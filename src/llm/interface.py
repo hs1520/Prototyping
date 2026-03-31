@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+from src.config import Config
 
 
 @dataclass
@@ -59,6 +60,134 @@ class LLMInterface(ABC):
         messages.append(Message(role="user", content=user_message))
         response = self.complete(messages)
         return response.content
+
+
+class GeminiLLM(LLMInterface):
+    """Google Gemini API-backed LLM implementation."""
+
+    def __init__(
+        self,
+        model: str = "gemini-3-flash-preview",
+        api_key: Optional[str] = None,
+        use_test_key: Optional[bool] = None,
+        enable_langsmith: bool = True,
+    ):
+        try:
+            from google import genai
+        except ImportError as e:
+            raise ImportError(
+                "google-genai package is required. Install with: pip install google-genai"
+            ) from e
+
+        self.model = model
+        self.langsmith_enabled = False
+
+        # Load and export runtime env from .env through centralized config.
+        Config.setup_langsmith_env(use_test=use_test_key)
+
+        selected_api_key = api_key or Config.get_gemini_api_key(use_test=use_test_key)
+        if not selected_api_key:
+            raise ValueError(
+                "Gemini API key is missing. Please set GEMINI_API_KEY or GEMINI_API_KEY_TEST in .env."
+            )
+
+        base_client = genai.Client(api_key=selected_api_key)
+        self.client = self._maybe_wrap_with_langsmith(base_client, enable_langsmith)
+
+    def _maybe_wrap_with_langsmith(self, base_client: Any, enable_langsmith: bool) -> Any:
+        """Wrap Gemini client with LangSmith when tracing is enabled and installed."""
+        if not enable_langsmith or not Config.langsmith_enabled():
+            return base_client
+
+        try:
+            from langsmith import wrappers
+
+            wrapped_client = wrappers.wrap_gemini(
+                base_client,
+                tracing_extra={
+                    "tags": ["gemini", "llm-interface"],
+                    "metadata": {
+                        "integration": "google-genai",
+                        "model": self.model,
+                    },
+                },
+            )
+            self.langsmith_enabled = True
+            return wrapped_client
+        except ImportError:
+            # Keep normal Gemini calls working even if LangSmith package is absent.
+            return base_client
+
+    def complete(
+        self,
+        messages: List[Message],
+        temperature: float = 1.0,
+        max_tokens: int = 4096,
+    ) -> LLMResponse:
+        """Call Gemini and normalize structured response fields into LLMResponse."""
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=[m.content for m in messages],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+        content, finish_reason = self._extract_content_and_finish_reason(response)
+
+        usage = getattr(response, "usage_metadata", None)
+        prompt_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
+        completion_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+        total_tokens = int(getattr(usage, "total_token_count", 0) or 0)
+        thoughts_token_count = int(getattr(usage, "thoughts_token_count", 0) or 0)
+
+        model_name = (
+            getattr(response, "model_version", None)
+            or getattr(response, "model", None)
+            or self.model
+        )
+
+        metadata: Dict[str, Any] = {
+            "response_id": getattr(response, "response_id", None),
+            "finish_reason": finish_reason,
+            "total_tokens": total_tokens,
+            "thoughts_token_count": thoughts_token_count,
+            "langsmith_enabled": self.langsmith_enabled,
+            "candidate_count": len(getattr(response, "candidates", None) or []),
+        }
+
+        return LLMResponse(
+            content=content,
+            model=model_name,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _extract_content_and_finish_reason(response: Any) -> tuple[str, str]:
+        """Extract response text and finish reason across SDK response variants."""
+        content = getattr(response, "text", None) or ""
+        finish_reason = ""
+
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            return content, finish_reason
+
+        first_candidate = candidates[0]
+        finish_reason_obj = getattr(first_candidate, "finish_reason", None)
+        finish_reason = getattr(finish_reason_obj, "value", None) or str(finish_reason_obj or "")
+
+        if content:
+            return content, finish_reason
+
+        candidate_content = getattr(first_candidate, "content", None)
+        parts = getattr(candidate_content, "parts", None) or []
+        content = "".join(
+            part_text
+            for part_text in (getattr(part, "text", "") for part in parts)
+            if part_text
+        )
+        return content, finish_reason
 
 
 class OpenAILLM(LLMInterface):
