@@ -1,5 +1,5 @@
 ,file_path,raw_content,descriptions,embeddings
-0,../models/Analysis Examples/AnalysisAnnotation.sysml,"package AnalysisAnnotation {
+0,../SysML-v2-release-src/examples/Analysis Examples/AnalysisAnnotation.sysml,"package AnalysisAnnotation {
 	private import ScalarValues::Real;
 	private import AnalysisTooling::*;
 	private import ISQ::*;
@@ -137,7 +137,7 @@ Each input and output variable should have appropriate tool variable annotations
  -1.02855496e-01  1.09551691e-01 -4.01209481e-02  4.19251658e-02
   7.51106301e-03 -7.63134062e-02  5.11759780e-02 -4.84016165e-02
  -1.68056116e-02 -4.79684658e-02 -3.44313048e-02 -2.38831267e-02]"
-1,../models/Analysis Examples/Dynamics.sysml,"package Dynamics {
+1,../SysML-v2-release-src/examples/Analysis Examples/Dynamics.sysml,"package Dynamics {
 	private import ScalarValues::Real;
 	private import ISQ::*;
 	
@@ -342,7 +342,7 @@ This model structure provides a clear framework for analyzing vehicle dynamics i
  -6.57032579e-02  9.10480842e-02 -5.35747744e-02  6.86556026e-02
  -4.24711779e-02 -3.03395055e-02  1.30796516e-02 -4.52238023e-02
  -2.39392910e-02  7.17482669e-03 -2.07302142e-02 -1.51984543e-02]"
-2,../models/Analysis Examples/Turbojet Stage Analysis.sysml,"package 'Turbojet Stage Analysis' {
+2,../SysML-v2-release-src/examples/Analysis Examples/Turbojet Stage Analysis.sysml,"package 'Turbojet Stage Analysis' {
 	private import Quantities::ScalarQuantityValue;
 	private import MeasurementReferences::DimensionOneValue;
 	private import ISQ::*;
@@ -563,7 +563,7 @@ This model effectively represents the necessary calculations and thermodynamic p
  -6.65408447e-02  9.17998254e-02 -7.33120218e-02  7.33368471e-02
  -7.80579969e-02  3.95204984e-02  8.30256864e-02 -5.63265309e-02
  -1.47385774e-02  6.55437484e-02 -6.04944713e-02  9.96076223e-03]"
-3,../models/Analysis Examples/Vehicle Analysis Demo.sysml,"package 'Vehicle Analysis Demo' {
+3,../SysML-v2-release-src/examples/Analysis Examples/Vehicle Analysis Demo.sysml,"package 'Vehicle Analysis Demo' {
     private import ScalarValues::*;
     private import ISQ::*;
     private import USCustomaryUnits::*;
@@ -973,7 +973,7 @@ By constructing this model, I aim to create a comprehensive behavioral and perfo
  -7.12736472e-02  8.77687186e-02 -1.13850329e-02 -8.99364334e-03
  -2.92918049e-02  2.42625899e-03  1.03222065e-01 -8.05294067e-02
  -7.16809556e-02  3.15727219e-02 -2.29499917e-02 -1.55044766e-02]"
-4,../models/Arrowhead Framework Example/AHFCoreLib.sysml,"// /** Mandatory Services and Systems */
+4,../SysML-v2-release-src/examples/Arrowhead Framework Example/AHFCoreLib.sysml,"// /** Mandatory Services and Systems */
 library package AHFCoreLib {
 	private import AHFProfileLib::*;
 	private import ScalarValues::*;
@@ -1140,7 +1140,7 @@ This SysML v2 model encapsulates the services and systems necessary for establis
  -4.64233197e-03  8.77066478e-02 -5.68169504e-02  1.41092092e-01
   2.95890030e-02 -3.74292433e-02  5.42183779e-02  1.55795757e-02
   8.98508448e-03  4.43508849e-02  4.82044742e-03 -2.42878380e-03]"
-5,../models/Arrowhead Framework Example/AHFNorwayTopics.sysml,"package AHFNorway {
+5,../SysML-v2-release-src/examples/Arrowhead Framework Example/AHFNorwayTopics.sysml,"package AHFNorway {
 	doc /* This is the Norwegian use-case for Arrowhead Framework */
 	// The use-case is for Productive4.0 and Arrowhead Tools
 	// The system is taken from a chemical factory
@@ -1431,7 +1431,7 @@ This summary encapsulates the essential structure and functionality of the model
  -1.60463564e-02  3.51189822e-02 -7.33354241e-02  8.88625905e-02
   6.58579171e-02 -1.14492297e-01  4.61832024e-02  3.63136493e-02
   1.20301377e-02  3.98315769e-03  2.08334308e-02  3.98002081e-02]"
-6,../models/Arrowhead Framework Example/AHFProfileLib.sysml,"library package AHFProfileLib {
+6,../SysML-v2-release-src/examples/Arrowhead Framework Example/AHFProfileLib.sysml,"library package AHFProfileLib {
 	// Systems and Services and their functionalities
 	private import ScalarValues::*;
 	
@@ -1666,7 +1666,7 @@ This model captures a structured approach to defining services and systems along
  -2.05532312e-02  7.06588998e-02 -7.83849135e-02  3.36710326e-02
  -5.67613952e-02 -3.16345803e-02  8.55405927e-02  6.84101284e-02
   2.72716489e-02  4.18719202e-02 -2.55781077e-02  3.29454727e-02]"
-7,../models/Arrowhead Framework Example/AHFSequences.sysml,"// ** This is the Norwegian use-case for Arrowhead Framework */
+7,../SysML-v2-release-src/examples/Arrowhead Framework Example/AHFSequences.sysml,"// ** This is the Norwegian use-case for Arrowhead Framework */
 package AHFNorwaySequences {
 	// Here we show sequences of the Norwegian use-case
 	private import AHFProfileLib::*;
@@ -1903,7 +1903,7 @@ This model serves as a detailed blueprint for understanding interactions in the 
  -1.50089003e-02  5.96096218e-02 -6.23279512e-02  3.16293575e-02
   9.21527743e-02 -8.08292925e-02  7.16669559e-02  5.05922548e-02
   4.85610031e-02  4.15917858e-02  4.94578220e-02  3.14275250e-02]"
-8,../models/Association Examples/ProductSelection_N_ary.sysml,"package ProductSelection_N_ary_SysML {
+8,../SysML-v2-release-src/examples/Association Examples/ProductSelection_N_ary.sysml,"package ProductSelection_N_ary_SysML {
 	
 	item def ShoppingCart;
 	item def Product;
@@ -2031,7 +2031,7 @@ This model captures the relationship between a shopping cart, the products chose
  -2.77536139e-02  1.33857261e-02 -8.51702690e-02 -3.66154537e-02
   2.62488499e-02  2.17752289e-02  2.38080677e-02 -3.85078900e-02
  -1.38142495e-03 -1.31698335e-02 -3.35622206e-02 -1.86376479e-02]"
-9,../models/Association Examples/ProductSelection_OwnedEnds.sysml,"package ProductSelection_OwnedEnds_SysML {
+9,../SysML-v2-release-src/examples/Association Examples/ProductSelection_OwnedEnds.sysml,"package ProductSelection_OwnedEnds_SysML {
 	
 	item def SelectionInfo;
 	item def ShoppingCart;
@@ -2200,7 +2200,7 @@ This description outlines the key components and relationships within the model,
  -7.61265606e-02  3.28699686e-02 -7.40566030e-02  6.91602286e-03
   1.98578276e-02 -3.64892483e-02  9.05463472e-02 -1.43701909e-02
  -6.48456020e-03 -2.10738052e-02 -2.52908282e-02  3.90928350e-02]"
-10,../models/Association Examples/ProductSelection_UnownedEnds.sysml,"package ProductSelection_UnownedEnds_SysML {
+10,../SysML-v2-release-src/examples/Association Examples/ProductSelection_UnownedEnds.sysml,"package ProductSelection_UnownedEnds_SysML {
 	
 	item def SelectionInfo;
 	item def ShoppingCart {
@@ -2348,7 +2348,7 @@ This model aims to encapsulate the relationships and functionalities necessary f
  -3.92263569e-02  2.31375229e-02 -3.96501385e-02 -7.27978768e-03
   3.66275273e-02  2.68990081e-03  6.98866844e-02 -1.44861881e-02
   4.35408112e-03 -3.38711403e-02 -7.73020834e-02  4.02498581e-02]"
-11,../models/Camera Example/Camera.sysml,"part def Camera {
+11,../SysML-v2-release-src/examples/Camera Example/Camera.sysml,"part def Camera {
 	private import PictureTaking::*;
 	
 	perform action takePicture[*] :> PictureTaking::takePicture;
@@ -2463,7 +2463,7 @@ The focus is on demonstrating how a camera's functionalities are divided into di
  -1.49283018e-02  1.02013193e-01 -6.78987429e-02  3.55925523e-02
   7.37962350e-02 -4.95046154e-02  7.21655712e-02  1.66092999e-02
   5.22853136e-02  2.09445544e-02 -6.10943884e-02  6.06754944e-02]"
-12,../models/Camera Example/PictureTaking.sysml,"package PictureTaking {
+12,../SysML-v2-release-src/examples/Camera Example/PictureTaking.sysml,"package PictureTaking {
 	part def Exposure;
 	
 	action def Focus { out xrsl: Exposure; }
@@ -2582,7 +2582,7 @@ This structure ensures a clear workflow from focusing to shooting, facilitating 
  -1.78706162e-02  1.06852062e-01 -6.30641952e-02  3.59213836e-02
   5.24044000e-02 -7.76381837e-03  4.98604141e-02  4.78943670e-03
   2.66520157e-02 -2.46465411e-02 -1.06755309e-01  6.05270825e-02]"
-13,../models/Cause and Effect Examples/CauseAndEffectExample.sysml,"package CauseAndEffectExample {
+13,../SysML-v2-release-src/examples/Cause and Effect Examples/CauseAndEffectExample.sysml,"package CauseAndEffectExample {
 	private import CauseAndEffect::*;
 	
 	part def Causer1;
@@ -2744,7 +2744,7 @@ This model will visually represent the interactions and dependencies between cau
  -3.99089791e-02  6.55368790e-02 -2.18839776e-02  2.65498343e-03
   4.23154272e-02 -1.15710227e-02  9.64878350e-02 -5.44504225e-02
  -1.04072029e-02 -2.06021201e-02 -1.56231206e-02 -4.18490209e-02]"
-14,../models/Cause and Effect Examples/MedicalDeviceFailure.sysml,"package MedicalDeviceFailure {
+14,../SysML-v2-release-src/examples/Cause and Effect Examples/MedicalDeviceFailure.sysml,"package MedicalDeviceFailure {
 	private import CauseAndEffect::*;
 	
 	part medicalDevice {
@@ -2871,7 +2871,7 @@ Additionally, I want to establish a multi-causation connection where both ""batt
  -5.15909353e-03  9.99411847e-03 -8.20618346e-02  6.14011586e-02
   2.45839674e-02  1.52821373e-02  4.42367345e-02 -3.24026681e-02
   8.88246223e-02  3.22969072e-02  2.68875491e-02 -2.39980314e-02]"
-15,../models/Comment Examples/Comments.sysml,"package Comments {
+15,../SysML-v2-release-src/examples/Comment Examples/Comments.sysml,"package Comments {
 	doc /* Documentation Comment */
 
 	doc /* Documentation about Package */
@@ -2993,7 +2993,7 @@ This model captures the relationships between comments, documentation, and part 
  -8.39669257e-02  3.38379256e-02 -1.05127610e-01  4.49605547e-02
   2.59181391e-02 -1.68111008e-02  7.00566247e-02 -8.42135772e-02
  -6.15898967e-02  8.02888069e-03  1.35142356e-02  4.51854095e-02]"
-16,../models/Flashlight Example/Flashlight Example.sysml,"package 'Flashlight Example' {
+16,../SysML-v2-release-src/examples/Flashlight Example/Flashlight Example.sysml,"package 'Flashlight Example' {
 	
 	attribute def OnOffCmd;
 	attribute def Light;
@@ -3185,7 +3185,7 @@ This model captures the interaction between a user sending commands to a flashli
  -6.45039082e-02  5.10398075e-02 -8.35803077e-02  4.04063575e-02
   2.43635755e-02 -2.65587773e-02  3.01912539e-02 -1.40671022e-02
   6.69022873e-02  2.79311836e-03 -5.12955934e-02  6.64688647e-02]"
-17,../models/Geometry Examples/CarWithEnvelopingShape.sysml,"package CarWithEnvelopingShape {
+17,../SysML-v2-release-src/examples/Geometry Examples/CarWithEnvelopingShape.sysml,"package CarWithEnvelopingShape {
 	private import ShapeItems::Box;
 	private import SI::mm;
 
@@ -3297,7 +3297,7 @@ This model captures the interaction between a user sending commands to a flashli
  -4.81646918e-02  5.14063835e-02 -5.13684079e-02  2.79002208e-02
  -2.77248174e-02 -1.60278808e-02  4.88514230e-02 -1.90783627e-02
  -8.96291211e-02  7.27971876e-03 -7.38094598e-02  1.96689572e-02]"
-18,../models/Geometry Examples/CarWithShapeAndCSG.sysml,"package CarWithShapeAndCSG {
+18,../SysML-v2-release-src/examples/Geometry Examples/CarWithShapeAndCSG.sysml,"package CarWithShapeAndCSG {
 	private import SpatialItems::*;
 	private import ShapeItems::*;
 	private import Objects::Point;
@@ -3497,7 +3497,7 @@ This model serves as a foundational representation for further detailed design o
  -5.28365485e-02  1.04279004e-01 -3.04687209e-02  4.84868176e-02
   9.33663640e-03 -3.89032401e-02  4.55660038e-02 -4.88413051e-02
  -8.64422992e-02  8.08232725e-02 -1.02227973e-02 -2.55041476e-03]"
-19,../models/Geometry Examples/ExternalShapeRefExample.sysml,"package ExternalShapeRefExample {
+19,../SysML-v2-release-src/examples/Geometry Examples/ExternalShapeRefExample.sysml,"package ExternalShapeRefExample {
 	private import ScalarValues::String;
 	private import ShapeItems::*;
 	private import ISQ::mass;
@@ -3649,7 +3649,7 @@ This description focuses on the key elements of the SysML model and their struct
   2.38830876e-03  4.60617319e-02 -6.92621917e-02  8.79755542e-02
  -4.96914461e-02 -4.41809138e-03  4.78523821e-02  3.76201309e-02
   4.61744480e-02 -1.27566289e-02 -4.44387682e-02  1.38491355e-02]"
-20,../models/Geometry Examples/SimpleQuadcopter.sysml,"package SimpleQuadcopter {
+20,../SysML-v2-release-src/examples/Geometry Examples/SimpleQuadcopter.sysml,"package SimpleQuadcopter {
     private import ISQ::*;
     private import SI::*;
     private import SpatialItems::*;
@@ -4018,7 +4018,7 @@ This model effectively illustrates the spatial relationships and physical charac
  -6.08216822e-02  6.35187030e-02 -5.22352196e-02  8.99173841e-02
  -1.71350446e-02 -3.31710465e-02 -7.03489454e-03 -5.11133224e-02
   3.56252082e-02  6.21199459e-02 -4.38915491e-02  6.64601326e-02]"
-21,../models/Geometry Examples/VehicleGeometryAndCoordinateFrames.sysml,"package VehicleGeometryAndCoordinateFrames {
+21,../SysML-v2-release-src/examples/Geometry Examples/VehicleGeometryAndCoordinateFrames.sysml,"package VehicleGeometryAndCoordinateFrames {
     private import TrigFunctions::*;
     private import ISQ::*;
     private import SI::*;
@@ -4262,7 +4262,7 @@ Overall, this model is designed to accurately define the physical geometry and s
  -8.53114128e-02  1.01526842e-01 -3.22576277e-02  3.33647616e-02
   2.98889186e-02 -3.59997749e-02  8.45160037e-02 -5.49213216e-02
  -8.96990746e-02  8.87956098e-02  9.05836839e-03 -2.78927386e-02]"
-22,../models/Import Tests/AliasImport.sysml,"package AliasImport {
+22,../SysML-v2-release-src/examples/Import Tests/AliasImport.sysml,"package AliasImport {
 	package Definitions {
 	    part def Vehicle;
 	    
@@ -4376,7 +4376,7 @@ This setup allows me to demonstrate how to use an alias in my model while keepin
  -5.62203489e-02  3.62918898e-02 -8.03724378e-02  2.43390650e-02
  -2.30986625e-02 -4.51421551e-03  3.01356874e-02 -9.29211006e-02
  -5.59145696e-02 -3.51533480e-02 -1.52423130e-02  4.54095472e-03]"
-23,../models/Import Tests/CircularImport.sysml,"package CircularImport {
+23,../SysML-v2-release-src/examples/Import Tests/CircularImport.sysml,"package CircularImport {
 
 	package P1 {
 		public import P2::*;
@@ -4498,7 +4498,7 @@ This setup allows me to demonstrate how to use an alias in my model while keepin
  -3.93523499e-02  4.47540358e-02 -7.52376392e-02  1.72030423e-02
  -6.99572192e-05 -1.91205442e-02  6.84884051e-03 -9.61001962e-02
  -5.08885756e-02 -2.21749544e-02  4.09778953e-02 -3.06874067e-02]"
-24,../models/Import Tests/PrivateImportTest.sysml,"package PrivateImportTest {
+24,../SysML-v2-release-src/examples/Import Tests/PrivateImportTest.sysml,"package PrivateImportTest {
 	package P1 {
 		part def A;
 	}
@@ -4639,7 +4639,7 @@ The structure encapsulates and illustrates the effects of private and public imp
  -4.83784564e-02  4.69725020e-02 -2.65171602e-02  7.18803033e-02
   3.45513574e-03  2.63220631e-02  1.39231877e-02 -8.37309882e-02
  -2.03778408e-02  7.12218229e-03 -4.76203077e-02  1.53715927e-02]"
-25,../models/Import Tests/QualifiedNameImportTest.sysml,"package QualifiedNameImportTest {
+25,../SysML-v2-release-src/examples/Import Tests/QualifiedNameImportTest.sysml,"package QualifiedNameImportTest {
 	package P1 {
 		part def A;
 	}
@@ -4754,7 +4754,7 @@ This model will demonstrate the use of qualified name imports across packages, e
  -6.11678064e-02  5.98839764e-03 -6.87460750e-02  1.91082023e-02
  -3.80505361e-02 -1.46045312e-02 -2.45095813e-03 -1.21282414e-01
  -3.95682976e-02 -1.19433599e-02  3.44022512e-02  1.20867335e-03]"
-26,../models/Individuals Examples/AnalysisIndividualExample.sysml,"package AnalysisIndividualExample {
+26,../SysML-v2-release-src/examples/Individuals Examples/AnalysisIndividualExample.sysml,"package AnalysisIndividualExample {
     private import ScalarValues::*;
     private import Quantities::*;
     private import ISQ::*;
@@ -4965,7 +4965,7 @@ Overall, the model captures the structural relationships between vehicle attribu
  -7.22777918e-02  6.89771101e-02 -2.84169875e-02 -2.72648707e-02
  -6.00016713e-02 -1.53321419e-02  3.24767195e-02 -6.32223934e-02
   2.49064015e-03  5.26319519e-02 -3.34333703e-02  3.92785855e-03]"
-27,../models/Individuals Examples/JohnIndividualExample.sysml,"package JohnIndividualExample {
+27,../SysML-v2-release-src/examples/Individuals Examples/JohnIndividualExample.sysml,"package JohnIndividualExample {
 	
 	item def Person {
 		doc	
@@ -5136,7 +5136,7 @@ This concise description captures the overall structure of the model, its entiti
  -4.97353189e-02  2.74214260e-02 -2.02200264e-02  3.02885715e-02
   3.24877016e-02  3.21917720e-02  6.53712079e-02 -1.05541453e-01
   6.91331318e-03 -2.99092550e-02 -7.02172443e-02  1.39548872e-02]"
-28,../models/Interaction Sequencing Examples/ServerSequenceModel.sysml,"package ServerSequenceModel {
+28,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceModel.sysml,"package ServerSequenceModel {
 	private import ScalarValues::String;
 	public import SignalDefinitions::*;
 
@@ -5297,7 +5297,7 @@ This model effectively captures the flow and interactions within a typical pub/s
   2.32125632e-02 -1.18207987e-02 -8.34325105e-02  2.58186255e-02
   2.39612907e-02 -2.15991959e-02  1.02884218e-01  1.82104427e-02
   3.29325721e-02  6.81244731e-02 -3.85106169e-02 -1.21576935e-02]"
-29,../models/Interaction Sequencing Examples/ServerSequenceModelOutside.sysml,"package ServerSequenceModelOutside {
+29,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceModelOutside.sysml,"package ServerSequenceModelOutside {
 	public import ServerSequenceModel::*;
 
 	part def PubSubSequenceOutside :> PubSubSequence {
@@ -5427,7 +5427,7 @@ This concise model leverages event sequencing to effectively illustrate the publ
   4.57024807e-03  5.43564605e-03 -6.25908226e-02  3.06604747e-02
   3.07221115e-02 -1.51783442e-02  1.34210035e-01  2.33648457e-02
   2.21498869e-02  2.99486872e-02 -6.03732169e-02 -5.26771834e-03]"
-30,../models/Interaction Sequencing Examples/ServerSequenceOutsideRealization-2.sysml,"package ServerSequenceOutsideRealization_2 {
+30,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceOutsideRealization-2.sysml,"package ServerSequenceOutsideRealization_2 {
 	private import ScalarValues::String;
 	private import ServerSequenceModelOutside::*;
 	private import Configuration::*;
@@ -5645,7 +5645,7 @@ Overall, this model captures the interactions in a synchronous pub-sub system wh
   1.18643185e-02  2.70890277e-02 -6.18929341e-02  2.27653421e-02
   2.24203207e-02 -1.41227422e-02  8.74622017e-02 -1.93809054e-03
  -2.68340819e-02  3.40933613e-02 -3.56010757e-02  6.02089008e-03]"
-31,../models/Interaction Sequencing Examples/ServerSequenceOutsideRealization-3.sysml,"package ServerSequenceOutsideRealization_3 {
+31,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceOutsideRealization-3.sysml,"package ServerSequenceOutsideRealization_3 {
 	private import ScalarValues::String;
 	private import ServerSequenceModelOutside::*;
 	private import Configuration::*;
@@ -5933,7 +5933,7 @@ This concise layout will effectively model the interactions necessary for a basi
  -1.43190417e-02  3.23455036e-02 -8.26981962e-02  3.69922891e-02
   7.40215974e-03 -1.10175684e-02  1.00754507e-01 -8.79278872e-03
  -3.01265940e-02  1.15992222e-02 -6.62139338e-03  1.68070514e-02]"
-32,../models/Interaction Sequencing Examples/ServerSequenceRealization-2.sysml,"package ServerSequenceRealization_2 {
+32,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceRealization-2.sysml,"package ServerSequenceRealization_2 {
 	private import ScalarValues::String;
 	private import ServerSequenceModel::*;
 	private import Configuration::*;
@@ -6145,7 +6145,7 @@ In summary, the model captures the dynamics of a publish-subscribe system includ
  -2.04675384e-02  4.49500792e-02 -8.17642137e-02  7.86319841e-03
   1.99781302e-02  1.24930241e-03  8.20794851e-02 -5.84959192e-03
   8.38323589e-03  1.70945711e-02 -3.50687541e-02  4.18951362e-03]"
-33,../models/Interaction Sequencing Examples/ServerSequenceRealization-3.sysml,"package ServerSequenceRealization_3 {
+33,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceRealization-3.sysml,"package ServerSequenceRealization_3 {
 	private import ScalarValues::String;
 	private import ServerSequenceModel::*;
 	private import Configuration::*;
@@ -6401,7 +6401,7 @@ Overall, the model captures the interactions and behaviors of each component in 
   3.22487839e-02  1.36094121e-02 -5.89453280e-02  7.39527494e-03
   1.78408418e-02 -7.96510745e-03  7.08869994e-02  2.53455080e-02
   1.69324887e-03  3.99149843e-02 -1.16120325e-02  1.25348223e-02]"
-34,../models/Mass Roll-up Example/MassConstraintExample.sysml,"package MassConstraintExample {
+34,../SysML-v2-release-src/examples/Mass Roll-up Example/MassConstraintExample.sysml,"package MassConstraintExample {
 	private import ISQ::*;
 	private import SI::*;
 	private import NumericalFunctions::*;
@@ -6656,7 +6656,7 @@ This model serves as a framework for analyzing and enforcing mass constraints in
  -7.47203380e-02  1.14476055e-01 -2.25895029e-02 -3.33228298e-02
  -2.23688576e-02 -5.07761538e-02  7.36235380e-02 -7.00793192e-02
  -1.74456406e-02  5.06834686e-02 -1.13143986e-02 -1.76079180e-02]"
-35,../models/Mass Roll-up Example/MassRollup.sysml,"package MassRollup {
+35,../SysML-v2-release-src/examples/Mass Roll-up Example/MassRollup.sysml,"package MassRollup {
 	private import NumericalFunctions::*;
 	
 	part def MassedThing {
@@ -6788,7 +6788,7 @@ Overall, this model captures the concept of mass aggregation considering both in
  -4.04754393e-02  6.73079537e-03 -8.58231112e-02 -2.84491619e-03
   2.88665667e-02  3.24014239e-02  7.79301971e-02 -6.07157573e-02
   7.53904283e-02 -3.80503051e-02 -2.20499970e-02  1.73395183e-02]"
-36,../models/Mass Roll-up Example/Vehicles.sysml,"package VehicleMasses {
+36,../SysML-v2-release-src/examples/Mass Roll-up Example/Vehicles.sysml,"package VehicleMasses {
 	private import ScalarValues::*;
 	private import MassRollup::*;
 	
@@ -6935,7 +6935,7 @@ This model structure will help manage vehicle mass details clearly and effective
  -7.49553144e-02  6.51987419e-02 -4.49062139e-02 -4.65616264e-04
   1.16797276e-02  8.29836912e-03  1.09527819e-01 -1.07169859e-01
  -9.35257133e-03  2.94075767e-03 -2.47118771e-02 -1.73505358e-02]"
-37,../models/Metadata Examples/IssueMetadataExample.sysml,"package IssueMetadataExample {
+37,../SysML-v2-release-src/examples/Metadata Examples/IssueMetadataExample.sysml,"package IssueMetadataExample {
 	private import ModelingMetadata::Issue;
 	
     //Example: the following identifies an issue with the interface
@@ -7070,7 +7070,7 @@ Together, this model effectively captures and communicates a specific interface 
  -5.77657223e-02  4.83487211e-02 -8.71979967e-02 -7.22885923e-03
  -5.21334857e-02 -2.84344498e-02  1.54131670e-02 -5.36833890e-04
   5.52807860e-02  7.38553554e-02  4.20563407e-02  3.96887921e-02]"
-38,../models/Metadata Examples/RationaleMetadataExample.sysml,"package RationaleMetadataExample {
+38,../SysML-v2-release-src/examples/Metadata Examples/RationaleMetadataExample.sysml,"package RationaleMetadataExample {
 	private import ModelingMetadata::Rationale;
 	
     /* Example: the following provides the rationale for selecting the engine4cyl based on a trade study analysis. 
@@ -7207,7 +7207,7 @@ This structure helps in documenting the decision-making process behind engine se
   5.89503767e-03  7.01268017e-02 -5.15352413e-02  9.01953503e-02
  -1.77902151e-02 -2.55260039e-02 -1.51438294e-02 -1.51719451e-01
  -3.51143070e-02  1.83618348e-02  2.71390174e-02  8.44184868e-03]"
-39,../models/Metadata Examples/RequirementMetadataExample.sysml,"package RequirementMetadataExample {
+39,../SysML-v2-release-src/examples/Metadata Examples/RequirementMetadataExample.sysml,"package RequirementMetadataExample {
 	private import Metaobjects::SemanticMetadata;
 	private import ModelingMetadata::*;
 	private import RiskMetadata::*;
@@ -7346,7 +7346,7 @@ Under the `#goal` requirement, include a requirement `deliverPayload` that has c
  -5.47992140e-02  1.33280411e-01 -7.58815035e-02  2.88833678e-02
  -7.21272174e-03  8.28414876e-03  5.96545003e-02 -4.46415842e-02
   5.03484271e-02  5.32180294e-02  7.41346739e-03 -1.25794401e-02]"
-40,../models/Metadata Examples/RiskMetadataExample.sysml,"package RiskMetadataExample {
+40,../SysML-v2-release-src/examples/Metadata Examples/RiskMetadataExample.sysml,"package RiskMetadataExample {
 	private import RiskMetadata::*;
 	private import RiskLevelEnum::*;
 	
@@ -7462,7 +7462,7 @@ Within the package, there is a part named `engine4cyl`, which includes two risk 
  -2.76033636e-02  1.60527557e-01 -5.45828417e-02  1.21923164e-02
  -1.31437937e-02  1.91132557e-02  1.48481419e-02 -5.95613457e-02
   9.52151977e-03 -2.48604175e-02  3.15111056e-02 -1.06675806e-03]"
-41,../models/Metadata Examples/VerificationMetadataExample.sysml,"package VerificationMetadataExample {
+41,../SysML-v2-release-src/examples/Metadata Examples/VerificationMetadataExample.sysml,"package VerificationMetadataExample {
 	private import VerificationCases::*;
 	private import VerificationMethodKind::*;
 	
@@ -7578,7 +7578,7 @@ This concise representation facilitates the organization of verification activit
  -1.08637437e-01  1.05419204e-01 -1.28373712e-01  1.03675701e-01
   5.55452555e-02 -5.03079258e-02  2.77069286e-02 -1.16851320e-02
   1.16914615e-01  4.18099090e-02  1.00353315e-01 -6.44205287e-02]"
-42,../models/Packet Example/Packets.sysml,"package Packets {
+42,../SysML-v2-release-src/examples/Packet Example/Packets.sysml,"package Packets {
 	private import ScalarValues::*;
 	private import Time::DateTime;
 	
@@ -7728,7 +7728,7 @@ This concise organization helps in modeling the specifics of packet data transmi
  -5.46589829e-02  5.46592511e-02 -5.62822148e-02 -2.05283053e-03
  -2.39191335e-02 -1.92969330e-02  3.65726873e-02 -9.46845487e-02
  -2.57636048e-02  1.01321768e-02 -7.96400234e-02  8.84768553e-03]"
-43,../models/Packet Example/PacketUsage.sysml,"package 'Packet Usage' {
+43,../SysML-v2-release-src/examples/Packet Example/PacketUsage.sysml,"package 'Packet Usage' {
 	public import Packets::*;
 	private import ScalarValues::Real;
 	
@@ -7840,7 +7840,7 @@ This concise organization helps in modeling the specifics of packet data transmi
  -7.59871304e-02  6.90991655e-02 -7.20858425e-02 -3.96880433e-02
  -1.03052771e-02  2.36704722e-02  2.20384449e-02 -8.77540633e-02
  -3.07458397e-02 -2.86025945e-02 -3.01236920e-02  3.50921042e-02]"
-44,../models/Requirements Examples/HSUVRequirements.sysml,"package HSUVRequirements {
+44,../SysML-v2-release-src/examples/Requirements Examples/HSUVRequirements.sysml,"package HSUVRequirements {
 	private import Requirements::*;
 	
 	requirement <'UR1.1'> Load: FunctionalRequirementCheck {
@@ -7982,7 +7982,7 @@ Please ensure that the model reflects the hierarchical structure of these requir
  -2.11898312e-02  6.26434088e-02 -3.72146517e-02 -3.91364433e-02
   6.40887162e-03  1.62428357e-02  1.50486007e-02 -7.60829374e-02
   7.72831813e-02  4.35570069e-02 -1.50555291e-03  1.20200403e-02]"
-45,../models/Requirements Examples/RequirementDerivationExample.sysml,"package RequirementDerivationExample {
+45,../SysML-v2-release-src/examples/Requirements Examples/RequirementDerivationExample.sysml,"package RequirementDerivationExample {
 	private import RequirementDerivation::*;
 	
 	requirement def Req1;
@@ -8126,7 +8126,7 @@ This concise description captures the intent to define a structured model demons
  -4.01949063e-02  4.43493128e-02 -1.15987562e-01 -1.83791816e-02
   5.86684514e-03  4.83314134e-02  3.81407738e-02 -6.06123870e-03
   1.80635042e-02  9.74428877e-02  3.30637880e-02 -6.70349449e-02]"
-46,../models/Requirements Examples/VehicleRequirementDerivation.sysml,"package VehicleRequirementDerivation {
+46,../SysML-v2-release-src/examples/Requirements Examples/VehicleRequirementDerivation.sysml,"package VehicleRequirementDerivation {
 	private import RequirementDerivation::*;
 	
 	part vehicle {
@@ -8265,7 +8265,7 @@ Finally, I want to establish derivation links among these requirements, indicati
  -5.48268855e-02  1.03465453e-01 -5.07020876e-02 -1.00230230e-02
   5.29858749e-03  5.18858097e-02  8.36705863e-02 -9.24776047e-02
   2.83867903e-02  7.67048895e-02  4.57264669e-02 -2.57505514e-02]"
-47,../models/Room Model/RoomModel.sysml,"// SysML v2 Interpretation of the SysML v1 Room Connection Example
+47,../SysML-v2-release-src/examples/Room Model/RoomModel.sysml,"// SysML v2 Interpretation of the SysML v1 Room Connection Example
 package RoomModel { 
     package RoomDefinitionModelLibrary{
         private import Port_Definitions::*;
@@ -8461,7 +8461,7 @@ This description serves as a foundation for modeling a functional representation
  -5.19763082e-02  5.47227124e-03 -2.68505812e-02  4.07556407e-02
  -2.88296472e-02 -4.44337679e-03  6.76541254e-02 -4.14370522e-02
  -3.84022444e-02  1.49625495e-01 -5.11645675e-02  1.67247150e-02]"
-48,../models/Simple Tests/ActionTest.sysml,"package ActionTest {
+48,../SysML-v2-release-src/examples/Simple Tests/ActionTest.sysml,"package ActionTest {
 	action def A{ in x; }
 	
 	action a: A { 
@@ -8632,7 +8632,7 @@ The model captures complex interactions and controls between actions while allow
  -6.59336746e-02  1.21347986e-01 -2.22960021e-02  2.19261479e-02
   3.36859487e-02 -3.30798402e-02  5.03430404e-02 -6.47152495e-03
   2.36599240e-02 -1.83626600e-02 -7.87095204e-02  1.50901014e-02]"
-49,../models/Simple Tests/AliasTest.sysml,"package AliasTest {
+49,../SysML-v2-release-src/examples/Simple Tests/AliasTest.sysml,"package AliasTest {
 	private import ISQSpaceTime::breadth; // import of an alias
 	attribute b :> breadth;
 	
@@ -8753,7 +8753,7 @@ Finally, I would establish connections between `p1.po1` and both `p2.pdest` and 
  -1.89196542e-02  1.48921339e-02 -7.84753859e-02  4.74402010e-02
  -5.88043742e-02  1.01785746e-03  1.77082401e-02 -5.40199429e-02
  -4.84225107e-03  2.75965650e-02 -6.44762185e-04  1.81223620e-02]"
-50,../models/Simple Tests/AllocationTest.sysml,"package AllocationTest {
+50,../SysML-v2-release-src/examples/Simple Tests/AllocationTest.sysml,"package AllocationTest {
 	part def Logical {
 		part component;
 	}
@@ -8900,7 +8900,7 @@ The overall model captures the mapping of logical components to physical impleme
  -7.51002133e-02  4.66680750e-02 -9.95258316e-02  6.59164554e-03
  -1.35561209e-02 -4.77322756e-04  8.37795902e-03 -6.75280206e-03
   3.62764345e-03  6.05008006e-03 -6.33397698e-02 -1.39537947e-02]"
-51,../models/Simple Tests/AnalysisTest.sysml,"package AnalysisTest {
+51,../SysML-v2-release-src/examples/Simple Tests/AnalysisTest.sysml,"package AnalysisTest {
 
 	part def V {
 		m;
@@ -9061,7 +9061,7 @@ This description should enable the generation of the specified model accurately.
  -7.44522214e-02  9.24382657e-02 -7.16763958e-02  8.35136622e-02
   5.38029373e-02 -2.13528108e-02  6.53159767e-02 -4.84726354e-02
   5.67534342e-02  5.25333360e-02 -1.24553796e-02 -4.25736234e-02]"
-52,../models/Simple Tests/AssignmentTest.sysml,"package AssignmentTest {
+52,../SysML-v2-release-src/examples/Simple Tests/AssignmentTest.sysml,"package AssignmentTest {
 	
 	part def Counter {
 		attribute count : ScalarValues::Integer := 0;
@@ -9216,7 +9216,7 @@ This model succinctly encapsulates the behavior and state management for a simpl
  -9.44799781e-02  8.01192522e-02 -5.25163859e-02  2.45315395e-02
   3.00514344e-02 -3.75975594e-02  3.08037437e-02  3.52177210e-02
   2.72391737e-03 -6.37657419e-02 -7.17675835e-02 -9.80877038e-03]"
-53,../models/Simple Tests/CalculationTest.sysml,"package CalculationExample {
+53,../SysML-v2-release-src/examples/Simple Tests/CalculationTest.sysml,"package CalculationExample {
 	private import ISQ::*;
 	private import NumericalFunctions::*;
 	
@@ -9359,7 +9359,7 @@ This succinctly encapsulates the vehicle mass calculation system using SysML v2.
  -9.39391181e-02  8.27631727e-02 -7.03368634e-02  1.43909082e-02
  -3.87698994e-04 -3.87548469e-02  7.09913373e-02 -8.39442462e-02
   4.41279635e-03  5.81091680e-02  1.89383293e-03 -3.25892605e-02]"
-54,../models/Simple Tests/CommentTest.sysml,"  /* AAA */
+54,../SysML-v2-release-src/examples/Simple Tests/CommentTest.sysml,"  /* AAA */
   //a lexical comment (""note"") is not a part of model
 package CommentTest {
 	// inside package
@@ -9514,7 +9514,7 @@ Overall, this model emphasizes the use of comments and documentation in SysML v2
  -5.72306588e-02  2.37659328e-02 -7.10129440e-02  1.05056368e-01
  -2.20483285e-03 -3.69739835e-03  6.52973726e-02 -3.31613608e-02
  -5.76203987e-02  6.65101130e-03 -3.42130428e-03  4.17961702e-02]"
-55,../models/Simple Tests/ConjugationTest.sysml,"package ConjugationTest {
+55,../SysML-v2-release-src/examples/Simple Tests/ConjugationTest.sysml,"package ConjugationTest {
 	port def P;
 	
 	part def B {
@@ -9655,7 +9655,7 @@ Overall, the model will demonstrate the relationships and interactions between t
  -4.69574891e-02  2.68503111e-02 -8.54795948e-02  4.63632494e-02
  -3.00262813e-02  8.84273369e-03  2.65819356e-02 -4.31717001e-02
   3.98360118e-02  3.53586674e-02  1.88850332e-02  2.82519050e-02]"
-56,../models/Simple Tests/ConnectionTest.sysml,"package ConnectionTest {
+56,../SysML-v2-release-src/examples/Simple Tests/ConnectionTest.sysml,"package ConnectionTest {
 	
 	part p {
 		part x {
@@ -9816,7 +9816,7 @@ The model should effectively represent the connections and parts defined, demons
  -4.85335067e-02  5.71086444e-03 -7.02618510e-02 -1.73664484e-02
  -1.54357869e-02  3.07802614e-02  6.73206465e-04 -2.98512727e-02
   2.72502913e-03  5.06660528e-02 -1.43377967e-02 -1.50944730e-02]"
-57,../models/Simple Tests/ConstraintTest.sysml,"package ConstraintTest {
+57,../SysML-v2-release-src/examples/Simple Tests/ConstraintTest.sysml,"package ConstraintTest {
 	private import ISQ::MassValue;
 	private import SI::kg;
 	private import NumericalFunctions::sum;
@@ -10024,7 +10024,7 @@ This model efficiently validates and analyzes mass constraints and relationships
  -8.65128189e-02  1.08029053e-01 -5.17051667e-02  4.12734859e-02
  -1.95484683e-02  6.69430150e-03  5.28538823e-02 -4.72563766e-02
   1.34160304e-02  6.20905235e-02  1.90116279e-02 -3.84915099e-02]"
-58,../models/Simple Tests/ControlNodeTest.sysml,"action def ControlNodeTest {
+58,../SysML-v2-release-src/examples/Simple Tests/ControlNodeTest.sysml,"action def ControlNodeTest {
 	action A1;
 	then J;
 	
@@ -10142,7 +10142,7 @@ The model should detail the sequence of actions and control nodes as specified, 
  -2.93920711e-02  7.32682645e-02 -5.90607673e-02  3.33998203e-02
   3.93634662e-02 -3.24759893e-02  2.74919532e-02  8.80608801e-04
  -8.93531740e-03  1.77533682e-02 -5.02678007e-02 -5.52892825e-03]"
-59,../models/Simple Tests/DecisionTest.sysml,"action def DecisionTest {
+59,../SysML-v2-release-src/examples/Simple Tests/DecisionTest.sysml,"action def DecisionTest {
 	attribute x = 1;
 	
 	decide 'test x';
@@ -10277,7 +10277,7 @@ This model captures the decision-making flow based on the attribute `x` while de
  -6.75725266e-02  5.50086051e-02 -1.46863647e-02  2.03827769e-02
   3.30956690e-02 -1.35831069e-02 -1.53467674e-02 -3.36397067e-02
   6.53651729e-02 -6.28604367e-02 -6.37957975e-02  3.07427626e-02]"
-60,../models/Simple Tests/DefaultValueTest.sysml,"package DefaultValueTest {
+60,../SysML-v2-release-src/examples/Simple Tests/DefaultValueTest.sysml,"package DefaultValueTest {
 	
 	part def V {
 		attribute m default = 10;
@@ -10397,7 +10397,7 @@ This model captures the relationships between the parts and their default attrib
  -5.14324382e-02  2.91871019e-02 -1.31782234e-01  3.23919766e-03
   1.86404958e-02  5.07904105e-02  3.75852399e-02 -7.44634643e-02
  -8.61523021e-03 -1.59611329e-02 -4.26666625e-02  4.78989221e-02]"
-61,../models/Simple Tests/DependencyTest.sysml,"package DependencyTest {
+61,../SysML-v2-release-src/examples/Simple Tests/DependencyTest.sysml,"package DependencyTest {
 	
 	package System {
 		package 'Application Layer';
@@ -10521,7 +10521,7 @@ The `System` package will be imported privately for use within the model.","[-6.
  -9.28705558e-02  3.22828963e-02 -5.14397621e-02  1.78017467e-02
   3.36252935e-02 -3.43308435e-03  1.31104039e-02 -1.07131429e-01
  -7.18611851e-02 -2.81360038e-02  3.07002962e-02 -1.58853214e-02]"
-62,../models/Simple Tests/EnumerationTest.sysml,"package EnumerationTest {
+62,../SysML-v2-release-src/examples/Simple Tests/EnumerationTest.sysml,"package EnumerationTest {
 	
 	attribute def Color {
 		attribute val : ScalarValues::Natural;
@@ -10693,7 +10693,7 @@ This concise description aims to encapsulate the structure, attributes, and enum
  -1.45440772e-02  5.45255933e-03 -1.04252160e-01  8.23183730e-03
  -2.07086629e-03  9.26820654e-03  8.59538838e-02 -7.65893385e-02
  -1.37931686e-02 -5.56931607e-02 -3.98170613e-02  5.82479313e-02]"
-63,../models/Simple Tests/FeaturePathTest.sysml,"package Q {
+63,../SysML-v2-release-src/examples/Simple Tests/FeaturePathTest.sysml,"package Q {
   part def F {
   	part a : A;
   }
@@ -10857,7 +10857,7 @@ This model effectively captures the interactions and hierarchies among component
  -7.87122101e-02  6.16938770e-02 -1.02131039e-01  1.36285173e-02
  -4.39064167e-02 -1.56962257e-02  5.94455153e-02 -9.15767998e-02
  -1.50798436e-03  3.20290513e-02  1.29172448e-02  1.29486974e-02]"
-64,../models/Simple Tests/ImportTest.sysml,"package ImportTest {
+64,../SysML-v2-release-src/examples/Simple Tests/ImportTest.sysml,"package ImportTest {
     package Pkg1 {
     	private import Pkg2::Pkg21::Pkg211::P211;
     	private import Pkg2::Pkg21::*;
@@ -10983,7 +10983,7 @@ This structure should effectively demonstrate private imports and part definitio
  -9.04998258e-02  1.61987208e-02 -8.02964792e-02  1.07196346e-01
  -3.17623615e-02 -1.73312277e-02  3.70147228e-02 -7.10640773e-02
  -9.69053525e-03 -3.19609046e-02  1.35618811e-02 -1.14327800e-02]"
-65,../models/Simple Tests/ItemTest.sysml,"package ItemTest {
+65,../SysML-v2-release-src/examples/Simple Tests/ItemTest.sysml,"package ItemTest {
 	
 	item f: A;
 
@@ -11103,7 +11103,7 @@ In addition, I have a private part `C`, which contains two private incoming refe
  -3.23837660e-02  2.97556706e-02 -7.08599687e-02  3.43473554e-02
  -1.17426347e-02 -8.64606909e-03  4.81373854e-02 -9.41142812e-02
  -1.88804716e-02  1.87330768e-02 -3.60670476e-03  4.30508330e-02]"
-66,../models/Simple Tests/MetadataTest.sysml,"package MetadataTest {
+66,../SysML-v2-release-src/examples/Simple Tests/MetadataTest.sysml,"package MetadataTest {
 	private import 'User Defined Extensions'::*;
 	
 	library package 'User Defined Extensions' {
@@ -11256,7 +11256,7 @@ Overall, this model establishes a framework for security classification in SysML
  -5.32103404e-02  4.58439626e-02 -9.04959217e-02  4.67160605e-02
  -3.34159397e-02  1.00541990e-02 -1.98172126e-02 -8.13740417e-02
   3.81001048e-02 -4.10739444e-02 -3.57045308e-02  1.83099825e-02]"
-67,../models/Simple Tests/MultiplicityTest.sysml,"package MultiplicityTest {
+67,../SysML-v2-release-src/examples/Simple Tests/MultiplicityTest.sysml,"package MultiplicityTest {
 	
 	part def P;
 	attribute n : ScalarValues::Integer = 5;
@@ -11386,7 +11386,7 @@ This model tests various multiplicities for parts and attributes.","[ 8.64186138
  -3.66252288e-02  1.80548914e-02 -8.88662636e-02  1.71785001e-02
  -1.67782919e-03  1.18404236e-02  7.03150481e-02 -6.79570362e-02
   8.86327326e-02 -2.50553153e-02 -9.21071619e-02  2.68680938e-02]"
-68,../models/Simple Tests/OccurrenceTest.sysml,"package OccurrenceTest {
+68,../SysML-v2-release-src/examples/Simple Tests/OccurrenceTest.sysml,"package OccurrenceTest {
 	occurrence def Occ {
 		attribute a;
 		ref occurrence occ1 : Occ;
@@ -11534,7 +11534,7 @@ Overall, this model effectively captures the concept of occurrences, their attri
  -5.15957959e-02  8.32180083e-02 -7.02805743e-02  5.57231009e-02
   5.34611158e-02 -4.64274548e-02  9.30560306e-02 -8.32506269e-02
   7.90830627e-02 -2.92247757e-02  1.38223451e-02  4.95739803e-02]"
-69,../models/Simple Tests/ParameterTest.sysml,"package ParameterTest {
+69,../SysML-v2-release-src/examples/Simple Tests/ParameterTest.sysml,"package ParameterTest {
 	attribute def A {
 		attribute x : ScalarValues::String;
 		attribute y : A;
@@ -11669,7 +11669,7 @@ This model focuses on demonstrating the use of attributes and calculations, alon
  -6.56785369e-02  3.09235640e-02 -1.12976737e-01 -2.69302772e-03
  -4.51198407e-03 -1.34596331e-02  2.13562567e-02 -1.31400749e-01
   7.15938816e-03 -2.70163883e-02 -1.80790890e-02  1.40974931e-02]"
-70,../models/Simple Tests/PartTest.sysml,"package PartTest {
+70,../SysML-v2-release-src/examples/Simple Tests/PartTest.sysml,"package PartTest {
 	
 	part f: A;
 
@@ -11855,7 +11855,7 @@ This concise description captures the essential elements and relationships that 
  -5.61447367e-02  2.71022227e-02 -9.21933800e-02  1.63254421e-02
  -1.16975373e-02 -3.40424920e-03  4.16040458e-02 -1.04484797e-01
   3.95662524e-02  4.31097448e-02  6.02869270e-03  3.55164409e-02]"
-71,../models/Simple Tests/RequirementTest.sysml,"package RequirementTest {
+71,../SysML-v2-release-src/examples/Simple Tests/RequirementTest.sysml,"package RequirementTest {
 	constraint def C;
 	constraint c : C;
 	private import q::**;
@@ -11993,7 +11993,7 @@ Overall, the model outlines a structured relation of requirements, constraints, 
  -7.51369148e-02  4.03380655e-02 -8.29383209e-02  5.37868477e-02
   1.86876790e-03  2.35878807e-02 -5.36317052e-03 -5.53176180e-02
   9.08238813e-02  9.24711078e-02  6.06145710e-03 -1.04509750e-02]"
-72,../models/Simple Tests/RootPackageTest.sysml,"package P1 {
+72,../SysML-v2-release-src/examples/Simple Tests/RootPackageTest.sysml,"package P1 {
 	part def A;
 }
 
@@ -12108,7 +12108,7 @@ This model should maintain the private import scopes and the subset relationship
  -6.26647472e-02  2.46960241e-02 -8.35025087e-02  4.88977619e-02
   1.35055073e-02  2.94778608e-02  3.39999124e-02 -8.18784013e-02
  -2.89818309e-02 -1.22818183e-02 -3.87613662e-02 -2.23465118e-04]"
-73,../models/Simple Tests/StateTest.sysml,"package StateTest {
+73,../SysML-v2-release-src/examples/Simple Tests/StateTest.sysml,"package StateTest {
 	attribute def Sig {
 		x;
 	}
@@ -12304,7 +12304,7 @@ The model design captures hierarchy, transitions, actions, and signal handling, 
  -1.51415005e-01  6.41111284e-02 -6.33980483e-02  2.99817063e-02
   1.83612127e-02 -3.49906385e-02  4.30773720e-02 -3.28389965e-02
   3.25762667e-02  6.68378361e-03 -4.25622948e-02 -8.76264833e-03]"
-74,../models/Simple Tests/StructuredControlTest.sysml,"package StructuredControlTest {
+74,../SysML-v2-release-src/examples/Simple Tests/StructuredControlTest.sysml,"package StructuredControlTest {
 	
 	action {
 		attribute i : ScalarValues::Integer := 0;
@@ -12454,7 +12454,7 @@ This description outlines the attributes and control structures succinctly, prov
  -6.27299026e-02  9.44008082e-02 -5.08083068e-02  3.31479381e-03
   2.55852621e-02  2.04812065e-02  1.08053237e-02  3.72239016e-02
   5.55248838e-03  6.00661663e-03 -3.64491157e-02 -5.42906858e-02]"
-75,../models/Simple Tests/TextualRepresentationTest.sysml,"package TextualRepresentationTest {
+75,../SysML-v2-release-src/examples/Simple Tests/TextualRepresentationTest.sysml,"package TextualRepresentationTest {
 	private import ScalarValues::Real;
 	
 	item def C {
@@ -12577,7 +12577,7 @@ Please generate this model structure with the specified components and behaviors
  -6.21893741e-02  5.45886680e-02 -8.67045671e-02  2.97462828e-02
   5.27605303e-02 -3.00160167e-03  5.21204732e-02 -5.07591218e-02
  -5.96951880e-03 -5.55345090e-03 -2.05680542e-02  1.61109641e-02]"
-76,../models/Simple Tests/TradeStudyTest.sysml,"package TradeStudyTest {
+76,../SysML-v2-release-src/examples/Simple Tests/TradeStudyTest.sysml,"package TradeStudyTest {
 	private import ScalarValues::Real;
 	private import TradeStudies::*;
 	
@@ -12695,7 +12695,7 @@ The trade study focuses on maximizing an objective related to the engines, with 
  -3.36358696e-02  3.09614185e-02 -7.24917427e-02  1.13551831e-02
  -4.24125232e-02 -4.15499918e-02 -4.21007983e-02 -5.28523177e-02
  -1.90749858e-02 -5.44439023e-03 -1.56517457e-02  8.53834860e-03]"
-77,../models/Simple Tests/UseCaseTest.sysml,"package UseCaseTest {
+77,../SysML-v2-release-src/examples/Simple Tests/UseCaseTest.sysml,"package UseCaseTest {
 
 	part def System;	
 	part def User;
@@ -12834,7 +12834,7 @@ This structure leverages SysML's capabilities to model system behaviors and inte
  -1.05064332e-01  1.08332202e-01 -1.34953773e-02  1.07311551e-02
   6.06077053e-02  5.15074376e-03  4.84806895e-02 -5.07650804e-03
   4.99807633e-02  5.15986606e-02  3.67066078e-02  4.24339324e-02]"
-78,../models/Simple Tests/VariabilityTest.sysml,"package VariabilityTest {
+78,../SysML-v2-release-src/examples/Simple Tests/VariabilityTest.sysml,"package VariabilityTest {
 	part def P {
 		attribute a;
 	}
@@ -12987,7 +12987,7 @@ I need this model to capture various aspects of variability and their relationsh
  -8.21973011e-02  3.95860709e-02 -8.53275359e-02  3.12864147e-02
   2.24345233e-02 -1.22577706e-02  4.66117077e-02 -1.22097999e-01
   2.48617958e-02 -8.75965052e-04 -4.03109305e-02  4.77271564e-02]"
-79,../models/Simple Tests/VerificationTest.sysml,"package VerificationTest {
+79,../SysML-v2-release-src/examples/Simple Tests/VerificationTest.sysml,"package VerificationTest {
 
 	part def V {
 		m : ScalarValues::Integer;
@@ -13148,7 +13148,7 @@ This concise description outlines the structure and components of the SysML v2 m
  -7.00135753e-02  9.22568366e-02 -1.25453234e-01  3.76848094e-02
  -1.51593685e-02 -3.23298462e-02  2.90037505e-02 -5.07132411e-02
   2.98963953e-02  4.64606397e-02 -2.27704123e-02 -5.10237552e-02]"
-80,../models/Simple Tests/ViewTest.sysml,"package ViewTest {
+80,../SysML-v2-release-src/examples/Simple Tests/ViewTest.sysml,"package ViewTest {
 	package P {
 		public part p1;
 		private part p2;
@@ -13293,7 +13293,7 @@ This concise structure allows for systematic representation of stakeholders, con
  -8.58644098e-02  7.42457211e-02  1.77753833e-03  1.31691247e-02
   2.75837947e-02 -3.26269902e-02  7.48471022e-02 -4.70928475e-02
  -2.32050903e-02 -1.98448859e-02 -3.41173597e-02  2.81219333e-02]"
-81,../models/State Space Representation Examples/CartSample.sysml,"// State Space Representation cart example
+81,../SysML-v2-release-src/examples/State Space Representation Examples/CartSample.sysml,"// State Space Representation cart example
 
 package CartSample {
     private import StateSpaceRepresentation::*;
@@ -13486,7 +13486,7 @@ This concise description outlines the key components, attributes, and the intera
  -9.56174806e-02  1.03257276e-01 -9.85784736e-03  6.30685464e-02
  -3.78710567e-04  5.95026882e-03  8.57512727e-02 -4.21054922e-02
   3.36590260e-02 -2.70371921e-02 -3.47609930e-02  1.84146676e-03]"
-82,../models/State Space Representation Examples/EVSample.sysml,"// State Space Representation EV example
+82,../SysML-v2-release-src/examples/State Space Representation Examples/EVSample.sysml,"// State Space Representation EV example
 package EVSample {
     private import SI::*;
     private import StateSpaceRepresentation::*;
@@ -13922,7 +13922,7 @@ This model allows for concerted analysis and simulation aimed at evaluating and 
  -3.93572338e-02  7.99969733e-02 -2.12760363e-02  7.55212381e-02
  -7.93302581e-02 -9.47546214e-03  6.31446242e-02 -2.45526694e-02
   3.15553099e-02 -1.57293882e-02 -1.27114262e-02 -1.73202492e-02]"
-83,../models/v1 Spec Examples/8.4.1 Wheel Hub Assembly/Wheel Package - Updated.sysml,"package 'Wheel Package - Updated' {
+83,../SysML-v2-release-src/examples/v1 Spec Examples/8.4.1 Wheel Hub Assembly/Wheel Package - Updated.sysml,"package 'Wheel Package - Updated' {
 	doc
 	/*
 	 * Example from the SysML 1.6 spec, subclause 8.4.1 Wheel Hub Assembly.
@@ -14136,7 +14136,7 @@ This description succinctly outlines the purpose and structure of the SysML v2 m
  -6.95948154e-02  5.50769977e-02 -7.73831010e-02  1.06548078e-01
  -2.91190799e-02  1.46816541e-02  3.90919298e-02 -4.34276983e-02
  -7.37454817e-02  3.43493260e-02  1.41853532e-02 -4.85500246e-02]"
-84,../models/v1 Spec Examples/8.4.1 Wheel Hub Assembly/Wheel Package.sysml,"package 'Wheel Package' {
+84,../SysML-v2-release-src/examples/v1 Spec Examples/8.4.1 Wheel Hub Assembly/Wheel Package.sysml,"package 'Wheel Package' {
 	doc
 	/*
 	 * Example from the SysML 1.6 spec, subclause 8.4.1 Wheel Hub Assembly.
@@ -14351,7 +14351,7 @@ This succinctly captures the architecture of a wheel assembly, detailing parts, 
  -8.56592581e-02  7.24395886e-02 -4.39564027e-02  8.46582130e-02
  -2.36030184e-02  5.95558109e-03  6.46598712e-02 -2.87454091e-02
  -8.55390653e-02  4.00803797e-02  1.22166174e-02 -1.50478128e-02]"
-85,../models/v1 Spec Examples/8.4.5 Constraining Decomposition/Vehicle Decomposition - Updated.sysml,"package 'Vehicle Decomposition - Updated' {
+85,../SysML-v2-release-src/examples/v1 Spec Examples/8.4.5 Constraining Decomposition/Vehicle Decomposition - Updated.sysml,"package 'Vehicle Decomposition - Updated' {
 	doc
 	/*
 	 * Example from the SysML 1.6 spec, subclause 8.4.5 Constraining Decomposition,
@@ -14535,7 +14535,7 @@ Overall, the model showcases a hierarchical decomposition of a vehicle emphasizi
  -6.29338920e-02  1.04553528e-01 -8.31840783e-02  2.93756295e-02
  -8.28589965e-03  1.15167256e-02  7.28617236e-02 -7.63249397e-02
  -2.73509510e-02  3.21586281e-02  8.13068077e-03  3.50335613e-02]"
-86,../models/v1 Spec Examples/8.4.5 Constraining Decomposition/Vehicle Decomposition.sysml,"package 'Vehicle Decomposition' {
+86,../SysML-v2-release-src/examples/v1 Spec Examples/8.4.5 Constraining Decomposition/Vehicle Decomposition.sysml,"package 'Vehicle Decomposition' {
 	doc
 	/*
 	 * Example from the SysML 1.6 spec, subclause 8.4.5 Constraining Decomposition.
@@ -14713,7 +14713,7 @@ This concise structure allows for a clear representation of the vehicle's assemb
  -8.52082148e-02  9.36210379e-02 -5.56901842e-02  9.53358412e-03
   2.71741371e-03  1.15212360e-02  1.04887523e-01 -8.68019313e-02
  -3.53172645e-02  3.11183017e-02  3.22927795e-02  3.34467404e-02]"
-87,../models/v1 Spec Examples/D.4.7.8 Dynamics/HSUVDynamics.sysml,"package HSUVDynamics {
+87,../SysML-v2-release-src/examples/v1 Spec Examples/D.4.7.8 Dynamics/HSUVDynamics.sysml,"package HSUVDynamics {
 	private import ScalarValues::*;
 	private import SequenceFunctions::size;
 	private import ControlFunctions::*;
@@ -14910,7 +14910,7 @@ Each equation is defined with appropriate attributes, and the use of ordered col
  -6.03198409e-02  6.72369227e-02 -3.76378223e-02  9.99181718e-03
   1.94689271e-03 -3.97305414e-02  7.14221597e-02 -5.02700843e-02
  -2.89382655e-02  6.81455359e-02  1.37404324e-02 -1.12706153e-02]"
-88,../models/Variability Examples/VehicleVariabilityModel.sysml,"package VehicleVariabilityModel {
+88,../SysML-v2-release-src/examples/Variability Examples/VehicleVariabilityModel.sysml,"package VehicleVariabilityModel {
 
 	package DesignModel {
 		public import PartDefinitions::*;
@@ -15194,7 +15194,7 @@ This concise description captures the essential structure and relationships with
  -6.88869134e-02  7.47819319e-02 -9.69567820e-02  5.75423874e-02
   1.98664464e-04 -1.94696337e-02  7.05761388e-02 -8.52559581e-02
   1.52913304e-02  7.16197044e-02 -2.49144272e-03  4.21393517e-04]"
-89,../models/Vehicle Example/SysML v2 Spec Annex A SimpleVehicleModel.sysml,"package SimpleVehicleModel{
+89,../SysML-v2-release-src/examples/Vehicle Example/SysML v2 Spec Annex A SimpleVehicleModel.sysml,"package SimpleVehicleModel{
     // 2023-02 release
     public import Definitions::*;  
     public import ISQ::*;
@@ -16890,7 +16890,7 @@ This model provides a holistic design approach, capturing both the physical and 
  -4.12016399e-02  1.26976237e-01 -6.68270513e-02  6.20731562e-02
  -2.27481835e-02 -1.95633713e-02  7.54628256e-02 -3.52765620e-02
  -1.14332959e-02  1.38145626e-01 -3.10619804e-03  2.71610487e-02]"
-90,../models/Vehicle Example/VehicleDefinitions.sysml,"package VehicleDefinitions {
+90,../SysML-v2-release-src/examples/Vehicle Example/VehicleDefinitions.sysml,"package VehicleDefinitions {
 	doc
 	/*
 	 * Example vehicle definitions model.
@@ -17055,7 +17055,7 @@ In summary, the model should encapsulate vehicle definitions, including the part
  -7.25593492e-02  8.86927471e-02 -4.21714149e-02  8.08100253e-02
  -4.63991892e-03  1.04897295e-03  6.81748986e-02 -5.52374050e-02
  -3.46750692e-02  8.24829116e-02  2.49356609e-02  3.06700226e-02]"
-91,../models/Vehicle Example/VehicleIndividuals.sysml,"package VehicleIndividuals {
+91,../SysML-v2-release-src/examples/Vehicle Example/VehicleIndividuals.sysml,"package VehicleIndividuals {
 	private import VehicleUsages::*;
 	private import Time::DateTime;
 	private import SI::kg;
@@ -17283,7 +17283,7 @@ This model effectively captures the definitions, states, and configurations of v
  -8.48830268e-02  1.42340526e-01 -7.85474181e-02  2.20815539e-02
  -7.47497566e-03 -3.92005481e-02  8.33505318e-02 -2.01744158e-02
  -8.57548043e-03  1.68762561e-02 -4.11287928e-03 -1.04339579e-02]"
-92,../models/Vehicle Example/VehicleUsages.sysml,"package VehicleUsages {
+92,../SysML-v2-release-src/examples/Vehicle Example/VehicleUsages.sysml,"package VehicleUsages {
 	doc
 	/*
 	 * Example usages of elements from the vehicle definitions model.

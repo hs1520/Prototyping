@@ -1,5 +1,5 @@
 ,file_path,raw_content
-0,../models/Analysis Examples/AnalysisAnnotation.sysml,"package AnalysisAnnotation {
+0,../SysML-v2-release-src/examples/Analysis Examples/AnalysisAnnotation.sysml,"package AnalysisAnnotation {
 	private import ScalarValues::Real;
 	private import AnalysisTooling::*;
 	private import ISQ::*;
@@ -25,7 +25,7 @@
 	}
 
 }"
-1,../models/Analysis Examples/Dynamics.sysml,"package Dynamics {
+1,../SysML-v2-release-src/examples/Analysis Examples/Dynamics.sysml,"package Dynamics {
 	private import ScalarValues::Real;
 	private import ISQ::*;
 	
@@ -116,7 +116,7 @@
 		bind x_out = pos.x;
 	}
 }"
-2,../models/Analysis Examples/Turbojet Stage Analysis.sysml,"package 'Turbojet Stage Analysis' {
+2,../SysML-v2-release-src/examples/Analysis Examples/Turbojet Stage Analysis.sysml,"package 'Turbojet Stage Analysis' {
 	private import Quantities::ScalarQuantityValue;
 	private import MeasurementReferences::DimensionOneValue;
 	private import ISQ::*;
@@ -226,7 +226,7 @@
 	}	
 	
 }"
-3,../models/Analysis Examples/Vehicle Analysis Demo.sysml,"package 'Vehicle Analysis Demo' {
+3,../SysML-v2-release-src/examples/Analysis Examples/Vehicle Analysis Demo.sysml,"package 'Vehicle Analysis Demo' {
     private import ScalarValues::*;
     private import ISQ::*;
     private import USCustomaryUnits::*;
@@ -512,7 +512,7 @@
 	    satisfy vehicleFuelEconomyRequirementsGroup by vehicle_c1_analysized;
 	}
 }"
-4,../models/Arrowhead Framework Example/AHFCoreLib.sysml,"// /** Mandatory Services and Systems */
+4,../SysML-v2-release-src/examples/Arrowhead Framework Example/AHFCoreLib.sysml,"// /** Mandatory Services and Systems */
 library package AHFCoreLib {
 	private import AHFProfileLib::*;
 	private import ScalarValues::*;
@@ -567,7 +567,7 @@ library package AHFCoreLib {
 		}
 	}
 }"
-5,../models/Arrowhead Framework Example/AHFNorwayTopics.sysml,"package AHFNorway {
+5,../SysML-v2-release-src/examples/Arrowhead Framework Example/AHFNorwayTopics.sysml,"package AHFNorway {
 	doc /* This is the Norwegian use-case for Arrowhead Framework */
 	// The use-case is for Productive4.0 and Arrowhead Tools
 	// The system is taken from a chemical factory
@@ -727,7 +727,7 @@ library package AHFCoreLib {
 	}
 	
 }"
-6,../models/Arrowhead Framework Example/AHFProfileLib.sysml,"library package AHFProfileLib {
+6,../SysML-v2-release-src/examples/Arrowhead Framework Example/AHFProfileLib.sysml,"library package AHFProfileLib {
 	// Systems and Services and their functionalities
 	private import ScalarValues::*;
 	
@@ -844,7 +844,7 @@ library package AHFProfileMetadata{
 	}	
 	
 }"
-7,../models/Arrowhead Framework Example/AHFSequences.sysml,"// ** This is the Norwegian use-case for Arrowhead Framework */
+7,../SysML-v2-release-src/examples/Arrowhead Framework Example/AHFSequences.sysml,"// ** This is the Norwegian use-case for Arrowhead Framework */
 package AHFNorwaySequences {
 	// Here we show sequences of the Norwegian use-case
 	private import AHFProfileLib::*;
@@ -966,7 +966,7 @@ package AHFNorwaySequences {
 		
 	}
 }"
-8,../models/Association Examples/ProductSelection_N_ary.sysml,"package ProductSelection_N_ary_SysML {
+8,../SysML-v2-release-src/examples/Association Examples/ProductSelection_N_ary.sysml,"package ProductSelection_N_ary_SysML {
 	
 	item def ShoppingCart;
 	item def Product;
@@ -987,7 +987,7 @@ package AHFNorwaySequences {
 	}
 	
 }"
-9,../models/Association Examples/ProductSelection_OwnedEnds.sysml,"package ProductSelection_OwnedEnds_SysML {
+9,../SysML-v2-release-src/examples/Association Examples/ProductSelection_OwnedEnds.sysml,"package ProductSelection_OwnedEnds_SysML {
 	
 	item def SelectionInfo;
 	item def ShoppingCart;
@@ -1034,7 +1034,7 @@ package AHFNorwaySequences {
 	}
 	
 }"
-10,../models/Association Examples/ProductSelection_UnownedEnds.sysml,"package ProductSelection_UnownedEnds_SysML {
+10,../SysML-v2-release-src/examples/Association Examples/ProductSelection_UnownedEnds.sysml,"package ProductSelection_UnownedEnds_SysML {
 	
 	item def SelectionInfo;
 	item def ShoppingCart {
@@ -1071,7 +1071,7 @@ package AHFNorwaySequences {
 	}
 	
 }"
-11,../models/Camera Example/Camera.sysml,"part def Camera {
+11,../SysML-v2-release-src/examples/Camera Example/Camera.sysml,"part def Camera {
 	private import PictureTaking::*;
 	
 	perform action takePicture[*] :> PictureTaking::takePicture;
@@ -1085,7 +1085,7 @@ package AHFNorwaySequences {
 	}
 	
 }"
-12,../models/Camera Example/PictureTaking.sysml,"package PictureTaking {
+12,../SysML-v2-release-src/examples/Camera Example/PictureTaking.sysml,"package PictureTaking {
 	part def Exposure;
 	
 	action def Focus { out xrsl: Exposure; }
@@ -1097,7 +1097,7 @@ package AHFNorwaySequences {
 		action shoot: Shoot[1];
 	}
 }"
-13,../models/Cause and Effect Examples/CauseAndEffectExample.sysml,"package CauseAndEffectExample {
+13,../SysML-v2-release-src/examples/Cause and Effect Examples/CauseAndEffectExample.sysml,"package CauseAndEffectExample {
 	private import CauseAndEffect::*;
 	
 	part def Causer1;
@@ -1152,7 +1152,7 @@ package AHFNorwaySequences {
 		}
 	}
 }"
-14,../models/Cause and Effect Examples/MedicalDeviceFailure.sysml,"package MedicalDeviceFailure {
+14,../SysML-v2-release-src/examples/Cause and Effect Examples/MedicalDeviceFailure.sysml,"package MedicalDeviceFailure {
 	private import CauseAndEffect::*;
 	
 	part medicalDevice {
@@ -1177,7 +1177,7 @@ package AHFNorwaySequences {
 	}	
 	
 }"
-15,../models/Comment Examples/Comments.sysml,"package Comments {
+15,../SysML-v2-release-src/examples/Comment Examples/Comments.sysml,"package Comments {
 	doc /* Documentation Comment */
 
 	doc /* Documentation about Package */
@@ -1192,7 +1192,7 @@ package AHFNorwaySequences {
 		comment about Comments /* Comment about Package */
 	}
 }"
-16,../models/Flashlight Example/Flashlight Example.sysml,"package 'Flashlight Example' {
+16,../SysML-v2-release-src/examples/Flashlight Example/Flashlight Example.sysml,"package 'Flashlight Example' {
 	
 	attribute def OnOffCmd;
 	attribute def Light;
@@ -1252,7 +1252,7 @@ package AHFNorwaySequences {
 	
 	
 }"
-17,../models/Geometry Examples/CarWithEnvelopingShape.sysml,"package CarWithEnvelopingShape {
+17,../SysML-v2-release-src/examples/Geometry Examples/CarWithEnvelopingShape.sysml,"package CarWithEnvelopingShape {
 	private import ShapeItems::Box;
 	private import SI::mm;
 
@@ -1269,7 +1269,7 @@ package AHFNorwaySequences {
 		}
 	}
 }"
-18,../models/Geometry Examples/CarWithShapeAndCSG.sysml,"package CarWithShapeAndCSG {
+18,../SysML-v2-release-src/examples/Geometry Examples/CarWithShapeAndCSG.sysml,"package CarWithShapeAndCSG {
 	private import SpatialItems::*;
 	private import ShapeItems::*;
 	private import Objects::Point;
@@ -1357,7 +1357,7 @@ package AHFNorwaySequences {
 		}
 	}
 }"
-19,../models/Geometry Examples/ExternalShapeRefExample.sysml,"package ExternalShapeRefExample {
+19,../SysML-v2-release-src/examples/Geometry Examples/ExternalShapeRefExample.sysml,"package ExternalShapeRefExample {
 	private import ScalarValues::String;
 	private import ShapeItems::*;
 	private import ISQ::mass;
@@ -1388,7 +1388,7 @@ package AHFNorwaySequences {
 		}
 	}
 }"
-20,../models/Geometry Examples/SimpleQuadcopter.sysml,"package SimpleQuadcopter {
+20,../SysML-v2-release-src/examples/Geometry Examples/SimpleQuadcopter.sysml,"package SimpleQuadcopter {
     private import ISQ::*;
     private import SI::*;
     private import SpatialItems::*;
@@ -1635,7 +1635,7 @@ package AHFNorwaySequences {
         
     }
 }"
-21,../models/Geometry Examples/VehicleGeometryAndCoordinateFrames.sysml,"package VehicleGeometryAndCoordinateFrames {
+21,../SysML-v2-release-src/examples/Geometry Examples/VehicleGeometryAndCoordinateFrames.sysml,"package VehicleGeometryAndCoordinateFrames {
     private import TrigFunctions::*;
     private import ISQ::*;
     private import SI::*;
@@ -1767,7 +1767,7 @@ package AHFNorwaySequences {
     }
 }
 "
-22,../models/Import Tests/AliasImport.sysml,"package AliasImport {
+22,../SysML-v2-release-src/examples/Import Tests/AliasImport.sysml,"package AliasImport {
 	package Definitions {
 	    part def Vehicle;
 	    
@@ -1780,7 +1780,7 @@ package AHFNorwaySequences {
 	    part vehicle : Car;
 	}
 }"
-23,../models/Import Tests/CircularImport.sysml,"package CircularImport {
+23,../SysML-v2-release-src/examples/Import Tests/CircularImport.sysml,"package CircularImport {
 
 	package P1 {
 		public import P2::*;
@@ -1807,7 +1807,7 @@ package AHFNorwaySequences {
 	part y: P1::B;
 	
 }"
-24,../models/Import Tests/PrivateImportTest.sysml,"package PrivateImportTest {
+24,../SysML-v2-release-src/examples/Import Tests/PrivateImportTest.sysml,"package PrivateImportTest {
 	package P1 {
 		part def A;
 	}
@@ -1840,7 +1840,7 @@ package AHFNorwaySequences {
 		part z1: A;
 	}	
 }"
-25,../models/Import Tests/QualifiedNameImportTest.sysml,"package QualifiedNameImportTest {
+25,../SysML-v2-release-src/examples/Import Tests/QualifiedNameImportTest.sysml,"package QualifiedNameImportTest {
 	package P1 {
 		part def A;
 	}
@@ -1853,7 +1853,7 @@ package AHFNorwaySequences {
 		part x: P2a::A;
 	}
 }"
-26,../models/Individuals Examples/AnalysisIndividualExample.sysml,"package AnalysisIndividualExample {
+26,../SysML-v2-release-src/examples/Individuals Examples/AnalysisIndividualExample.sysml,"package AnalysisIndividualExample {
     private import ScalarValues::*;
     private import Quantities::*;
     private import ISQ::*;
@@ -1948,7 +1948,7 @@ package AHFNorwaySequences {
 	}
 	
 }"
-27,../models/Individuals Examples/JohnIndividualExample.sysml,"package JohnIndividualExample {
+27,../SysML-v2-release-src/examples/Individuals Examples/JohnIndividualExample.sysml,"package JohnIndividualExample {
 	
 	item def Person {
 		doc	
@@ -2005,7 +2005,7 @@ package AHFNorwaySequences {
 		ref :>> presidentOfUS : John;
 	}
 }"
-28,../models/Interaction Sequencing Examples/ServerSequenceModel.sysml,"package ServerSequenceModel {
+28,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceModel.sysml,"package ServerSequenceModel {
 	private import ScalarValues::String;
 	public import SignalDefinitions::*;
 
@@ -2047,7 +2047,7 @@ package AHFNorwaySequences {
 		}
 	}
 }"
-29,../models/Interaction Sequencing Examples/ServerSequenceModelOutside.sysml,"package ServerSequenceModelOutside {
+29,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceModelOutside.sysml,"package ServerSequenceModelOutside {
 	public import ServerSequenceModel::*;
 
 	part def PubSubSequenceOutside :> PubSubSequence {
@@ -2067,7 +2067,7 @@ package AHFNorwaySequences {
 		}
 	}
 }"
-30,../models/Interaction Sequencing Examples/ServerSequenceOutsideRealization-2.sysml,"package ServerSequenceOutsideRealization_2 {
+30,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceOutsideRealization-2.sysml,"package ServerSequenceOutsideRealization_2 {
 	private import ScalarValues::String;
 	private import ServerSequenceModelOutside::*;
 	private import Configuration::*;
@@ -2164,7 +2164,7 @@ package AHFNorwaySequences {
  		bind server_2.serverBehavior.delivering.accepter.acceptedMessage = publish_message;
 	}
 }"
-31,../models/Interaction Sequencing Examples/ServerSequenceOutsideRealization-3.sysml,"package ServerSequenceOutsideRealization_3 {
+31,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceOutsideRealization-3.sysml,"package ServerSequenceOutsideRealization_3 {
 	private import ScalarValues::String;
 	private import ServerSequenceModelOutside::*;
 	private import Configuration::*;
@@ -2323,7 +2323,7 @@ package AHFNorwaySequences {
 		}
 	}
 }"
-32,../models/Interaction Sequencing Examples/ServerSequenceRealization-2.sysml,"package ServerSequenceRealization_2 {
+32,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceRealization-2.sysml,"package ServerSequenceRealization_2 {
 	private import ScalarValues::String;
 	private import ServerSequenceModel::*;
 	private import Configuration::*;
@@ -2425,7 +2425,7 @@ package AHFNorwaySequences {
  		bind server_2.serverBehavior.delivering.accepter.acceptedMessage = publish_message;
 	}
 }"
-33,../models/Interaction Sequencing Examples/ServerSequenceRealization-3.sysml,"package ServerSequenceRealization_3 {
+33,../SysML-v2-release-src/examples/Interaction Sequencing Examples/ServerSequenceRealization-3.sysml,"package ServerSequenceRealization_3 {
 	private import ScalarValues::String;
 	private import ServerSequenceModel::*;
 	private import Configuration::*;
@@ -2576,7 +2576,7 @@ package AHFNorwaySequences {
 		}
 	}
 }"
-34,../models/Mass Roll-up Example/MassConstraintExample.sysml,"package MassConstraintExample {
+34,../SysML-v2-release-src/examples/Mass Roll-up Example/MassConstraintExample.sysml,"package MassConstraintExample {
 	private import ISQ::*;
 	private import SI::*;
 	private import NumericalFunctions::*;
@@ -2693,7 +2693,7 @@ package AHFNorwaySequences {
 	}	
 	
 }"
-35,../models/Mass Roll-up Example/MassRollup.sysml,"package MassRollup {
+35,../SysML-v2-release-src/examples/Mass Roll-up Example/MassRollup.sysml,"package MassRollup {
 	private import NumericalFunctions::*;
 	
 	part def MassedThing {
@@ -2720,7 +2720,7 @@ package AHFNorwaySequences {
 	}
 
 }"
-36,../models/Mass Roll-up Example/Vehicles.sysml,"package VehicleMasses {
+36,../SysML-v2-release-src/examples/Mass Roll-up Example/Vehicles.sysml,"package VehicleMasses {
 	private import ScalarValues::*;
 	private import MassRollup::*;
 	
@@ -2757,7 +2757,7 @@ package AHFNorwaySequences {
 	
 	// c.totalMass --> 1150.0 [kg]
 }"
-37,../models/Metadata Examples/IssueMetadataExample.sysml,"package IssueMetadataExample {
+37,../SysML-v2-release-src/examples/Metadata Examples/IssueMetadataExample.sysml,"package IssueMetadataExample {
 	private import ModelingMetadata::Issue;
 	
     //Example: the following identifies an issue with the interface
@@ -2787,7 +2787,7 @@ package AHFNorwaySequences {
         connect engine.drivePwrPort to transmission.clutchPort;       
 
 }"
-38,../models/Metadata Examples/RationaleMetadataExample.sysml,"package RationaleMetadataExample {
+38,../SysML-v2-release-src/examples/Metadata Examples/RationaleMetadataExample.sysml,"package RationaleMetadataExample {
 	private import ModelingMetadata::Rationale;
 	
     /* Example: the following provides the rationale for selecting the engine4cyl based on a trade study analysis. 
@@ -2811,7 +2811,7 @@ package AHFNorwaySequences {
         return selectedEngine :> engine;
      }
 }"
-39,../models/Metadata Examples/RequirementMetadataExample.sysml,"package RequirementMetadataExample {
+39,../SysML-v2-release-src/examples/Metadata Examples/RequirementMetadataExample.sysml,"package RequirementMetadataExample {
 	private import Metaobjects::SemanticMetadata;
 	private import ModelingMetadata::*;
 	private import RiskMetadata::*;
@@ -2845,7 +2845,7 @@ package AHFNorwaySequences {
     }
     
 }"
-40,../models/Metadata Examples/RiskMetadataExample.sysml,"package RiskMetadataExample {
+40,../SysML-v2-release-src/examples/Metadata Examples/RiskMetadataExample.sysml,"package RiskMetadataExample {
 	private import RiskMetadata::*;
 	private import RiskLevelEnum::*;
 	
@@ -2864,7 +2864,7 @@ package AHFNorwaySequences {
     }
         
 }"
-41,../models/Metadata Examples/VerificationMetadataExample.sysml,"package VerificationMetadataExample {
+41,../SysML-v2-release-src/examples/Metadata Examples/VerificationMetadataExample.sysml,"package VerificationMetadataExample {
 	private import VerificationCases::*;
 	private import VerificationMethodKind::*;
 	
@@ -2879,7 +2879,7 @@ package AHFNorwaySequences {
     }
 	
 }"
-42,../models/Packet Example/Packets.sysml,"package Packets {
+42,../SysML-v2-release-src/examples/Packet Example/Packets.sysml,"package Packets {
 	private import ScalarValues::*;
 	private import Time::DateTime;
 	
@@ -2914,7 +2914,7 @@ package AHFNorwaySequences {
 	}
 	
 }"
-43,../models/Packet Example/PacketUsage.sysml,"package 'Packet Usage' {
+43,../SysML-v2-release-src/examples/Packet Example/PacketUsage.sysml,"package 'Packet Usage' {
 	public import Packets::*;
 	private import ScalarValues::Real;
 	
@@ -2931,7 +2931,7 @@ package AHFNorwaySequences {
 }
 	
 "
-44,../models/Requirements Examples/HSUVRequirements.sysml,"package HSUVRequirements {
+44,../SysML-v2-release-src/examples/Requirements Examples/HSUVRequirements.sysml,"package HSUVRequirements {
 	private import Requirements::*;
 	
 	requirement <'UR1.1'> Load: FunctionalRequirementCheck {
@@ -2970,7 +2970,7 @@ package AHFNorwaySequences {
 		require Ergonomics;
 	}
 }"
-45,../models/Requirements Examples/RequirementDerivationExample.sysml,"package RequirementDerivationExample {
+45,../SysML-v2-release-src/examples/Requirements Examples/RequirementDerivationExample.sysml,"package RequirementDerivationExample {
 	private import RequirementDerivation::*;
 	
 	requirement def Req1;
@@ -3009,7 +3009,7 @@ package AHFNorwaySequences {
 	}
 	
 }"
-46,../models/Requirements Examples/VehicleRequirementDerivation.sysml,"package VehicleRequirementDerivation {
+46,../SysML-v2-release-src/examples/Requirements Examples/VehicleRequirementDerivation.sysml,"package VehicleRequirementDerivation {
 	private import RequirementDerivation::*;
 	
 	part vehicle {
@@ -3049,7 +3049,7 @@ package AHFNorwaySequences {
 	}
 	
 }"
-47,../models/Room Model/RoomModel.sysml,"// SysML v2 Interpretation of the SysML v1 Room Connection Example
+47,../SysML-v2-release-src/examples/Room Model/RoomModel.sysml,"// SysML v2 Interpretation of the SysML v1 Room Connection Example
 package RoomModel { 
     package RoomDefinitionModelLibrary{
         private import Port_Definitions::*;
@@ -3127,7 +3127,7 @@ package RoomModel {
 
 
 "
-48,../models/Simple Tests/ActionTest.sysml,"package ActionTest {
+48,../SysML-v2-release-src/examples/Simple Tests/ActionTest.sysml,"package ActionTest {
 	action def A{ in x; }
 	
 	action a: A { 
@@ -3180,7 +3180,7 @@ package RoomModel {
 		then terminate;
 	}	
 }"
-49,../models/Simple Tests/AliasTest.sysml,"package AliasTest {
+49,../SysML-v2-release-src/examples/Simple Tests/AliasTest.sysml,"package AliasTest {
 	private import ISQSpaceTime::breadth; // import of an alias
 	attribute b :> breadth;
 	
@@ -3202,7 +3202,7 @@ package RoomModel {
     connect p1.po1 to p2.pdest;
 	connect p1.po1 to p2.pd1;
 }"
-50,../models/Simple Tests/AllocationTest.sysml,"package AllocationTest {
+50,../SysML-v2-release-src/examples/Simple Tests/AllocationTest.sysml,"package AllocationTest {
 	part def Logical {
 		part component;
 	}
@@ -3237,7 +3237,7 @@ package RoomModel {
 
 	allocate l.component to p.assembly.element;
 }"
-51,../models/Simple Tests/AnalysisTest.sysml,"package AnalysisTest {
+51,../SysML-v2-release-src/examples/Simple Tests/AnalysisTest.sysml,"package AnalysisTest {
 
 	part def V {
 		m;
@@ -3275,7 +3275,7 @@ package RoomModel {
 		}
 	}
 }"
-52,../models/Simple Tests/AssignmentTest.sysml,"package AssignmentTest {
+52,../SysML-v2-release-src/examples/Simple Tests/AssignmentTest.sysml,"package AssignmentTest {
 	
 	part def Counter {
 		attribute count : ScalarValues::Integer := 0;
@@ -3327,7 +3327,7 @@ package RoomModel {
 		assign counting.counter.count := Increment(counting.counter).count;
 	}
 }"
-53,../models/Simple Tests/CalculationTest.sysml,"package CalculationExample {
+53,../SysML-v2-release-src/examples/Simple Tests/CalculationTest.sysml,"package CalculationExample {
 	private import ISQ::*;
 	private import NumericalFunctions::*;
 	
@@ -3357,7 +3357,7 @@ package RoomModel {
 	attribute masses1[*] = (vehicles as VehiclePart).m;
 	attribute masses2[*] = (vehicles as vehicle).m;
 }"
-54,../models/Simple Tests/CommentTest.sysml,"  /* AAA */
+54,../SysML-v2-release-src/examples/Simple Tests/CommentTest.sysml,"  /* AAA */
   //a lexical comment (""note"") is not a part of model
 package CommentTest {
 	// inside package
@@ -3401,7 +3401,7 @@ package CommentTest {
 	/* abc */
 	part def A;
 }"
-55,../models/Simple Tests/ConjugationTest.sysml,"package ConjugationTest {
+55,../SysML-v2-release-src/examples/Simple Tests/ConjugationTest.sysml,"package ConjugationTest {
 	port def P;
 	
 	part def B {
@@ -3436,7 +3436,7 @@ package CommentTest {
 	}
 	
 }"
-56,../models/Simple Tests/ConnectionTest.sysml,"package ConnectionTest {
+56,../SysML-v2-release-src/examples/Simple Tests/ConnectionTest.sysml,"package ConnectionTest {
 	
 	part p {
 		part x {
@@ -3485,7 +3485,7 @@ package CommentTest {
 	
 	message : F from p to p;
 }"
-57,../models/Simple Tests/ConstraintTest.sysml,"package ConstraintTest {
+57,../SysML-v2-release-src/examples/Simple Tests/ConstraintTest.sysml,"package ConstraintTest {
 	private import ISQ::MassValue;
 	private import SI::kg;
 	private import NumericalFunctions::sum;
@@ -3575,7 +3575,7 @@ package CommentTest {
 	constraint massLimitation { mass : MassValue; massLimit : MassValue; mass < massLimit }
 	assert not massLimitation { :>> mass = vehicle3.mass; :>> massLimit = vehicle4.mass; }
 }"
-58,../models/Simple Tests/ControlNodeTest.sysml,"action def ControlNodeTest {
+58,../SysML-v2-release-src/examples/Simple Tests/ControlNodeTest.sysml,"action def ControlNodeTest {
 	action A1;
 	then J;
 	
@@ -3590,7 +3590,7 @@ package CommentTest {
 	action B1;
 	action B2;
 }"
-59,../models/Simple Tests/DecisionTest.sysml,"action def DecisionTest {
+59,../SysML-v2-release-src/examples/Simple Tests/DecisionTest.sysml,"action def DecisionTest {
 	attribute x = 1;
 	
 	decide 'test x';
@@ -3612,7 +3612,7 @@ package CommentTest {
 	first A3;
 		if x > 0 then 'test x';
 }"
-60,../models/Simple Tests/DefaultValueTest.sysml,"package DefaultValueTest {
+60,../SysML-v2-release-src/examples/Simple Tests/DefaultValueTest.sysml,"package DefaultValueTest {
 	
 	part def V {
 		attribute m default = 10;
@@ -3630,7 +3630,7 @@ package CommentTest {
 	part v2 = W();
 	
 }"
-61,../models/Simple Tests/DependencyTest.sysml,"package DependencyTest {
+61,../SysML-v2-release-src/examples/Simple Tests/DependencyTest.sysml,"package DependencyTest {
 	
 	package System {
 		package 'Application Layer';
@@ -3650,7 +3650,7 @@ package CommentTest {
 	dependency z to x, y;
 	
 }"
-62,../models/Simple Tests/EnumerationTest.sysml,"package EnumerationTest {
+62,../SysML-v2-release-src/examples/Simple Tests/EnumerationTest.sysml,"package EnumerationTest {
 	
 	attribute def Color {
 		attribute val : ScalarValues::Natural;
@@ -3704,7 +3704,7 @@ package CommentTest {
 	enum size: SizeChoice = 60.0;
 	
 }"
-63,../models/Simple Tests/FeaturePathTest.sysml,"package Q {
+63,../SysML-v2-release-src/examples/Simple Tests/FeaturePathTest.sysml,"package Q {
   part def F {
   	part a : A;
   }
@@ -3748,7 +3748,7 @@ package CommentTest {
 	
 }
 "
-64,../models/Simple Tests/ImportTest.sysml,"package ImportTest {
+64,../SysML-v2-release-src/examples/Simple Tests/ImportTest.sysml,"package ImportTest {
     package Pkg1 {
     	private import Pkg2::Pkg21::Pkg211::P211;
     	private import Pkg2::Pkg21::*;
@@ -3766,7 +3766,7 @@ package CommentTest {
         }
     }
 }"
-65,../models/Simple Tests/ItemTest.sysml,"package ItemTest {
+65,../SysML-v2-release-src/examples/Simple Tests/ItemTest.sysml,"package ItemTest {
 	
 	item f: A;
 
@@ -3789,7 +3789,7 @@ package CommentTest {
 	}
 	
 }"
-66,../models/Simple Tests/MetadataTest.sysml,"package MetadataTest {
+66,../SysML-v2-release-src/examples/Simple Tests/MetadataTest.sysml,"package MetadataTest {
 	private import 'User Defined Extensions'::*;
 	
 	library package 'User Defined Extensions' {
@@ -3831,7 +3831,7 @@ package CommentTest {
 	}	
 	
 }"
-67,../models/Simple Tests/MultiplicityTest.sysml,"package MultiplicityTest {
+67,../SysML-v2-release-src/examples/Simple Tests/MultiplicityTest.sysml,"package MultiplicityTest {
 	
 	part def P;
 	attribute n : ScalarValues::Integer = 5;
@@ -3850,7 +3850,7 @@ package CommentTest {
 		attribute x : A[i];
 	}
 }"
-68,../models/Simple Tests/OccurrenceTest.sysml,"package OccurrenceTest {
+68,../SysML-v2-release-src/examples/Simple Tests/OccurrenceTest.sysml,"package OccurrenceTest {
 	occurrence def Occ {
 		attribute a;
 		ref occurrence occ1 : Occ;
@@ -3883,7 +3883,7 @@ package CommentTest {
 	  occurrence o2;
 	}
 }"
-69,../models/Simple Tests/ParameterTest.sysml,"package ParameterTest {
+69,../SysML-v2-release-src/examples/Simple Tests/ParameterTest.sysml,"package ParameterTest {
 	attribute def A {
 		attribute x : ScalarValues::String;
 		attribute y : A;
@@ -3899,7 +3899,7 @@ package CommentTest {
 	attribute b = A(y=a, x=""""); 
 	attribute c = A(""test2"");
 }"
-70,../models/Simple Tests/PartTest.sysml,"package PartTest {
+70,../SysML-v2-release-src/examples/Simple Tests/PartTest.sysml,"package PartTest {
 	
 	part f: A;
 
@@ -3950,7 +3950,7 @@ package CommentTest {
     part p4 :> p4;
 	
 }"
-71,../models/Simple Tests/RequirementTest.sysml,"package RequirementTest {
+71,../SysML-v2-release-src/examples/Simple Tests/RequirementTest.sysml,"package RequirementTest {
 	constraint def C;
 	constraint c : C;
 	private import q::**;
@@ -3979,7 +3979,7 @@ package CommentTest {
 	assert not satisfy r1 by q;
 	
 }"
-72,../models/Simple Tests/RootPackageTest.sysml,"package P1 {
+72,../SysML-v2-release-src/examples/Simple Tests/RootPackageTest.sysml,"package P1 {
 	part def A;
 }
 
@@ -3993,7 +3993,7 @@ private import P2::*;
 package P3 {
 	part b subsets a;
 }"
-73,../models/Simple Tests/StateTest.sysml,"package StateTest {
+73,../SysML-v2-release-src/examples/Simple Tests/StateTest.sysml,"package StateTest {
 	attribute def Sig {
 		x;
 	}
@@ -4065,7 +4065,7 @@ package P3 {
 	}
 	
 }"
-74,../models/Simple Tests/StructuredControlTest.sysml,"package StructuredControlTest {
+74,../SysML-v2-release-src/examples/Simple Tests/StructuredControlTest.sysml,"package StructuredControlTest {
 	
 	action {
 		attribute i : ScalarValues::Integer := 0;
@@ -4101,7 +4101,7 @@ package P3 {
 		}
 	}
 }"
-75,../models/Simple Tests/TextualRepresentationTest.sysml,"package TextualRepresentationTest {
+75,../SysML-v2-release-src/examples/Simple Tests/TextualRepresentationTest.sysml,"package TextualRepresentationTest {
 	private import ScalarValues::Real;
 	
 	item def C {
@@ -4123,7 +4123,7 @@ package P3 {
 	}
 	
 }"
-76,../models/Simple Tests/TradeStudyTest.sysml,"package TradeStudyTest {
+76,../SysML-v2-release-src/examples/Simple Tests/TradeStudyTest.sysml,"package TradeStudyTest {
 	private import ScalarValues::Real;
 	private import TradeStudies::*;
 	
@@ -4144,7 +4144,7 @@ package P3 {
 	}
 	
 }"
-77,../models/Simple Tests/UseCaseTest.sysml,"package UseCaseTest {
+77,../SysML-v2-release-src/examples/Simple Tests/UseCaseTest.sysml,"package UseCaseTest {
 
 	part def System;	
 	part def User;
@@ -4180,7 +4180,7 @@ package P3 {
 	}
 	
 }"
-78,../models/Simple Tests/VariabilityTest.sysml,"package VariabilityTest {
+78,../SysML-v2-release-src/examples/Simple Tests/VariabilityTest.sysml,"package VariabilityTest {
 	part def P {
 		attribute a;
 	}
@@ -4221,7 +4221,7 @@ package P3 {
     }
 	
 }"
-79,../models/Simple Tests/VerificationTest.sysml,"package VerificationTest {
+79,../SysML-v2-release-src/examples/Simple Tests/VerificationTest.sysml,"package VerificationTest {
 
 	part def V {
 		m : ScalarValues::Integer;
@@ -4260,7 +4260,7 @@ package P3 {
 		}
 	}
 }"
-80,../models/Simple Tests/ViewTest.sysml,"package ViewTest {
+80,../SysML-v2-release-src/examples/Simple Tests/ViewTest.sysml,"package ViewTest {
 	package P {
 		public part p1;
 		private part p2;
@@ -4304,7 +4304,7 @@ package P3 {
 	}
 
 }"
-81,../models/State Space Representation Examples/CartSample.sysml,"// State Space Representation cart example
+81,../SysML-v2-release-src/examples/State Space Representation Examples/CartSample.sysml,"// State Space Representation cart example
 
 package CartSample {
     private import StateSpaceRepresentation::*;
@@ -4369,7 +4369,7 @@ package CartSample {
     }
 }
 "
-82,../models/State Space Representation Examples/EVSample.sysml,"// State Space Representation EV example
+82,../SysML-v2-release-src/examples/State Space Representation Examples/EVSample.sysml,"// State Space Representation EV example
 package EVSample {
     private import SI::*;
     private import StateSpaceRepresentation::*;
@@ -4689,7 +4689,7 @@ package EVSample {
     }
 }
 "
-83,../models/v1 Spec Examples/8.4.1 Wheel Hub Assembly/Wheel Package - Updated.sysml,"package 'Wheel Package - Updated' {
+83,../SysML-v2-release-src/examples/v1 Spec Examples/8.4.1 Wheel Hub Assembly/Wheel Package - Updated.sysml,"package 'Wheel Package - Updated' {
 	doc
 	/*
 	 * Example from the SysML 1.6 spec, subclause 8.4.1 Wheel Hub Assembly.
@@ -4781,7 +4781,7 @@ package EVSample {
 	}
 	
 }"
-84,../models/v1 Spec Examples/8.4.1 Wheel Hub Assembly/Wheel Package.sysml,"package 'Wheel Package' {
+84,../SysML-v2-release-src/examples/v1 Spec Examples/8.4.1 Wheel Hub Assembly/Wheel Package.sysml,"package 'Wheel Package' {
 	doc
 	/*
 	 * Example from the SysML 1.6 spec, subclause 8.4.1 Wheel Hub Assembly.
@@ -4875,7 +4875,7 @@ package EVSample {
 	}
 	
 }"
-85,../models/v1 Spec Examples/8.4.5 Constraining Decomposition/Vehicle Decomposition - Updated.sysml,"package 'Vehicle Decomposition - Updated' {
+85,../SysML-v2-release-src/examples/v1 Spec Examples/8.4.5 Constraining Decomposition/Vehicle Decomposition - Updated.sysml,"package 'Vehicle Decomposition - Updated' {
 	doc
 	/*
 	 * Example from the SysML 1.6 spec, subclause 8.4.5 Constraining Decomposition,
@@ -4943,7 +4943,7 @@ package EVSample {
 		}
 	}
 }"
-86,../models/v1 Spec Examples/8.4.5 Constraining Decomposition/Vehicle Decomposition.sysml,"package 'Vehicle Decomposition' {
+86,../SysML-v2-release-src/examples/v1 Spec Examples/8.4.5 Constraining Decomposition/Vehicle Decomposition.sysml,"package 'Vehicle Decomposition' {
 	doc
 	/*
 	 * Example from the SysML 1.6 spec, subclause 8.4.5 Constraining Decomposition.
@@ -4998,7 +4998,7 @@ package EVSample {
 		ref redefines lugBoltBR[24..28]; // 6..7 per wheel
 	}
 }"
-87,../models/v1 Spec Examples/D.4.7.8 Dynamics/HSUVDynamics.sysml,"package HSUVDynamics {
+87,../SysML-v2-release-src/examples/v1 Spec Examples/D.4.7.8 Dynamics/HSUVDynamics.sysml,"package HSUVDynamics {
 	private import ScalarValues::*;
 	private import SequenceFunctions::size;
 	private import ControlFunctions::*;
@@ -5086,7 +5086,7 @@ package EVSample {
 	}
 		
 }"
-88,../models/Variability Examples/VehicleVariabilityModel.sysml,"package VehicleVariabilityModel {
+88,../SysML-v2-release-src/examples/Variability Examples/VehicleVariabilityModel.sysml,"package VehicleVariabilityModel {
 
 	package DesignModel {
 		public import PartDefinitions::*;
@@ -5251,7 +5251,7 @@ package EVSample {
 	    }
 	}
 }"
-89,../models/Vehicle Example/SysML v2 Spec Annex A SimpleVehicleModel.sysml,"package SimpleVehicleModel{
+89,../SysML-v2-release-src/examples/Vehicle Example/SysML v2 Spec Annex A SimpleVehicleModel.sysml,"package SimpleVehicleModel{
     // 2023-02 release
     public import Definitions::*;  
     public import ISQ::*;
@@ -6832,7 +6832,7 @@ package EVSample {
 }
 
 "
-90,../models/Vehicle Example/VehicleDefinitions.sysml,"package VehicleDefinitions {
+90,../SysML-v2-release-src/examples/Vehicle Example/VehicleDefinitions.sysml,"package VehicleDefinitions {
 	doc
 	/*
 	 * Example vehicle definitions model.
@@ -6886,7 +6886,7 @@ package EVSample {
 		flow axleMount.transferredTorque to hub.appliedTorque;
 	}
 }"
-91,../models/Vehicle Example/VehicleIndividuals.sysml,"package VehicleIndividuals {
+91,../SysML-v2-release-src/examples/Vehicle Example/VehicleIndividuals.sysml,"package VehicleIndividuals {
 	private import VehicleUsages::*;
 	private import Time::DateTime;
 	private import SI::kg;
@@ -6997,7 +6997,7 @@ package EVSample {
 		}	
 	}
 }"
-92,../models/Vehicle Example/VehicleUsages.sysml,"package VehicleUsages {
+92,../SysML-v2-release-src/examples/Vehicle Example/VehicleUsages.sysml,"package VehicleUsages {
 	doc
 	/*
 	 * Example usages of elements from the vehicle definitions model.

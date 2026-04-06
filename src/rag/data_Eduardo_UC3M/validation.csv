@@ -1,5 +1,5 @@
 ,file_path,raw_content,descriptions,embeddings
-0,../../models/validation/01-Parts Tree/1a-Parts Tree.sysml,"package '1a-Parts Tree' {
+0,../SysML-v2-release-src/validation/01-Parts Tree/1a-Parts Tree.sysml,"package '1a-Parts Tree' {
 	private import SI::kg;
 	
 	package Definitions {	
@@ -219,7 +219,7 @@
  -6.96464628e-02  6.98889494e-02 -3.84338610e-02  3.64084020e-02
   5.09024523e-02 -8.66004080e-03  9.61401090e-02 -5.33185378e-02
   1.78640778e-03  4.30802666e-02  8.30749944e-02  6.90041296e-03]"
-1,../../models/validation/01-Parts Tree/1c-Parts Tree Redefinition.sysml,"package '1c-Parts Tree Redefinition' {
+1,../SysML-v2-release-src/validation/01-Parts Tree/1c-Parts Tree Redefinition.sysml,"package '1c-Parts Tree Redefinition' {
 	private import SI::kg;
 	
 	package Definitions {	
@@ -400,7 +400,7 @@
  -7.70346224e-02  1.15249651e-02 -1.91538855e-02  5.89186549e-02
  -2.70752441e-02  2.77543925e-02  2.94122268e-02 -5.15995454e-03
   8.76966515e-04  2.69364268e-02  4.56171297e-02 -6.96847774e-03]"
-2,../../models/validation/01-Parts Tree/1d-Parts Tree with Reference.sysml,"package '1d-Parts Tree with Reference' {
+2,../SysML-v2-release-src/validation/01-Parts Tree/1d-Parts Tree with Reference.sysml,"package '1d-Parts Tree with Reference' {
 	
 	package Definitions {
 		part def Vehicle;
@@ -546,7 +546,7 @@
  -6.10260889e-02  6.03324883e-02 -2.96866708e-03  2.45002620e-02
   7.29538733e-03 -1.89985577e-02  6.03529811e-02 -2.17355527e-02
  -5.66526763e-02  6.27904460e-02  3.29576321e-02  2.73239445e-02]"
-3,../../models/validation/02-Parts Interconnection/2a-Parts Interconnection.sysml,"package '2a-Parts Interconnection' {
+3,../SysML-v2-release-src/validation/02-Parts Interconnection/2a-Parts Interconnection.sysml,"package '2a-Parts Interconnection' {
 	public import Definitions::*;
 	public import Usages::*;
 
@@ -847,7 +847,7 @@
  -6.30098283e-02  9.37980637e-02 -2.88351774e-02 -5.18131256e-03
  -3.96077186e-02  1.39711211e-02  5.39031327e-02  1.56870135e-03
  -5.79437762e-02  1.04642875e-01  3.62822562e-02 -2.78817993e-02]"
-4,../../models/validation/02-Parts Interconnection/2c-Parts Interconnection-Multiple Decompositions.sysml,"package '2c-Parts Interconnection-Multiple Decompositions' {
+4,../SysML-v2-release-src/validation/02-Parts Interconnection/2c-Parts Interconnection-Multiple Decompositions.sysml,"package '2c-Parts Interconnection-Multiple Decompositions' {
 	
 	part def A1;
 	
@@ -1032,7 +1032,7 @@
  -6.79100826e-02  1.27959698e-02 -3.25754434e-02 -3.73363751e-03
  -9.68333557e-02 -2.24362314e-02  8.98464173e-02  2.62095034e-02
  -3.69006880e-02  1.04548700e-01  7.97669217e-03 -2.70062350e-02]"
-5,../../models/validation/03-Function-based Behavior/3a-Function-based Behavior-1.sysml,"package '3a-Function-based Behavior-1' {
+5,../SysML-v2-release-src/validation/03-Function-based Behavior/3a-Function-based Behavior-1.sysml,"package '3a-Function-based Behavior-1' {
 	public import Definitions::*;
 	public import Usages::*;
 
@@ -1264,7 +1264,7 @@
  -5.18362075e-02  1.62739426e-01 -2.88339611e-02  4.03418355e-02
   2.99490057e-02 -1.51155805e-02  3.72563154e-02 -8.21379293e-03
  -2.91335043e-02  3.27381641e-02 -1.41728129e-02 -1.82418115e-02]"
-6,../../models/validation/03-Function-based Behavior/3a-Function-based Behavior-2.sysml,"package '3a-Function-based Behavior-2' {
+6,../SysML-v2-release-src/validation/03-Function-based Behavior/3a-Function-based Behavior-2.sysml,"package '3a-Function-based Behavior-2' {
 	public import Definitions::*;
 	public import Usages::*;
 
@@ -1444,7 +1444,7 @@
  -2.47796695e-03  1.27363801e-01 -2.46315803e-02  3.84975150e-02
  -1.57068726e-02  4.47581196e-03  2.01675724e-02 -1.24164922e-02
  -6.07877076e-02  4.55370955e-02  1.83931887e-04 -1.64304916e-02]"
-7,../../models/validation/03-Function-based Behavior/3a-Function-based Behavior-3.sysml,"package '3a-Function-based Behavior-5' {
+7,../SysML-v2-release-src/validation/03-Function-based Behavior/3a-Function-based Behavior-3.sysml,"package '3a-Function-based Behavior-5' {
 	public import Definitions::*;
 	public import Usages::*;
 
@@ -1612,7 +1612,7 @@
  -2.83030812e-02  1.30477816e-01 -3.97376157e-03  4.81050424e-02
  -1.92253664e-02  2.79715727e-03  3.62264253e-02 -1.14211431e-02
  -9.32882726e-02  6.56662881e-02  2.55232416e-02 -2.18822248e-02]"
-8,../../models/validation/03-Function-based Behavior/3c-Function-based Behavior-structure mod-1.sysml,"package '3c-Function-based Behavior-structure mod-1' {
+8,../SysML-v2-release-src/validation/03-Function-based Behavior/3c-Function-based Behavior-structure mod-1.sysml,"package '3c-Function-based Behavior-structure mod-1' {
 	
 	part def Vehicle;
 	part def VehicleFrame;
@@ -1758,7 +1758,7 @@
  -9.82129201e-02  1.03556581e-01  2.81522945e-02  2.32787319e-02
   5.00970241e-03 -2.64839511e-02  5.72726950e-02 -2.00983007e-02
  -5.39862402e-02  7.18437582e-02  5.24150170e-02  3.63289518e-03]"
-9,../../models/validation/03-Function-based Behavior/3c-Function-based Behavior-structure mod-2.sysml,"package '3c-Function-based Behavior-structure mod-2' {
+9,../SysML-v2-release-src/validation/03-Function-based Behavior/3c-Function-based Behavior-structure mod-2.sysml,"package '3c-Function-based Behavior-structure mod-2' {
 	
 	part def Vehicle;
 	part def VehicleFrame;
@@ -1902,7 +1902,7 @@
  -1.00872055e-01  1.14581309e-01  3.31786573e-02  1.78021844e-02
   7.45447911e-03 -3.58327292e-02  6.33979216e-02 -1.92696620e-02
  -9.06855315e-02  7.31228814e-02  2.16470789e-02 -2.77355989e-03]"
-10,../../models/validation/03-Function-based Behavior/3c-Function-based Behavior-structure mod-3.sysml,"package '3c-Function-based Behavior-structure mod-3' {
+10,../SysML-v2-release-src/validation/03-Function-based Behavior/3c-Function-based Behavior-structure mod-3.sysml,"package '3c-Function-based Behavior-structure mod-3' {
 	
 	part def Vehicle;
 	part def VehicleFrame;
@@ -2032,7 +2032,7 @@ The model expresses two key actions: 'connect trailer to vehicle,' which assigns
  -7.97749534e-02  1.08124182e-01  1.18135652e-02  1.98346544e-02
   7.61626288e-03 -3.19565050e-02  5.28449751e-02 -3.43573019e-02
  -5.04384637e-02  7.54827335e-02  2.37527359e-02  1.85079351e-02]"
-11,../../models/validation/03-Function-based Behavior/3d-Function-based Behavior-item.sysml,"package '3d-Function-based Behavior-item' {
+11,../SysML-v2-release-src/validation/03-Function-based Behavior/3d-Function-based Behavior-item.sysml,"package '3d-Function-based Behavior-item' {
 	private import ScalarValues::Real;
 	public import Definitions::*;
 	public import Usages::*;
@@ -2210,7 +2210,7 @@ The model expresses two key actions: 'connect trailer to vehicle,' which assigns
  -5.61576448e-02  1.13053858e-01  2.76595503e-02  1.01336222e-02
  -9.49717760e-02  6.63681403e-02  9.46935564e-02 -8.15828517e-03
  -1.64329261e-02  9.48094726e-02 -2.67801676e-02  1.27867907e-02]"
-12,../../models/validation/03-Function-based Behavior/3e-Function-based Behavior-item.sysml,"package '3e-Function-based Behavior-item' {
+12,../SysML-v2-release-src/validation/03-Function-based Behavior/3e-Function-based Behavior-item.sysml,"package '3e-Function-based Behavior-item' {
 	public import Definitions::*;
 	
 	package Definitions {
@@ -2369,7 +2369,7 @@ The model expresses two key actions: 'connect trailer to vehicle,' which assigns
  -1.00968473e-01  1.24248534e-01 -5.37366159e-02  3.81946415e-02
   5.36305225e-03 -6.08438849e-02  8.45873207e-02 -2.93400735e-02
   1.23973563e-02  8.94790292e-02  2.57962476e-02 -2.86069661e-02]"
-13,../../models/validation/04-Functional Allocation/4a-Functional Allocation.sysml,"package '4a-Functional Allocation' {
+13,../SysML-v2-release-src/validation/04-Functional Allocation/4a-Functional Allocation.sysml,"package '4a-Functional Allocation' {
 	private import '2a-Parts Interconnection'::*;
 	private import '3a-Function-based Behavior-1'::*;
 	private import '3a-Function-based Behavior-1'::'provide power'::*;
@@ -2574,7 +2574,7 @@ The model expresses two key actions: 'connect trailer to vehicle,' which assigns
  -4.85020652e-02  8.27301592e-02 -2.21738908e-02  8.63976404e-03
  -8.11333582e-02  1.84736699e-02  1.74143258e-02 -1.73597541e-02
  -3.64919640e-02  1.36172727e-01  3.17402855e-02 -3.21980566e-02]"
-14,../../models/validation/05-State-based Behavior/5-State-based Behavior-1.sysml,"package '5-State-based Behavior-1' {
+14,../SysML-v2-release-src/validation/05-State-based Behavior/5-State-based Behavior-1.sysml,"package '5-State-based Behavior-1' {
 	private import ScalarValues::*;
 	private import ISQ::*;
 	private import '3a-Function-based Behavior-1'::*;
@@ -2905,7 +2905,7 @@ The model expresses two key actions: 'connect trailer to vehicle,' which assigns
  -9.12078172e-02  1.65623382e-01 -8.23853612e-02 -3.34367901e-02
   6.82196720e-03 -1.40799889e-02  5.55082671e-02  3.06191668e-02
  -4.01784331e-02  5.06125540e-02 -7.98839182e-02  2.23374758e-02]"
-15,../../models/validation/05-State-based Behavior/5-State-based Behavior-1a.sysml,"package '5-State-based Behavior-1a' {
+15,../SysML-v2-release-src/validation/05-State-based Behavior/5-State-based Behavior-1a.sysml,"package '5-State-based Behavior-1a' {
 	private import ScalarValues::*;
 	private import ISQ::*;
 	
@@ -3238,7 +3238,7 @@ The model expresses two key actions: 'connect trailer to vehicle,' which assigns
  -1.00620762e-01  1.21997043e-01 -4.64667715e-02 -2.94839591e-02
  -3.91894281e-02 -1.48482965e-02  6.25013113e-02  7.13391742e-03
  -3.91422063e-02  6.69329762e-02 -5.83194420e-02 -5.12363110e-03]"
-16,../../models/validation/05-State-based Behavior/5-State-based Behavior-2.sysml,"package '5-State-based Behavior-2' {
+16,../SysML-v2-release-src/validation/05-State-based Behavior/5-State-based Behavior-2.sysml,"package '5-State-based Behavior-2' {
 	private import ScalarValues::*;
 	private import ISQ::*;
 	private import '3a-Function-based Behavior-1'::*;
@@ -3461,7 +3461,7 @@ The model expresses two key actions: 'connect trailer to vehicle,' which assigns
  -7.79650360e-02  9.37143266e-02 -3.11323572e-02 -3.18766460e-02
  -1.15990955e-02  9.64766555e-03  3.23976055e-02  9.27557796e-03
  -3.50739770e-02  8.90483260e-02 -6.24215417e-02 -1.38656178e-04]"
-17,../../models/validation/06-Individual and Snapshots/6-Individual and Snapshots.sysml,"package '6-Individual and Snapshots' {
+17,../SysML-v2-release-src/validation/06-Individual and Snapshots/6-Individual and Snapshots.sysml,"package '6-Individual and Snapshots' {
 	private import ScalarValues::Real;
 	private import Time::DateTime;
 	private import ISQ::*;
@@ -3723,7 +3723,7 @@ The model expresses two key actions: 'connect trailer to vehicle,' which assigns
  -8.01342055e-02  1.53734818e-01 -2.72244979e-02  1.74764134e-02
   1.67056397e-02 -5.92725389e-02  1.14084013e-01 -3.59931551e-02
  -1.85894463e-02  3.63066383e-02 -3.76210921e-02  1.97832547e-02]"
-18,../../models/validation/07-Variant Configuration/7a-Variant Configuration - General Concept.sysml,"package '7a-Variant Configuration - General Concept' {
+18,../SysML-v2-release-src/validation/07-Variant Configuration/7a-Variant Configuration - General Concept.sysml,"package '7a-Variant Configuration - General Concept' {
 	
 	part def Vehicle;
 	
@@ -3871,7 +3871,7 @@ The model expresses two key actions: 'connect trailer to vehicle,' which assigns
  -5.49704283e-02  9.08848420e-02 -1.49960285e-02  4.56466200e-03
  -1.36154564e-02 -2.25941446e-02  1.01636775e-01 -1.91764422e-02
  -4.73739319e-02  4.78176065e-02  1.26301562e-02 -2.50044856e-02]"
-19,../../models/validation/07-Variant Configuration/7a1-Variant Configuration - General Concept-a.sysml,"package '7a1-Variant Configuration - General Concept-a' {
+19,../SysML-v2-release-src/validation/07-Variant Configuration/7a1-Variant Configuration - General Concept-a.sysml,"package '7a1-Variant Configuration - General Concept-a' {
 	
 	action doX;
 	action doY;
@@ -4045,7 +4045,7 @@ The model expresses two key actions: 'connect trailer to vehicle,' which assigns
  -9.01784450e-02  1.08954817e-01  7.58611457e-03 -6.73140050e-04
  -2.43381355e-02  1.38191320e-02  1.01476513e-01 -1.47110671e-02
  -6.09569736e-02  7.59752989e-02  2.98868865e-04 -4.67332862e-02]"
-20,../../models/validation/07-Variant Configuration/7b-Variant Configurations.sysml,"package '7b-Variant Configurations' {
+20,../SysML-v2-release-src/validation/07-Variant Configuration/7b-Variant Configurations.sysml,"package '7b-Variant Configurations' {
 	private import RequirementsModel::*;
 	private import DesignModel::*;
 	private import VariantDefinitions::*;
@@ -4280,7 +4280,7 @@ The model expresses two key actions: 'connect trailer to vehicle,' which assigns
  -2.91729029e-02  1.01658553e-01 -6.02490501e-03  4.66317087e-02
   3.61172785e-03  1.38462789e-03  7.23892078e-02 -5.58573827e-02
   6.10000035e-03  4.32064086e-02 -2.99838576e-02 -2.06721835e-02]"
-21,../../models/validation/08-Requirements/8-Requirements.sysml,"package '8-Requirements' {
+21,../SysML-v2-release-src/validation/08-Requirements/8-Requirements.sysml,"package '8-Requirements' {
 	private import ScalarValues::Real;
 	private import ISQ::*;
 	private import SI::*;
@@ -4582,7 +4582,7 @@ The 'Vehicle Requirements' package articulates specific constraints, like mass l
  -5.52342162e-02  1.35387242e-01 -4.99501787e-02  2.13090852e-02
  -5.44065656e-03  1.51231838e-02  7.55131096e-02 -6.39891252e-02
  -1.22677069e-02  8.21988434e-02  2.49390192e-02 -2.32455023e-02]"
-22,../../models/validation/09-Verification/9-Verification-simplified.sysml,"package '9-Verification-simplified' {
+22,../SysML-v2-release-src/validation/09-Verification/9-Verification-simplified.sysml,"package '9-Verification-simplified' {
 	private import VerificationCases::*;
 	private import Definitions::*;
 	
@@ -4794,7 +4794,7 @@ In the Usages package, the vehicleMassRequirement guarantees that any tested veh
  -8.15704465e-02  1.41723260e-01 -8.50016773e-02  8.28625634e-02
   1.05973752e-02 -3.64638399e-04  3.42866071e-02 -8.29534419e-03
   4.87678424e-02  8.51779059e-03  5.17586363e-04 -6.87855780e-02]"
-23,../../models/validation/10-Analysis and Trades/10a-Analysis.sysml,"package '10a-Analysis' {
+23,../SysML-v2-release-src/validation/10-Analysis and Trades/10a-Analysis.sysml,"package '10a-Analysis' {
 	private import ISQ::*;
 	private import SI::*;
 	private import NumericalFunctions::*;
@@ -4969,7 +4969,7 @@ Develop an 'AnalysisPlan' that includes the 'MassAnalysisCase', linked to the ve
  -9.20315534e-02  1.05782762e-01 -4.88116890e-02  4.35933135e-02
   3.06781922e-02 -1.13522969e-02  6.91612735e-02 -5.29089756e-02
  -9.47094988e-03  7.27965385e-02  3.11009097e-03 -3.33077386e-02]"
-24,../../models/validation/10-Analysis and Trades/10b-Trade-off Among Alternative Configurations.sysml,"package '10b-Trade-off Among Alternative Configurations' {
+24,../SysML-v2-release-src/validation/10-Analysis and Trades/10b-Trade-off Among Alternative Configurations.sysml,"package '10b-Trade-off Among Alternative Configurations' {
 	private import ScalarValues::Real;
 	private import TradeStudies::*;
 	private import Definitions::*;
@@ -5163,7 +5163,7 @@ The Analysis package includes a comprehensive evaluation function, EngineEvaluat
  -1.52732627e-02  9.95283648e-02  1.83509681e-02  9.48314648e-03
  -1.36993006e-02 -3.20799910e-02  3.09328511e-02 -3.52895968e-02
  -5.80080450e-02  2.17187423e-02  1.70075744e-02 -4.38716672e-02]"
-25,../../models/validation/10-Analysis and Trades/10c-Fuel Economy Analysis.sysml,"package '10c-Fuel Economy Analysis' {
+25,../SysML-v2-release-src/validation/10-Analysis and Trades/10c-Fuel Economy Analysis.sysml,"package '10c-Fuel Economy Analysis' {
 	private import ScalarValues::*;
 	private import Quantities::*;
 	private import MeasurementReferences::*;
@@ -5426,7 +5426,7 @@ The Analysis package includes a comprehensive evaluation function, EngineEvaluat
  -9.84137058e-02  9.70114619e-02 -2.92474125e-03 -4.44562361e-02
  -5.81127629e-02  2.00379640e-02  1.63395181e-02 -5.48828300e-03
  -2.89232768e-02  4.49024923e-02 -3.33231203e-02 -1.45141603e-02]"
-26,../../models/validation/10-Analysis and Trades/10d-Dynamics Analysis.sysml,"package '10d-Dynamics Analysis' {
+26,../SysML-v2-release-src/validation/10-Analysis and Trades/10d-Dynamics Analysis.sysml,"package '10d-Dynamics Analysis' {
 	private import ISQ::*;
 	
 	package VehicleModel {
@@ -5601,7 +5601,7 @@ The Analysis package includes a comprehensive evaluation function, EngineEvaluat
  -8.21179599e-02  1.14345126e-01 -7.45403841e-02  3.31187733e-02
  -2.23833080e-02 -2.88076121e-02  5.24974354e-02 -3.55546884e-02
  -5.34246825e-02  2.70983223e-02 -2.36238819e-02 -1.72079820e-02]"
-27,../../models/validation/11-View and Viewpoint/11a-View-Viewpoint.sysml,"package '11a-View-Viewpoint' {
+27,../SysML-v2-release-src/validation/11-View and Viewpoint/11a-View-Viewpoint.sysml,"package '11a-View-Viewpoint' {
 	
 	package SystemModel {
 		private import SI::*;
@@ -5752,7 +5752,7 @@ The Analysis package includes a comprehensive evaluation function, EngineEvaluat
  -8.29778314e-02  1.00372501e-01 -5.45353070e-02  4.45718542e-02
   4.81062122e-02 -2.93423962e-02  4.20422256e-02 -2.59114150e-02
  -2.70479042e-02  6.43937364e-02 -1.20655047e-02  1.79385338e-02]"
-28,../../models/validation/11-View and Viewpoint/11b-Safety and Security Feature Views.sysml,"private import Views::*; // private import library package, not internal Views package!
+28,../SysML-v2-release-src/validation/11-View and Viewpoint/11b-Safety and Security Feature Views.sysml,"private import Views::*; // private import library package, not internal Views package!
 package '11b-Safety and Security Feaure Views' {
 	private import ScalarValues::*;
 	
@@ -5912,7 +5912,7 @@ package '11b-Safety and Security Feaure Views' {
  -5.93762249e-02  1.37530431e-01 -8.63525942e-02  5.51410727e-02
   2.10224539e-02 -7.07684085e-02  1.22391462e-01  2.88183801e-02
  -1.09749306e-02  7.30891377e-02  8.21989321e-04  1.97537486e-02]"
-29,../../models/validation/12-Dependency Relationships/12a-Dependency.sysml,"package '12a-Dependency' {
+29,../SysML-v2-release-src/validation/12-Dependency Relationships/12a-Dependency.sysml,"package '12a-Dependency' {
 	
 	package 'Application Layer';
 	package 'Service Layer';
@@ -6023,7 +6023,7 @@ package '11b-Safety and Security Feaure Views' {
  -8.42491016e-02  7.78622702e-02 -6.64784461e-02 -1.36066293e-02
   3.08322180e-02 -3.42647806e-02  7.35993534e-02 -1.70679092e-02
  -3.61813270e-02  4.21126038e-02  1.75023880e-02  7.38988025e-03]"
-30,../../models/validation/12-Dependency Relationships/12b-Allocation-1.sysml,"package '12b-Allocation-1' {
+30,../SysML-v2-release-src/validation/12-Dependency Relationships/12b-Allocation-1.sysml,"package '12b-Allocation-1' {
 	private import SI::*;
 	private import RequirementModel::*;
 	private import LogicalModel::*;
@@ -6174,7 +6174,7 @@ package '11b-Safety and Security Feaure Views' {
  -2.28675082e-02  3.01357750e-02 -8.59096572e-02  8.12881365e-02
  -1.80318691e-02  2.42754519e-02  1.59971155e-02 -2.46035587e-02
  -2.10628100e-02  3.83626260e-02  5.13923774e-03 -4.28006873e-02]"
-31,../../models/validation/12-Dependency Relationships/12b-Allocation.sysml,"package '12b-Allocation' {
+31,../SysML-v2-release-src/validation/12-Dependency Relationships/12b-Allocation.sysml,"package '12b-Allocation' {
 	private import LogicalModel::*;
 	private import PhysicalModel::*;
 	
@@ -6295,7 +6295,7 @@ package '11b-Safety and Security Feaure Views' {
  -2.65391693e-02  2.85919998e-02 -1.00760937e-01  9.68017131e-02
  -2.89796963e-02  3.82148474e-02  1.97044443e-02 -2.53347550e-02
  -3.70140672e-02  2.64974311e-02 -1.02347629e-02 -5.31156920e-02]"
-32,../../models/validation/13-Model Containment/13a-Model Containment.sysml,"package '13a-Model Containment' {
+32,../SysML-v2-release-src/validation/13-Model Containment/13a-Model Containment.sysml,"package '13a-Model Containment' {
 	private import '2a-Parts Interconnection'::*;
 	private import '8-Requirements'::*;
 	
@@ -6452,7 +6452,7 @@ package '11b-Safety and Security Feaure Views' {
  -5.87481298e-02  8.52155760e-02 -1.88672654e-02  4.37344313e-02
  -5.37706353e-02 -4.31003049e-02  5.53379767e-02 -6.49520382e-02
  -4.04903591e-02  5.26820496e-02  2.24297941e-02 -3.46961468e-02]"
-33,../../models/validation/13-Model Containment/13b-Safety and Security Features Element Group-1.sysml,"package '13b-Safety and Security Features Element Group-1' {
+33,../SysML-v2-release-src/validation/13-Model Containment/13b-Safety and Security Features Element Group-1.sysml,"package '13b-Safety and Security Features Element Group-1' {
 	private import ScalarValues::*;
 	private import AnnotationDefinitions::*;
 	private import PartsTree::*;
@@ -6604,7 +6604,7 @@ package '11b-Safety and Security Feaure Views' {
  -7.91961253e-02  1.39145419e-01 -3.28126997e-02  3.11994422e-02
   7.44643668e-03 -2.30364744e-02  1.50286689e-01 -5.81623847e-03
   2.61392184e-02  4.51510735e-02  4.12588045e-02  3.22395284e-03]"
-34,../../models/validation/13-Model Containment/13b-Safety and Security Features Element Group-2.sysml,"package '13b-Safety and Security Features Element Group-2' {
+34,../SysML-v2-release-src/validation/13-Model Containment/13b-Safety and Security Features Element Group-2.sysml,"package '13b-Safety and Security Features Element Group-2' {
 	private import ScalarValues::*;
 	private import AnnotationDefinitions::*;
 	private import PartsTree::*;
@@ -6752,7 +6752,7 @@ package '11b-Safety and Security Feaure Views' {
  -6.03959337e-02  1.38992175e-01 -2.48510148e-02  7.41412640e-02
  -8.89638904e-03 -3.61331217e-02  1.22338802e-01  8.76878761e-03
  -2.16481596e-04  6.94165826e-02  4.60559167e-02 -1.95298865e-02]"
-35,../../models/validation/13-Model Containment/13b-Safety and Security Features Element Group.sysml,"package '13b-Safety and Security Features Element Group' {
+35,../SysML-v2-release-src/validation/13-Model Containment/13b-Safety and Security Features Element Group.sysml,"package '13b-Safety and Security Features Element Group' {
 	
 	part vehicle1_c1 {
 		part interior {
@@ -6888,7 +6888,7 @@ package '11b-Safety and Security Feaure Views' {
  -6.96670189e-02  1.23012751e-01 -1.56980548e-02  8.04308951e-02
  -1.35963662e-02 -5.98307550e-02  1.34871036e-01  3.37476656e-02
  -4.69120927e-02  2.56650634e-02 -1.87836180e-03 -1.39750065e-02]"
-36,../../models/validation/14-Language Extensions/14a-Language Extensions.sysml,"package '14a-Language Extensions' {
+36,../SysML-v2-release-src/validation/14-Language Extensions/14a-Language Extensions.sysml,"package '14a-Language Extensions' {
 	private import 'User Defined Extensions'::*;
 	
 	package 'User Defined Extensions' {
@@ -7016,7 +7016,7 @@ Next, define a part, 'part_X', which is associated with the 'Classified' metadat
  -4.35269140e-02  9.93798226e-02 -8.68277550e-02  5.09901233e-02
  -2.79814973e-02  8.53578560e-03  2.97593903e-02 -1.83678176e-02
   7.30519043e-03  3.57391685e-02 -2.89638899e-02  4.13980410e-02]"
-37,../../models/validation/14-Language Extensions/14b-Language Extensions.sysml,"package '14b-Language-Extensions' {
+37,../SysML-v2-release-src/validation/14-Language Extensions/14b-Language Extensions.sysml,"package '14b-Language-Extensions' {
 	
 	package LibraryModel {
 		
@@ -7164,7 +7164,7 @@ Within a 'Usages' subpackage, instantiate 'vehicle1' as a Vehicle part, which ha
  -2.33184379e-02  1.06277727e-01 -5.31589836e-02  2.43316088e-02
  -4.18683998e-02 -5.60456440e-02  7.64461532e-02  4.72809235e-03
  -7.80851543e-02  1.24952562e-01  4.86191995e-02 -1.28718396e-03]"
-38,../../models/validation/14-Language Extensions/14c-Language Extensions.sysml,"package '14c-Language-Extensions' {
+38,../SysML-v2-release-src/validation/14-Language Extensions/14c-Language Extensions.sysml,"package '14c-Language-Extensions' {
 	private import ScalarValues::*;
 	
 	library package FMEALibrary {
@@ -7467,7 +7467,7 @@ Within a 'Usages' subpackage, instantiate 'vehicle1' as a Vehicle part, which ha
  -6.23837709e-02  1.14990711e-01 -4.95250486e-02  5.48209026e-02
  -1.77277960e-02  2.69403644e-02  5.76394387e-02 -1.94629431e-02
   6.10874891e-02  1.04300566e-02  1.83195490e-02 -1.21677280e-04]"
-39,../../models/validation/15-Properties-Values-Expressions/15_01-Constants.sysml,"package '15_01-Constants' {
+39,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_01-Constants.sysml,"package '15_01-Constants' {
     private import MeasurementReferences::*;
     private import SI::*;
     private import RealFunctions::*;
@@ -7618,7 +7618,7 @@ Within a 'Usages' subpackage, instantiate 'vehicle1' as a Vehicle part, which ha
  -1.23619542e-01 -2.24865284e-02  4.20945473e-02  3.58314998e-02
  -8.06043893e-02 -4.17095721e-02 -2.85712909e-02  4.30829525e-02
  -2.93165557e-02 -3.07167396e-02 -1.03448227e-01 -4.85453475e-03]"
-40,../../models/validation/15-Properties-Values-Expressions/15_02-Basic Value Properties.sysml,"package '15_02-Basic Value Properties' {
+40,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_02-Basic Value Properties.sysml,"package '15_02-Basic Value Properties' {
 	private import ScalarValues::*;
 	
     attribute def LengthValue :> Real {
@@ -7739,7 +7739,7 @@ Within a 'Usages' subpackage, instantiate 'vehicle1' as a Vehicle part, which ha
  -2.90105585e-02  7.82655329e-02 -4.02338021e-02 -2.62040342e-03
  -4.30240110e-03  3.87734808e-02  1.45195238e-02 -2.95003075e-02
  -5.03208786e-02 -3.05574518e-02 -1.06676705e-02 -1.37014864e-02]"
-41,../../models/validation/15-Properties-Values-Expressions/15_03-Value Expression.sysml,"package '15_03-Value Expression' {
+41,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_03-Value Expression.sysml,"package '15_03-Value Expression' {
     private import SI::*;
     private import USCustomaryUnits::*;
 
@@ -7869,7 +7869,7 @@ Additionally, encapsulate the 'Tire' part within a 'Wheel', specifying its profi
  -5.09229116e-02  8.33547786e-02 -2.44537909e-02  3.69214043e-02
  -6.91754417e-03  4.39729653e-02 -8.11634772e-03 -3.78403887e-02
  -4.47531082e-02  6.20911457e-02 -2.98870783e-02 -3.08717713e-02]"
-42,../../models/validation/15-Properties-Values-Expressions/15_04-Logical Expressions.sysml,"package '15_04-Logical Expressions' {
+42,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_04-Logical Expressions.sysml,"package '15_04-Logical Expressions' {
 	private import ScalarValues::*;
 	
 	part def Engine;
@@ -7994,7 +7994,7 @@ Additionally, encapsulate the 'Tire' part within a 'Wheel', specifying its profi
  -5.28760627e-02  9.60015282e-02 -5.22049591e-02 -2.78295353e-02
   4.11668001e-03 -8.88330024e-03  2.30372865e-02 -8.40105936e-02
   1.18468627e-02  1.01911463e-01  4.48835976e-02 -4.22216803e-02]"
-43,../../models/validation/15-Properties-Values-Expressions/15_05-Unification of Expression and Constraint Definition.sysml,"package '15_05-Unification of Expression and Constraint Definition' {
+43,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_05-Unification of Expression and Constraint Definition.sysml,"package '15_05-Unification of Expression and Constraint Definition' {
 	private import '15_03-Value Expression'::*;
 	private import ControlFunctions::forAll;
 	private import SI::*;
@@ -8145,7 +8145,7 @@ Additionally, encapsulate the 'Tire' part within a 'Wheel', specifying its profi
  -5.56664355e-02  6.23893142e-02 -5.04276939e-02  4.87267040e-02
  -2.82406062e-02  5.95842376e-02  7.39294104e-03 -2.17269585e-02
  -1.36400629e-02  6.11931495e-02  5.31979501e-02 -2.98838280e-02]"
-44,../../models/validation/15-Properties-Values-Expressions/15_06-System of Quantities.sysml,"package '15_06-System of Quantities' {
+44,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_06-System of Quantities.sysml,"package '15_06-System of Quantities' {
     private import ISQ::*;
 
 	/*
@@ -8281,7 +8281,7 @@ Additionally, encapsulate the 'Tire' part within a 'Wheel', specifying its profi
  -1.11452378e-02  5.65242730e-02 -5.09349257e-03  7.08751800e-03
  -5.13395444e-02 -1.35437725e-02 -1.33382222e-02 -8.88547581e-03
   1.86260752e-02 -7.61801600e-02 -4.68093306e-02 -1.26287965e-02]"
-45,../../models/validation/15-Properties-Values-Expressions/15_07-System of Units and Scales.sysml,"package '15_07-System of Units and Scales' {
+45,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_07-System of Units and Scales.sysml,"package '15_07-System of Units and Scales' {
     private import ISQ::*;
     private import USCustomaryUnits::*;
 
@@ -8423,7 +8423,7 @@ Additionally, encapsulate the 'Tire' part within a 'Wheel', specifying its profi
  -1.75637174e-02 -7.59915030e-03  7.92672206e-03 -4.92234156e-03
  -7.95678571e-02 -3.39706726e-02 -3.93006355e-02  4.02892381e-02
   5.38879670e-02 -4.97111008e-02 -8.74779522e-02  5.91616798e-03]"
-46,../../models/validation/15-Properties-Values-Expressions/15_08-Range Restriction.sysml,"package '15_08-Range Restriction' {
+46,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_08-Range Restriction.sysml,"package '15_08-Range Restriction' {
 	private import ISQ::*;
 	private import SI::*;
 	private import '15_01-Constants'::'Mathematical Constants'::pi;
@@ -8541,7 +8541,7 @@ Additionally, implement an assertion constraint to enforce this limit, ensuring 
  -3.57775614e-02  3.45192775e-02 -1.10426039e-01  3.66019905e-02
   1.15111552e-01 -2.89713172e-03 -3.63875702e-02 -9.24549475e-02
   4.96736169e-02  5.35764620e-02 -3.92211825e-02  2.60808226e-02]"
-47,../../models/validation/15-Properties-Values-Expressions/15_10-Primitive Data Types.sysml,"package '15.10-Primitive Data Types' {
+47,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_10-Primitive Data Types.sysml,"package '15.10-Primitive Data Types' {
 	/*
 	 * Primitive data types are defined in normative model libraries.
 	 * Any more specialized data types can be declared in user-defined 
@@ -8725,7 +8725,7 @@ Additionally, implement an assertion constraint to enforce this limit, ensuring 
   1.69936405e-03  1.01385720e-01 -7.10715950e-02 -1.18761687e-02
   1.04598589e-02  2.87385713e-02  1.03415223e-02 -2.18178742e-02
   3.06974351e-02 -1.38519257e-02 -3.19276601e-02  4.01794091e-02]"
-48,../../models/validation/15-Properties-Values-Expressions/15_11-Variable Length Collection Types.sysml,"package '15_11-Variable Length Collection Types' {
+48,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_11-Variable Length Collection Types.sysml,"package '15_11-Variable Length Collection Types' {
 	private import ScalarValues::*;
 	private import Collections::*;
 	
@@ -8856,7 +8856,7 @@ Additionally, implement an assertion constraint to enforce this limit, ensuring 
   3.16930213e-03  7.98241235e-04 -1.74306221e-02  3.16281095e-02
   6.06811279e-03  3.48961018e-02  1.17536165e-01 -7.14783967e-02
   2.06311699e-02 -9.78841558e-02 -6.72771633e-02  3.45312953e-02]"
-49,../../models/validation/15-Properties-Values-Expressions/15_12-Compound Value Type.sysml,"package '15_12-Compound Value Type' {
+49,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_12-Compound Value Type.sysml,"package '15_12-Compound Value Type' {
 	private import ScalarValues::*;
 	private import USCustomaryUnits::'in';
 	
@@ -8983,7 +8983,7 @@ Additionally, implement an assertion constraint to enforce this limit, ensuring 
  -2.37262081e-02  1.11233220e-01 -8.20375048e-03  3.20964977e-02
  -3.97410169e-02 -3.14207077e-02  1.20722959e-02 -1.33278482e-02
  -8.86150524e-02 -2.77183820e-02  4.84170299e-03 -6.38695841e-04]"
-50,../../models/validation/15-Properties-Values-Expressions/15_13-Discretely Sampled Function Value.sysml,"package '15_13-Discretely Sampled Function Value' {
+50,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_13-Discretely Sampled Function Value.sysml,"package '15_13-Discretely Sampled Function Value' {
 	private import SampledFunctions::SampledFunction;
 	private import SampledFunctions::SamplePair;
 	private import Collections::Array;
@@ -9155,7 +9155,7 @@ Additionally, implement an assertion constraint to enforce this limit, ensuring 
  -4.51748297e-02  8.54967237e-02  3.36727910e-02  7.34155774e-02
  -6.52751746e-03 -7.78250024e-02  7.10976496e-02 -9.28611215e-03
  -4.15429845e-02 -1.36168208e-02 -1.23560280e-01 -7.14333802e-02]"
-51,../../models/validation/15-Properties-Values-Expressions/15_19-Materials with Properties.sysml,"package '15_19-Materials with Properties' {
+51,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_19-Materials with Properties.sysml,"package '15_19-Materials with Properties' {
 	private import ScalarValues::Real;
 	private import Quantities::*;
 	private import MeasurementReferences::*;
@@ -9333,7 +9333,7 @@ Additionally, implement an assertion constraint to enforce this limit, ensuring 
  -9.54018068e-03  7.49439513e-03 -3.08634080e-02  1.02541834e-01
  -4.61599231e-02  1.23064192e-02 -1.98864192e-03 -6.06186911e-02
   2.25160550e-02 -6.59395829e-02 -4.44218293e-02  3.18654440e-02]"
-52,../../models/validation/15-Properties-Values-Expressions/15_19a-Materials with Properties.sysml,"package '15_19a-Materials with Properties' {
+52,../SysML-v2-release-src/validation/15-Properties-Values-Expressions/15_19a-Materials with Properties.sysml,"package '15_19a-Materials with Properties' {
 	private import ScalarValues::*;
 	private import Quantities::*;
 	private import MeasurementReferences::*;
@@ -9498,7 +9498,7 @@ Additionally, implement an assertion constraint to enforce this limit, ensuring 
  -2.23582201e-02 -1.03330314e-02 -6.49805665e-02  9.66862142e-02
  -2.52798516e-02  6.58560358e-03  2.45995689e-02 -3.06153260e-02
   1.18763689e-02 -5.66578768e-02 -3.60028050e-03  2.70593520e-02]"
-53,../../models/validation/17-Sequence Modeling/17a-Sequence-Modeling.sysml,"package '17a-Sequence-Modeling' {
+53,../SysML-v2-release-src/validation/17-Sequence Modeling/17a-Sequence-Modeling.sysml,"package '17a-Sequence-Modeling' {
 	private import ScalarValues::*;
 	private import PayloadDefinitions::*;
 
@@ -9635,7 +9635,7 @@ Additionally, implement an assertion constraint to enforce this limit, ensuring 
   3.43283378e-02  4.13540266e-02 -4.86462489e-02  2.12975051e-02
   4.72009219e-02 -4.34559844e-02  1.30824715e-01  3.56393382e-02
   4.30662185e-02  6.43368140e-02 -3.90264988e-02 -1.10794893e-02]"
-54,../../models/validation/17-Sequence Modeling/17b-Sequence-Modeling.sysml,"package '17b-Sequence-Modeling' {
+54,../SysML-v2-release-src/validation/17-Sequence Modeling/17b-Sequence-Modeling.sysml,"package '17b-Sequence-Modeling' {
 	private import ScalarValues::*;
 	private import PayloadDefinitions::*;
 
@@ -9774,7 +9774,7 @@ Within this context, create an occurrence called 'PubSubSequence' that illustrat
   5.61597720e-02  3.46562527e-02 -5.01969308e-02  2.86344625e-02
   5.07421084e-02 -1.77096464e-02  1.19184449e-01  6.64586648e-02
   4.85510789e-02  7.23428354e-02 -8.84795561e-03 -4.07389831e-03]"
-55,../../models/validation/18-Use Case/18-Use Case.sysml,"package '18-Use Case' {
+55,../SysML-v2-release-src/validation/18-Use Case/18-Use Case.sysml,"package '18-Use Case' {
 	
 	part def Vehicle;
 	part def Person;

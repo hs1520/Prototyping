@@ -1,5 +1,5 @@
 ,file_path,raw_content,descriptions,embeddings
-0,../../models/training/01. Packages/Comment Example.sysml,"package 'Comment Example' {
+0,../SysML-v2-release-src/training/01. Packages/Comment Example.sysml,"package 'Comment Example' {
 	/* This is a comment, which is a part of the model, 
 	 * annotating (by default) it's owning namespace. */
 	
@@ -118,7 +118,7 @@
  -1.16322018e-01  8.04888606e-02 -1.09982111e-01  5.04969470e-02
   3.90920304e-02  4.15576324e-02  3.27487066e-02 -1.66333932e-02
  -3.93927097e-03  5.37521727e-02  1.21635571e-02  4.27793860e-02]"
-1,../../models/training/01. Packages/Documentation Example.sysml,"package 'Documentation Example' {
+1,../SysML-v2-release-src/training/01. Packages/Documentation Example.sysml,"package 'Documentation Example' {
 	doc /* This is documentation of the owning 
 	     * package.
 	     */
@@ -227,7 +227,7 @@
  -3.85659896e-02  1.13898814e-01 -7.65547380e-02  3.91005315e-02
   4.87874486e-02  4.10942622e-02  5.14569916e-02 -7.68024102e-02
   6.84155896e-03  6.19077943e-02  1.00693088e-02  3.54554020e-02]"
-2,../../models/training/01. Packages/Package Example.sysml,"package 'Package Example' {
+2,../SysML-v2-release-src/training/01. Packages/Package Example.sysml,"package 'Package Example' {
 	public import ISQ::TorqueValue;
 	private import ScalarValues::*;
 	 
@@ -331,7 +331,7 @@
  -6.14500754e-02  9.36145782e-02 -7.24536479e-02  3.06455307e-02
   4.91469679e-03  1.47560108e-02  5.17085940e-02 -9.45172459e-02
  -4.09982502e-02 -2.47165058e-02  1.03414208e-02  2.74886824e-02]"
-3,../../models/training/02. Part Definitions/Part Definition Example.sysml,"package 'Part Definition Example' {
+3,../SysML-v2-release-src/training/02. Part Definitions/Part Definition Example.sysml,"package 'Part Definition Example' {
 	private import ScalarValues::*;
 	
 	part def Vehicle {
@@ -446,7 +446,7 @@
  -7.60125145e-02  8.98348615e-02 -9.06774178e-02  2.81323288e-02
   2.83809546e-02 -3.74740027e-02  4.24836576e-02 -6.76285401e-02
   2.43302737e-03  8.68838504e-02  3.65207181e-03  2.28376314e-02]"
-4,../../models/training/03. Generalization/Generalization Example.sysml,"package 'Generalization Example' {
+4,../SysML-v2-release-src/training/03. Generalization/Generalization Example.sysml,"package 'Generalization Example' {
 
 	abstract part def Vehicle;
 	
@@ -560,7 +560,7 @@
  -5.60884960e-02  6.33635372e-02 -4.72329259e-02  6.06185235e-02
   1.30930524e-02 -7.19407480e-03  3.04245539e-02 -6.10853881e-02
   1.59137929e-03  7.71713704e-02  2.85873543e-02  1.20696081e-02]"
-5,../../models/training/04. Subsetting/Subsetting Example.sysml,"package 'Subsetting Example' {
+5,../SysML-v2-release-src/training/04. Subsetting/Subsetting Example.sysml,"package 'Subsetting Example' {
 	
 	part def Vehicle {
 		part parts : VehiclePart[*];
@@ -670,7 +670,7 @@
  -7.11864606e-02  9.98705178e-02 -6.50585592e-02  2.60290056e-02
   1.95890851e-02 -3.79190780e-02  1.09242760e-01 -7.27192461e-02
  -6.98620304e-02  4.68686707e-02  4.50053215e-02  2.12561674e-02]"
-6,../../models/training/05. Redefinition/Redefinition Example.sysml,"package 'Redefinition Example' {
+6,../SysML-v2-release-src/training/05. Redefinition/Redefinition Example.sysml,"package 'Redefinition Example' {
 
 	part def Vehicle {
 		part eng : Engine;
@@ -790,7 +790,7 @@
  -3.12158447e-02  6.61373064e-02 -4.88368981e-02  4.78218421e-02
   6.06291415e-03 -1.14370100e-02  1.53366262e-02 -5.07254712e-02
   1.42469315e-03  4.87114489e-02  7.61726797e-02  2.91216057e-02]"
-7,../../models/training/06. Enumeration Definitions/Enumeration Definitions-1.sysml,"package 'Enumeration Definitions-1' {
+7,../SysML-v2-release-src/training/06. Enumeration Definitions/Enumeration Definitions-1.sysml,"package 'Enumeration Definitions-1' {
 	private import ScalarValues::Real;
 	
 	enum def TrafficLightColor {
@@ -902,7 +902,7 @@
  -7.57758617e-02  6.01653494e-02 -9.44854692e-02 -5.97102083e-02
   2.81218924e-02 -4.20109602e-03  6.99092774e-03 -3.50940693e-03
   3.28914970e-02  5.25854789e-02 -1.85003430e-02  7.04471916e-02]"
-8,../../models/training/06. Enumeration Definitions/Enumeration Definitions-2.sysml,"package 'Enumeration Definitions-2' {
+8,../SysML-v2-release-src/training/06. Enumeration Definitions/Enumeration Definitions-2.sysml,"package 'Enumeration Definitions-2' {
 	private import ScalarValues::*;
 	private import 'Enumeration Definitions-1'::*;
 	
@@ -1029,7 +1029,7 @@
  -1.14378005e-01  4.35263813e-02 -1.05251506e-01 -3.73774879e-02
  -2.58665830e-02  6.76403113e-04 -4.95506339e-02 -5.16408272e-02
   5.67510389e-02  2.45148595e-03 -3.36914249e-02  3.70435864e-02]"
-9,../../models/training/07. Parts/Parts Example-1.sysml,"package 'Parts Example-1' {
+9,../SysML-v2-release-src/training/07. Parts/Parts Example-1.sysml,"package 'Parts Example-1' {
 	
 	// Definitions
 	
@@ -1153,7 +1153,7 @@
  -5.09638935e-02  9.65684205e-02 -4.01980057e-02  1.53512759e-02
   1.50422165e-02 -2.79997364e-02  4.25481349e-02 -6.62334859e-02
  -4.71465476e-02  9.44132805e-02  1.95213500e-02  2.83373501e-02]"
-10,../../models/training/07. Parts/Parts Example-2.sysml,"package 'Parts Example-2' {
+10,../SysML-v2-release-src/training/07. Parts/Parts Example-2.sysml,"package 'Parts Example-2' {
 	
 	// Definitions
 	
@@ -1277,7 +1277,7 @@
  -1.88842993e-02  7.13130608e-02 -2.58503389e-02  3.72301452e-02
   1.75879095e-02 -3.46336290e-02  8.97016190e-03 -9.23448727e-02
  -5.30800596e-02  1.03508674e-01  5.53580858e-02  3.46105210e-02]"
-11,../../models/training/08. Items/Items Example.sysml,"package 'Items Example' {
+11,../SysML-v2-release-src/training/08. Items/Items Example.sysml,"package 'Items Example' {
 	private import ScalarValues::*;
 	
 	item def Fuel;
@@ -1389,7 +1389,7 @@
  -8.19975957e-02  7.89036304e-02 -4.86364029e-02 -1.16118789e-02
  -1.88671786e-03  1.48178693e-02  9.09442827e-02 -9.49925184e-02
   1.37865692e-02  6.12700954e-02  1.38820671e-02  2.52419952e-02]"
-12,../../models/training/09. Connections/Connections Example.sysml,"package 'Connections Example' {
+12,../SysML-v2-release-src/training/09. Connections/Connections Example.sysml,"package 'Connections Example' {
 	
 	part def WheelHubAssembly;
 	part def WheelAssembly;
@@ -1530,7 +1530,7 @@ The model will incorporate a connection that links the TireBead to the TireMount
  -3.72128077e-02  3.49246822e-02 -4.84517403e-02  5.63607886e-02
  -3.12372390e-02  3.38820517e-02  6.35979399e-02  2.12851185e-02
  -8.42169747e-02  6.88781366e-02  1.38154756e-02 -4.61450182e-02]"
-13,../../models/training/10. Ports/Port Conjugation Example.sysml,"package 'Port Conjugation Example' {
+13,../SysML-v2-release-src/training/10. Ports/Port Conjugation Example.sysml,"package 'Port Conjugation Example' {
 	
 	attribute def Temp;
 	
@@ -1645,7 +1645,7 @@ The model will incorporate a connection that links the TireBead to the TireMount
  -2.94050481e-02  4.75617461e-02 -8.20702761e-02 -3.03754527e-02
  -6.05358258e-02  7.45257810e-02  6.51298016e-02 -4.27095704e-02
   1.51524339e-02  1.17160730e-01  1.61391050e-02  1.69568807e-02]"
-14,../../models/training/10. Ports/Port Example.sysml,"package 'Port Example' {
+14,../SysML-v2-release-src/training/10. Ports/Port Example.sysml,"package 'Port Example' {
 	
 	attribute def Temp;
 	
@@ -1766,7 +1766,7 @@ The model will incorporate a connection that links the TireBead to the TireMount
  -4.01825048e-02  4.55846712e-02 -4.91649695e-02 -2.53296224e-03
  -6.96225241e-02  5.16508557e-02  7.01248869e-02 -4.60739136e-02
  -5.96098490e-02  1.20886385e-01  2.81994753e-02 -1.52949095e-02]"
-15,../../models/training/11. Interfaces/Interface Decomposition Example.sysml,"package 'Interface Decomposition Example' {
+15,../SysML-v2-release-src/training/11. Interfaces/Interface Decomposition Example.sysml,"package 'Interface Decomposition Example' {
 	
 	port def SpigotBank;
 	port def Spigot;
@@ -1884,7 +1884,7 @@ The model will incorporate a connection that links the TireBead to the TireMount
  -1.43985096e-02  2.91272961e-02 -4.55255583e-02  4.03965777e-03
  -5.54288737e-02 -4.50176932e-02  4.78758365e-02  2.01619640e-02
  -3.59196067e-02  1.01310514e-01  4.11851741e-02 -1.62826870e-02]"
-16,../../models/training/11. Interfaces/Interface Example.sysml,"package 'Interface Example' {
+16,../SysML-v2-release-src/training/11. Interfaces/Interface Example.sysml,"package 'Interface Example' {
 	private import 'Port Example'::*;
 	
 	part def Vehicle;
@@ -1998,7 +1998,7 @@ The model will incorporate a connection that links the TireBead to the TireMount
  -4.59620990e-02  5.13845161e-02 -3.14458162e-02 -1.29904961e-02
  -6.07037395e-02  3.15927230e-02  4.60300408e-02 -3.36548202e-02
  -2.61240285e-02  1.30703494e-01  5.86554110e-02  7.65150459e-03]"
-17,../../models/training/12. Binding Connectors/Binding Connectors Example-1.sysml,"package 'Binding Connectors Example-1' {
+17,../SysML-v2-release-src/training/12. Binding Connectors/Binding Connectors Example-1.sysml,"package 'Binding Connectors Example-1' {
 	private import 'Port Example'::*;
 	
 	part def Vehicle;
@@ -2122,7 +2122,7 @@ The model will incorporate a connection that links the TireBead to the TireMount
  -4.73458506e-02  4.17782133e-03 -2.30983552e-02 -1.61609463e-02
  -7.56609738e-02  7.09373727e-02  1.12320334e-01 -2.80942433e-02
  -8.18323269e-02  1.13770530e-01  1.15514323e-02 -2.53077573e-03]"
-18,../../models/training/12. Binding Connectors/Binding Connectors Example-2.sysml,"package 'Binding Connectors Example-2' {
+18,../SysML-v2-release-src/training/12. Binding Connectors/Binding Connectors Example-2.sysml,"package 'Binding Connectors Example-2' {
 	private import 'Port Example'::*;
 	
 	part def Vehicle;
@@ -2243,7 +2243,7 @@ The model will incorporate a connection that links the TireBead to the TireMount
  -5.29160164e-02  1.39814345e-02  3.76079022e-03 -2.34236121e-02
  -9.66914594e-02  7.49862194e-02  7.12068081e-02 -1.79649852e-02
  -7.52544999e-02  8.24727267e-02  9.06936452e-03 -3.01414076e-03]"
-19,../../models/training/13. Flow Connections/Flow Connection Definition Example.sysml,"package 'Flow Connection Definition Example' {
+19,../SysML-v2-release-src/training/13. Flows/Flow Definition Example.sysml,"package 'Flow Connection Definition Example' {
 	private import 'Port Example'::*;
 	
 	part def Vehicle;
@@ -2359,7 +2359,7 @@ The model will incorporate a connection that links the TireBead to the TireMount
  -5.26107177e-02  6.26542717e-02 -1.97791588e-02 -3.86233442e-02
  -7.41484538e-02  1.00513464e-02  2.59879623e-02 -4.49373871e-02
  -5.01989312e-02  1.67408228e-01  7.88424984e-02 -1.53721124e-02]"
-20,../../models/training/13. Flow Connections/Flow Connection Interface Example.sysml,"package 'Flow Connection Interface Example' {
+20,../SysML-v2-release-src/training/13. Flows/Flow Interface Example.sysml,"package 'Flow Connection Interface Example' {
 	private import 'Port Example'::*;
 	
 	part def Vehicle;
@@ -2476,7 +2476,7 @@ The model will incorporate a connection that links the TireBead to the TireMount
  -5.68623878e-02  4.76994477e-02 -3.75240296e-02 -5.37665151e-02
  -8.79059434e-02  3.12357619e-02  5.17496429e-02 -2.91920882e-02
  -2.11397205e-02  1.36377975e-01  7.37573132e-02 -1.14568835e-02]"
-21,../../models/training/13. Flow Connections/Flow Connection Usage Example.sysml,"package 'Flow Connection Interface Example' {
+21,../SysML-v2-release-src/training/13. Flows/Flow Usage Example.sysml,"package 'Flow Connection Interface Example' {
 	private import 'Port Example'::*;
 	
 	part def Vehicle;
@@ -2589,7 +2589,7 @@ The model will incorporate a connection that links the TireBead to the TireMount
  -4.81001511e-02  7.46880099e-02  1.51339136e-02 -2.00695712e-02
  -7.85010457e-02  1.89632680e-02  1.12389624e-02 -3.72542515e-02
  -6.67020231e-02  1.55552506e-01  5.25369570e-02 -1.08287819e-02]"
-22,../../models/training/14. Action Definitions/Action Definition Example.sysml,"package 'Action Definition Example' {
+22,../SysML-v2-release-src/training/14. Action Definitions/Action Definition Example.sysml,"package 'Action Definition Example' {
 	item def Scene;
 	item def Image;
 	item def Picture;
@@ -2705,7 +2705,7 @@ The model will incorporate a connection that links the TireBead to the TireMount
  -2.36861836e-02  9.99498218e-02 -5.98300435e-02  5.59533350e-02
   1.05947569e-01 -2.68548410e-02  7.41333291e-02  5.34391552e-02
   2.09942814e-02  4.47816364e-02 -8.78499076e-02  7.02127516e-02]"
-23,../../models/training/14. Action Definitions/Action Shorthand Example.sysml,"package 'Action Shorthand Example' {
+23,../SysML-v2-release-src/training/14. Action Definitions/Action Shorthand Example.sysml,"package 'Action Shorthand Example' {
 	item def Scene;
 	item def Image;
 	item def Picture;
@@ -2828,7 +2828,7 @@ The TakePicture action is the central operation, taking a Scene as input and yie
  -1.90397780e-02  8.40603039e-02 -5.91634475e-02  4.40207310e-02
   7.45931491e-02 -1.06169730e-02  8.76227468e-02  5.32459170e-02
   1.47713711e-02  6.36138245e-02 -5.61124198e-02  5.66752255e-02]"
-24,../../models/training/14. Action Definitions/Action Succession Example-1.sysml,"package 'Action Succession Example-1' {
+24,../SysML-v2-release-src/training/14. Action Definitions/Action Succession Example-1.sysml,"package 'Action Succession Example-1' {
 	item def Scene;
 	item def Image;
 	item def Picture;
@@ -2949,7 +2949,7 @@ The TakePicture action is the central operation, taking a Scene as input and yie
  -1.91349778e-02  9.59177390e-02 -1.21253347e-02  2.47776601e-02
   1.00649036e-01 -2.46689171e-02  9.25938264e-02  6.37981519e-02
   1.65638365e-02  9.36842803e-03 -9.64691415e-02  3.95383574e-02]"
-25,../../models/training/14. Action Definitions/Action Succession Example-2.sysml,"package 'Action Definition Example' {
+25,../SysML-v2-release-src/training/14. Action Definitions/Action Succession Example-2.sysml,"package 'Action Definition Example' {
 	item def Scene;
 	item def Image;
 	item def Picture;
@@ -3068,7 +3068,7 @@ The TakePicture action is the central operation, taking a Scene as input and yie
  -2.35992484e-02  8.43291059e-02 -4.50655594e-02  3.51861864e-02
   9.97017026e-02 -1.67461894e-02  6.65341914e-02  3.22350785e-02
  -1.19747426e-02  1.12233013e-02 -8.57656002e-02  5.37993535e-02]"
-26,../../models/training/15. Actions/Action Decomposition.sysml,"package 'Action Decomposition' {
+26,../SysML-v2-release-src/training/15. Actions/Action Decomposition.sysml,"package 'Action Decomposition' {
 	part def Scene;
 	part def Image;
 	part def Picture;
@@ -3190,7 +3190,7 @@ The TakePicture action is the central operation, taking a Scene as input and yie
  -7.02413395e-02  8.58711600e-02 -4.80410010e-02  2.94903424e-02
   1.02524512e-01 -1.73524544e-02  9.82823893e-02  2.79967375e-02
   2.94865109e-02  5.81405982e-02 -4.22143489e-02  3.95998284e-02]"
-27,../../models/training/16. Conditional Succession/Conditional Succession Example-1.sysml,"package 'Conditional Succession Example-1' {
+27,../SysML-v2-release-src/training/16. Conditional Succession/Conditional Succession Example-1.sysml,"package 'Conditional Succession Example-1' {
 	part def Scene;
 	part def Image {
 		isWellFocused: ScalarValues::Boolean;
@@ -3319,7 +3319,7 @@ The model incorporates conditional logic to check the focus quality before initi
  -2.94645727e-02  6.57107085e-02 -6.61920607e-02  1.86178572e-02
   1.10130146e-01  3.39124128e-02  7.28582293e-02  5.32221533e-02
   6.10897020e-02  2.82610804e-02 -7.26019293e-02  2.93789823e-02]"
-28,../../models/training/16. Conditional Succession/Conditional Succession Example-2.sysml,"package 'Conditional Succession Example-2' {
+28,../SysML-v2-release-src/training/16. Conditional Succession/Conditional Succession Example-2.sysml,"package 'Conditional Succession Example-2' {
 	part def Scene;
 	part def Image {
 		isWellFocused: ScalarValues::Boolean;
@@ -3447,7 +3447,7 @@ Implement the 'takePicture' action as a conditional sequence that first invokes 
  -3.55750211e-02  9.14805010e-02 -2.34088823e-02  1.12699112e-02
   1.26424104e-01  3.75135615e-02  4.79820259e-02  5.74824847e-02
   2.97963973e-02  3.17510925e-02 -9.38761532e-02  3.63870785e-02]"
-29,../../models/training/17. Control/Camera.sysml,"package Camera {
+29,../SysML-v2-release-src/training/17. Control/Camera.sysml,"package Camera {
 	private import 'Action Decomposition'::*;
 	
 	part def Camera;
@@ -3568,7 +3568,7 @@ Implement the 'takePicture' action as a conditional sequence that first invokes 
  -5.30498661e-03  4.57212627e-02 -5.19163609e-02  1.77502148e-02
   1.02620445e-01 -1.94615945e-02  4.34488803e-02  3.30119058e-02
   1.22943437e-02  7.55851194e-02 -5.60802780e-02  9.74340588e-02]"
-30,../../models/training/17. Control/Control Structures Example.sysml,"package 'Control Structures Example' {
+30,../SysML-v2-release-src/training/17. Control/Control Structures Example.sysml,"package 'Control Structures Example' {
 	private import ScalarValues::*;
 	
 	attribute def BatteryCharged;
@@ -3696,7 +3696,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -3.75908054e-02  2.22395435e-02 -9.26779062e-02  9.67377499e-02
  -2.07716059e-02  1.81095991e-02 -8.01200420e-03  6.81802556e-02
   9.54645798e-02 -1.92404240e-02 -2.25382429e-02 -6.22783601e-03]"
-31,../../models/training/17. Control/Decision Example.sysml,"package 'Decision Example' {
+31,../SysML-v2-release-src/training/17. Control/Decision Example.sysml,"package 'Decision Example' {
 	private import ScalarValues::*;
 	
 	attribute def BatteryCharged;
@@ -3825,7 +3825,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -1.96519792e-02  4.54936847e-02 -5.10794632e-02  1.01925217e-01
  -1.56466868e-02 -1.53289074e-02  1.05868913e-02  6.66996166e-02
   1.08640432e-01 -3.05479206e-02 -3.02193835e-02  4.42672567e-03]"
-32,../../models/training/17. Control/Fork Join Example.sysml,"package 'Fork Join Example' {
+32,../SysML-v2-release-src/training/17. Control/Fork Join Example.sysml,"package 'Fork Join Example' {
 	private import ScalarValues::*;
 	
 	attribute def TurnKeyToOn;
@@ -3961,7 +3961,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -4.31897119e-02  8.02808404e-02 -6.66860417e-02  8.34989548e-02
   8.45752005e-03 -3.54505479e-02  3.62096392e-02  5.64143993e-02
   9.14527010e-03  1.81398839e-02 -1.92872435e-02 -1.73280314e-02]"
-33,../../models/training/17. Control/Merge Example.sysml,"package 'Merge Example' {
+33,../SysML-v2-release-src/training/17. Control/Merge Example.sysml,"package 'Merge Example' {
 	part def Scene;
 	part def Image;
 	part def Picture;
@@ -4098,7 +4098,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -5.32257929e-02  7.04814494e-02 -2.43219808e-02  1.22079998e-02
   1.31125718e-01 -1.65563561e-02  8.60838220e-02  7.60997310e-02
   2.87933927e-02  3.72492969e-02 -8.38159174e-02  3.40121128e-02]"
-34,../../models/training/18. Action Performance/Action Performance Example.sysml,"package 'Action Performance Example' {
+34,../SysML-v2-release-src/training/18. Action Performance/Action Performance Example.sysml,"package 'Action Performance Example' {
 	private import 'Action Decomposition'::*;
 	
 	part def Camera;
@@ -4215,7 +4215,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -5.18826991e-02  9.55066234e-02 -6.83620870e-02  7.76840523e-02
   1.01715878e-01 -2.69092191e-02  5.68340085e-02 -7.11638574e-03
   4.29884642e-02 -1.49857905e-03 -1.20614924e-01  7.32699260e-02]"
-35,../../models/training/19. Terminate Actions/Terminate Actions Example-1.sysml,"package 'Terminate Actions Example-1' {
+35,../SysML-v2-release-src/training/19. Terminate Actions/Terminate Actions Example-1.sysml,"package 'Terminate Actions Example-1' {
 	private import ScalarValues::Boolean;
 	
 	action monitorCriticalActivity;
@@ -4338,7 +4338,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -4.70847003e-02  6.40508384e-02 -5.39808236e-02  3.45955603e-02
   6.52391836e-02 -2.00332627e-02  9.76331998e-03  6.31740764e-02
   2.02159435e-02 -2.07160600e-02 -7.93360993e-02 -2.37355195e-02]"
-36,../../models/training/19. Terminate Actions/Terminate Actions Example-2.sysml,"package 'Terminate Actions Example-2' {
+36,../SysML-v2-release-src/training/19. Terminate Actions/Terminate Actions Example-2.sysml,"package 'Terminate Actions Example-2' {
 	action def WorkflowProcess;
 	
 	part def Processor {
@@ -4453,7 +4453,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -5.25967292e-02  1.05070703e-01 -9.22830403e-02  1.63117703e-03
  -1.24904211e-03 -2.03331318e-02  1.20423306e-02  4.03446369e-02
   2.27975622e-02  5.29558435e-02 -1.06839091e-02  3.62157240e-03]"
-37,../../models/training/20. Assignment Actions/Assignment Example.sysml,"package 'For Loop Example' {
+37,../SysML-v2-release-src/training/20. Assignment Actions/Assignment Example.sysml,"package 'For Loop Example' {
 	private import SequenceFunctions::*;
 	
     action def StraightLineDynamics {
@@ -4589,7 +4589,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -6.36420548e-02  5.01515828e-02 -4.09679152e-02  3.52613032e-02
  -2.15423442e-02 -5.05451933e-02  3.66318971e-02  2.25187764e-02
  -5.71314283e-02  8.09070934e-03 -4.84515876e-02 -3.14157046e-02]"
-38,../../models/training/21. Asynchronous Messaging/Messaging Example.sysml,"package 'Messaging Example' {
+38,../SysML-v2-release-src/training/21. Asynchronous Messaging/Messaging Example.sysml,"package 'Messaging Example' {
 	item def Scene;
 	item def Image;
 	item def Picture;
@@ -4717,7 +4717,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -4.64969724e-02  7.81201124e-02 -4.42016870e-02  1.91124082e-02
   1.25231773e-01 -2.50375438e-02  1.02871977e-01  8.88157114e-02
   2.51432927e-03  4.56967056e-02 -8.46671909e-02  4.34425510e-02]"
-39,../../models/training/21. Asynchronous Messaging/Messaging with Ports.sysml,"package 'Messaging Example' {
+39,../SysML-v2-release-src/training/21. Asynchronous Messaging/Messaging with Ports.sysml,"package 'Messaging Example' {
 	item def Scene;
 	item def Image;
 	item def Picture;
@@ -4852,7 +4852,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -3.56486402e-02  5.33980206e-02 -3.56510654e-02  1.74208661e-03
   1.33782208e-01 -2.11792104e-02  8.56491923e-02  6.83889389e-02
   9.42156371e-03  9.20650139e-02 -6.04111925e-02  5.88008873e-02]"
-40,../../models/training/22. Opaque Actions/Opaque Action Example.sysml,"package 'Opaque Action Example' {
+40,../SysML-v2-release-src/training/22. Opaque Actions/Opaque Action Example.sysml,"package 'Opaque Action Example' {
 	
 	part def Sensor {
 		attribute ready : ScalarValues::Boolean;
@@ -4966,7 +4966,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -4.70674150e-02  9.40948948e-02 -8.20597410e-02  1.83590502e-02
   5.76185547e-02 -4.60877344e-02  4.64328341e-02  1.81106739e-02
  -3.21909785e-02  2.09047869e-02 -7.15721622e-02  2.47374400e-02]"
-41,../../models/training/23. State Definitions/State Definition Example-1.sysml,"package 'State Definition Example-1' {
+41,../SysML-v2-release-src/training/23. State Definitions/State Definition Example-1.sysml,"package 'State Definition Example-1' {
 	
 	attribute def VehicleStartSignal;
 	attribute def VehicleOnSignal;
@@ -5093,7 +5093,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -1.05713718e-01  1.05255663e-01 -5.04219793e-02 -1.41275758e-02
   6.40359847e-03 -5.26554324e-03  6.76069641e-03  3.12579656e-03
  -7.10009085e-03  7.66343102e-02 -3.50505300e-02  1.16899088e-02]"
-42,../../models/training/23. State Definitions/State Definition Example-2.sysml,"package 'State Definition Example-2' {
+42,../SysML-v2-release-src/training/23. State Definitions/State Definition Example-2.sysml,"package 'State Definition Example-2' {
 	
 	attribute def VehicleStartSignal;
 	attribute def VehicleOnSignal;
@@ -5211,7 +5211,7 @@ The primary action, 'ChargeBattery', employs a loop structure for continuous cha
  -8.46050009e-02  7.96387643e-02 -5.58431968e-02 -1.96706261e-02
  -3.66628077e-03 -1.56694558e-03  2.06746496e-02  4.95078741e-04
  -1.13493379e-03  1.17920488e-01 -1.15005914e-02  3.81711707e-03]"
-43,../../models/training/24. States/State Actions.sysml,"package 'State Actions' {
+43,../SysML-v2-release-src/training/24. States/State Actions.sysml,"package 'State Actions' {
 	
 	attribute def VehicleStartSignal;
 	attribute def VehicleOnSignal;
@@ -5343,7 +5343,7 @@ The 'off' state can accept the VehicleStartSignal and transition to the 'startin
  -9.72991809e-02  1.30904943e-01 -2.59219203e-02  1.28747411e-02
  -2.35592835e-02 -1.03685511e-02  3.64369228e-02  1.01325316e-02
  -1.53987436e-03  8.84711966e-02  1.02997599e-02 -3.45217832e-03]"
-44,../../models/training/24. States/State Decomposition-1.sysml,"package 'State Decomposition-1' {
+44,../SysML-v2-release-src/training/24. States/State Decomposition-1.sysml,"package 'State Decomposition-1' {
 	
 	attribute def VehicleStartSignal;
 	attribute def VehicleOnSignal;
@@ -5463,7 +5463,7 @@ The 'off' state can accept the VehicleStartSignal and transition to the 'startin
  -1.04838103e-01  1.10342711e-01 -2.77393460e-02 -2.22218502e-02
   1.48541760e-02  1.16019754e-03  5.48231080e-02 -9.31653660e-03
  -1.28164859e-02  9.00490806e-02 -2.92252097e-02  1.86289102e-02]"
-45,../../models/training/24. States/State Decomposition-2.sysml,"package 'State Decomposition-1' {
+45,../SysML-v2-release-src/training/24. States/State Decomposition-2.sysml,"package 'State Decomposition-1' {
 	
 	attribute def VehicleStartSignal;
 	attribute def VehicleOnSignal;
@@ -5592,7 +5592,7 @@ In operationalStates, the vehicle begins in the 'off' state, which transitions t
  -7.72447512e-02  1.12047695e-01 -7.04792142e-02  6.72967406e-04
  -4.40998049e-03  1.31163225e-02  3.40987816e-02  1.15522603e-03
  -2.64079906e-02  4.36784066e-02 -9.70426109e-03  2.21306793e-02]"
-46,../../models/training/25. Transitions/Change and Time Triggers.sysml,"package 'Change and Time Triggers' {
+46,../SysML-v2-release-src/training/25. Transitions/Change and Time Triggers.sysml,"package 'Change and Time Triggers' {
 	private import ISQ::TemperatureValue;
 	private import ISQ::DurationValue;
 	private import Time::TimeInstantValue;
@@ -5730,7 +5730,7 @@ In operationalStates, the vehicle begins in the 'off' state, which transitions t
  -2.22659428e-02  1.10261776e-01 -7.69158080e-02 -2.23919842e-02
   4.36421111e-02  1.16216838e-02  3.32300663e-02  2.63960995e-02
  -4.56258059e-02  4.00451710e-03 -1.06026649e-01 -3.97548452e-03]"
-47,../../models/training/25. Transitions/Local Clock Example.sysml,"package 'Local Clock Example' {
+47,../SysML-v2-release-src/training/25. Transitions/Local Clock Example.sysml,"package 'Local Clock Example' {
 	private import ScalarValues::String;
 	
 	item def Start;
@@ -5859,7 +5859,7 @@ The state machine, 'ServerBehavior', comprises four states: 'off', 'waiting', an
  -2.44930517e-02  2.22260579e-02 -4.48662639e-02  2.35773120e-02
   2.22836025e-02 -5.09852543e-02  2.15021819e-02  4.15767804e-02
   9.97956097e-03  6.81027472e-02 -1.09006509e-01 -1.70887467e-02]"
-48,../../models/training/25. Transitions/Transition Actions.sysml,"package 'Transition Actions' {
+48,../SysML-v2-release-src/training/25. Transitions/Transition Actions.sysml,"package 'Transition Actions' {
 	
 	attribute def VehicleStartSignal;
 	attribute def VehicleOnSignal;
@@ -6000,7 +6000,7 @@ The action 'performSelfTest' is defined to execute a self-test on the vehicle wh
  -9.82559100e-02  1.08503148e-01  1.75768826e-02  2.28626817e-03
  -1.06985336e-02 -6.93613617e-03 -3.41245253e-03  2.01768875e-02
   3.25730704e-02  8.50015059e-02 -2.77438574e-03 -2.21539941e-03]"
-49,../../models/training/26. State Exhibition/State Exhibition Example.sysml,"package 'State Exhibition Example' {
+49,../SysML-v2-release-src/training/26. State Exhibition/State Exhibition Example.sysml,"package 'State Exhibition Example' {
 	private import 'Transition Actions'::*;
 	
 	part vehicle : Vehicle {
@@ -6110,7 +6110,7 @@ The action 'performSelfTest' is defined to execute a self-test on the vehicle wh
  -1.30064562e-01  1.56616315e-01 -4.61267047e-02  2.90799662e-02
   2.92007588e-02 -4.43361364e-02  6.10930212e-02 -2.30396427e-02
  -2.77033262e-02  9.62666422e-02 -2.26359703e-02  4.33780029e-02]"
-50,../../models/training/27. Occurrences/Event Occurrence Example.sysml,"package 'Event Occurrence Example' {	
+50,../SysML-v2-release-src/training/27. Occurrences/Event Occurrence Example.sysml,"package 'Event Occurrence Example' {	
 	part def Driver;
 	part def CruiseController;
 	part def Speedometer;
@@ -6234,7 +6234,7 @@ The action 'performSelfTest' is defined to execute a self-test on the vehicle wh
  -3.92896160e-02  9.52485651e-02 -4.13888767e-02  2.20017303e-02
  -1.22109742e-03 -3.85196768e-02  5.25218286e-02 -2.78738104e-02
  -2.80900598e-02  8.62620026e-02 -2.53792591e-02 -7.14521017e-03]"
-51,../../models/training/27. Occurrences/Interaction Example-1.sysml,"package 'Interaction Example-1' {
+51,../SysML-v2-release-src/training/27. Occurrences/Interaction Example-1.sysml,"package 'Interaction Example-1' {
 	public import 'Event Occurrence Example'::*;
 	
 	item def SetSpeed;
@@ -6352,7 +6352,7 @@ The action 'performSelfTest' is defined to execute a self-test on the vehicle wh
  -5.42959496e-02  7.80259594e-02 -2.10678987e-02 -3.67736556e-02
  -2.75296159e-02  3.28295701e-03  5.94570264e-02 -2.86263670e-03
  -5.98502122e-02  8.48224014e-02 -1.30722914e-02 -5.32948226e-03]"
-52,../../models/training/27. Occurrences/Interaction Example-2.sysml,"package 'Interaction Example-2' {
+52,../SysML-v2-release-src/training/27. Occurrences/Interaction Example-2.sysml,"package 'Interaction Example-2' {
 	private import 'Event Occurrence Example'::*;
 	
 	item def SetSpeed;
@@ -6481,7 +6481,7 @@ The action 'performSelfTest' is defined to execute a self-test on the vehicle wh
  -3.53442654e-02  7.84159452e-02 -1.00888861e-02  6.27351226e-03
   9.27300751e-03  6.30767364e-03  6.78360462e-02 -6.76670298e-03
  -5.10376580e-02  8.95817950e-02 -2.50020437e-02 -5.85821411e-03]"
-53,../../models/training/27. Occurrences/Interaction Realization-1.sysml,"package 'Interaction Realization-1' {
+53,../SysML-v2-release-src/training/27. Occurrences/Interaction Realization-1.sysml,"package 'Interaction Realization-1' {
 	private import 'Interaction Example-1'::*;
 	
 	part driver_a : Driver {
@@ -6631,7 +6631,7 @@ The action 'performSelfTest' is defined to execute a self-test on the vehicle wh
  -3.83640267e-02  1.04287714e-01 -4.01312187e-02 -1.14393691e-02
  -2.02826913e-02 -4.46741953e-02  4.80620898e-02 -1.30729256e-02
  -2.69570313e-02  8.59678984e-02 -5.36873341e-02  1.93688199e-02]"
-54,../../models/training/27. Occurrences/Interaction Realization-2.sysml,"package 'Interaction Realization-2' {
+54,../SysML-v2-release-src/training/27. Occurrences/Interaction Realization-2.sysml,"package 'Interaction Realization-2' {
 	private import 'Interaction Example-1'::*;
 	
 	part driver_b : Driver {
@@ -6808,7 +6808,7 @@ The action 'performSelfTest' is defined to execute a self-test on the vehicle wh
  -3.57967168e-02  1.10400133e-01 -2.45644618e-02  2.05128640e-02
  -2.53822971e-02 -2.57436801e-02  3.36102657e-02 -5.75975096e-03
  -3.26459594e-02  1.12579480e-01 -2.38021743e-02  1.58343501e-02]"
-55,../../models/training/27. Occurrences/Message Payload Example.sysml,"package 'Message Payload Example' {
+55,../SysML-v2-release-src/training/27. Occurrences/Message Payload Example.sysml,"package 'Message Payload Example' {
 	private import 'Event Occurrence Example'::*;
 	
 	item def SetSpeed;
@@ -6939,7 +6939,7 @@ The action 'performSelfTest' is defined to execute a self-test on the vehicle wh
  -4.44768816e-02  1.05789244e-01 -2.27933321e-02 -2.40554232e-02
  -2.17288621e-02 -7.99295865e-03  6.68938905e-02  1.41699961e-03
  -4.79141660e-02  1.02951355e-01 -1.05403541e-02 -1.35970367e-02]"
-56,../../models/training/27. Occurrences/Time Slice and Snapshot Example.sysml,"package 'Time Slice and Snapshot Example' {
+56,../SysML-v2-release-src/training/27. Occurrences/Time Slice and Snapshot Example.sysml,"package 'Time Slice and Snapshot Example' {
 		
 	attribute def Date;
 	item def Person;
@@ -7061,7 +7061,7 @@ The action 'performSelfTest' is defined to execute a self-test on the vehicle wh
  -4.32509892e-02  1.11607224e-01 -7.14646950e-02  2.25287825e-02
   6.17367998e-02 -2.71371920e-02  1.00170940e-01 -1.78647563e-02
  -1.33920219e-02 -1.33741158e-03 -2.27292962e-02  4.02696989e-02]"
-57,../../models/training/28. Individuals/Individuals and Roles-1.sysml,"package 'Individuals and Roles' {
+57,../SysML-v2-release-src/training/28. Individuals/Individuals and Roles-1.sysml,"package 'Individuals and Roles' {
 	private import 'Part Definition Example'::*;
 	
 	part def Wheel;
@@ -7180,7 +7180,7 @@ Within the individual part 'vehicle_1' of type 'Vehicle_1', establish a snapshot
  -5.99934198e-02  9.90137160e-02 -6.11182638e-02  6.36878088e-02
   2.97691356e-02  3.19550969e-02  7.31569454e-02 -2.59411428e-03
  -4.39727381e-02  9.59941745e-02  1.40042827e-02 -4.52816067e-03]"
-58,../../models/training/28. Individuals/Individuals and Snapshots Example.sysml,"package 'Individuals and Snapshots Example' {
+58,../SysML-v2-release-src/training/28. Individuals/Individuals and Snapshots Example.sysml,"package 'Individuals and Snapshots Example' {
 	public import 'Part Definition Example'::*;
 	
 	individual part def Vehicle_1 :> Vehicle {
@@ -7299,7 +7299,7 @@ Within the individual part 'vehicle_1' of type 'Vehicle_1', establish a snapshot
  -5.07717729e-02  1.03990898e-01 -5.39109483e-02  1.42336683e-02
  -4.31373389e-03 -7.17236400e-02  4.35273238e-02 -3.02903522e-02
  -1.63119212e-02  6.72546308e-03 -3.88310291e-02  1.63099188e-02]"
-59,../../models/training/28. Individuals/Individuals and Time Slices.sysml,"package 'Individuals and Time Slices' {
+59,../SysML-v2-release-src/training/28. Individuals/Individuals and Time Slices.sysml,"package 'Individuals and Time Slices' {
 	private import 'Individuals and Snapshots Example'::*;
 	
 	individual item def Alice :> Person;
@@ -7420,7 +7420,7 @@ Within the individual part 'vehicle_1' of type 'Vehicle_1', establish a snapshot
  -7.6868355e-02  6.8547592e-02 -2.3668675e-02  3.8994920e-02
   1.4503604e-02 -2.5693769e-02  9.6727125e-02 -3.8967229e-02
  -6.0809669e-03  4.6956441e-03 -8.2339868e-02  9.5039670e-04]"
-60,../../models/training/29. Expressions/Car Mass Rollup Example 1.sysml,"package 'Car Mass Rollup Example 1' {
+60,../SysML-v2-release-src/training/29. Expressions/Car Mass Rollup Example 1.sysml,"package 'Car Mass Rollup Example 1' {
 	private import ScalarValues::*;
 	private import MassRollup1::*;
 	
@@ -7555,7 +7555,7 @@ The model leverages scalar values for mass, assigning a total mass of 1150 kg fo
  -6.64218664e-02  1.03685707e-01 -7.00604767e-02  3.79221477e-02
   2.81626289e-03  8.36171582e-03  9.22587588e-02 -8.43960568e-02
  -1.09792668e-02  5.83350137e-02 -1.57493651e-02  1.15225362e-02]"
-61,../../models/training/29. Expressions/Car Mass Rollup Example 2.sysml,"package 'Car Mass Rollup 1' {
+61,../SysML-v2-release-src/training/29. Expressions/Car Mass Rollup Example 2.sysml,"package 'Car Mass Rollup 1' {
 	private import ScalarValues::*;
 	private import MassRollup2::*;
 	
@@ -7688,7 +7688,7 @@ The model leverages scalar values for mass, assigning a total mass of 1150 kg fo
  -7.14187175e-02  8.92634317e-02 -5.76548874e-02  3.13109495e-02
  -1.20289596e-02  5.72832208e-03  6.54354319e-02 -7.88326189e-02
   6.20487565e-03  5.76273687e-02 -3.44727151e-02  2.81363837e-02]"
-62,../../models/training/29. Expressions/MassRollup1.sysml,"package MassRollup1 {
+62,../SysML-v2-release-src/training/29. Expressions/MassRollup1.sysml,"package MassRollup1 {
 	private import NumericalFunctions::*;
 	
 	part def MassedThing {
@@ -7802,7 +7802,7 @@ The model leverages scalar values for mass, assigning a total mass of 1150 kg fo
  -7.21277744e-02  2.64292918e-02 -6.65710345e-02  3.06699164e-02
   3.92502286e-02 -6.97601214e-03  1.04552247e-01 -7.68132694e-03
  -7.94815086e-03 -5.13863191e-02  1.50204739e-02  2.19445564e-02]"
-63,../../models/training/29. Expressions/MassRollup2.sysml,"package MassRollup2 {
+63,../SysML-v2-release-src/training/29. Expressions/MassRollup2.sysml,"package MassRollup2 {
 	private import NumericalFunctions::*;
 	
 	part def MassedThing {
@@ -7918,7 +7918,7 @@ The model leverages scalar values for mass, assigning a total mass of 1150 kg fo
  -7.52128288e-02  4.11492772e-02 -8.30495730e-02  3.45865488e-02
   4.50374670e-02 -3.60427611e-03  1.09207042e-01 -3.21348868e-02
  -1.14243412e-02 -5.18090799e-02  6.54845312e-03  2.30058655e-02]"
-64,../../models/training/30. Calculations/Calculation Definitions.sysml,"package 'Calculation Definitions' {
+64,../SysML-v2-release-src/training/30. Calculations/Calculation Definitions.sysml,"package 'Calculation Definitions' {
 	private import ScalarValues::Real;
 	private import ISQ::*;
 	
@@ -8036,7 +8036,7 @@ The model leverages scalar values for mass, assigning a total mass of 1150 kg fo
  -7.09155574e-02  5.93883730e-02 -6.33909274e-03  3.83992270e-02
  -3.39954980e-02 -2.48823874e-02 -1.25058992e-02  1.01233115e-02
  -1.06072351e-01  3.72540094e-02 -6.60036318e-03 -2.62007490e-02]"
-65,../../models/training/30. Calculations/Calculation Usages-1.sysml,"package 'Calculation Usages-1' {
+65,../SysML-v2-release-src/training/30. Calculations/Calculation Usages-1.sysml,"package 'Calculation Usages-1' {
 	private import ScalarValues::Real;
 	private import ISQ::*;
 	private import 'Calculation Definitions'::*;
@@ -8181,7 +8181,7 @@ This model effectively captures the mathematical relationships governing vehicle
  -9.90915373e-02  1.14596978e-01 -4.47217412e-02  1.58721246e-02
  -3.44272554e-02 -4.32628915e-02 -1.49170309e-03 -1.29333325e-02
  -4.76905145e-02  3.18860859e-02  2.31266171e-02 -1.92504637e-02]"
-66,../../models/training/30. Calculations/Calculation Usages-2.sysml,"package 'Calculation Usages-2' {
+66,../SysML-v2-release-src/training/30. Calculations/Calculation Usages-2.sysml,"package 'Calculation Usages-2' {
 	private import ScalarValues::Real;
 	private import ISQ::*;
 	private import 'Calculation Definitions'::*;
@@ -8307,7 +8307,7 @@ Within 'VehicleDynamics,' a calculation function 'updateState' is defined, which
  -8.44166800e-02  1.09100424e-01 -2.72550955e-02  3.34852412e-02
  -1.35370344e-02 -6.29515294e-03  1.67483799e-02 -6.16929820e-03
  -6.83231279e-02  3.41902375e-02  9.62411799e-03  2.86494801e-03]"
-67,../../models/training/31. Constraints/Analytical Constraints.sysml,"package 'Analytical Constraints' {
+67,../SysML-v2-release-src/training/31. Constraints/Analytical Constraints.sysml,"package 'Analytical Constraints' {
 	private import ISQ::*;
 	private import 'Calculation Definitions'::*;
 	
@@ -8445,7 +8445,7 @@ Within 'VehicleDynamics,' a calculation function 'updateState' is defined, which
  -2.85870843e-02  3.79520766e-02 -3.50203961e-02  3.77351753e-02
  -8.13395344e-03 -2.81398799e-02 -1.24908490e-02  1.45629542e-02
  -2.51096208e-02  1.41722495e-02 -2.02418566e-02 -6.47789612e-02]"
-68,../../models/training/31. Constraints/Constraint Assertions-1.sysml,"package 'Constraint Assertions-1' {
+68,../SysML-v2-release-src/training/31. Constraints/Constraint Assertions-1.sysml,"package 'Constraint Assertions-1' {
 	private import ISQ::*;
 	private import SI::*;
 	private import NumericalFunctions::*;
@@ -8572,7 +8572,7 @@ Within 'VehicleDynamics,' a calculation function 'updateState' is defined, which
  -6.90367967e-02  1.19370230e-01 -6.21283092e-02  9.80693940e-03
   5.09666336e-07  2.88437586e-03  4.91711609e-02 -8.71695578e-02
   2.32920563e-03  7.69377947e-02  3.12749408e-02 -3.58440764e-02]"
-69,../../models/training/31. Constraints/Constraint Assertions-2.sysml,"package 'Constraint Assertions-2' {
+69,../SysML-v2-release-src/training/31. Constraints/Constraint Assertions-2.sysml,"package 'Constraint Assertions-2' {
 	private import ISQ::*;
 	private import SI::*;
 	private import NumericalFunctions::*;
@@ -8704,7 +8704,7 @@ Within 'VehicleDynamics,' a calculation function 'updateState' is defined, which
  -4.87009250e-02  9.82827619e-02 -7.28125274e-02  6.78388728e-03
  -3.57523398e-03 -3.53916013e-03  4.54252884e-02 -6.49214163e-02
   7.70973368e-03  6.18292764e-02 -1.46281498e-03 -3.31703015e-02]"
-70,../../models/training/31. Constraints/Constraints Example-1.sysml,"package 'Constraints Example-1' {
+70,../SysML-v2-release-src/training/31. Constraints/Constraints Example-1.sysml,"package 'Constraints Example-1' {
 	private import ISQ::*;
 	private import SI::*;
 	private import NumericalFunctions::*;
@@ -8831,7 +8831,7 @@ Within 'VehicleDynamics,' a calculation function 'updateState' is defined, which
  -6.03671521e-02  1.02119774e-01 -2.90103424e-02 -7.43524870e-03
  -2.77002621e-03 -3.81868449e-03  5.75045533e-02 -8.99115279e-02
  -3.84714417e-02  6.46356493e-02 -4.43583354e-03 -3.12630124e-02]"
-71,../../models/training/31. Constraints/Constraints Example-2.sysml,"package 'Constraints Example-2' {
+71,../SysML-v2-release-src/training/31. Constraints/Constraints Example-2.sysml,"package 'Constraints Example-2' {
 	private import ISQ::*;
 	private import SI::*;
 	private import NumericalFunctions::*;
@@ -8958,7 +8958,7 @@ Within 'VehicleDynamics,' a calculation function 'updateState' is defined, which
  -3.80635113e-02  1.13987632e-01 -3.64656374e-02  1.10084109e-03
   2.09097732e-02 -5.04302839e-03  6.98439777e-02 -8.08468461e-02
  -2.86678988e-02  8.50248560e-02  1.56505834e-02 -3.80644165e-02]"
-72,../../models/training/31. Constraints/Derivation Constraints.sysml,"package 'Derivation Constraints' {
+72,../SysML-v2-release-src/training/31. Constraints/Derivation Constraints.sysml,"package 'Derivation Constraints' {
 	private import SI::*;
 	private import 'Constraints Example-1'::*;
 	
@@ -9078,7 +9078,7 @@ Within 'VehicleDynamics,' a calculation function 'updateState' is defined, which
  -7.73369223e-02  1.04605563e-01 -4.25534993e-02 -1.06685283e-02
  -2.14268491e-02 -3.93916294e-03  5.94600290e-02 -7.33005777e-02
  -4.43409272e-02  4.93827015e-02  3.47371623e-02 -4.49039713e-02]"
-73,../../models/training/31. Constraints/Time Constraints.sysml,"package 'Time Constraints' {
+73,../SysML-v2-release-src/training/31. Constraints/Time Constraints.sysml,"package 'Time Constraints' {
 	private import ISQ::TemperatureValue;
 	private import ISQ::DurationValue;
 	private import Time::TimeInstantValue;
@@ -9210,7 +9210,7 @@ Within 'VehicleDynamics,' a calculation function 'updateState' is defined, which
  -2.07609776e-02  1.04719818e-01 -6.63624555e-02  4.07876633e-02
   6.74765334e-02  1.56859420e-02  3.24405991e-02 -1.15836896e-02
  -3.24988142e-02  3.93227069e-03 -5.89772016e-02  7.49821169e-03]"
-74,../../models/training/32. Requirements/Requirement Definitions.sysml,"package 'Requirement Definitions' {
+74,../SysML-v2-release-src/training/32. Requirements/Requirement Definitions.sysml,"package 'Requirement Definitions' {
 	private import ISQ::*;
 	private import SI::*;
 
@@ -9347,7 +9347,7 @@ Within 'VehicleDynamics,' a calculation function 'updateState' is defined, which
  -3.00567728e-02  9.32458788e-02 -3.22495811e-02  2.52021179e-02
  -2.92803776e-02  8.29351470e-02  4.85014543e-02 -3.76144089e-02
   1.12322103e-02  7.79236928e-02  1.12042994e-06 -2.87848450e-02]"
-75,../../models/training/32. Requirements/Requirement Groups.sysml,"package 'Requirement Groups' {
+75,../SysML-v2-release-src/training/32. Requirements/Requirement Groups.sysml,"package 'Requirement Groups' {
 	private import 'Requirement Definitions'::*;
 	private import 'Requirement Usages'::*;
 	
@@ -9477,7 +9477,7 @@ The model further outlines the 'vehicleSpecification' requirement, documenting t
  -2.54610274e-02  8.64638463e-02 -5.23336716e-02  5.32757416e-02
  -1.40151475e-02  4.71303090e-02  2.37041079e-02 -5.43744341e-02
   1.02388952e-02  1.25614390e-01  2.03832183e-02 -2.17293408e-02]"
-76,../../models/training/32. Requirements/Requirement Satisfaction.sysml,"package 'Requirement Satisfaction' {
+76,../SysML-v2-release-src/training/32. Requirements/Requirement Satisfaction.sysml,"package 'Requirement Satisfaction' {
 	private import 'Requirement Definitions'::*;
 	private import 'Requirement Groups'::*;
 	
@@ -9599,7 +9599,7 @@ The model further outlines the 'vehicleSpecification' requirement, documenting t
  -5.41172028e-02  8.18474144e-02 -2.98341010e-02  1.43904053e-02
  -1.22549692e-02  1.95365716e-02  3.64386775e-02 -3.65862921e-02
  -2.95053888e-02  9.59221497e-02  5.03179105e-03 -2.40681767e-02]"
-77,../../models/training/32. Requirements/Requirement Usages.sysml,"package 'Requirement Usages' {
+77,../SysML-v2-release-src/training/32. Requirements/Requirement Usages.sysml,"package 'Requirement Usages' {
 	private import SI::*;
 	private import 'Requirement Definitions'::*;
 	
@@ -9719,7 +9719,7 @@ The model further outlines the 'vehicleSpecification' requirement, documenting t
  -7.70020634e-02  1.28260508e-01 -3.27295028e-02  1.53349461e-02
  -3.72342058e-02  5.36961518e-02  1.78485084e-02 -6.11268282e-02
  -1.71585083e-02  6.58421814e-02 -2.50977129e-02  2.78230067e-02]"
-78,../../models/training/33. Analysis/Analysis Case Definition Example.sysml,"package 'Analysis Case Definition Example' {
+78,../SysML-v2-release-src/training/33. Analysis/Analysis Case Definition Example.sysml,"package 'Analysis Case Definition Example' {
 	private import ScalarValues::Real;
 	private import 'Calculation Definitions'::*;
 	private import 'Analytical Constraints'::*;
@@ -9902,7 +9902,7 @@ Model an ""FuelEconomyAnalysis"" analysis that evaluates if the vehicle meets th
  -8.87568444e-02  7.06524700e-02 -5.58901299e-03 -2.70904284e-02
  -6.19778372e-02  5.63769974e-03  1.41394120e-02 -1.57597456e-02
  -3.79683934e-02  5.75704239e-02  1.65905170e-02 -4.35953327e-02]"
-79,../../models/training/33. Analysis/Analysis Case Usage Example.sysml,"package 'Analysis Case Usage Example' {
+79,../SysML-v2-release-src/training/33. Analysis/Analysis Case Usage Example.sysml,"package 'Analysis Case Usage Example' {
 	private import 'Analysis Case Definition Example'::*;
 	
 	part vehicleFuelEconomyAnalysisContext {
@@ -10032,7 +10032,7 @@ Two analyses, 'cityAnalysis' and 'highwayAnalysis,' utilize the 'FuelEconomyAnal
  -1.13115348e-01  9.60823968e-02 -2.94275333e-06 -2.59523094e-02
  -3.30005214e-02  1.13632018e-02  3.11175343e-02 -3.88977467e-03
   1.65687781e-02  7.37645179e-02  3.32201994e-03 -1.08311325e-02]"
-80,../../models/training/33. Analysis/Trade Study Analysis Example.sysml,"package 'Trade Study Analysis Example' {
+80,../SysML-v2-release-src/training/33. Analysis/Trade Study Analysis Example.sysml,"package 'Trade Study Analysis Example' {
 	private import ScalarValues::Real;
 	private import TradeStudies::*;
 	
@@ -10170,7 +10170,7 @@ Two analyses, 'cityAnalysis' and 'highwayAnalysis,' utilize the 'FuelEconomyAnal
  -2.68163141e-02  6.96456432e-02  1.73548947e-03  7.14089274e-02
  -2.56968141e-02 -4.96989898e-02 -3.18496190e-02 -2.75068358e-02
  -9.20737721e-03 -5.73187582e-02  3.06577906e-02  6.92017889e-03]"
-81,../../models/training/34. Verification/Verification Case Definition Example.sysml,"package 'Verification Case Definition Example' {
+81,../SysML-v2-release-src/training/34. Verification/Verification Case Definition Example.sysml,"package 'Verification Case Definition Example' {
 	
 	part def Vehicle {
 		attribute mass :> ISQ::mass;
@@ -10314,7 +10314,7 @@ The verification section, ""VehicleMassTest,"" establishes a test for this requi
  -8.87311697e-02  1.29371300e-01 -7.99850896e-02  3.87356170e-02
   3.84305343e-02 -9.80558898e-03  1.78006962e-02 -3.18124741e-02
   6.87538534e-02  6.49833530e-02  2.07158886e-02 -5.43488897e-02]"
-82,../../models/training/34. Verification/Verification Case Usage Example.sysml,"package 'Verification Case Usage Example' {
+82,../SysML-v2-release-src/training/34. Verification/Verification Case Usage Example.sysml,"package 'Verification Case Usage Example' {
 	private import 'Verification Case Definition Example'::*;
 	
 	part def MassVerificationSystem;
@@ -10465,7 +10465,7 @@ The execution is divided into two timeslices: the first conducts the mass test f
  -1.01840712e-01  1.27808094e-01 -6.53493255e-02  4.69801277e-02
   7.37188943e-03 -3.16613019e-02  6.49026632e-02  6.50008814e-03
   5.57244755e-03  3.00273579e-02  6.50094682e-03 -6.70405105e-02]"
-83,../../models/training/35. Use Cases/Use Case Definition Example.sysml,"package 'Use Case Definition Example' {
+83,../SysML-v2-release-src/training/35. Use Cases/Use Case Definition Example.sysml,"package 'Use Case Definition Example' {
 	
 	part def Vehicle;
 	part def Person;
@@ -10596,7 +10596,7 @@ The first use case, 'Provide Transportation', outlines the vehicle's role in tra
  -9.85285118e-02  1.24392368e-01  1.59907714e-02  1.48639418e-02
   9.70980618e-03 -2.41949945e-03  8.83790851e-02 -1.83131751e-02
  -3.88703942e-02  1.39900222e-01  5.26358048e-03  1.24085294e-02]"
-84,../../models/training/35. Use Cases/Use Case Usage Example.sysml,"package 'Use Case Usage Example' {
+84,../SysML-v2-release-src/training/35. Use Cases/Use Case Usage Example.sysml,"package 'Use Case Usage Example' {
 	
 	private import 'Use Case Definition Example'::*;
 	
@@ -10728,7 +10728,7 @@ The first use case, 'Provide Transportation', outlines the vehicle's role in tra
  -8.06637779e-02  7.61911049e-02  1.07203498e-02  1.67291556e-02
   1.02670910e-02  6.34675026e-02  1.00826241e-01 -9.06219706e-03
  -2.04379950e-03  1.19911022e-01  2.50791851e-02  8.41987971e-03]"
-85,../../models/training/36. Variability/Variation Configuration.sysml,"package 'Variation Configuration' {
+85,../SysML-v2-release-src/training/36. Variability/Variation Configuration.sysml,"package 'Variation Configuration' {
 	private import 'Variation Usages'::*;
 	
 	part vehicle4Cyl :> vehicleFamily {
@@ -10837,7 +10837,7 @@ The first use case, 'Provide Transportation', outlines the vehicle's role in tra
  -6.94494992e-02  1.03748232e-01  2.00353359e-04  7.46372249e-03
   1.81999803e-02 -4.63788994e-02  6.98826015e-02 -5.61818965e-02
  -3.99979874e-02  7.98117369e-02  3.31513435e-02 -1.67266317e-02]"
-86,../../models/training/36. Variability/Variation Definitions.sysml,"package 'Variation Definitions' {
+86,../SysML-v2-release-src/training/36. Variability/Variation Definitions.sysml,"package 'Variation Definitions' {
 	private import ScalarValues::Real;
 	private import SI::mm;
 	
@@ -10967,7 +10967,7 @@ The first use case, 'Provide Transportation', outlines the vehicle's role in tra
   2.90984549e-02  6.94220215e-02  3.98272229e-03  3.78909968e-02
   5.09300753e-02  5.02949990e-02 -1.43552544e-02 -8.28188658e-02
  -3.26251760e-02  4.19665016e-02 -3.56050953e-02 -4.45786230e-02]"
-87,../../models/training/36. Variability/Variation Usages.sysml,"package 'Variation Usages' {
+87,../SysML-v2-release-src/training/36. Variability/Variation Usages.sysml,"package 'Variation Usages' {
 	private import 'Variation Definitions'::*;
 	
 	part def Vehicle;
@@ -11087,7 +11087,7 @@ The first use case, 'Provide Transportation', outlines the vehicle's role in tra
  -3.79838534e-02  9.16140825e-02  6.14809850e-03 -2.22452339e-02
   3.06218639e-02 -5.02693951e-02  4.43146899e-02 -5.56353219e-02
   1.58402082e-02  1.14801392e-01 -1.72488112e-02 -1.72111951e-02]"
-88,../../models/training/37. Dependencies/Dependency Example.sysml,"package 'Dependency Example' {
+88,../SysML-v2-release-src/training/37. Dependencies/Dependency Example.sysml,"package 'Dependency Example' {
 	
 	part 'System Assembly' {
 		part 'Computer Subsystem' {
@@ -11209,7 +11209,7 @@ The first use case, 'Provide Transportation', outlines the vehicle's role in tra
  -1.08131029e-01  1.02640755e-01 -9.66468304e-02  1.73844751e-02
   1.00179911e-02  2.78140791e-02  7.79390708e-02 -5.57767577e-04
  -2.44662482e-02  8.49781930e-02  3.93923931e-02 -5.71790114e-02]"
-89,../../models/training/38. Allocation/Allocation Definition Example.sysml,"package 'Allocation Definition Example' {
+89,../SysML-v2-release-src/training/38. Allocation/Allocation Definition Example.sysml,"package 'Allocation Definition Example' {
 	package LogicalModel {
 		action def ProvidePower;
 		action def GenerateTorque;
@@ -11346,7 +11346,7 @@ Additionally, create an 'allocation' definition called 'LogicalToPhysical', with
  -5.07552065e-02  1.77305993e-02 -8.68241563e-02  5.80625050e-02
  -4.60537374e-02  1.67242922e-02  1.13049913e-02 -1.86640359e-02
  -1.43332295e-02  5.65679297e-02  2.40816437e-02 -6.18309937e-02]"
-90,../../models/training/38. Allocation/Allocation Usage Example.sysml,"package 'Allocation Usage Example' {
+90,../SysML-v2-release-src/training/38. Allocation/Allocation Usage Example.sysml,"package 'Allocation Usage Example' {
 	package LogicalModel {
 		action def ProvidePower;
 		action def GenerateTorque;
@@ -11481,7 +11481,7 @@ This model effectively illustrates the relationship between logical actions and 
  -3.33958901e-02  1.90166589e-02 -7.54782632e-02  7.87005648e-02
  -1.68011039e-02  2.07231231e-02  3.43630277e-02 -2.79753506e-02
  -1.01455441e-02  6.32472560e-02  2.12819707e-02 -4.73231487e-02]"
-91,../../models/training/39. Metadata/Metadata Example-1.sysml,"package 'Metadata Example-1' {
+91,../SysML-v2-release-src/training/39. Metadata/Metadata Example-1.sysml,"package 'Metadata Example-1' {
 	
 	metadata def SafetyFeature;
 	metadata def SecurityFeature {
@@ -11608,7 +11608,7 @@ This model effectively illustrates the relationship between logical actions and 
  -6.49534613e-02  9.95217413e-02 -2.68358514e-02  7.14987293e-02
  -8.18433519e-03 -4.95658256e-02  1.12438589e-01  3.08231618e-02
  -3.97453923e-03  6.12438694e-02  3.85897383e-02  4.53075394e-03]"
-92,../../models/training/39. Metadata/Metadata Example-2.sysml,"package 'Metadata Example-2' {
+92,../SysML-v2-release-src/training/39. Metadata/Metadata Example-2.sysml,"package 'Metadata Example-2' {
 	
 	action computeDynamics {
 		private import AnalysisTooling::*;
@@ -11723,7 +11723,7 @@ This model effectively illustrates the relationship between logical actions and 
  -9.17923599e-02  5.13183251e-02 -7.64534324e-02  2.65974980e-02
  -1.77327264e-02 -4.39544544e-02  4.46476489e-02 -1.80866681e-02
  -7.39635006e-02 -3.63885984e-02 -1.61853824e-02 -1.44544449e-02]"
-93,../../models/training/40. Filtering/Filtering Example-1.sysml,"package 'Filtering Example-1' {
+93,../SysML-v2-release-src/training/40. Filtering/Filtering Example-1.sysml,"package 'Filtering Example-1' {
 	private import ScalarValues::Boolean;
 	
 	metadata def Safety {
@@ -11857,7 +11857,7 @@ Create a subpackage 'Safety Features' that includes all parts relevant to safety
  -3.68592218e-02  1.29232660e-01 -4.82596122e-02  1.25070633e-02
   3.41247208e-03 -2.42141206e-02  9.12708417e-02 -4.61270511e-02
  -6.66886510e-04  7.48001933e-02  4.99051511e-02 -4.71935607e-03]"
-94,../../models/training/40. Filtering/Filtering Example-2.sysml,"package 'Filtering Example-2' {
+94,../SysML-v2-release-src/training/40. Filtering/Filtering Example-2.sysml,"package 'Filtering Example-2' {
 	private import ScalarValues::Boolean;
 	
 	metadata def Safety {
@@ -11991,7 +11991,7 @@ Additionally, create a package named ""Safety Features"" to encapsulate all part
  -3.89080793e-02  1.20296411e-01 -4.75683287e-02  5.69445081e-02
   3.07121873e-02 -3.29015143e-02  9.55946520e-02 -2.93813031e-02
   1.22388629e-02  7.14945942e-02  6.63117245e-02 -5.24175679e-03]"
-95,../../models/training/41. Language Extension/Model Library Example.sysml,"library package 'Model Library Example' {
+95,../SysML-v2-release-src/training/41. Language Extension/Model Library Example.sysml,"library package 'Model Library Example' {
 	private import ScalarValues::Real;
 	private import RiskMetadata::Level;
 	
@@ -12121,7 +12121,7 @@ Additionally, create a package named ""Safety Features"" to encapsulate all part
  -5.08695422e-03  1.29121840e-01  8.42044037e-03  3.47488211e-03
   6.08809702e-02  1.86220445e-02  5.20805940e-02 -3.56130973e-02
   4.57535647e-02 -2.71772314e-03  2.63206568e-02  2.31629536e-02]"
-96,../../models/training/41. Language Extension/Semantic Metadata Example.sysml,"library package 'Semantic Metadata Example' {
+96,../SysML-v2-release-src/training/41. Language Extension/Semantic Metadata Example.sysml,"library package 'Semantic Metadata Example' {
 	private import 'Model Library Example'::*;
 	private import Metaobjects::SemanticMetadata;
 
@@ -12241,7 +12241,7 @@ Additionally, create a package named ""Safety Features"" to encapsulate all part
  -6.45366684e-02  7.32462406e-02 -6.67755827e-02  6.18597753e-02
  -7.94805307e-03  6.77997014e-03  4.90493067e-02 -6.80599213e-02
   5.44555336e-02  3.21005769e-02  1.73322987e-02  2.09930465e-02]"
-97,../../models/training/41. Language Extension/User Keyword Example.sysml,"package 'User Keyword Example' {
+97,../SysML-v2-release-src/training/41. Language Extension/User Keyword Example.sysml,"package 'User Keyword Example' {
 	private import ScalarValues::Real;
 	private import 'Semantic Metadata Example'::*;
 	private import RiskMetadata::LevelEnum;
@@ -12368,7 +12368,7 @@ Additionally, create a package named ""Safety Features"" to encapsulate all part
  -4.48425822e-02  2.70045120e-02 -9.23091099e-02  3.62339690e-02
  -3.63374278e-02  4.81039435e-02 -1.53533798e-02 -4.31315303e-02
   1.07104786e-01  3.14930864e-02 -2.33179796e-02 -4.97380225e-03]"
-98,../../models/training/42. Views/Viewpoint Example.sysml,"package 'Viewpoint Example' {	
+98,../SysML-v2-release-src/training/42. Views/Viewpoint Example.sysml,"package 'Viewpoint Example' {	
 	part def 'Systems Engineer';
 	part def 'IV&V';
 	
@@ -12501,7 +12501,7 @@ Additionally, create a package named ""Safety Features"" to encapsulate all part
  -7.35613853e-02  7.57676885e-02 -3.34906578e-02  1.24213807e-02
   5.59678413e-02 -2.68339869e-02  7.94380307e-02 -5.84007986e-03
   4.00112793e-02  7.17470869e-02 -1.74430106e-02 -9.22967214e-03]"
-99,../../models/training/42. Views/Views Example.sysml,"package 'Views Example' {
+99,../SysML-v2-release-src/training/42. Views/Views Example.sysml,"package 'Views Example' {
 	private import Views::*;
 	private import 'Viewpoint Example'::*;
 	private import 'Filtering Example-2'::*;
