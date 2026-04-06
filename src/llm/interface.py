@@ -125,11 +125,14 @@ class GeminiLLM(LLMInterface):
         max_tokens: int = 4096,
     ) -> LLMResponse:
         """Call Gemini and normalize structured response fields into LLMResponse."""
+        # google-genai expects generation settings in `config`, not top-level kwargs.
         response = self.client.models.generate_content(
             model=self.model,
             contents=[m.content for m in messages],
-            temperature=temperature,
-            max_tokens=max_tokens,
+            config={
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+            },
         )
 
         content, finish_reason = self._extract_content_and_finish_reason(response)

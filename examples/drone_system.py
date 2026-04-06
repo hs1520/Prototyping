@@ -55,7 +55,7 @@ def main():
     print()
 
     # Create LLM (mock for demo, real for --openai flag)
-    llm = create_llm(use_openai=use_openai)
+    llm = create_llm(use_llm=True)
     print(f"Using LLM: {llm.__class__.__name__}")
     print()
 

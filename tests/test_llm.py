@@ -1,7 +1,9 @@
 """Tests for the LLM interface and Chain of Thought prompting."""
 
+from types import SimpleNamespace
+
 import pytest
-from src.llm.interface import Message, LLMResponse, MockLLM
+from src.llm.interface import GeminiLLM, Message, LLMResponse, MockLLM
 from src.llm.chain_of_thought import ChainOfThoughtPrompter, CoTResult
 
 
@@ -161,3 +163,36 @@ class TestChainOfThoughtPrompter:
         )
         assert isinstance(result, CoTResult)
         assert result.metadata.get("num_candidates") == 2
+
+
+class TestGeminiLLM:
+    def test_complete_uses_config_argument_for_generation_settings(self):
+        captured_kwargs = {}
+
+        class FakeModels:
+            def generate_content(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                return SimpleNamespace(
+                    text="ok",
+                    usage_metadata=None,
+                    candidates=[],
+                    model_version="gemini-test",
+                )
+
+        gemini = GeminiLLM.__new__(GeminiLLM)
+        gemini.model = "gemini-test"
+        gemini.langsmith_enabled = False
+        gemini.client = SimpleNamespace(models=FakeModels())
+
+        response = gemini.complete(
+            [Message(role="user", content="hello")],
+            temperature=0.25,
+            max_tokens=123,
+        )
+
+        assert response.content == "ok"
+        assert "temperature" not in captured_kwargs
+        assert "max_tokens" not in captured_kwargs
+        assert captured_kwargs["config"]["temperature"] == 0.25
+        assert captured_kwargs["config"]["max_output_tokens"] == 123
+

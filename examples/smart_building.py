@@ -168,7 +168,7 @@ def main():
     print("=" * 70)
     print()
 
-    llm = create_llm(use_openai=use_openai)
+    llm = create_llm(use_llm=use_openai)
     print(f"Using LLM: {llm.__class__.__name__}")
 
     pipeline = PrototypingPipeline(
