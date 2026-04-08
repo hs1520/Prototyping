@@ -9,9 +9,10 @@ from __future__ import annotations
 import argparse
 import csv
 import re
-import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
+
+from src.rag.pinecone_wrapper import PineconeWrapper
 
 
 def parse_args() -> argparse.Namespace:
@@ -148,64 +149,6 @@ def batched(records: Iterable[Dict[str, Any]], batch_size: int) -> Iterator[List
     if batch:
         yield batch
 
-
-def _import_pinecone_wrapper():
-    script_dir = str(Path(__file__).resolve().parent)
-    project_root_str = str(Path(__file__).resolve().parents[2])
-
-    # When executed as a file, `src/rag` can shadow the external `pinecone` package.
-    if script_dir in sys.path:
-        sys.path = [p for p in sys.path if p != script_dir]
-    if project_root_str not in sys.path:
-        sys.path.insert(0, project_root_str)
-
-    try:
-        from src.rag.pinecone import PineconeWrapper
-
-        return PineconeWrapper
-    except ModuleNotFoundError as exc:
-        # Support direct script execution: `python src/rag/ingest_uc3m_to_pinecone.py`.
-        if exc.name != "src":
-            raise
-
-        from src.rag.pinecone import PineconeWrapper
-
-        return PineconeWrapper
-
-
-def _extract_verify_summary(result: Any) -> tuple[int, str]:
-    hits_list: List[Any] = []
-
-    if isinstance(result, dict):
-        hits_list = result.get("result", {}).get("hits", []) or []
-    elif hasattr(result, "to_dict"):
-        data = result.to_dict()
-        if isinstance(data, dict):
-            hits_list = data.get("result", {}).get("hits", []) or []
-    elif hasattr(result, "result"):
-        response_result = getattr(result, "result")
-        if isinstance(response_result, dict):
-            hits_list = response_result.get("hits", []) or []
-        elif hasattr(response_result, "hits"):
-            hits_list = getattr(response_result, "hits") or []
-
-    hits = len(hits_list)
-    if not hits_list:
-        return 0, ""
-
-    first_hit = hits_list[0]
-    first_file_path = ""
-    if isinstance(first_hit, dict):
-        fields = first_hit.get("fields", {}) or {}
-        first_file_path = str(fields.get("file_path", ""))
-    elif hasattr(first_hit, "fields"):
-        fields = getattr(first_hit, "fields")
-        if isinstance(fields, dict):
-            first_file_path = str(fields.get("file_path", ""))
-
-    return hits, first_file_path
-
-
 def main() -> None:
     args = parse_args()
     data_dir = Path(args.data_dir).resolve()
@@ -230,8 +173,6 @@ def main() -> None:
             print("[dry-run] first file_path:", sample.get("file_path"))
         return
 
-    PineconeWrapper = _import_pinecone_wrapper()
-
     wrapper = PineconeWrapper(api_key=args.api_key, default_namespace=args.namespace)
     created = wrapper.create_index(
         index_name=args.index_name,
@@ -253,19 +194,6 @@ def main() -> None:
         print(f"batch={i} upserted={upserted} total={total_upserted}")
 
     print(f"ingestion_done: total_upserted={total_upserted}")
-
-    if total_upserted > 0 and args.verify_query:
-        result = wrapper.search(
-            index_name=args.index_name,
-            query_text=args.verify_query,
-            top_k=1,
-            namespace=args.namespace,
-            fields=["chunk_text", "file_path", "source_csv", "split"],
-        )
-
-        hits, first_file_path = _extract_verify_summary(result)
-
-        print(f"verify_done: hits={hits} top_file_path={first_file_path}")
 
 # python src/rag/ingest_uc3m_to_pinecone.py --csv-files training.csv validation.csv
 if __name__ == "__main__":

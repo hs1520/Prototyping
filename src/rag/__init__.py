@@ -1,7 +1,7 @@
 """RAG (Retrieval Augmented Generation) package for MBSE knowledge."""
 
 from .knowledge_base import KnowledgeBase, KnowledgeEntry
-from .pinecone import PineconeWrapper
+from .pinecone_wrapper import PineconeWrapper
 from .retriever import RAGRetriever, RetrievedContext
 
 __all__ = [
