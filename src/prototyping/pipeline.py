@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from ..agents.orchestrator import Orchestrator
 from ..llm.interface import LLMInterface, MockLLM, OpenAILLM, GeminiLLM
-from ..rag.knowledge_base import KnowledgeBase
+from ..rag.pinecone_wrapper import PineconeWrapper
 from ..rag.retriever import RAGRetriever
 from ..sysml.model import SysMLModel
 
@@ -145,7 +145,9 @@ class PrototypingPipeline:
         llm_model: Optional[str] = None,
         llm_api_key: Optional[str] = None,
         llm_options: Optional[Dict[str, Any]] = None,
-        knowledge_base: Optional[KnowledgeBase] = None,
+        pinecone_wrapper: Optional[PineconeWrapper] = None,
+        rag_index_name: str = "ai-prototyping-sysml-v2",
+        rag_namespace: str = "SysML-V2-Release",
         quality_threshold: float = 0.70,
         max_iterations: int = 3,
     ):
@@ -155,8 +157,13 @@ class PrototypingPipeline:
             api_key=llm_api_key,
             provider_kwargs=llm_options,
         )
-        self.kb = knowledge_base or KnowledgeBase()
-        self.rag = RAGRetriever(self.llm, self.kb)
+        self.pinecone = pinecone_wrapper or PineconeWrapper(default_namespace=rag_namespace)
+        self.rag = RAGRetriever(
+            llm=self.llm,
+            pinecone_wrapper=self.pinecone,
+            index_name=rag_index_name,
+            namespace=rag_namespace,
+        )
         self.orchestrator = Orchestrator(
             llm=self.llm,
             rag_retriever=self.rag,

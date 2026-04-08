@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--csv-files",
         nargs="+",
-        default=["content_descriptions.csv"],
+        default=["content_descriptions.csv", "training.csv", "validation.csv"],
         help=(
             "CSV files under --data-dir to ingest. "
             "Default ingests content_descriptions.csv only."

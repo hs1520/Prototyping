@@ -10,6 +10,34 @@ from src.rag.retriever import RAGRetriever
 from src.sysml.model import SysMLModel
 
 
+class FakePineconeWrapper:
+    def search(
+        self,
+        index_name,
+        query_text,
+        top_k=3,
+        namespace=None,
+        filter_dict=None,
+        fields=None,
+    ):
+        return {
+            "result": {
+                "hits": [
+                    {
+                        "_id": "test-hit",
+                        "_score": 0.9,
+                        "fields": {
+                            "title": "Test Context",
+                            "chunk_text": "This is test retrieval context.",
+                            "category": "sysml_pattern",
+                            "tags": ["test"],
+                        },
+                    }
+                ]
+            }
+        }
+
+
 class TestAgentMessage:
     def test_creation(self):
         msg = AgentMessage(
@@ -158,7 +186,12 @@ class TestOrchestrator:
     @pytest.fixture
     def orchestrator(self):
         llm = MockLLM()
-        rag = RAGRetriever(llm)
+        rag = RAGRetriever(
+            llm=llm,
+            pinecone_wrapper=FakePineconeWrapper(),
+            index_name="test-index",
+            namespace="test-ns",
+        )
         return Orchestrator(
             llm=llm,
             rag_retriever=rag,
