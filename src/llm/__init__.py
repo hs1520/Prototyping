@@ -5,7 +5,9 @@ from .chain_of_thought import (
     CoTResult,
     ThoughtStep,
 )
+from .github_auth import GitHubAuthManager, GitHubCLIAuthError
 from .interface import (
+    GitHubCopilotLLM,
     LLMInterface,
     LLMResponse,
     Message,
@@ -16,6 +18,9 @@ from .interface import (
 __all__ = [
     "ChainOfThoughtPrompter",
     "CoTResult",
+    "GitHubAuthManager",
+    "GitHubCLIAuthError",
+    "GitHubCopilotLLM",
     "LLMInterface",
     "LLMResponse",
     "Message",

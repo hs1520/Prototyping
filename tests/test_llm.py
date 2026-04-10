@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
+import src.llm.interface as interface_module
 from src.llm.interface import GeminiLLM, Message, LLMResponse, MockLLM
 from src.llm.chain_of_thought import ChainOfThoughtPrompter, CoTResult
 
@@ -195,4 +196,99 @@ class TestGeminiLLM:
         assert "max_tokens" not in captured_kwargs
         assert captured_kwargs["config"]["temperature"] == 0.25
         assert captured_kwargs["config"]["max_output_tokens"] == 123
+
+
+class TestGitHubCopilotLLMListModels:
+    def test_list_models_filters_provider(self, monkeypatch):
+        class FakeAuthManager:
+            def get_token(self, explicit_token=None):
+                return "t"
+
+            def refresh_token(self):
+                return "t2"
+
+        class FakeResponse:
+            status_code = 200
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {
+                    "data": [
+                        {"id": "openai/gpt-4.1-mini"},
+                        {"id": "meta/llama-3.3-70b-instruct"},
+                        {"id": "openai/gpt-4o-mini"},
+                    ]
+                }
+
+        monkeypatch.setattr(interface_module.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+        llm = interface_module.GitHubCopilotLLM.__new__(interface_module.GitHubCopilotLLM)
+        llm.auto_login = True
+        llm.auth_manager = FakeAuthManager()
+        llm.models_endpoint = "https://models.github.ai/catalog/models"
+        llm.base_url = "https://models.github.ai/inference"
+        llm._openai_cls = lambda **kwargs: SimpleNamespace(**kwargs)
+        llm.client = None
+
+        models = llm.list_models(provider="openai")
+        assert models == ["openai/gpt-4.1-mini", "openai/gpt-4o-mini"]
+
+    def test_list_models_retries_once_on_401(self, monkeypatch):
+        class FakeAuthManager:
+            def __init__(self):
+                self.refresh_count = 0
+
+            def get_token(self, explicit_token=None):
+                return "t"
+
+            def refresh_token(self):
+                self.refresh_count += 1
+                return "t2"
+
+        class FakeUnauthorizedResponse:
+            status_code = 401
+
+            @staticmethod
+            def raise_for_status():
+                raise RuntimeError("unauthorized")
+
+            @staticmethod
+            def json():
+                return {}
+
+        class FakeOkResponse:
+            status_code = 200
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"data": [{"id": "openai/gpt-4.1-mini"}]}
+
+        responses = [FakeUnauthorizedResponse(), FakeOkResponse()]
+
+        def fake_get(*args, **kwargs):
+            return responses.pop(0)
+
+        monkeypatch.setattr(interface_module.requests, "get", fake_get)
+
+        auth_manager = FakeAuthManager()
+        llm = interface_module.GitHubCopilotLLM.__new__(interface_module.GitHubCopilotLLM)
+        llm.auto_login = True
+        llm.auth_manager = auth_manager
+        llm.models_endpoint = "https://models.github.ai/catalog/models"
+        llm.base_url = "https://models.github.ai/inference"
+        llm._openai_cls = lambda **kwargs: SimpleNamespace(**kwargs)
+        llm.client = None
+
+        models = llm.list_models()
+        assert models == ["openai/gpt-4.1-mini"]
+        assert auth_manager.refresh_count == 1
+
 

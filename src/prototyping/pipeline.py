@@ -11,7 +11,7 @@ import inspect
 from typing import Any, Dict, List, Optional
 
 from ..agents.orchestrator import Orchestrator
-from ..llm.interface import LLMInterface, MockLLM, OpenAILLM, GeminiLLM
+from ..llm.interface import LLMInterface, MockLLM, OpenAILLM, GeminiLLM, GitHubCopilotLLM
 from ..rag.pinecone_wrapper import PineconeWrapper
 from ..rag.retriever import RAGRetriever
 from ..sysml.model import SysMLModel
@@ -21,6 +21,7 @@ LLM_PROVIDER_FACTORIES: Dict[str, Any] = {
     "mock": MockLLM,
     "openai": OpenAILLM,
     "gemini": GeminiLLM,
+    "github_copilot": GitHubCopilotLLM,
 }
 
 LLM_PROVIDER_ALIASES: Dict[str, str] = {
@@ -29,6 +30,9 @@ LLM_PROVIDER_ALIASES: Dict[str, str] = {
     "open_ai": "openai",
     "gpt": "openai",
     "google": "gemini",
+    "github": "github_copilot",
+    "copilot": "github_copilot",
+    "github_models": "github_copilot",
 }
 
 
@@ -113,6 +117,8 @@ def create_llm(
             model = "gpt-4o"
         elif provider_name == "gemini":
             model = "gemini-3-flash-preview"
+        elif provider_name == "github_copilot":
+            model = "openai/gpt-4.1-mini"
 
     kwargs = _build_constructor_kwargs(factory, model, api_key, provider_kwargs)
     # noinspection PyArgumentList
