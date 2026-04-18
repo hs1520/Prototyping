@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .base_agent import AgentMessage, AgentResult, BaseAgent
+from .base_agent import AgentMessage
 from .design_agent import DesignAgent
 from .requirements_agent import RequirementsAgent
 from ..dse.design_space import DesignConfiguration, DesignParameter, DesignSpace, ParameterType
@@ -284,11 +284,10 @@ class Orchestrator:
 
             if score > best_score:
                 best_score = score
-                best_model = current_model
 
             if score >= self.quality_threshold:
                 print(f"  ✓ Quality threshold {self.quality_threshold} reached")
-                return best_model, best_score
+                return current_model, score
 
             # Also get LLM evaluation
             cot_eval = self.cot.evaluate_design(
@@ -297,14 +296,31 @@ class Orchestrator:
             )
 
             if eval_result.issues:
+                refinement_feedback = self._build_refinement_feedback(eval_result, cot_eval.final_answer)
                 # Refine based on issues
                 refine_result = self.design_agent.run({
                     "system_name": current_model.name,
                     "requirements": requirements,
                     "existing_model": current_model,
-                    "refinement_feedback": cot_eval.final_answer,
+                    "refinement_feedback": refinement_feedback,
+                    "refinement_issues": eval_result.issues + eval_result.recommendations,
                 })
                 if refine_result.success and isinstance(refine_result.output, SysMLModel):
                     current_model = refine_result.output
 
-        return best_model if best_score > 0 else current_model, best_score
+        return current_model, best_score
+
+    @staticmethod
+    def _build_refinement_feedback(eval_result: Any, cot_feedback: str) -> str:
+        """Combine evaluator issues with LLM feedback into a refinement-oriented summary."""
+        lines = ["Refinement targets:"]
+        for issue in eval_result.issues:
+            lines.append(f"- {issue}")
+        for rec in eval_result.recommendations:
+            lines.append(f"- {rec}")
+        if cot_feedback:
+            lines.append("")
+            lines.append("LLM evaluation summary:")
+            lines.append(cot_feedback)
+        return "\n".join(lines)
+

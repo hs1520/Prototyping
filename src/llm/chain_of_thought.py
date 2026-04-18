@@ -24,6 +24,8 @@ When designing systems:
 3. Consider both functional and non-functional requirements
 4. Ensure traceability between requirements and design elements
 5. Design for reliability, safety, and maintainability
+6. When refining a model, preserve existing valid structure and only change what is needed
+   to satisfy missing requirements or remove inconsistencies
 
 SysML v2 key constructs:
 - `package`: top-level namespace
@@ -34,6 +36,7 @@ SysML v2 key constructs:
 - `action`: behavior specification
 - `connect`: links ports between parts
 - `satisfy`: links design elements to requirements
+- `refine`: indicates a more concrete model element elaborates an abstract one
 """
 
 REQUIREMENTS_COT_TEMPLATE = """Analyze the following system description and extract structured requirements.
@@ -66,6 +69,7 @@ Think through the design step by step:
 3. ATTRIBUTES: What key parameters define each component?
 4. BEHAVIOR: What actions does each component perform?
 5. TRACEABILITY: Which components satisfy which requirements?
+6. REFINEMENT: If some requirements are abstract, show how the design refines them
 
 Provide the complete SysML v2 model in a code block marked with ```sysml
 """
@@ -106,6 +110,7 @@ Think through the refinements step by step:
 2. How do the changes affect other parts of the design?
 3. What new elements need to be added?
 4. What existing elements need to be modified?
+5. Which requirements or blocks are refined, and which existing valid elements should remain unchanged?
 
 Provide the refined SysML v2 model in a code block marked with ```sysml
 """

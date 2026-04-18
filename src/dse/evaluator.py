@@ -8,7 +8,7 @@ scoring them on multiple quality attributes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from .design_space import DesignConfiguration
 from ..sysml.model import SysMLModel
@@ -107,12 +107,10 @@ class DesignEvaluator:
         # Generate issues and recommendations
         for criterion_name, score in result.criteria_scores.items():
             if score < 0.5:
-                result.issues.append(
-                    f"Low score ({score:.2f}) for '{criterion_name}'"
-                )
-                result.recommendations.append(
-                    f"Improve '{criterion_name}' by reviewing related design elements"
-                )
+                issue = self._build_issue_message(criterion_name, score)
+                recommendation = self._build_recommendation(criterion_name)
+                result.issues.append(issue)
+                result.recommendations.append(recommendation)
 
         return result
 
@@ -218,3 +216,23 @@ class DesignEvaluator:
         if not model.blocks:
             return 0.0
         return blocks_with_traces / len(model.blocks)
+
+    @staticmethod
+    def _build_issue_message(criterion_name: str, score: float) -> str:
+        """Create an actionable issue message for the refinement loop."""
+        return f"{criterion_name}: score={score:.2f} below refinement threshold"
+
+    @staticmethod
+    def _build_recommendation(criterion_name: str) -> str:
+        """Create criterion-specific refinement guidance."""
+        guidance = {
+            "functional_completeness": "Add missing parts/actions that explicitly cover the uncovered requirements.",
+            "structural_quality": "Refine the architecture into clearer modular parts and reduce monolithic structure.",
+            "interface_consistency": "Align ports and connectors so all exposed interfaces are consistent and connected.",
+            "requirement_traceability": "Add `satisfy` links from blocks to requirement IDs and preserve requirement allocation in the model.",
+        }
+        return guidance.get(
+            criterion_name,
+            f"Review the design elements related to '{criterion_name}' and refine the weakest parts.",
+        )
+

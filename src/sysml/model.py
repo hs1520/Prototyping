@@ -49,6 +49,7 @@ class Requirement(SysMLElement):
     satisfaction_level: float = 0.0  # 0.0 to 1.0
     parent_id: Optional[str] = None
     derived_from: List[str] = field(default_factory=list)
+    refined_by: List[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         return f"requirement {self.name} {{ doc /* {self.text} */ }}"
@@ -117,6 +118,7 @@ class Block(SysMLElement):
     sub_parts: List[Block] = field(default_factory=list)
     block_type: str = "part def"
     satisfies: List[str] = field(default_factory=list)  # requirement IDs
+    refines: List[str] = field(default_factory=list)
 
     def add_port(self, port: Port) -> None:
         """Add a port to this block."""
@@ -134,10 +136,24 @@ class Block(SysMLElement):
         """Add a sub-part to this block."""
         self.sub_parts.append(block)
 
+    def add_satisfies(self, requirement_id: str) -> None:
+        """Record that this block satisfies a requirement."""
+        if requirement_id and requirement_id not in self.satisfies:
+            self.satisfies.append(requirement_id)
+
+    def add_refinement(self, element_id: str) -> None:
+        """Record that this block refines an abstract element or requirement."""
+        if element_id and element_id not in self.refines:
+            self.refines.append(element_id)
+
     def __str__(self) -> str:
         lines = [f"{self.block_type} {self.name} {{"]
         if self.short_description:
             lines.append(f"    doc /* {self.short_description} */")
+        for req_id in self.satisfies:
+            lines.append(f"    satisfy {req_id};")
+        for ref_id in self.refines:
+            lines.append(f"    // refines {ref_id}")
         for attr in self.attributes:
             lines.append(f"    {attr}")
         for port in self.ports:
@@ -192,6 +208,18 @@ class SysMLModel:
         """Add a connector to the model."""
         self.connectors.append(connector)
 
+    def add_refinement_link(self, refined_element_id: str, refining_element_id: str) -> None:
+        """Record a refinement relationship between model elements."""
+        refined = self.get_requirement_by_name(refined_element_id) or self.get_block_by_name(refined_element_id)
+        refining = self.get_requirement_by_name(refining_element_id) or self.get_block_by_name(refining_element_id)
+
+        if isinstance(refined, Requirement):
+            if refining_element_id not in refined.refined_by:
+                refined.refined_by.append(refining_element_id)
+
+        if isinstance(refining, Block):
+            refining.add_refinement(refined_element_id)
+
     def get_block_by_name(self, name: str) -> Optional[Block]:
         """Find a block by its name."""
         for block in self.blocks:
@@ -217,12 +245,19 @@ class SysMLModel:
             for req in self.requirements:
                 for line in str(req).splitlines():
                     lines.append(f"    {line}")
+                if req.parent_id:
+                    lines.append(f"    // refined from {req.parent_id}")
+                if req.derived_from:
+                    derived_from = ", ".join(req.derived_from)
+                    lines.append(f"    // derived from: {derived_from}")
                 lines.append("")
         if self.blocks:
             lines.append("    // Part Definitions")
             for block in self.blocks:
                 for line in str(block).splitlines():
                     lines.append(f"    {line}")
+                if block.refines:
+                    lines.append(f"    // refines: {', '.join(block.refines)}")
                 lines.append("")
         if self.connectors:
             lines.append("    // Connections")

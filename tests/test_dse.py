@@ -293,6 +293,8 @@ class TestDesignEvaluator:
         result = evaluator.evaluate(config, simple_model)
         assert isinstance(result, EvaluationResult)
         assert 0.0 <= result.weighted_total <= 1.0
+        assert any("requirement_traceability" in issue for issue in result.issues)
+        assert any("satisfy" in rec for rec in result.recommendations)
 
     def test_evaluate_empty_model(self, evaluator):
         model = SysMLModel(name="Empty")

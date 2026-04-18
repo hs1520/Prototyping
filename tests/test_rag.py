@@ -1,5 +1,7 @@
 """Tests for Pinecone-backed RAG retriever behavior."""
 
+from pathlib import Path
+
 import pytest
 from src.llm.interface import MockLLM
 from src.rag.retriever import RAGRetriever, RetrievedContext
@@ -34,6 +36,7 @@ class FakePineconeWrapper:
                     "chunk_text": "Ports define connection points between parts.",
                     "category": "sysml_pattern",
                     "tags": ["port", "interface", "connection"],
+                    "file_path": "../SysML-v2-release-src/training/ports/PortsExample.sysml",
                 },
             },
             {
@@ -44,6 +47,7 @@ class FakePineconeWrapper:
                     "chunk_text": "Example architecture for autonomous drone systems.",
                     "category": "example",
                     "tags": ["drone", "uav"],
+                    "file_path": "../SysML-v2-release-src/training/examples/DroneExample.sysml",
                 },
             },
             {
@@ -54,6 +58,7 @@ class FakePineconeWrapper:
                     "chunk_text": "Redundancy patterns improve reliability.",
                     "category": "design_principle",
                     "tags": ["safety", "fault-tolerance", "redundancy"],
+                    "file_path": "../SysML-v2-release-src/training/principles/Reliability.sysml",
                 },
             },
         ]
@@ -134,6 +139,60 @@ class TestRAGRetriever:
         formatted = context.format_for_prompt()
         assert isinstance(formatted, str)
         assert "No relevant context found" in formatted
+
+    def test_retrieve_includes_official_sysml_reference_when_enabled(self, tmp_path: Path):
+        release_root = tmp_path / "SysML-v2-release-src"
+        source_file = release_root / "training" / "ports" / "PortsExample.sysml"
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_text(
+            "package P {\n"
+            "    part def Controller {\n"
+            "        port sensorIn : SensorPort;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        retriever = RAGRetriever(
+            llm=MockLLM(),
+            pinecone_wrapper=FakePineconeWrapper(),
+            index_name="test-index",
+            namespace="test-ns",
+            official_release_root=str(release_root),
+        )
+
+        context = retriever.retrieve(
+            "SysML port controller",
+            include_official_sysml=True,
+            total_token_budget=300,
+        )
+        first_entry = context.entries[0][0]
+        assert "official_sysml_reference" in first_entry
+        assert "package P" in first_entry["official_sysml_reference"]
+        formatted = context.format_for_prompt()
+        assert "Official SysML v2 reference snippet" in formatted
+
+    def test_retrieve_ignores_disallowed_extension(self, tmp_path: Path):
+        release_root = tmp_path / "SysML-v2-release-src"
+        text_file = release_root / "training" / "ports" / "PortsExample.txt"
+        text_file.parent.mkdir(parents=True, exist_ok=True)
+        text_file.write_text("not sysml", encoding="utf-8")
+
+        retriever = RAGRetriever(
+            llm=MockLLM(),
+            pinecone_wrapper=FakePineconeWrapper(),
+            index_name="test-index",
+            namespace="test-ns",
+            official_release_root=str(release_root),
+        )
+
+        context = retriever.retrieve(
+            "SysML port controller",
+            include_official_sysml=True,
+            allowed_extensions=(".txt",),
+        )
+        first_entry = context.entries[0][0]
+        assert "official_sysml_reference" not in first_entry
 
 
 class TestRetrievedContext:

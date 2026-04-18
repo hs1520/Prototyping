@@ -1,12 +1,14 @@
 """Tests for the multi-agent framework."""
 
 import pytest
-from src.agents.base_agent import AgentMessage, AgentResult, BaseAgent
+from typing import cast
+
+from src.agents.base_agent import AgentMessage, AgentResult
 from src.agents.requirements_agent import RequirementsAgent
 from src.agents.design_agent import DesignAgent
-from src.agents.orchestrator import Orchestrator, PrototypingState
+from src.agents.orchestrator import Orchestrator
 from src.llm.interface import MockLLM
-from src.rag.retriever import RAGRetriever
+from src.rag.retriever import RAGRetriever, RetrievedContext
 from src.sysml.model import SysMLModel
 
 
@@ -81,7 +83,7 @@ class TestRequirementsAgent:
 
     def test_run_extracts_requirements(self, agent):
         # Inject a response with requirements
-        agent.llm.inject_response(
+        cast(MockLLM, agent.llm).inject_response(
             "Here are the requirements:\n"
             "REQ-FUNC-001: The system shall fly autonomously\n"
             "REQ-PERF-001: The system shall maintain stability within 0.1 degrees\n"
@@ -122,6 +124,15 @@ class TestRequirementsAgent:
         assert agent.last_result is not None
         assert agent.last_result.agent_name == "RequirementsAgent"
 
+    def test_run_does_not_call_rag(self):
+        class _FailIfCalledRAG:
+            def retrieve(self, *args, **kwargs):
+                raise AssertionError("RequirementsAgent should not call RAG retrieve")
+
+        agent = RequirementsAgent(MockLLM(), rag_retriever=_FailIfCalledRAG())
+        result = agent.run({"system_description": "A simple monitoring system"})
+        assert result.success
+
 
 class TestDesignAgent:
     @pytest.fixture
@@ -140,7 +151,7 @@ class TestDesignAgent:
         assert isinstance(result.output, SysMLModel)
 
     def test_run_with_sysml_response(self, agent):
-        agent.llm.inject_response(
+        cast(MockLLM, agent.llm).inject_response(
             "Here is the design:\n"
             "```sysml\n"
             "package DroneSystem {\n"
@@ -180,6 +191,27 @@ class TestDesignAgent:
         }
         result = agent.run(task)
         assert isinstance(result, AgentResult)
+        assert isinstance(result.output, SysMLModel)
+        assert any(block.satisfies for block in result.output.blocks)
+
+    def test_run_requests_official_sysml_context(self):
+        class _CapturingRAG:
+            def __init__(self):
+                self.last_kwargs = None
+
+            def retrieve(self, query, top_k=3, **kwargs):
+                self.last_kwargs = kwargs
+                return RetrievedContext(entries=[], query=query)
+
+        rag = _CapturingRAG()
+        agent = DesignAgent(MockLLM(), rag_retriever=rag)
+        result = agent.run({
+            "system_name": "CaptureTest",
+            "requirements": ["REQ-001: The system shall operate safely"],
+        })
+        assert result.success
+        assert rag.last_kwargs is not None
+        assert rag.last_kwargs.get("include_official_sysml") is True
 
 
 class TestOrchestrator:

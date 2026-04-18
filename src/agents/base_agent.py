@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from ..llm.interface import LLMInterface
 from ..rag.retriever import RAGRetriever
@@ -60,11 +60,23 @@ class BaseAgent(ABC):
     def run(self, task: Dict[str, Any]) -> AgentResult:
         """Execute the agent's primary task."""
 
-    def get_augmented_context(self, query: str) -> str:
+    def get_augmented_context(
+        self,
+        query: str,
+        include_official_sysml: bool = False,
+        total_token_budget: int = 1500,
+        allowed_extensions: Optional[Sequence[str]] = None,
+    ) -> str:
         """Retrieve relevant MBSE knowledge to augment the agent's reasoning."""
         if self.rag is None:
             return ""
-        context = self.rag.retrieve(query, top_k=3)
+        context = self.rag.retrieve(
+            query,
+            top_k=3,
+            include_official_sysml=include_official_sysml,
+            total_token_budget=total_token_budget,
+            allowed_extensions=allowed_extensions,
+        )
         return context.format_for_prompt()
 
     def send_message(

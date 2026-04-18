@@ -149,6 +149,39 @@ def batched(records: Iterable[Dict[str, Any]], batch_size: int) -> Iterator[List
     if batch:
         yield batch
 
+
+def _extract_verify_summary(response: Any) -> tuple[int, str]:
+    """Extract a compact summary from a Pinecone verify/search response.
+
+    Supports both plain dictionaries and SDK response objects exposing ``to_dict()``.
+    Returns the hit count and the first file path if present.
+    """
+    if hasattr(response, "to_dict") and callable(response.to_dict):
+        payload = response.to_dict()
+    else:
+        payload = response
+
+    if not isinstance(payload, dict):
+        return 0, ""
+
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return 0, ""
+
+    hits = result.get("hits")
+    if not isinstance(hits, list):
+        return 0, ""
+
+    first_file_path = ""
+    if hits:
+        first_hit = hits[0]
+        if isinstance(first_hit, dict):
+            fields = first_hit.get("fields")
+            if isinstance(fields, dict):
+                first_file_path = _safe_text(fields.get("file_path") or fields.get("path"))
+
+    return len(hits), first_file_path
+
 def main() -> None:
     args = parse_args()
     data_dir = Path(args.data_dir).resolve()

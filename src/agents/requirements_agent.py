@@ -69,11 +69,8 @@ Use the format: REQ-{category}-{number}: [text]
                 reasoning="No system description provided",
             )
 
-        # Augment with RAG context
-        context = self.get_augmented_context(description)
-
         # Use CoT to extract requirements
-        cot_result = self.cot.extract_requirements(description, context)
+        cot_result = self.cot.extract_requirements(description)
 
         # Parse requirements from CoT response
         requirements = self._parse_requirements(cot_result.final_answer)

@@ -102,6 +102,15 @@ class TestBlock:
         assert "part def" in s
         assert "Controller" in s
 
+    def test_satisfies_and_refines_are_serialized(self):
+        block = Block(name="Controller")
+        block.add_satisfies("REQ_001")
+        block.add_refinement("AbstractController")
+
+        s = str(block)
+        assert "satisfy REQ_001" in s
+        assert "refines AbstractController" in s
+
 
 class TestSysMLModel:
     def test_creation(self):
@@ -157,6 +166,22 @@ class TestSysMLModel:
         assert summary["blocks_count"] == 2
         assert summary["requirements_count"] == 1
         assert "A" in summary["blocks"]
+
+    def test_to_sysml_text_includes_refinement_relations(self):
+        model = SysMLModel(name="RefinedSystem")
+        req = Requirement(name="REQ_001", text="The system shall respond quickly")
+        req.derived_from.append("REQ_000")
+        model.add_requirement(req)
+
+        block = Block(name="Controller")
+        block.add_satisfies("REQ_001")
+        block.add_refinement("AbstractController")
+        model.add_block(block)
+
+        sysml_text = model.to_sysml_text()
+        assert "satisfy REQ_001" in sysml_text
+        assert "refines AbstractController" in sysml_text
+        assert "derived from: REQ_000" in sysml_text
 
     def test_add_connector(self):
         model = SysMLModel(name="TestSystem")
