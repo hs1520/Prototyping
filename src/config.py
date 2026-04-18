@@ -21,6 +21,8 @@ class Config:
 
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
+    VERTEX_API_KEY: str = os.getenv("VERTEX_API_KEY", "")
+
     # Practical switch: use test key by default to control costs.
     GEMINI_USE_TEST_KEY: str = os.getenv("GEMINI_USE_TEST_KEY", "true")
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
@@ -112,6 +114,11 @@ class Config:
     def get_anthropic_api_key(cls) -> str:
         """Return the Anthropic API key."""
         return cls.ANTHROPIC_API_KEY
+
+    @classmethod
+    def get_vertex_api_key(cls) -> str:
+        """Return the Vertex API key."""
+        return cls.VERTEX_API_KEY
 
     @classmethod
     def setup_langsmith_env(cls, use_test: Optional[bool] = None) -> None:
