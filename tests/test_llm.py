@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 import src.llm.interface as interface_module
-from src.llm.interface import GeminiLLM, Message, LLMResponse, MockLLM
+from src.llm.interface import GeminiLLM, GitHubCopilotLLM, Message, LLMResponse, MockLLM
 from src.llm.chain_of_thought import ChainOfThoughtPrompter, CoTResult
 
 
@@ -290,5 +290,3 @@ class TestGitHubCopilotLLMListModels:
         models = llm.list_models()
         assert models == ["openai/gpt-4.1-mini"]
         assert auth_manager.refresh_count == 1
-
-

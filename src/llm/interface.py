@@ -247,6 +247,7 @@ class GitHubCopilotLLM(LLMInterface):
         base_url: str = "https://models.github.ai/inference",
         models_endpoint: str = "https://models.github.ai/catalog/models",
         auto_login: bool = True,
+        enable_langsmith: bool = True,
         auth_manager: Optional[GitHubAuthManager] = None,
     ):
         try:
@@ -260,8 +261,13 @@ class GitHubCopilotLLM(LLMInterface):
         self.base_url = base_url
         self.models_endpoint = models_endpoint
         self.auto_login = auto_login
+        self.langsmith_enabled = False
         self.auth_manager = auth_manager or GitHubAuthManager(auto_login=auto_login)
         self._openai_cls = OpenAI
+        self._enable_langsmith = enable_langsmith
+
+        # Reuse centralized env setup so GitHub Models calls can be traced like Gemini calls.
+        Config.setup_langsmith_env()
 
         token = self.auth_manager.get_token(explicit_token=api_key)
 
@@ -270,7 +276,43 @@ class GitHubCopilotLLM(LLMInterface):
                 "No GitHub auth token found. Run `gh auth login --hostname github.com --git-protocol https --web`."
             )
 
-        self.client = OpenAI(api_key=token, base_url=self.base_url)
+        self.client = self._build_client(token)
+
+    def _build_client(self, token: str) -> Any:
+        """Create an OpenAI-compatible client and wrap with LangSmith when available."""
+        base_client = self._openai_cls(api_key=token, base_url=self.base_url)
+        return self._maybe_wrap_with_langsmith(
+            base_client,
+            getattr(self, "_enable_langsmith", False),
+        )
+
+    def _maybe_wrap_with_langsmith(self, base_client: Any, enable_langsmith: bool) -> Any:
+        """Wrap OpenAI-compatible client with LangSmith when tracing is enabled and installed."""
+        if not enable_langsmith or not Config.langsmith_enabled():
+            return base_client
+
+        try:
+            from langsmith import wrappers
+
+            wrapped_client = wrappers.wrap_openai(
+                base_client,
+                tracing_extra=cast(
+                    Any,
+                    {
+                        "tags": ["github-copilot", "llm-interface"],
+                        "metadata": {
+                            "integration": "openai-compatible",
+                            "provider": "github_copilot",
+                            "model": self.model,
+                            "base_url": self.base_url,
+                        },
+                    },
+                ),
+            )
+            self.langsmith_enabled = True
+            return wrapped_client
+        except ImportError:
+            return base_client
 
     def list_models(self, provider: Optional[str] = None, timeout: int = 30) -> List[str]:
         """List model IDs visible to the current GitHub token, optionally filtered by provider."""
@@ -293,7 +335,7 @@ class GitHubCopilotLLM(LLMInterface):
                 if retried_auth or not self.auto_login:
                     response.raise_for_status()
                 token = self.auth_manager.refresh_token()
-                self.client = self._openai_cls(api_key=token, base_url=self.base_url)
+                self.client = self._build_client(token)
                 retried_auth = True
                 continue
 
@@ -308,7 +350,7 @@ class GitHubCopilotLLM(LLMInterface):
             else:
                 items = []
 
-            model_ids = sorted(
+            model_ids: List[str] = sorted(
                 {
                     item.get("id", "").strip()
                     for item in items
@@ -326,10 +368,12 @@ class GitHubCopilotLLM(LLMInterface):
             prefix = f"{normalized}/"
             return [model_id for model_id in model_ids if model_id.lower().startswith(prefix)]
 
+        return []
+
     def complete(
         self,
         messages: List[Message],
-        temperature: float = 0.7,
+        temperature: float = 1,
         max_tokens: int = 2048,
     ) -> LLMResponse:
         """Call GitHub Models chat completions using OpenAI-compatible schema."""
@@ -342,7 +386,7 @@ class GitHubCopilotLLM(LLMInterface):
                     model=self.model,
                     messages=payload_messages,
                     temperature=temperature,
-                    max_tokens=max_tokens,
+                    max_completion_tokens=max_tokens,
                 )
                 choice = response.choices[0]
                 usage = response.usage
@@ -354,6 +398,7 @@ class GitHubCopilotLLM(LLMInterface):
                     metadata={
                         "provider": "github_copilot",
                         "base_url": self.base_url,
+                        "langsmith_enabled": self.langsmith_enabled,
                     },
                 )
             except Exception as exc:
@@ -361,7 +406,7 @@ class GitHubCopilotLLM(LLMInterface):
                     raise
 
                 token = self.auth_manager.refresh_token()
-                self.client = self._openai_cls(api_key=token, base_url=self.base_url)
+                self.client = self._build_client(token)
                 retried_auth = True
 
 
