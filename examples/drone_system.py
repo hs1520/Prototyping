@@ -14,7 +14,8 @@ import os
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.prototyping.pipeline import PrototypingPipeline, create_llm
+from src.prototyping.pipeline import PrototypingPipeline
+from src.prototyping.provider_factory import create_llm
 
 
 DRONE_DESCRIPTION = """

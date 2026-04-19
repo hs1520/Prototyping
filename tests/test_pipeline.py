@@ -1,7 +1,8 @@
-"""Tests for provider-agnostic LLM creation in pipeline."""
+"""Tests for provider factory and orchestration split."""
 
 from src.llm.interface import LLMResponse, MockLLM
-from src.prototyping import pipeline as pipeline_module
+from src.prototyping import pipeline as orchestration_module
+from src.prototyping import provider_factory as provider_module
 
 
 class DummyLLM:
@@ -27,22 +28,22 @@ class StrictDummyLLM:
 
 
 def test_create_llm_defaults_to_mock():
-    llm = pipeline_module.create_llm()
+    llm = provider_module.create_llm()
     assert isinstance(llm, MockLLM)
 
 
 def test_create_llm_rejects_unknown_provider():
     try:
-        pipeline_module.create_llm(provider="not-a-provider")
+        provider_module.create_llm(provider="not-a-provider")
         assert False, "Expected ValueError for unknown provider"
     except ValueError as exc:
         assert "Unknown LLM provider" in str(exc)
 
 
 def test_register_custom_provider_and_create(monkeypatch):
-    monkeypatch.setitem(pipeline_module.LLM_PROVIDER_FACTORIES, "dummy", DummyLLM)
+    monkeypatch.setitem(provider_module.LLM_PROVIDER_FACTORIES, "dummy", DummyLLM)
 
-    llm = pipeline_module.create_llm(
+    llm = provider_module.create_llm(
         provider="dummy",
         model="dummy-v1",
         api_key="k-test",
@@ -56,10 +57,10 @@ def test_register_custom_provider_and_create(monkeypatch):
 
 
 def test_provider_aliases_keep_only_default_and_test(monkeypatch):
-    monkeypatch.setitem(pipeline_module.LLM_PROVIDER_FACTORIES, "mock", DummyLLM)
+    monkeypatch.setitem(provider_module.LLM_PROVIDER_FACTORIES, "mock", DummyLLM)
 
-    llm_default = pipeline_module.create_llm(provider="default", model="default-model")
-    llm_test = pipeline_module.create_llm(provider="test", model="test-model")
+    llm_default = provider_module.create_llm(provider="default", model="default-model")
+    llm_test = provider_module.create_llm(provider="test", model="test-model")
 
     assert isinstance(llm_default, DummyLLM)
     assert llm_default.model == "default-model"
@@ -68,34 +69,54 @@ def test_provider_aliases_keep_only_default_and_test(monkeypatch):
 
 
 def test_constructor_kwargs_are_filtered(monkeypatch):
-	monkeypatch.setitem(pipeline_module.LLM_PROVIDER_FACTORIES, "strict", StrictDummyLLM)
+    monkeypatch.setitem(provider_module.LLM_PROVIDER_FACTORIES, "strict", StrictDummyLLM)
 
-	llm = pipeline_module.create_llm(
-		provider="strict",
-		model="should-not-be-passed",
-		api_key="should-not-be-passed",
-		provider_kwargs={"timeout": 42},
-	)
+    llm = provider_module.create_llm(
+        provider="strict",
+        model="should-not-be-passed",
+        api_key="should-not-be-passed",
+        provider_kwargs={"timeout": 42},
+    )
 
-	assert isinstance(llm, StrictDummyLLM)
-	assert llm.timeout == 42
+    assert isinstance(llm, StrictDummyLLM)
+    assert llm.timeout == 42
 
 
 def test_vertex_uses_default_model_when_not_provided(monkeypatch):
-	monkeypatch.setitem(pipeline_module.LLM_PROVIDER_FACTORIES, "vertex", DummyLLM)
+    monkeypatch.setitem(provider_module.LLM_PROVIDER_FACTORIES, "vertex", DummyLLM)
 
-	llm = pipeline_module.create_llm(provider="vertex")
+    llm = provider_module.create_llm(provider="vertex")
 
-	assert isinstance(llm, DummyLLM)
-	assert llm.model == "gemini-3-pro-preview"
+    assert isinstance(llm, DummyLLM)
+    assert llm.model == "gemini-3.1-pro-preview"
 
 
 def test_vertex_accepts_claude_model_passthrough(monkeypatch):
-	monkeypatch.setitem(pipeline_module.LLM_PROVIDER_FACTORIES, "vertex", DummyLLM)
+    monkeypatch.setitem(provider_module.LLM_PROVIDER_FACTORIES, "vertex", DummyLLM)
 
-	llm = pipeline_module.create_llm(provider="vertex", model="claude-3-7-sonnet")
+    llm = provider_module.create_llm(provider="vertex", model="claude-3-7-sonnet")
 
-	assert isinstance(llm, DummyLLM)
-	assert llm.model == "claude-3-7-sonnet"
+    assert isinstance(llm, DummyLLM)
+    assert llm.model == "claude-3-7-sonnet"
+
+
+class DummyPineconeWrapper:
+    def __init__(self, default_namespace: str = "ns"):
+        self.default_namespace = default_namespace
+
+    def search(self, *args, **kwargs):
+        return {"matches": []}
+
+
+def test_prototyping_pipeline_requires_injected_llm_and_builds_components():
+    llm = DummyLLM()
+    pipeline = orchestration_module.PrototypingPipeline(
+        llm=llm,
+        pinecone_wrapper=DummyPineconeWrapper(),
+    )
+
+    assert pipeline.llm is llm
+    assert pipeline.pinecone.default_namespace == "ns"
+    assert pipeline.orchestrator is not None
 
 

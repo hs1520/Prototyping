@@ -13,7 +13,8 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.prototyping.pipeline import PrototypingPipeline, create_llm
+from src.prototyping.pipeline import PrototypingPipeline
+from src.prototyping.provider_factory import create_llm
 from src.dse.design_space import DesignParameter, DesignSpace, ParameterType
 from src.dse.mcts import MCTSDesignExplorer
 

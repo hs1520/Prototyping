@@ -1,5 +1,5 @@
 """
-Main prototyping pipeline module.
+Main orchestration module.
 
 Provides the high-level API for the AI-assisted MBSE rapid prototyping
 framework, combining all components into a unified workflow.
@@ -7,111 +7,13 @@ framework, combining all components into a unified workflow.
 
 from __future__ import annotations
 
-import inspect
 from typing import Any, Dict, List, Optional
 
 from ..agents.orchestrator import Orchestrator
-from ..llm.interface import (
-    GeminiLLM,
-    GitHubCopilotLLM,
-    LLMInterface,
-    MockLLM,
-    VertexLLM,
-)
+from ..llm.interface import LLMInterface
 from ..rag.pinecone_wrapper import PineconeWrapper
 from ..rag.retriever import RAGRetriever
 from ..sysml.model import SysMLModel
-
-
-LLM_PROVIDER_FACTORIES: Dict[str, Any] = {
-    "mock": MockLLM,
-    "gemini": GeminiLLM,
-    "github_copilot": GitHubCopilotLLM,
-    "vertex": VertexLLM,
-}
-
-LLM_PROVIDER_ALIASES: Dict[str, str] = {
-    "default": "mock",
-    "test": "mock",
-}
-
-
-def _normalize_provider_name(provider: Optional[str]) -> str:
-    """Normalize provider names and common aliases to a canonical key."""
-    normalized = (provider or "mock").strip().lower().replace("-", "_")
-    return LLM_PROVIDER_ALIASES.get(normalized, normalized)
-
-
-def _build_constructor_kwargs(
-    factory: Any,
-    model: Optional[str],
-    api_key: Optional[str],
-    provider_kwargs: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Only pass kwargs accepted by a provider constructor."""
-    kwargs = dict(provider_kwargs or {})
-    signature = inspect.signature(factory.__init__)
-    parameters = signature.parameters
-    accepts_var_kwargs = any(
-        p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()
-    )
-
-    if model is not None and ("model" in parameters or accepts_var_kwargs):
-        kwargs.setdefault("model", model)
-    if api_key is not None and ("api_key" in parameters or accepts_var_kwargs):
-        kwargs.setdefault("api_key", api_key)
-
-    return kwargs
-
-
-def register_llm_provider(name: str, provider_factory: Any) -> None:
-    """Register a custom LLM provider for create_llm()."""
-    LLM_PROVIDER_FACTORIES[_normalize_provider_name(name)] = provider_factory
-
-
-def available_llm_providers() -> List[str]:
-    """Return all currently registered canonical provider names."""
-    return sorted(LLM_PROVIDER_FACTORIES.keys())
-
-
-def create_llm(
-    provider: Optional[str] = None,
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
-    provider_kwargs: Optional[Dict[str, Any]] = None,
-) -> LLMInterface:
-    """
-    Create an LLM instance.
-
-    Args:
-        provider: Provider name, e.g. "mock", "gemini", "vertex"
-        model: Model name for providers that support it
-        api_key: API key for providers that support it
-        provider_kwargs: Extra provider-specific constructor args
-
-    Returns:
-        An LLM interface instance
-    """
-    provider_name = _normalize_provider_name(provider)
-    factory = LLM_PROVIDER_FACTORIES.get(provider_name)
-    if factory is None:
-        supported = ", ".join(available_llm_providers())
-        raise ValueError(
-            f"Unknown LLM provider '{provider}'. Supported providers: {supported}"
-        )
-
-    if model is None:
-        if provider_name == "gemini":
-            model = "gemini-3-flash-preview"
-        elif provider_name == "github_copilot":
-            model = "openai/gpt-4.1-mini"
-        elif provider_name == "vertex":
-            # Vertex model ID can target Gemini or Anthropic families (e.g. claude-*).
-            model = "gemini-3.1-pro-preview"
-
-    kwargs = _build_constructor_kwargs(factory, model, api_key, provider_kwargs)
-    # noinspection PyArgumentList
-    return factory(**kwargs)
 
 
 class PrototypingPipeline:
@@ -125,7 +27,7 @@ class PrototypingPipeline:
     - Monte Carlo Tree Search for design space exploration
 
     Example usage:
-        pipeline = PrototypingPipeline()
+        pipeline = PrototypingPipeline(llm=llm)
         result = pipeline.prototype_system(
             system_name="AutonomousDrone",
             description="A drone that autonomously delivers packages...",
@@ -135,23 +37,14 @@ class PrototypingPipeline:
 
     def __init__(
         self,
-        llm: Optional[LLMInterface] = None,
-        llm_provider: Optional[str] = None,
-        llm_model: Optional[str] = None,
-        llm_api_key: Optional[str] = None,
-        llm_options: Optional[Dict[str, Any]] = None,
+        llm: LLMInterface,
         pinecone_wrapper: Optional[PineconeWrapper] = None,
         rag_index_name: str = "ai-prototyping-sysml-v2",
         rag_namespace: str = "SysML-V2-Release",
         quality_threshold: float = 0.70,
         max_iterations: int = 3,
     ):
-        self.llm = llm or create_llm(
-            provider=llm_provider,
-            model=llm_model,
-            api_key=llm_api_key,
-            provider_kwargs=llm_options,
-        )
+        self.llm = llm
         self.pinecone = pinecone_wrapper or PineconeWrapper(default_namespace=rag_namespace)
         self.rag = RAGRetriever(
             llm=self.llm,
@@ -279,3 +172,5 @@ class PrototypingPipeline:
             })
 
         return alternatives
+
+
