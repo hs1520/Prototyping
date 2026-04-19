@@ -80,6 +80,7 @@ Always provide SysML v2 code in ```sysml blocks.
         refinement_issues = task.get("refinement_issues", [])
 
         # Augment context with RAG
+        # TODO query需要改造 3条不科学
         query = f"{system_name} {' '.join(requirements[:3])}"
         rag_context = self.get_augmented_context(
             query,
@@ -115,7 +116,8 @@ Always provide SysML v2 code in ```sysml blocks.
         if cot_result.extracted_sysml:
             self._populate_model_from_sysml(model, cot_result.extracted_sysml)
         else:
-            self._populate_model_heuristically(model, system_name, requirements)
+            raise RuntimeError("未提取到SysML v2 design.")
+            # self._populate_model_heuristically(model, system_name, requirements)
 
         self._apply_requirement_traceability(model, requirements)
 
@@ -133,6 +135,7 @@ Always provide SysML v2 code in ```sysml blocks.
         self.record_result(result)
         return result
 
+    #TODO 这个parser存在很大问题 推荐用官方AST/API
     def _populate_model_from_sysml(
         self, model: SysMLModel, sysml_text: str
     ) -> None:
@@ -220,6 +223,7 @@ Always provide SysML v2 code in ```sysml blocks.
             model.add_connector(conn)
             existing_conn_keys.add(key)
 
+    #TODO 存在问题 建议用Embedding做 同时当前无置信度/不可解释/没有一对多分配
     def _apply_requirement_traceability(self, model: SysMLModel, requirements: List[str]) -> None:
         """Ensure each requirement is allocated to at least one design block when possible."""
         if not requirements or not model.blocks:

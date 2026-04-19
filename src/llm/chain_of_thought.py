@@ -171,7 +171,7 @@ class ChainOfThoughtPrompter:
             Message(role="system", content=self.system_prompt),
             Message(role="user", content=prompt),
         ]
-        response = self.llm.complete(messages, temperature=0.3)
+        response = self.llm.complete(messages, temperature=0.9)
         return self._parse_cot_response(response.content)
 
     def generate_design(
@@ -239,6 +239,7 @@ class ChainOfThoughtPrompter:
         response = self.llm.complete(messages, temperature=0.4)
         return self._parse_cot_response(response.content)
 
+    #TODO 检查是否需要
     def self_consistency_generate(
         self,
         system_name: str,
@@ -298,5 +299,7 @@ class ChainOfThoughtPrompter:
                     content=content.strip(),
                 )
             )
+
+        #TODO：Metadata can be added into CoTResult
 
         return result
