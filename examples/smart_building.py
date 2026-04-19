@@ -165,7 +165,7 @@ def main():
     print("=" * 70)
     print()
 
-    llm = create_llm(provider="gemini")
+    llm = create_llm(provider="vertex")
     print(f"Using LLM: {llm.__class__.__name__}")
 
     pipeline = PrototypingPipeline(

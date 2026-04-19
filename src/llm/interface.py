@@ -50,7 +50,7 @@ class LLMInterface(ABC):
         self,
         messages: List[Message],
         temperature: float = 0.7,
-        max_tokens: int = 2048,
+        max_tokens: int = 20480,
     ) -> LLMResponse:
         """Generate a completion from the LLM."""
 
@@ -124,7 +124,7 @@ class GeminiLLM(LLMInterface):
         self,
         messages: List[Message],
         temperature: float = 1.0,
-        max_tokens: int = 8192,
+        max_tokens: int = 20480,
     ) -> LLMResponse:
         """Call Gemini and normalize structured response fields into LLMResponse."""
         # google-genai expects generation settings in `config`, not top-level kwargs.
@@ -331,7 +331,7 @@ class GitHubCopilotLLM(LLMInterface):
         self,
         messages: List[Message],
         temperature: float = 1,
-        max_tokens: int = 2048,
+        max_tokens: int = 20480,
     ) -> LLMResponse:
         """Call GitHub Models chat completions using OpenAI-compatible schema."""
         retried_auth = False
@@ -423,7 +423,7 @@ class VertexLLM(LLMInterface):
         self,
         messages: List[Message],
         temperature: float = 1.0,
-        max_tokens: int = 8192,
+        max_tokens: int = 20480,
     ) -> LLMResponse:
         """Call Vertex Gemini and normalize response into LLMResponse."""
         response = self.client.models.generate_content(
@@ -473,7 +473,7 @@ class MockLLM(LLMInterface):
         self,
         messages: List[Message],
         temperature: float = 0.7,
-        max_tokens: int = 2048,
+        max_tokens: int = 20480,
     ) -> LLMResponse:
         self._call_count += 1
 
