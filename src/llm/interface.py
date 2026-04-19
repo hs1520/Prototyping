@@ -194,49 +194,6 @@ class GeminiLLM(LLMInterface):
         )
         return content, finish_reason
 
-
-class OpenAILLM(LLMInterface):
-    """OpenAI API-backed LLM implementation."""
-
-    def __init__(
-        self,
-        model: str = "gpt-4o",
-        api_key: Optional[str] = None,
-    ):
-        try:
-            from openai import OpenAI
-        except ImportError as e:
-            raise ImportError(
-                "openai package is required. Install with: pip install openai"
-            ) from e
-
-        self.model = model
-        self.client = OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
-
-    def complete(
-        self,
-        messages: List[Message],
-        temperature: float = 0.7,
-        max_tokens: int = 2048,
-    ) -> LLMResponse:
-        """Call the OpenAI API to generate a completion."""
-        payload_messages = cast(Any, [m.to_dict() for m in messages])
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=payload_messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        choice = response.choices[0]
-        usage = response.usage
-        return LLMResponse(
-            content=choice.message.content or "",
-            model=response.model,
-            prompt_tokens=usage.prompt_tokens if usage else 0,
-            completion_tokens=usage.completion_tokens if usage else 0,
-        )
-
-
 class GitHubCopilotLLM(LLMInterface):
     """GitHub Models/Copilot-backed LLM using GitHub CLI authentication."""
 
@@ -408,6 +365,97 @@ class GitHubCopilotLLM(LLMInterface):
                 token = self.auth_manager.refresh_token()
                 self.client = self._build_client(token)
                 retried_auth = True
+
+class VertexLLM(LLMInterface):
+    """Vertex-backed Gemini LLM implementation."""
+
+    def __init__(
+        self,
+        model: str = "gemini-2.5-pro",
+        api_key: Optional[str] = None,
+        enable_langsmith: bool = True,
+    ):
+        try:
+            from google import genai
+        except ImportError as e:
+            raise ImportError(
+                "google-genai package is required. Install with: pip install google-genai"
+            ) from e
+
+        self.model = model
+        self.langsmith_enabled = False
+
+        Config.setup_langsmith_env()
+        selected_api_key = api_key or Config.get_vertex_api_key()
+        if not selected_api_key:
+            raise ValueError(
+                "Vertex API key is missing. Please set VERTEX_API_KEY in .env."
+            )
+
+        base_client = genai.Client(vertexai=True, api_key=selected_api_key)
+        self.client = self._maybe_wrap_with_langsmith(base_client, enable_langsmith)
+
+    def _maybe_wrap_with_langsmith(self, base_client: Any, enable_langsmith: bool) -> Any:
+        """Wrap Vertex client with LangSmith when tracing is enabled and installed."""
+        if not enable_langsmith or not Config.langsmith_enabled():
+            return base_client
+
+        try:
+            from langsmith import wrappers
+
+            wrapped_client = wrappers.wrap_gemini(
+                base_client,
+                tracing_extra={
+                    "tags": ["vertex", "llm-interface"],
+                    "metadata": {
+                        "integration": "google-genai",
+                        "provider": "vertex",
+                        "model": self.model,
+                    },
+                },
+            )
+            self.langsmith_enabled = True
+            return wrapped_client
+        except ImportError:
+            return base_client
+
+    def complete(
+        self,
+        messages: List[Message],
+        temperature: float = 1.0,
+        max_tokens: int = 4096,
+    ) -> LLMResponse:
+        """Call Vertex Gemini and normalize response into LLMResponse."""
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=[m.content for m in messages],
+            config={
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+            },
+        )
+
+        content = getattr(response, "text", None) or ""
+        usage = getattr(response, "usage_metadata", None)
+        prompt_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
+        completion_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+
+        model_name = (
+            getattr(response, "model_version", None)
+            or getattr(response, "model", None)
+            or self.model
+        )
+
+        return LLMResponse(
+            content=content,
+            model=model_name,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            metadata={
+                "provider": "vertex",
+                "langsmith_enabled": self.langsmith_enabled,
+            },
+        )
 
 
 class MockLLM(LLMInterface):
