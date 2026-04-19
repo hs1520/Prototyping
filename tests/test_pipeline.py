@@ -5,66 +5,66 @@ from src.prototyping import pipeline as pipeline_module
 
 
 class DummyLLM:
-	"""Simple test double used to validate provider registration and kwargs."""
+    """Simple test double used to validate provider registration and kwargs."""
 
-	def __init__(self, model: str = "dummy-model", api_key: str | None = None, **kwargs):
-		self.model = model
-		self.api_key = api_key
-		self.extra = kwargs
+    def __init__(self, model: str = "dummy-model", api_key: str | None = None, **kwargs):
+        self.model = model
+        self.api_key = api_key
+        self.extra = kwargs
 
-	def complete(self, messages, temperature: float = 0.7, max_tokens: int = 2048):
-		return LLMResponse(content="ok", model=self.model)
+    def complete(self, messages, temperature: float = 0.7, max_tokens: int = 2048):
+        return LLMResponse(content="ok", model=self.model)
 
 
 class StrictDummyLLM:
-	"""Constructor without model/api_key used to test kwargs filtering."""
+    """Constructor without model/api_key used to test kwargs filtering."""
 
-	def __init__(self, timeout: int = 5):
-		self.timeout = timeout
+    def __init__(self, timeout: int = 5):
+        self.timeout = timeout
 
-	def complete(self, messages, temperature: float = 0.7, max_tokens: int = 2048):
-		return LLMResponse(content="ok", model="strict")
+    def complete(self, messages, temperature: float = 0.7, max_tokens: int = 2048):
+        return LLMResponse(content="ok", model="strict")
 
 
 def test_create_llm_defaults_to_mock():
-	llm = pipeline_module.create_llm()
-	assert isinstance(llm, MockLLM)
+    llm = pipeline_module.create_llm()
+    assert isinstance(llm, MockLLM)
 
 
 def test_create_llm_rejects_unknown_provider():
-	try:
-		pipeline_module.create_llm(provider="not-a-provider")
-		assert False, "Expected ValueError for unknown provider"
-	except ValueError as exc:
-		assert "Unknown LLM provider" in str(exc)
+    try:
+        pipeline_module.create_llm(provider="not-a-provider")
+        assert False, "Expected ValueError for unknown provider"
+    except ValueError as exc:
+        assert "Unknown LLM provider" in str(exc)
 
 
 def test_register_custom_provider_and_create(monkeypatch):
-	monkeypatch.setitem(pipeline_module.LLM_PROVIDER_FACTORIES, "dummy", DummyLLM)
+    monkeypatch.setitem(pipeline_module.LLM_PROVIDER_FACTORIES, "dummy", DummyLLM)
 
-	llm = pipeline_module.create_llm(
-		provider="dummy",
-		model="dummy-v1",
-		api_key="k-test",
-		provider_kwargs={"region": "us-central1"},
-	)
+    llm = pipeline_module.create_llm(
+        provider="dummy",
+        model="dummy-v1",
+        api_key="k-test",
+        provider_kwargs={"region": "us-central1"},
+    )
 
-	assert isinstance(llm, DummyLLM)
-	assert llm.model == "dummy-v1"
-	assert llm.api_key == "k-test"
-	assert llm.extra["region"] == "us-central1"
+    assert isinstance(llm, DummyLLM)
+    assert llm.model == "dummy-v1"
+    assert llm.api_key == "k-test"
+    assert llm.extra["region"] == "us-central1"
 
 
-def test_provider_alias_works_with_legacy_use_openai(monkeypatch):
-	monkeypatch.setitem(pipeline_module.LLM_PROVIDER_FACTORIES, "openai", DummyLLM)
+def test_provider_aliases_keep_only_default_and_test(monkeypatch):
+    monkeypatch.setitem(pipeline_module.LLM_PROVIDER_FACTORIES, "mock", DummyLLM)
 
-	llm = pipeline_module.create_llm(use_openai=True, model="compat-model")
-	assert isinstance(llm, DummyLLM)
-	assert llm.model == "compat-model"
+    llm_default = pipeline_module.create_llm(provider="default", model="default-model")
+    llm_test = pipeline_module.create_llm(provider="test", model="test-model")
 
-	llm_alias = pipeline_module.create_llm(provider="open_ai", model="alias-model")
-	assert isinstance(llm_alias, DummyLLM)
-	assert llm_alias.model == "alias-model"
+    assert isinstance(llm_default, DummyLLM)
+    assert llm_default.model == "default-model"
+    assert isinstance(llm_test, DummyLLM)
+    assert llm_test.model == "test-model"
 
 
 def test_constructor_kwargs_are_filtered(monkeypatch):
@@ -79,4 +79,23 @@ def test_constructor_kwargs_are_filtered(monkeypatch):
 
 	assert isinstance(llm, StrictDummyLLM)
 	assert llm.timeout == 42
+
+
+def test_vertex_uses_default_model_when_not_provided(monkeypatch):
+	monkeypatch.setitem(pipeline_module.LLM_PROVIDER_FACTORIES, "vertex", DummyLLM)
+
+	llm = pipeline_module.create_llm(provider="vertex")
+
+	assert isinstance(llm, DummyLLM)
+	assert llm.model == "gemini-3-pro-preview"
+
+
+def test_vertex_accepts_claude_model_passthrough(monkeypatch):
+	monkeypatch.setitem(pipeline_module.LLM_PROVIDER_FACTORIES, "vertex", DummyLLM)
+
+	llm = pipeline_module.create_llm(provider="vertex", model="claude-3-7-sonnet")
+
+	assert isinstance(llm, DummyLLM)
+	assert llm.model == "claude-3-7-sonnet"
+
 

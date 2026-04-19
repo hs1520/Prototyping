@@ -7,17 +7,19 @@ from .chain_of_thought import (
 )
 from .github_auth import GitHubAuthManager, GitHubCLIAuthError
 from .interface import (
+    GeminiLLM,
     GitHubCopilotLLM,
     LLMInterface,
     LLMResponse,
     Message,
     MockLLM,
-    OpenAILLM,
+    VertexLLM,
 )
 
 __all__ = [
     "ChainOfThoughtPrompter",
     "CoTResult",
+    "GeminiLLM",
     "GitHubAuthManager",
     "GitHubCLIAuthError",
     "GitHubCopilotLLM",
@@ -25,6 +27,6 @@ __all__ = [
     "LLMResponse",
     "Message",
     "MockLLM",
-    "OpenAILLM",
     "ThoughtStep",
+    "VertexLLM",
 ]

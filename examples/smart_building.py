@@ -6,7 +6,6 @@ to rapidly design a smart building management system (BMS).
 
 Usage:
     python examples/smart_building.py
-    python examples/smart_building.py --openai  # to use real OpenAI API
 """
 
 import sys
@@ -161,14 +160,12 @@ def demonstrate_mcts_standalone():
 
 
 def main():
-    use_openai = "--openai" in sys.argv
-
     print("=" * 70)
     print("AI-Assisted MBSE Rapid Prototyping: Smart Building Management System")
     print("=" * 70)
     print()
 
-    llm = create_llm(use_llm=True)
+    llm = create_llm(provider="gemini")
     print(f"Using LLM: {llm.__class__.__name__}")
 
     pipeline = PrototypingPipeline(

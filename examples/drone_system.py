@@ -6,7 +6,6 @@ to rapidly design an autonomous package delivery drone system.
 
 Usage:
     python examples/drone_system.py
-    python examples/drone_system.py --openai  # to use real OpenAI API
 """
 
 import sys
@@ -47,15 +46,12 @@ DRONE_REQUIREMENTS = [
 
 
 def main():
-    use_openai = "--openai" in sys.argv
-
     print("=" * 70)
     print("AI-Assisted MBSE Rapid Prototyping: Autonomous Drone System")
     print("=" * 70)
     print()
 
-    # Create LLM (mock for demo, real for --openai flag)
-    llm = create_llm(use_llm=True)
+    llm = create_llm(provider="vertex")
     print(f"Using LLM: {llm.__class__.__name__}")
     print()
 

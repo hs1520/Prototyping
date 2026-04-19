@@ -11,7 +11,13 @@ import inspect
 from typing import Any, Dict, List, Optional
 
 from ..agents.orchestrator import Orchestrator
-from ..llm.interface import LLMInterface, MockLLM, OpenAILLM, GeminiLLM, GitHubCopilotLLM
+from ..llm.interface import (
+    GeminiLLM,
+    GitHubCopilotLLM,
+    LLMInterface,
+    MockLLM,
+    VertexLLM,
+)
 from ..rag.pinecone_wrapper import PineconeWrapper
 from ..rag.retriever import RAGRetriever
 from ..sysml.model import SysMLModel
@@ -19,20 +25,14 @@ from ..sysml.model import SysMLModel
 
 LLM_PROVIDER_FACTORIES: Dict[str, Any] = {
     "mock": MockLLM,
-    "openai": OpenAILLM,
     "gemini": GeminiLLM,
     "github_copilot": GitHubCopilotLLM,
+    "vertex": VertexLLM,
 }
 
 LLM_PROVIDER_ALIASES: Dict[str, str] = {
     "default": "mock",
     "test": "mock",
-    "open_ai": "openai",
-    "gpt": "openai",
-    "google": "gemini",
-    "github": "github_copilot",
-    "copilot": "github_copilot",
-    "github_models": "github_copilot",
 }
 
 
@@ -76,8 +76,6 @@ def available_llm_providers() -> List[str]:
 
 def create_llm(
     provider: Optional[str] = None,
-    use_openai: bool = False,
-    use_llm: bool = False,
     model: Optional[str] = None,
     api_key: Optional[str] = None,
     provider_kwargs: Optional[Dict[str, Any]] = None,
@@ -86,9 +84,7 @@ def create_llm(
     Create an LLM instance.
 
     Args:
-        provider: Provider name, e.g. "mock", "gemini", "openai"
-        use_openai: Legacy flag for selecting OpenAI when provider is not set
-        use_llm: Legacy flag for selecting Gemini when provider is not set
+        provider: Provider name, e.g. "mock", "gemini", "vertex"
         model: Model name for providers that support it
         api_key: API key for providers that support it
         provider_kwargs: Extra provider-specific constructor args
@@ -96,14 +92,6 @@ def create_llm(
     Returns:
         An LLM interface instance
     """
-    if provider is None:
-        if use_openai:
-            provider = "openai"
-        elif use_llm:
-            provider = "gemini"
-        else:
-            provider = "mock"
-
     provider_name = _normalize_provider_name(provider)
     factory = LLM_PROVIDER_FACTORIES.get(provider_name)
     if factory is None:
@@ -113,12 +101,13 @@ def create_llm(
         )
 
     if model is None:
-        if provider_name == "openai":
-            model = "gpt-4o"
-        elif provider_name == "gemini":
+        if provider_name == "gemini":
             model = "gemini-3-flash-preview"
         elif provider_name == "github_copilot":
             model = "openai/gpt-4.1-mini"
+        elif provider_name == "vertex":
+            # Vertex model ID can target Gemini or Anthropic families (e.g. claude-*).
+            model = "gemini-3.1-pro-preview"
 
     kwargs = _build_constructor_kwargs(factory, model, api_key, provider_kwargs)
     # noinspection PyArgumentList

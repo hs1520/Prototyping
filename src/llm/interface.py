@@ -124,7 +124,7 @@ class GeminiLLM(LLMInterface):
         self,
         messages: List[Message],
         temperature: float = 1.0,
-        max_tokens: int = 4096,
+        max_tokens: int = 8192,
     ) -> LLMResponse:
         """Call Gemini and normalize structured response fields into LLMResponse."""
         # google-genai expects generation settings in `config`, not top-level kwargs.
@@ -371,7 +371,7 @@ class VertexLLM(LLMInterface):
 
     def __init__(
         self,
-        model: str = "gemini-2.5-pro",
+        model: str = "gemini-3.1-pro-preview",
         api_key: Optional[str] = None,
         enable_langsmith: bool = True,
     ):
@@ -423,7 +423,7 @@ class VertexLLM(LLMInterface):
         self,
         messages: List[Message],
         temperature: float = 1.0,
-        max_tokens: int = 4096,
+        max_tokens: int = 8192,
     ) -> LLMResponse:
         """Call Vertex Gemini and normalize response into LLMResponse."""
         response = self.client.models.generate_content(
