@@ -108,15 +108,29 @@ class DummyPineconeWrapper:
         return {"matches": []}
 
 
+class DummyAstClient:
+    def parse_text(self, sysml_text: str, source_uri: str = "", options=None):
+        return {
+            "schema_version": "1.0",
+            "status": "ok",
+            "ast": {"name": "Dummy"},
+            "diagnostics": [],
+        }
+
+
 def test_prototyping_pipeline_requires_injected_llm_and_builds_components():
     llm = DummyLLM()
+    ast_client = DummyAstClient()
     pipeline = orchestration_module.PrototypingPipeline(
         llm=llm,
         pinecone_wrapper=DummyPineconeWrapper(),
+        ast_client=ast_client,
     )
 
     assert pipeline.llm is llm
+    assert pipeline.ast_client is ast_client
     assert pipeline.pinecone.default_namespace == "ns"
     assert pipeline.orchestrator is not None
+    assert pipeline.orchestrator.design_agent.ast_client is ast_client
 
 

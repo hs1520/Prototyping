@@ -20,6 +20,7 @@ from ..dse.mcts import MCTSDesignExplorer
 from ..llm.chain_of_thought import ChainOfThoughtPrompter
 from ..llm.interface import LLMInterface
 from ..rag.retriever import RAGRetriever
+from ..sysml.ast_client import SysMLAstClient
 from ..sysml.model import SysMLModel
 
 
@@ -53,6 +54,7 @@ class Orchestrator:
         self,
         llm: LLMInterface,
         rag_retriever: Optional[RAGRetriever] = None,
+        ast_client: Optional[SysMLAstClient] = None,
         quality_threshold: float = 0.75,
         max_iterations: int = 3,
     ):
@@ -63,7 +65,7 @@ class Orchestrator:
 
         # Initialize specialized agents
         self.requirements_agent = RequirementsAgent(llm, rag_retriever)
-        self.design_agent = DesignAgent(llm, rag_retriever)
+        self.design_agent = DesignAgent(llm, rag_retriever, ast_client=ast_client)
         self.evaluator = DesignEvaluator()
         self.cot = ChainOfThoughtPrompter(llm)
 

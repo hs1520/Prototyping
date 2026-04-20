@@ -1,5 +1,6 @@
 """Tests for the multi-agent framework."""
 
+import re
 import pytest
 from typing import cast
 
@@ -7,7 +8,7 @@ from src.agents.base_agent import AgentMessage, AgentResult
 from src.agents.requirements_agent import RequirementsAgent
 from src.agents.design_agent import DesignAgent
 from src.agents.orchestrator import Orchestrator
-from src.llm.interface import MockLLM
+from src.llm.interface import LLMResponse, MockLLM
 from src.rag.retriever import RAGRetriever, RetrievedContext
 from src.sysml.model import SysMLModel
 
@@ -38,6 +39,96 @@ class FakePineconeWrapper:
                 ]
             }
         }
+
+
+class FakeAstClient:
+    def parse_text(self, sysml_text: str, source_uri: str = "", options=None):
+        block_names = re.findall(r"part\s+def\s+(\w+)", sysml_text)
+        if not block_names:
+            block_names = ["Controller"]
+
+        blocks = []
+        for name in block_names:
+            blocks.append(
+                {
+                    "kind": "part def",
+                    "name": name,
+                    "ports": [],
+                    "attributes": [],
+                    "actions": [],
+                }
+            )
+
+        connectors = []
+        for source_block, source_port, target_block, target_port in re.findall(
+            r"connect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)",
+            sysml_text,
+        ):
+            connectors.append(
+                {
+                    "kind": "connector",
+                    "name": f"conn_{source_block}_{target_block}",
+                    "sourceBlockId": source_block,
+                    "sourcePortId": source_port,
+                    "targetBlockId": target_block,
+                    "targetPortId": target_port,
+                }
+            )
+
+        model_name_match = re.search(r"package\s+(\w+)", sysml_text)
+        model_name = model_name_match.group(1) if model_name_match else "MockSystem"
+
+        return {
+            "schema_version": "1.0",
+            "status": "ok",
+            "ast": {
+                "name": model_name,
+                "sourceUri": source_uri,
+                "blocks": blocks,
+                "connectors": connectors,
+                "diagnostics": [],
+            },
+            "diagnostics": [],
+        }
+
+
+class DesignCapableMockLLM(MockLLM):
+    """Mock provider that prioritizes SysML generation for design prompts."""
+
+    def complete(self, messages, temperature: float = 0.7, max_tokens: int = 20480):
+        injected = getattr(self, "_injected_response", None)
+        if injected is not None:
+            self._injected_response = None
+            return LLMResponse(content=injected, model="mock-llm", prompt_tokens=0, completion_tokens=0)
+
+        user_text = "\n".join(
+            m.content for m in messages if getattr(m, "role", "") == "user"
+        ).lower()
+
+        if "sysml" in user_text or "block diagram" in user_text or "design a sysml" in user_text:
+            content = (
+                "```sysml\n"
+                "package MockSystem {\n"
+                "    part def Controller {}\n"
+                "}\n"
+                "```"
+            )
+        elif "requirement" in user_text:
+            content = (
+                "Extracted requirements:\n"
+                "1. The system shall provide core functionality.\n"
+                "2. The system shall be safe and reliable."
+            )
+        else:
+            content = "Mock response: design candidate generated successfully."
+
+        return LLMResponse(
+            content=content,
+            model="mock-llm",
+            prompt_tokens=0,
+            completion_tokens=0,
+            metadata={"temperature": temperature, "max_tokens": max_tokens},
+        )
 
 
 class TestAgentMessage:
@@ -137,8 +228,8 @@ class TestRequirementsAgent:
 class TestDesignAgent:
     @pytest.fixture
     def agent(self):
-        llm = MockLLM()
-        return DesignAgent(llm)
+        llm = DesignCapableMockLLM()
+        return DesignAgent(llm, ast_client=FakeAstClient())
 
     def test_run_generates_model(self, agent):
         task = {
@@ -204,7 +295,7 @@ class TestDesignAgent:
                 return RetrievedContext(entries=[], query=query)
 
         rag = _CapturingRAG()
-        agent = DesignAgent(MockLLM(), rag_retriever=rag)
+        agent = DesignAgent(DesignCapableMockLLM(), rag_retriever=rag, ast_client=FakeAstClient())
         result = agent.run({
             "system_name": "CaptureTest",
             "requirements": ["REQ-001: The system shall operate safely"],
@@ -217,7 +308,7 @@ class TestDesignAgent:
 class TestOrchestrator:
     @pytest.fixture
     def orchestrator(self):
-        llm = MockLLM()
+        llm = DesignCapableMockLLM()
         rag = RAGRetriever(
             llm=llm,
             pinecone_wrapper=FakePineconeWrapper(),
@@ -227,6 +318,7 @@ class TestOrchestrator:
         return Orchestrator(
             llm=llm,
             rag_retriever=rag,
+            ast_client=FakeAstClient(),
             quality_threshold=0.5,  # Low threshold for testing
             max_iterations=2,
         )

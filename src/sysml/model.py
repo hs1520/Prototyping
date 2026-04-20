@@ -50,6 +50,12 @@ class Requirement(SysMLElement):
     parent_id: Optional[str] = None
     derived_from: List[str] = field(default_factory=list)
     refined_by: List[str] = field(default_factory=list)
+    namespace: str = ""
+    qualified_name: str = ""
+    source_uri: str = ""
+    source_span: Dict[str, Any] = field(default_factory=dict)
+    status: str = ""
+    constraints: List[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         return f"requirement {self.name} {{ doc /* {self.text} */ }}"
@@ -62,6 +68,11 @@ class Port(SysMLElement):
     port_type: str = ""
     multiplicity: Multiplicity = Multiplicity.ONE
     conjugated: bool = False
+    qualified_name: str = ""
+    type_path: str = ""
+    visibility: str = "public"
+    source_uri: str = ""
+    source_span: Dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
         direction = f":{self.direction.value}" if self.direction != FeatureDirection.NONE else ""
@@ -77,6 +88,12 @@ class Attribute(SysMLElement):
     default_value: Optional[Any] = None
     unit: str = ""
     direction: FeatureDirection = FeatureDirection.NONE
+    qualified_name: str = ""
+    type_path: str = ""
+    visibility: str = "public"
+    is_read_only: bool = False
+    source_uri: str = ""
+    source_span: Dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
         default = f" = {self.default_value}" if self.default_value is not None else ""
@@ -90,6 +107,13 @@ class Action(SysMLElement):
     inputs: List[str] = field(default_factory=list)
     outputs: List[str] = field(default_factory=list)
     description: str = ""
+    qualified_name: str = ""
+    parameters: List[Dict[str, Any]] = field(default_factory=list)
+    body: str = ""
+    preconditions: List[str] = field(default_factory=list)
+    postconditions: List[str] = field(default_factory=list)
+    source_uri: str = ""
+    source_span: Dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
         inputs_str = ", ".join(self.inputs)
@@ -119,6 +143,19 @@ class Block(SysMLElement):
     block_type: str = "part def"
     satisfies: List[str] = field(default_factory=list)  # requirement IDs
     refines: List[str] = field(default_factory=list)
+    namespace: str = ""
+    qualified_name: str = ""
+    visibility: str = "public"
+    is_abstract: bool = False
+    is_final: bool = False
+    generalizations: List[str] = field(default_factory=list)
+    specializations: List[str] = field(default_factory=list)
+    constraints: List[str] = field(default_factory=list)
+    expressions: List[str] = field(default_factory=list)
+    imports: List[str] = field(default_factory=list)
+    children: List[Block] = field(default_factory=list)
+    source_uri: str = ""
+    source_span: Dict[str, Any] = field(default_factory=dict)
 
     def add_port(self, port: Port) -> None:
         """Add a port to this block."""
@@ -146,14 +183,57 @@ class Block(SysMLElement):
         if element_id and element_id not in self.refines:
             self.refines.append(element_id)
 
+    def add_generalization(self, element_id: str) -> None:
+        """Record a generalization relationship."""
+        if element_id and element_id not in self.generalizations:
+            self.generalizations.append(element_id)
+
+    def add_specialization(self, element_id: str) -> None:
+        """Record a specialization relationship."""
+        if element_id and element_id not in self.specializations:
+            self.specializations.append(element_id)
+
+    def add_constraint(self, constraint: str) -> None:
+        """Record a constraint owned by this block."""
+        if constraint and constraint not in self.constraints:
+            self.constraints.append(constraint)
+
+    def add_expression(self, expression: str) -> None:
+        """Record an expression owned by this block."""
+        if expression and expression not in self.expressions:
+            self.expressions.append(expression)
+
+    def add_import(self, import_name: str) -> None:
+        """Record an imported package or symbol reference."""
+        if import_name and import_name not in self.imports:
+            self.imports.append(import_name)
+
+    def add_child(self, block: Block) -> None:
+        """Add a nested child block."""
+        self.children.append(block)
+
     def __str__(self) -> str:
         lines = [f"{self.block_type} {self.name} {{"]
         if self.short_description:
             lines.append(f"    doc /* {self.short_description} */")
+        if self.is_abstract:
+            lines.append("    // abstract")
+        if self.is_final:
+            lines.append("    // final")
+        if self.imports:
+            lines.append(f"    // imports: {', '.join(self.imports)}")
+        if self.generalizations:
+            lines.append(f"    // generalizes: {', '.join(self.generalizations)}")
+        if self.specializations:
+            lines.append(f"    // specializes: {', '.join(self.specializations)}")
         for req_id in self.satisfies:
             lines.append(f"    satisfy {req_id};")
         for ref_id in self.refines:
             lines.append(f"    // refines {ref_id}")
+        for constraint in self.constraints:
+            lines.append(f"    // constraint: {constraint}")
+        for expression in self.expressions:
+            lines.append(f"    // expression: {expression}")
         for attr in self.attributes:
             lines.append(f"    {attr}")
         for port in self.ports:
@@ -163,6 +243,9 @@ class Block(SysMLElement):
                 lines.append(f"    {line}")
         for part in self.sub_parts:
             lines.append(f"    part {part.name} : {part.name};")
+        for child in self.children:
+            for line in str(child).splitlines():
+                lines.append(f"    {line}")
         lines.append("}")
         return "\n".join(lines)
 
@@ -174,6 +257,12 @@ class Connector(SysMLElement):
     source_port_id: str = ""
     target_block_id: str = ""
     target_port_id: str = ""
+    qualified_name: str = ""
+    connector_type: str = ""
+    end_roles: Dict[str, Any] = field(default_factory=dict)
+    multiplicity: str = ""
+    source_uri: str = ""
+    source_span: Dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
         return (
@@ -195,6 +284,19 @@ class SysMLModel:
     blocks: List[Block] = field(default_factory=list)
     connectors: List[Connector] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    namespace: str = ""
+    qualified_name: str = ""
+    packages: List[str] = field(default_factory=list)
+    imports: List[str] = field(default_factory=list)
+    generalizations: List[str] = field(default_factory=list)
+    specializations: List[str] = field(default_factory=list)
+    constraints: List[str] = field(default_factory=list)
+    expressions: List[str] = field(default_factory=list)
+    source_uri: str = ""
+    ast_version: str = ""
+    parse_diagnostics: List[Dict[str, Any]] = field(default_factory=list)
+    confidence: float = 0.0
+    mapping_notes: List[str] = field(default_factory=list)
 
     def add_requirement(self, req: Requirement) -> None:
         """Add a requirement to the model."""
@@ -207,6 +309,45 @@ class SysMLModel:
     def add_connector(self, connector: Connector) -> None:
         """Add a connector to the model."""
         self.connectors.append(connector)
+
+    def add_package(self, package_name: str) -> None:
+        """Record a package that belongs to this model."""
+        if package_name and package_name not in self.packages:
+            self.packages.append(package_name)
+
+    def add_import(self, import_name: str) -> None:
+        """Record an imported package or symbol."""
+        if import_name and import_name not in self.imports:
+            self.imports.append(import_name)
+
+    def add_generalization(self, element_id: str) -> None:
+        """Record a model-level generalization relationship."""
+        if element_id and element_id not in self.generalizations:
+            self.generalizations.append(element_id)
+
+    def add_specialization(self, element_id: str) -> None:
+        """Record a model-level specialization relationship."""
+        if element_id and element_id not in self.specializations:
+            self.specializations.append(element_id)
+
+    def add_constraint(self, constraint: str) -> None:
+        """Record a model-level constraint."""
+        if constraint and constraint not in self.constraints:
+            self.constraints.append(constraint)
+
+    def add_expression(self, expression: str) -> None:
+        """Record a model-level expression."""
+        if expression and expression not in self.expressions:
+            self.expressions.append(expression)
+
+    def add_diagnostic(self, diagnostic: Dict[str, Any]) -> None:
+        """Record a parsing or mapping diagnostic."""
+        self.parse_diagnostics.append(diagnostic)
+
+    def add_mapping_note(self, note: str) -> None:
+        """Record a human-readable mapping note."""
+        if note:
+            self.mapping_notes.append(note)
 
     def add_refinement_link(self, refined_element_id: str, refining_element_id: str) -> None:
         """Record a refinement relationship between model elements."""
@@ -239,6 +380,12 @@ class SysMLModel:
         lines = [f"package {self.name} {{"]
         if self.description:
             lines.append(f"    doc /* {self.description} */")
+        if self.namespace:
+            lines.append(f"    // namespace: {self.namespace}")
+        if self.qualified_name:
+            lines.append(f"    // qualified name: {self.qualified_name}")
+        if self.imports:
+            lines.append(f"    // imports: {', '.join(self.imports)}")
         lines.append("")
         if self.requirements:
             lines.append("    // Requirements")
@@ -258,11 +405,26 @@ class SysMLModel:
                     lines.append(f"    {line}")
                 if block.refines:
                     lines.append(f"    // refines: {', '.join(block.refines)}")
+                if block.generalizations:
+                    lines.append(f"    // generalizes: {', '.join(block.generalizations)}")
+                if block.specializations:
+                    lines.append(f"    // specializes: {', '.join(block.specializations)}")
+                if block.constraints:
+                    for constraint in block.constraints:
+                        lines.append(f"    // constraint: {constraint}")
                 lines.append("")
         if self.connectors:
             lines.append("    // Connections")
             for conn in self.connectors:
                 lines.append(f"    {conn}")
+        if self.constraints:
+            lines.append("    // Model Constraints")
+            for constraint in self.constraints:
+                lines.append(f"    // constraint: {constraint}")
+        if self.expressions:
+            lines.append("    // Model Expressions")
+            for expression in self.expressions:
+                lines.append(f"    // expression: {expression}")
         lines.append("}")
         return "\n".join(lines)
 
@@ -271,9 +433,15 @@ class SysMLModel:
         return {
             "name": self.name,
             "description": self.description,
+            "namespace": self.namespace,
+            "qualified_name": self.qualified_name,
             "requirements_count": len(self.requirements),
             "blocks_count": len(self.blocks),
             "connectors_count": len(self.connectors),
+            "imports_count": len(self.imports),
+            "constraints_count": len(self.constraints),
+            "parse_diagnostics_count": len(self.parse_diagnostics),
+            "confidence": self.confidence,
             "requirements": [r.name for r in self.requirements],
             "blocks": [b.name for b in self.blocks],
         }

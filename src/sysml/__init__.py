@@ -12,6 +12,8 @@ from .model import (
     SysMLElement,
     SysMLModel,
 )
+from .ast_adapter import SysMLAstAdapter, SysMLAstMappingError
+from .ast_client import SysMLAstClient, SysMLAstClientError, SysMLAstSchemaError, SysMLAstServiceError
 
 __all__ = [
     "Action",
@@ -22,6 +24,12 @@ __all__ = [
     "Multiplicity",
     "Port",
     "Requirement",
+    "SysMLAstAdapter",
+    "SysMLAstClient",
+    "SysMLAstClientError",
+    "SysMLAstMappingError",
+    "SysMLAstSchemaError",
+    "SysMLAstServiceError",
     "SysMLElement",
     "SysMLModel",
 ]

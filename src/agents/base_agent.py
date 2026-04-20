@@ -64,7 +64,7 @@ class BaseAgent(ABC):
         self,
         query: str,
         include_official_sysml: bool = False,
-        total_token_budget: int = 1500,
+        total_token_budget: int = 4096,
         allowed_extensions: Optional[Sequence[str]] = None,
     ) -> str:
         """Retrieve relevant MBSE knowledge to augment the agent's reasoning."""

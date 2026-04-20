@@ -2,12 +2,10 @@
 
 import pytest
 from src.sysml.model import (
-    Action,
     Attribute,
     Block,
     Connector,
     FeatureDirection,
-    Multiplicity,
     Port,
     Requirement,
     SysMLModel,
@@ -119,6 +117,17 @@ class TestSysMLModel:
         assert len(model.requirements) == 0
         assert len(model.blocks) == 0
 
+    def test_extended_defaults(self):
+        model = SysMLModel(name="TestSystem")
+        assert model.namespace == ""
+        assert model.qualified_name == ""
+        assert model.packages == []
+        assert model.imports == []
+        assert model.constraints == []
+        assert model.expressions == []
+        assert model.parse_diagnostics == []
+        assert model.confidence == 0.0
+
     def test_add_requirement(self):
         model = SysMLModel(name="TestSystem")
         req = Requirement(name="REQ_001", text="The system shall work")
@@ -194,6 +203,40 @@ class TestSysMLModel:
         )
         model.add_connector(conn)
         assert len(model.connectors) == 1
+
+    def test_extended_helpers(self):
+        model = SysMLModel(name="TestSystem")
+        model.add_package("pkg.core")
+        model.add_import("pkg.common")
+        model.add_generalization("AbstractSystem")
+        model.add_specialization("ConcreteSystem")
+        model.add_constraint("speed > 0")
+        model.add_expression("x + y")
+        model.add_diagnostic({"level": "error", "message": "bad ast"})
+        model.add_mapping_note("mapped from AST")
+
+        assert model.packages == ["pkg.core"]
+        assert model.imports == ["pkg.common"]
+        assert model.generalizations == ["AbstractSystem"]
+        assert model.specializations == ["ConcreteSystem"]
+        assert model.constraints == ["speed > 0"]
+        assert model.expressions == ["x + y"]
+        assert len(model.parse_diagnostics) == 1
+        assert model.mapping_notes == ["mapped from AST"]
+
+    def test_block_extended_helpers(self):
+        block = Block(name="Controller")
+        block.add_generalization("AbstractController")
+        block.add_specialization("ConcreteController")
+        block.add_constraint("response_time < 10ms")
+        block.add_expression("u = Kp * e")
+        block.add_import("pkg::common")
+
+        assert block.generalizations == ["AbstractController"]
+        assert block.specializations == ["ConcreteController"]
+        assert block.constraints == ["response_time < 10ms"]
+        assert block.expressions == ["u = Kp * e"]
+        assert block.imports == ["pkg::common"]
 
     def test_full_model_sysml_text(self):
         """Test a complete model serializes to valid SysML v2 text."""

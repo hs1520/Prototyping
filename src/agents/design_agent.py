@@ -11,16 +11,14 @@ import re
 from typing import Any, Dict, List, Optional
 
 from .base_agent import AgentResult, BaseAgent
+from ..config import Config
 from ..llm.chain_of_thought import ChainOfThoughtPrompter
 from ..llm.interface import LLMInterface
 from ..rag.retriever import RAGRetriever
+from ..sysml.ast_adapter import SysMLAstAdapter, SysMLAstMappingError
+from ..sysml.ast_client import SysMLAstClient, SysMLAstClientError
 from ..sysml.model import (
-    Action,
-    Attribute,
     Block,
-    Connector,
-    FeatureDirection,
-    Port,
     SysMLModel,
 )
 
@@ -55,10 +53,19 @@ Always provide SysML v2 code in ```sysml blocks.
         self,
         llm: LLMInterface,
         rag_retriever: Optional[RAGRetriever] = None,
+        ast_client: Optional[SysMLAstClient] = None,
+        ast_adapter: Optional[SysMLAstAdapter] = None,
     ):
         super().__init__("DesignAgent", llm, rag_retriever)
         self.cot = ChainOfThoughtPrompter(llm)
         self.cot.system_prompt = self.SYSTEM_PROMPT
+        self.ast_adapter = ast_adapter or SysMLAstAdapter()
+        self.ast_client = ast_client
+        if self.ast_client is None and Config.SYSML_AST_SERVICE_URL.strip():
+            try:
+                self.ast_client = SysMLAstClient()
+            except SysMLAstClientError:
+                self.ast_client = None
 
     def run(self, task: Dict[str, Any]) -> AgentResult:
         """
@@ -78,6 +85,8 @@ Always provide SysML v2 code in ```sysml blocks.
         existing_model = task.get("existing_model")
         feedback = task.get("refinement_feedback", "")
         refinement_issues = task.get("refinement_issues", [])
+        ast_payload = task.get("sysml_ast")
+        source_uri = task.get("source_uri", "")
 
         # Augment context with RAG
         # TODO query需要改造 3条不科学
@@ -113,11 +122,25 @@ Always provide SysML v2 code in ```sysml blocks.
             description=f"Auto-generated design for {system_name}",
         )
 
-        if cot_result.extracted_sysml:
-            self._populate_model_from_sysml(model, cot_result.extracted_sysml)
-        else:
-            raise RuntimeError("未提取到SysML v2 design.")
-            # self._populate_model_heuristically(model, system_name, requirements)
+        if ast_payload is None:
+            if not cot_result.extracted_sysml:
+                raise RuntimeError("[AST_INPUT_ERROR] 未提取到SysML v2 design.")
+            if self.ast_client is None:
+                raise RuntimeError(
+                    "[AST_CONFIG_ERROR] DesignAgent runs in AST-only mode but no AST client is configured. "
+                    "Set SYSML_AST_SERVICE_URL or inject ast_client."
+                )
+            try:
+                ast_payload = self.ast_client.parse_text(
+                    cot_result.extracted_sysml,
+                    source_uri=source_uri,
+                )
+            except SysMLAstClientError as exc:
+                raise RuntimeError(f"[AST_SERVICE_ERROR] SysML AST service failed: {exc}") from exc
+
+        if ast_payload is None:
+            raise RuntimeError("[AST_INPUT_ERROR] 未提取到SysML v2 design.")
+        model = self._populate_model_from_ast(model, ast_payload)
 
         self._apply_requirement_traceability(model, requirements)
 
@@ -135,93 +158,27 @@ Always provide SysML v2 code in ```sysml blocks.
         self.record_result(result)
         return result
 
-    #TODO 这个parser存在很大问题 推荐用官方AST/API
+    def _populate_model_from_ast(
+        self,
+        model: SysMLModel,
+        ast_payload: Dict[str, Any],
+    ) -> SysMLModel:
+        """Populate the model from a JSON AST payload."""
+        try:
+            mapped = self.ast_adapter.ast_to_model(ast_payload, existing_model=model)
+        except SysMLAstMappingError as exc:
+            raise RuntimeError(f"[AST_MAPPING_ERROR] SysML AST mapping failed: {exc}") from exc
+        mapped.add_mapping_note("Populated via AST adapter")
+        return mapped
+
+    # AST-only mode: keep method name for compatibility with older call sites.
     def _populate_model_from_sysml(
         self, model: SysMLModel, sysml_text: str
     ) -> None:
-        """
-        Parse SysML v2 text and populate the model.
-
-        This is a simplified parser; a production system would use
-        a full SysML v2 grammar parser.
-        """
-        import re
-
-        # Extract part definitions and merge them into the existing model.
-        part_def_pattern = r"part def\s+(\w+)\s*\{([^}]*)\}"
-        for match in re.finditer(part_def_pattern, sysml_text, re.DOTALL):
-            block_name = match.group(1)
-            block_body = match.group(2)
-
-            block = model.get_block_by_name(block_name)
-            if block is None:
-                block = Block(name=block_name, block_type="part def")
-
-            # Parse attributes
-            attr_pattern = r"attribute\s+(\w+)\s*:\s*(\w+)(?:\s*=\s*([^;]+))?"
-            for attr_match in re.finditer(attr_pattern, block_body):
-                attr_name = attr_match.group(1)
-                if any(existing.name == attr_name for existing in block.attributes):
-                    continue
-                attr = Attribute(
-                    name=attr_name,
-                    attribute_type=attr_match.group(2),
-                    default_value=attr_match.group(3).strip() if attr_match.group(3) else None,
-                )
-                block.add_attribute(attr)
-
-            # Parse ports
-            port_pattern = r"port\s+(\w+)\s*(?::\s*~?(\w+))?"
-            for port_match in re.finditer(port_pattern, block_body):
-                port_name = port_match.group(1)
-                if any(existing.name == port_name for existing in block.ports):
-                    continue
-                port = Port(
-                    name=port_name,
-                    port_type=port_match.group(2) or "",
-                )
-                block.add_port(port)
-
-            # Parse actions
-            action_pattern = r"action\s+(\w+)\s*\{([^}]*)\}"
-            for action_match in re.finditer(action_pattern, block_body, re.DOTALL):
-                action_name = action_match.group(1)
-                if any(existing.name == action_name for existing in block.actions):
-                    continue
-                action = Action(name=action_name, description=action_match.group(2).strip())
-                block.add_action(action)
-
-            # Parse satisfy relationships / refinement hints
-            satisfy_pattern = r"satisfy\s+(\w+)\s*;"
-            for satisfy_match in re.finditer(satisfy_pattern, block_body):
-                block.add_satisfies(satisfy_match.group(1))
-
-            refines_pattern = r"refines\s+([\w_\-]+)"
-            for refines_match in re.finditer(refines_pattern, block_body):
-                block.add_refinement(refines_match.group(1))
-
-            if model.get_block_by_name(block_name) is None:
-                model.add_block(block)
-
-        # Extract connections (deduplicate)
-        existing_conn_keys = {
-            (c.source_block_id, c.source_port_id, c.target_block_id, c.target_port_id)
-            for c in model.connectors
-        }
-        conn_pattern = r"connect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)"
-        for conn_match in re.finditer(conn_pattern, sysml_text):
-            key = (conn_match.group(1), conn_match.group(2), conn_match.group(3), conn_match.group(4))
-            if key in existing_conn_keys:
-                continue
-            conn = Connector(
-                name=f"conn_{conn_match.group(1)}_{conn_match.group(3)}",
-                source_block_id=conn_match.group(1),
-                source_port_id=conn_match.group(2),
-                target_block_id=conn_match.group(3),
-                target_port_id=conn_match.group(4),
-            )
-            model.add_connector(conn)
-            existing_conn_keys.add(key)
+        raise RuntimeError(
+            "[AST_LEGACY_REMOVED] Regex parser path has been removed. "
+            "Use AST payloads via sysml_ast or ast_client."
+        )
 
     #TODO 存在问题 建议用Embedding做 同时当前无置信度/不可解释/没有一对多分配
     def _apply_requirement_traceability(self, model: SysMLModel, requirements: List[str]) -> None:
@@ -257,55 +214,5 @@ Always provide SysML v2 code in ```sysml blocks.
         system_name: str,
         requirements: List[str],
     ) -> None:
-        """
-        Create a basic model structure when SysML extraction fails.
-
-        Uses heuristics to identify common CPS components from requirements.
-        Skips adding components that already exist in the model.
-        """
-        # Common cyber-physical system components
-        standard_components = [
-            ("Controller", [
-                Port(name="sensorIn", direction=FeatureDirection.IN),
-                Port(name="commandOut", direction=FeatureDirection.OUT),
-                Attribute(name="processingRate", attribute_type="Real", default_value="1000.0", unit="Hz"),
-            ]),
-            ("Sensor", [
-                Port(name="dataOut", direction=FeatureDirection.OUT),
-                Attribute(name="samplingRate", attribute_type="Real", default_value="100.0", unit="Hz"),
-            ]),
-            ("Actuator", [
-                Port(name="commandIn", direction=FeatureDirection.IN),
-                Attribute(name="responseTime", attribute_type="Real", default_value="10.0", unit="ms"),
-            ]),
-        ]
-
-        for comp_name, elements in standard_components:
-            if model.get_block_by_name(comp_name):
-                continue  # Skip if already exists
-            block = Block(name=comp_name, block_type="part def")
-            for elem in elements:
-                if isinstance(elem, Port):
-                    block.add_port(elem)
-                elif isinstance(elem, Attribute):
-                    block.add_attribute(elem)
-            model.add_block(block)
-
-        # Add connection between sensor and controller (only if not already present)
-        if len(model.blocks) >= 2:
-            existing_conns = {
-                (c.source_block_id, c.source_port_id, c.target_block_id, c.target_port_id)
-                for c in model.connectors
-            }
-            key = ("Sensor", "dataOut", "Controller", "sensorIn")
-            if key not in existing_conns:
-                model.add_connector(Connector(
-                    name="sensorToController",
-                    source_block_id="Sensor",
-                    source_port_id="dataOut",
-                    target_block_id="Controller",
-                    target_port_id="sensorIn",
-                ))
-
-        self._apply_requirement_traceability(model, requirements)
+        raise RuntimeError("[AST_LEGACY_REMOVED] Heuristic parser fallback has been removed in AST-only mode.")
 
