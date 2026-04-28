@@ -62,12 +62,6 @@ class Config:
     # Vector Database Configuration
     PINECONE_API_KEY: str = os.getenv("PINECONE_API_KEY", "")
 
-    # SysML AST Service Configuration
-    SYSML_AST_SERVICE_URL: str = os.getenv("SYSML_AST_SERVICE_URL", "")
-    SYSML_AST_PARSE_PATH: str = os.getenv("SYSML_AST_PARSE_PATH", "/parse")
-    SYSML_AST_PARSE_FILE_PATH: str = os.getenv("SYSML_AST_PARSE_FILE_PATH", "/parse-file")
-    SYSML_AST_TIMEOUT_SECONDS: float = float(os.getenv("SYSML_AST_TIMEOUT_SECONDS", "30"))
-
     @classmethod
     def validate(cls) -> bool:
         """
@@ -170,10 +164,6 @@ class Config:
             "database_url": cls.DATABASE_URL,
             "rag_embedding_model": cls.RAG_EMBEDDING_MODEL,
             "dse_max_iterations": cls.DSE_MAX_ITERATIONS,
-            "sysml_ast_service_url": cls.SYSML_AST_SERVICE_URL,
-            "sysml_ast_parse_path": cls.SYSML_AST_PARSE_PATH,
-            "sysml_ast_parse_file_path": cls.SYSML_AST_PARSE_FILE_PATH,
-            "sysml_ast_timeout_seconds": cls.SYSML_AST_TIMEOUT_SECONDS,
         }
 
 
