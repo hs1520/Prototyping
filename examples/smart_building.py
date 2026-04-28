@@ -188,7 +188,7 @@ def main():
 
     print(f"\nSystem: {result['system_name']}")
     print(f"Final Quality Score: {result['final_score']:.3f}")
-    print(f"Components designed: {result['model_summary']['blocks_count']}")
+    print(f"Part definitions designed: {result['model_summary']['part_definitions_count']}")
 
     print("\n" + "=" * 70)
     print("GENERATED SysML v2 MODEL (excerpt)")

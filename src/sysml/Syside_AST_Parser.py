@@ -39,7 +39,7 @@ from typing import Any, Iterable, List, Optional, Tuple
 
 import syside
 
-from model import (
+from src.sysml.model import (
     # core
     SysMLModel,
     Package,
@@ -1960,7 +1960,7 @@ def _map_requirement_usage(node) -> RequirementUsage:
     subs = _extract_subsettings(node)
     name = _clean_name(_real_name(node))
     if not name and subs:
-        # Anonymous redefinition: take name from the first redef target
+        # Anonymous redefinition: take name from the first redefinition target
         for s in subs:
             if s.specialization_kind == "redefinition" and s.target:
                 name = s.target.display()
@@ -3249,8 +3249,7 @@ if __name__ == "__main__":
     import sys
 
     DEFAULT_PATH = (
-        "/Users/huangsongyi/VSCode/Prototyping/src/rag/SysML-v2-release-src/"
-        "examples/State Space Representation Examples/EVSample.sysml"
+        "/Users/huangsongyi/VSCode/Prototyping/src/rag/SysML-v2-release-src/examples/Camera Example/Camera.sysml"
     )
     file_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PATH
 
@@ -3329,3 +3328,4 @@ if __name__ == "__main__":
 
     print("\n─── Round-trip SysML Text ───────────────────────────")
     print(extracted.to_sysml_text())
+

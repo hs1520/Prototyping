@@ -10,7 +10,16 @@ from src.dse.design_space import (
 )
 from src.dse.evaluator import DesignEvaluator, EvaluationResult
 from src.dse.mcts import MCTSDesignExplorer, MCTSNode
-from src.sysml.model import Block, Connector, Port, Requirement, SysMLModel, FeatureDirection
+from src.sysml.model import (
+    ConnectionEnd,
+    ConnectionUsage,
+    ElementRef,
+    FeatureDirection,
+    PortUsage,
+    PartDefinition,
+    RequirementDefinition,
+    SysMLModel,
+)
 
 
 class TestDesignParameter:
@@ -272,20 +281,22 @@ class TestDesignEvaluator:
     @pytest.fixture
     def simple_model(self):
         model = SysMLModel(name="TestSystem")
-        sensor = Block(name="Sensor")
-        sensor.add_port(Port(name="dataOut", direction=FeatureDirection.OUT))
-        ctrl = Block(name="Controller")
-        ctrl.add_port(Port(name="sensorIn", direction=FeatureDirection.IN))
-        model.add_block(sensor)
-        model.add_block(ctrl)
-        model.add_requirement(Requirement(name="R1", text="req"))
-        model.add_connector(Connector(
-            name="c1",
-            source_block_id="Sensor",
-            source_port_id="dataOut",
-            target_block_id="Controller",
-            target_port_id="sensorIn",
-        ))
+
+        sensor = PartDefinition(name="Sensor")
+        sensor.add_port(PortUsage(name="dataOut", direction=FeatureDirection.OUT))
+
+        ctrl = PartDefinition(name="Controller")
+        ctrl.add_port(PortUsage(name="sensorIn", direction=FeatureDirection.IN))
+
+        model.add_part_definition(sensor)
+        model.add_part_definition(ctrl)
+        model.add_requirement_definition(RequirementDefinition(name="R1", text="req"))
+
+        conn = ConnectionUsage(name="c1")
+        conn.add_end(ConnectionEnd(role_name="source", feature_ref=ElementRef(name="Sensor.dataOut", path="Sensor.dataOut")))
+        conn.add_end(ConnectionEnd(role_name="target", feature_ref=ElementRef(name="Controller.sensorIn", path="Controller.sensorIn")))
+        model.add_top_level_usage(conn)
+
         return model
 
     def test_evaluate_returns_result(self, evaluator, simple_model):

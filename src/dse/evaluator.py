@@ -168,39 +168,68 @@ class DesignEvaluator:
     # Default scoring functions
     # -------------------------------------------------------------------------
 
+    def _count_connections(self, model: SysMLModel) -> int:
+        """Count connection usages across top-level and part definitions."""
+        seen_ids = set()
+        count = 0
+
+        for usage in getattr(model, "top_level_usages", []):
+            if usage.__class__.__name__ != "ConnectionUsage":
+                continue
+            uid = getattr(usage, "id", None)
+            if uid and uid in seen_ids:
+                continue
+            if uid:
+                seen_ids.add(uid)
+            count += 1
+
+        for part in getattr(model, "part_definitions", []):
+            for conn in getattr(part, "connection_usages", []):
+                uid = getattr(conn, "id", None)
+                if uid and uid in seen_ids:
+                    continue
+                if uid:
+                    seen_ids.add(uid)
+                count += 1
+
+        return count
+
     def _score_functional_completeness(
         self, config: DesignConfiguration, model: SysMLModel
     ) -> float:
         """Score how well the model addresses functional requirements."""
-        if not model.requirements:
+        if not model.requirement_definitions:
             return 0.5  # No requirements to check
-        if not model.blocks:
+        if not model.part_definitions:
             return 0.0  # No design elements
-        # Heuristic: ratio of requirements to design blocks
-        coverage = min(1.0, len(model.blocks) / max(1, len(model.requirements)))
+        # Heuristic: ratio of requirements to design part definitions
+        coverage = min(
+            1.0,
+            len(model.part_definitions) / max(1, len(model.requirement_definitions)),
+        )
         return coverage
 
     def _score_structural_quality(
         self, config: DesignConfiguration, model: SysMLModel
     ) -> float:
         """Score the structural quality of the design."""
-        if not model.blocks:
+        if not model.part_definitions:
             return 0.0
-        # Reward having multiple blocks with ports (modular design)
-        blocks_with_ports = sum(1 for b in model.blocks if b.ports)
-        modularity = blocks_with_ports / len(model.blocks) if model.blocks else 0.0
+        # Reward having multiple parts with ports (modular design)
+        parts_with_ports = sum(1 for p in model.part_definitions if p.ports)
+        modularity = parts_with_ports / len(model.part_definitions)
         # Reward having connectors (connected design)
-        connectivity = min(1.0, len(model.connectors) / max(1, len(model.blocks)))
+        connectivity = min(1.0, self._count_connections(model) / max(1, len(model.part_definitions)))
         return 0.6 * modularity + 0.4 * connectivity
 
     def _score_interface_consistency(
         self, config: DesignConfiguration, model: SysMLModel
     ) -> float:
         """Score the consistency of interfaces (ports and connections)."""
-        if not model.blocks:
+        if not model.part_definitions:
             return 0.5
-        total_ports = sum(len(b.ports) for b in model.blocks)
-        connected_ports = len(model.connectors) * 2
+        total_ports = sum(len(p.ports) for p in model.part_definitions)
+        connected_ports = self._count_connections(model) * 2
         if total_ports == 0:
             return 0.5
         return min(1.0, connected_ports / total_ports)
@@ -209,13 +238,15 @@ class DesignEvaluator:
         self, config: DesignConfiguration, model: SysMLModel
     ) -> float:
         """Score the traceability from design to requirements."""
-        if not model.requirements:
+        if not model.requirement_definitions:
             return 0.5
-        # Check how many blocks reference requirements
-        blocks_with_traces = sum(1 for b in model.blocks if b.satisfies)
-        if not model.blocks:
+        if not model.part_definitions:
             return 0.0
-        return blocks_with_traces / len(model.blocks)
+        # Check how many part definitions reference requirements
+        parts_with_traces = sum(
+            1 for p in model.part_definitions if getattr(p, "satisfy_relationships", [])
+        )
+        return parts_with_traces / len(model.part_definitions)
 
     @staticmethod
     def _build_issue_message(criterion_name: str, score: float) -> str:

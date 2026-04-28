@@ -88,10 +88,11 @@ def main():
 
     print(f"\nModel Summary:")
     summary = result['model_summary']
-    print(f"  Blocks (components): {summary['blocks_count']}")
-    print(f"  Requirements: {summary['requirements_count']}")
-    print(f"  Connectors: {summary['connectors_count']}")
-    print(f"  Components: {', '.join(summary['blocks'])}")
+    print(f"  Part definitions: {summary['part_definitions_count']}")
+    print(f"  Requirement definitions: {summary['requirement_definitions_count']}")
+    print(f"  Top-level usages: {summary['top_level_usages_count']}")
+    part_names = [p.name for p in result['model'].part_definitions]
+    print(f"  Parts: {', '.join(part_names) if part_names else '(none)'}")
 
     print(f"\nDesign Space Exploration:")
     dse = result['design_space_summary']
