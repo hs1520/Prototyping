@@ -75,6 +75,7 @@ class Orchestrator:
         system_description: str,
         additional_requirements: Optional[List[str]] = None,
         mcts_iterations: int = 50,
+        parse_strict: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Run the complete prototyping pipeline.
@@ -103,9 +104,9 @@ class Orchestrator:
         # Phase 2: Initial Design Generation
         print("Phase 2: Initial Design Generation")
         print("-" * 40)
-        model = self._generate_initial_design(system_name, requirements)
+        model = self._generate_initial_design(system_name, requirements, parse_strict=parse_strict)
         self.state.current_model = model
-        print(f"  ✓ Generated model with {len(model.blocks)} blocks\n")
+        print(f"  ✓ Generated model with {len(model.part_definitions)} part definitions\n")
 
         # Phase 3: Design Space Exploration
         print("Phase 3: Design Space Exploration (MCTS)")
@@ -139,7 +140,7 @@ class Orchestrator:
         print(f"{'='*60}")
         print("Prototyping Complete!")
         print(f"  Final score: {final_score:.3f}")
-        print(f"  Blocks: {len(final_model.blocks)}")
+        print(f"  Part definitions: {len(final_model.part_definitions)}")
         print(f"  Requirements: {len(requirements)}")
         print(f"{'='*60}\n")
 
@@ -171,12 +172,15 @@ class Orchestrator:
         self,
         system_name: str,
         requirements: List[str],
+        parse_strict: Optional[bool] = None,
     ) -> SysMLModel:
         """Phase 2: Generate initial SysML v2 design."""
-        result = self.design_agent.run({
+        task = {
             "system_name": system_name,
             "requirements": requirements,
-        })
+            "parse_strict": (parse_strict if parse_strict is not None else False),
+        }
+        result = self.design_agent.run(task)
         if result.success and isinstance(result.output, SysMLModel):
             model = result.output
         else:

@@ -660,6 +660,11 @@ class RequirementUsage(Usage):
     nested_requirements: List["RequirementUsage"] = field(default_factory=list)
     # rhs assignment for `requirement xxx :>> y = z;` form
     rhs_assignment: Optional[str] = None
+    # When non-empty (one of "require"/"assume"/"assert"), this RequirementUsage
+    # is a constraint-membership reference like
+    #   `require rangeRequirement { :>> actualRange = simulatedRange; }`
+    # and is rendered with that keyword instead of the default `requirement`.
+    constraint_kind: str = ""
 
     def __str__(self) -> str:
         # Build header: keyword [<alias>] name [specs] [: type]
@@ -695,11 +700,16 @@ class RequirementUsage(Usage):
         spec_str = (" " + " ".join(spec_parts)) if spec_parts else ""
 
         # Header construction
+        # The default keyword is `requirement`, but when this usage represents
+        # a constraint-membership reference (`require <name> { :>> ... }`,
+        # `assume <name> { ... }`, `assert <name> { ... }`), the SysML keyword
+        # is the constraint kind instead.
+        keyword = self.constraint_kind if self.constraint_kind else "requirement"
         if anonymous_redef_target:
-            # `requirement :>> name [other-specs] [: Type]`
-            head = f"requirement :>> {anonymous_redef_target}{spec_str}{type_str}"
+            # `<keyword> :>> name [other-specs] [: Type]`
+            head = f"{keyword} :>> {anonymous_redef_target}{spec_str}{type_str}"
         else:
-            head = f"requirement{alias} {self.name}{spec_str}{type_str}"
+            head = f"{keyword}{alias} {self.name}{spec_str}{type_str}"
 
         # `requirement xxx :>> rangeRequirement = rangeRequirementSmall;` form:
         # if rhs_assignment is set and no body, render as one-liner.
@@ -756,12 +766,11 @@ class AttributeUsage(Usage):
         unit_str = f" [{self.unit}]" if self.unit else ""
         mult = f"[{self.multiplicity}]" if self.multiplicity and str(self.multiplicity) != "1" else ""
 
+        # Short-name alias: `<'A⋅h'>` — stored in metadata by the parser.
+        short_name = self.metadata.get("short_name", "") if hasattr(self, "metadata") and self.metadata else ""
+        alias_str = f" <'{short_name}'>" if short_name else ""
+
         # Render specializations (:> subsetting, :>> redefinition)
-        # Subsetting and redefinition come BEFORE the typing colon in SysML,
-        # but for simplicity we append them as separate clauses after the name.
-        # If the AttributeUsage redefines another attribute (e.g.
-        # `attribute :>> mass = 1000[kg]`), the name already IS the redefinition
-        # target — render as "attribute :>> name = value;".
         spec_parts: List[str] = []
         is_pure_redef = False
         for spec in self.specializations:
@@ -769,8 +778,6 @@ class AttributeUsage(Usage):
             if not target_str:
                 continue
             if spec.specialization_kind == "redefinition":
-                # If the redefinition target name matches our own name, we are
-                # an anonymous redefinition: render as ":>> target [= value]"
                 if target_str == self.name:
                     is_pure_redef = True
                     continue
@@ -779,11 +786,10 @@ class AttributeUsage(Usage):
                 spec_parts.append(f":> {target_str}")
 
         if is_pure_redef:
-            # `attribute :>> mass = 1000[kg];` form
             return f"{vis}{ro}attribute :>> {self.name}{default}{unit_str};"
 
         spec_str = (" " + " ".join(spec_parts)) if spec_parts else ""
-        return f"{vis}{ro}attribute {self.name}{mult}{spec_str}{type_str}{default}{unit_str};"
+        return f"{vis}{ro}attribute{alias_str} {self.name}{mult}{spec_str}{type_str}{default}{unit_str};"
 
 
 @dataclass
@@ -850,8 +856,10 @@ class ActionDefinition(Definition):
     # AnalysisCaseDefinition extras (also valid on ActionDefinition where unused):
     # `requirement vehicleRequirement : VehicleRequirement;` — feature-membership
     # `objective rangeAnalysisObjective { ... }`              — objective-membership
+    # `subject vehicle : Vehicle;`                            — subject-membership
     nested_requirements: List["RequirementUsage"] = field(default_factory=list)
     objective_requirement: Optional["RequirementUsage"] = None
+    subject_parameter: Optional[ActionParameter] = None
 
     # The SysML keyword used in __str__ output. Subclasses (e.g.
     # AnalysisDefinition) override this to render "analysis def" instead.
@@ -869,6 +877,12 @@ class ActionDefinition(Definition):
         lines = [f"{self._keyword} {self.name}{gen} {{"]
         if self.short_description:
             lines.append(f"    doc /* {self.short_description} */")
+        # Subject member (analysis def / requirement def) renders BEFORE
+        # parameters using the `subject` keyword instead of in/out.
+        if self.subject_parameter is not None:
+            sp = self.subject_parameter
+            sp_type = f" : {sp.type_ref.display()}" if sp.type_ref else ""
+            lines.append(f"    subject {sp.name}{sp_type};")
         # Parameters render with their own direction / return / specializations.
         for p in self.parameters:
             for ln in str(p).splitlines():

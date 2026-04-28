@@ -43,9 +43,11 @@ class PrototypingPipeline:
         rag_namespace: str = "SysML-V2-Release",
         quality_threshold: float = 0.70,
         max_iterations: int = 3,
+        parse_strict: bool = False,
     ):
         self.llm = llm
         self.pinecone = pinecone_wrapper or PineconeWrapper(default_namespace=rag_namespace)
+        self.parse_strict = parse_strict
         self.rag = RAGRetriever(
             llm=self.llm,
             pinecone_wrapper=self.pinecone,
@@ -65,6 +67,7 @@ class PrototypingPipeline:
         description: str,
         additional_requirements: Optional[List[str]] = None,
         mcts_iterations: int = 50,
+        parse_strict: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Run the complete AI-assisted prototyping pipeline.
@@ -89,12 +92,14 @@ class PrototypingPipeline:
             system_description=description,
             additional_requirements=additional_requirements,
             mcts_iterations=mcts_iterations,
+            parse_strict=(parse_strict if parse_strict is not None else self.parse_strict),
         )
 
     def quick_design(
         self,
         system_name: str,
         requirements: List[str],
+        parse_strict: Optional[bool] = None,
     ) -> SysMLModel:
         """
         Quickly generate a SysML v2 model from a list of requirements.
@@ -111,13 +116,16 @@ class PrototypingPipeline:
         from ..agents.design_agent import DesignAgent
         from ..agents.requirements_agent import RequirementsAgent
 
-        design_agent = DesignAgent(self.llm, self.rag, ast_client=self.ast_client)
+        # Create DesignAgent without the old ast_client parameter
+        design_agent = DesignAgent(self.llm, self.rag)
         req_agent = RequirementsAgent(self.llm, self.rag)
 
-        result = design_agent.run({
+        task = {
             "system_name": system_name,
             "requirements": requirements,
-        })
+            "parse_strict": (parse_strict if parse_strict is not None else self.parse_strict),
+        }
+        result = design_agent.run(task)
 
         if result.success and isinstance(result.output, SysMLModel):
             model = result.output

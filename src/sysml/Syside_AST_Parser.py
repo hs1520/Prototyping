@@ -39,12 +39,14 @@ from typing import Any, Iterable, List, Optional, Tuple
 
 import syside
 
-from src.sysml.model import (
+from .model import (
     # core
     SysMLModel,
+    Package,
     ElementRef,
     SourcePoint,
     SourceSpan,
+    Documentation,
     Diagnostic,
     DiagnosticSeverity,
     VisibilityKind,
@@ -55,12 +57,15 @@ from src.sysml.model import (
     Generalization,
     Specialization,
     SatisfyRelationship,
+    RefineRelationship,
     # definitions
     PartDefinition,
+    ItemDefinition,
     PortDefinition,
     InterfaceDefinition,
     AttributeDefinition,
     ConstraintDefinition,
+    ConnectionDefinition,
     ActionDefinition,
     AnalysisDefinition,
     ActionParameter,
@@ -542,6 +547,50 @@ def _is_objective_member(feat) -> bool:
 
 def _is_requirement_constraint_member(feat) -> bool:
     return _owning_membership_kind(feat) == "RequirementConstraintMembership"
+
+
+def _extract_constraint_kind(feat) -> str:
+    """
+    Determine whether a RequirementConstraintMembership member is `assume`,
+    `require`, or `assert`.
+
+    Diagnostic confirmed:
+    - `kind` field exists on the membership, but its value is always
+      `RequirementConstraintKind.Requirement` (not Assume/Require/Assert),
+      so we CANNOT distinguish by enum value — strategy 1 is disabled.
+    - `cst_node` on the membership carries the full source text starting
+      with the keyword (`require constraint {...}`, `assume constraint {...}`,
+      `require rangeRequirement {...}`).  This is the reliable strategy.
+    """
+    try:
+        om = getattr(feat, "owning_membership", None)
+        if om is None or callable(om):
+            return "assert"
+
+        # Strategy: read the membership's cst_node src directly.
+        # The src starts with the SysML keyword (assume/require/assert).
+        cst = getattr(om, "cst_node", None)
+        if cst is not None:
+            start = getattr(cst, "start_byte", None)
+            end   = getattr(cst, "end_byte",   None)
+            if (start is not None and end is not None
+                    and not callable(start) and not callable(end)):
+                # Use global _SOURCE_BYTES (set by parse_sysml_to_model)
+                raw = _SOURCE_BYTES[int(start):int(end)].decode(
+                    "utf-8", errors="replace").lstrip().lower()
+                # Match the WHOLE first word to avoid "require" matching
+                # inside "RequirementConstraintKind.Requirement".
+                first_word = raw.split()[0] if raw.split() else ""
+                if first_word == "assume":
+                    return "assume"
+                if first_word == "require":
+                    return "require"
+                if first_word == "assert":
+                    return "assert"
+
+    except Exception:
+        pass
+    return "assert"
 
 
 # =============================================================================
@@ -1702,14 +1751,27 @@ def _map_requirement_definition(node) -> RequirementDefinition:
             continue
 
         if om_kind == "RequirementConstraintMembership":
-            # `assume constraint { vehicle.mass < 900[kg] }`
+            # Two variants live under this membership:
+            #   1. ConstraintUsage -> `require constraint { actualRange >= requiredRange }`
+            #   2. RequirementUsage -> `require efficiencyRequirement { :>> actualEfficiency = ... }`
+            kind = _extract_constraint_kind(feat)
+
+            if "RequirementUsage" in ftname:
+                # Form 2: a nested requirement reference with a constraint
+                # kind keyword.  RequirementDefinition has no native slot for
+                # nested requirement references, so we render the inner usage
+                # to text and stash it as a constraint_clause.  The renderer
+                # produces `<kind> constraint { <text> }` which matches the
+                # spec well enough for EVSample (this form does not appear in
+                # any RequirementDefinition body in EVSample, so this path is
+                # essentially dead but kept for safety).
+                inner = _map_requirement_usage(feat)
+                inner.constraint_kind = kind
+                req.constraint_clauses.append((kind, str(inner)))
+                continue
+
+            # Form 1: plain ConstraintUsage carrying just an expression.
             raw = _cst_text(feat).strip().rstrip(";")
-            kind = "assert"
-            for k in ("assume", "require", "assert"):
-                if raw.lower().startswith(k):
-                    kind = k
-                    raw = raw[len(k):].strip()
-                    break
             if raw.lower().startswith("constraint"):
                 raw = raw[len("constraint"):].strip()
             if raw.startswith("{") and raw.endswith("}"):
@@ -1722,12 +1784,10 @@ def _map_requirement_definition(node) -> RequirementDefinition:
             req.nested_attributes.append(_map_attribute_usage(feat))
             continue
 
-        # Bare `require constraint { actualRange >= requiredRange }` — the
-        # outer feat may be a ConstraintUsage, not wrapped in
-        # RequirementConstraintMembership.  Handle by class name.
+        # Bare ConstraintUsage not wrapped in RequirementConstraintMembership
         if "ConstraintUsage" in ftname:
+            kind = _extract_constraint_kind(feat) or "assert"
             raw = _cst_text(feat).strip().rstrip(";")
-            kind = "assert"
             for k in ("require", "assume", "assert"):
                 if raw.lower().startswith(k):
                     kind = k
@@ -1746,7 +1806,15 @@ def _map_requirement_definition(node) -> RequirementDefinition:
 def _map_attribute_usage(node) -> AttributeUsage:
     subs = _extract_subsettings(node)
 
-    name = _clean_name(_real_name(node))
+    # `declared_name` may be a quoted identifier like `'ampere hour'`
+    # Use _real_name (which reads declared_name) but do NOT strip quotes here —
+    # quotes are part of the SysML identifier and must round-trip correctly.
+    raw_name = _real_name(node)          # may have surrounding quotes already
+    name = _clean_name(raw_name) if raw_name else ""
+    # If _clean_name stripped the quotes, re-add them when the source name
+    # contains a space (i.e. it was originally a quoted identifier).
+    if raw_name and " " in raw_name and not name.startswith("'"):
+        name = f"'{raw_name.strip()}'"
     if not name and subs and subs[0].target:
         name = subs[0].target.display()
     if not name:
@@ -1764,8 +1832,24 @@ def _map_attribute_usage(node) -> AttributeUsage:
     attr.type_ref = _extract_feature_typing_ref(node)
     attr.default_value = _extract_default_value(node)
 
-    # Unit from measurement reference or type
-    attr.unit = _extract_unit_ref(node)
+    # Short name alias: `<'A⋅h'>` — stored in declared_short_name on the node.
+    # We stash it in a metadata entry so AttributeUsage.__str__ can render it.
+    try:
+        sn = getattr(node, "declared_short_name", None)
+        if sn and not callable(sn):
+            sn_str = str(sn).strip()
+            if sn_str:
+                attr.metadata["short_name"] = sn_str
+    except Exception:
+        pass
+
+    # Unit from measurement reference or type.
+    # Skip for unit-definition attributes (those that carry a short_name alias
+    # like `attribute <'A⋅h'> 'ampere hour' : ElectricChargeUnit = A*h;`).
+    # For these, the unit IS the attribute itself — attaching a unit suffix
+    # would produce a spurious `[h]` from the alias text.
+    if not attr.metadata.get("short_name"):
+        attr.unit = _extract_unit_ref(node)
 
     try:
         attr.is_read_only = bool(getattr(node, "is_constant", False))
@@ -1814,7 +1898,7 @@ def _map_requirement_usage(node) -> RequirementUsage:
     subs = _extract_subsettings(node)
     name = _clean_name(_real_name(node))
     if not name and subs:
-        # Anonymous redefinition: take name from the first redef target
+        # Anonymous redefinition: take name from the first redefinition target
         for s in subs:
             if s.specialization_kind == "redefinition" and s.target:
                 name = s.target.display()
@@ -1866,16 +1950,58 @@ def _map_requirement_usage(node) -> RequirementUsage:
 
         # ── nested requirement constraint members ──────────────────────────
         if om_kind == "RequirementConstraintMembership":
-            # `assume constraint { ... }` or `require constraint { ... }`
+            # Two forms under this membership (differentiated by src text):
+            #   1. `require rangeRequirement { :>> actualRange = ... }`
+            #      — src does NOT contain the word "constraint"
+            #      — renders as a named requirement-reference with constraint keyword
+            #   2. `assume constraint { vehicle.mass < 900[kg] }`
+            #      — src DOES contain "constraint"
+            #      — renders as a constraint expression
+            kind = _extract_constraint_kind(feat)
+
+            # Read the MEMBERSHIP src to decide which form this is.
+            # (The feat's own cst may start at `constraint { ... }` or at the
+            # requirement name, depending on syside internal structure.)
+            om = getattr(feat, "owning_membership", None)
+            om_src = ""
+            if om:
+                cst = getattr(om, "cst_node", None)
+                if cst:
+                    s = getattr(cst, "start_byte", None)
+                    e = getattr(cst, "end_byte", None)
+                    if s is not None and e is not None and not callable(s):
+                        om_src = _SOURCE_BYTES[int(s):int(e)].decode(
+                            "utf-8", errors="replace").strip()
+
+            # Detect form: if membership src contains "constraint {" it's form 2.
+            # Otherwise it's form 1 (require <name> { ... }).
+            is_constraint_form = "constraint" in om_src.lower()
+
+            if not is_constraint_form:
+                # Form 1: `require <reqName> { ... }` — render as named req ref.
+                # Build a synthetic RequirementUsage from the feat or from the
+                # membership src directly (most reliable).
+                if "RequirementUsage" in ftname:
+                    inner = _map_requirement_usage(feat)
+                else:
+                    # Feat is something else (ConstraintUsage, etc.).
+                    # Build a minimal RequirementUsage from the membership src.
+                    inner = RequirementUsage(name="")
+                    # Extract name: after the kind keyword, before '{'
+                    after_kw = om_src[len(kind):].strip() if om_src.lower().startswith(kind) else om_src
+                    req_name = after_kw.split("{")[0].strip()
+                    inner.name = req_name
+                    # Extract body attributes from the feat's owned_features
+                    for sub_feat in _iter_safe(getattr(feat, "owned_features", None)):
+                        sub_tname = type(sub_feat).__name__
+                        if "AttributeUsage" in sub_tname or "ReferenceUsage" in sub_tname:
+                            inner.nested_attributes.append(_map_attribute_usage(sub_feat))
+                inner.constraint_kind = kind
+                ru.nested_requirements.append(inner)
+                continue
+
+            # Form 2: `assume/require/assert constraint { <expr> }`
             raw = _cst_text(feat).strip().rstrip(";")
-            # Detect kind from leading keyword
-            kind = "assert"
-            for k in ("assume", "require", "assert"):
-                if raw.lower().startswith(k):
-                    kind = k
-                    raw = raw[len(k):].strip()
-                    break
-            # Strip leading "constraint { ... }" wrapper to get just the expression
             if raw.lower().startswith("constraint"):
                 raw = raw[len("constraint"):].strip()
             if raw.startswith("{") and raw.endswith("}"):
@@ -2259,12 +2385,9 @@ def _map_analysis_definition(node) -> AnalysisDefinition:
         elif "RequirementUsage" in tname:
             ad.nested_requirements.append(_map_requirement_usage(feat))
         elif om_kind == "SubjectMembership":
-            # `subject vehicle : Vehicle;` — render as a non-direction parameter
-            # using ActionParameter so it round-trips. We mark it with a metadata
-            # tag so future code can distinguish it.
-            p = _map_action_parameter(feat)
-            p.metadata["membership"] = "subject"
-            ad.parameters.append(p)
+            # `subject vehicle : Vehicle;` — store as a single subject_parameter
+            # so __str__ renders it with the `subject` keyword (not `in`/`out`).
+            ad.subject_parameter = _map_action_parameter(feat)
         else:
             # ReturnParameterMembership, ParameterMembership, FeatureMembership(other)
             ad.parameters.append(_map_action_parameter(feat))
@@ -2301,6 +2424,8 @@ def _map_action_definition_full(node) -> ActionDefinition:
             action_def.objective_requirement = _map_requirement_usage(feat)
         elif "RequirementUsage" in tname:
             action_def.nested_requirements.append(_map_requirement_usage(feat))
+        elif om_kind == "SubjectMembership":
+            action_def.subject_parameter = _map_action_parameter(feat)
         else:
             action_def.parameters.append(_map_action_parameter(feat))
     return action_def
@@ -2724,18 +2849,19 @@ def _run_sema(mutex) -> None:
 def _dispatch_member(node, model: SysMLModel, seen_connections: set) -> None:
     """Route a top-level AST member to the appropriate model adder."""
 
+    def _cls(name: str):
+        return getattr(syside, name, None)
+
     try:
         tname = type(node).__name__
 
         # ---- Requirements ----
-        req_def_cls = getattr(syside, "RequirementDefinition", None)
-        if req_def_cls and isinstance(node, req_def_cls):
+        if _cls("RequirementDefinition") and isinstance(node, _cls("RequirementDefinition")):
             model.add_requirement_definition(_map_requirement_definition(node))
             return
 
         # ---- Part definitions ----
-        part_def_cls = getattr(syside, "PartDefinition", None)
-        if part_def_cls and isinstance(node, part_def_cls):
+        if _cls("PartDefinition") and isinstance(node, _cls("PartDefinition")):
             _map_part_definition(node, model)
             return
 
@@ -2746,58 +2872,52 @@ def _dispatch_member(node, model: SysMLModel, seen_connections: set) -> None:
         # ActionDefinition isinstance check below would swallow them and they
         # would be rendered as plain `action def` in round-trip text.
         analysis_types = tuple(t for t in (
-            getattr(syside, "AnalysisCaseDefinition", None),
-            getattr(syside, "VerificationCaseDefinition", None),
-            getattr(syside, "UseCaseDefinition", None),
-            getattr(syside, "CaseDefinition", None),
+            _cls("AnalysisCaseDefinition"),
+            _cls("VerificationCaseDefinition"),
+            _cls("UseCaseDefinition"),
+            _cls("CaseDefinition"),
         ) if t)
         if analysis_types and isinstance(node, analysis_types):
             model.add_analysis_definition(_map_analysis_definition(node))
             return
 
-        act_def_cls = getattr(syside, "ActionDefinition", None)
-        if act_def_cls and isinstance(node, act_def_cls):
+        if _cls("ActionDefinition") and isinstance(node, _cls("ActionDefinition")):
             model.add_action_definition(_map_action_definition(node))
             return
 
         # ---- Attribute definitions ----
-        attr_def_cls = getattr(syside, "AttributeDefinition", None)
-        if attr_def_cls and isinstance(node, attr_def_cls):
+        if _cls("AttributeDefinition") and isinstance(node, _cls("AttributeDefinition")):
             model.add_attribute_definition(_map_attribute_definition(node))
             return
 
         # ---- Port definitions ----
-        port_def_cls = getattr(syside, "PortDefinition", None)
-        if port_def_cls and isinstance(node, port_def_cls):
+        if _cls("PortDefinition") and isinstance(node, _cls("PortDefinition")):
             model.add_port_definition(_map_port_definition(node))
             return
 
         # ---- Interface definitions ----
-        iface_def_cls = getattr(syside, "InterfaceDefinition", None)
-        if iface_def_cls and isinstance(node, iface_def_cls):
+        if _cls("InterfaceDefinition") and isinstance(node, _cls("InterfaceDefinition")):
             model.add_interface_definition(_map_interface_definition(node))
             return
 
         # ---- Constraint definitions ----
-        constraint_def_cls = getattr(syside, "ConstraintDefinition", None)
-        if constraint_def_cls and isinstance(node, constraint_def_cls):
+        if _cls("ConstraintDefinition") and isinstance(node, _cls("ConstraintDefinition")):
             model.add_constraint_definition(_map_constraint_definition(node))
             return
 
         # ---- Metadata definitions ----
-        meta_def_cls = getattr(syside, "MetadataDefinition", None)
-        if meta_def_cls and isinstance(node, meta_def_cls):
+        if _cls("MetadataDefinition") and isinstance(node, _cls("MetadataDefinition")):
             model.add_metadata_definition(_map_metadata_definition(node))
             return
 
         # ---- Connection / Binding / Flow usages ----
         conn_types = tuple(t for t in (
-            getattr(syside, "ConnectionUsage", None),
-            getattr(syside, "BindingConnectorAsUsage", None),
-            getattr(syside, "FlowConnectionUsage", None),
-            getattr(syside, "FlowUsage", None),
-            getattr(syside, "SuccessionFlowUsage", None),
-            getattr(syside, "SuccessionAsUsage", None),
+            _cls("ConnectionUsage"),
+            _cls("BindingConnectorAsUsage"),
+            _cls("FlowConnectionUsage"),
+            _cls("FlowUsage"),
+            _cls("SuccessionFlowUsage"),
+            _cls("SuccessionAsUsage"),
         ) if t)
         if conn_types and isinstance(node, conn_types):
             eid = _extract_element_id(node)
@@ -2811,10 +2931,10 @@ def _dispatch_member(node, model: SysMLModel, seen_connections: set) -> None:
         # from ActionUsage / PartUsage in some syside builds — must be checked
         # BEFORE the generic PartUsage branch.
         au_types = tuple(t for t in (
-            getattr(syside, "AnalysisCaseUsage", None),
-            getattr(syside, "VerificationCaseUsage", None),
-            getattr(syside, "UseCaseUsage", None),
-            getattr(syside, "CaseUsage", None),
+            _cls("AnalysisCaseUsage"),
+            _cls("VerificationCaseUsage"),
+            _cls("UseCaseUsage"),
+            _cls("CaseUsage"),
         ) if t)
         if au_types and isinstance(node, au_types):
             obj = _map_analysis_usage(node)
@@ -2822,15 +2942,13 @@ def _dispatch_member(node, model: SysMLModel, seen_connections: set) -> None:
             return
 
         # ---- Top-level RequirementUsage ----
-        req_usage_cls = getattr(syside, "RequirementUsage", None)
-        if req_usage_cls and isinstance(node, req_usage_cls):
+        if _cls("RequirementUsage") and isinstance(node, _cls("RequirementUsage")):
             obj = _map_requirement_usage(node)
             model.add_top_level_usage(obj)
             return
 
         # ---- Part usages ----
-        part_usage_cls = getattr(syside, "PartUsage", None)
-        if part_usage_cls and isinstance(node, part_usage_cls):
+        if _cls("PartUsage") and isinstance(node, _cls("PartUsage")):
             obj = _map_part_usage(node)
             if isinstance(obj, SpatialPartUsage):
                 _extract_nested_members_into(obj, node, model)
@@ -2839,17 +2957,22 @@ def _dispatch_member(node, model: SysMLModel, seen_connections: set) -> None:
             model.add_top_level_usage(obj)
             return
 
+        # ---- Top-level AttributeUsage (e.g. unit declarations like
+        #      `attribute <'A⋅h'> 'ampere hour' : ElectricChargeUnit = A*h;`)
+        if _cls("AttributeUsage") and isinstance(node, _cls("AttributeUsage")):
+            obj = _map_attribute_usage(node)
+            model.add_top_level_usage(obj)
+            return
+
         # ---- Item usages ----
-        item_usage_cls = getattr(syside, "ItemUsage", None)
-        if item_usage_cls and isinstance(node, item_usage_cls):
+        if _cls("ItemUsage") and isinstance(node, _cls("ItemUsage")):
             obj = _map_item_usage(node)
             _extract_nested_members_into(obj, node, model)
             model.add_top_level_usage(obj)
             return
 
         # ---- Packages (recursive) ----
-        pkg_cls = getattr(syside, "Package", None)
-        if pkg_cls and isinstance(node, pkg_cls):
+        if _cls("Package") and isinstance(node, _cls("Package")):
             if not model.namespace:
                 pkg_name = _real_name(node)
                 if pkg_name:
@@ -2932,18 +3055,12 @@ def parse_sysml_to_model(
 
         source_span: Optional[SourceSpan] = None
         try:
-            # 尝试从syside Diagnostic对象的range属性读取行列信息
-            diag_range = getattr(diag, "range", None)
-            if diag_range is not None:
-                start_point = getattr(diag_range, "start", None)
-                end_point = getattr(diag_range, "end", None)
-                if start_point is not None and end_point is not None:
-                    source_span = SourceSpan(
-                        start=SourcePoint(line=getattr(start_point, "line", 0) + 1,
-                                        character=getattr(start_point, "character", 0)),
-                        end=SourcePoint(line=getattr(end_point, "line", 0) + 1,
-                                      character=getattr(end_point, "character", 0)),
-                    )
+            source_span = SourceSpan(
+                start=SourcePoint(line=diag.range.start.line + 1,
+                                  character=diag.range.start.character),
+                end=SourcePoint(line=diag.range.end.line + 1,
+                                character=diag.range.end.character),
+            )
         except Exception:
             pass
 
@@ -3059,3 +3176,4 @@ if __name__ == "__main__":
 
     print("\n─── Round-trip SysML Text ───────────────────────────")
     print(extracted.to_sysml_text())
+

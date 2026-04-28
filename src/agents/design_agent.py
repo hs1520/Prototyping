@@ -20,6 +20,7 @@ from ..sysml.model import (
     ElementRef,
     SysMLModel,
 )
+from src.sysml.Syside_AST_Parser import parse_sysml_to_model
 
 
 class DesignAgent(BaseAgent):
@@ -113,9 +114,50 @@ Always provide SysML v2 code in ```sysml blocks.
         if not cot_result.extracted_sysml:
             raise RuntimeError("[SysML_EXTRACTION_ERROR] 未提取到SysML v2 design.")
 
-        # TODO: 未来集成Syside AST Parser来解析和映射SysML文本到model
-        # from ..sysml.Syside_AST_Parser import parse_sysml_to_model
-        # model = parse_sysml_to_model(cot_result.extracted_sysml, model_name=system_name)
+        # Integrate Syside AST Parser: parse the extracted SysML text into a SysMLModel.
+        parse_strict = task.get("parse_strict", False)
+        fail_on_parse_error = task.get("fail_on_parse_error", False)
+
+        parse_diagnostics = []
+        try:
+            parsed = parse_sysml_to_model(cot_result.extracted_sysml, model_name=system_name, strict=parse_strict)
+
+            # Serialize diagnostics into lightweight dicts for metadata
+            for d in getattr(parsed, "diagnostics", []):
+                sev = getattr(d, "severity", None)
+                try:
+                    sev_str = sev.value if hasattr(sev, "value") else str(sev)
+                except Exception:
+                    sev_str = str(sev)
+                msg = getattr(d, "message", str(d))
+                span = getattr(d, "source_span", None)
+                source_span = None
+                if span is not None:
+                    start = getattr(span, "start", None)
+                    end = getattr(span, "end", None)
+                    if start is not None and end is not None:
+                        source_span = {
+                            "start": {"line": getattr(start, "line", 0), "character": getattr(start, "character", 0)},
+                            "end": {"line": getattr(end, "line", 0), "character": getattr(end, "character", 0)},
+                        }
+                parse_diagnostics.append({"severity": sev_str, "message": msg, "source_span": source_span})
+
+            # Replace existing model with parsed model (replacement strategy)
+            model = parsed
+
+        except Exception as e:
+            # Parsing failed unexpectedly
+            parse_error_msg = str(e)
+            metadata = {"parse_error": parse_error_msg, "parse_diagnostics": parse_diagnostics}
+            result = AgentResult(
+                agent_name=self.name,
+                success=not fail_on_parse_error,
+                output=model,
+                reasoning=cot_result.final_answer,
+                metadata=metadata,
+            )
+            self.record_result(result)
+            return result
 
         self._apply_requirement_traceability(model, requirements)
 
@@ -128,6 +170,7 @@ Always provide SysML v2 code in ```sysml blocks.
                 "sysml_extracted": cot_result.extracted_sysml is not None,
                 "thought_steps": len(cot_result.thought_steps),
                 "part_definitions_created": len(model.part_definitions),
+                "parse_diagnostics": parse_diagnostics,
             },
         )
         self.record_result(result)

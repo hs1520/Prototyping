@@ -52,7 +52,7 @@ def main():
     print("=" * 70)
     print()
 
-    llm = create_llm(provider="github_copilot")
+    llm = create_llm(provider="vertex")
     print(f"Using LLM: {llm.__class__.__name__}")
     print()
 
