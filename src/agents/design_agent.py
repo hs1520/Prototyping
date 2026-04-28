@@ -11,14 +11,13 @@ import re
 from typing import Any, Dict, List, Optional
 
 from .base_agent import AgentResult, BaseAgent
-from ..config import Config
 from ..llm.chain_of_thought import ChainOfThoughtPrompter
 from ..llm.interface import LLMInterface
 from ..rag.retriever import RAGRetriever
-from ..sysml.ast_adapter import SysMLAstAdapter, SysMLAstMappingError
-from ..sysml.ast_client import SysMLAstClient, SysMLAstClientError
 from ..sysml.model import (
-    Block,
+    PartDefinition,
+    SatisfyRelationship,
+    ElementRef,
     SysMLModel,
 )
 
@@ -53,19 +52,10 @@ Always provide SysML v2 code in ```sysml blocks.
         self,
         llm: LLMInterface,
         rag_retriever: Optional[RAGRetriever] = None,
-        ast_client: Optional[SysMLAstClient] = None,
-        ast_adapter: Optional[SysMLAstAdapter] = None,
     ):
         super().__init__("DesignAgent", llm, rag_retriever)
         self.cot = ChainOfThoughtPrompter(llm)
         self.cot.system_prompt = self.SYSTEM_PROMPT
-        self.ast_adapter = ast_adapter or SysMLAstAdapter()
-        self.ast_client = ast_client
-        if self.ast_client is None and Config.SYSML_AST_SERVICE_URL.strip():
-            try:
-                self.ast_client = SysMLAstClient()
-            except SysMLAstClientError:
-                self.ast_client = None
 
     def run(self, task: Dict[str, Any]) -> AgentResult:
         """
@@ -85,8 +75,6 @@ Always provide SysML v2 code in ```sysml blocks.
         existing_model = task.get("existing_model")
         feedback = task.get("refinement_feedback", "")
         refinement_issues = task.get("refinement_issues", [])
-        ast_payload = task.get("sysml_ast")
-        source_uri = task.get("source_uri", "")
 
         # Augment context with RAG
         # TODO query需要改造 3条不科学
@@ -122,25 +110,12 @@ Always provide SysML v2 code in ```sysml blocks.
             description=f"Auto-generated design for {system_name}",
         )
 
-        if ast_payload is None:
-            if not cot_result.extracted_sysml:
-                raise RuntimeError("[AST_INPUT_ERROR] 未提取到SysML v2 design.")
-            if self.ast_client is None:
-                raise RuntimeError(
-                    "[AST_CONFIG_ERROR] DesignAgent runs in AST-only mode but no AST client is configured. "
-                    "Set SYSML_AST_SERVICE_URL or inject ast_client."
-                )
-            try:
-                ast_payload = self.ast_client.parse_text(
-                    cot_result.extracted_sysml,
-                    source_uri=source_uri,
-                )
-            except SysMLAstClientError as exc:
-                raise RuntimeError(f"[AST_SERVICE_ERROR] SysML AST service failed: {exc}") from exc
+        if not cot_result.extracted_sysml:
+            raise RuntimeError("[SysML_EXTRACTION_ERROR] 未提取到SysML v2 design.")
 
-        if ast_payload is None:
-            raise RuntimeError("[AST_INPUT_ERROR] 未提取到SysML v2 design.")
-        model = self._populate_model_from_ast(model, ast_payload)
+        # TODO: 未来集成Syside AST Parser来解析和映射SysML文本到model
+        # from ..sysml.Syside_AST_Parser import parse_sysml_to_model
+        # model = parse_sysml_to_model(cot_result.extracted_sysml, model_name=system_name)
 
         self._apply_requirement_traceability(model, requirements)
 
@@ -152,67 +127,40 @@ Always provide SysML v2 code in ```sysml blocks.
             metadata={
                 "sysml_extracted": cot_result.extracted_sysml is not None,
                 "thought_steps": len(cot_result.thought_steps),
-                "blocks_created": len(model.blocks),
+                "part_definitions_created": len(model.part_definitions),
             },
         )
         self.record_result(result)
         return result
 
-    def _populate_model_from_ast(
-        self,
-        model: SysMLModel,
-        ast_payload: Dict[str, Any],
-    ) -> SysMLModel:
-        """Populate the model from a JSON AST payload."""
-        try:
-            mapped = self.ast_adapter.ast_to_model(ast_payload, existing_model=model)
-        except SysMLAstMappingError as exc:
-            raise RuntimeError(f"[AST_MAPPING_ERROR] SysML AST mapping failed: {exc}") from exc
-        mapped.add_mapping_note("Populated via AST adapter")
-        return mapped
-
-    # AST-only mode: keep method name for compatibility with older call sites.
-    def _populate_model_from_sysml(
-        self, model: SysMLModel, sysml_text: str
-    ) -> None:
-        raise RuntimeError(
-            "[AST_LEGACY_REMOVED] Regex parser path has been removed. "
-            "Use AST payloads via sysml_ast or ast_client."
-        )
-
-    #TODO 存在问题 建议用Embedding做 同时当前无置信度/不可解释/没有一对多分配
     def _apply_requirement_traceability(self, model: SysMLModel, requirements: List[str]) -> None:
-        """Ensure each requirement is allocated to at least one design block when possible."""
-        if not requirements or not model.blocks:
+        """Ensure each requirement is allocated to at least one design component when possible."""
+        if not requirements or not model.part_definitions:
             return
 
         controller_like = next(
-            (block for block in model.blocks if "controller" in block.name.lower()),
+            (part for part in model.part_definitions if "controller" in part.name.lower()),
             None,
         )
 
-        def score_block(req_text: str, block: Block) -> int:
+        def score_part(req_text: str, part: PartDefinition) -> int:
             req_tokens = set(re.findall(r"[A-Za-z0-9_]+", req_text.lower()))
-            block_tokens = set(re.findall(r"[A-Za-z0-9_]+", block.name.lower()))
-            block_tokens.update(token.lower() for port in block.ports for token in [port.name])
-            block_tokens.update(token.lower() for attr in block.attributes for token in [attr.name])
-            return len(req_tokens & block_tokens)
+            part_tokens = set(re.findall(r"[A-Za-z0-9_]+", part.name.lower()))
+            part_tokens.update(token.lower() for attr in part.attributes for token in [attr.name])
+            return len(req_tokens & part_tokens)
 
         for req_text in requirements:
             req_id_match = re.match(r"(REQ-\w+-\d+|REQ-\d+):\s*(.*)", req_text)
             req_id = req_id_match.group(1).replace("-", "_") if req_id_match else req_text.split(":", 1)[0].replace("-", "_")
-            if any(req_id in block.satisfies for block in model.blocks):
+
+            # Check if requirement is already satisfied
+            if any(req_id in str(part.satisfy_relationships) for part in model.part_definitions):
                 continue
 
-            best_block = max(model.blocks, key=lambda block: score_block(req_text, block), default=None)
-            chosen_block = best_block if best_block and score_block(req_text, best_block) > 0 else controller_like or model.blocks[0]
-            chosen_block.add_satisfies(req_id)
-
-    def _populate_model_heuristically(
-        self,
-        model: SysMLModel,
-        system_name: str,
-        requirements: List[str],
-    ) -> None:
-        raise RuntimeError("[AST_LEGACY_REMOVED] Heuristic parser fallback has been removed in AST-only mode.")
-
+            best_part = max(
+                model.part_definitions,
+                key=lambda part: score_part(req_text, part),
+                default=None
+            )
+            chosen_part = best_part if best_part and score_part(req_text, best_part) > 0 else controller_like or model.part_definitions[0]
+            chosen_part.add_satisfy(SatisfyRelationship(source=chosen_part.to_ref(), target=ElementRef(name=req_id)))

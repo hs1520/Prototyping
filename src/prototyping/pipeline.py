@@ -13,7 +13,6 @@ from ..agents.orchestrator import Orchestrator
 from ..llm.interface import LLMInterface
 from ..rag.pinecone_wrapper import PineconeWrapper
 from ..rag.retriever import RAGRetriever
-from ..sysml.ast_client import SysMLAstClient
 from ..sysml.model import SysMLModel
 
 
@@ -40,14 +39,12 @@ class PrototypingPipeline:
         self,
         llm: LLMInterface,
         pinecone_wrapper: Optional[PineconeWrapper] = None,
-        ast_client: Optional[SysMLAstClient] = None,
         rag_index_name: str = "ai-prototyping-sysml-v2",
         rag_namespace: str = "SysML-V2-Release",
         quality_threshold: float = 0.70,
         max_iterations: int = 3,
     ):
         self.llm = llm
-        self.ast_client = ast_client
         self.pinecone = pinecone_wrapper or PineconeWrapper(default_namespace=rag_namespace)
         self.rag = RAGRetriever(
             llm=self.llm,
@@ -58,7 +55,6 @@ class PrototypingPipeline:
         self.orchestrator = Orchestrator(
             llm=self.llm,
             rag_retriever=self.rag,
-            ast_client=self.ast_client,
             quality_threshold=quality_threshold,
             max_iterations=max_iterations,
         )

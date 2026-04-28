@@ -16,3 +16,4 @@ google-genai
 langsmith
 pinecone
 gh
+syside

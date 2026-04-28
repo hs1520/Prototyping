@@ -14,7 +14,7 @@ from .base_agent import AgentResult, BaseAgent
 from ..llm.chain_of_thought import ChainOfThoughtPrompter
 from ..llm.interface import LLMInterface
 from ..rag.retriever import RAGRetriever
-from ..sysml.model import Requirement, SysMLModel
+from ..sysml.model import RequirementDefinition, SysMLModel
 
 
 class RequirementsAgent(BaseAgent):
@@ -135,12 +135,12 @@ Use the format: REQ-{category}-{number}: [text]
                 req_id = f"REQ_{i+1:03d}"
                 req_content = req_text.strip()
 
-            req = Requirement(
+            req = RequirementDefinition(
                 name=req_id,
                 text=req_content,
                 short_description=req_content[:80],
             )
-            model.add_requirement(req)
+            model.add_requirement_definition(req)
 
     def _parse_requirements(self, text: str) -> List[str]:
         """Parse requirements from LLM response text."""
