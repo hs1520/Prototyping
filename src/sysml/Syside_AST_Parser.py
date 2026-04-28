@@ -39,7 +39,7 @@ from typing import Any, Iterable, List, Optional, Tuple
 
 import syside
 
-from .model import (
+from model import (
     # core
     SysMLModel,
     Package,
@@ -198,6 +198,12 @@ def _clean_name(name: Optional[str]) -> str:
 
 _SOURCE_TEXT: str = ""
 _SOURCE_BYTES: bytes = b""  # UTF-8 bytes — use for start_byte/end_byte slicing
+
+# Whether to keep syside's implicit (auto-inferred) generalizations and
+# subsettings.  Default False = keep ONLY relations that the user wrote
+# explicitly in the source.  Set to True if downstream consumers need the
+# full standard-library inheritance chain.
+_KEEP_IMPLICIT: bool = False
 
 
 def _cst_node(node_or_rel):
@@ -1196,17 +1202,49 @@ def _extract_imports(node) -> List[Import]:
 
 
 def _extract_generalizations(node) -> List[Generalization]:
+    """
+    Extract :> (Subclassification) relationships.
+
+    By default, filters out implicit generalizations that syside auto-inserts
+    during semantic analysis (e.g. `:> Parts::Part` on every part def, or
+    `:> AnalysisCases::AnalysisCase` on every analysis def).  These are
+    standard-library noise that the user never wrote in the source.
+
+    Set the module-level `_KEEP_IMPLICIT = True` to retain them.
+
+    Also de-duplicates by target qualified name — syside sometimes emits the
+    same supertype twice (once explicit, once via implicit re-derivation),
+    causing `:> Parts::Part, Parts::Part` artifacts.
+    """
     result: List[Generalization] = []
+    seen_targets: set = set()
+
     for rel in _iter_safe(getattr(node, "owned_subclassifications", None)):
+        # Filter out implicit relations unless the user opts in.
+        if not _KEEP_IMPLICIT:
+            try:
+                if bool(getattr(rel, "is_implied", False)):
+                    continue
+            except Exception:
+                pass
+
         ref = _extract_subclassification_target(node, rel)
-        if ref:
-            result.append(
-                Generalization(
-                    name=f"gen_{_safe_name(node)}_{ref.name or 'super'}",
-                    source=_make_ref_from_node(node),
-                    target=ref,
-                )
+        if not ref:
+            continue
+
+        # Dedup by display string (qualified name when available, else name).
+        key = ref.display() or ref.name or ""
+        if not key or key in seen_targets:
+            continue
+        seen_targets.add(key)
+
+        result.append(
+            Generalization(
+                name=f"gen_{_safe_name(node)}_{ref.name or 'super'}",
+                source=_make_ref_from_node(node),
+                target=ref,
             )
+        )
     return result
 
 
@@ -1215,8 +1253,17 @@ def _extract_subsettings(node) -> List[Specialization]:
     Extract :>> (Subsetting / Redefinition) relationships.
     Also tries to capture the RHS value for inline assignments like
       :>> radius = 18 [mm]
+
+    By default, filters out implicit subsettings that syside auto-inserts
+    (e.g. `:> dataValues`, `:> subparts`, `:> requirementChecks`, `:> obj`,
+    `:> result`) — these come from the standard library hierarchy and are not
+    in the user's source. Set `_KEEP_IMPLICIT = True` to retain them.
+
+    Also de-duplicates by (kind, target-display) to avoid emitting the same
+    subsetting twice.
     """
     result: List[Specialization] = []
+    seen: set = set()
     redef_cls  = getattr(syside, "Redefinition", None)
     subset_cls = getattr(syside, "Subsetting",   None)
 
@@ -1227,9 +1274,24 @@ def _extract_subsettings(node) -> List[Specialization]:
         if not (is_sub or is_red or tname in {"Subsetting", "Redefinition"}):
             continue
 
+        # Filter out implicit relations unless opted in.
+        if not _KEEP_IMPLICIT:
+            try:
+                if bool(getattr(rel, "is_implied", False)):
+                    continue
+            except Exception:
+                pass
+
         ref = _extract_subsetting_target(node, rel)
         if not ref:
             continue
+
+        # Dedup by (kind, target-display) — avoids `:> X, X` duplication.
+        kind = "redefinition" if is_red else "subsetting"
+        key = (kind, ref.display() or ref.name or "")
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
 
         # Try to capture assignment value from the feature itself
         value: Optional[str] = None
@@ -1247,7 +1309,7 @@ def _extract_subsettings(node) -> List[Specialization]:
                 name=f"spec_{_safe_name(node)}_{ref.name or 'target'}",
                 source=_make_ref_from_node(node),
                 target=ref,
-                specialization_kind="redefinition" if is_red else "subsetting",
+                specialization_kind=kind,
                 value=value,
             )
         )
@@ -1898,7 +1960,7 @@ def _map_requirement_usage(node) -> RequirementUsage:
     subs = _extract_subsettings(node)
     name = _clean_name(_real_name(node))
     if not name and subs:
-        # Anonymous redefinition: take name from the first redefinition target
+        # Anonymous redefinition: take name from the first redef target
         for s in subs:
             if s.specialization_kind == "redefinition" and s.target:
                 name = s.target.display()
@@ -3013,83 +3075,168 @@ def parse_sysml_to_model(
     sysml_text: str,
     model_name: str = "GeneratedModel",
     strict: bool = False,
+    keep_implicit: bool = False,
 ) -> SysMLModel:
     """
     Parse SysML v2 source text and return a populated SysMLModel.
 
+    Uses `syside.try_load_model` (which loads the full SysML standard library
+    including ISQ::*, SI::*, ScalarValues::*, StateSpaceRepresentation::*) so
+    that cross-library type references are fully resolved.  Falls back to the
+    old `Document.parse_string_st + pipeline` path if try_load_model is
+    unavailable or fails completely.
+
     Args:
-        sysml_text: Raw SysML v2 source.
-        model_name: Name to assign to the returned SysMLModel.
-        strict:     If True, raise ValueError on any parse errors.
+        sysml_text:    Raw SysML v2 source.
+        model_name:    Name to assign to the returned SysMLModel.
+        strict:        If True, raise ValueError on any ERROR-level diagnostics.
+        keep_implicit: If True, retain syside's auto-inferred generalizations
+                       (`:> Parts::Part`, `:> AnalysisCases::AnalysisCase`,
+                       `:> dataValues`, `:> subparts`, etc.).  Default False
+                       keeps only relations the user wrote explicitly — best
+                       for downstream consumers (agents, round-trip writers)
+                       that should see the source-level model, not the
+                       semantic-analysis output.
 
     Returns:
         SysMLModel populated from the semantic graph.
     """
-    global _SOURCE_TEXT, _SOURCE_BYTES
-    # Store source text AND bytes so _cst_text can use start_byte/end_byte slicing.
-    # CONFIRMED: start_byte/end_byte are UTF-8 byte offsets, not character offsets.
-    # For files containing multibyte chars (e.g. '°' degree symbol), slicing the
-    # Python str with byte indices gives wrong results. We must slice _SOURCE_BYTES
-    # and then decode.
+    global _SOURCE_TEXT, _SOURCE_BYTES, _KEEP_IMPLICIT
+    # Store source bytes for cst_node byte-offset slicing.
     _SOURCE_TEXT  = sysml_text
     _SOURCE_BYTES = sysml_text.encode("utf-8")
+    _KEEP_IMPLICIT = keep_implicit
 
     model = SysMLModel(name=model_name)
 
-    mutex, diagnostics = syside.Document.parse_string_st(
-        sysml_text,
-        syside.ModelLanguage.SysML,
-    )
-
-    has_errors = False
-    for diag in diagnostics:
-        msg = getattr(diag, "message", str(diag))
-        sev = getattr(diag, "severity", None)
-
-        severity = DiagnosticSeverity.WARNING
-        if sev == syside.DiagnosticSeverity.Error:
-            severity = DiagnosticSeverity.ERROR
-            has_errors = True
-        elif str(sev).lower().endswith("info"):
-            severity = DiagnosticSeverity.INFO
-
-        source_span: Optional[SourceSpan] = None
-        try:
-            source_span = SourceSpan(
-                start=SourcePoint(line=diag.range.start.line + 1,
-                                  character=diag.range.start.character),
-                end=SourcePoint(line=diag.range.end.line + 1,
-                                character=diag.range.end.character),
-            )
-        except Exception:
-            pass
-
-        model.add_diagnostic(Diagnostic(severity=severity, message=msg,
-                                         source_span=source_span))
-
-        if severity == DiagnosticSeverity.ERROR:
-            logger.error(f"[Parse] Error: {msg}")
-        else:
-            logger.warning(f"[Parse] {severity.value.title()}: {msg}")
-
-    if strict and has_errors:
-        error_count = sum(1 for d in model.diagnostics
-                          if d.severity == DiagnosticSeverity.ERROR)
-        raise ValueError(
-            f"Strict mode: {error_count} syntax error(s) in SysML source. Aborting."
-        )
-
+    # ── Strategy A: try_load_model (full stdlib, recommended) ────────────────
+    # try_load_model ships the complete SysML/KerML standard library so that
+    # import references like ISQ::mass resolve to concrete types instead of `?`.
+    # It never raises — type errors are returned as diagnostics.
+    loaded_mutex = None
     try:
-        _run_sema(mutex)
-        logger.info("[Sema] Semantic analysis complete (BuildState.Built).")
-    except Exception as e:
-        logger.error(f"[Sema] Pipeline failed: {e}")
-        model.add_mapping_note(f"Sema failed ({e}); mapping from parse-only AST.")
+        loaded_model, diagnostics = syside.try_load_model(sysml_source=sysml_text)
 
-    with mutex.lock() as doc:
-        build_state = getattr(doc, "build_state", None)
-        logger.info(f"[Map] Document build_state = {build_state}")
-        _map_document(doc, model)
+        # Collect diagnostics
+        has_errors = False
+        for diag in _iter_safe(diagnostics):
+            msg     = getattr(diag, "message", str(diag))
+            sev_raw = str(getattr(diag, "severity", "")).lower()
+            if "error" in sev_raw:
+                severity  = DiagnosticSeverity.ERROR
+                has_errors = True
+            elif "warn" in sev_raw:
+                severity = DiagnosticSeverity.WARNING
+            else:
+                severity = DiagnosticSeverity.INFO
+
+            source_span: Optional[SourceSpan] = None
+            try:
+                r = diag.range
+                source_span = SourceSpan(
+                    start=SourceSpan(line=r.start.line + 1,
+                                     character=r.start.character),
+                    end=SourceSpan(line=r.end.line + 1,
+                                   character=r.end.character),
+                )
+            except Exception:
+                pass
+
+            model.add_diagnostic(Diagnostic(severity=severity, message=msg,
+                                             source_span=source_span))
+            if severity == DiagnosticSeverity.ERROR:
+                logger.debug(f"[Load] type-error (non-fatal): {msg}")
+
+        if strict and has_errors:
+            error_count = sum(1 for d in model.diagnostics
+                              if d.severity == DiagnosticSeverity.ERROR)
+            raise ValueError(
+                f"Strict mode: {error_count} error(s) in SysML source.")
+
+        # Extract the Document mutex from the loaded Model.
+        # try_load_model returns a Model that wraps one or more Documents.
+        # We try several known attribute names to locate the mutex.
+        for attr in ("documents", "mutexes", "document_mutexes", "_documents"):
+            docs_raw = getattr(loaded_model, attr, None)
+            if docs_raw is None or callable(docs_raw):
+                continue
+            try:
+                doc_list = list(docs_raw)
+                if doc_list:
+                    # Our file is always the last document (stdlib docs come first).
+                    loaded_mutex = doc_list[-1]
+                    logger.info("[Sema] try_load_model succeeded (full stdlib).")
+                    break
+            except Exception:
+                continue
+
+        # Fallback: the Model itself might BE the mutex-like object.
+        if loaded_mutex is None:
+            if hasattr(loaded_model, "lock") and callable(loaded_model.lock):
+                loaded_mutex = loaded_model
+                logger.info("[Sema] try_load_model: using Model directly as mutex.")
+
+    except Exception as e:
+        logger.warning(f"[Load] try_load_model failed ({e}); falling back.")
+
+    # ── Strategy B: legacy Document.parse_string_st + pipeline ───────────────
+    if loaded_mutex is None:
+        logger.info("[Sema] Using legacy parse_string_st path.")
+        mutex, parse_diags = syside.Document.parse_string_st(
+            sysml_text,
+            syside.ModelLanguage.SysML,
+        )
+        has_errors = False
+        for diag in parse_diags:
+            msg = getattr(diag, "message", str(diag))
+            sev = getattr(diag, "severity", None)
+            severity = DiagnosticSeverity.WARNING
+            if sev == syside.DiagnosticSeverity.Error:
+                severity  = DiagnosticSeverity.ERROR
+                has_errors = True
+            elif str(sev).lower().endswith("info"):
+                severity = DiagnosticSeverity.INFO
+            source_span = None
+            try:
+                source_span = SourceSpan(
+                    start=SourcePoint(line=diag.range.start.line + 1,
+                                      character=diag.range.start.character),
+                    end=SourcePoint(line=diag.range.end.line + 1,
+                                    character=diag.range.end.character),
+                )
+            except Exception:
+                pass
+            model.add_diagnostic(Diagnostic(severity=severity, message=msg,
+                                             source_span=source_span))
+            if severity == DiagnosticSeverity.ERROR:
+                logger.error(f"[Parse] Error: {msg}")
+            else:
+                logger.warning(f"[Parse] {severity.value.title()}: {msg}")
+
+        if strict and has_errors:
+            error_count = sum(1 for d in model.diagnostics
+                              if d.severity == DiagnosticSeverity.ERROR)
+            raise ValueError(
+                f"Strict mode: {error_count} syntax error(s) in SysML source.")
+
+        try:
+            _run_sema(mutex)
+            logger.info("[Sema] Semantic analysis complete (BuildState.Built).")
+        except Exception as e:
+            logger.error(f"[Sema] Pipeline failed: {e}")
+            model.add_mapping_note(
+                f"Sema failed ({e}); mapping from parse-only AST.")
+
+        loaded_mutex = mutex
+
+    # ── Map AST → SysMLModel ─────────────────────────────────────────────────
+    try:
+        with loaded_mutex.lock() as doc:
+            build_state = getattr(doc, "build_state", None)
+            logger.info(f"[Map] Document build_state = {build_state}")
+            _map_document(doc, model)
+    except Exception as e:
+        logger.error(f"[Map] Failed to map document: {e}")
 
     return model
 
@@ -3119,6 +3266,12 @@ if __name__ == "__main__":
     # SysML package name is read from `package <Name> { ... }` in the source
     # itself and stored in model.namespace, which `to_sysml_text()` prefers.
     model_label = os.path.splitext(os.path.basename(file_path))[0] or "GeneratedModel"
+
+    # Enable debug logging to see whether try_load_model (full stdlib) or
+    # the legacy parse_string_st path was used.
+    logging.basicConfig(level=logging.INFO,
+                        format="%(levelname)s: %(message)s")
+
     extracted = parse_sysml_to_model(sysml_src, model_label)
 
     print("\n─── Model Summary ───────────────────────────────────")
@@ -3176,4 +3329,3 @@ if __name__ == "__main__":
 
     print("\n─── Round-trip SysML Text ───────────────────────────")
     print(extracted.to_sysml_text())
-
