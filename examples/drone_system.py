@@ -59,8 +59,9 @@ def main():
     # Initialize the prototyping pipeline
     pipeline = PrototypingPipeline(
         llm=llm,
-        quality_threshold=0.65,
+        quality_threshold=0.75,
         max_iterations=3,
+        verbose=True,
     )
 
     # Run the complete prototyping pipeline
@@ -110,22 +111,6 @@ def main():
     print("GENERATED SysML v2 MODEL")
     print("=" * 70)
     print(result['model_sysml'])
-
-    # Also show design alternatives
-    print("\n" + "=" * 70)
-    print("DESIGN ALTERNATIVES ANALYSIS")
-    print("=" * 70)
-    alternatives = pipeline.explore_alternatives(
-        system_name="AutonomousDrone",
-        description=DRONE_DESCRIPTION,
-        num_alternatives=2,
-    )
-    for i, alt in enumerate(alternatives, 1):
-        print(f"\nAlternative {i}: {alt['name']}")
-        print(f"  Reasoning steps: {alt['thought_steps']}")
-        if alt['sysml']:
-            sysml_preview = alt['sysml'][:200] + "..." if len(alt['sysml']) > 200 else alt['sysml']
-            print(f"  SysML preview:\n{sysml_preview}")
 
     print("\n✓ Drone system prototyping complete!")
 

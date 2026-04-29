@@ -41,9 +41,10 @@ class PrototypingPipeline:
         pinecone_wrapper: Optional[PineconeWrapper] = None,
         rag_index_name: str = "ai-prototyping-sysml-v2",
         rag_namespace: str = "SysML-V2-Release",
-        quality_threshold: float = 0.70,
+        quality_threshold: float = 0.75,
         max_iterations: int = 3,
         parse_strict: bool = False,
+        verbose: bool = False,
     ):
         self.llm = llm
         self.pinecone = pinecone_wrapper or PineconeWrapper(default_namespace=rag_namespace)
@@ -59,6 +60,7 @@ class PrototypingPipeline:
             rag_retriever=self.rag,
             quality_threshold=quality_threshold,
             max_iterations=max_iterations,
+            verbose=verbose,
         )
 
     def prototype_system(
@@ -140,43 +142,58 @@ class PrototypingPipeline:
         system_name: str,
         description: str,
         num_alternatives: int = 3,
+        requirements: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Generate multiple alternative design candidates for comparison.
 
-        Uses self-consistency CoT to produce diverse designs.
+        Uses self-consistency CoT to produce diverse designs at varying
+        temperatures, giving a spread of structural alternatives.
 
         Args:
-            system_name: Name of the system
-            description: System description
-            num_alternatives: Number of design alternatives to generate
+            system_name:      Name of the system.
+            description:      System description (used only when
+                              ``requirements`` is not supplied).
+            num_alternatives: Number of design alternatives to generate.
+            requirements:     Pre-extracted requirement list.  When provided
+                              (e.g. taken from a prior ``prototype_system``
+                              result) the method skips the Phase-1 LLM call
+                              that would otherwise re-extract them from
+                              ``description``.
 
         Returns:
-            List of design dictionaries with model and metadata
+            List of dicts with keys: name, sysml, reasoning, thought_steps,
+            requirements_source ("provided" | "extracted").
         """
         from ..agents.requirements_agent import RequirementsAgent
         from ..llm.chain_of_thought import ChainOfThoughtPrompter
 
-        req_agent = RequirementsAgent(self.llm, self.rag)
         cot = ChainOfThoughtPrompter(self.llm)
 
-        # Extract requirements
-        req_result = req_agent.run({"system_description": description})
-        requirements = req_result.output if req_result.success else []
+        if requirements:
+            # Reuse caller-supplied requirements — no extra LLM call needed.
+            reqs = requirements
+            req_source = "provided"
+        else:
+            # Fall back to extracting from description when no list is given.
+            req_agent = RequirementsAgent(self.llm, self.rag)
+            req_result = req_agent.run({"system_description": description})
+            reqs = req_result.output if req_result.success else []
+            req_source = "extracted"
 
-        # Generate alternatives using self-consistency
         alternatives: List[Dict[str, Any]] = []
         for i in range(num_alternatives):
             cot_result = cot.generate_design(
-                system_name=f"{system_name}_v{i+1}",
-                requirements=requirements,
-                temperature=0.6 + i * 0.1,  # Slightly different temperature each time
+                system_name=f"{system_name}_v{i + 1}",
+                requirements=reqs,
+                temperature=0.6 + i * 0.1,
             )
             alternatives.append({
-                "name": f"{system_name}_v{i+1}",
+                "name": f"{system_name}_v{i + 1}",
                 "sysml": cot_result.extracted_sysml or "",
                 "reasoning": cot_result.final_answer,
                 "thought_steps": len(cot_result.thought_steps),
+                "requirements_source": req_source,
             })
 
         return alternatives

@@ -100,13 +100,27 @@ class MCTSDesignExplorer:
             untried_actions=self._generate_actions(root_config),
         )
 
-    def search(self, num_iterations: int = 100) -> DesignConfiguration:
-        """
-        Run MCTS for a specified number of iterations.
+        # Diagnostics populated by search()
+        self.iterations_run: int = 0
+        self.early_stopped: bool = False
 
-        Returns the best configuration found.
+    def search(
+        self,
+        num_iterations: int = 100,
+        patience: Optional[int] = None,
+    ) -> DesignConfiguration:
+        """Run MCTS for up to `num_iterations`.
+
+        If `patience` is set, stop early when the best score has not improved
+        for `patience` consecutive iterations.
         """
+        best_so_far = -float("inf")
+        no_improve = 0
+        self.iterations_run = 0
+
         for iteration in range(num_iterations):
+            self.iterations_run = iteration + 1
+
             # Phase 1: Selection
             node = self._select(self.root)
 
@@ -123,6 +137,21 @@ class MCTSDesignExplorer:
             # Record the configuration in the design space
             if node.config not in self.design_space.configurations:
                 self.design_space.add_configuration(node.config)
+
+            # Early stopping check
+            if patience is not None:
+                current_best = (
+                    self.design_space.get_best_configuration().overall_score
+                    if self.design_space.configurations else 0.0
+                )
+                if current_best > best_so_far + 1e-3:
+                    best_so_far = current_best
+                    no_improve = 0
+                else:
+                    no_improve += 1
+                if no_improve >= patience:
+                    self.early_stopped = True
+                    break
 
         return self.design_space.get_best_configuration() or self.root.config
 
@@ -148,14 +177,29 @@ class MCTSDesignExplorer:
         return current
 
     def _expand(self, node: MCTSNode) -> MCTSNode:
-        """Expand the node by adding a new child with a modified configuration."""
-        if not node.untried_actions:
+        """Expand the node by adding a new child with a modified configuration.
+
+        Skips actions that produce infeasible configurations (per
+        DesignSpace.constraints). Returns the parent node unchanged when no
+        feasible action remains.
+        """
+        # Drain infeasible actions, picking the first feasible one
+        feasible_action = None
+        feasible_config = None
+        # Snapshot to allow safe mutation of untried_actions during iteration
+        candidates = list(node.untried_actions)
+        self.rng.shuffle(candidates)
+        for action in candidates:
+            node.untried_actions.remove(action)
+            candidate = node.config.copy_with_changes(action)
+            if self.design_space.is_feasible(candidate.parameters):
+                feasible_action = action
+                feasible_config = candidate
+                break
+        if feasible_config is None:
             return node
 
-        action = self.rng.choice(node.untried_actions)
-        node.untried_actions.remove(action)
-
-        new_config = node.config.copy_with_changes(action)
+        new_config = feasible_config
         new_config.name = f"config_{len(self.design_space.configurations)}"
         new_config.scores = self.evaluate(new_config)
 

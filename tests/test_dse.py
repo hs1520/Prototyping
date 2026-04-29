@@ -1,7 +1,21 @@
 """Tests for Design Space Exploration and MCTS."""
 
 import math
+import sys
+from types import ModuleType
 import pytest
+
+# Stub heavy optional deps not installed in the test environment
+for _name, _attrs in [
+    ("dotenv", {"load_dotenv": lambda *a, **kw: None}),
+    ("pinecone", {"Pinecone": type("Pinecone", (), {"__init__": lambda self, **kw: None})}),
+    ("syside", {}),
+]:
+    if _name not in sys.modules:
+        _mod = ModuleType(_name)
+        for _k, _v in _attrs.items():
+            setattr(_mod, _k, _v)
+        sys.modules[_name] = _mod
 from src.dse.design_space import (
     DesignConfiguration,
     DesignParameter,
@@ -329,4 +343,4 @@ class TestDesignEvaluator:
         assert all(0.0 <= v <= 1.0 for v in scores.values())
 
     def test_default_criteria_count(self, evaluator):
-        assert len(evaluator.criteria) == 4
+        assert len(evaluator.criteria) == 5  # added safety_coverage criterion

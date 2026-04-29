@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
 from .design_space import DesignConfiguration
-from ..sysml.model import SysMLModel
+from ..sysml.model import FeatureDirection, SysMLModel
 
 
 @dataclass
@@ -60,7 +60,7 @@ class DesignEvaluator:
             EvaluationCriteria(
                 name="functional_completeness",
                 weight=0.30,
-                description="All functional requirements are addressed",
+                description="All requirements have explicit satisfy links",
                 scoring_function=self._score_functional_completeness,
             ),
             EvaluationCriteria(
@@ -77,9 +77,15 @@ class DesignEvaluator:
             ),
             EvaluationCriteria(
                 name="requirement_traceability",
-                weight=0.25,
-                description="Design elements are traceable to requirements",
+                weight=0.15,
+                description="Fraction of requirements covered by satisfy links",
                 scoring_function=self._score_traceability,
+            ),
+            EvaluationCriteria(
+                name="safety_coverage",
+                weight=0.10,
+                description="SAFE requirements have corresponding fault-handling behavior",
+                scoring_function=self._score_safety_coverage,
             ),
         ]
 
@@ -104,13 +110,18 @@ class DesignEvaluator:
 
         result.weighted_total = weighted_sum / total_weight if total_weight > 0 else 0.0
 
-        # Generate issues and recommendations
+        # Generate specific, model-aware issues and recommendations
+        specific_issues, specific_recs = self._diagnose_model(model)
+        result.issues.extend(specific_issues)
+        result.recommendations.extend(specific_recs)
+
+        # Append criterion-level summaries for criteria with low scores
         for criterion_name, score in result.criteria_scores.items():
             if score < 0.5:
-                issue = self._build_issue_message(criterion_name, score)
-                recommendation = self._build_recommendation(criterion_name)
-                result.issues.append(issue)
-                result.recommendations.append(recommendation)
+                result.issues.append(
+                    f"{criterion_name}: score={score:.2f} — see specific issues above"
+                )
+                result.recommendations.append(self._build_recommendation(criterion_name))
 
         return result
 
@@ -197,17 +208,19 @@ class DesignEvaluator:
     def _score_functional_completeness(
         self, config: DesignConfiguration, model: SysMLModel
     ) -> float:
-        """Score how well the model addresses functional requirements."""
+        """Score the fraction of requirement definitions covered by satisfy links."""
         if not model.requirement_definitions:
             return 0.5  # No requirements to check
         if not model.part_definitions:
-            return 0.0  # No design elements
-        # Heuristic: ratio of requirements to design part definitions
-        coverage = min(
-            1.0,
-            len(model.part_definitions) / max(1, len(model.requirement_definitions)),
-        )
-        return coverage
+            return 0.0
+        req_ids = {r.name for r in model.requirement_definitions}
+        satisfied_ids = {
+            sr.target.name
+            for part in model.part_definitions
+            for sr in part.satisfy_relationships
+            if sr.target and sr.target.name
+        }
+        return len(satisfied_ids & req_ids) / len(req_ids)
 
     def _score_structural_quality(
         self, config: DesignConfiguration, model: SysMLModel
@@ -237,30 +250,148 @@ class DesignEvaluator:
     def _score_traceability(
         self, config: DesignConfiguration, model: SysMLModel
     ) -> float:
-        """Score the traceability from design to requirements."""
+        """Fraction of requirement definitions that have at least one incoming satisfy link."""
         if not model.requirement_definitions:
             return 0.5
         if not model.part_definitions:
             return 0.0
-        # Check how many part definitions reference requirements
-        parts_with_traces = sum(
-            1 for p in model.part_definitions if getattr(p, "satisfy_relationships", [])
-        )
-        return parts_with_traces / len(model.part_definitions)
+        req_ids = {r.name for r in model.requirement_definitions}
+        satisfied_ids = {
+            sr.target.name
+            for part in model.part_definitions
+            for sr in part.satisfy_relationships
+            if sr.target and sr.target.name
+        }
+        return len(satisfied_ids & req_ids) / len(req_ids)
 
-    @staticmethod
-    def _build_issue_message(criterion_name: str, score: float) -> str:
-        """Create an actionable issue message for the refinement loop."""
-        return f"{criterion_name}: score={score:.2f} below refinement threshold"
+    def _score_safety_coverage(
+        self, config: DesignConfiguration, model: SysMLModel
+    ) -> float:
+        """Score whether SAFE requirements have fault-handling actions or nested defs."""
+        safe_reqs = [r for r in model.requirement_definitions if "_SAFE_" in r.name]
+        if not safe_reqs:
+            return 1.0  # N/A — no penalty when no SAFE requirements exist
+
+        _safety_keywords = {"emergency", "fault", "safe", "shutdown", "failsafe", "monitor"}
+
+        def _has_safety_behavior(part) -> bool:
+            for action in part.actions:
+                if any(kw in action.name.lower() for kw in _safety_keywords):
+                    return True
+            for nd in part.nested_definitions:
+                if any(kw in nd.name.lower() for kw in _safety_keywords):
+                    return True
+            return False
+
+        parts_with_safety = sum(1 for p in model.part_definitions if _has_safety_behavior(p))
+        # Score: proportional to whether *any* part has safety behavior
+        # (binary check is more useful than a ratio here)
+        return 1.0 if parts_with_safety > 0 else 0.0
+
+    def _diagnose_model(self, model: SysMLModel) -> tuple:
+        """
+        Produce specific, model-aware issue and recommendation strings.
+
+        Returns (issues: List[str], recommendations: List[str]).
+        These are generated independently of score thresholds so the
+        refinement loop gets actionable feedback regardless of overall score.
+        """
+        issues: List[str] = []
+        recs: List[str] = []
+
+        req_ids = {r.name for r in model.requirement_definitions}
+        satisfied_ids = {
+            sr.target.name
+            for part in model.part_definitions
+            for sr in part.satisfy_relationships
+            if sr.target and sr.target.name
+        }
+
+        # 1. Untraced requirements
+        untraced = sorted(req_ids - satisfied_ids)
+        if untraced:
+            issues.append(f"Untraced requirements: {', '.join(untraced)}")
+            recs.append(
+                "Add a `satisfy REQ_X_NNN by <PartName>;` statement for each untraced requirement."
+            )
+
+        # 2. Parts missing ports
+        parts_no_ports = [p.name for p in model.part_definitions if not p.ports]
+        if parts_no_ports:
+            issues.append(f"Parts missing ports: {', '.join(parts_no_ports)}")
+            recs.append("Add at least one port with direction (in/out/inout) to each part def.")
+
+        # 3. Parts whose ports all lack direction
+        parts_undirected = [
+            p.name for p in model.part_definitions
+            if p.ports and all(
+                getattr(port, "direction", FeatureDirection.NONE) == FeatureDirection.NONE
+                for port in p.ports
+            )
+        ]
+        if parts_undirected:
+            issues.append(f"Parts with undirected ports: {', '.join(parts_undirected)}")
+            recs.append("Set direction (in / out / inout) on all port usages.")
+
+        # 4. Parts missing numeric attributes
+        parts_no_attrs = [
+            p.name for p in model.part_definitions
+            if not p.attributes or all(
+                not getattr(a, "default_value", None) for a in p.attributes
+            )
+        ]
+        if parts_no_attrs:
+            issues.append(f"Parts missing numeric attributes: {', '.join(parts_no_attrs)}")
+            recs.append(
+                "Add at least one attribute with a numeric default value and SI unit to each part def."
+            )
+
+        # 5. SAFE requirements without fault-handling behavior
+        safe_reqs = [r for r in model.requirement_definitions if "_SAFE_" in r.name]
+        if safe_reqs:
+            _safety_kws = {"emergency", "fault", "safe", "shutdown", "failsafe", "monitor"}
+            has_any_safety = any(
+                any(kw in a.name.lower() for kw in _safety_kws for a in p.actions)
+                or any(kw in nd.name.lower() for kw in _safety_kws for nd in p.nested_definitions)
+                for p in model.part_definitions
+            )
+            if not has_any_safety:
+                safe_ids = ", ".join(r.name for r in safe_reqs)
+                issues.append(
+                    f"SAFE requirement(s) {safe_ids} have no fault-handling "
+                    f"actions or state defs in any part"
+                )
+                recs.append(
+                    "For each SAFE requirement, add a state def with explicit fault-entry "
+                    "transition and an emergency action def (e.g., emergencyStop, shutdownSafely)."
+                )
+
+        return issues, recs
 
     @staticmethod
     def _build_recommendation(criterion_name: str) -> str:
         """Create criterion-specific refinement guidance."""
         guidance = {
-            "functional_completeness": "Add missing parts/actions that explicitly cover the uncovered requirements.",
-            "structural_quality": "Refine the architecture into clearer modular parts and reduce monolithic structure.",
-            "interface_consistency": "Align ports and connectors so all exposed interfaces are consistent and connected.",
-            "requirement_traceability": "Add `satisfy` links from blocks to requirement IDs and preserve requirement allocation in the model.",
+            "functional_completeness": (
+                "Add satisfy links to cover all requirement IDs — "
+                "every REQ_X_NNN must appear in exactly one satisfy statement."
+            ),
+            "structural_quality": (
+                "Refine the architecture into clearly modular parts; "
+                "each part def must have ≥ 1 directed port and ≥ 1 numeric attribute."
+            ),
+            "interface_consistency": (
+                "Align ports and connectors: add connect statements to link "
+                "all exposed in/out ports between components."
+            ),
+            "requirement_traceability": (
+                "Add `satisfy` links from blocks to requirement IDs and preserve "
+                "requirement allocation in the model."
+            ),
+            "safety_coverage": (
+                "For each SAFE requirement, add a state def with a fault-entry "
+                "transition and an emergency action def inside the responsible part."
+            ),
         }
         return guidance.get(
             criterion_name,
