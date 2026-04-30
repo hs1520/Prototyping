@@ -62,6 +62,13 @@ _BEHAVIOR_FRAGMENT = (
     "```\n"
 )
 
+_INTERFACE_FRAGMENT = (
+    "```sysml\n"
+    "item def TelemetryData { attribute rate : Real; }\n"
+    "port def TelemetryPort { out item signal : TelemetryData; }\n"
+    "```\n"
+)
+
 _ASSEMBLED_MODEL = (
     "```sysml\n"
     "package DroneSystem {\n"
@@ -194,6 +201,7 @@ class TestAssembleModel:
         result = cot.assemble_model(
             system_name="DroneSystem",
             parts_fragment="part def FlightController { ... }",
+            interfaces_fragment="",
             behavior_fragment="action def navigateToWaypoint { }",
             requirements=[
                 "REQ-FUNC-001: The drone shall navigate autonomously.",
@@ -216,6 +224,7 @@ class TestAssembleModel:
         cot.assemble_model(
             system_name="My-Drone System 2",
             parts_fragment="",
+            interfaces_fragment="",
             behavior_fragment="",
             requirements=["REQ-FUNC-001: The system shall fly with speed 10 m/s."],
         )
@@ -254,15 +263,17 @@ class TestMultistepGeneratePipeline:
 
         return agent
 
-    def test_four_llm_calls_made(self, monkeypatch):
+    def test_five_llm_calls_made(self, monkeypatch):
+        """Pipeline now has 5 steps: arch, parts, interfaces, behavior, assembly."""
         import src.agents.design_agent as da_module
         from src.sysml.model import SysMLModel, PartDefinition
 
         responses = [
             "Architecture plan text with component list",  # step 1
             _SYSML_FRAGMENT,                               # step 2
-            _BEHAVIOR_FRAGMENT,                             # step 3
-            _ASSEMBLED_MODEL,                               # step 4
+            _INTERFACE_FRAGMENT,                           # step 3 (interfaces)
+            _BEHAVIOR_FRAGMENT,                            # step 4 (behavior)
+            _ASSEMBLED_MODEL,                              # step 5 (assembly)
         ]
         agent = self._make_agent(responses, monkeypatch)
 
@@ -279,7 +290,7 @@ class TestMultistepGeneratePipeline:
         })
 
         assert result.success
-        assert agent.llm.call_count == 4
+        assert agent.llm.call_count == 5
 
     def test_metadata_contains_generation_steps(self, monkeypatch):
         import src.agents.design_agent as da_module
@@ -288,8 +299,9 @@ class TestMultistepGeneratePipeline:
         responses = [
             "Architecture plan",
             _SYSML_FRAGMENT,
-            _BEHAVIOR_FRAGMENT,
-            _ASSEMBLED_MODEL,
+            _INTERFACE_FRAGMENT,   # step 3
+            _BEHAVIOR_FRAGMENT,    # step 4
+            _ASSEMBLED_MODEL,      # step 5
         ]
         agent = self._make_agent(responses, monkeypatch)
 
@@ -304,13 +316,18 @@ class TestMultistepGeneratePipeline:
             "requirements": self._REQUIREMENTS,
         })
 
-        assert result.metadata["generation_steps_completed"] == 4
+        assert result.metadata["generation_steps_completed"] == 5
         assert "architecture_length" in result.metadata
         assert "parts_fragment_length" in result.metadata
+        assert "interfaces_fragment_length" in result.metadata
         assert "behavior_fragment_length" in result.metadata
 
     def test_behavior_step_skipped_without_func_safe_reqs(self, monkeypatch):
-        """Only 3 LLM calls when no FUNC or SAFE requirements exist."""
+        """Only 4 LLM calls when no FUNC or SAFE requirements exist.
+
+        Pipeline: step1(arch) + step2(parts) + step3(interfaces) + step5(assembly)
+        Step 4 (behavior) is skipped — no FUNC/SAFE reqs.
+        """
         import src.agents.design_agent as da_module
         from src.sysml.model import SysMLModel, PartDefinition
 
@@ -321,8 +338,9 @@ class TestMultistepGeneratePipeline:
         responses = [
             "Architecture plan",  # step 1
             _SYSML_FRAGMENT,      # step 2
-            # step 3 skipped (no FUNC/SAFE)
-            _ASSEMBLED_MODEL,     # step 4
+            _INTERFACE_FRAGMENT,  # step 3 (interfaces — always runs)
+            # step 4 skipped (no FUNC/SAFE)
+            _ASSEMBLED_MODEL,     # step 5
         ]
         agent = self._make_agent(responses, monkeypatch)
 
@@ -338,7 +356,7 @@ class TestMultistepGeneratePipeline:
         })
 
         assert result.success
-        assert agent.llm.call_count == 3
+        assert agent.llm.call_count == 4
         assert result.metadata["behavior_fragment_length"] == 0
 
     def test_refinement_mode_still_uses_single_step(self, monkeypatch):

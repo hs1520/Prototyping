@@ -163,8 +163,9 @@ Work through these steps before writing the model:
    (c) the minimal change needed. Do not change unrelated parts.
 
 2. CATEGORY-SPECIFIC FIXES
-   - Untraced requirement (REQ_X_NNN has no satisfy): add `satisfy REQ_X_NNN by <PartName>;`
-     inside the responsible part def. Use underscore form, not hyphens.
+   - Untraced requirement (REQ_X_NNN has no satisfy): add `satisfy requirement REQ_X_NNN;`
+     inside the responsible part def body. Use underscore form, not hyphens.
+     NEVER use `satisfy REQ_X by PartName;` — that form breaks the parser.
    - Missing port: add `<direction> port <name> : <Type>;` with in/out/inout.
    - Missing numeric attribute: add `attribute <name> : Real = <value> [<unit>];`
    - SAFE req without fault behavior: add inside the responsible part def:
@@ -217,6 +218,16 @@ Rules:
 - Every REQ ID must appear in at least one "Addresses:" line.
 - Aim for 3–7 top-level components; avoid micro-splitting single responsibilities.
 - Do not write any SysML syntax yet — plain structured text only.
+- Safety interconnect ports (MANDATORY when these component types appear):
+    • If a SafetyMonitor (or similar safety-enforcement component) is listed:
+        – The main controller/autopilot component MUST include `in overrideCmd` in its port list.
+        – SafetyMonitor MUST include `out overrideCmd` in its port list.
+    • If a CommunicationSystem (or comms/link component) is listed:
+        – It MUST include `out commStatus` in its port list.
+        – SafetyMonitor MUST include `in commStatus` in its port list.
+    • If a PerceptionSystem (or sensor/IMU/camera component) is listed:
+        – It MUST include `out sensorStatus` in its port list.
+        – SafetyMonitor MUST include `in sensorStatus` in its port list.
 """
 
 PART_DEFINITIONS_TEMPLATE = """Generate the SysML v2 structural fragment for the system below.
@@ -239,8 +250,50 @@ Rules:
 - PERF requirements must appear as attributes with numeric bounds and units.
 - INTF requirements must appear as port definitions with matching data types.
 - Use valid SysML v2 syntax throughout.
+- Safety interconnect ports (MANDATORY — add these whenever the component type is present):
+    • If a SafetyMonitor part def is defined:
+        – The main controller/autopilot part def MUST declare `in port overrideCmd : DataPort;`
+        – SafetyMonitor MUST declare `out port overrideCmd : DataPort;`
+    • If a CommunicationSystem part def is defined:
+        – CommunicationSystem MUST declare `out port commStatus : DataPort;`
+        – SafetyMonitor MUST declare `in port commStatus : DataPort;`
+    • If a PerceptionSystem (or sensor/IMU) part def is defined:
+        – PerceptionSystem MUST declare `out port sensorStatus : DataPort;`
+        – SafetyMonitor MUST declare `in port sensorStatus : DataPort;`
 
 Output a single ```sysml code block containing ONLY the structural fragment (no package wrapper yet).
+No prose after the block.
+"""
+
+INTERFACE_FLOW_TEMPLATE = """Generate the SysML v2 interface and flow fragment for the system below.
+Write ONLY item definitions and typed port definitions — no part def body, no attribute, no action def, no state def, no connect, no satisfy yet.
+
+System: {system_name}
+
+Architecture plan:
+{architecture}
+
+Structural fragment (for reference — ports already exist, do NOT repeat them):
+{parts_fragment}
+
+Interface requirements (INTF):
+{intf_requirements}
+
+Rules:
+- For every unique type of data/signal exchanged between components, define one `item def`.
+  Name item defs as noun phrases in PascalCase (e.g. `GNSSPositionData`, `BatteryStatus`).
+- For every port type used across part defs (DataPort, RfPort, etc.), define a typed
+  `port def` that references the correct `item def`.
+  Example:
+      item def GNSSPositionData {{ attribute lat : Real; attribute lon : Real; }}
+      port def GNSSPort {{ in item signal : GNSSPositionData; }}
+- If an INTF requirement names a specific protocol (MAVLink, ADS-B, I2C, etc.),
+  define an item def capturing that protocol's data payload.
+- Do NOT define more than one item def per logical data type — reuse where possible.
+- Item def names must NOT clash with part def names or requirement IDs.
+- Use valid SysML v2 syntax.
+
+Output a single ```sysml code block containing ONLY the item defs and typed port defs.
 No prose after the block.
 """
 
@@ -259,7 +312,7 @@ Behavioral requirements (FUNC and SAFE):
 {behavioral_requirements}
 
 Rules:
-- For every FUNC requirement: define an action def inside the responsible component.
+- For every FUNC requirement: define an action def that belongs to the responsible component.
   The action def name must be a verb phrase in camelCase (e.g., navigateToWaypoint).
 - For every SAFE requirement: define a state def with:
     • An explicit fault-entry transition (annotated with the fault condition).
@@ -267,7 +320,25 @@ Rules:
 - Action def and state def names must be unique across the fragment.
 - Use valid SysML v2 syntax.
 
-Output a single ```sysml code block containing ONLY the behavioral fragment.
+CRITICAL OWNERSHIP ANNOTATION — you MUST prefix every action def and state def with a
+comment naming the part def it belongs to.  The next assembly step uses this to embed
+each element inside the correct part def.  Missing annotations cause elements to be lost.
+
+Format (use exactly this style — no other comment form):
+  // OWNER: <PartName>
+  action def doSomething {{ }}
+
+  // OWNER: <PartName>
+  state def <Name>SafetyBehavior {{
+      state <Name>Nominal;
+      state <Name>Fault {{
+          entry action emergencyStop : emergencyStop;
+      }}
+      transition <name>Init from entry to <Name>Nominal;
+      transition <name>Fault from <Name>Nominal to <Name>Fault;
+  }}
+
+Output a single ```sysml code block containing ONLY the behavioral fragment (with OWNER comments).
 No prose after the block.
 """
 
@@ -275,10 +346,13 @@ INTEGRATION_TEMPLATE = """Assemble the complete SysML v2 model from the fragment
 
 System: {system_name}
 
-Structural fragment:
+Structural fragment (part defs, ports, attributes):
 {parts_fragment}
 
-Behavioral fragment:
+Interface & flow fragment (item defs, typed port defs — use these types when annotating ports):
+{interfaces_fragment}
+
+Behavioral fragment (each element is annotated with // OWNER: <PartName>):
 {behavior_fragment}
 
 All requirements (every REQ ID must appear in exactly one satisfy statement):
@@ -286,22 +360,89 @@ All requirements (every REQ ID must appear in exactly one satisfy statement):
 
 Assembly rules:
 1. Wrap everything in: package {package_name} {{ ... }}
-2. Embed each action def / state def inside the matching part def (do not leave them at package level).
-3. Add connect statements for every INTF requirement:
+   At the top of the package body, declare:
+     (a) All item defs and typed port defs from the Interface & flow fragment.
+     (b) All requirement defs (one per REQ ID using underscore form).
+         Use the CORRECT SysML v2 doc-comment syntax:
+           requirement def REQ_FUNC_001 {{ doc /* The drone shall ... */ }}
+         NEVER use the string-assignment form — it is NOT valid SysML v2:
+           ✗  requirement def REQ_FUNC_001 {{ doc = "The drone shall ..."; }}
+2. Apply typed port defs from the Interface & flow fragment:
+   Re-annotate every port in each part def to use the typed port def where applicable.
+   Example — interfaces fragment contains `port def GNSSPort {{ ... }}`:
+     → Change `in port gnssIn : DataPort;` to `in port gnssIn : GNSSPort;`
+   If no typed port def matches a particular port, keep its original type.
+3. Embed EVERY action def and state def from the behavioral fragment inside its owner part def.
+   Use the // OWNER: <PartName> comment to identify which part def each element belongs to.
+   CRITICAL: Do NOT drop, skip, or omit any state def from the behavioral fragment.
+             Every state def in the behavioral fragment MUST appear in the final model.
+   Example — behavioral fragment contains:
+       // OWNER: SafetyMonitor
+       state def BatterySafetyBehavior {{ state BattNominal; state BattFault {{ entry; }} ... }}
+   → Embed inside part def SafetyMonitor {{ ... }}.
+4. Add connect statements for ALL inter-component data flows — not just INTF requirements.
      connect <partA>::<portA> to <partB>::<portB>;
-4. Add one satisfy statement per requirement using underscore form:
-     satisfy REQ_<CATEGORY>_<NNN> by <PartName>;
-5. Every part def must retain its ports and attributes from the structural fragment unchanged.
-6. Do not introduce new part defs — use exactly those from the structural fragment.
+   MINIMUM COVERAGE (mandatory — every item below must have a connect statement):
+   (a) Every INTF requirement must map to at least one connect.
+   (b) Every safety-related port pair MUST be connected:
+         commStatus     : CommunicationSystem::commStatus     → SafetyMonitor::commStatus
+         sensorStatus   : PerceptionSystem::sensorStatus      → SafetyMonitor::sensorStatus
+         overrideCmd    : SafetyMonitor::overrideCmd          → <MainController>::overrideCmd
+   (c) Connect all semantically paired out→in ports (matching base names, e.g.
+       `gnssOut → gnssIn`, `battStatusOut → battStatusIn`, `telemetryOut → telemetryIn`).
+   (d) Connect the main controller to the communication system for uplink/downlink.
+   RULE: For a system with N part defs, include at least max(N − 1, INTF_req_count) connects.
+   Do NOT leave any out port without at least one connect to a consumer.
+   FAN-IN PROHIBITION (critical): Each `in port` must receive from exactly ONE source.
+   Never write two connect statements that both target the same port.
+     ✗ WRONG (fan-in):
+         connect flightController::telemetryData to commSystem::telemetryData;
+         connect payloadManager::payloadStatus   to commSystem::telemetryData;   ← same target!
+     ✓ RIGHT (route through aggregator):
+         connect payloadManager::payloadStatus   to flightController::payloadStatusIn;
+         connect flightController::telemetryData to commSystem::telemetryData;
+   Sub-system status ports (payloadStatus, batteryStatus, etc.) MUST connect to the
+   main controller or a dedicated aggregator — NOT directly to a communication port.
+5. Add one satisfy statement PER requirement INSIDE the owning part def, using underscore form:
+     satisfy requirement REQ_<CATEGORY>_<NNN>;
+   NOT "satisfy REQ_X by PartName" — that form is forbidden and breaks the parser.
+6. Every part def must retain its ports and attributes from the structural fragment unchanged.
+7. Do not introduce new part defs — use exactly those from the structural fragment.
 
 Pre-write checklist:
-  □ Every part def has ≥ 1 port with direction
+  □ Item defs and typed port defs from the interface fragment are declared at package level
+  □ Every part def has ≥ 1 port (annotated with typed port def where available)
   □ Every part def has ≥ 1 attribute with numeric value and unit
-  □ Every SAFE requirement maps to a state def with fault transition
-  □ Every INTF requirement maps to a port def and a connect usage
-  □ Every REQ ID (underscore form) appears in exactly one satisfy statement
+  □ Every state def from the behavioral fragment is embedded in its owner part def (NONE dropped)
+  □ Every SAFE requirement maps to a state def with fault transition inside the safety part def
+  □ Every INTF requirement maps to a typed port def and a semantically consistent connect usage
+  □ Safety port connects present: commStatus, sensorStatus, overrideCmd each have a connect
+  □ Total connect count ≥ max(N_parts − 1, INTF_req_count) — no output port left unconnected
+  □ Every REQ ID (underscore form) appears in exactly one satisfy statement (inside a part def)
 
 Output the complete model in a single ```sysml code block. No prose after the block.
+"""
+
+
+MCTS_REDUNDANCY_GROUNDING_TEMPLATE = """You have ONE task: add {redundancy_level} hardware redundancy to the SysML v2 model below.
+
+Rules (strict):
+- DO NOT remove, rename, or restructure any existing element.
+- DO NOT change any port, attribute, action def, existing state def, satisfy link, or connect.
+- ONLY add new content inside the target part def.
+- Use valid SysML v2 syntax (doc /* */ not doc = ""; state names globally unique).
+
+Target part def: {target_part}
+
+What to add (copy exactly, then adjust state/transition names if needed to avoid duplicates):
+{redundancy_instructions}
+
+Current SysML model:
+```sysml
+{sysml_text}
+```
+
+Return the COMPLETE updated model in a single ```sysml code block. No prose before or after.
 """
 
 
@@ -517,22 +658,105 @@ class ChainOfThoughtPrompter:
         response = self.llm.complete(messages, temperature=0.4)
         return self._parse_cot_response(response.content)
 
+    def generate_interfaces_and_flows(
+        self,
+        system_name: str,
+        architecture: str,
+        parts_fragment: str,
+        intf_requirements: List[str],
+        context: str = "",
+    ) -> CoTResult:
+        """Step 3: Generate interface & flow fragment (item def / typed port def)."""
+        req_text = "\n".join(f"  {r}" for r in intf_requirements) if intf_requirements else "  (none)"
+        prompt = INTERFACE_FLOW_TEMPLATE.format(
+            system_name=system_name,
+            architecture=architecture,
+            parts_fragment=parts_fragment,
+            intf_requirements=req_text,
+        )
+        messages = [
+            Message(role="system", content=self.system_prompt),
+            Message(role="user", content=prompt),
+        ]
+        response = self.llm.complete(messages, temperature=0.3)
+        return self._parse_cot_response(response.content)
+
     def assemble_model(
         self,
         system_name: str,
         parts_fragment: str,
+        interfaces_fragment: str,
         behavior_fragment: str,
         requirements: List[str],
     ) -> CoTResult:
-        """Step 4: Assemble complete SysML package with connections and satisfy links."""
+        """Step 5: Assemble complete SysML package with connections and satisfy links."""
         req_text = "\n".join(f"  {r}" for r in requirements)
         package_name = re.sub(r"[^A-Za-z0-9]", "", system_name) or "System"
         prompt = INTEGRATION_TEMPLATE.format(
             system_name=system_name,
             parts_fragment=parts_fragment,
+            interfaces_fragment=interfaces_fragment if interfaces_fragment else "(none — use generic port types)",
             behavior_fragment=behavior_fragment,
             requirements=req_text,
             package_name=package_name,
+        )
+        messages = [
+            Message(role="system", content=self.system_prompt),
+            Message(role="user", content=prompt),
+        ]
+        response = self.llm.complete(messages, temperature=0.2)
+        return self._parse_cot_response(response.content)
+
+    def mcts_structural_grounding(
+        self,
+        redundancy_level: str,
+        target_part: str,
+        sysml_text: str,
+    ) -> CoTResult:
+        """Focused single-purpose LLM call: add redundancy structure to an existing model.
+
+        This is intentionally narrow — it does exactly one thing so the LLM
+        cannot "get distracted" by other quality concerns.  Called unconditionally
+        from the MCTS grounding pass regardless of the model's quality score.
+        """
+        if redundancy_level == "triple":
+            instructions = (
+                f"Add the following INSIDE part def {target_part} (before its closing brace):\n\n"
+                f"    attribute redundancyChannels : Integer = 3;\n\n"
+                f"    state def TripleChannelRedundancy {{\n"
+                f"        state ChannelA;\n"
+                f"        state ChannelB;\n"
+                f"        state ChannelC;\n"
+                f"        state FailsafeActive {{\n"
+                f"            entry action def emergencyStop {{ }}\n"
+                f"        }}\n"
+                f"        transition channelAFail from ChannelA to FailsafeActive when channelAFailed;\n"
+                f"        transition channelBFail from ChannelB to FailsafeActive when channelBFailed;\n"
+                f"        transition channelCFail from ChannelC to FailsafeActive when channelCFailed;\n"
+                f"    }}"
+            )
+        elif redundancy_level == "dual":
+            instructions = (
+                f"Add the following INSIDE part def {target_part} (before its closing brace):\n\n"
+                f"    attribute redundancyChannels : Integer = 2;\n\n"
+                f"    state def DualChannelRedundancy {{\n"
+                f"        state PrimaryActive;\n"
+                f"        state BackupActive;\n"
+                f"        state FailsafeActive {{\n"
+                f"            entry action def emergencyStop {{ }}\n"
+                f"        }}\n"
+                f"        transition primaryFail from PrimaryActive to BackupActive when primaryChannelFailed;\n"
+                f"        transition backupFail from BackupActive to FailsafeActive when backupChannelFailed;\n"
+                f"    }}"
+            )
+        else:
+            return self._parse_cot_response(sysml_text)
+
+        prompt = MCTS_REDUNDANCY_GROUNDING_TEMPLATE.format(
+            redundancy_level=redundancy_level,
+            target_part=target_part,
+            redundancy_instructions=instructions,
+            sysml_text=sysml_text,
         )
         messages = [
             Message(role="system", content=self.system_prompt),

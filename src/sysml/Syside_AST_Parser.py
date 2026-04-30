@@ -1317,6 +1317,16 @@ def _extract_subsettings(node) -> List[Specialization]:
 
 
 def _extract_satisfies(node) -> List[SatisfyRelationship]:
+    """Extract SatisfyRelationship objects from a part/requirement definition node.
+
+    SatisfyRequirementUsage nodes carry their target requirement name in two ways:
+      1. Via a FeatureTyping relationship  →  _extract_feature_typing_ref()
+      2. Via the node's own declared name  →  _safe_name(feat)
+
+    Syside uses Subsetting (not FeatureTyping) for the `satisfy requirement X`
+    form, so path (1) returns None.  Path (2) is always available: Syside sets
+    the node name to the requirement identifier being satisfied.
+    """
     satisfies: List[SatisfyRelationship] = []
     sat_cls = getattr(syside, "SatisfyRequirementUsage", None)
     if sat_cls is None:
@@ -1325,20 +1335,32 @@ def _extract_satisfies(node) -> List[SatisfyRelationship]:
     for src in ("owned_requirements", "owned_features"):
         try:
             for feat in _iter_safe(getattr(node, src, None)):
-                if isinstance(feat, sat_cls):
-                    ref = _extract_feature_typing_ref(feat)
-                    if ref:
-                        satisfies.append(
-                            SatisfyRelationship(
-                                name=f"satisfy_{_safe_name(node)}_{ref.name}",
-                                source=_make_ref_from_node(node),
-                                target=ref,
-                            )
+                if not isinstance(feat, sat_cls):
+                    continue
+
+                # Path 1: FeatureTyping (works for typed satisfy forms)
+                ref = _extract_feature_typing_ref(feat)
+
+                # Path 2: node name IS the requirement identifier
+                # (Syside sets the declared name of a SatisfyRequirementUsage
+                #  to the name of the requirement it satisfies, e.g. "REQ_SAFE_001")
+                if ref is None:
+                    req_name = _safe_name(feat)
+                    if req_name:
+                        ref = ElementRef(name=req_name, path=req_name)
+
+                if ref and ref.name:
+                    satisfies.append(
+                        SatisfyRelationship(
+                            name=f"satisfy_{_safe_name(node)}_{ref.name}",
+                            source=_make_ref_from_node(node),
+                            target=ref,
                         )
+                    )
         except Exception:
             pass
 
-    # Dedup
+    # Dedup by (source, target) pair
     dedup: dict[Tuple[str, str], SatisfyRelationship] = {}
     for s in satisfies:
         key = (s.source.display() if s.source else "", s.target.display() if s.target else "")

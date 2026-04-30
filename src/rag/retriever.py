@@ -34,27 +34,54 @@ class RetrievedContext:
     query: str
 
     def format_for_prompt(self, max_entries: int = 3) -> str:
-        """Format retrieved entries as context for an LLM prompt."""
+        """Format retrieved entries as context for an LLM prompt.
+
+        Token-efficiency rules applied here:
+        - Relevance scores are omitted (the LLM gains nothing from them).
+        - Absolute ``Source:`` paths are omitted (machine-local, meaningless
+          to the model and expensive in tokens).
+        - Auto-generated vector IDs (e.g. ``uc3m#…#row-000021`` or full
+          ``/Users/…`` paths) are suppressed; only human-readable titles are
+          shown.
+        """
         top_entries = self.entries[:max_entries]
         if not top_entries:
             return "No relevant context found."
 
-        lines = ["Relevant MBSE knowledge:"]
-        for i, (entry, score) in enumerate(top_entries, 1):
-            title = str(entry.get("title") or entry.get("id") or "Untitled")
-            content = str(entry.get("content") or "")
-            lines.append(f"\n[{i}] {title} (relevance: {score:.2f})")
-            lines.append(content)
+        def _clean_title(raw: str) -> str:
+            """Return a human-readable title or empty string to suppress it."""
+            if not raw or raw == "Untitled":
+                return ""
+            # Auto-generated Pinecone / CSV row IDs contain '#'
+            if "#" in raw:
+                return ""
+            # Absolute file paths — show only the stem filename
+            if raw.startswith("/") or (len(raw) > 2 and raw[1] == ":"):
+                from pathlib import Path
+                stem = Path(raw).name
+                # Still looks like an ID? suppress it.
+                return stem if stem and "#" not in stem else ""
+            return raw
 
-            source_path = str(entry.get("official_source_path") or "")
+        lines = ["Relevant MBSE knowledge:"]
+        for i, (entry, _score) in enumerate(top_entries, 1):
+            raw_title = str(entry.get("title") or entry.get("id") or "")
+            title = _clean_title(raw_title)
+            content = str(entry.get("content") or "")
+
+            header = f"\n[{i}]" + (f" {title}" if title else "")
+            lines.append(header)
+            if content:
+                lines.append(content)
+
+            # Official SysML reference snippet (no path — content only)
             official_snippet = str(entry.get("official_sysml_reference") or "")
             if official_snippet:
-                if source_path:
-                    lines.append(f"Source: {source_path}")
                 lines.append("Official SysML v2 reference snippet:")
                 lines.append("```sysml")
                 lines.append(official_snippet)
                 lines.append("```")
+
         return "\n".join(lines)
 
 
