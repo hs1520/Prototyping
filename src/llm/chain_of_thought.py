@@ -169,13 +169,27 @@ Work through these steps before writing the model:
    - Missing port: add `<direction> port <name> : <Type>;` with in/out/inout.
    - Missing numeric attribute: add `attribute <name> : Real = <value> [<unit>];`
    - SAFE req without fault behavior: add inside the responsible part def:
+       action def emergencyStop {{ }}    // top-level action def in the part body
        state def <Name>Monitor {{
            state nominal;
-           state fault {{ entry; action def emergencyStop {{ }} }}
-           transition nominal -> fault when <faultCondition>;
+           state fault {{ entry action stop : emergencyStop; }}
+           transition <name>Fault
+               first nominal
+               if <faultCondition>
+               then fault;
        }}
-   - INTF req without connect: add `connect <partA>::<portA> to <partB>::<portB>;`
-     at package level (outside part defs).
+     SYNTAX RULES (SysML v2 canonical — verified against the official examples corpus):
+       ✓ transition <name> first <source> [accept <event>] [if <guard>] [do <effect>] then <target>;
+       ✗ transition <name> from <source> to <target> when <guard>;       (NOT canonical — use first/if/then)
+       ✗ transition <name> -> <target>;                                  (NOT canonical — `->` is for succession)
+       ✓ entry action <localName> : <ExistingActionDef>;                 (entry references an action def)
+       ✗ entry action def emergencyStop {{ }}                              (NOT canonical — define action def
+                                                                          at part-def top level, then reference)
+       ✓ transition initial then <state>;                                (canonical initial pseudo-transition)
+       ✗ transition <name>Init from entry to <state>;                    (use `transition initial then ...` instead)
+   - INTF req without connect: add `connect <partA>.<portA> to <partB>.<portB>;`
+     at package level (outside part defs).  SysML v2 uses dot notation for
+     connect endpoints, NOT `::` (which is the namespace-qualified-name operator).
 
 3. CONSISTENCY CHECK
    After applying fixes, verify:
@@ -324,19 +338,34 @@ CRITICAL OWNERSHIP ANNOTATION — you MUST prefix every action def and state def
 comment naming the part def it belongs to.  The next assembly step uses this to embed
 each element inside the correct part def.  Missing annotations cause elements to be lost.
 
-Format (use exactly this style — no other comment form):
+Format (use exactly this style — no other comment form).  All transitions and
+entry actions follow canonical SysML v2 syntax (verified against the official
+examples corpus):
+
   // OWNER: <PartName>
   action def doSomething {{ }}
+
+  // OWNER: <PartName>
+  action def <name>EmergencyResponse {{ }}     // emergency action lives at this level
 
   // OWNER: <PartName>
   state def <Name>SafetyBehavior {{
       state <Name>Nominal;
       state <Name>Fault {{
-          entry action emergencyStop : emergencyStop;
+          entry action onFault : <name>EmergencyResponse;     // reference, not inline def
       }}
-      transition <name>Init from entry to <Name>Nominal;
-      transition <name>Fault from <Name>Nominal to <Name>Fault;
+      transition initial then <Name>Nominal;     // canonical initial transition
+      transition <name>Fault                     // named fault transition
+          first <Name>Nominal                    // source state (NOT `from`)
+          if <faultCondition>                    // guard expression (NOT `when`)
+          then <Name>Fault;                      // target state (NOT `to`)
   }}
+
+CRITICAL — DO NOT USE these non-canonical forms (Syside may parse them but they
+are not SysML v2 standard):
+  ✗  transition X from <state> to <state> when <guard>;     // wrong keywords
+  ✗  transition X -> Y when Z;                              // `->` is succession, not transition
+  ✗  state Y {{ entry action def localAction {{ }} }}            // inline action def in entry
 
 Output a single ```sysml code block containing ONLY the behavioral fragment (with OWNER comments).
 No prose after the block.
@@ -381,13 +410,17 @@ Assembly rules:
        state def BatterySafetyBehavior {{ state BattNominal; state BattFault {{ entry; }} ... }}
    → Embed inside part def SafetyMonitor {{ ... }}.
 4. Add connect statements for ALL inter-component data flows — not just INTF requirements.
-     connect <partA>::<portA> to <partB>::<portB>;
+     connect <partA>.<portA> to <partB>.<portB>;
+   SYNTAX (critical — SysML v2 uses dot notation, NOT `::`):
+     ✓  connect engine.drivePort to transmission.clutchPort;
+     ✗  connect engine::drivePort to transmission::clutchPort;   (wrong — `::` is for
+         qualified namespace names like `Package::Element`, not connect endpoints)
    MINIMUM COVERAGE (mandatory — every item below must have a connect statement):
    (a) Every INTF requirement must map to at least one connect.
    (b) Every safety-related port pair MUST be connected:
-         commStatus     : CommunicationSystem::commStatus     → SafetyMonitor::commStatus
-         sensorStatus   : PerceptionSystem::sensorStatus      → SafetyMonitor::sensorStatus
-         overrideCmd    : SafetyMonitor::overrideCmd          → <MainController>::overrideCmd
+         commStatus     : CommunicationSystem.commStatus     → SafetyMonitor.commStatus
+         sensorStatus   : PerceptionSystem.sensorStatus      → SafetyMonitor.sensorStatus
+         overrideCmd    : SafetyMonitor.overrideCmd          → <MainController>.overrideCmd
    (c) Connect all semantically paired out→in ports (matching base names, e.g.
        `gnssOut → gnssIn`, `battStatusOut → battStatusIn`, `telemetryOut → telemetryIn`).
    (d) Connect the main controller to the communication system for uplink/downlink.
@@ -396,11 +429,11 @@ Assembly rules:
    FAN-IN PROHIBITION (critical): Each `in port` must receive from exactly ONE source.
    Never write two connect statements that both target the same port.
      ✗ WRONG (fan-in):
-         connect flightController::telemetryData to commSystem::telemetryData;
-         connect payloadManager::payloadStatus   to commSystem::telemetryData;   ← same target!
+         connect flightController.telemetryData to commSystem.telemetryData;
+         connect payloadManager.payloadStatus   to commSystem.telemetryData;   ← same target!
      ✓ RIGHT (route through aggregator):
-         connect payloadManager::payloadStatus   to flightController::payloadStatusIn;
-         connect flightController::telemetryData to commSystem::telemetryData;
+         connect payloadManager.payloadStatus   to flightController.payloadStatusIn;
+         connect flightController.telemetryData to commSystem.telemetryData;
    Sub-system status ports (payloadStatus, batteryStatus, etc.) MUST connect to the
    main controller or a dedicated aggregator — NOT directly to a communication port.
 5. Add one satisfy statement PER requirement INSIDE the owning part def, using underscore form:
@@ -720,33 +753,62 @@ class ChainOfThoughtPrompter:
         from the MCTS grounding pass regardless of the model's quality score.
         """
         if redundancy_level == "triple":
+            # Canonical SysML v2 form (verified against the official examples
+            # corpus): transitions use `first / if / then`; emergencyStop is
+            # declared at part-def top level and *referenced* from the entry,
+            # not inline-defined inside an entry.  Channel failure signals are
+            # grounded as Boolean attributes so transition guards have a real
+            # producer; the fail conditions then drive 2-of-3 majority voting.
             instructions = (
                 f"Add the following INSIDE part def {target_part} (before its closing brace):\n\n"
-                f"    attribute redundancyChannels : Integer = 3;\n\n"
+                f"    attribute redundancyChannels : Integer = 3;\n"
+                f"    attribute channelAFailed : Boolean = false;\n"
+                f"    attribute channelBFailed : Boolean = false;\n"
+                f"    attribute channelCFailed : Boolean = false;\n\n"
+                f"    action def emergencyStop {{ }}\n\n"
                 f"    state def TripleChannelRedundancy {{\n"
-                f"        state ChannelA;\n"
-                f"        state ChannelB;\n"
-                f"        state ChannelC;\n"
+                f"        state Active;\n"
                 f"        state FailsafeActive {{\n"
-                f"            entry action def emergencyStop {{ }}\n"
+                f"            entry action stop : emergencyStop;\n"
                 f"        }}\n"
-                f"        transition channelAFail from ChannelA to FailsafeActive when channelAFailed;\n"
-                f"        transition channelBFail from ChannelB to FailsafeActive when channelBFailed;\n"
-                f"        transition channelCFail from ChannelC to FailsafeActive when channelCFailed;\n"
+                f"        transition initial then Active;\n"
+                f"        transition majorityFailAB\n"
+                f"            first Active\n"
+                f"            if channelAFailed and channelBFailed\n"
+                f"            then FailsafeActive;\n"
+                f"        transition majorityFailBC\n"
+                f"            first Active\n"
+                f"            if channelBFailed and channelCFailed\n"
+                f"            then FailsafeActive;\n"
+                f"        transition majorityFailAC\n"
+                f"            first Active\n"
+                f"            if channelAFailed and channelCFailed\n"
+                f"            then FailsafeActive;\n"
                 f"    }}"
             )
         elif redundancy_level == "dual":
+            # Canonical SysML v2 form: see the triple-redundancy comment above.
             instructions = (
                 f"Add the following INSIDE part def {target_part} (before its closing brace):\n\n"
-                f"    attribute redundancyChannels : Integer = 2;\n\n"
+                f"    attribute redundancyChannels : Integer = 2;\n"
+                f"    attribute primaryChannelFailed : Boolean = false;\n"
+                f"    attribute backupChannelFailed  : Boolean = false;\n\n"
+                f"    action def emergencyStop {{ }}\n\n"
                 f"    state def DualChannelRedundancy {{\n"
                 f"        state PrimaryActive;\n"
                 f"        state BackupActive;\n"
                 f"        state FailsafeActive {{\n"
-                f"            entry action def emergencyStop {{ }}\n"
+                f"            entry action stop : emergencyStop;\n"
                 f"        }}\n"
-                f"        transition primaryFail from PrimaryActive to BackupActive when primaryChannelFailed;\n"
-                f"        transition backupFail from BackupActive to FailsafeActive when backupChannelFailed;\n"
+                f"        transition initial then PrimaryActive;\n"
+                f"        transition primaryFail\n"
+                f"            first PrimaryActive\n"
+                f"            if primaryChannelFailed\n"
+                f"            then BackupActive;\n"
+                f"        transition backupFail\n"
+                f"            first BackupActive\n"
+                f"            if backupChannelFailed\n"
+                f"            then FailsafeActive;\n"
                 f"    }}"
             )
         else:

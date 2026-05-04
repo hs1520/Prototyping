@@ -87,6 +87,39 @@ assert abs(sum(DIMENSION_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1
 
 
 # ---------------------------------------------------------------------------
+# Veto floors (Strategy D — conjunction constraint)
+# ---------------------------------------------------------------------------
+# A weighted average lets a strong dimension compensate a weak one, so a model
+# can pass the threshold while having a critical sub-system effectively unimplemented.
+# These floors enforce a minimum on individual dimensions: when violated, the
+# overall score is capped just below the quality threshold so refinement is
+# always triggered, and a [VETO] issue is added to the report.
+
+DIMENSION_VETO_FLOORS: Dict[str, Tuple[float, str]] = {
+    "requirement_satisfaction": (
+        0.50,
+        "more than half the requirements have no SysML construct implementing them",
+    ),
+    "mcts_fidelity": (
+        0.60,
+        "MCTS architectural decisions present only as injected keywords — "
+        "LLM did not produce the design-level details (voting topology, "
+        "grounded guards, item-typed protocol port defs, sensor aggregator) "
+        "that injection cannot generate",
+    ),
+    "safety_assurance": (
+        0.40,
+        "SAFE requirements present but safety machinery (state defs / fault tx / "
+        "override / emergency actions) is critically incomplete",
+    ),
+    "structural_integrity": (
+        0.45,
+        "structural baseline broken — parts lack ports, attributes, or connections",
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -117,12 +150,15 @@ class DesignEvaluator:
     result = evaluator.evaluate(config, model, mcts_config=best_config)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, quality_threshold: float = 0.75) -> None:
         # Expose criteria list for backward compatibility with tests/tooling
         self.criteria: List[EvaluationCriteria] = [
             EvaluationCriteria(name=k, weight=v, description=k.replace("_", " ").title())
             for k, v in DIMENSION_WEIGHTS.items()
         ]
+        # Used to cap weighted_total when a veto fires, so refinement is forced
+        # without making the cap an arbitrary absolute value.
+        self.quality_threshold = quality_threshold
 
     # ------------------------------------------------------------------
     # Public API
@@ -153,6 +189,39 @@ class DesignEvaluator:
             weighted_sum += clamped * DIMENSION_WEIGHTS[dim]
 
         result.weighted_total = round(weighted_sum, 4)
+
+        # ── Veto floors (Strategy D) ─────────────────────────────────────
+        # If any critical dimension is below its floor, force refinement by
+        # capping the weighted_total just below the quality threshold.  We do
+        # NOT directly fail here — the score remains informative and the
+        # refinement loop receives a clear [VETO] tag so the LLM can prioritise.
+        veto_triggered = False
+        # Skip dimension-specific vetos when the dimension is vacuously N/A:
+        #   - safety_assurance: no SAFE requirements
+        #   - mcts_fidelity:    no MCTS config supplied
+        # In both cases the scorer returns 1.0 so the veto would never trigger
+        # anyway, but skipping makes the intent explicit.
+        has_safe = any(
+            "_SAFE_" in r.name for r in model.requirement_definitions
+        )
+        has_mcts = mcts_config is not None
+        for dim, (floor, reason) in DIMENSION_VETO_FLOORS.items():
+            if dim == "safety_assurance" and not has_safe:
+                continue
+            if dim == "mcts_fidelity" and not has_mcts:
+                continue
+            score = result.criteria_scores.get(dim, 1.0)
+            if score < floor:
+                result.issues.insert(
+                    0,
+                    f"[VETO] {dim}={score:.2f} < {floor:.2f} — {reason}",
+                )
+                veto_triggered = True
+
+        if veto_triggered:
+            cap = max(0.0, self.quality_threshold - 0.05)
+            if result.weighted_total > cap:
+                result.weighted_total = round(cap, 4)
 
         issues, recs = self._diagnose(model, mcts_config)
         result.issues.extend(issues)
@@ -190,44 +259,100 @@ class DesignEvaluator:
         mcts_config: Optional[DesignConfiguration],
     ) -> float:
         """
-        70 % satisfy-link coverage + 30 % quantitative specification quality.
+        Per-category semantic implementation rate (Strategy B).
 
-        *Satisfy coverage*: fraction of `requirement def` names that appear as
-        the target of at least one `satisfy` link.
+        For each requirement category, verify the corresponding SysML construct
+        is actually present — not just that a `satisfy` link exists.
+        Token-matching satisfy links (added by `_apply_requirement_traceability`)
+        previously inflated this score; this implementation cross-checks the
+        actual SysML constructs needed for each category.
 
-        *Quantitative spec*: fraction of part defs that have at least one
-        attribute with a non-empty numeric default value *and* a unit — this
-        measures how well the model is numerically specified, not just
-        structurally sketched.
+        Sub-metrics (weights renormalised to active categories only):
+          FUNC →  action def count vs. FUNC requirement count          (0.25)
+          PERF →  numeric+unit attributes count vs. PERF req count      (0.20)
+          SAFE →  state def count vs. SAFE requirement count            (0.20)
+          INTF →  port def AND connect count vs. INTF req count         (0.15)
+          CONS →  doc-comment count vs. CONS requirement count          (0.05)
+          satisfy_coverage (link presence — degraded weight)            (0.15)
+          quant_spec (structural numeric quality)                        (0.10)
         """
         req_defs = model.requirement_definitions
         if not req_defs:
-            satisfy_coverage = 0.5  # no requirements defined: neutral
-        else:
-            req_ids = {r.name for r in req_defs}
-            sat_ids = _satisfied_req_ids(model)
-            satisfy_coverage = len(sat_ids & req_ids) / len(req_ids)
+            return 0.0  # was 0.5 — having no requirements means no implementation
 
-        # Quantitative spec quality
+        text = _sysml_text(model)
         parts = model.part_definitions
-        if not parts:
-            quant_spec = 0.0
-        else:
-            def _has_numeric_attr(part) -> bool:  # noqa: ANN001
-                for a in part.attributes:
-                    val = getattr(a, "default_value", None)
-                    unit = getattr(a, "unit", None)
-                    if val and unit:
-                        try:
-                            float(str(val).replace(",", "."))
-                            return True
-                        except (ValueError, TypeError):
-                            pass
-                return False
 
+        func_reqs = [r for r in req_defs if "_FUNC_" in r.name]
+        perf_reqs = [r for r in req_defs if "_PERF_" in r.name]
+        safe_reqs = [r for r in req_defs if "_SAFE_" in r.name]
+        intf_reqs = [r for r in req_defs if "_INTF_" in r.name]
+        cons_reqs = [r for r in req_defs if "_CONS_" in r.name]
+
+        components: List[Tuple[float, float]] = []  # list of (score, weight)
+
+        # ── FUNC → action def per requirement ────────────────────────────
+        if func_reqs:
+            n_actions = len(re.findall(r"\baction\s+def\s+\w+", text))
+            components.append((min(1.0, n_actions / len(func_reqs)), 0.25))
+
+        # ── PERF → numeric attribute per requirement ──────────────────────
+        def _has_numeric_attr(part) -> bool:  # noqa: ANN001
+            for a in part.attributes:
+                val = getattr(a, "default_value", None)
+                unit = getattr(a, "unit", None)
+                if val and unit:
+                    try:
+                        float(str(val).replace(",", "."))
+                        return True
+                    except (ValueError, TypeError):
+                        pass
+            return False
+
+        if perf_reqs:
+            numeric_attrs = sum(
+                1 for p in parts
+                for a in p.attributes
+                if getattr(a, "default_value", None) and getattr(a, "unit", None)
+            )
+            components.append((min(1.0, numeric_attrs / len(perf_reqs)), 0.20))
+
+        # ── SAFE → state def per requirement ──────────────────────────────
+        if safe_reqs:
+            n_states = len(re.findall(r"\bstate\s+def\s+\w+", text))
+            components.append((min(1.0, n_states / len(safe_reqs)), 0.20))
+
+        # ── INTF → port def AND connect per requirement (double check) ────
+        if intf_reqs:
+            n_port_defs = len(re.findall(r"\bport\s+def\s+\w+", text))
+            # SysML v2 connect uses dot notation (verified against the official
+            # SysML-v2-release-src/examples corpus — all 22 connects use `.`).
+            n_connects = len(re.findall(
+                r"\bconnect\s+\w+\.\w+\s+to\s+\w+\.\w+", text, re.IGNORECASE
+            ))
+            intf_score = min(1.0, min(n_port_defs, n_connects) / len(intf_reqs))
+            components.append((intf_score, 0.15))
+
+        # ── CONS → doc annotation or constraint ──────────────────────────
+        if cons_reqs:
+            doc_count = len(re.findall(r"\bdoc\s+/\*", text))
+            components.append((min(1.0, doc_count / len(cons_reqs)), 0.05))
+
+        # ── Satisfy-link coverage (low weight — was 70% in old design) ───
+        req_ids = {r.name for r in req_defs}
+        sat_ids = _satisfied_req_ids(model)
+        satisfy_cov = len(sat_ids & req_ids) / len(req_ids)
+        components.append((satisfy_cov, 0.15))
+
+        # ── Quantitative spec quality (parts with numeric+unit attributes) ─
+        if parts:
             quant_spec = sum(1 for p in parts if _has_numeric_attr(p)) / len(parts)
+            components.append((quant_spec, 0.10))
 
-        return 0.70 * satisfy_coverage + 0.30 * quant_spec
+        if not components:
+            return 0.0
+        total_w = sum(w for _, w in components)
+        return sum(s * w for s, w in components) / total_w
 
     # ------------------------------------------------------------------
     # Dimension 2: MCTS Fidelity (25 %)
@@ -240,86 +365,314 @@ class DesignEvaluator:
         mcts_config: Optional[DesignConfiguration],
     ) -> float:
         """
-        Checks whether MCTS architectural decisions are present in the SysML text.
-        Each active check contributes equally to the score.
-        Returns 1.0 (dimension N/A) when no MCTS config is supplied.
+        Scores the LLM's design judgment in implementing MCTS decisions.
+
+        Critical insight: Phase-3 programmatic injections (in orchestrator.py)
+        write keyword patterns directly into the SysML text — `controlFrequency`,
+        `MAVLinkSignal`, `sensorUnitN`, `TripleChannelRedundancy`.  An evaluator
+        that checks "is this keyword present?" measures injection success, not
+        LLM design judgment, creating a self-verification loop.
+
+        This dimension instead checks design qualities that injection CANNOT
+        produce, so it correctly measures whether the LLM understood the
+        architectural intent:
+
+          • Causal connectivity     — guards tied to actual ports/attributes
+          • Type richness           — port def has inner item; item def linked
+          • Topology coherence      — redundancy has voter; sensors aggregated
+          • Domain separation       — power vs. data ports differentiated
+          • Behavioral grounding    — frequency lives next to action/state defs
+          • Decision consistency    — distributed_control matches actual count
+
+        Each parameter mixes a small "injection floor" (low weight) with
+        larger weights on LLM-judgment indicators.  Returns 1.0 (N/A) when no
+        MCTS config is supplied.
         """
         if mcts_config is None:
             return 1.0
 
         params = mcts_config.parameters
         text = _sysml_text(model)
-        checks: List[Tuple[str, float]] = []   # (label, 0-1 score)
+        checks: List[Tuple[str, float]] = []
 
-        # ── Redundancy ───────────────────────────────────────────────────
+        # Helper: extract body text of part defs whose name matches a pattern
+        def _part_bodies_matching(name_pat: str) -> str:
+            part_re = re.compile(
+                rf"\bpart\s+def\s+(\w*(?:{name_pat})\w*)\s*\{{",
+                re.IGNORECASE,
+            )
+            bodies: List[str] = []
+            for m in part_re.finditer(text):
+                brace_open = text.index("{", m.start())
+                depth = 0
+                i = brace_open
+                end = -1
+                while i < len(text):
+                    if text[i] == "{":
+                        depth += 1
+                    elif text[i] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = i
+                            break
+                    i += 1
+                if end != -1:
+                    bodies.append(text[brace_open:end])
+            return "\n".join(bodies)
+
+        # ── Redundancy: voting topology + signal grounding ───────────────
+        # Injection writes channel states + made-up `channelXFailed` guards
+        # with no source.  LLM judgment shows up as:
+        #   (a) sanity:    channel states match redundancy level (floor)
+        #   (b) voting:    ≥1 transition guard combines multiple channels
+        #                  ("when X and Y", "when X or Y") — true TMR pattern
+        #   (c) grounded:  guard names map to declared in ports / attributes
+        #                  in the same part body (signals have a real source)
         redundancy = str(params.get("redundancy_level", "none")).lower()
-        if redundancy == "triple":
-            ok = bool(re.search(
-                r"TripleChannel|redundancyChannels\s*:\s*Integer\s*=\s*3"
-                r"|ChannelA\b.{0,200}ChannelB\b.{0,200}ChannelC\b",
-                text, re.DOTALL | re.IGNORECASE,
-            ))
-            checks.append(("tmr_structure", 1.0 if ok else 0.0))
-        elif redundancy == "dual":
-            ok = bool(re.search(
-                r"DualChannel|redundancyChannels\s*:\s*Integer\s*=\s*2",
-                text, re.IGNORECASE,
-            ))
-            checks.append(("dual_structure", 1.0 if ok else 0.0))
+        if redundancy in ("triple", "dual"):
+            n_channels = 3 if redundancy == "triple" else 2
+            safety_body = _part_bodies_matching("Safety|Monitor|Fault|Health")
 
-        # ── Communication protocol ───────────────────────────────────────
+            # (a) sanity — redundancy "shape" is present.  Two equivalent forms
+            #     count: (i) one state per channel (`state ChannelA/B/C` or
+            #     `Primary/Backup/Standby`), or (ii) one Boolean attribute per
+            #     channel (`attribute channelXFailed : Boolean`) which is the
+            #     more elegant "Active + voting on Booleans" idiom.  Either
+            #     form represents the redundancy decision; both are accepted
+            #     so the evaluator does not penalise the more compact design.
+            channel_states = re.findall(
+                r"\bstate\s+(Channel[A-Z]\w*|Primary\w*|Backup\w*|Standby\w*)",
+                safety_body, re.IGNORECASE,
+            )
+            channel_bools = re.findall(
+                r"\battribute\s+(channel[A-Z]\w*Failed|primary\w*Failed|backup\w*Failed)\s*:\s*Boolean",
+                safety_body, re.IGNORECASE,
+            )
+            shape_count = max(len(set(channel_states)), len(set(channel_bools)))
+            sanity = 1.0 if shape_count >= n_channels else 0.0
+
+            # (b) voting — composite guard expressions.
+            #     Accepts the canonical SysML v2 form `transition X first Y if
+            #     <guard> then Z;` AND the legacy non-canonical project form
+            #     `transition X from Y to Z when <guard>;` so the metric is not
+            #     biased against either generation style.  Multi-line variants
+            #     (`first` / `if` / `then` on separate lines) are matched via
+            #     re.DOTALL with whitespace tolerance.
+            voting_canonical = re.compile(
+                r"\btransition\s+\w+\s+first\s+\w+\s+if\s+([^;]+?)\s+then\s+\w+\s*;",
+                re.IGNORECASE | re.DOTALL,
+            )
+            voting_legacy = re.compile(
+                r"\btransition\s+\w+\s+from\s+\w+\s+to\s+\w+\s+when\s+([^;]+);",
+                re.IGNORECASE,
+            )
+            has_voting = False
+            for pat in (voting_canonical, voting_legacy):
+                for m in pat.finditer(safety_body):
+                    guard = m.group(1).lower()
+                    logical_ops = guard.count(" and ") + guard.count(" or ")
+                    channel_refs = len(re.findall(r"channel[a-z]\w*", guard))
+                    if logical_ops >= 1 or channel_refs >= 2:
+                        has_voting = True
+                        break
+                if has_voting:
+                    break
+            voting = 1.0 if has_voting else 0.0
+
+            # (c) grounded — every guard identifier must resolve to a declared
+            #     in port or attribute in the safety part body.  Accepts both
+            #     the canonical `if <guard>` and the legacy `when <guard>`.
+            #     Skips literal keywords (`true` / `false`) which do not need
+            #     a producer.
+            _GUARD_LITERALS = {"true", "false"}
+            guard_names = set()
+            for kw in (r"if", r"when"):
+                for m in re.finditer(
+                    rf"\b{kw}\s+(\w+)", safety_body, re.IGNORECASE,
+                ):
+                    name = m.group(1)
+                    if name.lower() not in _GUARD_LITERALS:
+                        guard_names.add(name)
+            grounded_count = sum(
+                1 for g in guard_names
+                if re.search(
+                    rf"\b(?:in\s+port|attribute)\s+{re.escape(g)}\b",
+                    safety_body, re.IGNORECASE,
+                )
+            )
+            grounding = grounded_count / max(len(guard_names), 1)
+
+            redundancy_score = (
+                0.20 * sanity        # injection floor
+                + 0.40 * voting      # primary LLM judgment
+                + 0.40 * grounding   # signal causality
+            )
+            checks.append((f"{redundancy}_redundancy_design", redundancy_score))
+
+        # ── Communication protocol: type richness + clean separation ────
+        # Injection writes `port def XSignal;` (empty body) and replaces
+        # DataPort/RfPort usages.  LLM judgment shows up as:
+        #   (a) sanity:    port def exists (floor — injection guarantees it)
+        #   (b) body:      port def has a non-empty body
+        #   (c) item link: body references the protocol's item def
+        #   (d) cleanup:   block-form generic port defs are removed
+        #   (e) domain:    PowerPort-typed ports are NOT replaced
         protocol = str(params.get("communication_protocol", "")).strip()
         if protocol and protocol.lower() not in ("none", ""):
             proto_id = re.sub(r"[^A-Za-z0-9]", "", protocol)
             signal_type = f"{proto_id}Signal"
 
-            # Signal type definition present?
+            # (a) sanity
             has_def = bool(re.search(
-                rf"port\s+def\s+{re.escape(signal_type)}\b", text, re.IGNORECASE
+                rf"port\s+def\s+{re.escape(signal_type)}\b",
+                text, re.IGNORECASE,
             ))
 
-            # Residual generic port usages
-            all_usages = re.findall(
-                r"(?:in|out|inout)\s+port\s+\w+\s*:\s*(\w+)", text, re.IGNORECASE
+            # (b) body present (block-form `port def X { ... }`)
+            body_match = re.search(
+                rf"port\s+def\s+{re.escape(signal_type)}\s*\{{([^}}]*)\}}",
+                text, re.IGNORECASE,
             )
-            n_generic = sum(
-                1 for t in all_usages if t.lower() in ("dataport", "rfport", "genericport")
-            )
-            n_total = len(all_usages)
-            residual_rate = n_generic / n_total if n_total else 0.0
+            has_body = bool(body_match)
+            body = body_match.group(1) if body_match else ""
 
-            proto_score = (1.0 if has_def else 0.0) * (1.0 - min(1.0, residual_rate * 3))
-            checks.append(("protocol_signal", proto_score))
+            # (c) body references a protocol-specific item def
+            item_linked = bool(re.search(
+                rf"\bitem\s+\w+\s*:\s*\w*{re.escape(proto_id)}\w*",
+                body, re.IGNORECASE,
+            )) if has_body else False
 
-        # ── Sensor count ─────────────────────────────────────────────────
-        num_sensors = int(params.get("num_sensors", 0))
-        if num_sensors > 1:
-            _SENSOR_PAT = re.compile(
-                r"\bpart\s+\w+\s*:\s*\w*(?:Sensor|Perception|Detector|Camera|Lidar|IMU|GPS|Radar)\w*\s*;",
-                re.IGNORECASE,
-            )
-            found = len(_SENSOR_PAT.findall(text))
-            checks.append(("sensor_count", min(1.0, found / num_sensors)))
+            # (d) no leftover block-form generic port defs (semicolon form
+            #     is removed by injection; block form is the LLM's job)
+            leftover_block = bool(re.search(
+                r"\bport\s+def\s+(?:DataPort|RfPort|RFPort|GenericPort)\s*\{",
+                text, re.IGNORECASE,
+            ))
+            cleaned = 0.0 if leftover_block else 1.0
 
-        # ── Control frequency ────────────────────────────────────────────
-        freq = float(params.get("control_frequency_hz", 0))
-        if freq > 0:
-            freq_str = f"{freq:.1f}".rstrip("0").rstrip(".")
-            ok = bool(re.search(
-                rf"controlFrequency\s*:\s*Real\s*=\s*{re.escape(freq_str)}",
+            # (e) power ports retain PowerPort type (domain separation)
+            power_misuse = bool(re.search(
+                rf"\b(?:in|out|inout)\s+port\s+\w*[Pp]ower\w*\s*:\s*"
+                rf"{re.escape(signal_type)}\b",
                 text,
             ))
-            checks.append(("control_frequency", 1.0 if ok else 0.0))
+            domain_sep = 0.0 if power_misuse else 1.0
 
-        # ── Distributed control ──────────────────────────────────────────
-        if params.get("distributed_control") is True:
-            n_parts = len(model.part_definitions)
-            # Distributed = ≥3 distinct part defs (heuristic)
-            checks.append(("distributed_control", 1.0 if n_parts >= 3 else 0.0))
+            protocol_score = (
+                0.10 * (1.0 if has_def else 0.0)       # injection floor
+                + 0.25 * (1.0 if has_body else 0.0)    # LLM enriches def
+                + 0.25 * (1.0 if item_linked else 0.0) # type-system linkage
+                + 0.20 * cleaned                       # dead-def cleanup
+                + 0.20 * domain_sep                    # domain awareness
+            )
+            checks.append(("protocol_design", protocol_score))
+
+        # ── Sensor count: redundancy must be wired, not just declared ────
+        # Injection writes `part sensorUnitN : Type;` with NO connects (the
+        # injection's fan-in protection skips wiring).  LLM judgment shows
+        # up as:
+        #   (a) count:       enough sensor instances exist (floor)
+        #   (b) connected:   redundant sensors are NOT dangling
+        #   (c) aggregator:  a Voter/Aggregator/Fusion part type exists
+        num_sensors = int(params.get("num_sensors", 0))
+        if num_sensors > 1:
+            _SENSOR_USAGE_RE = re.compile(
+                r"\bpart\s+(\w+)\s*:\s*\w*"
+                r"(?:Sensor|Perception|Detector|Camera|Lidar|IMU|GPS|Radar)\w*\s*;",
+                re.IGNORECASE,
+            )
+            instances = {m.group(1) for m in _SENSOR_USAGE_RE.finditer(text)}
+
+            # (a) count
+            count_ok = 1.0 if len(instances) >= num_sensors else \
+                       len(instances) / num_sensors
+
+            # (b) every instance appears in a connect statement
+            connect_re = re.compile(
+                r"\bconnect\s+(\w+)\.\w+\s+to\s+(\w+)\.\w+", re.IGNORECASE,
+            )
+            connected_parts: set = set()
+            for m in connect_re.finditer(text):
+                connected_parts.add(m.group(1))
+                connected_parts.add(m.group(2))
+            connectivity = (
+                len(instances & connected_parts) / max(len(instances), 1)
+                if instances else 0.0
+            )
+
+            # (c) aggregator/voter part def exists
+            has_aggregator = bool(re.search(
+                r"\bpart\s+def\s+\w*"
+                r"(?:Aggregat|Voter|Fusion|Combiner|Arbiter|Merger|Selector)\w*",
+                text, re.IGNORECASE,
+            ))
+
+            sensor_score = (
+                0.20 * count_ok                         # injection floor
+                + 0.50 * connectivity                   # core LLM judgment
+                + 0.30 * (1.0 if has_aggregator else 0.0)  # voter pattern
+            )
+            checks.append(("sensor_redundancy_design", sensor_score))
+
+        # ── Control frequency: tied to behavior, not just an attribute ───
+        # Injection writes the attribute.  LLM judgment shows up as:
+        #   (a) location:   attribute lives in the controller part (floor)
+        #   (b) behaviour:  same part has ≥1 action def or state def
+        #                   (the periodic logic the frequency is supposed to
+        #                    drive)
+        freq = float(params.get("control_frequency_hz", 0))
+        if freq > 0:
+            ctrl_body = _part_bodies_matching(
+                "Controller|Flight|Autopilot|Nav|MainControl"
+            )
+            freq_str = f"{freq:.1f}".rstrip("0").rstrip(".")
+            in_ctrl = bool(re.search(
+                rf"controlFrequency\s*:\s*Real\s*=\s*{re.escape(freq_str)}",
+                ctrl_body,
+            ))
+            has_behaviour = bool(
+                re.search(r"\baction\s+def\s+\w+", ctrl_body, re.IGNORECASE)
+                or re.search(r"\bstate\s+def\s+\w+", ctrl_body, re.IGNORECASE)
+            )
+            checks.append((
+                "control_freq_design",
+                0.40 * (1.0 if in_ctrl else 0.0)         # injection floor
+                + 0.60 * (1.0 if has_behaviour else 0.0)  # behavioural ground
+            ))
+
+        # ── Distributed control: actual topology check ───────────────────
+        # NO injection writes this — fully an LLM judgment.
+        #   True  → ≥3 distinct controller-class part defs
+        #   False → exactly 1 (or at most 2 with backup) controller part def
+        distributed = params.get("distributed_control")
+        if distributed is True:
+            ctrl_parts = re.findall(
+                r"\bpart\s+def\s+(\w*"
+                r"(?:Controller|Manager|Module|Subsystem|Node)\w*)\s*\{",
+                text, re.IGNORECASE,
+            )
+            checks.append((
+                "distributed_topology", min(1.0, len(set(ctrl_parts)) / 3.0)
+            ))
+        elif distributed is False:
+            ctrl_parts = re.findall(
+                r"\bpart\s+def\s+\w*Controller\w*\s*\{",
+                text, re.IGNORECASE,
+            )
+            n_ctrl = len(ctrl_parts)
+            if n_ctrl == 1:
+                score = 1.0
+            elif n_ctrl == 2:
+                score = 0.7
+            elif n_ctrl == 0:
+                score = 0.2  # missing controller is also a problem
+            else:
+                # 3+ controllers contradicts a centralised decision
+                score = max(0.0, 1.0 - (n_ctrl - 1) * 0.3)
+            checks.append(("centralised_topology", score))
 
         if not checks:
-            return 1.0  # nothing to check
-
+            return 1.0
         return sum(v for _, v in checks) / len(checks)
 
     # ------------------------------------------------------------------
@@ -333,10 +686,12 @@ class DesignEvaluator:
         mcts_config: Optional[DesignConfiguration],
     ) -> float:
         """
-        Four equal sub-metrics:
+        Four sub-metrics (Strategy E — tighter denominators, no neutral fallbacks):
           port_coverage        — fraction of parts with ≥1 directed port
           attr_coverage        — fraction of parts with ≥1 numeric attribute
-          connect_density      — connect statements / n_parts (capped at 1)
+          out_port_connected   — fraction of `out`/`inout` ports referenced in
+                                  at least one connect statement (replaces
+                                  connect_density which was too lenient)
           instance_connectivity— fraction of part usages appearing in ≥1 connect
         """
         parts = model.part_definitions
@@ -345,13 +700,26 @@ class DesignEvaluator:
         n = len(parts)
         text = _sysml_text(model)
 
-        # ── Port coverage ────────────────────────────────────────────────
+        # ── Port coverage (text-level fallback for AST direction=NONE) ───
         def _has_directed_port(part) -> bool:  # noqa: ANN001
-            return any(
+            if any(
                 getattr(p, "direction", FeatureDirection.NONE) not in
                 (None, FeatureDirection.NONE)
                 for p in part.ports
+            ):
+                return True
+            # Fallback: scan part def body for `in/out/inout port` keyword.
+            # Syside sometimes returns NONE for directions defined in port def
+            # bodies rather than inline at the port usage site.
+            part_block_re = re.compile(
+                rf"\bpart\s+def\s+{re.escape(part.name)}\s*\{{(.*?)\n\s*\}}",
+                re.DOTALL,
             )
+            m = part_block_re.search(text)
+            body = m.group(1) if m else ""
+            return bool(re.search(
+                r"\b(?:in|out|inout)\s+port\s+\w+", body, re.IGNORECASE
+            ))
         port_cov = sum(1 for p in parts if _has_directed_port(p)) / n
 
         # ── Attribute coverage ───────────────────────────────────────────
@@ -359,24 +727,45 @@ class DesignEvaluator:
             return any(getattr(a, "default_value", None) for a in part.attributes)
         attr_cov = sum(1 for p in parts if _has_valued_attr(p)) / n
 
-        # ── Connect density (text-level) ─────────────────────────────────
-        connects = re.findall(
-            r"\bconnect\s+\w+::\w+\s+to\s+\w+::\w+", text, re.IGNORECASE
+        # ── Out-port connection rate (replaces lenient connect_density) ──
+        # Count distinct out/inout port names that appear as the source of a
+        # connect statement. Unconnected outputs are a real architectural gap.
+        out_port_decls = re.findall(
+            r"\b(?:out|inout)\s+port\s+(\w+)", text, re.IGNORECASE
         )
-        # Expect roughly one connect per part as minimum baseline
-        connect_density = min(1.0, len(connects) / max(n, 1))
+        connect_sources = {
+            m.group(1)
+            for m in re.finditer(
+                r"\bconnect\s+\w+\.(\w+)\s+to\s+\w+\.\w+", text, re.IGNORECASE
+            )
+        }
+        if out_port_decls:
+            connected_out = sum(
+                1 for p in set(out_port_decls) if p in connect_sources
+            )
+            connect_density = connected_out / len(set(out_port_decls))
+        else:
+            # No out ports declared at all — fall back to connect-per-part
+            connects = re.findall(
+                r"\bconnect\s+\w+\.\w+\s+to\s+\w+\.\w+", text, re.IGNORECASE
+            )
+            # Tighter denominator: expect 1.5 connects per part
+            connect_density = min(1.0, len(connects) / max(n * 1.5, 1))
 
         # ── Instance connectivity ────────────────────────────────────────
         part_usage_re = re.compile(r"\bpart\s+(\w+)\s*:\s*\w+\s*;")
         connect_instance_re = re.compile(
-            r"\bconnect\s+(\w+)::\w+\s+to\s+(\w+)::\w+", re.IGNORECASE
+            r"\bconnect\s+(\w+)\.\w+\s+to\s+(\w+)\.\w+", re.IGNORECASE
         )
         declared = {m.group(1) for m in part_usage_re.finditer(text)}
         connected: set = set()
         for m in connect_instance_re.finditer(text):
             connected.add(m.group(1))
             connected.add(m.group(2))
-        instance_conn = len(declared & connected) / max(len(declared), 1) if declared else 0.5
+        # Removed neutral 0.5 fallback: no part usages → 0.0 (model is not assembled)
+        instance_conn = (
+            len(declared & connected) / max(len(declared), 1) if declared else 0.0
+        )
 
         return 0.25 * port_cov + 0.25 * attr_cov + 0.25 * connect_density + 0.25 * instance_conn
 
@@ -404,10 +793,11 @@ class DesignEvaluator:
         n_safe = len(safe_reqs)
         text = _sysml_text(model)
 
-        # ── State-machine coverage ───────────────────────────────────────
+        # ── State-machine coverage (tighter — 1:1 with SAFE reqs) ────────
+        # Was: state_defs / max(n_safe / 1.5, 1) — 3 SAFE reqs only need 2 states
+        # Now: state_defs / n_safe — every SAFE req should have its own state def
         state_defs = len(re.findall(r"\bstate\s+def\s+\w+", text))
-        # Heuristic: one meaningful state machine per 1.5 SAFE requirements
-        state_cov = min(1.0, state_defs / max(n_safe / 1.5, 1))
+        state_cov = min(1.0, state_defs / max(n_safe, 1))
 
         # ── Fault transitions ────────────────────────────────────────────
         # Genuine fault transitions go TO a state containing "Fault", "Fail", or "failsafe"
@@ -419,20 +809,21 @@ class DesignEvaluator:
 
         # ── Override-command path ────────────────────────────────────────
         has_override_port = bool(re.search(r"\boverrideCmd\b", text))
-        # Also check it appears in a connect statement
+        # Also check it appears in a connect statement (SysML v2 dot notation)
         override_connected = bool(re.search(
-            r"\bconnect\s+\w+::overrideCmd\s+to|to\s+\w+::overrideCmd\b",
+            r"\bconnect\s+\w+\.overrideCmd\s+to|to\s+\w+\.overrideCmd\b",
             text, re.IGNORECASE,
         ))
         override_score = (0.5 if has_override_port else 0.0) + (0.5 if override_connected else 0.0)
 
-        # ── Emergency action defs ────────────────────────────────────────
+        # ── Emergency action defs (tighter — 1 per 1.5 SAFE reqs) ────────
+        # Was: emerg_actions / max(n_safe / 3.0, 1) — 6 SAFE reqs only need 2 actions
+        # Now: emerg_actions / max(n_safe / 1.5, 1)
         emerg_actions = len(re.findall(
             r"action\s+def\s+\w*(?:emergency|autoLand|emergLand|emergStop|shutdown|failsafe)\w*",
             text, re.IGNORECASE,
         ))
-        # One emergency action per ~3 SAFE reqs is good
-        emerg_score = min(1.0, emerg_actions / max(n_safe / 3.0, 1))
+        emerg_score = min(1.0, emerg_actions / max(n_safe / 1.5, 1))
 
         return (
             0.40 * state_cov
@@ -471,11 +862,13 @@ class DesignEvaluator:
             )
             type_consistency = 1.0 - min(1.0, n_generic / len(all_usage_types))
         else:
-            type_consistency = 0.5
+            # No port usages declared at all — model has no interfaces.
+            # Was 0.5 (neutral); now 0.0 because absent ports = absent interfaces.
+            type_consistency = 0.0
 
         # ── Fan-in freedom ───────────────────────────────────────────────
         connects = re.findall(
-            r"\bconnect\s+\w+::(\w+)\s+to\s+(\w+)::(\w+)", text, re.IGNORECASE
+            r"\bconnect\s+\w+\.(\w+)\s+to\s+(\w+)\.(\w+)", text, re.IGNORECASE
         )
         target_count: Dict[str, int] = {}
         for _, tgt_inst, tgt_port in connects:
@@ -489,7 +882,8 @@ class DesignEvaluator:
 
         # ── Port direction coverage ──────────────────────────────────────
         if not parts:
-            direction_cov = 0.5
+            # No parts → no interfaces at all (was 0.5 neutral).
+            direction_cov = 0.0
         else:
             def _all_directed(part) -> bool:  # noqa: ANN001
                 return bool(part.ports) and all(
@@ -552,7 +946,7 @@ class DesignEvaluator:
         in_connects = {
             g
             for m in re.finditer(
-                r"\bconnect\s+(\w+)::\w+\s+to\s+(\w+)::\w+", text, re.IGNORECASE
+                r"\bconnect\s+(\w+)\.\w+\s+to\s+(\w+)\.\w+", text, re.IGNORECASE
             )
             for g in (m.group(1), m.group(2))
         }
@@ -581,17 +975,13 @@ class DesignEvaluator:
             )
 
         # ── Fan-in violations ────────────────────────────────────────────
-        connects_raw = re.findall(
-            r"\bconnect\s+(\w+::)?(\w+)::\s*(\w+)\s+to\s+(\w+)::\s*(\w+)",
-            text, re.IGNORECASE,
-        )
         target_map: Dict[str, List[str]] = {}
         for m in re.finditer(
-            r"\bconnect\s+(\w+)::(\w+)\s+to\s+(\w+)::(\w+)", text, re.IGNORECASE
+            r"\bconnect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)", text, re.IGNORECASE
         ):
             src, sp, tgt, tp = m.groups()
-            key = f"{tgt}::{tp}"
-            target_map.setdefault(key, []).append(f"{src}::{sp}")
+            key = f"{tgt}.{tp}"
+            target_map.setdefault(key, []).append(f"{src}.{sp}")
         fan_ins = {k: v for k, v in target_map.items() if len(v) > 1}
         if fan_ins:
             for tgt_key, sources in list(fan_ins.items())[:3]:
@@ -616,57 +1006,276 @@ class DesignEvaluator:
                 "entry state, a fault transition, and an `action def emergencyXxx {{ }}`."
             )
 
-        # ── MCTS decision gaps ───────────────────────────────────────────
+        # ── MCTS decision gaps (design-judgment level, not keyword level) ─
+        # These diagnostics mirror the sub-checks in `_score_mcts_fidelity`.
+        # Each gap surfaces a *design judgment* the LLM still owes — the kind
+        # of architectural detail the Phase-3 injection pipeline structurally
+        # cannot produce, so the refinement LLM is the only place to fix it.
         if mcts_config:
             params = mcts_config.parameters
 
+            # ── Redundancy ────────────────────────────────────────────────
             redundancy = str(params.get("redundancy_level", "none")).lower()
-            if redundancy == "triple" and not re.search(
-                r"TripleChannel|redundancyChannels\s*:\s*Integer\s*=\s*3", text
-            ):
-                issues.append(
-                    "MCTS: redundancy_level=triple not implemented "
-                    "(missing TripleChannelRedundancy state def)"
+            if redundancy in ("triple", "dual"):
+                n_channels = 3 if redundancy == "triple" else 2
+                # Find safety part body (cannot reuse private helper here)
+                safety_pat = re.compile(
+                    r"\bpart\s+def\s+\w*(?:Safety|Monitor|Fault|Health)\w*\s*\{",
+                    re.IGNORECASE,
                 )
-                recs.append(
-                    "Inside the safety-monitor part def, add:\n"
-                    "  attribute redundancyChannels : Integer = 3;\n"
-                    "  state def TripleChannelRedundancy {\n"
-                    "      state ChannelA; state ChannelB; state ChannelC;\n"
-                    "      state FailsafeActive { entry action def emergencyStop { } }\n"
-                    "      transition channelAFail from ChannelA to FailsafeActive when channelAFailed;\n"
-                    "      ...  }"
-                )
+                safety_match = safety_pat.search(text)
+                safety_body = ""
+                if safety_match:
+                    brace_open = text.index("{", safety_match.start())
+                    depth, i, end = 0, brace_open, -1
+                    while i < len(text):
+                        if text[i] == "{":
+                            depth += 1
+                        elif text[i] == "}":
+                            depth -= 1
+                            if depth == 0:
+                                end = i
+                                break
+                        i += 1
+                    if end != -1:
+                        safety_body = text[brace_open:end]
 
+                # Voting transition?
+                voting_re = re.compile(
+                    r"\btransition\s+\w+\s+from\s+\w+\s+to\s+\w+\s+when\s+([^;]+);",
+                    re.IGNORECASE,
+                )
+                has_voting = any(
+                    " and " in m.group(1).lower() or " or " in m.group(1).lower()
+                    or len(re.findall(r"channel[a-z]\w*", m.group(1).lower())) >= 2
+                    for m in voting_re.finditer(safety_body)
+                )
+                if not has_voting:
+                    issues.append(
+                        f"MCTS: {redundancy} redundancy lacks voting logic — "
+                        f"channel transitions fire independently with no majority rule"
+                    )
+                    recs.append(
+                        f"Inside the redundancy state def, add a transition whose guard "
+                        f"combines ≥ 2 channel conditions, using the canonical SysML v2 "
+                        f"`first / if / then` keywords:\n"
+                        f"  transition majorityFail\n"
+                        f"      first Active\n"
+                        f"      if channelAFailed and channelBFailed\n"
+                        f"      then FailsafeActive;"
+                    )
+
+                # Grounded guards?
+                guard_names = set(re.findall(
+                    r"\bwhen\s+(\w+)", safety_body, re.IGNORECASE
+                ))
+                ungrounded = [
+                    g for g in guard_names
+                    if not re.search(
+                        rf"\b(?:in\s+port|attribute)\s+{re.escape(g)}\b",
+                        safety_body, re.IGNORECASE,
+                    )
+                ]
+                if ungrounded:
+                    issues.append(
+                        f"MCTS: {redundancy} redundancy uses ungrounded guards — "
+                        f"{', '.join(sorted(ungrounded)[:3])}"
+                        f"{'...' if len(ungrounded) > 3 else ''} "
+                        f"(no in port or attribute produces these signals)"
+                    )
+                    recs.append(
+                        "For each guard like `channelXFailed`, declare a producer in the "
+                        "same part body, e.g.:\n"
+                        "  in port channelAStatus : DataPort;\n"
+                        "  attribute channelAFailed : Boolean = false;"
+                    )
+
+            # ── Communication protocol ────────────────────────────────────
             protocol = str(params.get("communication_protocol", "")).strip()
             if protocol and protocol.lower() not in ("none", ""):
                 proto_id = re.sub(r"[^A-Za-z0-9]", "", protocol)
                 signal_type = f"{proto_id}Signal"
-                if not re.search(rf"port\s+def\s+{re.escape(signal_type)}\b", text):
+
+                # Has the port def gained a body?
+                has_def = bool(re.search(
+                    rf"port\s+def\s+{re.escape(signal_type)}\b", text,
+                    re.IGNORECASE,
+                ))
+                has_body = bool(re.search(
+                    rf"port\s+def\s+{re.escape(signal_type)}\s*\{{[^}}]*\}}",
+                    text, re.IGNORECASE,
+                ))
+                if has_def and not has_body:
                     issues.append(
-                        f"MCTS: communication_protocol={protocol} not implemented "
-                        f"(missing `port def {signal_type};`)"
+                        f"MCTS: `port def {signal_type}` is an empty forward declaration"
+                        f" — protocol carries no payload type"
                     )
                     recs.append(
-                        f"Add `port def {signal_type};` at the package level and replace "
-                        f"all DataPort/RfPort usages with `{signal_type}`."
+                        f"Replace `port def {signal_type};` with a proper definition that "
+                        f"references the protocol's payload item def, e.g.:\n"
+                        f"  port def {signal_type} {{ inout item data : {proto_id}Telemetry; }}"
                     )
 
+                # Block-form generic port defs left undeleted?
+                leftover = re.findall(
+                    r"\bport\s+def\s+(DataPort|RfPort|RFPort|GenericPort)\s*\{",
+                    text, re.IGNORECASE,
+                )
+                if leftover:
+                    issues.append(
+                        f"Stale generic port defs remain: "
+                        f"{', '.join(sorted(set(leftover)))}"
+                    )
+                    recs.append(
+                        "Remove the unused `port def DataPort { ... }` / `port def RfPort "
+                        "{ ... }` block declarations — all usages now reference "
+                        f"`{signal_type}`, so these are dead code."
+                    )
+
+                # Power port misuse (protocol type leaked onto power ports)?
+                power_misuse = re.findall(
+                    rf"\b(?:in|out|inout)\s+port\s+(\w*[Pp]ower\w*)\s*:\s*"
+                    rf"{re.escape(signal_type)}\b",
+                    text,
+                )
+                if power_misuse:
+                    issues.append(
+                        f"MCTS: protocol type {signal_type} incorrectly applied to "
+                        f"power port(s): {', '.join(power_misuse)}"
+                    )
+                    recs.append(
+                        "Restore PowerPort type on power-domain ports — they carry "
+                        "electrical energy, not protocol data."
+                    )
+
+            # ── Sensor redundancy: count + connectivity + aggregator ──────
             num_sensors = int(params.get("num_sensors", 0))
             if num_sensors > 1:
                 _SENSOR_PAT = re.compile(
-                    r"\bpart\s+\w+\s*:\s*\w*(?:Sensor|Perception|Detector|Camera|Lidar|IMU|GPS|Radar)\w*\s*;",
+                    r"\bpart\s+(\w+)\s*:\s*\w*"
+                    r"(?:Sensor|Perception|Detector|Camera|Lidar|IMU|GPS|Radar)\w*\s*;",
                     re.IGNORECASE,
                 )
-                found = len(_SENSOR_PAT.findall(text))
-                if found < num_sensors:
+                instances = {m.group(1) for m in _SENSOR_PAT.finditer(text)}
+                if len(instances) < num_sensors:
                     issues.append(
-                        f"MCTS: num_sensors={num_sensors} requires {num_sensors} sensor part "
-                        f"usages, found {found}"
+                        f"MCTS: num_sensors={num_sensors} but only "
+                        f"{len(instances)} sensor part usage(s) declared"
                     )
                     recs.append(
-                        f"Add {num_sensors - found} more `part sensorUnitN : <SensorPartDef>;` "
-                        f"declarations in the assembly section."
+                        f"Add {num_sensors - len(instances)} more "
+                        f"`part sensorUnitN : <SensorPartDef>;` declarations."
+                    )
+
+                # Dangling sensor instances
+                connected_parts: set = set()
+                for m in re.finditer(
+                    r"\bconnect\s+(\w+)\.\w+\s+to\s+(\w+)\.\w+", text,
+                    re.IGNORECASE,
+                ):
+                    connected_parts.add(m.group(1))
+                    connected_parts.add(m.group(2))
+                dangling = sorted(instances - connected_parts)
+                if dangling:
+                    issues.append(
+                        f"MCTS: redundant sensor instances are dangling "
+                        f"(no connect): {', '.join(dangling)}"
+                    )
+                    recs.append(
+                        "Introduce an aggregator/voter part def and connect every "
+                        "redundant sensor instance to it, e.g.:\n"
+                        "  part def SensorVoter { in port a, b, c : DataPort; "
+                        "out port voted : DataPort; }\n"
+                        "  connect sensorUnit2.sensorStatus to sensorVoter.b;"
+                    )
+
+                # Aggregator/voter present?
+                has_aggregator = bool(re.search(
+                    r"\bpart\s+def\s+\w*"
+                    r"(?:Aggregat|Voter|Fusion|Combiner|Arbiter|Merger|Selector)\w*",
+                    text, re.IGNORECASE,
+                ))
+                if not has_aggregator:
+                    issues.append(
+                        f"MCTS: {num_sensors}-way sensor redundancy has no "
+                        f"voter/aggregator part — redundant readings are not combined"
+                    )
+                    recs.append(
+                        "Add a Voter / Aggregator / FusionUnit part def that consumes "
+                        "all redundant sensor outputs and produces a single combined output."
+                    )
+
+            # ── Control frequency: tied to behaviour? ─────────────────────
+            freq = float(params.get("control_frequency_hz", 0))
+            if freq > 0:
+                ctrl_pat = re.compile(
+                    r"\bpart\s+def\s+\w*"
+                    r"(?:Controller|Flight|Autopilot|Nav|MainControl)\w*\s*\{",
+                    re.IGNORECASE,
+                )
+                ctrl_match = ctrl_pat.search(text)
+                ctrl_body = ""
+                if ctrl_match:
+                    brace_open = text.index("{", ctrl_match.start())
+                    depth, i, end = 0, brace_open, -1
+                    while i < len(text):
+                        if text[i] == "{":
+                            depth += 1
+                        elif text[i] == "}":
+                            depth -= 1
+                            if depth == 0:
+                                end = i
+                                break
+                        i += 1
+                    if end != -1:
+                        ctrl_body = text[brace_open:end]
+                has_behaviour = bool(
+                    re.search(r"\baction\s+def\s+\w+", ctrl_body, re.IGNORECASE)
+                    or re.search(r"\bstate\s+def\s+\w+", ctrl_body, re.IGNORECASE)
+                )
+                if not has_behaviour:
+                    issues.append(
+                        f"MCTS: control_frequency={freq}Hz set but the controller "
+                        f"part has no action def or state def to drive at that rate"
+                    )
+                    recs.append(
+                        "Inside the main controller part def, add a periodic action "
+                        "def or a state machine whose transitions reference "
+                        "`controlFrequency`."
+                    )
+
+            # ── Distributed control: topology vs. decision ────────────────
+            distributed = params.get("distributed_control")
+            if distributed is True:
+                ctrl_count = len(set(re.findall(
+                    r"\bpart\s+def\s+(\w*"
+                    r"(?:Controller|Manager|Module|Subsystem|Node)\w*)\s*\{",
+                    text, re.IGNORECASE,
+                )))
+                if ctrl_count < 3:
+                    issues.append(
+                        f"MCTS: distributed_control=True but only {ctrl_count} "
+                        f"controller-class part def(s) — topology is not actually distributed"
+                    )
+                    recs.append(
+                        "Split control logic into ≥3 part defs whose names reflect their "
+                        "role (e.g., NavigationController, PayloadManager, "
+                        "PowerManager)."
+                    )
+            elif distributed is False:
+                ctrl_count = len(re.findall(
+                    r"\bpart\s+def\s+\w*Controller\w*\s*\{",
+                    text, re.IGNORECASE,
+                ))
+                if ctrl_count > 2:
+                    issues.append(
+                        f"MCTS: distributed_control=False but {ctrl_count} "
+                        f"`*Controller` part defs exist — topology contradicts the "
+                        f"centralisation decision"
+                    )
+                    recs.append(
+                        "Consolidate controllers into one centralised controller part def, "
+                        "absorbing the responsibilities of the others."
                     )
 
         return issues, recs

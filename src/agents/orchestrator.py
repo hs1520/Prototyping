@@ -71,7 +71,9 @@ class Orchestrator:
         # Initialize specialized agents
         self.requirements_agent = RequirementsAgent(llm, rag_retriever)
         self.design_agent = DesignAgent(llm, rag_retriever)
-        self.evaluator = DesignEvaluator()
+        # Pass quality_threshold so the evaluator's veto cap is consistent with
+        # the orchestrator's refinement gate (cap = threshold − 0.05).
+        self.evaluator = DesignEvaluator(quality_threshold=quality_threshold)
         self.cot = ChainOfThoughtPrompter(llm)
 
         self.state: Optional[PrototypingState] = None
@@ -983,8 +985,9 @@ class Orchestrator:
         # Find out-port names on the sensor part def (e.g. sensorStatus, navData)
         # that the primary instance connects OUTWARD (source side of a connect).
         # We build a set of already-occupied target port keys to avoid fan-in.
+        # SysML v2 connect uses dot notation (per official examples corpus).
         connect_re = re.compile(
-            r"\bconnect\s+(\w+)::(\w+)\s+to\s+(\w+)::(\w+)\s*;",
+            r"\bconnect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)\s*;",
             re.IGNORECASE,
         )
         occupied_targets: set = set()
@@ -992,7 +995,7 @@ class Orchestrator:
         if primary_instance:
             for cm in connect_re.finditer(sysml_text):
                 src_inst, src_port, tgt_inst, tgt_port = cm.groups()
-                tgt_key = f"{tgt_inst}::{tgt_port}"
+                tgt_key = f"{tgt_inst}.{tgt_port}"
                 occupied_targets.add(tgt_key)
                 if src_inst.lower() == primary_instance.lower():
                     primary_out_ports.append((src_port, tgt_inst, tgt_port))
@@ -1009,10 +1012,10 @@ class Orchestrator:
             # occupied (fan-in guard) — those cases need a voting intermediary
             # that is beyond the scope of programmatic injection.
             for src_port, tgt_inst, tgt_port in primary_out_ports:
-                tgt_key = f"{tgt_inst}::{tgt_port}"
+                tgt_key = f"{tgt_inst}.{tgt_port}"
                 if tgt_key not in occupied_targets:
                     new_connects.append(
-                        f"    connect {unit_name}::{src_port} to {tgt_inst}::{tgt_port};"
+                        f"    connect {unit_name}.{src_port} to {tgt_inst}.{tgt_port};"
                     )
                     occupied_targets.add(tgt_key)  # mark so next unit doesn't reuse it
                 # else: fan-in risk — omit; a TMR voter/aggregator is needed
@@ -1211,12 +1214,41 @@ class Orchestrator:
             )
             rule_score = eval_result.weighted_total
 
-            # ── LLM evaluation (skip when rule score already sufficient) ──
-            # Avoids an expensive API call when it can't change the outcome.
+            # ── LLM evaluation (skip when rule score already sufficient OR
+            #    when a [VETO] fired in the rule evaluator) ─────────────────
+            #
+            # Rationale for the VETO bypass:
+            #   The blended score `rule × 0.6 + llm × 0.4` lets a generous LLM
+            #   evaluation rescue a model with critical design-judgment gaps.
+            #   The rule evaluator emits `[VETO]` issues for dimensions that
+            #   are below their critical floor (e.g. mcts_fidelity < 0.60 means
+            #   MCTS decisions exist only as injected keywords).  When that
+            #   happens, no amount of LLM enthusiasm should mask the gap — we
+            #   want the refinement loop to actually run.
+            veto_fired = any(
+                str(iss).startswith("[VETO]") for iss in eval_result.issues
+            )
+
             if rule_score >= self.quality_threshold:
+                # Rule already passes — nothing for the LLM to add.
                 score = rule_score
                 llm_overall = None
                 cot_eval = None
+            elif veto_fired:
+                # Veto: trust the rule evaluator's verdict, skip LLM blend so
+                # the orchestrator drops into the refinement branch below.
+                score = rule_score
+                llm_overall = None
+                cot_eval = None
+                if self.verbose:
+                    veto_issues = [
+                        iss for iss in eval_result.issues
+                        if str(iss).startswith("[VETO]")
+                    ]
+                    print(
+                        f"  [DEBUG] LLM evaluation skipped — {len(veto_issues)} "
+                        f"VETO floor(s) breached; refinement is mandatory"
+                    )
             else:
                 cot_eval = self.cot.evaluate_design(
                     model_text=current_model.to_sysml_text(),
@@ -1340,19 +1372,28 @@ class Orchestrator:
             " (these must be faithfully implemented in the SysML model):"
         ]
 
-        # Redundancy level → state def structure
+        # Redundancy level → state def structure (canonical SysML v2 syntax)
         redundancy = str(params.get("redundancy_level", "none"))
         if redundancy == "triple":
             lines.append(
-                "  • redundancy_level=triple  →  add a state def with three independent "
-                "channels (states: nominal, fault1, fault2); transition to failsafe when "
-                "≥2 channels report failure; include action def emergencyStop {}"
+                "  • redundancy_level=triple  →  add a state def implementing 2-of-3 "
+                "majority voting.  Use canonical SysML v2 syntax — `transition <name> "
+                "first <state> if <guard> then <state>;` (NOT `from/to/when`, NOT `->`). "
+                "Declare `action def emergencyStop {}` at the part-def top level (NOT "
+                "inline inside an entry); reference it via `entry action stop : "
+                "emergencyStop;` from the failsafe state.  Ground guard names by "
+                "declaring matching Boolean attributes (channelAFailed / channelBFailed "
+                "/ channelCFailed)."
             )
         elif redundancy == "dual":
             lines.append(
-                "  • redundancy_level=dual    →  add a state def with dual-channel "
-                "redundancy (states: nominal, faultPrimary); transition to failsafe on "
-                "primary channel failure; include action def emergencyStop {}"
+                "  • redundancy_level=dual    →  add a state def with primary/backup "
+                "channels.  Use canonical SysML v2 syntax — `transition <name> first "
+                "<state> if <guard> then <state>;` (NOT `from/to/when`, NOT `->`). "
+                "Declare `action def emergencyStop {}` at the part-def top level (NOT "
+                "inline); reference it via `entry action stop : emergencyStop;` from "
+                "the failsafe state.  Ground guard names with Boolean attributes "
+                "(primaryChannelFailed / backupChannelFailed)."
             )
 
         # Control frequency → numeric attribute (ONLY in main controller, nowhere else)

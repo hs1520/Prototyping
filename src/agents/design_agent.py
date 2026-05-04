@@ -184,10 +184,19 @@ Rules:
   - Output must be syntactically valid SysML v2.
 
 Key constructs (same as generation):
-  satisfy requirement <REQ_ID>;      — INSIDE a part def body; REQ_ID uses underscores
-  connect <partA>::<portA> to <partB>::<portB>;
-  state def <Name> { state nominal; state fault { entry; action def emergencyStop {} }
-                     transition nominal -> fault when <condition>; }
+  satisfy requirement <REQ_ID>;          — INSIDE a part def body; REQ_ID uses underscores
+  connect <partA>.<portA> to <partB>.<portB>;       — SysML v2 dot notation
+
+  // State machine: emergencyStop is a top-level action def in the part body,
+  // referenced (not defined) inside the fault state's entry; transitions use
+  // the canonical first/if/then keywords (NOT from/to/when, NOT `->`).
+  action def emergencyStop { }
+  state def <Name> {
+      state nominal;
+      state fault { entry action stop : emergencyStop; }
+      transition initial then nominal;
+      transition <name>Fault first nominal if <condition> then fault;
+  }
 
 SATISFY SYNTAX RULE (critical):
   ✓ Inside a part def: satisfy requirement REQ_SAFE_001;
@@ -228,7 +237,7 @@ Your output must be syntactically valid SysML v2. Key constructs:
   attribute <name> : <Type> = <value> [<unit>];
   action def <Name> { ... }
   state def <Name> { ... }
-  connect <partA>::<portA> to <partB>::<portB>;
+  connect <partA>.<portA> to <partB>.<portB>;     — SysML v2 dot notation; do NOT use `::`
 
 SATISFY LINK SYNTAX — critical, follow exactly:
   ✓ INSIDE a part def body:   satisfy requirement <REQ_ID>;
@@ -514,14 +523,32 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             parts = [p for p in (context, rag) if p]
             return "\n\n".join(parts)
 
-        # --- Step 1: Architecture Decomposition ---
-        ctx1 = _step_context("architecture")
+        # --- Step 1: Architecture Decomposition (RAG intentionally skipped) ---
+        # Rationale: the RAG corpus is exclusively `.sysml` grammar examples,
+        # and `RAGRetriever` wraps every retrieved snippet in ```sysml fences
+        # before prepending it to the prompt.  That directly contradicts this
+        # step's "plain structured text only — no SysML" instruction:
+        #
+        #   1. The retrieval is the wrong knowledge type for decomposition
+        #      planning (we want domain subsystem patterns, not SysML syntax).
+        #   2. The fenced examples prime the LLM to emit ```sysml code blocks,
+        #      which then have to be fence-stripped post-hoc.
+        #   3. The token cost is wasted — Step 2/3/4 already retrieve targeted
+        #      SysML examples for their respective generation tasks.
+        #
+        # Domain decomposition draws on the LLM's pretrained knowledge of
+        # cyber-physical system architecture instead.  The fence-strip guard
+        # below is retained as defence-in-depth.
+        if verbose:
+            print(f"\n  [DEBUG] Step 1 — RAG skipped (corpus is SysML-only, "
+                  f"would prime LLM to emit code blocks)")
         step1 = self.cot.decompose_architecture(
             system_name=system_name,
             requirements=requirements,
-            context=ctx1,
+            context=context,   # caller-supplied context only, no RAG
         )
         architecture_text = step1.final_answer
+        metadata["step1_rag_skipped"] = True
 
         # Guard: Step 1 must produce plain text only — no SysML.
         # If the LLM appended a ```sysml (or generic ```) code block, strip
@@ -715,6 +742,24 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=cleaned_text)
 
+        # --- Post-assembly: normalise `connect a::b to c::d;` → `connect a.b to c.d;` ---
+        # SysML v2 connect uses dot notation only.  Despite the prompt explicitly
+        # teaching `.`, LLMs occasionally emit `::` (treating it as a generic
+        # member-access operator).  Normalising here keeps every downstream
+        # consumer (evaluator, RAG, refinement prompt) on the canonical form.
+        if step5.extracted_sysml:
+            normalised, n_normalised = self._normalise_connect_syntax(
+                step5.extracted_sysml
+            )
+            if n_normalised:
+                metadata["normalised_connect_syntax"] = n_normalised
+                if verbose:
+                    print(
+                        f"\n  [DEBUG] Step 5 — Normalised {n_normalised} non-canonical "
+                        f"`connect a::b to c::d;` → `connect a.b to c.d;`"
+                    )
+                step5 = dataclasses.replace(step5, extracted_sysml=normalised)
+
         # --- Post-assembly: connect semantic validation ---
         if step5.extracted_sysml:
             suspicious = self._validate_connections(step5.extracted_sysml)
@@ -773,13 +818,15 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             words = re.sub(r"([A-Z])", r" \1", stem).lower().split()
             return {w for w in words if len(w) > 2 and w not in _STOP_TOKENS}
 
-        # Parse all connect statements — capture both part names and port names:
-        #   connect partA::portA to partB::portB;
-        #   connect partA.portA  to partB.portB;
+        # Parse all connect statements.  SysML v2 uses dot notation only —
+        # `connect partA.portA to partB.portB;`.  The `::` form is a deviation
+        # (it is the namespace-qualified-name operator, not a connect endpoint
+        # selector), so we do NOT accept it here; downstream syntax sanitisers
+        # should normalise any stray `::` to `.` before this point.
         connect_re = re.compile(
             r"\bconnect\s+"
-            r"(\w+)(?:::|\.)(\w+)\s+to\s+"
-            r"(\w+)(?:::|\.)(\w+)\s*;",
+            r"(\w+)\.(\w+)\s+to\s+"
+            r"(\w+)\.(\w+)\s*;",
             re.IGNORECASE,
         )
         suspicious: List[Dict[str, str]] = []
@@ -1057,6 +1104,52 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
     # ──────────────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _normalise_connect_syntax(sysml_text: str) -> Tuple[str, int]:
+        """Convert `connect a::b to c::d;` → `connect a.b to c.d;`.
+
+        SysML v2 uses dot notation for connect endpoints (verified against the
+        official SysML-v2-release-src/examples corpus).  The `::` operator is
+        for namespace-qualified names (`Package::Element`), not feature access
+        in connect statements.  LLMs sometimes emit the `::` form anyway;
+        normalising here ensures every downstream consumer sees the canonical
+        SysML v2 syntax.
+
+        Only `::` occurrences inside `connect ... to ...;` are touched — any
+        other use (e.g. `Package::Element` qualified names) is preserved.
+
+        Returns (normalised_text, count_of_substitutions).
+        """
+        # Match a complete connect statement that uses `::` on either side.
+        # The capture groups isolate part / port pieces so we can rewrite with `.`.
+        connect_pat = re.compile(
+            r"\bconnect\s+(\w+)::(\w+)\s+to\s+(\w+)::(\w+)\s*;",
+            re.IGNORECASE,
+        )
+
+        # Also handle the asymmetric forms (one side `::`, the other `.`).
+        connect_mixed_left = re.compile(
+            r"\bconnect\s+(\w+)::(\w+)\s+to\s+(\w+)\.(\w+)\s*;",
+            re.IGNORECASE,
+        )
+        connect_mixed_right = re.compile(
+            r"\bconnect\s+(\w+)\.(\w+)\s+to\s+(\w+)::(\w+)\s*;",
+            re.IGNORECASE,
+        )
+
+        count = 0
+
+        def _rewrite(m: re.Match) -> str:  # type: ignore[type-arg]
+            return f"connect {m.group(1)}.{m.group(2)} to {m.group(3)}.{m.group(4)};"
+
+        for pat in (connect_pat, connect_mixed_left, connect_mixed_right):
+            n = len(pat.findall(sysml_text))
+            if n:
+                sysml_text = pat.sub(_rewrite, sysml_text)
+                count += n
+
+        return sysml_text, count
+
+    @staticmethod
     def _fix_doc_syntax(sysml_text: str) -> Tuple[str, int]:
         """Convert invalid ``doc = "string";`` to valid ``doc /* string */``.
 
@@ -1155,9 +1248,11 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         perf_reqs = [r for r in requirements if "-PERF-" in r]
 
         if step == "architecture":
-            # Domain context + decomposition vocabulary.
-            # Use FUNC requirement bodies to capture domain-specific terms
-            # (e.g. "navigate waypoints obstacle payload delivery").
+            # NOTE: Step 1 no longer triggers RAG retrieval (see
+            # `_multistep_generate`).  This branch is preserved for backward
+            # compatibility with external callers / tests that may still invoke
+            # `_build_step_query("architecture", ...)` directly, but it is dead
+            # code on the main pipeline path.
             func_kw = _req_keywords(func_reqs)
             return (
                 f"{system_name} system architecture decomposition components subsystems "
@@ -1299,8 +1394,22 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             best = scored[0] if scored else None
             best_score = _score(req_tokens, best) if best else 0
 
-            if best_score == 0:
-                # No semantic match found — record as untraced, do not force-assign
+            # Tightened threshold (was: best_score == 0).  A 1-token overlap is
+            # a coincidence (e.g., the word "system" matching everywhere), not a
+            # real semantic match — don't manufacture a satisfy link from it,
+            # because that inflates the requirement_satisfaction dimension.
+            # Require ≥ 2 shared domain tokens, OR a tie-breaking margin of 2
+            # over the second-best part.
+            second_best_score = (
+                _score(req_tokens, scored[1]) if len(scored) > 1 else 0
+            )
+            strong_match = best_score >= 2
+            unambiguous = (best_score - second_best_score) >= 2
+
+            if best_score == 0 or not (strong_match or unambiguous):
+                # Either no match, or only a weak coincidental overlap.
+                # Record as untraced; the refinement loop will surface this so
+                # the LLM can add an explicit satisfy link in the right part.
                 untraced.append(req_id)
                 continue
 
