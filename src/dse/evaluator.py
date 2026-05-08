@@ -37,10 +37,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .design_space import DesignConfiguration
-from ..sysml.model import FeatureDirection, SysMLModel
+from ..sysml.model import DiagnosticSeverity, FeatureDirection, SysMLModel
+
+try:
+    import networkx as nx
+    _HAS_NX = True
+except ModuleNotFoundError:
+    _HAS_NX = False
 
 
 # ---------------------------------------------------------------------------
@@ -76,11 +82,12 @@ class EvaluationResult:
 # ---------------------------------------------------------------------------
 
 DIMENSION_WEIGHTS: Dict[str, float] = {
-    "requirement_satisfaction": 0.25,
-    "mcts_fidelity":           0.25,
-    "structural_integrity":    0.20,
-    "safety_assurance":        0.20,
+    "requirement_satisfaction": 0.23,
+    "mcts_fidelity":           0.23,
+    "structural_integrity":    0.18,
+    "safety_assurance":        0.18,
     "interface_correctness":   0.10,
+    "syntactic_validity":      0.08,
 }
 
 assert abs(sum(DIMENSION_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
@@ -116,6 +123,10 @@ DIMENSION_VETO_FLOORS: Dict[str, Tuple[float, str]] = {
         0.45,
         "structural baseline broken — parts lack ports, attributes, or connections",
     ),
+    "syntactic_validity": (
+        0.40,
+        "Syside reported multiple parse/semantic errors — LLM output fails compilation",
+    ),
 }
 
 
@@ -126,6 +137,125 @@ DIMENSION_VETO_FLOORS: Dict[str, Tuple[float, str]] = {
 def _sysml_text(model: SysMLModel) -> str:
     """Return the stored SysML text from model metadata (reliable source)."""
     return (getattr(model, "metadata", None) or {}).get("last_sysml_text", "")
+
+
+def _build_connection_graph(text: str):
+    """
+    Build a directed graph of **part-instance** connections from SysML text.
+
+    Nodes are part instance names (e.g. 'flightController'); edges represent
+    connect statements between them.  Self-loops (same instance on both ends)
+    are skipped.  Multiple connect statements between the same pair of instances
+    produce a single edge (DiGraph semantics).
+
+    This instance-level graph is used for:
+      - weakly_connected_components  → isolated subsystems (architectural gaps)
+      - simple_cycles                → feedback control loops
+
+    Fan-in (multiple sources → same port) is a port-level concern and is
+    handled separately with a regex counter, not via this graph.
+
+    Returns a networkx DiGraph when available, otherwise a pure-Python shim
+    with the same interface for the four operations we use.
+    """
+    edge_list: List[Tuple[str, str]] = []
+    for m in re.finditer(
+        r"\bconnect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)", text, re.IGNORECASE
+    ):
+        src = m.group(1)   # part instance name only
+        tgt = m.group(3)
+        if src != tgt:     # skip self-loops (binding a port to itself)
+            edge_list.append((src, tgt))
+
+    if _HAS_NX:
+        g = nx.DiGraph()
+        g.add_edges_from(edge_list)
+        return g
+
+    # ── Pure-Python fallback ──────────────────────────────────────────────
+    # Minimal DiGraph shim exposing only the methods used by scoring/diagnose.
+    class _PureDiGraph:
+        def __init__(self, edges: List[Tuple[str, str]]) -> None:
+            self._succ: Dict[str, Set[str]] = {}
+            self._pred: Dict[str, Set[str]] = {}
+            for u, v in edges:
+                self._succ.setdefault(u, set()).add(v)
+                self._succ.setdefault(v, set())
+                self._pred.setdefault(v, set()).add(u)
+                self._pred.setdefault(u, set())
+
+        def nodes(self) -> Set[str]:
+            return set(self._succ)
+
+        def edges(self) -> List[Tuple[str, str]]:
+            return [(u, v) for u, vs in self._succ.items() for v in vs]
+
+        def in_degree(self, node: str) -> int:
+            return len(self._pred.get(node, set()))
+
+        def weakly_connected_components(self) -> List[Set[str]]:
+            visited: Set[str] = set()
+            components: List[Set[str]] = []
+            undirected: Dict[str, Set[str]] = {}
+            for u, vs in self._succ.items():
+                undirected.setdefault(u, set()).update(vs)
+                for v in vs:
+                    undirected.setdefault(v, set()).add(u)
+            for start in undirected:
+                if start in visited:
+                    continue
+                comp: Set[str] = set()
+                stack = [start]
+                while stack:
+                    n = stack.pop()
+                    if n in visited:
+                        continue
+                    visited.add(n)
+                    comp.add(n)
+                    stack.extend(undirected.get(n, set()) - visited)
+                components.append(comp)
+            return components
+
+        def simple_cycles(self) -> List[List[str]]:
+            # Johnson's algorithm is complex; use basic DFS back-edge detection
+            cycles: List[List[str]] = []
+            visited: Set[str] = set()
+            path: List[str] = []
+            path_set: Set[str] = set()
+
+            def dfs(node: str) -> None:
+                visited.add(node)
+                path.append(node)
+                path_set.add(node)
+                for nb in self._succ.get(node, set()):
+                    if nb not in visited:
+                        dfs(nb)
+                    elif nb in path_set:
+                        idx = path.index(nb)
+                        cycles.append(path[idx:])
+                path.pop()
+                path_set.discard(node)
+
+            for n in list(self._succ):
+                if n not in visited:
+                    dfs(n)
+            return cycles
+
+    return _PureDiGraph(edge_list)
+
+
+def _build_port_type_map(model: SysMLModel) -> Dict[str, str]:
+    """
+    Returns {port_name: type_ref_name} built from all PartDefinition.ports.
+    When multiple definitions declare the same port name with different types,
+    the last one wins (ambiguous; caller should treat matches as best-effort).
+    """
+    mapping: Dict[str, str] = {}
+    for part in model.part_definitions:
+        for port in part.ports:
+            if port.type_ref and port.type_ref.name:
+                mapping[port.name] = port.type_ref.name
+    return mapping
 
 
 def _satisfied_req_ids(model: SysMLModel) -> set:
@@ -179,6 +309,7 @@ class DesignEvaluator:
             "structural_integrity":    self._score_structural_integrity,
             "safety_assurance":        self._score_safety_assurance,
             "interface_correctness":   self._score_interface_correctness,
+            "syntactic_validity":      self._score_syntactic_validity,
         }
 
         weighted_sum = 0.0
@@ -205,10 +336,14 @@ class DesignEvaluator:
             "_SAFE_" in r.name for r in model.requirement_definitions
         )
         has_mcts = mcts_config is not None
+        has_diagnostics = bool(model.diagnostics)
         for dim, (floor, reason) in DIMENSION_VETO_FLOORS.items():
             if dim == "safety_assurance" and not has_safe:
                 continue
             if dim == "mcts_fidelity" and not has_mcts:
+                continue
+            # Skip syntactic veto when Syside has not run (no diagnostics at all)
+            if dim == "syntactic_validity" and not has_diagnostics:
                 continue
             score = result.criteria_scores.get(dim, 1.0)
             if score < floor:
@@ -249,7 +384,40 @@ class DesignEvaluator:
         return result
 
     # ------------------------------------------------------------------
-    # Dimension 1: Requirement Satisfaction (25 %)
+    # Dimension 0: Syntactic Validity (8 %) — Syside diagnostics
+    # ------------------------------------------------------------------
+
+    def _score_syntactic_validity(
+        self,
+        config: DesignConfiguration,
+        model: SysMLModel,
+        mcts_config: Optional[DesignConfiguration],
+    ) -> float:
+        """
+        Scores syntactic/semantic correctness using Syside diagnostics.
+
+        Returns 1.0 when no diagnostics are present (model not compiled or
+        clean compile).  Each ERROR deducts 0.20; each WARNING deducts 0.05.
+        Floor is 0.0.
+
+        Veto fires at < 0.40 (≥ 3 errors), but only when diagnostics are
+        present — the evaluate() caller skips the veto for empty lists.
+        """
+        diags = model.diagnostics
+        if not diags:
+            return 1.0
+
+        n_errors = sum(
+            1 for d in diags if d.severity == DiagnosticSeverity.ERROR
+        )
+        n_warnings = sum(
+            1 for d in diags if d.severity == DiagnosticSeverity.WARNING
+        )
+        score = 1.0 - 0.20 * n_errors - 0.05 * n_warnings
+        return max(0.0, score)
+
+    # ------------------------------------------------------------------
+    # Dimension 1: Requirement Satisfaction (23 %)
     # ------------------------------------------------------------------
 
     def _score_requirement_satisfaction(
@@ -767,7 +935,33 @@ class DesignEvaluator:
             len(declared & connected) / max(len(declared), 1) if declared else 0.0
         )
 
-        return 0.25 * port_cov + 0.25 * attr_cov + 0.25 * connect_density + 0.25 * instance_conn
+        # ── Graph-based connectivity checks ─────────────────────────────
+        # Build directed graph of port connections to find isolated sub-graphs
+        # and unexpected feedback cycles.
+        graph = _build_connection_graph(text)
+        graph_nodes = graph.nodes() if callable(graph.nodes) else set(graph.nodes())
+        if graph_nodes:
+            comps = (
+                list(nx.weakly_connected_components(graph))
+                if _HAS_NX
+                else graph.weakly_connected_components()
+            )
+            # Penalise architectural fragmentation: multiple disconnected sub-graphs
+            # suggest parts of the system never exchange data.
+            n_comps = len(comps)
+            # A single connected component is ideal.  Penalty = 0.15 per extra.
+            graph_cohesion = max(0.0, 1.0 - 0.15 * (n_comps - 1))
+        else:
+            graph_cohesion = 1.0  # no connections at all already penalised above
+
+        # Weight: 20% graph cohesion, 80% split evenly among the four text metrics.
+        return (
+            0.20 * port_cov
+            + 0.20 * attr_cov
+            + 0.20 * connect_density
+            + 0.20 * instance_conn
+            + 0.20 * graph_cohesion
+        )
 
     # ------------------------------------------------------------------
     # Dimension 4: Safety Assurance (20 %)
@@ -866,23 +1060,22 @@ class DesignEvaluator:
             # Was 0.5 (neutral); now 0.0 because absent ports = absent interfaces.
             type_consistency = 0.0
 
-        # ── Fan-in freedom ───────────────────────────────────────────────
-        connects = re.findall(
+        # ── Fan-in freedom (port-level regex count) ──────────────────────
+        # Fan-in is a port-level concern: multiple sources → same target port.
+        # The instance-level graph cannot detect this (multiple edges to the
+        # same instance is expected and valid).
+        connects_fi = re.findall(
             r"\bconnect\s+\w+\.(\w+)\s+to\s+(\w+)\.(\w+)", text, re.IGNORECASE
         )
         target_count: Dict[str, int] = {}
-        for _, tgt_inst, tgt_port in connects:
+        for _, tgt_inst, tgt_port in connects_fi:
             key = f"{tgt_inst}::{tgt_port}"
             target_count[key] = target_count.get(key, 0) + 1
-        violations = sum(1 for c in target_count.values() if c > 1)
-        # Fan-in is a hard structural violation (SysML semantics break).
-        # Deduct 40 pp per violation; even a single fan-in materially degrades
-        # the interface_correctness dimension.
-        fan_in_score = max(0.0, 1.0 - violations * 0.40)
+        fan_in_violations = sum(1 for c in target_count.values() if c > 1)
+        fan_in_score = max(0.0, 1.0 - fan_in_violations * 0.40)
 
         # ── Port direction coverage ──────────────────────────────────────
         if not parts:
-            # No parts → no interfaces at all (was 0.5 neutral).
             direction_cov = 0.0
         else:
             def _all_directed(part) -> bool:  # noqa: ANN001
@@ -893,10 +1086,35 @@ class DesignEvaluator:
                 )
             direction_cov = sum(1 for p in parts if _all_directed(p)) / len(parts)
 
+        # ── Connect type consistency (AST port type_ref matching) ─────────
+        # For each connect X.portA to Y.portB, resolve both port type names
+        # and flag domain mismatches (data ↔ power) or exact type mismatches.
+        port_type_map = _build_port_type_map(model)
+        connects_typed = re.findall(
+            r"\bconnect\s+\w+\.(\w+)\s+to\s+\w+\.(\w+)", text, re.IGNORECASE
+        )
+        type_mismatches = 0
+        type_checked = 0
+        for src_port, tgt_port in connects_typed:
+            src_type = port_type_map.get(src_port)
+            tgt_type = port_type_map.get(tgt_port)
+            if src_type and tgt_type:
+                type_checked += 1
+                src_domain = "power" if "power" in src_type.lower() else "data"
+                tgt_domain = "power" if "power" in tgt_type.lower() else "data"
+                if src_domain != tgt_domain or src_type != tgt_type:
+                    type_mismatches += 1
+        if type_checked > 0:
+            type_conn_score = max(0.0, 1.0 - type_mismatches / type_checked)
+        else:
+            # No type information available — mild penalty to encourage typed ports
+            type_conn_score = 0.8
+
         return (
-            0.50 * type_consistency
-            + 0.30 * fan_in_score
+            0.35 * type_consistency
+            + 0.25 * fan_in_score
             + 0.20 * direction_cov
+            + 0.20 * type_conn_score
         )
 
     # ------------------------------------------------------------------
@@ -992,6 +1210,88 @@ class DesignEvaluator:
                 "Each `in port` must receive from exactly one source.  "
                 "Introduce an aggregator or voter part for many-to-one flows."
             )
+
+        # ── Syside diagnostic errors ─────────────────────────────────────
+        diag_errors = [
+            d for d in model.diagnostics
+            if d.severity == DiagnosticSeverity.ERROR
+        ]
+        if diag_errors:
+            sample = "; ".join(d.message for d in diag_errors[:3])
+            issues.append(
+                f"Syside parse/semantic errors ({len(diag_errors)}): {sample}"
+                f"{'...' if len(diag_errors) > 3 else ''}"
+            )
+            recs.append(
+                "Fix compilation errors before refining the design — invalid SysML "
+                "will be silently ignored by downstream tooling."
+            )
+
+        # ── Connect type mismatches (power ↔ data domain crossings) ──────
+        port_type_map = _build_port_type_map(model)
+        for m in re.finditer(
+            r"\bconnect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)", text, re.IGNORECASE
+        ):
+            src_inst, src_port, tgt_inst, tgt_port = m.groups()
+            src_type = port_type_map.get(src_port)
+            tgt_type = port_type_map.get(tgt_port)
+            if src_type and tgt_type:
+                src_domain = "power" if "power" in src_type.lower() else "data"
+                tgt_domain = "power" if "power" in tgt_type.lower() else "data"
+                if src_domain != tgt_domain:
+                    issues.append(
+                        f"Type domain mismatch: connect {src_inst}.{src_port} "
+                        f"({src_type}) to {tgt_inst}.{tgt_port} ({tgt_type}) — "
+                        f"power and data domains must not be mixed"
+                    )
+                elif src_type != tgt_type:
+                    issues.append(
+                        f"Port type mismatch: connect {src_inst}.{src_port} "
+                        f"({src_type}) to {tgt_inst}.{tgt_port} ({tgt_type})"
+                    )
+        if any("Type domain mismatch" in i or "Port type mismatch" in i for i in issues):
+            recs.append(
+                "Ensure connected ports share the same type.  Power ports "
+                "(PowerPort) must only connect to other power ports; "
+                "protocol signal ports must only connect to matching signal ports."
+            )
+
+        # ── Isolated sub-graphs (architectural fragmentation) ────────────
+        graph = _build_connection_graph(text)
+        graph_nodes = graph.nodes() if callable(graph.nodes) else set(graph.nodes())
+        if graph_nodes:
+            comps = (
+                list(nx.weakly_connected_components(graph))
+                if _HAS_NX
+                else graph.weakly_connected_components()
+            )
+            if len(comps) > 1:
+                comp_sizes = sorted((len(c) for c in comps), reverse=True)
+                issues.append(
+                    f"Connection graph has {len(comps)} disconnected components "
+                    f"(sizes: {comp_sizes}) — parts of the system never exchange data"
+                )
+                recs.append(
+                    "Connect all sub-systems into a single data-flow graph.  "
+                    "Every part usage should appear in at least one connect statement "
+                    "that traces back to the main controller."
+                )
+
+            # Report feedback cycles (informational — valid in control systems,
+            # but unexpected loops should be reviewed for safety).
+            cycles = (
+                list(nx.simple_cycles(graph))
+                if _HAS_NX
+                else graph.simple_cycles()
+            )
+            if cycles:
+                cycle_strs = [" → ".join(c) for c in cycles[:2]]
+                issues.append(
+                    f"Feedback cycle(s) detected in connection graph "
+                    f"({len(cycles)} total): {'; '.join(cycle_strs)}"
+                    f"{'...' if len(cycles) > 2 else ''} — "
+                    f"verify these are intentional control loops"
+                )
 
         # ── SAFE requirements without state machines ──────────────────────
         safe_reqs = [r for r in model.requirement_definitions if "_SAFE_" in r.name]
