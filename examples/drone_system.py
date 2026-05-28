@@ -91,7 +91,6 @@ def main():
     summary = result['model_summary']
     print(f"  Part definitions: {summary['part_definitions_count']}")
     print(f"  Requirement definitions: {summary['requirement_definitions_count']}")
-    print(f"  Top-level usages: {summary['top_level_usages_count']}")
     part_names = [p.name for p in result['model'].part_definitions]
     print(f"  Parts: {', '.join(part_names) if part_names else '(none)'}")
 

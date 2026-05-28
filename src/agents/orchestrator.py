@@ -9,6 +9,7 @@ inference with design space exploration.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -22,6 +23,29 @@ from ..llm.chain_of_thought import ChainOfThoughtPrompter
 from ..llm.interface import LLMInterface
 from ..rag.retriever import RAGRetriever
 from ..sysml.model import ElementRef, SysMLModel
+from ..sysml.lite_model import SysMLLiteModel, build_lite_model
+
+# Accept both model types wherever SysMLModel is checked
+_SysMLModelTypes = (SysMLModel, SysMLLiteModel)
+from ..simulation.validator import SimulationValidator, SimulationResult
+from ..simulation.syntax_checker import check_syntax, SyntaxCheckResult
+from ..simulation.levenshtein_fixer import (
+    try_fix_sema_errors,
+    format_hints_for_llm,
+)
+from ..simulation.error_localizer import (
+    extract_error_context,
+    merge_fixed_chunk,
+    build_fix_prompt,
+    strip_code_fences,
+)
+
+# System prompt for surgical LLM syntax fixes
+_SURGICAL_FIX_SYSTEM = (
+    "You are a SysML v2 syntax expert. "
+    "Fix only the specified errors in the given code block. "
+    "Return only the corrected code — no explanations, no markdown fences."
+)
 
 
 @dataclass
@@ -75,6 +99,7 @@ class Orchestrator:
         # the orchestrator's refinement gate (cap = threshold − 0.05).
         self.evaluator = DesignEvaluator(quality_threshold=quality_threshold)
         self.cot = ChainOfThoughtPrompter(llm)
+        self.sim_validator = SimulationValidator()
 
         self.state: Optional[PrototypingState] = None
 
@@ -89,10 +114,54 @@ class Orchestrator:
         parse_strict: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
-        Run the complete prototyping pipeline.
+        Full pipeline: generate a validated model then run DSE (MCTS).
+        Convenience wrapper — calls generate() then explore().
+        """
+        gen_result = self.generate(
+            system_name=system_name,
+            system_description=system_description,
+            additional_requirements=additional_requirements,
+            parse_strict=parse_strict,
+        )
+        return self.explore(
+            generate_result=gen_result,
+            mcts_iterations=mcts_iterations,
+            mcts_seed=mcts_seed,
+            mcts_patience=mcts_patience,
+        )
 
-        Returns a dictionary with the final model, requirements, evaluation,
-        and design space exploration results.
+    # ---------------------------------------------------------------------- #
+    #  Stage 1 — Generate a validated SysML v2 model (no DSE)                #
+    # ---------------------------------------------------------------------- #
+
+    def generate(
+        self,
+        system_name: str,
+        system_description: str,
+        additional_requirements: Optional[List[str]] = None,
+        parse_strict: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate a validated SysML v2 model without Design Space Exploration.
+
+        Pipeline
+        ────────
+        Phase 1  Requirements Extraction
+        Phase 2  Initial Design Generation
+        Phase 3  Iterative Refinement  (syntax gate → eval → LLM, no MCTS)
+        Phase 4  Behavioral Reachability Simulation
+
+        The returned dict can be passed directly to explore() when DSE is
+        needed later, or used as a standalone result.
+
+        Returns
+        -------
+        {
+          system_name, requirements,
+          model, model_sysml, model_summary,
+          final_score, iterations, evaluation_history,
+          simulation_result,
+        }
         """
         self.state = PrototypingState(
             system_name=system_name,
@@ -100,10 +169,10 @@ class Orchestrator:
         )
 
         print(f"\n{'='*60}")
-        print(f"Starting AI-assisted prototyping for: {system_name}")
+        print(f"[generate]  {system_name}")
         print(f"{'='*60}\n")
 
-        # Phase 1: Requirements Extraction
+        # ── Phase 1: Requirements Extraction ─────────────────────────────────
         print("Phase 1: Requirements Extraction")
         print("-" * 40)
         requirements = self._extract_requirements(
@@ -112,14 +181,116 @@ class Orchestrator:
         self.state.requirements = requirements
         print(f"  ✓ Extracted {len(requirements)} requirements\n")
 
-        # Phase 2: Initial Design Generation
+        # ── Phase 2: Initial Design Generation ───────────────────────────────
         print("Phase 2: Initial Design Generation")
         print("-" * 40)
-        model = self._generate_initial_design(system_name, requirements, parse_strict=parse_strict)
+        model = self._generate_initial_design(
+            system_name, requirements, parse_strict=parse_strict
+        )
         self.state.current_model = model
         print(f"  ✓ Generated model with {len(model.part_definitions)} part definitions\n")
 
-        # Phase 3: Design Space Exploration
+        # ── Phase 3: Iterative Refinement (no MCTS) ───────────────────────────
+        print("Phase 3: Iterative Refinement")
+        print("-" * 40)
+        final_model, final_score = self._iterative_refinement(
+            model, requirements, mcts_best_config=None
+        )
+        self.state.current_model = final_model
+        print(f"  ✓ Final design score: {final_score:.3f}\n")
+
+        # ── Phase 4: Behavioral Reachability Simulation ───────────────────────
+        print("Phase 4: Behavioral Reachability Simulation", flush=True)
+        print("-" * 40)
+        final_sysml = (
+            (getattr(final_model, "metadata", None) or {}).get("last_sysml_text")
+            or final_model.to_sysml_text()
+        )
+        final_sim = self._run_simulation(final_sysml, system_name)
+        self._print_final_sim(final_sim)
+
+        # ── Summary ───────────────────────────────────────────────────────────
+        sim_warnings = (getattr(final_model, "metadata", None) or {}).get("sim_warnings", "")
+        print(f"{'='*60}")
+        print("Generation Complete!")
+        print(f"  Final score:              {final_score:.3f}")
+        print(f"  Simulation reachability:  {final_sim.reachability_score:.3f} "
+              f"({len(final_sim.passed_scenarios())}/{len(final_sim.scenario_results)} scenarios)")
+        print(f"  Part definitions: {len(final_model.part_definitions)}")
+        print(f"  Requirements:     {len(requirements)}")
+        if sim_warnings:
+            print()
+            for line in sim_warnings.splitlines():
+                print(f"  {line}")
+        print(f"{'='*60}\n")
+
+        return {
+            "system_name":        system_name,
+            "requirements":       requirements,
+            "model":              final_model,
+            "model_sysml":        final_sysml,
+            "model_summary":      final_model.get_summary(),
+            "final_score":        final_score,
+            "iterations":         self.state.iteration,
+            "evaluation_history": self.state.evaluation_history,
+            "simulation_result":  final_sim,
+        }
+
+    # ---------------------------------------------------------------------- #
+    #  Stage 2 — Design Space Exploration on a validated model                #
+    # ---------------------------------------------------------------------- #
+
+    def explore(
+        self,
+        generate_result: Dict[str, Any],
+        mcts_iterations: int = 50,
+        mcts_seed: Optional[int] = None,
+        mcts_patience: Optional[int] = 15,
+    ) -> Dict[str, Any]:
+        """
+        Run MCTS Design Space Exploration on a validated model.
+
+        Takes the output of generate() as input.  Explores the parameter
+        space, injects the winning configuration into the model, then runs
+        a final refinement pass to implement those architectural decisions.
+
+        Pipeline
+        ────────
+        Phase 3  MCTS exploration + programmatic injection + grounding pass
+        Phase 4-5  Iterative Refinement (with MCTS constraints in prompt)
+        Phase 6  Behavioral Reachability Simulation
+
+        Parameters
+        ----------
+        generate_result   Dict returned by generate().
+        mcts_iterations   Number of MCTS simulation steps.
+        mcts_seed         Random seed (None = non-deterministic).
+        mcts_patience     Early-stop patience (steps without improvement).
+
+        Returns
+        -------
+        Full result dict — superset of generate_result — with updated
+        model/score/sim fields plus DSE-specific fields:
+        {design_space_summary, design_space_parameters,
+         best_config, pareto_alternatives, …}
+        """
+        model        = generate_result["model"]
+        requirements = generate_result["requirements"]
+        system_name  = generate_result["system_name"]
+
+        # Re-initialise state for this exploration session
+        self.state = PrototypingState(
+            system_name=system_name,
+            system_description="",
+        )
+        self.state.requirements  = requirements
+        self.state.current_model = model
+
+        print(f"\n{'='*60}")
+        print(f"[explore]  {system_name}")
+        print(f"{'='*60}\n")
+
+        # ── Phase 3: MCTS ─────────────────────────────────────────────────────
         print("Phase 3: Design Space Exploration (MCTS)")
         print("-" * 40)
         design_space, best_config, pareto_front = self._explore_design_space(
@@ -128,29 +299,18 @@ class Orchestrator:
             patience=mcts_patience,
         )
         self.state.design_space = design_space
-        # 方案 C: apply winning configuration back to the model
+
+        # Inject MCTS decisions into the model programmatically
         self._apply_best_config_to_model(best_config, model)
-        # Programmatically inject any attributes that MCTS decided to add but
-        # which don't yet exist in the model object — directly into the stored
-        # SysML text so the refinement LLM receives a complete starting point.
         self._apply_inject_attrs_to_sysml_text(model)
-        # Programmatically replace generic DataPort / RFPort annotations with
-        # the MCTS-selected protocol signal type in the stored SysML text.
-        # This ensures the export is consistent even when refinement is skipped
-        # (e.g. the initial model already scores above the quality threshold).
         self._apply_inject_protocol_to_sysml_text(model, best_config)
-        # Layer 1: programmatically inject extra sensor part usages so that the
-        # MCTS-selected num_sensors count is reflected in the assembly section
-        # even when the refinement loop is skipped.
         self._apply_inject_sensor_count_to_sysml_text(model, best_config)
-        # Layer 2: dedicated (quality-gate-bypassing) LLM call that adds the
-        # hardware-redundancy structure (TMR channels, voting logic, failsafe
-        # state) mandated by the MCTS redundancy_level decision.
+        # Structural grounding: LLM-driven pass for redundancy/state-machine
         self._mcts_structural_grounding_pass(model, best_config)
         self._print_exploration_summary(design_space, best_config, pareto_front)
 
-        # Phase 4-5: Iterative Refinement
-        print("Phase 4-5: Iterative Evaluation and Refinement")
+        # ── Phase 4-5: Refinement with MCTS constraints ───────────────────────
+        print("Phase 4-5: Iterative Refinement (MCTS-grounded)")
         print("-" * 40)
         final_model, final_score = self._iterative_refinement(
             model, requirements, mcts_best_config=best_config
@@ -158,48 +318,63 @@ class Orchestrator:
         self.state.current_model = final_model
         print(f"  ✓ Final design score: {final_score:.3f}\n")
 
-        # Compile final results
-        result = {
-            "system_name": system_name,
-            "requirements": requirements,
-            "model": final_model,
-            # Prefer the original LLM-generated text (with state defs, port def
-            # bodies, and MCTS-injected attrs intact) over the Syside round-trip
-            # reconstruction, which loses state defs and port def content.
-            "model_sysml": (
-                (getattr(final_model, "metadata", None) or {}).get("last_sysml_text")
-                or final_model.to_sysml_text()
-            ),
-            "model_summary": final_model.get_summary(),
+        # ── Phase 6: Simulation ───────────────────────────────────────────────
+        print("Phase 6: Behavioral Reachability Simulation", flush=True)
+        print("-" * 40)
+        final_sysml = (
+            (getattr(final_model, "metadata", None) or {}).get("last_sysml_text")
+            or final_model.to_sysml_text()
+        )
+        final_sim = self._run_simulation(final_sysml, system_name)
+        self._print_final_sim(final_sim)
+
+        # ── Summary ───────────────────────────────────────────────────────────
+        sim_warnings = (getattr(final_model, "metadata", None) or {}).get("sim_warnings", "")
+        print(f"{'='*60}")
+        print("Exploration Complete!")
+        print(f"  Final score:              {final_score:.3f}")
+        print(f"  Simulation reachability:  {final_sim.reachability_score:.3f} "
+              f"({len(final_sim.passed_scenarios())}/{len(final_sim.scenario_results)} scenarios)")
+        print(f"  Part definitions: {len(final_model.part_definitions)}")
+        print(f"  Best config:      {best_config.parameters}")
+        if sim_warnings:
+            print()
+            for line in sim_warnings.splitlines():
+                print(f"  {line}")
+        print(f"{'='*60}\n")
+
+        return {
+            # ── Fields inherited / updated from generate() ────────────────────
+            **generate_result,
+            "model":              final_model,
+            "model_sysml":        final_sysml,
+            "model_summary":      final_model.get_summary(),
+            "final_score":        final_score,
+            "iterations":         self.state.iteration,
+            "evaluation_history": self.state.evaluation_history,
+            "simulation_result":  final_sim,
+            # ── DSE-specific fields ───────────────────────────────────────────
             "design_space_summary": design_space.get_summary(),
             "design_space_parameters": [
-                {"name": p.name, "type": p.param_type.value,
-                 "choices": p.choices, "description": p.description}
+                {
+                    "name":        p.name,
+                    "type":        p.param_type.value,
+                    "choices":     p.choices,
+                    "description": p.description,
+                }
                 for p in design_space.parameters
             ],
             "best_config": best_config.parameters,
             "pareto_alternatives": [
                 {
-                    "name": c.name,
-                    "parameters": dict(c.parameters),
-                    "scores": dict(c.scores),
+                    "name":          c.name,
+                    "parameters":    dict(c.parameters),
+                    "scores":        dict(c.scores),
                     "overall_score": round(c.overall_score, 4),
                 }
                 for c in pareto_front
             ],
-            "final_score": final_score,
-            "iterations": self.state.iteration,
-            "evaluation_history": self.state.evaluation_history,
         }
-
-        print(f"{'='*60}")
-        print("Prototyping Complete!")
-        print(f"  Final score: {final_score:.3f}")
-        print(f"  Part definitions: {len(final_model.part_definitions)}")
-        print(f"  Requirements: {len(requirements)}")
-        print(f"{'='*60}\n")
-
-        return result
 
     def _extract_requirements(
         self,
@@ -273,13 +448,10 @@ class Orchestrator:
             "verbose": self.verbose,
         }
         result = self.design_agent.run(task)
-        if result.success and isinstance(result.output, SysMLModel):
+        if result.success and isinstance(result.output, _SysMLModelTypes):
             model = result.output
         else:
-            model = SysMLModel(
-                name=system_name,
-                description=f"Prototype design for {system_name}",
-            )
+            model = build_lite_model("", model_name=system_name)
 
         untraced = result.metadata.get("untraced_requirements", [])
         if untraced:
@@ -1001,11 +1173,16 @@ class Orchestrator:
                     primary_out_ports.append((src_port, tgt_inst, tgt_port))
 
         # ── Build additional part usages + safe connect stubs ─────────────────
+        # Rule: only inject a sensorUnitN if at least one connection can be
+        # wired for it.  A unit with zero connections is an isolated node —
+        # a real design defect that lowers the reachability score.
         new_lines: list = []
         new_connects: list = []
+        actually_injected = 0
+
         for i in range(existing + 1, target + 1):
             unit_name = f"sensorUnit{i}"
-            new_lines.append(f"    part {unit_name} : {sensor_part_name};")
+            unit_connects: list = []
 
             # For each out-port the primary sensor exposes, try to add a connect
             # for this redundant instance.  Skip if the same target is already
@@ -1014,30 +1191,40 @@ class Orchestrator:
             for src_port, tgt_inst, tgt_port in primary_out_ports:
                 tgt_key = f"{tgt_inst}.{tgt_port}"
                 if tgt_key not in occupied_targets:
-                    new_connects.append(
+                    unit_connects.append(
                         f"    connect {unit_name}.{src_port} to {tgt_inst}.{tgt_port};"
                     )
-                    occupied_targets.add(tgt_key)  # mark so next unit doesn't reuse it
-                # else: fan-in risk — omit; a TMR voter/aggregator is needed
+                    occupied_targets.add(tgt_key)
+
+            if not unit_connects:
+                # All target ports already occupied (fan-in guard) — skip
+                # injection rather than creating an isolated node.
+                continue
+
+            new_lines.append(f"    part {unit_name} : {sensor_part_name};")
+            new_connects.extend(unit_connects)
+            actually_injected += 1
+
+        if not new_lines:
+            return   # nothing to inject
 
         # Inject part usages after the last existing part usage
         usage_block = "\n" + "\n".join(new_lines)
         result = sysml_text[:last_usage_end] + usage_block + sysml_text[last_usage_end:]
 
-        # Inject any safe connect stubs just before the closing `}` of the package
+        # Inject connect stubs just before the closing `}` of the package
         if new_connects:
             connect_block = (
                 "\n    // MCTS-injected redundant sensor connects (fan-in-safe only):\n"
                 + "\n".join(new_connects)
                 + "\n"
             )
-            # Insert before the very last `}` in the file (package close)
             last_brace = result.rfind("}")
             if last_brace != -1:
                 result = result[:last_brace] + connect_block + result[last_brace:]
 
         model.metadata["last_sysml_text"] = result
-        model.metadata["mcts_injected_sensor_units"] = target - existing
+        model.metadata["mcts_injected_sensor_units"] = actually_injected
 
     def _mcts_structural_grounding_pass(
         self,
@@ -1201,9 +1388,18 @@ class Orchestrator:
         for iteration in range(self.max_iterations):
             self.state.iteration = iteration + 1
 
-            # ── Rule-based evaluation ─────────────────────────────────────
-            # Pass mcts_best_config so Dim-2 (mcts_fidelity) can verify that
-            # all MCTS architectural decisions are present in the SysML text.
+            # ── Step 0: Syntax gate — fix errors before evaluation ────────
+            current_sysml = (
+                (getattr(current_model, "metadata", None) or {}).get("last_sysml_text")
+                or current_model.to_sysml_text()
+            )
+            current_sysml, fixed_model, syntax_result = self._syntax_gate(
+                current_sysml, current_model, requirements, max_attempts=3
+            )
+            if fixed_model is not None:
+                current_model = fixed_model
+
+            # ── Rule-based evaluation (pass cached syntax result) ─────────
             eval_result = self.evaluator.evaluate(
                 config=DesignConfiguration(
                     name=f"iteration_{iteration}",
@@ -1211,44 +1407,28 @@ class Orchestrator:
                 ),
                 model=current_model,
                 mcts_config=mcts_best_config,
+                syntax_result=syntax_result,
             )
             rule_score = eval_result.weighted_total
 
+            # ── Behavioral simulation ─────────────────────────────────────
+            sim_result = self._run_simulation(current_sysml, current_model.name)
+            sim_issues = self._format_sim_issues(sim_result, requirements=requirements)
+
             # ── LLM evaluation (skip when rule score already sufficient OR
             #    when a [VETO] fired in the rule evaluator) ─────────────────
-            #
-            # Rationale for the VETO bypass:
-            #   The blended score `rule × 0.6 + llm × 0.4` lets a generous LLM
-            #   evaluation rescue a model with critical design-judgment gaps.
-            #   The rule evaluator emits `[VETO]` issues for dimensions that
-            #   are below their critical floor (e.g. mcts_fidelity < 0.60 means
-            #   MCTS decisions exist only as injected keywords).  When that
-            #   happens, no amount of LLM enthusiasm should mask the gap — we
-            #   want the refinement loop to actually run.
             veto_fired = any(
                 str(iss).startswith("[VETO]") for iss in eval_result.issues
             )
 
             if rule_score >= self.quality_threshold:
-                # Rule already passes — nothing for the LLM to add.
                 score = rule_score
                 llm_overall = None
                 cot_eval = None
             elif veto_fired:
-                # Veto: trust the rule evaluator's verdict, skip LLM blend so
-                # the orchestrator drops into the refinement branch below.
                 score = rule_score
                 llm_overall = None
                 cot_eval = None
-                if self.verbose:
-                    veto_issues = [
-                        iss for iss in eval_result.issues
-                        if str(iss).startswith("[VETO]")
-                    ]
-                    print(
-                        f"  [DEBUG] LLM evaluation skipped — {len(veto_issues)} "
-                        f"VETO floor(s) breached; refinement is mandatory"
-                    )
             else:
                 cot_eval = self.cot.evaluate_design(
                     model_text=current_model.to_sysml_text(),
@@ -1270,13 +1450,28 @@ class Orchestrator:
                 "rule_score": rule_score,
                 "llm_score": llm_overall,
                 "issues": eval_result.issues,
+                "sim_score": sim_result.reachability_score,
+                "sim_passed": len(sim_result.passed_scenarios()),
+                "sim_total": len(sim_result.scenario_results),
             })
 
-            print(
-                f"  Iteration {iteration+1}: score={score:.3f} "
-                f"(rule={rule_score:.3f}, "
-                f"llm={llm_overall if llm_overall is not None else 'N/A'})"
+            # ── Always-visible iteration summary ─────────────────────────
+            self._print_iteration_summary(
+                iteration=iteration + 1,
+                score=score,
+                rule_score=rule_score,
+                llm_overall=llm_overall,
+                eval_result=eval_result,
+                sim_result=sim_result,
+                veto_fired=veto_fired,
+                syntax_result=syntax_result,
             )
+
+            if self.verbose and cot_eval:
+                cot_scores = cot_eval.get_scores() or {}
+                if cot_scores:
+                    print("  [DEBUG] LLM sub-scores: "
+                          + ", ".join(f"{k}={v:.2f}" for k, v in cot_scores.items()))
 
             # ── P0: Best-model tracking ───────────────────────────────────
             if score > best_score:
@@ -1285,7 +1480,46 @@ class Orchestrator:
 
             # ── Early exit ────────────────────────────────────────────────
             if score >= self.quality_threshold:
-                print(f"  ✓ Quality threshold {self.quality_threshold} reached")
+                # Only exit if behavioral simulation, reachability, and sema
+                # are all clean.  A high rule-score can coexist with state-machine
+                # failures or connectivity gaps — those must be resolved first.
+                # Solution C: SAFE requirements must be covered by extracted state machines.
+                # extracted_sm_count == 0 is only "ok" when there are no SAFE requirements.
+                _safe_reqs = [r for r in requirements if "-SAFE-" in r or "SAFE" in r.upper()[:10]]
+                _br = sim_result.behavioral_result
+                behavioral_ok = (
+                    _br is None
+                    or (
+                        _br.extracted_sm_count == 0
+                        and not _safe_reqs          # no SAFE reqs → genuinely no SM needed
+                    )
+                    or (
+                        _br.extracted_sm_count > 0
+                        and _br.sim_score >= self.quality_threshold
+                    )
+                )
+                reachability_ok = not sim_result.failed_scenarios()
+                sema_ok = syntax_result is None or not syntax_result.has_errors
+
+                if behavioral_ok and reachability_ok and sema_ok:
+                    print(f"  ✓ Quality threshold {self.quality_threshold} reached",
+                          flush=True)
+                    return current_model, score
+
+                # Score met but hard failures remain — one targeted fix pass
+                issues_desc = ", ".join(filter(None, [
+                    "behavioral" if not behavioral_ok else "",
+                    "reachability" if not reachability_ok else "",
+                    "sema" if not sema_ok else "",
+                ]))
+                print(
+                    f"  ~ Quality threshold met (score={score:.3f}) "
+                    f"but {issues_desc} issues remain — forcing sim fix pass",
+                    flush=True,
+                )
+                current_model = self._sim_refinement_loop(
+                    current_model, requirements, max_iters=2
+                )
                 return current_model, score
 
             # ── P1: Persistent issue tracking ─────────────────────────────
@@ -1294,32 +1528,17 @@ class Orchestrator:
             persistent = [iss for iss, cnt in seen_issues.items() if cnt > 1]
 
             # ── P1: Refinement trigger ────────────────────────────────────
-            # Fire when explicit issues exist OR when LLM provided substantive
-            # feedback (covers the empty-issues / below-threshold case).
             has_issues = bool(eval_result.issues)
             has_llm_feedback = cot_eval is not None and bool(cot_eval.final_answer)
 
-            if self.verbose and eval_result.issues:
-                print(f"  [DEBUG] Rule issues ({len(eval_result.issues)}):")
-                for iss in eval_result.issues:
-                    marker = "  [PERSISTENT]" if iss in persistent else ""
-                    print(f"    • {iss}{marker}")
-            if self.verbose and eval_result.recommendations:
-                print(f"  [DEBUG] Recommendations ({len(eval_result.recommendations)}):")
-                for rec in eval_result.recommendations:
-                    print(f"    → {rec}")
-            if self.verbose and cot_eval:
-                cot_scores = cot_eval.get_scores() or {}
-                if cot_scores:
-                    print(f"  [DEBUG] LLM sub-scores: "
-                          + ", ".join(f"{k}={v:.2f}" for k, v in cot_scores.items()))
-
             if has_issues or has_llm_feedback:
+                print(f"\n  ⟳  Refining model …", flush=True)
                 refinement_feedback = self._build_refinement_feedback(
                     eval_result,
                     cot_eval.final_answer if cot_eval else "",
                     persistent_issues=persistent,
                     mcts_constraints=mcts_constraints,
+                    sim_issues=sim_issues,
                 )
                 refine_result = self.design_agent.run({
                     "system_name": current_model.name,
@@ -1329,28 +1548,36 @@ class Orchestrator:
                     "refinement_issues": eval_result.issues + eval_result.recommendations,
                     "verbose": self.verbose,
                 })
-                if refine_result.success and isinstance(refine_result.output, SysMLModel):
+                if refine_result.success and isinstance(refine_result.output, _SysMLModelTypes):
                     candidate = refine_result.output
                     # ── P0: Regression prevention ─────────────────────────
-                    # Accept the candidate only if its rule-based score does
-                    # not regress by more than 5 percentage points.
                     candidate_eval = self.evaluator.evaluate(
                         config=DesignConfiguration(name="candidate", parameters={}),
                         model=candidate,
                     )
+                    delta = candidate_eval.weighted_total - rule_score
+                    delta_str = f"{delta:+.3f}"
                     if candidate_eval.weighted_total >= rule_score - 0.05:
-                        if self.verbose:
-                            print(
-                                f"  [DEBUG] Regression check: "
-                                f"rule {rule_score:.3f} → {candidate_eval.weighted_total:.3f}"
-                                f"  ✓ accepted"
-                            )
+                        print(
+                            f"  ✓ Refinement accepted  "
+                            f"rule: {rule_score:.3f} → {candidate_eval.weighted_total:.3f} "
+                            f"({delta_str})",
+                            flush=True,
+                        )
+                        # ── Simulation inner loop ──────────────────────────
+                        # Re-run simulation on the accepted candidate and
+                        # attempt up to MAX_SIM_INNER_ITERS targeted fixes
+                        # before handing the model back to the outer loop.
+                        candidate = self._sim_refinement_loop(
+                            candidate, requirements, max_iters=3
+                        )
                         current_model = candidate
                     else:
                         print(
                             f"  ⚠ Refinement regression detected "
                             f"(rule: {rule_score:.3f} → {candidate_eval.weighted_total:.3f}), "
-                            f"keeping current model"
+                            f"keeping current model",
+                            flush=True,
                         )
 
         return best_model, best_score
@@ -1446,24 +1673,804 @@ class Orchestrator:
 
         return "\n".join(lines)
 
+    # ------------------------------------------------------------------
+    # Always-visible iteration output
+    # ------------------------------------------------------------------
+
+    def _print_iteration_summary(
+        self,
+        iteration: int,
+        score: float,
+        rule_score: float,
+        llm_overall,
+        eval_result,
+        sim_result: "SimulationResult",
+        veto_fired: bool,
+        syntax_result=None,
+    ) -> None:
+        """Print a self-contained, always-visible summary block for one iteration."""
+        W = 62
+        bar_w = 30
+
+        def bar(v: float) -> str:
+            filled = round(v * bar_w)
+            return "█" * filled + "░" * (bar_w - filled)
+
+        def score_icon(v: float) -> str:
+            if v >= 0.85: return "✓"
+            if v >= 0.65: return "~"
+            return "✗"
+
+        llm_str = f"{llm_overall:.3f}" if llm_overall is not None else " N/A "
+        veto_tag = "  ← VETO" if veto_fired else ""
+
+        print(f"\n  {'─'*W}", flush=True)
+        print(f"  Iteration {iteration}  │  score={score:.3f}  "
+              f"rule={rule_score:.3f}  llm={llm_str}{veto_tag}")
+        print(f"  {'─'*W}")
+
+        # ── Syntax check block ───────────────────────────────────────────
+        if syntax_result is not None:
+            if not syntax_result.has_errors:
+                print(f"  [SYNTAX]  ✓ no errors")
+            else:
+                n_p = len(syntax_result.parser_errors)
+                n_s = len(syntax_result.sema_errors)
+                print(f"  [SYNTAX]  ✗ {n_p} parser  {n_s} sema")
+                for e in (syntax_result.parser_errors + syntax_result.sema_errors)[:5]:
+                    print(f"    L{e['line']:>3}: {e['message'][:W-10]}")
+            print(f"  {'-'*W}")
+
+        # ── Dimension scores table ────────────────────────────────────────
+        dim_scores = eval_result.criteria_scores or {}
+        dim_labels = {
+            "requirement_satisfaction": "Req satisfaction",
+            "mcts_fidelity":            "MCTS fidelity   ",
+            "structural_integrity":     "Struct integrity",
+            "safety_assurance":         "Safety assurance",
+            "interface_correctness":    "Interface correct",
+            "syntactic_validity":       "Syntactic valid ",
+            "behavioral_reachability":  "Behav reachabil ",
+        }
+        for key, label in dim_labels.items():
+            v = dim_scores.get(key, None)
+            if v is None:
+                continue
+            icon = score_icon(v)
+            print(f"  {icon} {label}  {bar(v)}  {v:.3f}")
+
+        # ── Structural reachability block ─────────────────────────────────
+        sim_passed = len(sim_result.passed_scenarios())
+        sim_total  = len(sim_result.scenario_results)
+        sim_score  = sim_result.reachability_score
+        sim_icon   = score_icon(sim_score)
+        print(f"  {'-'*W}")
+        print(f"  [STRUCTURAL]  {sim_icon} {sim_score:.3f}  ({sim_passed}/{sim_total} scenarios)")
+
+        # Show paths for safety/emergency passing scenarios
+        for r in sim_result.passed_scenarios():
+            if "safety" in r.tags or "emergency" in r.tags:
+                path_parts = [n for n in r.path if "." not in n]
+                path_str = " → ".join(path_parts) if path_parts else "(direct)"
+                print(f"    ✓ [{'/'.join(r.tags):<20}] {r.scenario_name}")
+                print(f"       {path_str[:W-7]}")
+
+        # Show all passing nominal scenarios (compact, one line each)
+        nominal_passed = [r for r in sim_result.passed_scenarios()
+                          if "safety" not in r.tags and "emergency" not in r.tags]
+        if nominal_passed:
+            print(f"    ✓ nominal ({len(nominal_passed)} passed): "
+                  + ", ".join(r.scenario_name[:20] for r in nominal_passed[:4])
+                  + ("…" if len(nominal_passed) > 4 else ""))
+
+        # Show failed scenarios with reason
+        for r in sim_result.failed_scenarios():
+            tgts = ", ".join(r.unreachable_targets) or "?"
+            print(f"    ✗ {r.scenario_name}  →  can't reach: {tgts}")
+            for w in r.warnings:
+                print(f"      ⚠ {w}")
+
+        # ── Behavioral simulation (state machine) block ───────────────────
+        br = getattr(sim_result, "behavioral_result", None)
+        if br is not None and br.extracted_sm_count > 0:
+            b_passed = br.passed_count()
+            b_total  = len(br.scenario_results)
+            b_icon   = score_icon(br.sim_score)
+            print(f"  {'-'*W}")
+            print(f"  [BEHAVIORAL]  {b_icon} {br.sim_score:.3f}  "
+                  f"({b_passed}/{b_total} state machines)  "
+                  f"extracted: {br.extracted_sm_count}")
+            for sr in br.scenario_results:
+                icon = "✓" if sr.passed else "✗"
+                # Compact trigger line
+                trig = ""
+                if sr.trigger_value is not None:
+                    trig = f"  val={sr.trigger_value}"
+                elif sr.trigger_step is not None:
+                    trig = f"  step={sr.trigger_step}"
+                # Show timeline entries (guard drive + entry action)
+                key_lines = [l for l in sr.timeline
+                             if "Driving" in l or "Flipping" in l
+                             or "entry action" in l or "at trigger" in l]
+                print(f"    {icon} {sr.state_machine}{trig}")
+                for tl in key_lines[:3]:
+                    print(f"       {tl.strip()[:W-7]}")
+                for v in sr.violations:
+                    print(f"       ⚠ {v[:W-7]}")
+
+        # ── Issues (always shown) ─────────────────────────────────────────
+        if eval_result.issues:
+            print(f"  {'-'*W}")
+            print(f"  Issues ({len(eval_result.issues)}):")
+            persistent_set = set()
+            for iss in eval_result.issues:
+                tag = "  ← PERSISTENT" if iss in persistent_set else ""
+                display = iss.lstrip("[VETO] ").lstrip("[SIM] ")
+                print(f"    • {display[:W-4]}{tag}")
+
+        # ── Recommendations (top 3) ───────────────────────────────────────
+        if eval_result.recommendations:
+            print(f"  {'-'*W}")
+            print(f"  Recommendations (top {min(3, len(eval_result.recommendations))}):")
+            for rec in eval_result.recommendations[:3]:
+                words = rec.split()
+                line, lines_out = "", []
+                for w in words:
+                    if len(line) + len(w) + 1 > W - 6:
+                        lines_out.append(line)
+                        line = w
+                    else:
+                        line = (line + " " + w).strip()
+                if line:
+                    lines_out.append(line)
+                for i, l in enumerate(lines_out):
+                    prefix = "    → " if i == 0 else "       "
+                    print(f"{prefix}{l}")
+        print(f"  {'─'*W}", flush=True)
+
+    # ------------------------------------------------------------------
+    # Simulation inner refinement loop
+    # ------------------------------------------------------------------
+
+    def _sim_refinement_loop(
+        self,
+        model: SysMLModel,
+        requirements: List[str],
+        max_iters: int = 3,
+    ) -> SysMLModel:
+        """
+        After the main LLM refinement is accepted, run simulation on the
+        candidate and attempt targeted connectivity fixes.
+
+        Loop:
+          1. Run simulation → collect failed scenarios
+          2. If all pass → return immediately
+          3. Build a sim-only feedback prompt → call DesignAgent for a fix
+          4. If fix accepted (no regression) → update candidate and continue
+          5. After max_iters with persistent failures → attach [SIM-WARNING]
+             to model metadata and return with warning printed
+
+        Returns the best candidate (may still have sim warnings attached).
+        """
+        current = model
+        persistent_sim_issues: Dict[str, int] = {}   # issue text → occurrence count
+
+        print(f"\n  {'─'*62}", flush=True)
+        print(f"  ▶  Simulation inner loop  (max {max_iters} pass{'es' if max_iters>1 else ''})")
+
+        for sim_iter in range(max_iters):
+            sysml = (
+                (getattr(current, "metadata", None) or {}).get("last_sysml_text")
+                or current.to_sysml_text()
+            )
+            sim_result = self._run_simulation(sysml, current.name)
+            failed = sim_result.failed_scenarios()
+
+            # ── Print this pass's result ───────────────────────────────
+            passed  = len(sim_result.passed_scenarios())
+            total   = len(sim_result.scenario_results)
+            status  = "✓ all pass" if not failed else f"✗ {len(failed)} failing"
+            print(
+                f"  │  Pass {sim_iter+1}/{max_iters}  sim={sim_result.reachability_score:.3f} "
+                f"[{passed}/{total}]  {status}",
+                flush=True,
+            )
+
+            if not failed:
+                print(f"  └─ Simulation fully resolved ✓", flush=True)
+                return current
+
+            # ── Persistent tracking ────────────────────────────────────
+            sim_issues = self._format_sim_issues(sim_result, requirements=requirements)
+            for iss in sim_issues:
+                persistent_sim_issues[iss] = persistent_sim_issues.get(iss, 0) + 1
+            persistent = [
+                iss for iss, cnt in persistent_sim_issues.items() if cnt > 1
+            ]
+
+            # ── Print isolated parts (highest priority) ────────────────
+            if sim_result.isolated_parts:
+                print(f"  │  ⚠ ISOLATED PARTS ({len(sim_result.isolated_parts)}) — "
+                      f"no connect statements: "
+                      f"{', '.join(sim_result.isolated_parts)}")
+
+            # ── Print failed scenarios ─────────────────────────────────
+            for r in failed:
+                tgts = ", ".join(r.unreachable_targets) or "?"
+                p_tag = "  [PERSISTENT]" if any(
+                    r.scenario_name in iss for iss in persistent
+                ) else ""
+                print(f"  │    ✗ {r.scenario_name} → can't reach: {tgts}{p_tag}")
+                for w in r.warnings:
+                    print(f"  │      ⚠ {w}")
+
+            if sim_iter == max_iters - 1:
+                # Last pass — no more LLM calls, attach warning and exit
+                break
+
+            # ── Build sim-only refinement prompt ───────────────────────
+            print(f"  │  ⟳  Fixing connectivity …", flush=True)
+            sim_feedback = self._build_sim_only_feedback(
+                sim_result, persistent_issues=persistent
+            )
+            refine_result = self.design_agent.run({
+                "system_name": current.name,
+                "requirements": requirements,
+                "existing_model": current,
+                "refinement_feedback": sim_feedback,
+                "refinement_issues": sim_issues,
+                "verbose": self.verbose,
+            })
+
+            if not (refine_result.success and isinstance(refine_result.output, _SysMLModelTypes)):
+                print(f"  │  ⚠ LLM fix failed, keeping candidate", flush=True)
+                continue
+
+            fix_candidate = refine_result.output
+            fix_eval = self.evaluator.evaluate(
+                config=DesignConfiguration(name="sim_fix", parameters={}),
+                model=fix_candidate,
+            )
+            cur_eval = self.evaluator.evaluate(
+                config=DesignConfiguration(name="sim_fix_base", parameters={}),
+                model=current,
+            )
+            if fix_eval.weighted_total >= cur_eval.weighted_total - 0.05:
+                print(
+                    f"  │  ✓ Fix accepted  "
+                    f"rule: {cur_eval.weighted_total:.3f} → {fix_eval.weighted_total:.3f}",
+                    flush=True,
+                )
+                current = fix_candidate
+            else:
+                print(
+                    f"  │  ⚠ Fix caused regression "
+                    f"({cur_eval.weighted_total:.3f} → {fix_eval.weighted_total:.3f}), "
+                    f"keeping candidate",
+                    flush=True,
+                )
+
+        # ── Exited loop with persistent sim failures ───────────────────
+        final_sysml = (
+            (getattr(current, "metadata", None) or {}).get("last_sysml_text")
+            or current.to_sysml_text()
+        )
+        final_sim = self._run_simulation(final_sysml, current.name)
+        remaining = final_sim.failed_scenarios()
+
+        if remaining:
+            warning_lines = [
+                f"[SIM-WARNING] {len(remaining)} scenario(s) still unreachable "
+                f"after {max_iters} simulation refinement pass(es):"
+            ]
+            for r in remaining:
+                tgts = ", ".join(r.unreachable_targets) or "?"
+                warning_lines.append(
+                    f"  • {r.scenario_name}: '{tgts}' unreachable"
+                )
+            warning_text = "\n".join(warning_lines)
+
+            # Attach warning to model metadata
+            if not hasattr(current, "metadata") or current.metadata is None:
+                current.metadata = {}
+            current.metadata["sim_warnings"] = warning_text
+
+            print(f"  └─ ⚠  Simulation warnings attached to model:", flush=True)
+            for line in warning_lines:
+                print(f"       {line}")
+        else:
+            print(f"  └─ Simulation fully resolved ✓", flush=True)
+
+        print(f"  {'─'*62}", flush=True)
+        return current
+
+    @staticmethod
+    def _build_sim_only_feedback(
+        sim_result: SimulationResult,
+        persistent_issues: Optional[List[str]] = None,
+    ) -> str:
+        """
+        Build a targeted, simulation-only refinement prompt.
+        Focuses exclusively on missing port connections — no evaluator noise.
+        """
+        failed = sim_result.failed_scenarios()
+        lines = [
+            "CONNECTIVITY FIX ONLY — do not change any other part of the model.",
+            "",
+            "The following operational scenarios have no directed signal path.",
+            "For each, add the missing `connect <partA>.<portA> to <partB>.<portB>;`",
+            "statement(s) in the system assembly section of the package.",
+        ]
+
+        # ── Isolated parts section (highest priority) ──────────────────────
+        if sim_result.isolated_parts:
+            lines += [
+                "",
+                "ISOLATED PARTS (critical — fix these first):",
+                "  These parts exist in the model but have ZERO connect statements.",
+                "  They cannot send or receive any signal and will fail every scenario.",
+                "  For each part, add at least one outgoing and one incoming connection:",
+            ]
+            for p in sim_result.isolated_parts:
+                lines.append(f"  • {p}: connect {p}.<outPort> to <target>.<inPort>;")
+
+        lines += ["", "Failed scenarios:"]
+        for r in failed:
+            tgts = ", ".join(r.unreachable_targets) or "?"
+            entry = r.scenario_name.split("_to_")[0] if "_to_" in r.scenario_name else "?"
+            isolated_note = (
+                "  [entry part is isolated — add connections to it first]"
+                if entry in sim_result.isolated_parts else ""
+            )
+            lines.append(f"  • Scenario '{r.scenario_name}'{isolated_note}")
+            lines.append(f"    Signal must flow from '{entry}' to '{tgts}'.")
+            lines.append(f"    Check: are the relevant out-port → in-port connections present?")
+            if r.warnings:
+                for w in r.warnings:
+                    lines.append(f"    ⚠ {w}")
+        if persistent_issues:
+            lines += [
+                "",
+                "Persistent (appeared in multiple passes — highest priority):",
+            ]
+            for iss in persistent_issues:
+                lines.append(f"  • [PERSISTENT] {iss}")
+        lines += [
+            "",
+            "Rules:",
+            "  - ONLY add connect statements or add/fix port declarations.",
+            "  - Do NOT change part def structure, attributes, or requirements.",
+            "  - connect syntax: connect <instanceA>.<portA> to <instanceB>.<portB>;",
+        ]
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Simulation helpers
+    # ------------------------------------------------------------------
+
+    def _syntax_gate(
+        self,
+        sysml_text: str,
+        current_model: SysMLModel,
+        requirements: List[str],
+        max_attempts: int = 3,
+    ) -> Tuple[str, Optional[SysMLModel], SyntaxCheckResult]:
+        """
+        Syntax pre-check gate — two-tier fix strategy.
+
+        Tier 0 (Levenshtein, < 1 ms)
+            Applied first when sema errors exist.  Single-edit (distance=1)
+            typos in feature / type / instance names are corrected directly
+            in the text without calling the LLM.  Distance-2 near-misses are
+            collected as hints and injected into the LLM prompt (Tier 1).
+            If Tier 0 resolves ALL errors, the LLM loop is skipped entirely.
+
+        Tier 1 (LLM, up to max_attempts rounds)
+            Runs only when Tier 0 leaves errors unresolved (parser errors,
+            unresolvable sema errors, etc.).  Each round re-checks with syside
+            and stops as soon as the model is error-free.
+
+        Returns:
+            (final_sysml, fixed_model_or_None, syntax_result)
+            fixed_model_or_None is set only when the text was actually changed.
+        """
+        result = check_syntax(sysml_text)
+
+        if not result.has_errors:
+            print(f"  ✓ [SYNTAX]  no errors  (syside: 0 parser, 0 sema)", flush=True)
+            return sysml_text, None, result
+
+        working_sysml = sysml_text
+        working_model = current_model
+        latest_result = result
+        lev_hints: List[Dict] = []   # distance-2 suggestions for the LLM prompt
+
+        # ── Tier 0: Levenshtein quick-fix ────────────────────────────────────
+        if latest_result.sema_errors:
+            lev = try_fix_sema_errors(working_sysml, latest_result.sema_errors)
+
+            if lev.auto_fixed:
+                n_fixed = len(lev.auto_fixed)
+                print(
+                    f"\n  ┌─ [LEV-FIX]  {n_fixed} typo(s) auto-corrected"
+                    f" (distance=1, no LLM needed):",
+                    flush=True,
+                )
+                for e in lev.auto_fixed:
+                    import re as _re
+                    _wrong = _re.search(r"named '([^']+)'", e['message'])
+                    wrong_name = _wrong.group(1) if _wrong else "?"
+                    print(
+                        f"  │  L{e['line']:>3}: '{wrong_name}'"
+                        f"  →  '{e['_suggestion']}'",
+                        flush=True,
+                    )
+
+                # Re-check after applying Levenshtein fixes
+                working_sysml = lev.fixed_text
+                re_checked    = check_syntax(working_sysml)
+
+                # Update model metadata so downstream reads the fixed text
+                meta = getattr(working_model, "metadata", None)
+                if meta is None:
+                    object.__setattr__(working_model, "metadata", {})
+                    meta = working_model.metadata
+                meta["last_sysml_text"] = working_sysml
+
+                if not re_checked.has_errors:
+                    print(
+                        f"  └─ [LEV-FIX]  ✓ all errors resolved"
+                        f" — LLM fix loop skipped",
+                        flush=True,
+                    )
+                    return working_sysml, working_model, re_checked
+
+                print(
+                    f"  └─ [LEV-FIX]  {re_checked.total_errors()} error(s) remain"
+                    f" — continuing to LLM fix loop",
+                    flush=True,
+                )
+                latest_result = re_checked
+
+            # Collect distance-2 hints for the LLM prompt
+            lev_hints = lev.hints
+
+        # ── Tier 1: 外科式 LLM 修复 ──────────────────────────────────────────
+        # 只传错误块（~15 行）+ 精简声明摘要，而不是整个模型（~200 行）。
+        # 多个错误块逆序处理，保证行号不因前面的合并而漂移。
+        model_total_lines = len(working_sysml.splitlines())
+
+        for attempt in range(max_attempts):
+            all_errors = latest_result.parser_errors + latest_result.sema_errors
+            n = len(all_errors)
+
+            print(
+                f"\n  ╔═ [SYNTAX-GATE] attempt {attempt + 1}/{max_attempts}"
+                f" ─── {n} error(s)  ({latest_result.short_summary()})",
+                flush=True,
+            )
+            for e in all_errors[:8]:
+                tag = "parser" if e in latest_result.parser_errors else "sema"
+                print(f"  ║  [{tag}] L{e['line']:>3}: {e['message']}", flush=True)
+            if n > 8:
+                print(f"  ║  … and {n - 8} more", flush=True)
+
+            if attempt == max_attempts - 1:
+                print(
+                    f"  ╚═ ⚠  errors persist after {max_attempts} attempt(s)"
+                    f" — proceeding with degraded syntactic_validity score",
+                    flush=True,
+                )
+                changed = working_sysml != sysml_text or working_model is not current_model
+                return working_sysml, (working_model if changed else None), latest_result
+
+            # 按语法块分组，提取最小错误上下文
+            chunks = extract_error_context(working_sysml, all_errors)
+            print(
+                f"  ║\n  ║  ▸ {n} error(s) → {len(chunks)} block(s)"
+                f"  [model: {model_total_lines} lines total]",
+                flush=True,
+            )
+
+            # 逆序遍历，晚出现的块先修，避免行号漂移
+            n_merged = 0
+            for chunk in sorted(chunks, key=lambda c: c.start_line, reverse=True):
+
+                # 构建 prompt；首次调用时把 d=2 Lev 建议附到所属块
+                prompt = build_fix_prompt(chunk)
+                if lev_hints and attempt == 0:
+                    chunk_hints = [
+                        h for h in lev_hints
+                        if chunk.start_line <= h.get('line', 0) <= chunk.end_line
+                    ]
+                    hint_block = format_hints_for_llm(chunk_hints)
+                    if hint_block:
+                        prompt += "\n\n" + hint_block
+
+                chunk_lines   = chunk.end_line - chunk.start_line + 1
+                prompt_lines  = len(prompt.splitlines())
+                print(
+                    f"  ║\n  ║  ┌─ block '{chunk.block_name}'"
+                    f"  lines {chunk.start_line}–{chunk.end_line}"
+                    f"  ({chunk_lines} lines extracted / {model_total_lines} total)",
+                    flush=True,
+                )
+                for e in chunk.errors:
+                    tag = "parser" if e in latest_result.parser_errors else "sema"
+                    print(
+                        f"  ║  │  [{tag}] L{e['line']:>3}: {e['message']}",
+                        flush=True,
+                    )
+                print(
+                    f"  ║  │  prompt: {prompt_lines} lines"
+                    f"  (compressed {model_total_lines}→{prompt_lines} lines,"
+                    f" {100 * prompt_lines // max(model_total_lines, 1)}% of model)",
+                    flush=True,
+                )
+                print(f"  ║  │  ↳ calling LLM …", flush=True)
+
+                t0 = time.perf_counter()
+                try:
+                    raw_fix = self.llm.chat(
+                        prompt, system_prompt=_SURGICAL_FIX_SYSTEM
+                    )
+                except Exception as exc:
+                    print(f"  ║  │  ✗ LLM error: {exc}", flush=True)
+                    continue
+                elapsed = time.perf_counter() - t0
+
+                # 显示 LLM 返回的前几行（去除围栏后）
+                preview_lines = strip_code_fences(raw_fix).splitlines()
+                n_resp = len(preview_lines)
+                print(
+                    f"  ║  │  ↳ response: {n_resp} lines  ⏱ {elapsed:.1f}s",
+                    flush=True,
+                )
+                for pl in preview_lines[:4]:
+                    print(f"  ║  │     {pl}", flush=True)
+                if n_resp > 4:
+                    print(f"  ║  │     … ({n_resp - 4} more lines)", flush=True)
+
+                merge = merge_fixed_chunk(working_sysml, chunk, raw_fix)
+                if merge.success:
+                    working_sysml = merge.merged_text
+                    model_total_lines = len(working_sysml.splitlines())
+                    n_merged += 1
+                    status = f"Δlines={merge.line_delta:+d}"
+                    if merge.warning:
+                        print(f"  ║  └─ ⚠  merged  {status}  {merge.warning}", flush=True)
+                    else:
+                        print(f"  ║  └─ ✓  merged  {status}", flush=True)
+                else:
+                    print(f"  ║  └─ ✗  merge rejected — {merge.warning}", flush=True)
+
+            lev_hints = []   # d=2 建议只在首次 LLM 调用时传递
+
+            # 更新 model metadata，让后续流程读到最新文本
+            meta = getattr(working_model, "metadata", None)
+            if meta is None:
+                object.__setattr__(working_model, "metadata", {})
+                meta = working_model.metadata
+            meta["last_sysml_text"] = working_sysml
+
+            print(f"  ║\n  ║  re-checking syntax …", flush=True)
+            latest_result = check_syntax(working_sysml)
+
+            if not latest_result.has_errors:
+                print(
+                    f"  ╚═ ✓  all errors resolved"
+                    f" after {attempt + 1} fix attempt(s)",
+                    flush=True,
+                )
+                return working_sysml, working_model, latest_result
+
+            print(
+                f"  ╚═ {latest_result.total_errors()} error(s) remain"
+                f" after attempt {attempt + 1}"
+                f" — retrying …",
+                flush=True,
+            )
+
+        # Should not reach here, but safety fallback
+        return working_sysml, working_model, latest_result
+
+    def _run_simulation(self, sysml_text: str, model_name: str) -> SimulationResult:
+        """Run behavioral reachability simulation on raw SysML text."""
+        try:
+            return self.sim_validator.validate(sysml_text, model_name=model_name)
+        except Exception as e:
+            from ..simulation.validator import SimulationResult
+            r = SimulationResult(model_name=model_name)
+            r.issues.append(f"Simulation error: {e}")
+            return r
+
+    def _format_sim_issues(self, sim_result: SimulationResult,
+                            requirements: Optional[List[str]] = None) -> List[str]:
+        """Convert failed simulation scenarios into LLM-readable issue strings."""
+        issues: List[str] = []
+
+        # Isolated parts are the most actionable issue — report first
+        if sim_result.isolated_parts:
+            issues.append(
+                f"ISOLATED PARTS — the following parts have zero connect statements "
+                f"and are architecturally dead (no signal in or out): "
+                f"{', '.join(sim_result.isolated_parts)}. "
+                f"For each, add `connect <part>.<outPort> to <target>.<inPort>;` "
+                f"in the system assembly section."
+            )
+
+        for r in sim_result.failed_scenarios():
+            tgt = ", ".join(r.unreachable_targets) if r.unreachable_targets else "unknown"
+            entry = r.scenario_name.split("_to_")[0] if "_to_" in r.scenario_name else "?"
+            # Annotate if the source itself is isolated (helps LLM prioritise)
+            isolated_tag = (
+                " [entry part is isolated — no connections at all]"
+                if entry in sim_result.isolated_parts else ""
+            )
+            issues.append(
+                f"Scenario '{r.scenario_name}': no signal path from '{entry}' to '{tgt}'."
+                f"{isolated_tag} "
+                + (r.issues[0] if r.issues else "")
+            )
+        for rec in sim_result.recommendations:
+            if "only input ports" in rec or "Isolated" in rec:
+                issues.append(rec)
+
+        # ── Behavioral state machine violations ───────────────────────────────
+        br = getattr(sim_result, "behavioral_result", None)
+        if br is not None and br.extracted_sm_count > 0:
+            for sr in br.scenario_results:
+                if not sr.passed:
+                    for v in sr.violations:
+                        issues.append(
+                            f"STATE MACHINE '{sr.state_machine}': {v} "
+                            f"Fix: verify guard thresholds in the state def match "
+                            f"the corresponding SAFE requirement value."
+                        )
+
+        # ── Missing state machines (Solution B) ──────────────────────────────
+        # When SAFE requirements exist but no state def blocks were extracted,
+        # the LLM failed to generate fault-handling behaviour — flag it.
+        safe_reqs = [r for r in (requirements or []) if "-SAFE-" in r or "SAFE" in r.upper()[:10]]
+        if safe_reqs and (br is None or br.extracted_sm_count == 0):
+            sample = "; ".join(safe_reqs[:3])
+            issues.append(
+                f"MISSING STATE MACHINES — {len(safe_reqs)} safety requirement(s) found "
+                f"but no `state def` blocks were extracted from the model. "
+                f"You MUST add `state def` blocks inside the relevant PartDefinition(s) "
+                f"with guard-based transitions for each fault condition. "
+                f"Relevant requirements: {sample}"
+            )
+
+        return issues
+
+    def _print_sim_result(self, sim_result: SimulationResult) -> None:
+        """Compact simulation box (used in verbose mode inside iteration loop)."""
+        total  = len(sim_result.scenario_results)
+        passed = len(sim_result.passed_scenarios())
+        failed = sim_result.failed_scenarios()
+        print(f"\n  ┌─ Simulation: {sim_result.model_name}")
+        print(f"  │  Score {sim_result.reachability_score:.3f}  "
+              f"({passed}/{total} scenarios passed)")
+        print(f"  │  Graph: {sim_result.num_parts} parts · "
+              f"{sim_result.num_ports} ports · "
+              f"{sim_result.num_connections} connections")
+        if sim_result.isolated_parts:
+            print(f"  │  ⚠ ISOLATED ({len(sim_result.isolated_parts)}): "
+                  f"{', '.join(sim_result.isolated_parts)}")
+        if failed:
+            print(f"  │  Failed scenarios:")
+            for r in failed:
+                tgts = ", ".join(r.unreachable_targets) or "?"
+                print(f"  │    ✗ {r.scenario_name}  (can't reach: {tgts})")
+                for w in r.warnings:
+                    print(f"  │      ⚠ {w}")
+        else:
+            print(f"  │  All scenarios passed ✓")
+        for rec in sim_result.recommendations:
+            if rec != "All scenarios passed — model connectivity is structurally sound":
+                print(f"  │  • {rec}")
+        print(f"  └{'─'*55}")
+
+    def _print_final_sim(self, sim_result: SimulationResult) -> None:
+        """Full simulation report printed at the end of Phase 6."""
+        total  = len(sim_result.scenario_results)
+        passed = len(sim_result.passed_scenarios())
+        failed = sim_result.failed_scenarios()
+        W = 62
+
+        def bar(v: float, w: int = 30) -> str:
+            filled = round(v * w)
+            return "█" * filled + "░" * (w - filled)
+
+        print(f"\n  ╔{'═'*W}╗")
+        print(f"  ║  FINAL SIMULATION REPORT  ─  {sim_result.model_name:<29}║")
+        print(f"  ╠{'═'*W}╣")
+        print(f"  ║  Reachability score : {sim_result.reachability_score:.3f}  "
+              f"{bar(sim_result.reachability_score, 20)}  "
+              f"{passed}/{total} scenarios{' '*(4-len(str(total)))}║")
+        print(f"  ║  Graph              : {sim_result.num_parts} parts · "
+              f"{sim_result.num_ports} ports · "
+              f"{sim_result.num_connections} connections{' '*10}║")
+        if sim_result.isolated_parts:
+            iso_str = f"  ║  ⚠ Isolated parts   : {', '.join(sim_result.isolated_parts)}"
+            print(f"{iso_str:<{W+4}}║")
+        print(f"  ╠{'═'*W}╣")
+
+        # Per-scenario table
+        for r in sim_result.scenario_results:
+            icon  = "✓" if r.passed else "✗"
+            tags  = "|".join(r.tags)
+            name  = r.scenario_name[:32]
+            path  = (" → ".join(r.path[:3]) + ("…" if len(r.path) > 3 else "")) if r.path else "—"
+            path  = path[:26]
+            print(f"  ║  {icon} [{tags:<15}] {name:<33}║")
+            print(f"  ║      path: {path:<50}║")
+            for iss in r.issues[:2]:
+                print(f"  ║      ! {iss[:54]:<54}║")
+
+        print(f"  ╠{'═'*W}╣")
+        if sim_result.recommendations and \
+                sim_result.recommendations[0] != \
+                "All scenarios passed — model connectivity is structurally sound":
+            print(f"  ║  Recommendations:{'  '*(W//2-9)}║")
+            for rec in sim_result.recommendations[:3]:
+                words = rec.split()
+                line = ""
+                for w in words:
+                    if len(line) + len(w) + 1 > W - 6:
+                        print(f"  ║    • {line:<{W-6}}║")
+                        line = w
+                    else:
+                        line = (line + " " + w).strip()
+                if line:
+                    print(f"  ║    • {line:<{W-6}}║")
+        else:
+            print(f"  ║  ✓ All scenarios passed — connectivity is sound {'':>10}║")
+        print(f"  ╚{'═'*W}╝", flush=True)
+
+        # ── Behavioral simulation (state machine) detail report ───────────
+        br = getattr(sim_result, "behavioral_result", None)
+        if br is not None and br.extracted_sm_count > 0:
+            b_passed = br.passed_count()
+            b_total  = len(br.scenario_results)
+            print(f"\n  ╔{'═'*W}╗")
+            print(f"  ║  BEHAVIORAL SIMULATION  ─  State Machine Execution"
+                  f"{' '*(W-50)}║")
+            print(f"  ║  Extracted {br.extracted_sm_count} state machine(s)   "
+                  f"Score: {br.sim_score:.2%}   ({b_passed}/{b_total} passed)"
+                  f"{' '*(W-58+len(str(br.extracted_sm_count)))}║")
+            print(f"  ╠{'═'*W}╣")
+            for sr in br.scenario_results:
+                icon = "✓" if sr.passed else "✗"
+                name = sr.state_machine[:38]
+                print(f"  ║  {icon}  {name:<58}║")
+                for tl in sr.timeline:
+                    line = tl.strip()[:W-6]
+                    print(f"  ║      {line:<{W-4}}║")
+                for v in sr.violations:
+                    line = f"⚠ {v}"[:W-6]
+                    print(f"  ║      {line:<{W-4}}║")
+                print(f"  ║  {'·'*W}║")
+            print(f"  ╚{'═'*W}╝", flush=True)
+
     @staticmethod
     def _build_refinement_feedback(
         eval_result: Any,
         cot_feedback: str,
         persistent_issues: Optional[List[str]] = None,
         mcts_constraints: str = "",
+        sim_issues: Optional[List[str]] = None,
     ) -> str:
-        """Combine evaluator issues with LLM feedback into a refinement-oriented summary.
+        """Combine evaluator issues, simulation failures, and LLM feedback into
+        a refinement-oriented prompt section.
 
         Args:
             eval_result:        Rule-based evaluation result (issues + recommendations).
             cot_feedback:       LLM chain-of-thought final answer (may be empty).
-            persistent_issues:  Issues that have appeared in more than one iteration;
-                                these are flagged with [PERSISTENT] so the LLM can
-                                prioritise them.
-            mcts_constraints:   Architectural decisions from MCTS that the LLM must
-                                implement in the SysML model (prepended so the LLM
-                                sees them before anything else).
+            persistent_issues:  Issues that have appeared in more than one iteration.
+            mcts_constraints:   Architectural decisions from MCTS (non-negotiable).
+            sim_issues:         Behavioral simulation failures from SimulationValidator.
         """
         lines = []
 
@@ -1477,6 +2484,20 @@ class Orchestrator:
             lines.append(f"- {issue}")
         for rec in eval_result.recommendations:
             lines.append(f"- {rec}")
+
+        # Simulation failures: these are structural connectivity gaps found by
+        # running the port-connection graph against operational scenarios.
+        if sim_issues:
+            lines.append("")
+            lines.append(
+                "Behavioral simulation failures (port-connection reachability check):\n"
+                "  The following operational scenarios have no directed signal path in the model.\n"
+                "  Add `connect <source_part>::<port> to <target_part>::<port>;` statements\n"
+                "  to establish the missing paths."
+            )
+            for iss in sim_issues:
+                lines.append(f"- [SIM] {iss}")
+
         if persistent_issues:
             lines.append("")
             lines.append(

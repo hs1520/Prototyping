@@ -14,6 +14,9 @@ from ..llm.interface import LLMInterface
 from ..rag.pinecone_wrapper import PineconeWrapper
 from ..rag.retriever import RAGRetriever
 from ..sysml.model import SysMLModel
+from ..sysml.lite_model import SysMLLiteModel, build_lite_model
+
+_SysMLModelTypes = (SysMLModel, SysMLLiteModel)
 
 
 class PrototypingPipeline:
@@ -129,10 +132,10 @@ class PrototypingPipeline:
         }
         result = design_agent.run(task)
 
-        if result.success and isinstance(result.output, SysMLModel):
+        if result.success and isinstance(result.output, _SysMLModelTypes):
             model = result.output
         else:
-            model = SysMLModel(name=system_name)
+            model = build_lite_model("", model_name=system_name)
 
         req_agent.create_sysml_requirements(requirements, model)
         return model

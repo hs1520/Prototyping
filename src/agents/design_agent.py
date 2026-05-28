@@ -22,7 +22,7 @@ from ..sysml.model import (
     ElementRef,
     SysMLModel,
 )
-from src.sysml.Syside_AST_Parser import parse_sysml_to_model
+from ..sysml.lite_model import SysMLLiteModel, build_lite_model
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -315,23 +315,31 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         verbose = task.get("verbose", False)
 
         is_refinement = bool(existing_model and feedback)
+        skip_rag = task.get("skip_rag", False)
 
         if is_refinement:
-            # Refinement mode — RAG query is driven by the specific issues found,
-            # not the system name, so we retrieve constructs that fix those issues.
-            refinement_rag_query = self._build_refinement_query(refinement_issues)
-            rag_context = self.get_augmented_context(
-                refinement_rag_query,
-                include_official_sysml=True,
-                allowed_extensions=(".sysml",),
-            )
+            # Syntax-fix calls skip RAG entirely — the corpus has no useful examples
+            # for "fix undefined feature reference" errors, and the generic fallback
+            # query ("SysML v2 refine design improve quality") adds noise.
+            if skip_rag:
+                rag_context = ""
+                if verbose:
+                    print(f"\n  [DEBUG] Refinement RAG skipped (skip_rag=True)")
+            else:
+                refinement_rag_query = self._build_refinement_query(refinement_issues)
+                rag_context = self.get_augmented_context(
+                    refinement_rag_query,
+                    include_official_sysml=True,
+                    allowed_extensions=(".sysml",),
+                )
+                if verbose:
+                    print(f"\n  [DEBUG] Refinement RAG query: {refinement_rag_query!r}")
 
             if verbose:
                 print(f"\n  {'─'*60}")
                 print(f"  [DEBUG] Refinement Mode — Input feedback")
                 print(f"  {'─'*60}")
                 print(feedback)
-                print(f"\n  [DEBUG] Refinement RAG query: {refinement_rag_query!r}")
                 print(f"\n  [DEBUG] Existing model before refinement:")
                 _print_sysml_model_debug(existing_model, label="Before Refinement")
 
@@ -387,81 +395,30 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 verbose=verbose,
             )
 
-        # Build or update the SysML model
-        model = existing_model or SysMLModel(
-            name=system_name,
-            description=f"Auto-generated design for {system_name}",
-        )
-
         if not cot_result.extracted_sysml:
             raise RuntimeError("[SysML_EXTRACTION_ERROR] 未提取到SysML v2 design.")
 
-        # Integrate Syside AST Parser: parse the extracted SysML text into a SysMLModel.
-        parse_strict = task.get("parse_strict", False)
-        fail_on_parse_error = task.get("fail_on_parse_error", False)
-
-        parse_diagnostics = []
         parse_label = "After Refinement" if is_refinement else "After Initial Generation"
-        try:
-            parsed = parse_sysml_to_model(
-                cot_result.extracted_sysml, model_name=system_name, strict=parse_strict
+
+        # Parse via syside native API (replaces Syside_AST_Parser)
+        model = build_lite_model(cot_result.extracted_sysml, model_name=system_name)
+
+        parse_diagnostics = [
+            {"severity": d.severity.value if hasattr(d.severity, "value") else str(d.severity),
+             "message": d.message}
+            for d in model.diagnostics
+        ]
+
+        if verbose:
+            print(f"\n  {'─'*60}")
+            print(f"  [DEBUG] SysMLLiteModel — {parse_label}")
+            print(f"  {'─'*60}")
+            _print_sysml_model_debug(
+                model,
+                label=parse_label,
+                parse_diagnostics=parse_diagnostics,
+                sysml_text=cot_result.extracted_sysml,
             )
-
-            # Serialize diagnostics into lightweight dicts for metadata
-            for d in getattr(parsed, "diagnostics", []):
-                sev = getattr(d, "severity", None)
-                try:
-                    sev_str = sev.value if hasattr(sev, "value") else str(sev)
-                except Exception:
-                    sev_str = str(sev)
-                msg = getattr(d, "message", str(d))
-                span = getattr(d, "source_span", None)
-                source_span = None
-                if span is not None:
-                    start = getattr(span, "start", None)
-                    end = getattr(span, "end", None)
-                    if start is not None and end is not None:
-                        source_span = {
-                            "start": {"line": getattr(start, "line", 0), "character": getattr(start, "character", 0)},
-                            "end": {"line": getattr(end, "line", 0), "character": getattr(end, "character", 0)},
-                        }
-                parse_diagnostics.append({"severity": sev_str, "message": msg, "source_span": source_span})
-
-            # Replace existing model with parsed model (replacement strategy)
-            model = parsed
-
-            # Persist the original LLM-generated SysML text so future refinement
-            # rounds can use it directly instead of reconstructing via to_sysml_text().
-            if not hasattr(model, "metadata") or model.metadata is None:
-                object.__setattr__(model, "metadata", {})
-            model.metadata["last_sysml_text"] = cot_result.extracted_sysml
-
-            if verbose:
-                print(f"\n  {'─'*60}")
-                print(f"  [DEBUG] Parsed SysMLModel — {parse_label}")
-                print(f"  {'─'*60}")
-                _print_sysml_model_debug(
-                    model,
-                    label=parse_label,
-                    parse_diagnostics=parse_diagnostics,
-                    sysml_text=cot_result.extracted_sysml,
-                )
-
-        except Exception as e:
-            # Parsing failed unexpectedly
-            parse_error_msg = str(e)
-            if verbose:
-                print(f"\n  ✗ [DEBUG] Parse FAILED: {parse_error_msg}")
-            metadata = {"parse_error": parse_error_msg, "parse_diagnostics": parse_diagnostics}
-            result = AgentResult(
-                agent_name=self.name,
-                success=not fail_on_parse_error,
-                output=model,
-                reasoning=cot_result.final_answer,
-                metadata={**metadata, **generation_metadata},
-            )
-            self.record_result(result)
-            return result
 
         untraced = self._apply_requirement_traceability(model, requirements)
 

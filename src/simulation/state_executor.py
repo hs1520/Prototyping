@@ -1,0 +1,153 @@
+"""
+state_executor.py
+
+单个状态机实例的执行引擎。
+
+用法:
+    inst = StateMachineInstance(sm_def)
+    for t, variables in enumerate(test_sequence):
+        fired = inst.step(variables, time=float(t))
+    print(inst.transition_log)
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+from .state_extractor import GuardCondition, StateMachineDef
+
+
+# ---------------------------------------------------------------------------
+# Log entry
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TransitionEvent:
+    time: float
+    from_state: str
+    to_state: str
+    transition_name: Optional[str]
+    entry_action: Optional[str]
+    guard_description: str
+    variables_snapshot: Dict[str, Any] = field(default_factory=dict)
+
+    def to_line(self) -> str:
+        action_str = f"  → entry: {self.entry_action}" if self.entry_action else ""
+        return (
+            f"[t={self.time:.0f}]  {self.from_state} → {self.to_state}"
+            f"  ({self.guard_description}){action_str}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# State machine instance
+# ---------------------------------------------------------------------------
+
+class StateMachineInstance:
+    """
+    Executes a StateMachineDef step-by-step given a sequence of variable dicts.
+
+    State is reset between scenario runs via reset().
+    """
+
+    def __init__(self, sm: StateMachineDef) -> None:
+        self.sm = sm
+        self.current_state: Optional[str] = sm.initial_state
+        self.transition_log: List[TransitionEvent] = []
+        self.fired_actions: List[str] = []
+
+    def reset(self) -> None:
+        self.current_state = self.sm.initial_state
+        self.transition_log.clear()
+        self.fired_actions.clear()
+
+    # ------------------------------------------------------------------ #
+    #  Single time step                                                   #
+    # ------------------------------------------------------------------ #
+
+    def step(self, variables: Dict[str, Any], time: float = 0.0) -> bool:
+        """
+        Evaluate all outgoing transitions from the current state.
+        Fire the first one whose guard is satisfied.
+
+        Returns True if a transition fired this step.
+        """
+        if self.current_state is None:
+            return False
+
+        for tr in self.sm.transitions:
+            if tr.is_initial:
+                continue
+            if tr.source != self.current_state:
+                continue
+            if not tr.guards:
+                continue
+
+            # All guards must hold (implicit AND between multiple guards)
+            if all(self._eval_guard(g, variables) for g in tr.guards):
+                old_state = self.current_state
+                self.current_state = tr.target
+
+                entry = self.sm.entry_action_for_state(tr.target) if tr.target else None
+                if entry:
+                    self.fired_actions.append(entry)
+
+                guard_desc = " AND ".join(g.description() for g in tr.guards)
+                event = TransitionEvent(
+                    time=time,
+                    from_state=old_state,
+                    to_state=tr.target or "?",
+                    transition_name=tr.name,
+                    entry_action=entry,
+                    guard_description=guard_desc,
+                    variables_snapshot={
+                        k: variables[k]
+                        for k in tr.guards[0].involved_attributes()
+                        if k in variables
+                    },
+                )
+                self.transition_log.append(event)
+                return True
+
+        return False
+
+    def in_fault_state(self) -> bool:
+        """True if the current state has an entry action (i.e. a fault state)."""
+        if self.current_state is None:
+            return False
+        return self.sm.entry_action_for_state(self.current_state) is not None
+
+    # ------------------------------------------------------------------ #
+    #  Guard evaluation                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _eval_guard(self, guard: GuardCondition, variables: Dict[str, Any]) -> bool:
+        if guard.kind == "comparison":
+            val = variables.get(guard.attribute)
+            if val is None:
+                return False
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                return False
+            op = guard.operator
+            th = guard.threshold
+            if op == "<":  return v <  th
+            if op == "<=": return v <= th
+            if op == ">":  return v >  th
+            if op == ">=": return v >= th
+            if op == "==": return v == th
+            if op == "!=": return v != th
+            return False
+
+        if guard.kind == "bool_true":
+            return bool(variables.get(guard.attribute, False))
+
+        if guard.kind == "compound":
+            if guard.compound_op == "and":
+                return all(self._eval_guard(op, variables) for op in guard.operands)
+            if guard.compound_op == "or":
+                return any(self._eval_guard(op, variables) for op in guard.operands)
+
+        return False

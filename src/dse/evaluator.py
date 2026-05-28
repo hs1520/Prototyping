@@ -1,30 +1,35 @@
 """
 Design evaluator module — scientifically redesigned (v2).
 
-Five independent, non-overlapping evaluation dimensions:
+Six independent, non-overlapping evaluation dimensions:
 
-  Dim 1  requirement_satisfaction  25 %
+  Dim 1  requirement_satisfaction  21 %
          Satisfy-link coverage (70 %) + quantitative specification quality (30 %).
-         Replaces the previous *requirement_traceability* duplicate.
 
-  Dim 2  mcts_fidelity            25 %
+  Dim 2  mcts_fidelity            21 %
          Are MCTS architectural decisions actually present in the SysML text?
-         Checks redundancy structure, protocol signal type, sensor count,
-         control frequency.  Returns 1.0 (N/A) when no MCTS config is supplied.
+         Returns 1.0 (N/A) when no MCTS config is supplied.
 
-  Dim 3  structural_integrity     20 %
+  Dim 3  structural_integrity     17 %
          Port coverage + attribute coverage + connect density + instance
-         connectivity (no dangling parts).  All text-level where feasible so
-         parser gaps don't deflate the score.
+         connectivity (no dangling parts).
 
-  Dim 4  safety_assurance         20 %
+  Dim 4  safety_assurance         17 %
          State-machine coverage + fault transitions + override-command path +
-         emergency action defs.  Requires actual SysML state machines, not just
-         keyword-matching on action names.
+         emergency action defs.
 
-  Dim 5  interface_correctness    10 %
+  Dim 5  interface_correctness     9 %
          Port-type consistency (DataPort/RfPort residual rate) + fan-in freedom
          + port-direction coverage.
+
+  Dim 6  syntactic_validity        7 %
+         Syside parse/sema error count.
+
+  Dim 7  behavioral_reachability   8 %
+         Structural reachability simulation: builds a port-connection graph and
+         checks whether key operational scenarios (sensor→controller, safety→
+         controller, power→controller, etc.) have directed paths.
+         Returns 1.0 (N/A) when networkx is unavailable.
 
 Threshold calibration (v2):
   - A model that satisfies all requirements but is missing MCTS implementation
@@ -82,12 +87,13 @@ class EvaluationResult:
 # ---------------------------------------------------------------------------
 
 DIMENSION_WEIGHTS: Dict[str, float] = {
-    "requirement_satisfaction": 0.23,
-    "mcts_fidelity":           0.23,
-    "structural_integrity":    0.18,
-    "safety_assurance":        0.18,
-    "interface_correctness":   0.10,
-    "syntactic_validity":      0.08,
+    "requirement_satisfaction": 0.21,
+    "mcts_fidelity":           0.21,
+    "structural_integrity":    0.17,
+    "safety_assurance":        0.17,
+    "interface_correctness":   0.09,
+    "syntactic_validity":      0.07,
+    "behavioral_reachability": 0.08,
 }
 
 assert abs(sum(DIMENSION_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
@@ -299,8 +305,11 @@ class DesignEvaluator:
         config: DesignConfiguration,
         model: SysMLModel,
         mcts_config: Optional[DesignConfiguration] = None,
+        syntax_result=None,   # Optional[SyntaxCheckResult] — cached from syntax gate
     ) -> EvaluationResult:
         """Evaluate model quality across all five dimensions."""
+        # Store syntax_result for use by _score_syntactic_validity (avoids re-parsing)
+        self._cached_syntax_result = syntax_result
         result = EvaluationResult(configuration_name=config.name)
 
         scorers = {
@@ -310,6 +319,7 @@ class DesignEvaluator:
             "safety_assurance":        self._score_safety_assurance,
             "interface_correctness":   self._score_interface_correctness,
             "syntactic_validity":      self._score_syntactic_validity,
+            "behavioral_reachability": self._score_behavioral_reachability,
         }
 
         weighted_sum = 0.0
@@ -336,7 +346,7 @@ class DesignEvaluator:
             "_SAFE_" in r.name for r in model.requirement_definitions
         )
         has_mcts = mcts_config is not None
-        has_diagnostics = bool(model.diagnostics)
+        has_diagnostics = bool(model.diagnostics) or (syntax_result is not None)
         for dim, (floor, reason) in DIMENSION_VETO_FLOORS.items():
             if dim == "safety_assurance" and not has_safe:
                 continue
@@ -367,6 +377,7 @@ class DesignEvaluator:
             if s < 0.50:
                 result.issues.append(f"{dim}: {s:.2f} — see specific issues above")
 
+        self._cached_syntax_result = None  # clean up
         return result
 
     def evaluate_from_scores(
@@ -394,27 +405,24 @@ class DesignEvaluator:
         mcts_config: Optional[DesignConfiguration],
     ) -> float:
         """
-        Scores syntactic/semantic correctness using Syside diagnostics.
+        Scores syntactic/semantic correctness.
 
-        Returns 1.0 when no diagnostics are present (model not compiled or
-        clean compile).  Each ERROR deducts 0.20; each WARNING deducts 0.05.
-        Floor is 0.0.
-
-        Veto fires at < 0.40 (≥ 3 errors), but only when diagnostics are
-        present — the evaluate() caller skips the veto for empty lists.
+        Priority 1: use the SyntaxCheckResult cached from the syntax gate
+                    (syside try_load_model — most accurate).
+        Priority 2: fall back to model.diagnostics (legacy path).
         """
+        # Priority 1: cached syside result from syntax gate
+        cached = getattr(self, "_cached_syntax_result", None)
+        if cached is not None:
+            return cached.score
+
+        # Priority 2: legacy model.diagnostics fallback
         diags = model.diagnostics
         if not diags:
             return 1.0
-
-        n_errors = sum(
-            1 for d in diags if d.severity == DiagnosticSeverity.ERROR
-        )
-        n_warnings = sum(
-            1 for d in diags if d.severity == DiagnosticSeverity.WARNING
-        )
-        score = 1.0 - 0.20 * n_errors - 0.05 * n_warnings
-        return max(0.0, score)
+        n_errors = sum(1 for d in diags if d.severity == DiagnosticSeverity.ERROR)
+        n_warnings = sum(1 for d in diags if d.severity == DiagnosticSeverity.WARNING)
+        return max(0.0, 1.0 - 0.20 * n_errors - 0.05 * n_warnings)
 
     # ------------------------------------------------------------------
     # Dimension 1: Requirement Satisfaction (23 %)
@@ -1079,11 +1087,27 @@ class DesignEvaluator:
             direction_cov = 0.0
         else:
             def _all_directed(part) -> bool:  # noqa: ANN001
-                return bool(part.ports) and all(
+                if bool(part.ports) and all(
                     getattr(p, "direction", FeatureDirection.NONE) not in
                     (None, FeatureDirection.NONE)
                     for p in part.ports
+                ):
+                    return True
+                # Text fallback: count directed port keywords in part def body.
+                # Mirrors _has_directed_port — handles direction=NONE from syside
+                # when direction is declared in a port def body rather than inline.
+                part_block_re = re.compile(
+                    rf"\bpart\s+def\s+{re.escape(part.name)}\s*\{{(.*?)\n\s*\}}",
+                    re.DOTALL,
                 )
+                m = part_block_re.search(text)
+                if not m or not part.ports:
+                    return False
+                body = m.group(1)
+                directed_count = len(re.findall(
+                    r"\b(?:in|out|inout)\s+port\s+\w+", body, re.IGNORECASE
+                ))
+                return directed_count >= len(part.ports)
             direction_cov = sum(1 for p in parts if _all_directed(p)) / len(parts)
 
         # ── Connect type consistency (AST port type_ref matching) ─────────
@@ -1579,6 +1603,55 @@ class DesignEvaluator:
                     )
 
         return issues, recs
+
+    # ------------------------------------------------------------------
+    # Dim 7: behavioral_reachability
+    # ------------------------------------------------------------------
+
+    def _score_behavioral_reachability(
+        self,
+        config: DesignConfiguration,
+        model: SysMLModel,
+        mcts_config: Optional[DesignConfiguration] = None,
+    ) -> float:
+        """
+        Build a port-connection graph from the parsed SysMLModel and check
+        whether key operational scenarios have directed paths.
+
+        Returns 1.0 (N/A) when networkx is unavailable or no parts exist.
+        Falls back to 0.5 on any unexpected error so as not to penalise models
+        whose connectivity is simply not yet characterised.
+        """
+        if not _HAS_NX:
+            return 1.0
+        if not model.part_definitions:
+            return 1.0
+
+        try:
+            from src.simulation.extractor import extract_behavioral_graph
+            from src.simulation.exec_graph import build_exec_graph
+            from src.simulation.scenarios import select_scenarios, DRONE_SCENARIOS
+            from src.simulation.simulator import ScenarioSimulator
+            from src.simulation.validator import _compute_score
+
+            raw_text = _sysml_text(model)
+            if not raw_text:
+                return 1.0
+            bg = extract_behavioral_graph(raw_text)
+            if not bg.parts:
+                return 1.0
+
+            G = build_exec_graph(bg)
+            scenarios = select_scenarios(bg, predefined=DRONE_SCENARIOS)
+            if not scenarios:
+                return 1.0
+
+            sim = ScenarioSimulator(G)
+            results = sim.run_all(scenarios)
+            return _compute_score(results, [], len(bg.parts))
+
+        except Exception:
+            return 0.5
 
     # ------------------------------------------------------------------
     # Legacy compatibility shims
