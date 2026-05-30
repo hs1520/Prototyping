@@ -66,6 +66,60 @@ class PrototypingPipeline:
             verbose=verbose,
         )
 
+    def generate_system(
+        self,
+        system_name: str,
+        description: str,
+        additional_requirements: Optional[List[str]] = None,
+        parse_strict: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate a validated SysML v2 model without Design Space Exploration.
+
+        Run Phases 1-4 only (requirements → design → syntax gate → refinement
+        → simulation).  No MCTS, no parameter injection.  Use this to get a
+        correct, working model first; call explore_design_space() afterwards
+        when DSE is needed.
+
+        Returns
+        -------
+        {system_name, requirements, model, model_sysml, model_summary,
+         final_score, iterations, evaluation_history, simulation_result}
+        """
+        return self.orchestrator.generate(
+            system_name=system_name,
+            system_description=description,
+            additional_requirements=additional_requirements,
+            parse_strict=(parse_strict if parse_strict is not None else self.parse_strict),
+        )
+
+    def explore_design_space(
+        self,
+        generate_result: Dict[str, Any],
+        mcts_iterations: int = 50,
+        mcts_seed: Optional[int] = None,
+        mcts_patience: Optional[int] = 15,
+    ) -> Dict[str, Any]:
+        """
+        Run MCTS Design Space Exploration on a previously validated model.
+
+        Takes the dict returned by generate_system() and explores the
+        parameter space to find the optimal configuration.
+
+        Returns
+        -------
+        Full result dict — superset of generate_result — with updated
+        model/score/sim fields plus DSE fields:
+        {design_space_summary, design_space_parameters,
+         best_config, pareto_alternatives}
+        """
+        return self.orchestrator.explore(
+            generate_result=generate_result,
+            mcts_iterations=mcts_iterations,
+            mcts_seed=mcts_seed,
+            mcts_patience=mcts_patience,
+        )
+
     def prototype_system(
         self,
         system_name: str,

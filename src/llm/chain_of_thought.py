@@ -334,6 +334,41 @@ Rules:
 - Action def and state def names must be unique across the fragment.
 - Use valid SysML v2 syntax.
 
+GUARD CONDITION RULES — the `if <faultCondition>` expression decides whether the
+fault transition can ever fire.  A guard that is logically impossible produces a
+dead state machine.  Follow these rules exactly:
+- Use a threshold-CROSSING comparison operator: `<`, `<=`, `>`, `>=`.
+  NEVER use `==` or `!=` for a numeric condition — a fault is "value crossed a
+  limit", not "value exactly equals a number".  A continuously-changing quantity
+  almost never lands on an exact value, so an `==` guard never triggers.
+- The LEFT operand must be a DYNAMIC measured / sensed state variable
+  (e.g. batteryCharge, commLossTime, obstacleDistance, tiltAngle).
+  The RIGHT operand is the threshold. PREFER a dynamic threshold — another
+  attribute, or an arithmetic expression of attributes — whenever the limit
+  actually depends on operating conditions; use a bare numeric literal only
+  when the limit is a genuinely fixed constant.
+    e.g. `batteryCharge <= returnEnergyRequired`   (limit depends on distance)
+         `commLossTime > heartbeatInterval + 5.0`  (limit derived from a param)
+  NEVER compare a threshold against its own value
+  (e.g. `rtbBatteryThreshold == 120.0` is meaningless — it is always true/false).
+- For a boolean fault flag, the fault fires when the flag is TRUE.  Name flags
+  affirmatively (sensorSelfTestFailed, collisionDetected, linkLost) and write the
+  guard as the bare flag name:  `if sensorSelfTestFailed`
+  (NOT `== false`, NOT `== true` — the extractor only recognises the bare flag).
+- Every variable named in a guard must read as a runtime state of the owner part
+  (it will be declared as a backing attribute in the assembly step).
+
+  ✓ CORRECT guards:
+      if batteryCharge < 15.0                   // fixed numeric threshold
+      if commLossTime > 10.0
+      if sensorSelfTestFailed                   // boolean flag — fires when true
+      if batteryCharge <= returnEnergyRequired  // dynamic threshold (RHS is an attribute)
+      if commLossTime > heartbeatInterval + 5.0 // arithmetic threshold
+  ✗ WRONG guards:
+      if batteryLevel == 15.0          // `==` on a swept value never fires
+      if rtbBatteryThreshold == 120.0  // comparing a threshold to itself
+      if sensorStatus == false         // use an affirmative flag instead
+
 CRITICAL OWNERSHIP ANNOTATION — you MUST prefix every action def and state def with a
 comment naming the part def it belongs to.  The next assembly step uses this to embed
 each element inside the correct part def.  Missing annotations cause elements to be lost.
@@ -357,7 +392,7 @@ examples corpus):
       transition initial then <Name>Nominal;     // canonical initial transition
       transition <name>Fault                     // named fault transition
           first <Name>Nominal                    // source state (NOT `from`)
-          if <faultCondition>                    // guard expression (NOT `when`)
+          if measuredVar < limitValue            // threshold-crossing guard (NOT `==`, NOT `when`)
           then <Name>Fault;                      // target state (NOT `to`)
   }}
 
@@ -366,6 +401,8 @@ are not SysML v2 standard):
   ✗  transition X from <state> to <state> when <guard>;     // wrong keywords
   ✗  transition X -> Y when Z;                              // `->` is succession, not transition
   ✗  state Y {{ entry action def localAction {{ }} }}            // inline action def in entry
+  ✗  if someValue == <number>;                              // `==` numeric guard never fires — use < <= > >=
+  ✗  if someFlag == false;                                  // use an affirmative flag: `if someFlagFailed`
 
 Output a single ```sysml code block containing ONLY the behavioral fragment (with OWNER comments).
 No prose after the block.

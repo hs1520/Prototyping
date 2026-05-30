@@ -193,6 +193,42 @@ class TestGenerateBehavior:
         assert "navigateToWaypoint" in result.extracted_sysml
         assert "SafetyMonitor" in result.extracted_sysml
 
+    def test_behavior_prompt_contains_guard_rules(self):
+        """The behavior prompt must carry guard-authoring rules so the LLM does
+        not emit dead guards (`== <number>`, `== false`, threshold-vs-self)."""
+        captured = []
+
+        class CaptureLLM:
+            def complete(self, messages, **_):
+                captured.extend(messages)
+                return LLMResponse(content=_BEHAVIOR_FRAGMENT, model="cap")
+
+        cot = ChainOfThoughtPrompter(CaptureLLM())
+        cot.generate_behavior(
+            system_name="DroneSystem",
+            architecture="1. SafetyMonitor",
+            behavioral_requirements=["REQ-SAFE-001: emergency-land when battery low."],
+            parts_fragment="part def SafetyMonitor { }",
+        )
+        prompt = " ".join(m.content for m in captured)
+
+        # Section header present
+        assert "GUARD CONDITION RULES" in prompt
+        # Forbids == / != for numeric guards
+        assert "NEVER use `==` or `!=`" in prompt
+        # Left operand must be a dynamic variable; warns against threshold-vs-self
+        assert "DYNAMIC measured" in prompt
+        assert "comparing a threshold to itself" in prompt
+        # Boolean flag guidance (affirmative naming, no == false)
+        assert "affirmative flag" in prompt
+        # Concrete correct example + wrong anti-patterns
+        assert "if batteryCharge < 15.0" in prompt
+        assert "if someFlag == false" in prompt
+        # Encourages dynamic thresholds (attribute / arithmetic RHS), now that
+        # Layer 1 supports them — not just fixed numeric literals.
+        assert "PREFER a dynamic threshold" in prompt
+        assert "if batteryCharge <= returnEnergyRequired" in prompt
+
 
 class TestAssembleModel:
     def test_extracts_complete_package(self):
@@ -240,7 +276,7 @@ class TestAssembleModel:
 class TestMultistepGeneratePipeline:
     """
     Test _multistep_generate via DesignAgent using stubs.
-    The Syside parser is bypassed by monkeypatching parse_sysml_to_model.
+    The Syside parser is bypassed by monkeypatching build_lite_model.
     """
 
     _REQUIREMENTS = [
@@ -282,7 +318,7 @@ class TestMultistepGeneratePipeline:
         dummy_model.part_definitions.append(
             PartDefinition(name="FlightController", short_description="controls flight")
         )
-        monkeypatch.setattr(da_module, "parse_sysml_to_model", lambda *a, **kw: dummy_model)
+        monkeypatch.setattr(da_module, "build_lite_model", lambda *a, **kw: dummy_model)
 
         result = agent.run({
             "system_name": "DroneSystem",
@@ -309,7 +345,7 @@ class TestMultistepGeneratePipeline:
         dummy_model.part_definitions.append(
             PartDefinition(name="FlightController", short_description="controls flight")
         )
-        monkeypatch.setattr(da_module, "parse_sysml_to_model", lambda *a, **kw: dummy_model)
+        monkeypatch.setattr(da_module, "build_lite_model", lambda *a, **kw: dummy_model)
 
         result = agent.run({
             "system_name": "DroneSystem",
@@ -348,7 +384,7 @@ class TestMultistepGeneratePipeline:
         dummy_model.part_definitions.append(
             PartDefinition(name="FlightController", short_description="controls flight")
         )
-        monkeypatch.setattr(da_module, "parse_sysml_to_model", lambda *a, **kw: dummy_model)
+        monkeypatch.setattr(da_module, "build_lite_model", lambda *a, **kw: dummy_model)
 
         result = agent.run({
             "system_name": "DroneSystem",
@@ -375,7 +411,7 @@ class TestMultistepGeneratePipeline:
         dummy_model.part_definitions.append(
             PartDefinition(name="FlightController", short_description="controls flight")
         )
-        monkeypatch.setattr(da_module, "parse_sysml_to_model", lambda *a, **kw: dummy_model)
+        monkeypatch.setattr(da_module, "build_lite_model", lambda *a, **kw: dummy_model)
 
         result = agent.run({
             "system_name": "DroneSystem",

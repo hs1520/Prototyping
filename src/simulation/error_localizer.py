@@ -315,19 +315,85 @@ def merge_fixed_chunk(
 # 核心函数 3：构建 LLM 修复 prompt
 # ---------------------------------------------------------------------------
 
+# "No Feature named 'X' found." — 提取缺失的特征名
+_MISSING_FEATURE_RE = re.compile(r"No Feature named '([^']+)' found")
+
+# 名字暗示布尔标志的词缀（用于推断缺失属性的类型）
+_BOOL_HINT_RE = re.compile(
+    r"(?:Failed|Detected|Active|Activated|Enabled|Disabled|Triggered|Ready|"
+    r"Valid|Invalid|Lost|Exceeded|Pending|Done|Complete|Ok|Set|Flag)$",
+    re.IGNORECASE,
+)
+_BOOL_PREFIX_RE = re.compile(r"^(?:is|has|should|can|must)[A-Z]")
+
+# 单位括号 [...] — 用于把 `[bit]` 这类单位名与 guard 状态变量区分开
+_UNIT_BRACKET_RE = re.compile(r'\[([^\]]*)\]')
+
+
+def _infer_attr_decl(name: str) -> str:
+    """
+    为一个缺失的 guard 变量推断合理的 attribute 声明。
+
+    名字暗示布尔标志（…Failed / …Detected / isX / hasX …）→ Boolean = false
+    否则视为被测的连续量                                    → Real = 0.0
+    """
+    if _BOOL_HINT_RE.search(name) or _BOOL_PREFIX_RE.match(name):
+        return f"attribute {name} : Boolean = false;"
+    return f"attribute {name} : Real = 0.0;"
+
+
+def _name_in_unit_bracket(name: str, line_text: str) -> bool:
+    """Return True if *name* appears inside a unit bracket [...] on *line_text*."""
+    for m in _UNIT_BRACKET_RE.finditer(line_text):
+        if name in m.group(1):
+            return True
+    return False
+
+
+def _missing_feature_hints(chunk: "ErrorChunk") -> List[str]:
+    """
+    从 chunk 的 "No Feature named 'X' found" 错误中提取缺失变量，
+    返回推荐声明列表（去重，保持出现顺序）。
+
+    会跳过出现在单位括号 [...] 内的名字（如 `[bit]`）：那是单位标注，
+    不是 guard 状态变量，绝不能为它声明 attribute（否则产生垃圾属性）。
+    """
+    chunk_lines = chunk.chunk_text.split('\n')
+    seen: Set[str] = set()
+    hints: List[str] = []
+    for e in chunk.errors:
+        m = _MISSING_FEATURE_RE.search(e.get('message', ''))
+        if not m:
+            continue
+        name = m.group(1)
+        if name in seen:
+            continue
+
+        # 定位错误所在源码行，判断 name 是否是单位标注 [name]
+        idx = e.get('line', 0) - chunk.start_line
+        line_text = chunk_lines[idx] if 0 <= idx < len(chunk_lines) else ""
+        if _name_in_unit_bracket(name, line_text):
+            continue   # 单位名，交给 prompt 的单位规则处理，不声明 attribute
+
+        seen.add(name)
+        hints.append(f"  • '{name}'  →  declare  `{_infer_attr_decl(name)}`")
+    return hints
+
+
 def build_fix_prompt(chunk: ErrorChunk) -> str:
     """
     为单个 ErrorChunk 生成聚焦的 LLM 修复 prompt。
 
     Prompt 结构
     ───────────
-    1. 简短指令（只修复列出的错误，不做其他改动）
+    1. 指令 + 语义保持规则（禁止改运算符 / 禁止把 guard 变量绑到无关端口）
     2. 需修复的错误列表
-    3. 声明摘要（参考用，不可修改）
-    4. 带行号显示的代码片段
-    5. 严格的输出格式约束
+    3. 缺失 guard 变量的推荐声明（针对 "No Feature named" 错误）
+    4. 声明摘要（参考用，不可修改）
+    5. 带行号显示的代码片段
+    6. 严格的输出格式约束
 
-    返回字符串通常在 20-35 行之间（vs 整个模型的 100-300 行）。
+    返回字符串通常在 30-45 行之间（vs 整个模型的 100-300 行）。
     """
     # ── 格式化错误列表 ────────────────────────────────────────────────────
     err_lines: List[str] = []
@@ -344,14 +410,44 @@ def build_fix_prompt(chunk: ErrorChunk) -> str:
         snippet_lines.append(f"{i:4d} | {line}")
     snippet = "\n".join(snippet_lines)
 
+    # ── 缺失 guard 变量的推荐声明块（仅当存在此类错误时）──────────────────
+    miss_hints = _missing_feature_hints(chunk)
+    missing_block = ""
+    if miss_hints:
+        missing_block = (
+            "Missing state variables (a guard / expression reads a name that is "
+            "not declared).\n"
+            "Fix each by ADDING the recommended attribute declaration inside the "
+            "enclosing part def — do NOT rebind the name to an existing port:\n"
+            + "\n".join(miss_hints)
+            + "\n\n"
+        )
+
     return (
         f"Fix the following SysML v2 code snippet.\n"
         f"Apply ONLY the minimal changes needed to resolve the listed errors.\n"
-        f"Do NOT restructure, rename, reorder, or add new elements.\n"
+        f"\n"
+        f"SEMANTIC PRESERVATION RULES (critical — violating these is worse than "
+        f"the original error):\n"
+        f"  1. NEVER change the meaning of an expression. Keep every comparison "
+        f"operator exactly as written (<, <=, >, >=, ==, !=); keep numeric "
+        f"literals and arithmetic unchanged. Do NOT, e.g., turn `<=` into `==`.\n"
+        f"  2. For a 'No Feature named X found' error where X is read inside a "
+        f"guard / `if` condition, X is a MISSING dynamic state variable. Fix it "
+        f"by DECLARING a backing attribute in the enclosing part def — do NOT "
+        f"rebind X to an unrelated existing port or attribute.\n"
+        f"  3. If the unresolved name X appears inside a UNIT bracket, e.g. "
+        f"`= 256.0 [X]`, then X is a unit annotation, NOT a variable. Fix it by "
+        f"removing the `[X]` annotation (keep the value) or replacing X with a "
+        f"standard SI unit — NEVER declare an attribute named X.\n"
+        f"  4. Do NOT rename, reorder, delete, or restructure existing parts, "
+        f"ports, attributes, states, or transitions.\n"
+        f"  5. Do NOT add new ports, parts, or connect statements.\n"
         f"\n"
         f"Errors to fix:\n"
         f"{errors_block}\n"
         f"\n"
+        f"{missing_block}"
         f"{chunk.decl_summary}\n"
         f"\n"
         f"Code snippet (lines {chunk.start_line}–{chunk.end_line} of the original file):\n"

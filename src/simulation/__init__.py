@@ -30,6 +30,19 @@ from .error_localizer import (
     build_fix_prompt,
     strip_code_fences,
 )
+from .connectivity_fixer import (
+    PortInfo,
+    PortDirectory,
+    ConnectStmt,
+    ConnValidation,
+    ConnMergeResult,
+    build_port_directory,
+    parse_connects,
+    validate_connects,
+    merge_connects,
+    build_connectivity_prompt,
+    extract_connect_lines,
+)
 
 __all__ = [
     "SimulationValidator",
@@ -52,4 +65,15 @@ __all__ = [
     "merge_fixed_chunk",
     "build_fix_prompt",
     "strip_code_fences",
+    "PortInfo",
+    "PortDirectory",
+    "ConnectStmt",
+    "ConnValidation",
+    "ConnMergeResult",
+    "build_port_directory",
+    "parse_connects",
+    "validate_connects",
+    "merge_connects",
+    "build_connectivity_prompt",
+    "extract_connect_lines",
 ]

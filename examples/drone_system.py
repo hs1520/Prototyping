@@ -64,17 +64,16 @@ def main():
         verbose=True,
     )
 
-    # Run the complete prototyping pipeline
-    result = pipeline.prototype_system(
+    # Stage 1: Generate a validated SysML v2 model (no DSE)
+    result = pipeline.generate_system(
         system_name="AutonomousDrone",
         description=DRONE_DESCRIPTION,
         additional_requirements=DRONE_REQUIREMENTS,
-        mcts_iterations=30,
     )
 
     # Display results
     print("\n" + "=" * 70)
-    print("PROTOTYPING RESULTS")
+    print("GENERATION RESULTS")
     print("=" * 70)
 
     print(f"\nSystem: {result['system_name']}")
@@ -94,11 +93,10 @@ def main():
     part_names = [p.name for p in result['model'].part_definitions]
     print(f"  Parts: {', '.join(part_names) if part_names else '(none)'}")
 
-    print(f"\nDesign Space Exploration:")
-    dse = result['design_space_summary']
-    print(f"  Configurations explored: {dse['configurations_evaluated']}")
-    print(f"  Pareto-optimal designs: {dse['pareto_front_size']}")
-    print(f"  Best overall score: {dse['best_overall_score']:.3f}")
+    sim = result['simulation_result']
+    print(f"\nSimulation:")
+    print(f"  Reachability: {sim.reachability_score:.3f}  "
+          f"({len(sim.passed_scenarios())}/{len(sim.scenario_results)} scenarios passed)")
 
     if result['evaluation_history']:
         print(f"\nConvergence history:")
@@ -111,7 +109,8 @@ def main():
     print("=" * 70)
     print(result['model_sysml'])
 
-    print("\n✓ Drone system prototyping complete!")
+    print("\n✓ Drone system generation complete!")
+    print("  (Run pipeline.explore_design_space(result) to continue with DSE)")
 
 
 if __name__ == "__main__":

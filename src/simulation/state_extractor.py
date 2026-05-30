@@ -25,6 +25,120 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Expression tree (Layer 1 — supports variable/arithmetic RHS in guards)
+# ---------------------------------------------------------------------------
+#
+# A guard comparison's two sides are represented as expression trees so that
+# guards like `batteryCharge <= returnEnergyRequired` (variable RHS) or
+# `commLossTime > timeToHub + 300.0` (arithmetic RHS) are captured fully,
+# instead of being dropped when the RHS is not a bare literal.
+
+
+@dataclass
+class Expr:
+    """Base expression node."""
+    def eval(self, env: Dict[str, Any]) -> Optional[float]:  # pragma: no cover
+        raise NotImplementedError
+
+    def vars(self) -> List[str]:  # pragma: no cover
+        raise NotImplementedError
+
+    def render(self) -> str:  # pragma: no cover
+        raise NotImplementedError
+
+
+@dataclass
+class Const(Expr):
+    value: float
+
+    def eval(self, env: Dict[str, Any]) -> Optional[float]:
+        return self.value
+
+    def vars(self) -> List[str]:
+        return []
+
+    def render(self) -> str:
+        return f"{self.value:g}"
+
+
+@dataclass
+class VarRef(Expr):
+    name: str
+
+    def eval(self, env: Dict[str, Any]) -> Optional[float]:
+        v = env.get(self.name)
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    def vars(self) -> List[str]:
+        return [self.name]
+
+    def render(self) -> str:
+        return self.name
+
+
+@dataclass
+class BinOp(Expr):
+    op: str            # '+' '-' '*' '/'
+    left: Expr
+    right: Expr
+
+    def eval(self, env: Dict[str, Any]) -> Optional[float]:
+        a = self.left.eval(env)
+        b = self.right.eval(env)
+        if a is None or b is None:
+            return None
+        if self.op == "+": return a + b
+        if self.op == "-": return a - b
+        if self.op == "*": return a * b
+        if self.op == "/": return a / b if b != 0 else None
+        return None
+
+    def vars(self) -> List[str]:
+        return self.left.vars() + self.right.vars()
+
+    def render(self) -> str:
+        return f"({self.left.render()} {self.op} {self.right.render()})"
+
+
+_ARITH_OPS = {"+", "-", "*", "/"}
+
+
+def _to_expr(node) -> Optional[Expr]:
+    """Convert a syside expression node into an Expr, or None if unsupported."""
+    if node is None:
+        return None
+    tname = type(node).__name__
+
+    if tname == "FeatureReferenceExpression":
+        ref = node.referent
+        name = ref.name if ref else None
+        return VarRef(name) if name else None
+
+    if tname in ("LiteralRational", "LiteralInteger", "LiteralReal"):
+        try:
+            return Const(float(node.value))
+        except (TypeError, ValueError):
+            return None
+
+    if tname == "OperatorExpression":
+        op = str(node.operator).strip()
+        args = list(node.arguments)
+        if op in _ARITH_OPS and len(args) == 2:
+            left = _to_expr(args[0])
+            right = _to_expr(args[1])
+            if left is not None and right is not None:
+                return BinOp(op, left, right)
+        return None
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
 
@@ -41,14 +155,20 @@ class GuardCondition:
         e.g. channelAFailed and channelBFailed
     """
     kind: str                                         # 'comparison' | 'bool_true' | 'compound'
-    attribute: str = ""                               # for comparison / bool_true
+    attribute: str = ""                               # for comparison(LHS var) / bool_true
     operator: str = ""                                # '<' '<=' '>' '>=' '==' (comparison only)
-    threshold: float = 0.0                            # RHS value (comparison only)
+    threshold: float = 0.0                            # effective RHS constant (resolved)
     compound_op: str = ""                             # 'and' | 'or' (compound only)
     operands: List["GuardCondition"] = field(default_factory=list)
+    # Layer 1: full expression trees for a comparison's two sides.  Present when
+    # the guard was parsed as `lhs OP rhs`.  Enables variable/arithmetic RHS.
+    lhs: Optional[Expr] = None
+    rhs: Optional[Expr] = None
 
     def description(self) -> str:
         if self.kind == "comparison":
+            if self.rhs is not None and self.lhs is not None:
+                return f"{self.lhs.render()} {self.operator} {self.rhs.render()}"
             return f"{self.attribute} {self.operator} {self.threshold}"
         if self.kind == "bool_true":
             return f"{self.attribute} == true"
@@ -58,13 +178,64 @@ class GuardCondition:
         return "?"
 
     def involved_attributes(self) -> List[str]:
-        """Return all attribute names referenced by this guard."""
-        if self.kind in ("comparison", "bool_true"):
+        """Return all attribute names referenced by this guard (lhs + rhs)."""
+        if self.kind == "bool_true":
             return [self.attribute] if self.attribute else []
+        if self.kind == "comparison":
+            names: List[str] = []
+            if self.lhs is not None:
+                names += self.lhs.vars()
+            if self.rhs is not None:
+                names += self.rhs.vars()
+            if not names and self.attribute:
+                names = [self.attribute]
+            # de-dupe preserving order
+            seen: set = set()
+            return [n for n in names if not (n in seen or seen.add(n))]
         attrs: List[str] = []
         for op in self.operands:
             attrs.extend(op.involved_attributes())
         return attrs
+
+    def resolve_threshold(self, defaults: Dict[str, Any]) -> Optional[float]:
+        """
+        Partial-evaluate the RHS against *defaults* (the owner part's initial
+        attribute values) to get an effective numeric threshold.
+
+        Returns the constant, or None when the RHS cannot be reduced to a
+        number (e.g. references a variable with no known default — genuinely
+        dynamic, deferred to Layer 2/3).
+        """
+        if self.rhs is None:
+            return None
+        return self.rhs.eval(defaults)
+
+    def eval(self, env: Dict[str, Any]) -> bool:
+        """
+        Evaluate the full guard against a complete variable environment.
+        Used by the executor when lhs/rhs expression trees are available.
+        """
+        if self.kind == "comparison" and self.lhs is not None and self.rhs is not None:
+            a = self.lhs.eval(env)
+            b = self.rhs.eval(env)
+            if a is None or b is None:
+                return False
+            op = self.operator
+            if op == "<":  return a <  b
+            if op == "<=": return a <= b
+            if op == ">":  return a >  b
+            if op == ">=": return a >= b
+            if op == "==": return a == b
+            if op == "!=": return a != b
+            return False
+        if self.kind == "bool_true":
+            return bool(env.get(self.attribute, False))
+        if self.kind == "compound":
+            if self.compound_op == "and":
+                return all(op.eval(env) for op in self.operands)
+            if self.compound_op == "or":
+                return any(op.eval(env) for op in self.operands)
+        return False
 
 
 @dataclass
@@ -150,36 +321,37 @@ def _extract_guard(expr) -> Optional[GuardCondition]:
         if op in ("<", "<=", ">", ">=", "==", "!=") and len(args) == 2:
             lhs, rhs = args[0], args[1]
 
-            # LHS: feature reference → attribute name
-            attr_name: Optional[str] = None
-            if type(lhs).__name__ == "FeatureReferenceExpression":
-                ref = lhs.referent
-                attr_name = ref.name if ref else None
-
-            # RHS: literal value
-            threshold: Optional[float] = None
-            rhs_type = type(rhs).__name__
-            if rhs_type in ("LiteralRational", "LiteralInteger", "LiteralReal"):
-                try:
-                    threshold = float(rhs.value)
-                except (TypeError, ValueError):
-                    pass
-            elif rhs_type == "LiteralBoolean":
-                # e.g.  attr == true / attr == false
-                if attr_name:
-                    val = bool(rhs.value)
-                    if op == "==" and val:
-                        return GuardCondition(kind="bool_true", attribute=attr_name)
-                    # For == false or != true, skip (unusual in safety specs)
+            # ── Boolean literal RHS: `attr == true` / `attr == false` ──────────
+            if type(rhs).__name__ == "LiteralBoolean":
+                attr_name = None
+                if type(lhs).__name__ == "FeatureReferenceExpression":
+                    ref = lhs.referent
+                    attr_name = ref.name if ref else None
+                if attr_name and op == "==" and bool(rhs.value):
+                    return GuardCondition(kind="bool_true", attribute=attr_name)
+                # `== false` / `!= true` — skip (handled as no-fault by Layer1)
                 return None
 
-            if attr_name is not None and threshold is not None:
-                return GuardCondition(
-                    kind="comparison",
-                    attribute=attr_name,
-                    operator=op,
-                    threshold=threshold,
-                )
+            # ── General comparison: build expression trees for both sides ──────
+            lhs_expr = _to_expr(lhs)
+            rhs_expr = _to_expr(rhs)
+            if lhs_expr is None or rhs_expr is None:
+                return None
+
+            # Back-compat: when LHS is a bare variable, expose it as `attribute`
+            # so the existing single-variable driver keeps working.  `threshold`
+            # is resolved later (after initial_values are known) — see
+            # _resolve_guard_thresholds().
+            lhs_var = lhs_expr.name if isinstance(lhs_expr, VarRef) else ""
+            init_threshold = rhs_expr.eval({})  # resolves when RHS is constant
+            return GuardCondition(
+                kind="comparison",
+                attribute=lhs_var,
+                operator=op,
+                threshold=init_threshold if init_threshold is not None else 0.0,
+                lhs=lhs_expr,
+                rhs=rhs_expr,
+            )
 
     return None
 
@@ -281,6 +453,35 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
             if is_initial and tgt_name:
                 sm.initial_state = tgt_name
 
+        # ── Resolve effective thresholds now that initial_values are known ──
+        # A comparison whose RHS references an attribute (e.g.
+        # `batteryCharge <= returnEnergyRequired`) or contains arithmetic
+        # (`timeToHub + 300.0`) gets its `threshold` reduced to a constant
+        # using the owner part's default attribute values.
+        _resolve_guard_thresholds(sm)
+
         result.append(sm)
 
     return result
+
+
+def _resolve_guard_thresholds(sm: StateMachineDef) -> None:
+    """
+    Walk every comparison guard and set `threshold` to the RHS partially
+    evaluated against the owner part's initial attribute values.
+
+    Leaves the original `threshold` (0.0 / literal) untouched when the RHS
+    cannot be reduced to a number (genuinely dynamic — deferred to Layer 2/3).
+    """
+    def _walk(g: GuardCondition) -> None:
+        if g.kind == "comparison":
+            resolved = g.resolve_threshold(sm.initial_values)
+            if resolved is not None:
+                g.threshold = resolved
+        elif g.kind == "compound":
+            for op in g.operands:
+                _walk(op)
+
+    for tr in sm.transitions:
+        for g in tr.guards:
+            _walk(g)

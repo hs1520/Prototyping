@@ -110,6 +110,11 @@ _POWER_KEYWORDS    = {"power", "battery", "energy", "supply", "bms",
                        "propulsion", "motor", "esc", "thruster"}
 _ACTUATOR_KEYWORDS = {"actuator", "servo", "pump", "payload", "arm",
                        "wheel", "gimbal", "mechanism"}
+# Passive mechanical / structural parts.  These carry no signal role, so they
+# must NOT generate telemetry/control/uplink scenarios.  A part matching these
+# is classified "structure" and only participates in power-target scenarios.
+_STRUCTURE_KEYWORDS = {"airframe", "chassis", "frame", "fuselage", "housing",
+                       "enclosure", "structure", "hull"}
 
 # Requirement-name prefixes that map to a class unambiguously.
 # (Only fragments that reliably indicate the *owning* part's role.)
@@ -186,19 +191,32 @@ def _classify_node(node: PartNode, bg: BehavioralGraph) -> str:
     # ── P2: keyword matching (all parts, all categories) ─────────────────────
     for name in (node.id, node.def_name):
         low = name.lower()
-        if any(k in low for k in _SAFETY_KEYWORDS):   return "safety"
-        if any(k in low for k in _CONTROL_KEYWORDS):  return "controller"
-        if any(k in low for k in _SENSOR_KEYWORDS):   return "sensor"
-        if any(k in low for k in _COMMS_KEYWORDS):    return "comms"
-        if any(k in low for k in _POWER_KEYWORDS):    return "power"
-        if any(k in low for k in _ACTUATOR_KEYWORDS): return "actuator"
+        if any(k in low for k in _SAFETY_KEYWORDS):    return "safety"
+        if any(k in low for k in _CONTROL_KEYWORDS):   return "controller"
+        if any(k in low for k in _SENSOR_KEYWORDS):    return "sensor"
+        if any(k in low for k in _COMMS_KEYWORDS):     return "comms"
+        if any(k in low for k in _POWER_KEYWORDS):     return "power"
+        if any(k in low for k in _ACTUATOR_KEYWORDS):  return "actuator"
+        # Structure is checked LAST among keywords: only parts that match no
+        # active role and carry a structural name (airframe, chassis, …) are
+        # passive mechanical bodies.
+        if any(k in low for k in _STRUCTURE_KEYWORDS): return "structure"
 
     # ── P3: port direction topology (anonymous parts only) ───────────────────
+    # `_port_topology` counts `inout` as both in and out.  For controller
+    # promotion we require DISTINCT pure-out AND pure-in data ports — a part
+    # whose only mixed signal is a single `inout` (e.g. a physical mount) is
+    # NOT a controller and must not seed telemetry/control scenarios.
     has_out, has_in = _port_topology(node, bg)
+    part_ports = [bg.ports[pid] for pid in node.port_ids if pid in bg.ports]
+    pure_out = any(p.direction == "out" for p in part_ports)
+    pure_in  = any(p.direction == "in"  for p in part_ports)
     if node.port_ids:
-        if has_out and not has_in: return "sensor"      # pure source
-        if has_in  and not has_out: return "actuator"   # pure sink
-        if has_out and has_in:      return "controller" # unnamed hub
+        if has_out and not has_in:  return "sensor"      # pure source
+        if has_in  and not has_out: return "actuator"    # pure sink
+        if pure_out and pure_in:    return "controller"  # genuine hub (distinct in+out)
+        # mixed only via inout / single physical port → not a controller
+        return "other"
 
     return "other"
 
@@ -231,6 +249,7 @@ def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
     comms       = classified.get("comms", [])
     power       = classified.get("power", [])
     actuators   = classified.get("actuator", [])
+    structures  = classified.get("structure", [])
     others      = classified.get("other", [])
 
     # ── Hub-fallback: promote highest-degree "other" part to controller ───────
@@ -313,6 +332,15 @@ def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
             _add(f"control_{src}_to_{tgt}",
                  f"Control path: {src} → {tgt}",
                  src, tgt, tags=["nominal", "actuation"])
+
+    # Power → Structure (a structural body may house powered avionics).
+    # Structures participate ONLY here — never as telemetry/control/uplink
+    # endpoints — so a passive airframe cannot seed spurious signal scenarios.
+    for src in power:
+        for tgt in structures:
+            _add(f"power_{src}_to_{tgt}",
+                 f"Power path to structure: {src} → {tgt}",
+                 src, tgt, tags=["nominal", "power"])
 
     # ── Fallback: generic connectivity when all classification fails ──────────
     # This fires only when the cross-products above yielded nothing — meaning

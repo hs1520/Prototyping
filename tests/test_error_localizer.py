@@ -297,9 +297,152 @@ def test_build_fix_prompt():
     ok("has_types",        "BatteryMonitor" in prompt)
     ok("has_constraint",   "no explanations" in prompt.lower() or "no markdown" in prompt.lower())
     ok("has_code_fence",   "```sysml" in prompt)
-    # prompt 要足够短：不超过 60 行
-    ok("prompt_compact",   len(prompt.split("\n")) <= 60,
+    # prompt 仍应紧凑：不超过 70 行
+    ok("prompt_compact",   len(prompt.split("\n")) <= 70,
        f"lines={len(prompt.split(chr(10)))}")
+
+
+# ---------------------------------------------------------------------------
+# T11 — build_fix_prompt：语义保持规则
+# ---------------------------------------------------------------------------
+
+def test_semantic_rules_present():
+    print("T11  build_fix_prompt — 语义保持规则")
+    typo = SYSML.replace("bm.powerOut", "bm.powerOt")
+    ln = _line_of(typo, "connect")
+    errs = [{"line": ln, "col": 0, "message": "No Feature named 'powerOt' found.", "code": ""}]
+    chunk = extract_error_context(typo, errs)[0]
+    prompt = build_fix_prompt(chunk)
+
+    ok("has_semantic_header", "SEMANTIC PRESERVATION RULES" in prompt)
+    ok("forbids_op_change",   "<=" in prompt and "==" in prompt)
+    ok("forbids_rebind",      "rebind" in prompt.lower())
+    ok("no_new_ports",        "Do NOT add new ports" in prompt)
+
+
+# ---------------------------------------------------------------------------
+# T12 — 缺失 guard 变量 → 推荐声明（Boolean / Real 推断）
+# ---------------------------------------------------------------------------
+
+def test_missing_feature_hints():
+    print("T12  build_fix_prompt — 缺失变量推荐声明")
+    # 一个 part def，guard 引用了未声明的变量
+    src = (
+        "package P {\n"
+        "    part def Monitor {\n"
+        "        in port powerStatus : DataPort;\n"
+        "        state def Beh {\n"
+        "            state Nominal;\n"
+        "            state Fault;\n"
+        "            transition initial then Nominal;\n"
+        "            transition f first Nominal if batteryCharge < 15.0 then Fault;\n"
+        "            transition g first Nominal if sensorSelfTestFailed then Fault;\n"
+        "        }\n"
+        "    }\n"
+        "}"
+    )
+    ln_bat = _line_of(src, "batteryCharge")
+    ln_sen = _line_of(src, "sensorSelfTestFailed")
+    errs = [
+        {"line": ln_bat, "col": 0, "message": "No Feature named 'batteryCharge' found.", "code": ""},
+        {"line": ln_sen, "col": 0, "message": "No Feature named 'sensorSelfTestFailed' found.", "code": ""},
+    ]
+    chunk = extract_error_context(src, errs)[0]
+    prompt = build_fix_prompt(chunk)
+
+    ok("has_missing_block", "Missing state variables" in prompt)
+    # batteryCharge 是连续量 → Real
+    ok("battery_is_real",
+       "attribute batteryCharge : Real = 0.0;" in prompt,
+       f"prompt has no Real decl for batteryCharge")
+    # sensorSelfTestFailed 暗示布尔 → Boolean
+    ok("sensor_is_bool",
+       "attribute sensorSelfTestFailed : Boolean = false;" in prompt,
+       f"prompt has no Boolean decl for sensorSelfTestFailed")
+    # 明确指示不要绑到现成端口
+    ok("explicit_no_rebind",
+       "do NOT rebind the name to an existing port" in prompt)
+
+
+# ---------------------------------------------------------------------------
+# T13 — _infer_attr_decl 单元测试（Boolean / Real 推断）
+# ---------------------------------------------------------------------------
+
+def test_infer_attr_decl():
+    print("T13  _infer_attr_decl — 类型推断")
+    infer = _mod._infer_attr_decl
+    # 布尔类（后缀）
+    ok("Failed→bool",    infer("sensorFailed")      == "attribute sensorFailed : Boolean = false;")
+    ok("Detected→bool",  infer("collisionDetected") == "attribute collisionDetected : Boolean = false;")
+    ok("Active→bool",    infer("linkActive")        == "attribute linkActive : Boolean = false;")
+    # 布尔类（前缀）
+    ok("isReady→bool",   infer("isReady")           == "attribute isReady : Boolean = false;")
+    ok("hasFault→bool",  infer("hasFault")          == "attribute hasFault : Boolean = false;")
+    # 数值类
+    ok("charge→real",    infer("batteryCharge")     == "attribute batteryCharge : Real = 0.0;")
+    ok("timeToHub→real", infer("timeToHub")         == "attribute timeToHub : Real = 0.0;")
+
+
+# ---------------------------------------------------------------------------
+# T14 — 回归：单位括号 [bit] 不应被当作 guard 变量声明 attribute
+# ---------------------------------------------------------------------------
+
+def test_unit_bracket_not_declared():
+    print("T14  build_fix_prompt — 单位括号不声明属性")
+    # 复现 drone 回归场景：encryptionLevel 用了 syside 不认识的单位 [bit]
+    src = (
+        "package P {\n"
+        "    part def CommunicationSystem {\n"
+        "        out port commStatus : DataPort;\n"
+        "        attribute encryptionLevel : Real = 256.0 [bit];\n"
+        "    }\n"
+        "}"
+    )
+    ln = _line_of(src, "encryptionLevel")
+    errs = [{"line": ln, "col": 0, "message": "No Feature named 'bit' found.", "code": ""}]
+    chunk = extract_error_context(src, errs)[0]
+    prompt = build_fix_prompt(chunk)
+
+    # 关键：绝不能建议声明 `attribute bit ...`
+    ok("no_junk_attr_bit",   "attribute bit :" not in prompt,
+       "prompt wrongly recommends declaring `attribute bit`")
+    # 也不应出现"Missing state variables"块（因为唯一的缺失名是单位）
+    ok("no_missing_block",   "Missing state variables" not in prompt,
+       "unit-only error should not produce a missing-variable block")
+    # prompt 应包含单位规则（规则 3）
+    ok("has_unit_rule",      "unit annotation" in prompt)
+
+
+def test_missing_feature_hints_skips_unit():
+    print("T14b _missing_feature_hints — 跳过单位名")
+    hints_fn = _mod._missing_feature_hints
+    src = (
+        "package P {\n"
+        "    part def C {\n"
+        "        attribute encryptionLevel : Real = 256.0 [bit];\n"
+        "        state def B {\n"
+        "            state N; state F;\n"
+        "            transition initial then N;\n"
+        "            transition f first N if batteryCharge < 15.0 then F;\n"
+        "        }\n"
+        "    }\n"
+        "}"
+    )
+    ln_bit = _line_of(src, "encryptionLevel")
+    ln_bat = _line_of(src, "batteryCharge")
+    errs = [
+        {"line": ln_bit, "col": 0, "message": "No Feature named 'bit' found.", "code": ""},
+        {"line": ln_bat, "col": 0, "message": "No Feature named 'batteryCharge' found.", "code": ""},
+    ]
+    chunk = extract_error_context(src, errs)[0]
+    hints = hints_fn(chunk)
+
+    # 只应为 batteryCharge 生成建议，bit 被跳过
+    joined = "\n".join(hints)
+    ok("bit_skipped",      "bit" not in joined.replace("batteryCharge", ""),
+       f"hints leaked unit name: {hints}")
+    ok("battery_kept",     "batteryCharge" in joined, f"hints={hints}")
+    ok("exactly_one_hint", len(hints) == 1, f"hints={hints}")
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +460,11 @@ if __name__ == "__main__":
     test_merge_rejected()
     test_merge_strips_fences()
     test_build_fix_prompt()
+    test_semantic_rules_present()
+    test_missing_feature_hints()
+    test_infer_attr_decl()
+    test_unit_bracket_not_declared()
+    test_missing_feature_hints_skips_unit()
 
     print(f"\n{_PASS} passed, {_FAIL} failed")
     sys.exit(0 if _FAIL == 0 else 1)

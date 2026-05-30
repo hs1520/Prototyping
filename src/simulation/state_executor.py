@@ -123,6 +123,14 @@ class StateMachineInstance:
     # ------------------------------------------------------------------ #
 
     def _eval_guard(self, guard: GuardCondition, variables: Dict[str, Any]) -> bool:
+        # Layer 1: when the guard carries full expression trees, evaluate them
+        # against the COMPLETE environment (driven variables overlaid on the
+        # owner part's initial values), so a variable/arithmetic RHS such as
+        # `batteryCharge <= returnEnergyRequired` resolves correctly.
+        if guard.kind == "comparison" and guard.lhs is not None and guard.rhs is not None:
+            env: Dict[str, Any] = {**(self.sm.initial_values or {}), **variables}
+            return guard.eval(env)
+
         if guard.kind == "comparison":
             val = variables.get(guard.attribute)
             if val is None:

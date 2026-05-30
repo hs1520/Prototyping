@@ -39,6 +39,14 @@ from ..simulation.error_localizer import (
     build_fix_prompt,
     strip_code_fences,
 )
+from ..simulation.connectivity_fixer import (
+    build_port_directory,
+    parse_connects,
+    validate_connects,
+    merge_connects,
+    build_connectivity_prompt,
+    extract_connect_lines,
+)
 
 # System prompt for surgical LLM syntax fixes
 _SURGICAL_FIX_SYSTEM = (
@@ -46,6 +54,28 @@ _SURGICAL_FIX_SYSTEM = (
     "Fix only the specified errors in the given code block. "
     "Return only the corrected code — no explanations, no markdown fences."
 )
+
+# System prompt for surgical connectivity fixes (connect statements only)
+_CONNECTIVITY_FIX_SYSTEM = (
+    "You are a SysML v2 connectivity expert. "
+    "You add ONLY `connect a.x to b.y;` statements using existing ports. "
+    "You never invent ports and never output anything but connect statements."
+)
+
+# Scenario-name tag prefixes to strip when recovering the real entry instance.
+_SCEN_TAG_PREFIXES = (
+    "power_", "emergency_", "uplink_", "telemetry_",
+    "control_", "connectivity_",
+)
+
+
+def _scenario_src_instance(scenario_name: str) -> str:
+    """Recover the entry instance name from a tagged scenario name."""
+    base = scenario_name.split("_to_")[0] if "_to_" in scenario_name else scenario_name
+    for p in _SCEN_TAG_PREFIXES:
+        if base.startswith(p):
+            return base[len(p):]
+    return base
 
 
 @dataclass
@@ -1908,47 +1938,56 @@ class Orchestrator:
                 # Last pass — no more LLM calls, attach warning and exit
                 break
 
-            # ── Build sim-only refinement prompt ───────────────────────
-            print(f"  │  ⟳  Fixing connectivity …", flush=True)
-            sim_feedback = self._build_sim_only_feedback(
-                sim_result, persistent_issues=persistent
-            )
-            refine_result = self.design_agent.run({
-                "system_name": current.name,
-                "requirements": requirements,
-                "existing_model": current,
-                "refinement_feedback": sim_feedback,
-                "refinement_issues": sim_issues,
-                "verbose": self.verbose,
-            })
+            # ── Surgical connectivity fix ──────────────────────────────
+            # Feed ONLY a compact assembly context (port directory + existing
+            # connects + failed scenarios) instead of the whole model.  The
+            # LLM may return only `connect` lines; each is then validated
+            # programmatically (no fabricated ports, correct direction, type
+            # match, single-driver in-ports) before merging.
+            print(f"  │  ⟳  Fixing connectivity (surgical) …", flush=True)
 
-            if not (refine_result.success and isinstance(refine_result.output, _SysMLModelTypes)):
-                print(f"  │  ⚠ LLM fix failed, keeping candidate", flush=True)
+            directory = build_port_directory(sysml)
+            existing  = parse_connects(sysml)
+            failed_payload = [
+                {
+                    "name": r.scenario_name,
+                    "src":  _scenario_src_instance(r.scenario_name),
+                    "tgts": list(r.unreachable_targets),
+                }
+                for r in failed
+            ]
+            conn_prompt = build_connectivity_prompt(
+                directory, existing, failed_payload,
+                isolated_parts=sim_result.isolated_parts,
+            )
+
+            try:
+                raw = self.llm.chat(conn_prompt, system_prompt=_CONNECTIVITY_FIX_SYSTEM)
+            except Exception as exc:
+                print(f"  │  ✗ LLM error: {exc} — keeping candidate", flush=True)
                 continue
 
-            fix_candidate = refine_result.output
-            fix_eval = self.evaluator.evaluate(
-                config=DesignConfiguration(name="sim_fix", parameters={}),
-                model=fix_candidate,
-            )
-            cur_eval = self.evaluator.evaluate(
-                config=DesignConfiguration(name="sim_fix_base", parameters={}),
-                model=current,
-            )
-            if fix_eval.weighted_total >= cur_eval.weighted_total - 0.05:
-                print(
-                    f"  │  ✓ Fix accepted  "
-                    f"rule: {cur_eval.weighted_total:.3f} → {fix_eval.weighted_total:.3f}",
-                    flush=True,
-                )
-                current = fix_candidate
-            else:
-                print(
-                    f"  │  ⚠ Fix caused regression "
-                    f"({cur_eval.weighted_total:.3f} → {fix_eval.weighted_total:.3f}), "
-                    f"keeping candidate",
-                    flush=True,
-                )
+            cand_lines = extract_connect_lines(raw)
+            validation = validate_connects(cand_lines, directory, existing)
+
+            for stmt in validation.accepted:
+                print(f"  │    + {stmt.to_sysml()}", flush=True)
+            for line, reason in validation.rejected:
+                print(f"  │    ✗ rejected: {line}  — {reason}", flush=True)
+
+            if not validation.accepted:
+                print(f"  │  ⚠ no valid connections to add — stopping", flush=True)
+                break
+
+            merge = merge_connects(sysml, validation.accepted)
+
+            # Update the stored text so the next pass's simulation sees the fix.
+            meta = getattr(current, "metadata", None)
+            if meta is None:
+                object.__setattr__(current, "metadata", {})
+                meta = current.metadata
+            meta["last_sysml_text"] = merge.merged_text
+            print(f"  │  ✓ added {merge.n_added} validated connection(s)", flush=True)
 
         # ── Exited loop with persistent sim failures ───────────────────
         final_sysml = (

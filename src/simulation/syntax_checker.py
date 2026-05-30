@@ -76,6 +76,11 @@ _STDLIB_UNIT_NAMES = {
     "dB", "dBA",
     # Percentage / dimensionless
     "pct", "percent",
+    # Data / information units (LLM commonly annotates comms attributes with these)
+    "bit", "bits", "byte", "bytes", "B",
+    "kbit", "Kbit", "Mbit", "Gbit",
+    "kB", "MB", "GB", "TB",
+    "bps", "kbps", "Kbps", "Mbps", "Gbps", "baud",
     # Misc
     "G", "g_force", "lx", "lm", "cd",
     # Compound unit names that LLM might use
