@@ -47,6 +47,8 @@ class FakeEvalResult:
     weighted_total: float
     issues: List[str] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
+    # Per-criterion scores — consumed by Orchestrator._print_iteration_summary.
+    criteria_scores: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -68,7 +70,9 @@ class FakeEvaluator:
         self._idx = 0
         self.call_count = 0
 
-    def evaluate(self, config: Any, model: Any) -> FakeEvalResult:
+    def evaluate(self, config: Any, model: Any, **kwargs: Any) -> FakeEvalResult:
+        # **kwargs absorbs evaluator params the orchestrator now passes
+        # (mcts_config, syntax_result, …) without the fake needing to model them.
         self.call_count += 1
         if self._idx < len(self._queue):
             result = self._queue[self._idx]

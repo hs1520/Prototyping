@@ -17,7 +17,7 @@ from ..rag.retriever import RAGRetriever
 from ..sysml.model import RequirementDefinition, SysMLModel
 
 
-_VALID_CATEGORIES = {"FUNC", "PERF", "SAFE", "INTF", "CONS"}
+_VALID_CATEGORIES = {"FUNC", "PERF", "SAFE", "INTF", "CONS", "OPER"}
 _REQ_ID_RE = re.compile(r"^(REQ-([A-Z]+)-(\d+)):\s*(.+)$")
 _MIN_REQ_LENGTH = 20
 
@@ -50,6 +50,8 @@ Core rules:
    SAFE  — fail-safe, fault-tolerance, and hazard-mitigation behavior
    INTF  — external connections: protocols, signals, data formats, standards
    CONS  — physical, regulatory, cost, or resource constraints
+   OPER  — named sequential operational phases (mode machine); generate at most ONE
+           REQ-OPER requirement only when the system has 3+ distinct named phases
 6. Format each line as: REQ-<CATEGORY>-<NNN>: The system shall ...
    NNN is a zero-padded 3-digit number, restarting from 001 within each category.
 """
@@ -135,7 +137,7 @@ Core rules:
 
         Checks (issues = blocking, warnings = advisory):
         - REQ ID format: must match REQ-<CATEGORY>-<NNN>
-        - Category validity: must be one of FUNC | PERF | SAFE | INTF | CONS
+        - Category validity: must be one of FUNC | PERF | SAFE | INTF | CONS | OPER
         - Duplicate IDs within the list
         - Presence of "shall"
         - At least one measurable criterion (digit or boolean keyword)

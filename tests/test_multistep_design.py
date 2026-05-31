@@ -313,7 +313,7 @@ class TestMultistepGeneratePipeline:
         ]
         agent = self._make_agent(responses, monkeypatch)
 
-        # Stub parse_sysml_to_model to return a minimal SysMLModel
+        # Stub build_lite_model to return a minimal model
         dummy_model = SysMLModel(name="DroneSystem", description="test")
         dummy_model.part_definitions.append(
             PartDefinition(name="FlightController", short_description="controls flight")

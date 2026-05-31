@@ -9,52 +9,19 @@ Run with:
 
 from __future__ import annotations
 
-import importlib.util
+import os
 import sys
-import types
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ---------------------------------------------------------------------------
-# Bootstrap — 直接加载模块，绕过 src/__init__.py
-# ---------------------------------------------------------------------------
-
-def _load(name: str, path: str):
-    for stub in ["src", "src.simulation", f"src.simulation.{name}"]:
-        if stub not in sys.modules:
-            sys.modules[stub] = types.ModuleType(stub)
-
-    # levenshtein_fixer 是 error_localizer 的依赖，先注册
-    _reg_lev()
-
-    spec = importlib.util.spec_from_file_location(
-        f"src.simulation.{name}", f"src/simulation/{name}.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[f"src.simulation.{name}"] = mod
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    return mod
-
-
-def _reg_lev():
-    """确保 levenshtein_fixer 已注册（error_localizer 导入它）。"""
-    if "src.simulation.levenshtein_fixer" in sys.modules:
-        return
-    spec = importlib.util.spec_from_file_location(
-        "src.simulation.levenshtein_fixer",
-        "src/simulation/levenshtein_fixer.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["src.simulation.levenshtein_fixer"] = mod
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-
-
-_mod = _load("error_localizer", "src/simulation/error_localizer.py")
-
-extract_error_context = _mod.extract_error_context
-merge_fixed_chunk     = _mod.merge_fixed_chunk
-build_fix_prompt      = _mod.build_fix_prompt
-strip_code_fences     = _mod.strip_code_fences
-ErrorChunk            = _mod.ErrorChunk
+import src.simulation.error_localizer as _mod
+from src.simulation.error_localizer import (
+    extract_error_context,
+    merge_fixed_chunk,
+    build_fix_prompt,
+    strip_code_fences,
+    ErrorChunk,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +62,8 @@ def ok(name: str, cond: bool, msg: str = "") -> None:
     else:
         print(f"  FAIL  {name}  {msg}")
         _FAIL += 1
+    # Enforce under pytest too (standalone still prints the running tally above).
+    assert cond, f"{name}: {msg}"
 
 
 def _line_of(text: str, sub: str) -> int:

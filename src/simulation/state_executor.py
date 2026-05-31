@@ -152,6 +152,13 @@ class StateMachineInstance:
         if guard.kind == "bool_true":
             return bool(variables.get(guard.attribute, False))
 
+        if guard.kind == "enum_eq":
+            env: Dict[str, Any] = {**(self.sm.initial_values or {}), **variables}
+            current = env.get(guard.attribute)
+            if current is None:
+                return False
+            return str(current) == guard.enum_value
+
         if guard.kind == "compound":
             if guard.compound_op == "and":
                 return all(self._eval_guard(op, variables) for op in guard.operands)

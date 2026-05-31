@@ -153,17 +153,21 @@ class GuardCondition:
         e.g. sensorSelfTestFailed
     kind == 'compound'   : compound_op over operands
         e.g. channelAFailed and channelBFailed
+    kind == 'enum_eq'    : attribute == EnumType::Value  (Layer 2)
+        e.g. flightMode == DroneMode::SELF_TEST
     """
-    kind: str                                         # 'comparison' | 'bool_true' | 'compound'
-    attribute: str = ""                               # for comparison(LHS var) / bool_true
-    operator: str = ""                                # '<' '<=' '>' '>=' '==' (comparison only)
-    threshold: float = 0.0                            # effective RHS constant (resolved)
+    kind: str                                         # 'comparison' | 'bool_true' | 'compound' | 'enum_eq'
+    attribute: str = ""                               # LHS variable name (comparison / bool_true / enum_eq)
+    operator: str = ""                                # '<' '<=' '>' '>=' (comparison only)
+    threshold: float = 0.0                            # effective RHS constant (comparison only)
     compound_op: str = ""                             # 'and' | 'or' (compound only)
     operands: List["GuardCondition"] = field(default_factory=list)
-    # Layer 1: full expression trees for a comparison's two sides.  Present when
-    # the guard was parsed as `lhs OP rhs`.  Enables variable/arithmetic RHS.
+    # Layer 1: full expression trees for a comparison's two sides.
     lhs: Optional[Expr] = None
     rhs: Optional[Expr] = None
+    # Layer 2: enum equality fields
+    enum_type: str = ""                               # e.g. "DroneMode"
+    enum_value: str = ""                              # e.g. "SELF_TEST"
 
     def description(self) -> str:
         if self.kind == "comparison":
@@ -172,6 +176,8 @@ class GuardCondition:
             return f"{self.attribute} {self.operator} {self.threshold}"
         if self.kind == "bool_true":
             return f"{self.attribute} == true"
+        if self.kind == "enum_eq":
+            return f"{self.attribute} == {self.enum_type}::{self.enum_value}"
         if self.kind == "compound":
             sep = f" {self.compound_op} "
             return sep.join(op.description() for op in self.operands)
@@ -180,6 +186,8 @@ class GuardCondition:
     def involved_attributes(self) -> List[str]:
         """Return all attribute names referenced by this guard (lhs + rhs)."""
         if self.kind == "bool_true":
+            return [self.attribute] if self.attribute else []
+        if self.kind == "enum_eq":
             return [self.attribute] if self.attribute else []
         if self.kind == "comparison":
             names: List[str] = []
@@ -230,6 +238,12 @@ class GuardCondition:
             return False
         if self.kind == "bool_true":
             return bool(env.get(self.attribute, False))
+        if self.kind == "enum_eq":
+            # Compare current string value of the mode attribute against the target enum value.
+            current = env.get(self.attribute)
+            if current is None:
+                return False
+            return str(current) == self.enum_value
         if self.kind == "compound":
             if self.compound_op == "and":
                 return all(op.eval(env) for op in self.operands)
@@ -332,6 +346,28 @@ def _extract_guard(expr) -> Optional[GuardCondition]:
                 # `== false` / `!= true` — skip (handled as no-fault by Layer1)
                 return None
 
+            # ── Enum equality: `attr == EnumType::Value`  (Layer 2) ─────────────
+            # syside represents EnumType::Value as a FeatureReferenceExpression
+            # whose referent is an EnumerationUsage (not an AttributeUsage).
+            if (op == "=="
+                    and type(lhs).__name__ == "FeatureReferenceExpression"
+                    and type(rhs).__name__ == "FeatureReferenceExpression"):
+                lhs_ref = lhs.referent
+                rhs_ref = rhs.referent
+                if (rhs_ref is not None
+                        and type(rhs_ref).__name__ == "EnumerationUsage"):
+                    lhs_name = lhs_ref.name if lhs_ref else None
+                    rhs_value = rhs_ref.name
+                    rhs_owner = getattr(rhs_ref, "owner", None)
+                    rhs_type = rhs_owner.name if rhs_owner else ""
+                    if lhs_name and rhs_value:
+                        return GuardCondition(
+                            kind="enum_eq",
+                            attribute=lhs_name,
+                            enum_type=rhs_type,
+                            enum_value=rhs_value,
+                        )
+
             # ── General comparison: build expression trees for both sides ──────
             lhs_expr = _to_expr(lhs)
             rhs_expr = _to_expr(rhs)
@@ -382,6 +418,12 @@ def _extract_part_attrs(part_def) -> Dict[str, Any]:
                     pass
             elif fve_type == "LiteralBoolean":
                 result[name] = bool(fve.value)
+            elif fve_type == "FeatureReferenceExpression":
+                # Enum-typed attribute: initial value is an EnumerationUsage
+                # e.g. `attribute flightMode : DroneMode = DroneMode::POWER_ON`
+                ref = getattr(fve, "referent", None)
+                if ref is not None and type(ref).__name__ == "EnumerationUsage":
+                    result[name] = ref.name  # store as string, e.g. "POWER_ON"
     except Exception:
         pass
     return result

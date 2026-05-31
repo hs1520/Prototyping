@@ -9,32 +9,20 @@ Run with:
 
 from __future__ import annotations
 
-import importlib.util
+import os
 import sys
-import types
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def _load(name: str):
-    for stub in ["src", "src.simulation", f"src.simulation.{name}"]:
-        if stub not in sys.modules:
-            sys.modules[stub] = types.ModuleType(stub)
-    spec = importlib.util.spec_from_file_location(
-        f"src.simulation.{name}", f"src/simulation/{name}.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[f"src.simulation.{name}"] = mod
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    return mod
-
-
-_mod = _load("connectivity_fixer")
-
-build_port_directory     = _mod.build_port_directory
-parse_connects           = _mod.parse_connects
-validate_connects        = _mod.validate_connects
-merge_connects           = _mod.merge_connects
-build_connectivity_prompt = _mod.build_connectivity_prompt
-extract_connect_lines    = _mod.extract_connect_lines
+import src.simulation.connectivity_fixer as _mod
+from src.simulation.connectivity_fixer import (
+    build_port_directory,
+    parse_connects,
+    validate_connects,
+    merge_connects,
+    build_connectivity_prompt,
+    extract_connect_lines,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +72,8 @@ def ok(name: str, cond: bool, msg: str = "") -> None:
     else:
         print(f"  FAIL  {name}  {msg}")
         _FAIL += 1
+    # Enforce under pytest too (standalone still prints the running tally above).
+    assert cond, f"{name}: {msg}"
 
 
 # ---------------------------------------------------------------------------

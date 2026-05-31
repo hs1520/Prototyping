@@ -439,7 +439,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         self.record_result(result)
         return result
 
-    _BEHAVIORAL_CATEGORIES = {"FUNC", "SAFE"}
+    _BEHAVIORAL_CATEGORIES = {"FUNC", "SAFE", "OPER"}
 
     def _multistep_generate(
         self,
@@ -1237,11 +1237,20 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             ).strip()
 
         if step == "behavior":
-            # Behavioral SysML constructs shaped by SAFE and FUNC requirements.
+            # Behavioral SysML constructs shaped by SAFE, FUNC, and OPER requirements.
             # SAFE → state def with fault-entry transition + emergency action.
             # FUNC → action def capturing the functional behaviour.
+            # OPER → enum def + mode machine state def with enum-equality transitions.
+            oper_reqs = [r for r in requirements if "-OPER-" in r]
             safe_kw = _req_keywords(safe_reqs)
             func_kw = _req_keywords(func_reqs, n=2)
+            if oper_reqs:
+                oper_kw = _req_keywords(oper_reqs, n=1)
+                return (
+                    f"enum def mode machine operational phase transition state def "
+                    f"fault entry emergency action "
+                    f"{oper_kw} {safe_kw} {func_kw}"
+                ).strip()
             return (
                 f"state def fault entry transition emergency action "
                 f"{safe_kw} {func_kw}"

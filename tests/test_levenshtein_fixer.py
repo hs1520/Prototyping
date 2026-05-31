@@ -12,40 +12,18 @@ the test works even when optional deps like python-dotenv are absent.
 
 from __future__ import annotations
 
-import importlib.util
+import os
 import sys
-import types
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ---------------------------------------------------------------------------
-# Bootstrap: load levenshtein_fixer without triggering src/__init__.py
-# ---------------------------------------------------------------------------
-
-def _load_module():
-    stub_names = [
-        "src",
-        "src.simulation",
-        "src.simulation.levenshtein_fixer",
-    ]
-    for name in stub_names:
-        if name not in sys.modules:
-            sys.modules[name] = types.ModuleType(name)
-
-    spec = importlib.util.spec_from_file_location(
-        "src.simulation.levenshtein_fixer",
-        "src/simulation/levenshtein_fixer.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["src.simulation.levenshtein_fixer"] = mod
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    return mod
-
-
-_mod = _load_module()
-levenshtein          = _mod.levenshtein
-build_vocab          = _mod.build_vocab
-try_fix_sema_errors  = _mod.try_fix_sema_errors
-format_hints_for_llm = _mod.format_hints_for_llm
+import src.simulation.levenshtein_fixer as _mod
+from src.simulation.levenshtein_fixer import (
+    levenshtein,
+    build_vocab,
+    try_fix_sema_errors,
+    format_hints_for_llm,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +42,8 @@ def ok(name: str, cond: bool, msg: str = "") -> None:
     else:
         print(f"  FAIL  {name}  {msg}")
         _FAIL += 1
+    # Enforce under pytest too (standalone still prints the running tally above).
+    assert cond, f"{name}: {msg}"
 
 
 # ---------------------------------------------------------------------------

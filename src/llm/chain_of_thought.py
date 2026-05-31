@@ -37,6 +37,7 @@ SysML v2 key constructs:
 - `connect`: links ports between parts
 - `satisfy`: links design elements to requirements
 - `refine`: indicates a more concrete model element elaborates an abstract one
+- `enum def`: named enumeration type; values accessed as `EnumName::Value`; always declared at package scope; use when a component has distinct named operational modes (e.g. IDLE, ARMED, HOVER)
 """
 
 REQUIREMENTS_COT_TEMPLATE = """Analyze the following system description and extract a complete set of structured requirements.
@@ -61,14 +62,29 @@ Reason through each category in order. For each, ask: "What is missing that woul
 5. CONSTRAINTS (CONS): Non-negotiable limits imposed from outside the system.
    Ask: What physical envelope, regulations, cost caps, or standards must be respected?
 
+6. OPERATIONAL MODES (OPER): Named sequential phases that define the system's lifecycle.
+   Ask: Does the system have 3 or more clearly distinct operational phases, each with a
+   specific name and unambiguous entry condition (e.g. power-on → self-test → armed →
+   executing → returning → shutdown)?
+   Rules (STRICT):
+   - Generate EXACTLY ONE REQ-OPER-001 if yes, ZERO if no meaningful phase structure exists.
+     A thermostat cycling on/off is NOT a mode machine. A multi-phase mission vehicle is.
+   - Phase names MUST be short ALL-CAPS identifiers separated by →
+     (e.g. IDLE → ARMED → TAKEOFF → CRUISE → HOVER → RETURN → LAND).
+   - List phases in execution order, from initial power-on to final shutdown/idle.
+   - Include an EMERGENCY or FAULT phase if SAFE requirements mandate a system-wide
+     fail-safe mode (distinct from individual component fault monitors).
+
 Output rules (STRICT — do not deviate):
 - One requirement per line, one capability per requirement (atomic — no "and").
 - Requirements state WHAT the system must do, never HOW it does it (no implementation details).
 - Format exactly: REQ-<CATEGORY>-<NNN>: The {system_name} shall <action> <object> [<condition>]
-  CATEGORY ∈ {{FUNC, PERF, SAFE, INTF, CONS}}; NNN resets to 001 within each category.
+  CATEGORY ∈ {{FUNC, PERF, SAFE, INTF, CONS, OPER}}; NNN resets to 001 within each category.
 - Each requirement must contain "shall" and at least one verifiable criterion
   (numeric value with unit, explicit threshold, or clear boolean trigger condition).
+  Exception: REQ-OPER-001 is verified by the completeness of its phase list, not a numeric threshold.
 - Aim for completeness: typically 3–6 requirements per category, adjusted to the system's complexity.
+  OPER is always 0 or 1 requirement — never more.
 
 Format illustration (replace content with the actual system's domain):
   REQ-FUNC-001: The {system_name} shall <perform primary function A> within <tolerance X>.
@@ -76,6 +92,7 @@ Format illustration (replace content with the actual system's domain):
   REQ-SAFE-001: The {system_name} shall <fail-safe action> when <fault condition> is detected.
   REQ-INTF-001: The {system_name} shall <exchange data/signal> with <external entity> via <protocol/standard>.
   REQ-CONS-001: The {system_name} shall <operate within / comply with> <limit or regulation>.
+  REQ-OPER-001: The {system_name} shall operate in sequential phases: IDLE → ARMED → CRUISE → RETURN → LAND.
 
 After the requirement list, add a short "Dependencies:" section listing any REQ-X depends on REQ-Y pairs.
 """
@@ -220,6 +237,9 @@ For each requirement category, identify which subsystems are responsible:
   SAFE  → which component enforces the fail-safe behavior?
   INTF  → which component owns each external connection?
   CONS  → which component is most constrained?
+  OPER  → which component owns the operational mode state machine?
+          (If REQ-OPER-001 is present, name the owning component and list its mode attribute
+          e.g. "FlightController owns flightMode : FlightMode")
 
 Output a numbered component list. For each component write exactly:
   <N>. <ComponentName> — <one-sentence primary responsibility>
@@ -263,6 +283,12 @@ Rules:
 - Port names must match those listed in the architecture plan.
 - PERF requirements must appear as attributes with numeric bounds and units.
 - INTF requirements must appear as port definitions with matching data types.
+- If the architecture plan describes a component with distinct named operational modes
+  (e.g. IDLE/ARMED/CRUISE/LAND), declare an enum-typed mode attribute in that part def:
+      attribute <modeName> : <EnumName> = <EnumName>::<initial_mode>;
+  The `<EnumName>` will be defined as an `enum def` in the behavioral step — use the
+  same name here so the assembler can match the type.  If the enum name is not yet
+  known, choose a descriptive PascalCase name ending in `Mode` (e.g. `FlightMode`).
 - Use valid SysML v2 syntax throughout.
 - Safety interconnect ports (MANDATORY — add these whenever the component type is present):
     • If a SafetyMonitor part def is defined:
@@ -331,8 +357,56 @@ Rules:
 - For every SAFE requirement: define a state def with:
     • An explicit fault-entry transition (annotated with the fault condition).
     • An emergency action def (e.g., emergencyStop, shutdownSafely).
-- Action def and state def names must be unique across the fragment.
+- For every OPER requirement (REQ-OPER-NNN): read the phase sequence from the requirement
+  text and apply the MODE MACHINE RULES below to generate an enum def + mode machine state def.
+  The enum def goes at package scope (// OWNER: package); the state def goes in the owning
+  component identified by the architecture plan (// OWNER: <ComponentName>).
+- Action def, state def, and enum def names must be unique across the fragment.
 - Use valid SysML v2 syntax.
+
+MODE MACHINE RULES — Generate a mode machine when ANY of these triggers is present:
+  (a) PRIMARY: A `REQ-OPER-NNN` requirement exists in the behavioral requirements list.
+      Read the phase sequence directly from its text (e.g. "IDLE → ARMED → CRUISE → LAND").
+      This is the authoritative trigger — Phase 1 has already determined the phase structure.
+  (b) FALLBACK: A FUNC requirement explicitly describes phased or staged operation
+      (use only when no REQ-OPER is present and the phased intent is unambiguous).
+Do NOT generate a mode machine when neither trigger is present.
+Safety fault monitors are the default for SAFE requirements — do NOT replace them with mode machines.
+
+When a mode machine is needed:
+1. Declare an `enum def` at PACKAGE scope.  Use the sentinel `// OWNER: package` so the
+   assembler places it alongside item defs and requirement defs, NOT inside any part def.
+   Values use plain identifiers (no `::` inside the enum def body):
+
+     // OWNER: package
+     enum def <Name>Mode {{
+         enum <MODE_A>;
+         enum <MODE_B>;
+         enum <MODE_C>;
+     }}
+
+2. Declare the corresponding mode attribute on the owning part.  Annotate it so the
+   assembler adds it to the structural fragment if absent:
+
+     // ATTR OWNER: <PartName>
+     // attribute <modeName> : <Name>Mode = <Name>Mode::<MODE_A>;
+
+   (This comment line is a hint — the assembler will inject the attribute into the part def.)
+
+3. Define the mode-machine state def with enum-equality guards (see ENUM GUARD RULE below):
+
+     // OWNER: <PartName>
+     state def <Name>ModeMachine {{
+         state <Name><MODE_A>State;
+         state <Name><MODE_B>State {{
+             entry action activate : <activateActionDef>;
+         }}
+         transition initial then <Name><MODE_A>State;
+         transition <name>ToB
+             first <Name><MODE_A>State
+             if <modeName> == <Name>Mode::<MODE_B>
+             then <Name><MODE_B>State;
+     }}
 
 GUARD CONDITION RULES — the `if <faultCondition>` expression decides whether the
 fault transition can ever fire.  A guard that is logically impossible produces a
@@ -341,6 +415,12 @@ dead state machine.  Follow these rules exactly:
   NEVER use `==` or `!=` for a numeric condition — a fault is "value crossed a
   limit", not "value exactly equals a number".  A continuously-changing quantity
   almost never lands on an exact value, so an `==` guard never triggers.
+  ENUM GUARD EXCEPTION — `==` IS allowed when the left-hand side is an enum-typed
+  attribute and the right-hand side is a qualified `EnumName::Value` literal.
+  The type prefix is MANDATORY — bare `== HOVER` is not recognised:
+    ✓  if flightMode == FlightMode::HOVER     // enum equality — allowed
+    ✗  if flightMode == HOVER                 // missing EnumType:: prefix
+    ✗  if flightMode == "HOVER"               // string form — not valid SysML v2
 - The LEFT operand must be a DYNAMIC measured / sensed state variable
   (e.g. batteryCharge, commLossTime, obstacleDistance, tiltAngle).
   The RIGHT operand is the threshold. PREFER a dynamic threshold — another
@@ -364,14 +444,21 @@ dead state machine.  Follow these rules exactly:
       if sensorSelfTestFailed                   // boolean flag — fires when true
       if batteryCharge <= returnEnergyRequired  // dynamic threshold (RHS is an attribute)
       if commLossTime > heartbeatInterval + 5.0 // arithmetic threshold
+      if flightMode == FlightMode::HOVER        // enum equality — allowed (qualified literal)
   ✗ WRONG guards:
       if batteryLevel == 15.0          // `==` on a swept value never fires
       if rtbBatteryThreshold == 120.0  // comparing a threshold to itself
       if sensorStatus == false         // use an affirmative flag instead
+      if flightMode == HOVER           // missing EnumType:: prefix — not recognised
 
-CRITICAL OWNERSHIP ANNOTATION — you MUST prefix every action def and state def with a
-comment naming the part def it belongs to.  The next assembly step uses this to embed
-each element inside the correct part def.  Missing annotations cause elements to be lost.
+CRITICAL OWNERSHIP ANNOTATION — you MUST prefix every action def, state def, and enum def
+with a comment naming where the element belongs.  The assembly step uses these annotations
+to place each element correctly.  Missing annotations cause elements to be lost.
+
+  • Part-owned elements (action def, state def): `// OWNER: <PartName>`
+  • Package-scoped elements (enum def):          `// OWNER: package`
+  • Mode attribute hints:                        `// ATTR OWNER: <PartName>`
+    followed by:  `// attribute <name> : <EnumType> = <EnumType>::<initial>;`
 
 Format (use exactly this style — no other comment form).  All transitions and
 entry actions follow canonical SysML v2 syntax (verified against the official
@@ -403,6 +490,9 @@ are not SysML v2 standard):
   ✗  state Y {{ entry action def localAction {{ }} }}            // inline action def in entry
   ✗  if someValue == <number>;                              // `==` numeric guard never fires — use < <= > >=
   ✗  if someFlag == false;                                  // use an affirmative flag: `if someFlagFailed`
+  ✗  if flightMode == HOVER;                               // bare identifier — missing `EnumType::` prefix
+  ✗  enum def FlightMode {{ FlightMode::IDLE; ... }}        // values inside enum def use plain names, not qualified form
+  ✗  enum def FlightMode {{ IDLE = 0; ARMED = 1; }}         // no integer assignments in SysML v2 enum def
 
 Output a single ```sysml code block containing ONLY the behavioral fragment (with OWNER comments).
 No prose after the block.
@@ -433,6 +523,13 @@ Assembly rules:
            requirement def REQ_FUNC_001 {{ doc /* The drone shall ... */ }}
          NEVER use the string-assignment form — it is NOT valid SysML v2:
            ✗  requirement def REQ_FUNC_001 {{ doc = "The drone shall ..."; }}
+     (c) All `enum def` elements from the behavioral fragment that are annotated
+         `// OWNER: package`.  Enum defs are shared types — they MUST be at package
+         scope, NOT inside any part def.
+         Example — behavioral fragment contains:
+             // OWNER: package
+             enum def FlightMode {{ enum IDLE; enum ARMED; enum HOVER; }}
+         → Place `enum def FlightMode {{ ... }}` at the top of the package alongside item defs.
 2. Apply typed port defs from the Interface & flow fragment:
    Re-annotate every port in each part def to use the typed port def where applicable.
    Example — interfaces fragment contains `port def GNSSPort {{ ... }}`:
@@ -442,10 +539,17 @@ Assembly rules:
    Use the // OWNER: <PartName> comment to identify which part def each element belongs to.
    CRITICAL: Do NOT drop, skip, or omit any state def from the behavioral fragment.
              Every state def in the behavioral fragment MUST appear in the final model.
+   Elements annotated `// OWNER: package` go at package scope (rule 1c), not in any part def.
+   For every `// ATTR OWNER: <PartName>` hint line in the behavioral fragment, inject the
+   accompanying attribute declaration into that part def if it is not already present.
    Example — behavioral fragment contains:
        // OWNER: SafetyMonitor
        state def BatterySafetyBehavior {{ state BattNominal; state BattFault {{ entry; }} ... }}
    → Embed inside part def SafetyMonitor {{ ... }}.
+   Example — behavioral fragment contains:
+       // ATTR OWNER: FlightController
+       // attribute flightMode : FlightMode = FlightMode::IDLE;
+   → If part def FlightController does not already have `attribute flightMode`, add it.
 4. Add connect statements for ALL inter-component data flows — not just INTF requirements.
      connect <partA>.<portA> to <partB>.<portB>;
    SYNTAX (critical — SysML v2 uses dot notation, NOT `::`):
@@ -481,6 +585,8 @@ Assembly rules:
 
 Pre-write checklist:
   □ Item defs and typed port defs from the interface fragment are declared at package level
+  □ All `// OWNER: package` enum defs from the behavioral fragment are declared at package scope
+  □ Every `// ATTR OWNER: <Part>` attribute hint has been injected into the corresponding part def
   □ Every part def has ≥ 1 port (annotated with typed port def where available)
   □ Every part def has ≥ 1 attribute with numeric value and unit
   □ Every state def from the behavioral fragment is embedded in its owner part def (NONE dropped)

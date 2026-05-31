@@ -34,6 +34,8 @@ def ok(name: str, cond: bool, msg: str = "") -> None:
     else:
         print(f"  FAIL  {name}  {msg}")
         _FAIL += 1
+    # Enforce under pytest too (standalone still prints the running tally above).
+    assert cond, f"{name}: {msg}"
 
 
 def _port(part: str, pname: str, direction: str) -> PortNode:

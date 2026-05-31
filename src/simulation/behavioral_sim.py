@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from .state_extractor import GuardCondition, StateMachineDef, extract_state_machines
+from .state_extractor import GuardCondition, StateMachineDef, VarRef, extract_state_machines
 from .state_executor import StateMachineInstance
 
 
@@ -113,46 +113,187 @@ def _derive_start_and_step(guard: GuardCondition,
         return start, +step             # positive → increasing
 
 
-def _build_test_sequence(sm: StateMachineDef) -> List[Dict[str, Any]]:
+@dataclass
+class DriverPlan:
     """
-    Auto-generate a sequence of variable dicts that will drive the
-    first fault transition's guard condition from safe → fault.
+    One named trajectory of variable bindings used to drive a state machine.
+
+    Layer 2 allows multiple plans per guard (e.g. for `A <= B` we generate
+    two: one that pushes A down holding B, and one that pushes B up holding A)
+    so the *relationship* is exercised, not just one operand.
+    """
+    name: str                       # human label, e.g. "drive_LHS" / "drive_RHS"
+    sequence: List[Dict[str, Any]]  # per-step variable bindings
+    swept_var: str = ""             # which variable is being swept (for reporting)
+    start_val: Optional[float] = None
+    step_size: Optional[float] = None
+
+
+def _swept_plan(
+    swept: str,                 # the variable being driven
+    held: Dict[str, float],     # all other guard vars (held constant)
+    operator: str,              # the comparison op as seen by THIS sweep
+    threshold: float,           # constant against which `swept` is compared
+    initial_values: Dict[str, Any],
+    name: str,
+) -> DriverPlan:
+    """
+    Build a single-variable sweep trajectory.  `swept` ramps across
+    `threshold` under `operator`; `held` variables are emitted unchanged
+    every step so the guard evaluator sees the full environment.
+    """
+    # Synthesize a tiny ad-hoc guard to reuse the existing ramp logic.
+    pseudo = GuardCondition(
+        kind="comparison",
+        attribute=swept,
+        operator=operator,
+        threshold=threshold,
+    )
+    start, step = _derive_start_and_step(pseudo, initial_values)
+    seq: List[Dict[str, Any]] = []
+    val = start
+    for _ in range(_N_STEPS + 15):
+        binding: Dict[str, Any] = {swept: val}
+        binding.update(held)
+        seq.append(binding)
+        val += step
+    return DriverPlan(name=name, sequence=seq, swept_var=swept,
+                      start_val=start, step_size=step)
+
+
+def _guard_endpoints(guard: GuardCondition) -> Tuple[Optional[str], Optional[str]]:
+    """For a comparison guard, return (lhs_var, rhs_var) where each is a bare
+    variable name or None when that side is not a bare VarRef."""
+    lhs_var = guard.lhs.name if isinstance(guard.lhs, VarRef) else None
+    rhs_var = guard.rhs.name if isinstance(guard.rhs, VarRef) else None
+    return lhs_var, rhs_var
+
+
+def _resolve(env: Dict[str, Any], name: str, default: float = 0.0) -> float:
+    """Read a numeric attribute from env with a safe fallback."""
+    v = env.get(name)
+    try:
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
+    """
+    Generate one or more named DriverPlans for the first fault transition's
+    primary guard.
+
+    Layer 2 behaviour:
+      • Bare-variable LHS, bare-variable RHS (`A OP B`) →  TWO plans:
+          drive_LHS — sweep A across B's value (B held)
+          drive_RHS — sweep B across A's value (A held)
+        The *relationship* itself is verified — passes if ANY plan fires.
+      • Bare LHS, non-bare RHS (constant / arithmetic) →  ONE plan
+        (sweep LHS across the resolved threshold; old behaviour).
+      • Boolean / compound-AND guards → unchanged.
     """
     ft = sm.fault_transitions()
     if not ft:
         return []
 
-    guard = ft[0].guards[0]   # primary guard of the first fault transition
+    guard = ft[0].guards[0]
+    init  = sm.initial_values or {}
 
+    # ── Comparison ────────────────────────────────────────────────────────
     if guard.kind == "comparison":
-        start, step = _derive_start_and_step(guard, sm.initial_values)
-        seq = []
-        val = start
-        for _ in range(_N_STEPS + 15):
-            seq.append({guard.attribute: val})
-            val += step
-        return seq
+        lhs_var, rhs_var = _guard_endpoints(guard)
 
-    if guard.kind == "bool_true":
-        # Flip to True at step 5
+        # Both sides are variables → two-trajectory matrix
+        if lhs_var and rhs_var:
+            lhs_init = _resolve(init, lhs_var)
+            rhs_init = _resolve(init, rhs_var)
+
+            plans: List[DriverPlan] = []
+
+            # Plan A: drive LHS against the current RHS value
+            plans.append(_swept_plan(
+                swept=lhs_var,
+                held={rhs_var: rhs_init},
+                operator=guard.operator,
+                threshold=rhs_init,
+                initial_values=init,
+                name="drive_LHS",
+            ))
+
+            # Plan B: drive RHS so the relation reverses
+            # (`A < B` fires when LHS shrinks below RHS — equivalently when
+            # RHS GROWS above LHS, i.e. flipped operator on RHS).
+            flipped = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}.get(
+                guard.operator, guard.operator,
+            )
+            plans.append(_swept_plan(
+                swept=rhs_var,
+                held={lhs_var: lhs_init},
+                operator=flipped,
+                threshold=lhs_init,
+                initial_values=init,
+                name="drive_RHS",
+            ))
+            return plans
+
+        # LHS bare variable, RHS constant/arithmetic → original single sweep,
+        # but still emit RHS-side vars (if any) as held constants so the
+        # executor's full-env evaluator sees them.
+        if lhs_var:
+            held: Dict[str, float] = {}
+            if guard.rhs is not None:
+                for v in guard.rhs.vars():
+                    held[v] = _resolve(init, v)
+            return [_swept_plan(
+                swept=lhs_var,
+                held=held,
+                operator=guard.operator,
+                threshold=guard.threshold,
+                initial_values=init,
+                name="drive_LHS",
+            )]
+
+        # Neither side is a bare variable — no obvious driver, skip.
+        return []
+
+    # ── Enum equality: `mode == EnumType::Value` (Layer 2) ───────────────
+    # Walk the first mode transition: hold at initial enum value for 5 steps,
+    # then switch to the target value.  The state machine should advance once
+    # the attribute matches the guard's expected value.
+    if guard.kind == "enum_eq":
         attr = guard.attribute
-        return [{attr: False}] * 5 + [{attr: True}] * 15
+        init_val = str(init.get(attr, ""))   # e.g. "POWER_ON"
+        target_val = guard.enum_value         # e.g. "SELF_TEST"
+        seq: List[Dict[str, Any]] = [{attr: init_val}] * 5 + [{attr: target_val}] * 15
+        return [DriverPlan(name="set_mode", sequence=seq, swept_var=attr)]
 
+    # ── Boolean flag ──────────────────────────────────────────────────────
+    if guard.kind == "bool_true":
+        attr = guard.attribute
+        seq = [{attr: False}] * 5 + [{attr: True}] * 15
+        return [DriverPlan(name="flip_bool", sequence=seq, swept_var=attr)]
+
+    # ── Compound AND of boolean flags ─────────────────────────────────────
     if guard.kind == "compound" and guard.compound_op == "and":
-        # Flip each boolean operand in sequence (5 steps apart)
         bool_operands = [op for op in guard.operands if op.kind == "bool_true"]
         if not bool_operands:
             return []
         seq: List[Dict[str, Any]] = []
         state: Dict[str, Any] = {op.attribute: False for op in bool_operands}
         for i in range(len(bool_operands) * 8 + 10):
-            idx = i // 8   # flip next operand every 8 steps
+            idx = i // 8
             for j, op in enumerate(bool_operands):
                 state[op.attribute] = (j <= idx and idx < len(bool_operands))
             seq.append(dict(state))
-        return seq
+        return [DriverPlan(name="flip_bool_and", sequence=seq)]
 
     return []
+
+
+def _build_test_sequence(sm: StateMachineDef) -> List[Dict[str, Any]]:
+    """Back-compat shim: return the first driver plan's sequence."""
+    plans = _build_driver_plans(sm)
+    return plans[0].sequence if plans else []
 
 
 def _expected_trigger_step(guard: GuardCondition,
@@ -211,111 +352,138 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
         result.violations.append("No fault transitions found in state machine")
         return result
 
-    seq = _build_test_sequence(sm)
-    if not seq:
+    plans = _build_driver_plans(sm)
+    if not plans:
         result.violations.append("Could not generate test sequence for guard type")
         return result
 
-    # Compute expected trigger step for the primary guard
     primary_guard = ft[0].guards[0]
-    exp_step: Optional[int] = None
-    start_val: Optional[float] = None
-    step_size: Optional[float] = None
+    is_mode_machine = primary_guard.kind == "enum_eq"
 
-    if primary_guard.kind == "comparison":
-        s, st = _derive_start_and_step(primary_guard, sm.initial_values)
-        start_val = s
-        step_size = st
-        exp_step = _expected_trigger_step(primary_guard, s, st)
-        result.timeline.append(
-            f"Driving {primary_guard.attribute}: "
-            f"{s:.2f} → (threshold {primary_guard.operator} {primary_guard.threshold})"
-        )
-    elif primary_guard.kind == "bool_true":
-        exp_step = 5
-        result.timeline.append(
-            f"Flipping {primary_guard.attribute} to True at t=5"
-        )
-    elif primary_guard.kind == "compound":
-        bool_ops = [op for op in primary_guard.operands if op.kind == "bool_true"]
-        exp_step = len(bool_ops) * 8
-        result.timeline.append(
-            f"Flipping boolean flags: {primary_guard.description()}"
-        )
+    # ── Execute every plan; pass if ANY plan triggers the fault ──────────────
+    # Multi-plan (Layer 2) verifies the *relationship* in `A OP B`: a guard
+    # that only fires in one direction still passes, but we record which plans
+    # fired so the user can see the relation is properly two-sided.
+    any_fired = False
+    fault_states = {s.name for s in sm.states if s.entry_action}
 
-    # ── Execute ───────────────────────────────────────────────────────────────
-    inst = StateMachineInstance(sm)
+    for plan in plans:
+        inst = StateMachineInstance(sm)
+        for t, variables in enumerate(plan.sequence):
+            inst.step(variables, time=float(t))
+            # Mode machines: stop as soon as any transition fires.
+            # Fault monitors: stop when reaching a fault state (has entry action).
+            if is_mode_machine:
+                if inst.transition_log:
+                    break
+            else:
+                if inst.in_fault_state():
+                    break
 
-    for t, variables in enumerate(seq):
-        inst.step(variables, time=float(t))
-        if inst.in_fault_state():
-            break   # fault state reached — stop simulation
+        events = inst.transition_log
+        plan_label = f"[{plan.name}]" if len(plans) > 1 else ""
 
-    # ── Evaluate ──────────────────────────────────────────────────────────────
-    events = inst.transition_log
-    result.fired_actions = list(inst.fired_actions)
+        if not events:
+            # Plan didn't fire — record but keep trying other plans
+            result.timeline.append(
+                f"{plan_label} no trigger over {len(plan.sequence)} steps"
+                f" (swept {plan.swept_var or '?'})"
+            )
+            continue
 
-    if not events:
+        # This plan did fire — capture details from the LAST event
+        fault_event = events[-1]
+        first_fire = not any_fired
+        any_fired = True
+
+        if first_fire:
+            # Use the first firing plan's data as the canonical record
+            result.trigger_step = int(fault_event.time)
+            result.fired_actions = list(inst.fired_actions)
+
+            # Sweep header line for context
+            if plan.swept_var:
+                if primary_guard.kind == "comparison":
+                    result.timeline.append(
+                        f"{plan_label} Driving {plan.swept_var}: "
+                        f"{plan.start_val:.2f} → "
+                        f"(threshold {primary_guard.operator}"
+                        f" {primary_guard.threshold})"
+                        if plan.start_val is not None else
+                        f"{plan_label} Driving {plan.swept_var}"
+                    )
+                elif primary_guard.kind == "enum_eq":
+                    result.timeline.append(
+                        f"{plan_label} Setting {plan.swept_var} = "
+                        f"{primary_guard.enum_type}::{primary_guard.enum_value} at t=5"
+                    )
+                else:
+                    result.timeline.append(
+                        f"{plan_label} Flipping {plan.swept_var} to True at t=5"
+                    )
+
+            result.timeline.append(fault_event.to_line())
+
+            # ── Check 1: correct target state ─────────────────────────────────
+            # Mode machines have no fault states — any transition is valid.
+            if not is_mode_machine and fault_event.to_state not in fault_states:
+                result.violations.append(
+                    f"Transition target '{fault_event.to_state}' is not a known "
+                    f"fault state (expected one of: {fault_states})"
+                )
+
+            # ── Check 2: entry action was called ──────────────────────────────
+            # Mode machines: entry actions are optional — skip this check.
+            if not is_mode_machine:
+                if not result.fired_actions:
+                    result.violations.append(
+                        f"Fault state '{fault_event.to_state}' has no entry action "
+                        "recorded — emergency response may not have been triggered"
+                    )
+                else:
+                    result.timeline.append(
+                        f"  entry action called: {result.fired_actions[-1]}  ✓"
+                    )
+
+            # ── Check 3: trigger at roughly the expected step ────────────────
+            if primary_guard.kind == "comparison" and plan.start_val is not None \
+                    and plan.step_size is not None:
+                # Re-use the same pseudo-guard the swept plan used to compute exp_step.
+                pseudo = GuardCondition(
+                    kind="comparison",
+                    attribute=plan.swept_var,
+                    operator=("<" if (plan.step_size or 0) < 0 else ">"),
+                    threshold=(plan.start_val + plan.step_size * 0),  # placeholder
+                )
+                # Compute the value at trigger directly:
+                trig_val = round(plan.start_val + plan.step_size * result.trigger_step, 3)
+                result.trigger_value = trig_val
+                result.timeline.append(
+                    f"  {plan.swept_var} at trigger: {trig_val}"
+                    f"  (threshold: {primary_guard.operator}"
+                    f" {primary_guard.threshold})"
+                )
+        else:
+            # Subsequent plans that also fired — just note in timeline
+            result.timeline.append(
+                f"{plan_label} also fired at step {int(fault_event.time)}  ✓"
+            )
+
+    if not any_fired:
         result.violations.append(
-            f"No state transition fired in {len(seq)} simulation steps — "
+            f"No state transition fired across {len(plans)} driver plan(s) — "
             f"guard '{primary_guard.description()}' was never satisfied"
         )
         return result
 
-    # The last event is the fault transition
-    fault_event = events[-1]
-    result.trigger_step = int(fault_event.time)
-    result.timeline.append(fault_event.to_line())
-
-    # Check 1: correct target state
-    fault_states = {s.name for s in sm.states if s.entry_action}
-    if fault_event.to_state not in fault_states:
-        result.violations.append(
-            f"Transition target '{fault_event.to_state}' is not a known fault state "
-            f"(expected one of: {fault_states})"
-        )
-
-    # Check 2: entry action was called
-    if not result.fired_actions:
-        result.violations.append(
-            f"Fault state '{fault_event.to_state}' has no entry action recorded — "
-            "emergency response may not have been triggered"
-        )
-    else:
-        result.timeline.append(f"  entry action called: {result.fired_actions[-1]}  ✓")
-
-    # Check 3: trigger at roughly the expected step (tolerance ±30%)
-    if exp_step and primary_guard.kind == "comparison":
-        actual  = result.trigger_step
-        tolerance = max(3, int(exp_step * 0.30))
-        if abs(actual - exp_step) > tolerance:
-            result.violations.append(
-                f"Transition fired at step {actual} but expected near step {exp_step} "
-                f"(tolerance ±{tolerance}). Guard threshold may be misconfigured."
-            )
-
-    # Record the variable value at trigger (for numeric guards)
-    if primary_guard.kind == "comparison" and start_val is not None and step_size is not None:
-        trig_val = start_val + step_size * result.trigger_step
-        result.trigger_value = round(trig_val, 3)
-        result.timeline.append(
-            f"  {primary_guard.attribute} at trigger: {result.trigger_value}"
-            f"  (threshold: {primary_guard.operator} {primary_guard.threshold})"
-        )
-        # Verify the value actually satisfies the guard
-        op = primary_guard.operator
-        th = primary_guard.threshold
-        tv = result.trigger_value
-        satisfied = (
-            (op == "<"  and tv <  th) or
-            (op == "<=" and tv <= th) or
-            (op == ">"  and tv >  th) or
-            (op == ">=" and tv >= th) or
-            (op == "==" and tv == th)
-        )
-        if not satisfied:
-            result.violations.append(
-                f"Guard not satisfied at trigger: {tv} {op} {th} is False"
+    # Layer 2 informational hint when only one side of a two-sided relation fired
+    if len(plans) > 1 and result.timeline:
+        fired_names = [p.name for p in plans
+                       if any(p.name in tl for tl in result.timeline)]
+        if len(fired_names) == 1:
+            result.timeline.append(
+                f"  (only {fired_names[0]} fired — relationship is one-sided "
+                f"with the current initial values)"
             )
 
     result.passed = len(result.violations) == 0

@@ -41,6 +41,8 @@ def ok(name: str, cond: bool, msg: str = "") -> None:
     else:
         print(f"  FAIL  {name}  {msg}")
         _FAIL += 1
+    # Enforce under pytest too (standalone still prints the running tally above).
+    assert cond, f"{name}: {msg}"
 
 
 # ---------------------------------------------------------------------------
@@ -165,3 +167,102 @@ if __name__ == "__main__":
     test_end_to_end_variable_rhs()
     print(f"\n{_PASS} passed, {_FAIL} failed")
     sys.exit(0 if _FAIL == 0 else 1)
+
+
+# ---------------------------------------------------------------------------
+# Layer 2: enum_eq guard tests
+# ---------------------------------------------------------------------------
+
+_ENUM_SYSML = """
+package EnumTest {
+    enum def DroneMode {
+        enum POWER_ON;
+        enum SELF_TEST;
+        enum CRUISE;
+    }
+    part def FlightController {
+        attribute flightMode : DroneMode = DroneMode::POWER_ON;
+        state def DroneModeMachine {
+            state DronePowerOnState;
+            state DroneSelfTestState;
+            state DroneCruiseState;
+            transition initial then DronePowerOnState;
+            transition toSelfTest
+                first DronePowerOnState
+                if flightMode == DroneMode::SELF_TEST
+                then DroneSelfTestState;
+            transition toCruise
+                first DroneSelfTestState
+                if flightMode == DroneMode::CRUISE
+                then DroneCruiseState;
+        }
+    }
+}
+"""
+
+
+class TestEnumEqExtraction:
+    def test_enum_eq_guard_kind(self):
+        machines = extract_state_machines(_ENUM_SYSML)
+        assert machines, "Should extract DroneModeMachine"
+        sm = machines[0]
+        ft = sm.fault_transitions()
+        assert ft, "Should have non-initial transitions with guards"
+        assert ft[0].guards[0].kind == "enum_eq"
+
+    def test_enum_eq_attribute_name(self):
+        sm = extract_state_machines(_ENUM_SYSML)[0]
+        g = sm.fault_transitions()[0].guards[0]
+        assert g.attribute == "flightMode"
+
+    def test_enum_eq_type_and_value(self):
+        sm = extract_state_machines(_ENUM_SYSML)[0]
+        g = sm.fault_transitions()[0].guards[0]
+        assert g.enum_type == "DroneMode"
+        assert g.enum_value == "SELF_TEST"
+
+    def test_initial_values_stores_enum_string(self):
+        sm = extract_state_machines(_ENUM_SYSML)[0]
+        assert sm.initial_values.get("flightMode") == "POWER_ON"
+
+    def test_enum_eq_eval_true(self):
+        sm = extract_state_machines(_ENUM_SYSML)[0]
+        g = sm.fault_transitions()[0].guards[0]
+        assert g.eval({"flightMode": "SELF_TEST"}) is True
+
+    def test_enum_eq_eval_false_wrong_value(self):
+        sm = extract_state_machines(_ENUM_SYSML)[0]
+        g = sm.fault_transitions()[0].guards[0]
+        assert g.eval({"flightMode": "CRUISE"}) is False
+
+    def test_enum_eq_description(self):
+        sm = extract_state_machines(_ENUM_SYSML)[0]
+        g = sm.fault_transitions()[0].guards[0]
+        assert g.description() == "flightMode == DroneMode::SELF_TEST"
+
+    def test_enum_eq_involved_attributes(self):
+        sm = extract_state_machines(_ENUM_SYSML)[0]
+        g = sm.fault_transitions()[0].guards[0]
+        assert g.involved_attributes() == ["flightMode"]
+
+
+class TestEnumEqSimulation:
+    def test_mode_machine_passes(self):
+        from src.simulation.behavioral_sim import run_behavioral_simulation
+        result = run_behavioral_simulation(_ENUM_SYSML)
+        sm_result = next(r for r in result.scenario_results if "ModeMachine" in r.name)
+        assert sm_result.passed, f"Expected DroneModeMachine to pass, violations: {sm_result.violations}"
+
+    def test_mode_machine_sim_score_is_1(self):
+        from src.simulation.behavioral_sim import run_behavioral_simulation
+        result = run_behavioral_simulation(_ENUM_SYSML)
+        assert result.sim_score == 1.0
+
+    def test_mode_machine_timeline_shows_transition(self):
+        from src.simulation.behavioral_sim import run_behavioral_simulation
+        result = run_behavioral_simulation(_ENUM_SYSML)
+        sm_result = next(r for r in result.scenario_results if "ModeMachine" in r.name)
+        combined = "\n".join(sm_result.timeline)
+        assert "DroneMode::SELF_TEST" in combined
+        assert "DronePowerOnState" in combined
+        assert "DroneSelfTestState" in combined
