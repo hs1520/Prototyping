@@ -17,3 +17,4 @@ langsmith
 pinecone
 gh
 syside
+MAVProxy
