@@ -265,6 +265,7 @@ class TransitionDef:
     target: Optional[str]          # target state name
     guards: List[GuardCondition] = field(default_factory=list)
     is_initial: bool = False
+    accept_trigger: Optional[str] = None   # accept action type name, e.g. "TakeoffCmd"
 
 
 @dataclass
@@ -281,11 +282,66 @@ class StateMachineDef:
         """Non-initial transitions that have guard conditions."""
         return [t for t in self.transitions if not t.is_initial and t.guards]
 
+    def has_accept_transitions(self) -> bool:
+        """True if any non-initial transition is driven by an accept trigger."""
+        return any(
+            t.accept_trigger for t in self.transitions if not t.is_initial
+        )
+
     def entry_action_for_state(self, state_name: str) -> Optional[str]:
         for s in self.states:
             if s.name == state_name:
                 return s.entry_action
         return None
+
+
+# ---------------------------------------------------------------------------
+# Accept trigger extraction
+# ---------------------------------------------------------------------------
+
+_STD_NAMESPACES = frozenset({
+    "Actions::", "Occurrences::", "Base::",
+    "Performances::", "Transfers::", "Links::",
+})
+
+
+def _extract_accept_trigger(tr) -> Optional[str]:
+    """
+    Extract the accepted command/action type name from a syside
+    TransitionUsage.  Returns None when no accept trigger is present.
+
+    Verified API path (syside):
+      tr.trigger_actions
+        → AcceptActionUsage.payload_parameter
+          → .definitions  (LazyIterator of type defs)
+            → first ActionDefinition not in a standard-library namespace
+              → .name  ==  user-defined command type (e.g. "TakeoffCmd")
+    """
+    actions = getattr(tr, "trigger_actions", None)
+    if not actions:
+        return None
+
+    for action in actions:
+        if "Accept" not in type(action).__name__:
+            continue
+        pp = getattr(action, "payload_parameter", None)
+        if pp is None:
+            continue
+        try:
+            for defn in pp.definitions:
+                if type(defn).__name__ != "ActionDefinition":
+                    continue
+                qname = str(getattr(defn, "qualified_name", "") or "")
+                # Skip standard-library entries (Occurrences::Occurrence, etc.)
+                if any(qname.startswith(ns) for ns in _STD_NAMESPACES):
+                    continue
+                name = getattr(defn, "name", None)
+                if name:
+                    return str(name)
+        except Exception:
+            pass
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -483,12 +539,15 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
                 if g:
                     guards.append(g)
 
+            accept_trigger = _extract_accept_trigger(tr)
+
             td = TransitionDef(
                 name=tr.name,
                 source=src_name,
                 target=tgt_name,
                 guards=guards,
                 is_initial=is_initial,
+                accept_trigger=accept_trigger,
             )
             sm.transitions.append(td)
 

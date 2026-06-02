@@ -66,10 +66,17 @@ class StateMachineInstance:
     #  Single time step                                                   #
     # ------------------------------------------------------------------ #
 
-    def step(self, variables: Dict[str, Any], time: float = 0.0) -> bool:
+    def step(self, variables: Dict[str, Any], time: float = 0.0,
+             command: Optional[str] = None) -> bool:
         """
-        Evaluate all outgoing transitions from the current state.
-        Fire the first one whose guard is satisfied.
+        Evaluate all outgoing transitions from the current state and fire the
+        first eligible one.
+
+        Eligibility rules:
+          • Accept-triggered transition  → fires when *command* matches
+            ``tr.accept_trigger``; optional guards must also hold.
+          • Guard-only transition        → fires when all guards hold
+            (existing behaviour, *command* is ignored).
 
         Returns True if a transition fired this step.
         """
@@ -81,36 +88,59 @@ class StateMachineInstance:
                 continue
             if tr.source != self.current_state:
                 continue
+
+            if tr.accept_trigger:
+                # Accept-triggered: command must match
+                if tr.accept_trigger != command:
+                    continue
+                # Optional guard on top of accept
+                if tr.guards and not all(
+                    self._eval_guard(g, variables) for g in tr.guards
+                ):
+                    continue
+                self._fire_transition(tr, time, variables,
+                                      guard_desc=f"accept {tr.accept_trigger}")
+                return True
+
+            # Guard-only transition (original behaviour)
             if not tr.guards:
                 continue
-
-            # All guards must hold (implicit AND between multiple guards)
             if all(self._eval_guard(g, variables) for g in tr.guards):
-                old_state = self.current_state
-                self.current_state = tr.target
-
-                entry = self.sm.entry_action_for_state(tr.target) if tr.target else None
-                if entry:
-                    self.fired_actions.append(entry)
-
                 guard_desc = " AND ".join(g.description() for g in tr.guards)
-                event = TransitionEvent(
-                    time=time,
-                    from_state=old_state,
-                    to_state=tr.target or "?",
-                    transition_name=tr.name,
-                    entry_action=entry,
-                    guard_description=guard_desc,
-                    variables_snapshot={
-                        k: variables[k]
-                        for k in tr.guards[0].involved_attributes()
-                        if k in variables
-                    },
-                )
-                self.transition_log.append(event)
+                self._fire_transition(tr, time, variables, guard_desc=guard_desc)
                 return True
 
         return False
+
+    def _fire_transition(
+        self,
+        tr,
+        time: float,
+        variables: Dict[str, Any],
+        guard_desc: str = "",
+    ) -> None:
+        """Record a transition firing and advance current_state."""
+        old_state = self.current_state
+        self.current_state = tr.target
+
+        entry = self.sm.entry_action_for_state(tr.target) if tr.target else None
+        if entry:
+            self.fired_actions.append(entry)
+
+        snap_attrs = (
+            tr.guards[0].involved_attributes()
+            if tr.guards else []
+        )
+        event = TransitionEvent(
+            time=time,
+            from_state=old_state,
+            to_state=tr.target or "?",
+            transition_name=tr.name,
+            entry_action=entry,
+            guard_description=guard_desc,
+            variables_snapshot={k: variables[k] for k in snap_attrs if k in variables},
+        )
+        self.transition_log.append(event)
 
     def in_fault_state(self) -> bool:
         """True if the current state has an entry action (i.e. a fault state)."""

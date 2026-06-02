@@ -72,26 +72,154 @@ class PrototypingPipeline:
         description: str,
         additional_requirements: Optional[List[str]] = None,
         parse_strict: Optional[bool] = None,
+        # ── Phase 5: ArduPilot SITL 验证 ──────────────────────────────
+        sitl: bool = False,
+        sitl_output_dir: str = "sitl_output",
+        sitl_run_l2: bool = False,
+        sitl_auto_launch: bool = False,
+        sitl_host: str = "127.0.0.1",
+        sitl_port: int = 5760,
     ) -> Dict[str, Any]:
         """
         Generate a validated SysML v2 model without Design Space Exploration.
 
-        Run Phases 1-4 only (requirements → design → syntax gate → refinement
-        → simulation).  No MCTS, no parameter injection.  Use this to get a
-        correct, working model first; call explore_design_space() afterwards
-        when DSE is needed.
+        Run Phases 1-4 (requirements → design → syntax gate → refinement
+        → simulation).  Optionally runs Phase 5 (ArduPilot SITL validation).
+
+        Parameters
+        ----------
+        sitl : bool
+            Enable Phase 5 — generate .parm file + L2 test scripts.
+        sitl_output_dir : str
+            Directory to write SITL artifacts (.parm, test_*.py).
+        sitl_run_l2 : bool
+            Also execute L2 tests against a running SITL instance.
+        sitl_auto_launch : bool
+            Auto-launch/stop arducopter when sitl_run_l2=True.
+        sitl_host / sitl_port
+            SITL connection endpoint (used when sitl_run_l2=True).
 
         Returns
         -------
         {system_name, requirements, model, model_sysml, model_summary,
-         final_score, iterations, evaluation_history, simulation_result}
+         final_score, iterations, evaluation_history, simulation_result,
+         sitl_report (if sitl=True)}
         """
-        return self.orchestrator.generate(
+        result = self.orchestrator.generate(
             system_name=system_name,
             system_description=description,
             additional_requirements=additional_requirements,
             parse_strict=(parse_strict if parse_strict is not None else self.parse_strict),
         )
+
+        if sitl:
+            result = self._run_sitl_phase(
+                result=result,
+                output_dir=sitl_output_dir,
+                run_l2=sitl_run_l2,
+                auto_launch=sitl_auto_launch,
+                host=sitl_host,
+                port=sitl_port,
+            )
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Phase 5 — ArduPilot SITL
+    # ------------------------------------------------------------------
+
+    def _run_sitl_phase(
+        self,
+        result: Dict[str, Any],
+        output_dir: str,
+        run_l2: bool,
+        auto_launch: bool,
+        host: str,
+        port: int,
+    ) -> Dict[str, Any]:
+        """内部方法：运行 SITL 阶段并打印进度，将报告写入 result。"""
+        from ..sitl.sitl_bridge import SITLBridge
+
+        W = 62
+        print()
+        print("=" * W)
+        print("Phase 5: ArduPilot SITL 验证")
+        print("-" * W)
+
+        model = result.get("model")
+        if model is None:
+            print("  ✗ 模型不存在，跳过 SITL 阶段")
+            return result
+
+        conn = f"tcp:{host}:{port}"
+        bridge = SITLBridge(
+            model=model,
+            output_dir=output_dir,
+            connection_string=conn,
+        )
+
+        # ── L1：生成 .parm + 静态验证 ────────────────────────────────
+        print()
+        print("  [L1] 参数文件生成")
+        parm_path = bridge.generate_l1()
+        l1_results = bridge.validate_l1()
+
+        ok_l1 = sum(1 for r in l1_results if r.passed)
+        print(f"  参数验证: {ok_l1}/{len(l1_results)} 通过")
+        for r in l1_results:
+            icon = "✓" if r.passed else "✗"
+            print(f"    {icon} {r.req_id:<20} {r.message}")
+
+        # ── L2：生成测试脚本 ─────────────────────────────────────────
+        print()
+        print("  [L2] 测试脚本生成")
+        scripts = bridge.generate_l2_scripts()
+        for s in scripts:
+            print(f"    → {s.name}")
+
+        # ── L2：执行测试（可选）──────────────────────────────────────
+        l2_results = []
+        if run_l2:
+            print()
+            print("  [L2] 执行测试" + (" (自动启动 SITL)" if auto_launch else ""))
+            if auto_launch:
+                ok = bridge.launch_sitl()
+                if not ok:
+                    print("  ✗ SITL 启动失败，跳过 L2 执行")
+                    run_l2 = False
+
+            if run_l2:
+                l2_results = bridge.run_l2()
+                if auto_launch:
+                    bridge.stop_sitl()
+
+                ok_l2 = sum(1 for r in l2_results if r.passed)
+                print(f"\n  L2 测试结果: {ok_l2}/{len(l2_results)} 通过")
+                for r in l2_results:
+                    icon = "✓" if r.passed else "✗"
+                    dur = f"  [{r.duration_s:.1f}s]" if r.duration_s else ""
+                    print(f"    {icon} {r.req_id:<20} {r.message}{dur}")
+
+        # ── 汇总 ──────────────────────────────────────────────────────
+        from ..sitl.sitl_bridge import BridgeReport
+        report = BridgeReport(
+            model_name=model.name,
+            parm_file=str(parm_path),
+            l1_results=l1_results,
+            l2_results=l2_results,
+        )
+
+        all_n = len(l1_results) + len(l2_results)
+        all_ok = sum(1 for r in l1_results + l2_results if r.passed)
+        print()
+        print(f"  SITL 阶段完成  ({all_ok}/{all_n} 通过)")
+        print(f"  .parm 文件: {parm_path}")
+        print("=" * W)
+
+        result["sitl_report"] = report
+        result["sitl_parm_file"] = str(parm_path)
+        result["sitl_l2_scripts"] = [str(s) for s in scripts]
+        return result
 
     def explore_design_space(
         self,

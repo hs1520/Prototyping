@@ -47,6 +47,21 @@ from ..simulation.connectivity_fixer import (
     build_connectivity_prompt,
     extract_connect_lines,
 )
+from ..simulation.transition_fixer import (
+    build_state_machine_summary,
+    build_transition_prompt,
+    extract_transition_lines,
+    validate_transitions,
+    merge_transitions,
+)
+from ..simulation.port_fixer import (
+    collect_port_defs,
+    build_port_fix_prompt,
+    extract_port_additions,
+    validate_port_additions,
+    merge_port_additions,
+)
+from ..simulation.connect_auditor import audit_connects, AuditResult
 
 # System prompt for surgical LLM syntax fixes
 _SURGICAL_FIX_SYSTEM = (
@@ -62,11 +77,164 @@ _CONNECTIVITY_FIX_SYSTEM = (
     "You never invent ports and never output anything but connect statements."
 )
 
+# System prompt for surgical transition source fixes (transition statements only)
+_TRANSITION_FIX_SYSTEM = (
+    "You are a SysML v2 state machine expert. "
+    "You fix transition source states so a mode machine can traverse its full chain. "
+    "You return ONLY corrected `transition ... ;` statements — never any other text."
+)
+
+# System prompt for surgical port additions (port declarations only)
+_PORT_FIX_SYSTEM = (
+    "You are a SysML v2 port architect. "
+    "You add the minimum set of port declarations so unreachable signal paths "
+    "become connectable. You return ONLY lines in the form "
+    "`<PartDefName>: <direction> port <portName> : <PortType>;` — never any other text."
+)
+
 # Scenario-name tag prefixes to strip when recovering the real entry instance.
 _SCEN_TAG_PREFIXES = (
     "power_", "emergency_", "uplink_", "telemetry_",
     "control_", "connectivity_",
 )
+
+
+def _fix_keyword_item_names(sysml_text: str) -> str:
+    """
+    Quote SysML reserved words used as item-usage names inside port/part defs.
+
+    Pattern:  (in|out|inout) item <keyword> :
+    Fix:      (in|out|inout) item '<keyword>' :
+
+    syside rejects bare reserved words like `message`, `flow`, `connect`,
+    `accept`, `send`, `loop`, `state` as item-usage names (parser error
+    "Unexpected 'item'").  Quoting them makes the syntax valid.
+    """
+    _SYSML_KW = re.compile(
+        r'\b(in|out|inout)\s+item\s+'
+        r'(message|flow|connect|accept|send|loop|state|item|if|then|first|else)\s*:',
+        re.IGNORECASE,
+    )
+    return _SYSML_KW.sub(lambda m: f"{m.group(1)} item '{m.group(2)}' :", sysml_text)
+
+
+_GUARD_VAR_RE = re.compile(
+    r'\bif\s+(\w+)\s*(?:[<>=!]+|$)',
+)
+_BOOL_GUARD_RE = re.compile(
+    r'\bif\s+(\w+)\s*\n',
+)
+_PART_DEF_BLOCK_RE = re.compile(
+    r'\bpart\s+def\s+(\w+)\s*\{'
+)
+_ATTR_DECL_RE = re.compile(
+    r'\battribute\s+(\w+)\s*:'
+)
+
+
+def _inject_missing_guard_attrs(
+    sysml_text: str,
+    sema_errors: List[Dict],
+) -> tuple:
+    """
+    For each sema error "No Feature named 'X' found", check whether X appears
+    as a guard variable in a state machine inside a part def.  If so, inject
+    `attribute X : Real = 0.0;` (or Boolean = false) into that part def.
+
+    Returns (fixed_text, n_injected).
+    """
+    # Collect missing names from sema errors
+    missing: set = set()
+    for e in sema_errors:
+        m = re.search(r"No Feature named '(\w+)' found", e.get("message", ""))
+        if m:
+            missing.add(m.group(1))
+
+    if not missing:
+        return sysml_text, 0
+
+    # For each missing name, check it appears in a guard (if X ...) in the text
+    guard_vars = set()
+    for name in missing:
+        # Match `if <name>` (boolean) or `if <name> <op>` (comparison)
+        if re.search(rf'\bif\s+{re.escape(name)}\b', sysml_text):
+            guard_vars.add(name)
+
+    if not guard_vars:
+        return sysml_text, 0
+
+    # Find all part def blocks and inject missing attrs into the correct one
+    # Strategy: inject into every part def that contains a state def referencing
+    # the missing variable (simplest: inject into the first part def that
+    # contains the guard reference in its block)
+    text = sysml_text
+    n_injected = 0
+
+    # Build part def blocks index: name → (block_start, block_end)
+    blocks = []
+    for m in _PART_DEF_BLOCK_RE.finditer(text):
+        part_name = m.group(1)
+        brace = text.index('{', m.start())
+        depth, end = 0, brace
+        for i in range(brace, len(text)):
+            if text[i] == '{': depth += 1
+            elif text[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        blocks.append((part_name, brace, end))
+
+    # For each guard var, find the part def block that contains it
+    injections: List[tuple] = []   # (insert_pos, attr_line, var_name)
+    already_injected: set = set()
+
+    for var in sorted(guard_vars):   # sorted for deterministic order
+        for part_name, brace, end in blocks:
+            body = text[brace + 1: end]
+            if not re.search(rf'\bif\s+{re.escape(var)}\b', body):
+                continue
+            # Check if attribute already declared in this block
+            existing = {m.group(1) for m in _ATTR_DECL_RE.finditer(body)}
+            if var in existing:
+                continue
+            key = (part_name, var)
+            if key in already_injected:
+                continue
+
+            # Determine type and safe default from guard context
+            # Boolean: bare `if flagName` (no operator follows)
+            if re.search(rf'\bif\s+{re.escape(var)}\s*\n', body) or \
+               re.search(rf'\bif\s+{re.escape(var)}\s*then\b', body):
+                attr_line = f"        attribute {var} : Boolean = false;"
+            else:
+                # Numeric: infer safe initial from guard threshold
+                th_match = re.search(
+                    rf'\bif\s+{re.escape(var)}\s*([<>]=?)\s*([\d.]+)', body
+                )
+                if th_match:
+                    op, th = th_match.group(1), float(th_match.group(2))
+                    # Start well on the safe side of the threshold
+                    default = th * 3.0 + 10.0 if op in ('<', '<=') else 0.0
+                    default = round(default, 1)
+                else:
+                    default = 0.0
+                attr_line = f"        attribute {var} : Real = {default};"
+
+            # Insert after opening brace of the part def
+            injections.append((brace + 1, attr_line, var))
+            already_injected.add(key)
+            break   # inject into first matching part def only
+
+    if not injections:
+        return text, 0
+
+    # Apply in reverse order so earlier offsets stay valid
+    for insert_pos, attr_line, var in sorted(injections, reverse=True):
+        text = text[:insert_pos] + f"\n{attr_line}" + text[insert_pos:]
+        n_injected += 1
+
+    return text, n_injected
 
 
 def _scenario_src_instance(scenario_name: str) -> str:
@@ -424,15 +592,11 @@ class Orchestrator:
         if not result.success and not result.output:
             print(f"  ✗ Requirements extraction failed: {result.reasoning}")
 
-        llm_requirements = result.output if result.output else []
+        # RequirementsAgent now returns a unified set (fixed anchors + new additions)
+        # with consistent IDs in one pass — no separate merge step needed.
+        requirements = result.output if result.output else list(additional)
 
-        # Merge: manual requirements take precedence; duplicates (by ID or text) are dropped;
-        # same-ID-different-content LLM requirements are reassigned to a new ID with a warning.
-        requirements, merge_conflicts = self.requirements_agent.merge_requirements(llm_requirements, additional)
-        for warning in merge_conflicts:
-            print(f"  ⚠ {warning}")
-
-        # Validate merged set
+        # Validate unified set
         validation = self.requirements_agent.validate_requirements(requirements)
 
         if validation["issues"]:
@@ -1429,7 +1593,16 @@ class Orchestrator:
             if fixed_model is not None:
                 current_model = fixed_model
 
-            # ── Rule-based evaluation (pass cached syntax result) ─────────
+            # ── Step 0.5: Connect audit — remove type/direction-invalid connects ─
+            current_sysml, current_model = self._connect_audit_step(
+                current_sysml, current_model
+            )
+
+            # ── Behavioral simulation (runs before eval to feed into score) ─
+            sim_result = self._run_simulation(current_sysml, current_model.name)
+            sim_issues = self._format_sim_issues(sim_result, requirements=requirements)
+
+            # ── Rule-based evaluation (pass cached syntax + sim results) ──
             eval_result = self.evaluator.evaluate(
                 config=DesignConfiguration(
                     name=f"iteration_{iteration}",
@@ -1438,12 +1611,9 @@ class Orchestrator:
                 model=current_model,
                 mcts_config=mcts_best_config,
                 syntax_result=syntax_result,
+                sim_result=sim_result,
             )
             rule_score = eval_result.weighted_total
-
-            # ── Behavioral simulation ─────────────────────────────────────
-            sim_result = self._run_simulation(current_sysml, current_model.name)
-            sim_issues = self._format_sim_issues(sim_result, requirements=requirements)
 
             # ── LLM evaluation (skip when rule score already sufficient OR
             #    when a [VETO] fired in the rule evaluator) ─────────────────
@@ -1525,7 +1695,7 @@ class Orchestrator:
                     )
                     or (
                         _br.extracted_sm_count > 0
-                        and _br.sim_score >= self.quality_threshold
+                        and _br.sim_score >= 1.0    # require every SM to pass — transition fixer can repair
                     )
                 )
                 reachability_ok = not sim_result.failed_scenarios()
@@ -1754,13 +1924,13 @@ class Orchestrator:
         # ── Dimension scores table ────────────────────────────────────────
         dim_scores = eval_result.criteria_scores or {}
         dim_labels = {
-            "requirement_satisfaction": "Req satisfaction",
-            "mcts_fidelity":            "MCTS fidelity   ",
-            "structural_integrity":     "Struct integrity",
-            "safety_assurance":         "Safety assurance",
-            "interface_correctness":    "Interface correct",
             "syntactic_validity":       "Syntactic valid ",
-            "behavioral_reachability":  "Behav reachabil ",
+            "requirement_coverage":     "Req coverage    ",
+            "structural_completeness":  "Struct complete ",
+            "behavioral_verification":  "Behav verificat ",
+            "safety_assurance":         "Safety assurance",
+            "interface_quality":        "Interface quality",
+            "mcts_fidelity":            "MCTS fidelity   ",
         }
         for key, label in dim_labels.items():
             v = dim_scores.get(key, None)
@@ -1888,6 +2058,13 @@ class Orchestrator:
         print(f"\n  {'─'*62}", flush=True)
         print(f"  ▶  Simulation inner loop  (max {max_iters} pass{'es' if max_iters>1 else ''})")
 
+        # ── Behavioral transition fix (run once before connectivity loop) ──
+        # When a state machine got stuck mid-chain (Layer-3 mode machine
+        # incomplete), repair transition source/target via the surgical
+        # transition fixer.  This complements connectivity_fixer which only
+        # handles port-level reachability, not state-machine semantics.
+        current = self._fix_stuck_transitions(current)
+
         for sim_iter in range(max_iters):
             sysml = (
                 (getattr(current, "metadata", None) or {}).get("last_sysml_text")
@@ -1976,10 +2153,93 @@ class Orchestrator:
                 print(f"  │    ✗ rejected: {line}  — {reason}", flush=True)
 
             if not validation.accepted:
-                print(f"  │  ⚠ no valid connections to add — stopping", flush=True)
-                break
+                # connectivity_fixer found no usable connects — fall back to
+                # port_fixer: add missing port declarations on part defs so a
+                # second connectivity pass can wire them up.
+                print(f"  │  ⚠ no valid connections — trying port fixer …",
+                      flush=True)
+                port_defs  = collect_port_defs(sysml)
+                port_prompt = build_port_fix_prompt(
+                    directory, port_defs, failed_payload
+                )
+                try:
+                    port_raw = self.llm.chat(
+                        port_prompt, system_prompt=_PORT_FIX_SYSTEM
+                    )
+                except Exception as exc:
+                    print(f"  │  ✗ LLM error in port fixer: {exc} — stopping",
+                          flush=True)
+                    break
 
-            merge = merge_connects(sysml, validation.accepted)
+                port_items = extract_port_additions(port_raw)
+                port_val   = validate_port_additions(
+                    port_items, directory, port_defs
+                )
+                for item in port_val.accepted:
+                    print(f"  │    + {item.part_def}: {item.to_sysml()}",
+                          flush=True)
+                for raw_line, reason in port_val.rejected:
+                    print(f"  │    ✗ port rejected: {raw_line}  — {reason}",
+                          flush=True)
+
+                if not port_val.accepted:
+                    print(f"  │  ⚠ no valid ports to add — stopping",
+                          flush=True)
+                    break
+
+                port_merge = merge_port_additions(sysml, port_val.accepted)
+                sysml = port_merge.merged_text
+                print(
+                    f"  │  ✓ added {port_merge.n_added} port(s): "
+                    f"{', '.join(port_merge.added_descriptions)}",
+                    flush=True,
+                )
+
+                # Rebuild directory with the new ports and retry connectivity.
+                directory = build_port_directory(sysml)
+                existing  = parse_connects(sysml)
+                try:
+                    raw2 = self.llm.chat(
+                        build_connectivity_prompt(
+                            directory, existing, failed_payload,
+                            isolated_parts=sim_result.isolated_parts,
+                        ),
+                        system_prompt=_CONNECTIVITY_FIX_SYSTEM,
+                    )
+                except Exception as exc:
+                    print(f"  │  ✗ LLM error in post-port connect: {exc}",
+                          flush=True)
+                    # Persist the port additions; let next pass try connects.
+                    meta = getattr(current, "metadata", None)
+                    if meta is None:
+                        object.__setattr__(current, "metadata", {})
+                        meta = current.metadata
+                    meta["last_sysml_text"] = sysml
+                    continue
+
+                cand_lines2 = extract_connect_lines(raw2)
+                validation2 = validate_connects(cand_lines2, directory, existing)
+                for stmt in validation2.accepted:
+                    print(f"  │    + {stmt.to_sysml()}", flush=True)
+                for line, reason in validation2.rejected:
+                    print(f"  │    ✗ rejected: {line}  — {reason}", flush=True)
+
+                if not validation2.accepted:
+                    print(
+                        f"  │  ⚠ no valid connections after port fix"
+                        f" — persisting ports for next pass",
+                        flush=True,
+                    )
+                    meta = getattr(current, "metadata", None)
+                    if meta is None:
+                        object.__setattr__(current, "metadata", {})
+                        meta = current.metadata
+                    meta["last_sysml_text"] = sysml
+                    continue
+
+                merge = merge_connects(sysml, validation2.accepted)
+            else:
+                merge = merge_connects(sysml, validation.accepted)
 
             # Update the stored text so the next pass's simulation sees the fix.
             meta = getattr(current, "metadata", None)
@@ -2022,6 +2282,184 @@ class Orchestrator:
 
         print(f"  {'─'*62}", flush=True)
         return current
+
+    # ------------------------------------------------------------------
+    # Connect audit step
+    # ------------------------------------------------------------------
+
+    def _connect_audit_step(
+        self,
+        sysml_text: str,
+        model: SysMLModel,
+    ) -> Tuple[str, SysMLModel]:
+        """
+        Programmatically audit every existing ``connect`` statement using
+        the same five rules as connectivity_fixer.  Invalid connects are
+        removed from the text so downstream simulation and
+        connectivity_fixer see a clean model and can propose correct
+        replacements.
+
+        Runs in < 1 ms (pure regex + dict lookups, no LLM call).
+        """
+        result = audit_connects(sysml_text)
+
+        if not result.has_violations:
+            return sysml_text, model
+
+        W = 62
+        print(f"\n  ┌─ [CONNECT-AUDIT]  {result.n_removed} invalid connect(s) removed",
+              flush=True)
+        for v in result.violations:
+            print(f"  │  ✗ {v.summary()}", flush=True)
+        print(f"  └─ cleaned text passed to simulation", flush=True)
+
+        # Persist cleaned text into model metadata
+        meta = getattr(model, "metadata", None)
+        if meta is None:
+            object.__setattr__(model, "metadata", {})
+            meta = model.metadata
+        meta["last_sysml_text"] = result.cleaned_text
+
+        return result.cleaned_text, model
+
+    def _fix_stuck_transitions(
+        self, model: SysMLModel, max_rounds: int = 3
+    ) -> SysMLModel:
+        """
+        Iterative surgical mode-machine repair.
+
+        Each round:
+          1. Run behavioral simulation to find "stuck at X" violations.
+          2. For every stuck state machine, ask the LLM (narrow context only)
+             to correct the wrong transition source(s).
+          3. Validate and merge accepted fixes; re-run simulation.
+          4. Stop when all state machines pass, no more stuck machines are
+             found, no LLM fix was accepted (dead end), or max_rounds reached.
+
+        Supports both guard-based (enum_eq) and accept-triggered mode machines.
+        """
+        sysml = (
+            (getattr(model, "metadata", None) or {}).get("last_sysml_text")
+            or model.to_sysml_text()
+        )
+
+        _STUCK_RE = re.compile(
+            r"only traversed (\d+)/(\d+) (?:accept )?transitions"
+            r" — stuck at '([^']+)'"
+        )
+
+        def _collect_stuck(br) -> List[Tuple[str, str, int, int]]:
+            """Return (sm_name, stuck_state, fired, expected) for every stuck SM."""
+            out: List[Tuple[str, str, int, int]] = []
+            if br is None:
+                return out
+            for sr in br.scenario_results:
+                if sr.passed:
+                    continue
+                for v in sr.violations:
+                    m = _STUCK_RE.search(v)
+                    if m:
+                        out.append((sr.state_machine, m.group(3),
+                                    int(m.group(1)), int(m.group(2))))
+                        break
+            return out
+
+        # Initial simulation
+        sim_result = self._run_simulation(sysml, model.name)
+        br = sim_result.behavioral_result
+        if br is None or br.extracted_sm_count == 0:
+            return model
+
+        stuck = _collect_stuck(br)
+        if not stuck:
+            return model
+
+        for rnd in range(1, max_rounds + 1):
+            # Snapshot total fired count BEFORE this round's repairs so we can
+            # detect genuine progress after re-simulation.
+            prev_fired_total = sum(f for _, _, f, _ in stuck)
+
+            print(
+                f"  │  ⟳  Fixing stuck mode machine(s) "
+                f"— round {rnd}/{max_rounds} "
+                f"({len(stuck)} stuck) …",
+                flush=True,
+            )
+
+            any_accepted = False
+
+            for sm_name, stuck_state, fired, expected in stuck:
+                info = build_state_machine_summary(sysml, sm_name)
+                if info is None:
+                    print(f"  │    ✗ '{sm_name}' summary unavailable", flush=True)
+                    continue
+
+                prompt = build_transition_prompt(info, stuck_state, fired, expected)
+                try:
+                    raw = self.llm.chat(prompt, system_prompt=_TRANSITION_FIX_SYSTEM)
+                except Exception as exc:
+                    print(f"  │    ✗ LLM error: {exc}", flush=True)
+                    continue
+
+                lines = extract_transition_lines(raw)
+                validation = validate_transitions(lines, info)
+                for stmt in validation.accepted:
+                    print(
+                        f"  │    + {stmt.name}: first {stmt.source}"
+                        f" → then {stmt.target}",
+                        flush=True,
+                    )
+                for line, reason in validation.rejected:
+                    print(
+                        f"  │    ✗ rejected: {' '.join(line.split())[:60]}"
+                        f"  — {reason}",
+                        flush=True,
+                    )
+
+                if not validation.accepted:
+                    continue
+
+                merge = merge_transitions(sysml, validation.accepted)
+                sysml = merge.merged_text
+                meta = getattr(model, "metadata", None)
+                if meta is None:
+                    object.__setattr__(model, "metadata", {})
+                    meta = model.metadata
+                meta["last_sysml_text"] = sysml
+                print(
+                    f"  │  ✓ repaired {merge.n_replaced} transition(s)"
+                    f" in '{sm_name}'",
+                    flush=True,
+                )
+                any_accepted = True
+
+            if not any_accepted:
+                print(f"  │  ⚠ no fix accepted — stopping transition repair",
+                      flush=True)
+                break
+
+            # Re-simulate to check progress
+            sim_result = self._run_simulation(sysml, model.name)
+            br = sim_result.behavioral_result
+            stuck = _collect_stuck(br)
+
+            if not stuck:
+                print(f"  │  ✓ all mode machines resolved after round {rnd}",
+                      flush=True)
+                break
+
+            # Compare against the snapshot taken before this round's repairs.
+            # If total fired count didn't increase, the fix made no progress.
+            new_fired_total = sum(f for _, _, f, _ in stuck)
+            if new_fired_total <= prev_fired_total:
+                print(
+                    f"  │  ⚠ no progress in round {rnd}"
+                    f" ({prev_fired_total} → {new_fired_total} fired) — stopping",
+                    flush=True,
+                )
+                break
+
+        return model
 
     @staticmethod
     def _build_sim_only_feedback(
@@ -2124,6 +2562,35 @@ class Orchestrator:
         latest_result = result
         lev_hints: List[Dict] = []   # distance-2 suggestions for the LLM prompt
 
+        # ── Tier 0-pre: SysML keyword quoting ────────────────────────────────
+        # `inout/in/out item <keyword> :` where <keyword> is a SysML reserved
+        # word causes a parser error ("Unexpected 'item'").  Fix deterministically
+        # by quoting the offending name — no LLM needed.
+        if latest_result.parser_errors:
+            working_sysml = _fix_keyword_item_names(working_sysml)
+            re_checked = check_syntax(working_sysml)
+            if re_checked.total_errors() < latest_result.total_errors():
+                n_fixed = latest_result.total_errors() - re_checked.total_errors()
+                print(
+                    f"\n  ┌─ [KW-FIX]  {n_fixed} reserved-keyword item name(s) quoted"
+                    f" — no LLM needed",
+                    flush=True,
+                )
+                meta = getattr(working_model, "metadata", None)
+                if meta is None:
+                    object.__setattr__(working_model, "metadata", {})
+                    meta = working_model.metadata
+                meta["last_sysml_text"] = working_sysml
+                latest_result = re_checked
+                if not latest_result.has_errors:
+                    print(f"  └─ [KW-FIX]  ✓ all errors resolved", flush=True)
+                    return working_sysml, working_model, latest_result
+                print(
+                    f"  └─ [KW-FIX]  {latest_result.total_errors()} error(s) remain"
+                    f" — continuing",
+                    flush=True,
+                )
+
         # ── Tier 0: Levenshtein quick-fix ────────────────────────────────────
         if latest_result.sema_errors:
             lev = try_fix_sema_errors(working_sysml, latest_result.sema_errors)
@@ -2173,6 +2640,36 @@ class Orchestrator:
 
             # Collect distance-2 hints for the LLM prompt
             lev_hints = lev.hints
+
+        # ── Tier 0-post: undeclared guard attribute injection ─────────────────
+        # sema error "No Feature named 'X' found" where X appears in a state
+        # machine guard → inject `attribute X : Real/Boolean = <default>;`
+        # into the owner part def.  No LLM needed — purely programmatic.
+        if latest_result.sema_errors:
+            working_sysml, n_injected = _inject_missing_guard_attrs(
+                working_sysml, latest_result.sema_errors
+            )
+            if n_injected:
+                re_checked = check_syntax(working_sysml)
+                meta = getattr(working_model, "metadata", None)
+                if meta is None:
+                    object.__setattr__(working_model, "metadata", {})
+                    meta = working_model.metadata
+                meta["last_sysml_text"] = working_sysml
+                print(
+                    f"\n  ┌─ [ATTR-INJ]  {n_injected} missing guard attribute(s)"
+                    f" injected — no LLM needed",
+                    flush=True,
+                )
+                if not re_checked.has_errors:
+                    print(f"  └─ [ATTR-INJ]  ✓ all errors resolved", flush=True)
+                    return working_sysml, working_model, re_checked
+                print(
+                    f"  └─ [ATTR-INJ]  {re_checked.total_errors()} error(s) remain"
+                    f" — continuing",
+                    flush=True,
+                )
+                latest_result = re_checked
 
         # ── Tier 1: 外科式 LLM 修复 ──────────────────────────────────────────
         # 只传错误块（~15 行）+ 精简声明摘要，而不是整个模型（~200 行）。

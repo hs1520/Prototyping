@@ -99,20 +99,23 @@ Core rules:
                 ),
             )
 
-        # Build optional context from existing requirements so LLM avoids duplicating them
-        context = ""
-        if existing_requirements:
-            lines = "\n".join(f"  {r}" for r in existing_requirements[:30])
-            context = f"Already captured requirements (do not duplicate or contradict):\n{lines}"
-
-        # CoT extraction
+        # Feed manual requirements as fixed anchors — LLM produces a unified set
+        # (fixed + new) in one pass, avoiding the ID-conflict problem that arises
+        # when two independent generation passes both start numbering from 001.
         cot_result = self.cot.extract_requirements(
             description,
             system_name=system_name,
-            context=context,
+            fixed_requirements=existing_requirements or None,
         )
 
         requirements = self._parse_requirements(cot_result.final_answer)
+
+        # Safeguard: ensure no fixed requirement was dropped or modified by the LLM.
+        # If any is missing from the unified output, re-insert it verbatim.
+        if existing_requirements:
+            requirements = self._verify_fixed_requirements(
+                requirements, existing_requirements
+            )
         dependencies = self._parse_dependencies(cot_result.final_answer)
         counts = self._count_by_category(requirements)
 
@@ -334,6 +337,30 @@ Core rules:
                 short_description=req_content[:80],
             )
             model.add_requirement_definition(req)
+
+    @staticmethod
+    def _verify_fixed_requirements(
+        unified: List[str],
+        fixed: List[str],
+    ) -> List[str]:
+        """
+        Ensure every fixed requirement appears verbatim in the unified list.
+        If the LLM dropped or rephrased any, re-insert the original.
+        Uses normalised text comparison (whitespace-collapsed, case-insensitive).
+        """
+        def _norm(r: str) -> str:
+            # Strip ID prefix for comparison so minor ID reassignment doesn't
+            # block detection of content-identical requirements.
+            body = r.split(":", 1)[-1] if ":" in r else r
+            return re.sub(r"\s+", " ", body.lower().strip())
+
+        unified_norms = {_norm(r) for r in unified}
+        result = list(unified)
+        for req in fixed:
+            if _norm(req) not in unified_norms:
+                result.append(req)
+                unified_norms.add(_norm(req))
+        return result
 
     def _parse_requirements(self, text: str) -> List[str]:
         """Parse requirements from LLM response text."""

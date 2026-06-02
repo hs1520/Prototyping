@@ -192,6 +192,11 @@ def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
         (sweep LHS across the resolved threshold; old behaviour).
       • Boolean / compound-AND guards → unchanged.
     """
+    # Accept-triggered mode machine: use command injection plan
+    if sm.has_accept_transitions():
+        plan = _build_accept_command_plan(sm)
+        return [plan] if plan else []
+
     ft = sm.fault_transitions()
     if not ft:
         return []
@@ -256,16 +261,31 @@ def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
         # Neither side is a bare variable — no obvious driver, skip.
         return []
 
-    # ── Enum equality: `mode == EnumType::Value` (Layer 2) ───────────────
-    # Walk the first mode transition: hold at initial enum value for 5 steps,
-    # then switch to the target value.  The state machine should advance once
-    # the attribute matches the guard's expected value.
+    # ── Enum equality: `mode == EnumType::Value` (Layer 3) ───────────────
+    # Walk ALL enum_eq fault transitions on the same attribute in sequence:
+    # hold at initial for 5 steps, then advance one step per phase so the
+    # full mode chain (N-1 transitions) is exercised, not just the first.
     if guard.kind == "enum_eq":
         attr = guard.attribute
-        init_val = str(init.get(attr, ""))   # e.g. "POWER_ON"
-        target_val = guard.enum_value         # e.g. "SELF_TEST"
-        seq: List[Dict[str, Any]] = [{attr: init_val}] * 5 + [{attr: target_val}] * 15
-        return [DriverPlan(name="set_mode", sequence=seq, swept_var=attr)]
+        init_val = str(init.get(attr, ""))   # e.g. "BOOT"
+
+        # Collect target values from every enum_eq fault transition, in order.
+        phase_values: List[str] = [
+            t.guards[0].enum_value
+            for t in ft
+            if t.guards and t.guards[0].kind == "enum_eq"
+            and t.guards[0].attribute == attr
+        ]
+
+        # Build sequence: 5 steps holding initial, then 1 step per phase,
+        # then 5 extra steps at the final phase to let the last transition settle.
+        seq: List[Dict[str, Any]] = [{attr: init_val}] * 5
+        for val in phase_values:
+            seq.append({attr: val})
+        if phase_values:
+            seq.extend([{attr: phase_values[-1]}] * 5)
+
+        return [DriverPlan(name="traverse_modes", sequence=seq, swept_var=attr)]
 
     # ── Boolean flag ──────────────────────────────────────────────────────
     if guard.kind == "bool_true":
@@ -288,6 +308,55 @@ def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
         return [DriverPlan(name="flip_bool_and", sequence=seq)]
 
     return []
+
+
+def _build_accept_command_plan(sm: StateMachineDef) -> Optional[DriverPlan]:
+    """
+    Build a command-injection DriverPlan for accept-triggered mode machines.
+
+    Traverses the state graph following accept transitions from the initial
+    state and builds a step sequence that fires each command in order.
+    The special key ``__accept__`` carries the command name; None means
+    "no command this step" (hold).
+    """
+    if sm.initial_state is None:
+        return None
+
+    # Build adjacency: source_state -> [(accept_trigger, target_state)]
+    graph: Dict[str, List[tuple]] = {}
+    for t in sm.transitions:
+        if t.is_initial or not t.accept_trigger or not t.source or not t.target:
+            continue
+        graph.setdefault(t.source, []).append((t.accept_trigger, t.target))
+
+    if not graph:
+        return None
+
+    # Walk the nominal chain from initial state
+    steps: List[str] = []   # ordered list of command names
+    state = sm.initial_state
+    visited: set = set()
+    while state not in visited and state in graph:
+        visited.add(state)
+        cmd, next_state = graph[state][0]   # take first available transition
+        steps.append(cmd)
+        state = next_state
+
+    if not steps:
+        return None
+
+    # Sequence: 2 hold steps, then one command + one hold per transition
+    seq: List[Dict[str, Any]] = [{"__accept__": None}, {"__accept__": None}]
+    for cmd in steps:
+        seq.append({"__accept__": cmd})
+        seq.append({"__accept__": None})
+    seq.extend([{"__accept__": None}] * 3)
+
+    return DriverPlan(
+        name="accept_command_sequence",
+        sequence=seq,
+        swept_var="command",
+    )
 
 
 def _build_test_sequence(sm: StateMachineDef) -> List[Dict[str, Any]]:
@@ -348,7 +417,11 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
         tags=tags,
     )
 
-    if not ft:
+    # Accept-triggered machines have no guard-based fault transitions;
+    # their plans come from the accept command sequence instead.
+    is_accept_machine = sm.has_accept_transitions()
+
+    if not ft and not is_accept_machine:
         result.violations.append("No fault transitions found in state machine")
         return result
 
@@ -357,8 +430,8 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
         result.violations.append("Could not generate test sequence for guard type")
         return result
 
-    primary_guard = ft[0].guards[0]
-    is_mode_machine = primary_guard.kind == "enum_eq"
+    primary_guard = ft[0].guards[0] if ft else None
+    is_mode_machine = (primary_guard is not None and primary_guard.kind == "enum_eq")
 
     # ── Execute every plan; pass if ANY plan triggers the fault ──────────────
     # Multi-plan (Layer 2) verifies the *relationship* in `A OP B`: a guard
@@ -370,19 +443,80 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
     for plan in plans:
         inst = StateMachineInstance(sm)
         for t, variables in enumerate(plan.sequence):
-            inst.step(variables, time=float(t))
-            # Mode machines: stop as soon as any transition fires.
+            command = variables.get("__accept__") if is_accept_machine else None
+            inst.step(variables, time=float(t), command=command)
             # Fault monitors: stop when reaching a fault state (has entry action).
-            if is_mode_machine:
-                if inst.transition_log:
-                    break
-            else:
-                if inst.in_fault_state():
-                    break
+            # Mode/accept machines: run the full sequence.
+            if not is_mode_machine and not is_accept_machine and inst.in_fault_state():
+                break
 
         events = inst.transition_log
         plan_label = f"[{plan.name}]" if len(plans) > 1 else ""
 
+        # ── Accept machine path ───────────────────────────────────────────────
+        # Verify the nominal command chain: all accept-triggered transitions
+        # must fire in order.  Analogous to the mode-machine path below.
+        if is_accept_machine:
+            accept_trs = [t for t in sm.transitions
+                          if not t.is_initial and t.accept_trigger]
+            expected_count = len(accept_trs)
+            fired_count = len(events)
+
+            if fired_count == 0:
+                result.violations.append(
+                    f"No accept transition fired over {len(plan.sequence)} steps — "
+                    f"command sequence was never consumed"
+                )
+                continue
+
+            any_fired = True
+            result.trigger_step = int(events[0].time)
+            result.timeline.append(
+                f"Command sequence: {fired_count}/{expected_count} accept transitions fired"
+            )
+            for ev in events:
+                result.timeline.append(ev.to_line())
+
+            if fired_count < expected_count:
+                result.violations.append(
+                    f"Mode machine only traversed {fired_count}/{expected_count} "
+                    f"accept transitions — stuck at '{inst.current_state}' "
+                    f"(remaining phases unreachable)"
+                )
+            continue
+
+        # ── Mode machine path (Layer 3) ───────────────────────────────────────
+        # Verify the complete phase chain: all N-1 enum_eq transitions must fire.
+        if is_mode_machine:
+            expected_count = len([tr for tr in ft
+                                   if tr.guards and tr.guards[0].kind == "enum_eq"])
+            fired_count = len(events)
+
+            if fired_count == 0:
+                result.violations.append(
+                    f"No mode transition fired over {len(plan.sequence)} steps — "
+                    f"guard '{primary_guard.description()}' was never satisfied"
+                )
+                continue
+
+            any_fired = True
+            result.trigger_step = int(events[0].time)
+            result.timeline.append(
+                f"Traversing {plan.swept_var}: "
+                f"{fired_count}/{expected_count} transitions"
+            )
+            for ev in events:
+                result.timeline.append(ev.to_line())
+
+            if fired_count < expected_count:
+                result.violations.append(
+                    f"Mode machine only traversed {fired_count}/{expected_count} "
+                    f"transitions — stuck at '{inst.current_state}' "
+                    f"(remaining phases unreachable)"
+                )
+            continue
+
+        # ── Fault monitor path (comparison / bool / compound) ────────────────
         if not events:
             # Plan didn't fire — record but keep trying other plans
             result.timeline.append(
@@ -411,11 +545,6 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
                         f" {primary_guard.threshold})"
                         if plan.start_val is not None else
                         f"{plan_label} Driving {plan.swept_var}"
-                    )
-                elif primary_guard.kind == "enum_eq":
-                    result.timeline.append(
-                        f"{plan_label} Setting {plan.swept_var} = "
-                        f"{primary_guard.enum_type}::{primary_guard.enum_value} at t=5"
                     )
                 else:
                     result.timeline.append(

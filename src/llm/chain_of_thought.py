@@ -37,13 +37,14 @@ SysML v2 key constructs:
 - `connect`: links ports between parts
 - `satisfy`: links design elements to requirements
 - `refine`: indicates a more concrete model element elaborates an abstract one
-- `enum def`: named enumeration type; values accessed as `EnumName::Value`; always declared at package scope; use when a component has distinct named operational modes (e.g. IDLE, ARMED, HOVER)
+- `enum def`: named enumeration type; values accessed as `EnumName::Value` (ALWAYS `::`, never `.`); always declared at package scope; use when a component has distinct named operational modes (e.g. IDLE, ARMED, HOVER)
 """
 
 REQUIREMENTS_COT_TEMPLATE = """Analyze the following system description and extract a complete set of structured requirements.
 
 System Description:
 {description}
+{fixed_block}
 
 Reason through each category in order. For each, ask: "What is missing that would cause the design to fail?"
 
@@ -71,15 +72,23 @@ Reason through each category in order. For each, ask: "What is missing that woul
      A thermostat cycling on/off is NOT a mode machine. A multi-phase mission vehicle is.
    - Phase names MUST be short ALL-CAPS identifiers separated by →
      (e.g. IDLE → ARMED → TAKEOFF → CRUISE → HOVER → RETURN → LAND).
-   - List phases in execution order, from initial power-on to final shutdown/idle.
-   - Include an EMERGENCY or FAULT phase if SAFE requirements mandate a system-wide
-     fail-safe mode (distinct from individual component fault monitors).
+   - List NOMINAL phases only in the → sequence, from initial power-on to final shutdown/idle.
+     The → chain represents the happy-path lifecycle; do NOT append fault states to its end.
+   - If SAFE requirements mandate a system-wide fail-safe mode (EMERGENCY / FAULT / FAILSAFE),
+     list it OUTSIDE the → chain as a parenthetical annotation, explicitly stating it is
+     reachable from any active phase:
+       "(EMERGENCY: reachable from any active phase upon detection of a system-wide fault)"
+     Rationale: EMERGENCY is not the step after LAND — it is an interrupt that can fire at
+     any point in the nominal sequence. Placing it at the end of → implies a false ordering.
 
 Output rules (STRICT — do not deviate):
 - One requirement per line, one capability per requirement (atomic — no "and").
 - Requirements state WHAT the system must do, never HOW it does it (no implementation details).
 - Format exactly: REQ-<CATEGORY>-<NNN>: The {system_name} shall <action> <object> [<condition>]
-  CATEGORY ∈ {{FUNC, PERF, SAFE, INTF, CONS, OPER}}; NNN resets to 001 within each category.
+  CATEGORY ∈ {{FUNC, PERF, SAFE, INTF, CONS, OPER}}.
+  NNN assignment: if FIXED REQUIREMENTS exist above, continue numbering from the next available
+  number per category (do NOT reuse any ID already present in the fixed list).
+  If no fixed requirements: NNN resets to 001 within each category.
 - Each requirement must contain "shall" and at least one verifiable criterion
   (numeric value with unit, explicit threshold, or clear boolean trigger condition).
   Exception: REQ-OPER-001 is verified by the completeness of its phase list, not a numeric threshold.
@@ -92,7 +101,7 @@ Format illustration (replace content with the actual system's domain):
   REQ-SAFE-001: The {system_name} shall <fail-safe action> when <fault condition> is detected.
   REQ-INTF-001: The {system_name} shall <exchange data/signal> with <external entity> via <protocol/standard>.
   REQ-CONS-001: The {system_name} shall <operate within / comply with> <limit or regulation>.
-  REQ-OPER-001: The {system_name} shall operate in sequential phases: IDLE → ARMED → CRUISE → RETURN → LAND.
+  REQ-OPER-001: The {system_name} shall operate in sequential phases: IDLE → ARMED → CRUISE → RETURN → LAND → SHUTDOWN (EMERGENCY: reachable from any active phase upon detection of a system-wide fault condition).
 
 After the requirement list, add a short "Dependencies:" section listing any REQ-X depends on REQ-Y pairs.
 """
@@ -188,13 +197,20 @@ Work through these steps before writing the model:
    - SAFE req without fault behavior: add inside the responsible part def:
        action def emergencyStop {{ }}    // top-level action def in the part body
        state def <Name>Monitor {{
-           state nominal;
+           state nominal;               // nominal state has NO entry action
            state fault {{ entry action stop : emergencyStop; }}
+           transition initial then nominal;   // ALWAYS point to nominal, never fault
            transition <name>Fault
                first nominal
-               if <faultCondition>
+               if <faultCondition>     // <faultCondition> MUST be declared as attribute in this part
                then fault;
        }}
+     SAFETY MONITOR RULES (violations cause dead state machines — check before writing):
+       ✓ transition initial then nominal;    // initial → nominal (no entry action)
+       ✗ transition initial then fault;      // WRONG — machine stuck in fault at start, transition can never fire
+       ✓ if batteryCharge < 15.0            // OK — 'batteryCharge' declared as attribute in owner part
+       ✗ if distanceToWaypoint > 1.0        // WRONG — if 'distanceToWaypoint' not declared as attribute,
+                                            // syside rejects it and the simulator cannot drive it
      SYNTAX RULES (SysML v2 canonical — verified against the official examples corpus):
        ✓ transition <name> first <source> [accept <event>] [if <guard>] [do <effect>] then <target>;
        ✗ transition <name> from <source> to <target> when <guard>;       (NOT canonical — use first/if/then)
@@ -283,12 +299,22 @@ Rules:
 - Port names must match those listed in the architecture plan.
 - PERF requirements must appear as attributes with numeric bounds and units.
 - INTF requirements must appear as port definitions with matching data types.
-- If the architecture plan describes a component with distinct named operational modes
-  (e.g. IDLE/ARMED/CRUISE/LAND), declare an enum-typed mode attribute in that part def:
-      attribute <modeName> : <EnumName> = <EnumName>::<initial_mode>;
-  The `<EnumName>` will be defined as an `enum def` in the behavioral step — use the
-  same name here so the assembler can match the type.  If the enum name is not yet
-  known, choose a descriptive PascalCase name ending in `Mode` (e.g. `FlightMode`).
+  For INTF requirements that name a specific external protocol, use a protocol-derived port
+  type name (NOT DataPort) so Step 3 can define the matching typed port def:
+    • "MAVLink"                    → MAVLinkPort
+    • "ADS-B" / "ADS-B Out"       → ADSBOutPort
+    • "AES-256" / "encrypted"      → AES256Port
+    • "CAN" / "CAN bus"            → CANPort
+    • "I2C"                        → I2CPort
+    • "USB"                        → USBPort
+    Pattern: <Protocol>Port in PascalCase. Internal inter-component ports keep DataPort.
+- If the architecture plan mentions a component with distinct operational modes (REQ-OPER):
+  do NOT declare the mode attribute and do NOT generate any `enum def` here.
+  The behavioral step (Step 4) is solely responsible for defining the enum and
+  injecting the mode attribute via `// ATTR OWNER:`. Leave no placeholder — just omit it.
+- Structural/passive parts (Airframe, Chassis, Frame, Fuselage, Housing, etc.) MUST use
+  only `DataPort` for their ports — never protocol-derived types (MAVLinkPort, etc.).
+  This ensures the connectivity fixer can always wire them to a power or environmental source.
 - Use valid SysML v2 syntax throughout.
 - Safety interconnect ports (MANDATORY — add these whenever the component type is present):
     • If a SafetyMonitor part def is defined:
@@ -331,6 +357,10 @@ Rules:
   define an item def capturing that protocol's data payload.
 - Do NOT define more than one item def per logical data type — reuse where possible.
 - Item def names must NOT clash with part def names or requirement IDs.
+- The structural fragment may already reference protocol-derived port type names
+  (e.g. `MAVLinkPort`, `ADSBOutPort`, `AES256Port`). Define a `port def` for EACH
+  such name exactly as it appears in the structural fragment — do NOT rename them.
+  Only introduce new port type names for types not yet referenced in the structural fragment.
 - Use valid SysML v2 syntax.
 
 Output a single ```sysml code block containing ONLY the item defs and typed port defs.
@@ -393,7 +423,24 @@ When a mode machine is needed:
 
    (This comment line is a hint — the assembler will inject the attribute into the part def.)
 
-3. Define the mode-machine state def with enum-equality guards (see ENUM GUARD RULE below):
+3. Define the mode-machine state def.  Transitions are driven by EXTERNAL COMMANDS
+   (accept actions), NOT by guard conditions on the owner's own mode attribute.
+
+   MODE MACHINE GUARD RULE (STRICT):
+   - NEVER write `if <modeName> == <Name>Mode::<X>` in a mode machine transition.
+     `<modeName>` is an attribute that represents the state machine's CURRENT state.
+     Using it as a guard is a circular self-reference: the machine cannot move to
+     state X by checking whether it is already in state X.
+   - Use `accept <CommandDef>` to model transitions commanded from outside
+     (e.g. an operator arm command, a GCS takeoff command).
+   - For fault/contingency exits (EMERGENCY), use a guard on an EXTERNAL sensor
+     value owned by a DIFFERENT part (e.g. `batteryCharge`, `commLossTime`),
+     or delegate entirely to a dedicated SafetyMonitor state machine.
+
+   Template:
+
+     // OWNER: package
+     action def <Name>To<MODE_B>Cmd {{}}   // command type — declared once at package scope
 
      // OWNER: <PartName>
      state def <Name>ModeMachine {{
@@ -404,7 +451,7 @@ When a mode machine is needed:
          transition initial then <Name><MODE_A>State;
          transition <name>ToB
              first <Name><MODE_A>State
-             if <modeName> == <Name>Mode::<MODE_B>
+             accept <Name>To<MODE_B>Cmd
              then <Name><MODE_B>State;
      }}
 
@@ -418,9 +465,12 @@ dead state machine.  Follow these rules exactly:
   ENUM GUARD EXCEPTION — `==` IS allowed when the left-hand side is an enum-typed
   attribute and the right-hand side is a qualified `EnumName::Value` literal.
   The type prefix is MANDATORY — bare `== HOVER` is not recognised:
-    ✓  if flightMode == FlightMode::HOVER     // enum equality — allowed
-    ✗  if flightMode == HOVER                 // missing EnumType:: prefix
-    ✗  if flightMode == "HOVER"               // string form — not valid SysML v2
+    ✓  if operatingRegion == RegionMode::URBAN   // external enum attribute — allowed
+    ✗  if operatingRegion == URBAN               // missing EnumType:: prefix
+    ✗  if operatingRegion == "URBAN"             // string form — not valid SysML v2
+  ENUM GUARD SELF-REFERENCE BAN — do NOT use a part's own current-mode attribute
+  as a guard inside THAT SAME part's mode machine (see MODE MACHINE GUARD RULE):
+    ✗  if flightMode == FlightMode::HOVER        // circular — mode machine owns flightMode
 - The LEFT operand must be a DYNAMIC measured / sensed state variable
   (e.g. batteryCharge, commLossTime, obstacleDistance, tiltAngle).
   The RIGHT operand is the threshold. PREFER a dynamic threshold — another
@@ -438,18 +488,20 @@ dead state machine.  Follow these rules exactly:
 - Every variable named in a guard must read as a runtime state of the owner part
   (it will be declared as a backing attribute in the assembly step).
 
-  ✓ CORRECT guards:
+  ✓ CORRECT guards (safety monitors — external sensor/flag owned by THIS or ANOTHER part):
       if batteryCharge < 15.0                   // fixed numeric threshold
       if commLossTime > 10.0
       if sensorSelfTestFailed                   // boolean flag — fires when true
       if batteryCharge <= returnEnergyRequired  // dynamic threshold (RHS is an attribute)
       if commLossTime > heartbeatInterval + 5.0 // arithmetic threshold
-      if flightMode == FlightMode::HOVER        // enum equality — allowed (qualified literal)
   ✗ WRONG guards:
       if batteryLevel == 15.0          // `==` on a swept value never fires
       if rtbBatteryThreshold == 120.0  // comparing a threshold to itself
       if sensorStatus == false         // use an affirmative flag instead
       if flightMode == HOVER           // missing EnumType:: prefix — not recognised
+      if flightMode == FlightMode::HOVER  // CIRCULAR — mode machine must not guard on
+                                          // its own owner's current-mode attribute;
+                                          // use `accept <CommandDef>` instead
 
 CRITICAL OWNERSHIP ANNOTATION — you MUST prefix every action def, state def, and enum def
 with a comment naming where the element belongs.  The assembly step uses these annotations
@@ -459,6 +511,11 @@ to place each element correctly.  Missing annotations cause elements to be lost.
   • Package-scoped elements (enum def):          `// OWNER: package`
   • Mode attribute hints:                        `// ATTR OWNER: <PartName>`
     followed by:  `// attribute <name> : <EnumType> = <EnumType>::<initial>;`
+    ENUM QUALIFIER RULE — enum values ALWAYS use `::`, never `.`:
+      ✓  attribute flightMode : FlightPhase = FlightPhase::POWER_ON;
+      ✗  attribute flightMode : FlightPhase = FlightPhase.POWER_ON;   // dot is NOT valid SysML v2
+      ✓  if operatingMode == DronePhaseMode::CRUISE                   // guard: :: required
+      ✗  if operatingMode == DronePhaseMode.CRUISE                    // dot fails at parse time
 
 Format (use exactly this style — no other comment form).  All transitions and
 entry actions follow canonical SysML v2 syntax (verified against the official
@@ -472,16 +529,32 @@ examples corpus):
 
   // OWNER: <PartName>
   state def <Name>SafetyBehavior {{
-      state <Name>Nominal;
+      state <Name>Nominal;                       // nominal = no entry action
       state <Name>Fault {{
           entry action onFault : <name>EmergencyResponse;     // reference, not inline def
       }}
-      transition initial then <Name>Nominal;     // canonical initial transition
+      transition initial then <Name>Nominal;     // ALWAYS point to the NOMINAL state, NEVER the fault state
       transition <name>Fault                     // named fault transition
           first <Name>Nominal                    // source state (NOT `from`)
           if measuredVar < limitValue            // threshold-crossing guard (NOT `==`, NOT `when`)
           then <Name>Fault;                      // target state (NOT `to`)
   }}
+
+SAFETY MONITOR STRUCTURAL RULES (violations produce dead state machines):
+  RULE 1 — Initial state MUST be the nominal state (no entry action).
+    ✓  transition initial then <Name>Nominal;     // Nominal has NO entry action
+    ✗  transition initial then <Name>Fault;       // WRONG — machine starts in fault, can never observe the transition
+    Rationale: the state machine is designed to DETECT a transition from normal to faulty.
+    If it starts in the fault state, the fault transition has no source to fire from.
+
+  RULE 2 — Every attribute referenced in a guard MUST be declared in the owning part def.
+    ✓  // in part def: attribute batteryCharge : Real = 100.0;
+       if batteryCharge < 15.0                   // declared → extractor can drive it
+    ✗  if distanceToWaypoint > 1.0               // WRONG — if 'distanceToWaypoint' is not declared
+                                                 // as an attribute, syside reports a sema error
+                                                 // and the simulator cannot sweep the variable
+    Action: for every variable name that appears in a guard condition, verify it exists
+    as `attribute <name> : Real = <initial_value>;` in the owning part def before writing the guard.
 
 CRITICAL — DO NOT USE these non-canonical forms (Syside may parse them but they
 are not SysML v2 standard):
@@ -667,16 +740,46 @@ class ChainOfThoughtPrompter:
         system_description: str,
         system_name: str = "system",
         context: str = "",
+        fixed_requirements: Optional[List[str]] = None,
     ) -> CoTResult:
         """
         Use CoT prompting to extract structured requirements from a description.
+
+        fixed_requirements: manually written requirements that MUST appear verbatim
+        in the output.  The LLM is instructed to include them as-is and continue
+        numbering new requirements from the next available ID per category.
         """
         description_block = system_description
         if context:
             description_block += f"\n\nAdditional context: {context}"
+
+        fixed_block = ""
+        if fixed_requirements:
+            import re as _re
+            # Compute next available ID per category from fixed list
+            from collections import defaultdict
+            max_num: dict = defaultdict(int)
+            for req in fixed_requirements:
+                m = _re.match(r"REQ-([A-Z]+)-(\d+):", req.strip())
+                if m:
+                    max_num[m.group(1)] = max(max_num[m.group(1)], int(m.group(2)))
+
+            next_ids = "\n".join(
+                f"  {cat}: used up to {n:03d}, your new reqs start at {n+1:03d}"
+                for cat, n in sorted(max_num.items())
+            )
+            fixed_lines = "\n".join(f"  {r}" for r in fixed_requirements)
+            fixed_block = (
+                "\n\nFIXED REQUIREMENTS — copy these into your output VERBATIM "
+                "(exact text, exact ID). Do NOT rephrase, merge, split, or omit any:\n"
+                f"{fixed_lines}\n\n"
+                f"Next available IDs for NEW requirements you add:\n{next_ids}\n"
+            )
+
         prompt = REQUIREMENTS_COT_TEMPLATE.format(
             description=description_block,
             system_name=system_name,
+            fixed_block=fixed_block,
         )
         messages = [
             Message(role="system", content=self.system_prompt),

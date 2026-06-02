@@ -71,11 +71,15 @@ class TestEnumDefInBehaviorTemplate:
 
 
 class TestEnumDefInPartDefinitionsTemplate:
-    def test_enum_typed_attribute_rule_present(self):
-        assert "enum-typed mode attribute" in PART_DEFINITIONS_TEMPLATE
+    def test_step2_does_not_declare_mode_attribute(self):
+        # The mode attribute is injected by Step 4 via `// ATTR OWNER:`;
+        # Step 2 must explicitly NOT declare it (avoids enum-def duplication).
+        assert "do NOT declare the mode attribute" in PART_DEFINITIONS_TEMPLATE
 
-    def test_enum_mode_naming_convention_present(self):
-        assert "FlightMode" in PART_DEFINITIONS_TEMPLATE
+    def test_step2_defers_enum_to_behavioral_step(self):
+        # Step 2 must NOT generate any enum def — Step 4 owns enum definitions.
+        assert "do NOT" in PART_DEFINITIONS_TEMPLATE
+        assert "enum def" in PART_DEFINITIONS_TEMPLATE
 
 
 class TestOperCategory:

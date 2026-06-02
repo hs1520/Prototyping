@@ -228,6 +228,14 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                                 pass
                         elif fve_type == "LiteralBoolean":
                             default_val = bool(getattr(fve, "value", False))
+                        elif fve_type == "OperatorExpression":
+                            # 带单位的量值：25.0 [percent] → operand[0] 是数值
+                            try:
+                                first_op = next(iter(fve.operands))
+                                if type(first_op).__name__ in ("LiteralRational", "LiteralInteger", "LiteralReal"):
+                                    default_val = float(first_op.value)
+                            except Exception:
+                                pass
                     attrs.append(LiteAttributeUsage(name=attr.name, default_value=default_val))
             except Exception:
                 pass
