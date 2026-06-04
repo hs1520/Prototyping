@@ -416,6 +416,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 requirements=requirements,
                 context=context,
                 verbose=verbose,
+                platform_profile=task.get("platform_profile"),
             )
 
         if not cot_result.extracted_sysml:
@@ -470,6 +471,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         requirements: List[str],
         context: str = "",
         verbose: bool = False,
+        platform_profile=None,
     ) -> Tuple[Any, Dict[str, Any]]:
         """
         4-step generation pipeline:
@@ -621,7 +623,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 behavioral_requirements=behavioral_reqs,
                 parts_fragment=parts_fragment,
                 context=ctx4,
-                platform_profile=task.get("platform_profile"),
+                platform_profile=platform_profile,
             )
             if step4.extracted_sysml:
                 behavior_fragment = step4.extracted_sysml

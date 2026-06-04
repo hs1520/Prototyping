@@ -392,6 +392,8 @@ class RequirementLinker:
         # req_id → (part_name, guard, ContentEntry)：独占 guard 分配
         # 同一 guard 只能分配给一个 req，防止多 REQ 共享 part 时全部映射到同一 guard
         self._guard_assignment: Dict[str, Any] = self._assign_guards_exclusive()
+        # _lookup_catalogue 结果缓存：避免 _resolve_all 多次调用时重复打印 [CONTENT]
+        self._catalogue_cache: Dict[str, Optional[Dict]] = {}
 
     def _assign_guards_exclusive(self) -> Dict[str, Any]:
         """
@@ -566,9 +568,6 @@ class RequirementLinker:
         all_req_texts = extract_req_texts_from_model(self._model)
 
         for req_id in self._covered_req_ids():
-            # 层1：catalogue 精确命中
-            if req_id in _REQ_CATALOGUE:
-                continue
             # 层2：AST 合成命中
             parts = self._satisfy_map.get(req_id, [])
             ast_hit = any(self._ast_specs.get(p) for p in parts)
@@ -750,66 +749,75 @@ class RequirementLinker:
           层3b LLM 需求文本直接推断
           层4  全部失败 → None
         """
+        if req_id in self._catalogue_cache:
+            return self._catalogue_cache[req_id]
+
         part_names = self._satisfy_map.get(req_id)
         if not part_names:
+            self._catalogue_cache[req_id] = None
             return None
+
+        result: Optional[Dict[str, Any]] = None
 
         # ── 层1：内容匹配（_CONTENT_CATALOGUE）────────────────────────
         result = self._match_by_content(req_id)
-        if result:
-            return result
 
         # ── 层2：AST 合成（遍历所有 satisfying parts）──────────────────
-        for pname in part_names:
-            ast_candidates = self._ast_specs.get(pname, [])
-            if not ast_candidates:
-                continue
-            best = self._best_ast_spec(req_id, pname, ast_candidates)
-            if best is not None:
-                base_entry = self._tag_to_entry.get(best.tag)
-                if base_entry:
-                    if self._verbose:
-                        print(f"  [AST-SYN] {req_id} → tag={best.tag} "
-                              f"guard={best.guard_var!r} (part={pname})")
-                    d = self._entry_to_dict(base_entry)
-                    d["sitl_test"] = {
-                        "tier":   base_entry.tier,
-                        "inject": best.inject,
-                        "verify": best.verify,
-                        "notes":  base_entry.notes,
-                    }
-                    return d
+        if result is None:
+            for pname in part_names:
+                ast_candidates = self._ast_specs.get(pname, [])
+                if not ast_candidates:
+                    continue
+                best = self._best_ast_spec(req_id, pname, ast_candidates)
+                if best is not None:
+                    base_entry = self._tag_to_entry.get(best.tag)
+                    if base_entry:
+                        if self._verbose:
+                            print(f"  [AST-SYN] {req_id} → tag={best.tag} "
+                                  f"guard={best.guard_var!r} (part={pname})")
+                        d = self._entry_to_dict(base_entry)
+                        d["sitl_test"] = {
+                            "tier":   base_entry.tier,
+                            "inject": best.inject,
+                            "verify": best.verify,
+                            "notes":  base_entry.notes,
+                        }
+                        result = d
+                        break
 
         # ── 层3：LLM 状态机语义标签 ────────────────────────────────────
-        tag = self._semantic_map.get(req_id)
-        if tag and tag in self._tag_to_entry:
-            if self._verbose:
-                print(f"  [SEMANTIC] {req_id} → tag={tag} (parts={part_names})")
-            return self._entry_to_dict(self._tag_to_entry[tag])
+        if result is None:
+            tag = self._semantic_map.get(req_id)
+            if tag and tag in self._tag_to_entry:
+                if self._verbose:
+                    print(f"  [SEMANTIC] {req_id} → tag={tag} (parts={part_names})")
+                result = self._entry_to_dict(self._tag_to_entry[tag])
 
         # ── 层3b：LLM 需求文本直接推断 ─────────────────────────────────
-        direct = self._direct_param_map.get(req_id)
-        if direct:
-            param_name = direct["param"]
-            value      = direct["value"]
-            tier       = direct.get("tier", "L1")
-            if self._verbose:
-                print(f"  [REQ-PARAM] {req_id} → {param_name}={value} [{tier}]")
-            return {
-                "semantic_tag":        f"LLM_DIRECT:{param_name}",
-                "threshold_slot":      None,
-                "ardu_params":         {param_name: value},
-                "_resolved_guard_val": None,
-                "_resolved_attr_val":  None,
-                "sitl_test": {
-                    "tier":   tier,
-                    "inject": InjectSpec(kind="noop"),
-                    "verify": VerifySpec(kind="noop"),
-                    "notes":  "LLM-suggested param from requirement text.",
-                },
-            }
+        if result is None:
+            direct = self._direct_param_map.get(req_id)
+            if direct:
+                param_name = direct["param"]
+                value      = direct["value"]
+                tier       = direct.get("tier", "L1")
+                if self._verbose:
+                    print(f"  [REQ-PARAM] {req_id} → {param_name}={value} [{tier}]")
+                result = {
+                    "semantic_tag":        f"LLM_DIRECT:{param_name}",
+                    "threshold_slot":      None,
+                    "ardu_params":         {param_name: value},
+                    "_resolved_guard_val": None,
+                    "_resolved_attr_val":  None,
+                    "sitl_test": {
+                        "tier":   tier,
+                        "inject": InjectSpec(kind="noop"),
+                        "verify": VerifySpec(kind="noop"),
+                        "notes":  "LLM-suggested param from requirement text.",
+                    },
+                }
 
-        return None
+        self._catalogue_cache[req_id] = result
+        return result
 
     def _best_ast_spec(self, req_id: str, part_name: str, candidates):
         """
