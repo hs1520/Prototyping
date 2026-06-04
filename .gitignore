@@ -56,3 +56,10 @@ Thumbs.db
 # Model cache files
 *.pkl
 *.pickle
+
+# SITL runtime artifacts (auto-generated, do not commit)
+eeprom.bin
+logs/
+terrain/
+sitl_output/*.parm
+sitl_output/test_*.py
