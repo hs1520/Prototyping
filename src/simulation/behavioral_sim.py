@@ -13,11 +13,13 @@ behavioral_sim.py
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from .state_extractor import GuardCondition, StateMachineDef, VarRef, extract_state_machines
 from .state_executor import StateMachineInstance
+from .constraint_checker import extract_constraints, ParsedConstraint, eval_op
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +622,341 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
 
 
 # ---------------------------------------------------------------------------
+# Accept machine: nominal + emergency branch scenarios
+# ---------------------------------------------------------------------------
+
+def _classify_accept_transitions(sm: StateMachineDef):
+    """
+    将 accept 转移按目标状态是否有 entry action 分成两类：
+      nominal   → 目标无 entry action（正常阶段推进）
+      emergency → 目标有 entry action（应急响应）
+    """
+    state_has_entry = {s.name: bool(s.entry_action) for s in sm.states}
+    nominal, emergency = [], []
+    for t in sm.transitions:
+        if t.is_initial or not t.accept_trigger:
+            continue
+        if state_has_entry.get(t.target or "", False):
+            emergency.append(t)
+        else:
+            nominal.append(t)
+    return nominal, emergency
+
+
+def _run_accept_nominal_scenario(
+    sm: StateMachineDef,
+    nominal_trs,
+) -> BehavioralScenarioResult:
+    """沿 nominal 链逐步注入命令，验证所有正常转移全部触发。"""
+    nominal_graph = {
+        t.source: (t.accept_trigger, t.target)
+        for t in nominal_trs
+        if t.source and t.target and t.accept_trigger
+    }
+    # Walk linear nominal chain from initial state
+    cmds, state, visited = [], sm.initial_state, set()
+    while state not in visited and state in nominal_graph:
+        visited.add(state)
+        cmd, state = nominal_graph[state]
+        cmds.append(cmd)
+
+    r = BehavioralScenarioResult(
+        name=f"{sm.name}_nominal",
+        state_machine=sm.name,
+        description=f"nominal chain: {' → '.join(cmds) if cmds else '(none)'}",
+        passed=False,
+        tags=["accept_machine"],
+    )
+    if not cmds:
+        r.violations.append("No nominal transitions found")
+        return r
+
+    seq = [{"__accept__": None}] * 2
+    for cmd in cmds:
+        seq += [{"__accept__": cmd}, {"__accept__": None}]
+
+    inst = StateMachineInstance(sm)
+    for t, v in enumerate(seq):
+        inst.step(v, time=float(t), command=v["__accept__"])
+
+    fired = len(inst.transition_log)
+    r.timeline.append(f"Command sequence: {fired}/{len(cmds)} nominal transitions fired")
+    for ev in inst.transition_log:
+        r.timeline.append(ev.to_line())
+    if fired < len(cmds):
+        r.violations.append(
+            f"Nominal chain incomplete: {fired}/{len(cmds)} fired, "
+            f"stuck at '{inst.current_state}'"
+        )
+    r.passed = not r.violations
+    return r
+
+
+def _run_accept_emergency_scenario(
+    sm: StateMachineDef,
+    nominal_trs,
+    emrg_tr,
+) -> BehavioralScenarioResult:
+    """
+    沿 nominal 链导航到 emrg_tr.source，再注入 emergency 命令，
+    验证状态机进入带 entry action 的应急状态。
+    """
+    nominal_graph = {
+        t.source: (t.accept_trigger, t.target)
+        for t in nominal_trs
+        if t.source and t.target and t.accept_trigger
+    }
+    nav_cmds, state, visited = [], sm.initial_state, set()
+    while state != emrg_tr.source and state not in visited:
+        if state not in nominal_graph:
+            break
+        visited.add(state)
+        cmd, state = nominal_graph[state]
+        nav_cmds.append(cmd)
+
+    r = BehavioralScenarioResult(
+        name=f"{sm.name}_emrg_from_{emrg_tr.source}",
+        state_machine=sm.name,
+        description=(
+            f"emergency: navigate to {emrg_tr.source}, "
+            f"then {emrg_tr.accept_trigger} → {emrg_tr.target}"
+        ),
+        passed=False,
+        tags=["accept_machine", "emergency"],
+    )
+    if state != emrg_tr.source:
+        r.violations.append(f"Cannot reach '{emrg_tr.source}' via nominal chain")
+        return r
+
+    seq = [{"__accept__": None}] * 2
+    for cmd in nav_cmds:
+        seq += [{"__accept__": cmd}, {"__accept__": None}]
+    seq += [{"__accept__": emrg_tr.accept_trigger}, {"__accept__": None}] * 1
+    seq += [{"__accept__": None}] * 2
+
+    inst = StateMachineInstance(sm)
+    for t, v in enumerate(seq):
+        inst.step(v, time=float(t), command=v["__accept__"])
+
+    fault_states = {s.name for s in sm.states if s.entry_action}
+    emrg_fired = any(ev.to_state == emrg_tr.target for ev in inst.transition_log)
+
+    r.timeline += [ev.to_line() for ev in inst.transition_log]
+    if not emrg_fired:
+        r.violations.append(
+            f"Emergency transition to '{emrg_tr.target}' did not fire"
+        )
+    else:
+        entry_action = sm.entry_action_for_state(emrg_tr.target)
+        if entry_action and entry_action not in inst.fired_actions:
+            r.violations.append(
+                f"Emergency state '{emrg_tr.target}' entered but "
+                f"entry action '{entry_action}' was not called"
+            )
+        elif entry_action:
+            r.timeline.append(f"  entry action called: {entry_action}  ✓")
+    r.passed = not r.violations
+    return r
+
+
+def _run_accept_machine_scenarios(sm: StateMachineDef) -> List[BehavioralScenarioResult]:
+    """
+    为 accept-triggered 状态机生成完整场景集：
+      1. nominal 场景
+      2. 每个 emergency 分支各一个场景
+    """
+    nominal_trs, emergency_trs = _classify_accept_transitions(sm)
+    results: List[BehavioralScenarioResult] = [
+        _run_accept_nominal_scenario(sm, nominal_trs)
+    ]
+    for emrg_tr in emergency_trs:
+        results.append(_run_accept_emergency_scenario(sm, nominal_trs, emrg_tr))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Cross-component scenario (SafetyMonitor send → FlightController accept)
+# ---------------------------------------------------------------------------
+
+def _run_cross_component_scenario(
+    sm_safety: StateMachineDef,
+    sm_flight: StateMachineDef,
+    send_cmd: str,
+    send_port: str,
+) -> BehavioralScenarioResult:
+    """
+    联合仿真：
+      1. 驱动 sm_safety 的 guard 变量直到故障转移触发
+      2. 检测到 entry action 含 send(send_cmd, send_port)
+      3. 将 send_cmd 桥接注入 sm_flight
+      4. 验证 sm_flight 进入应急状态
+    """
+    r = BehavioralScenarioResult(
+        name=f"cross_{sm_safety.name}_to_{sm_flight.name}",
+        state_machine="cross_component",
+        description=(
+            f"{sm_safety.name} guard → send {send_cmd} to {send_port} "
+            f"→ {sm_flight.name} emergency"
+        ),
+        passed=False,
+        tags=["safety", "cross_component"],
+    )
+
+    fault_states_flight = {s.name for s in sm_flight.states if s.entry_action}
+
+    # 找 sm_flight 里接受 send_cmd 的所有转移（不限于 fault state）
+    # 说明：safety SM 可能发送命令触发正常阶段（如 battery RTB → return phase）
+    # 也可能触发应急阶段（如 propulsion fail → emergency）
+    # 两者都是合法的跨组件因果链，只要命令被接受就 PASS
+    all_trs_flight = [
+        t for t in sm_flight.transitions
+        if not t.is_initial
+        and t.accept_trigger == send_cmd
+    ]
+    if not all_trs_flight:
+        r.violations.append(
+            f"{sm_flight.name} has no accept transition for '{send_cmd}' "
+            f"— command sent by {sm_safety.name} is not accepted by the mode machine"
+        )
+        return r
+
+    # 在 sm_flight 里找最近可达的 source 状态（nominal 链上最早有 send_cmd 转移的节点）
+    nominal_trs_flight, _ = _classify_accept_transitions(sm_flight)
+    nominal_graph_flight = {
+        t.source: (t.accept_trigger, t.target)
+        for t in nominal_trs_flight
+        if t.source and t.target and t.accept_trigger
+    }
+
+    # 找到最近的可触发 send_cmd 的状态（不限于 fault 目标）
+    emrg_sources = {t.source for t in all_trs_flight if t.source}
+    nav_cmds, state, visited = [], sm_flight.initial_state, set()
+    while state not in emrg_sources and state not in visited:
+        if state not in nominal_graph_flight:
+            break
+        visited.add(state)
+        cmd, state = nominal_graph_flight[state]
+        nav_cmds.append(cmd)
+
+    if state not in emrg_sources:
+        r.violations.append(
+            f"Cannot navigate {sm_flight.name} to any state "
+            f"accepting '{send_cmd}' via nominal chain"
+        )
+        return r
+
+    # 为 sm_safety 生成 guard 驱动计划
+    plans = _build_driver_plans(sm_safety)
+    if not plans:
+        r.violations.append(f"Cannot build driver plan for {sm_safety.name}")
+        return r
+    safety_plan = plans[0]
+
+    # ── 实例化两个状态机 ──────────────────────────────────────────────────
+    inst_safety = StateMachineInstance(sm_safety)
+    inst_flight = StateMachineInstance(sm_flight)
+
+    # 预导航 sm_flight 到 emergency source 状态
+    for i, cmd in enumerate(nav_cmds):
+        inst_flight.step({"__accept__": cmd}, time=float(i), command=cmd)
+        inst_flight.step({"__accept__": None}, time=float(i) + 0.5)
+
+    pre_nav_count = len(inst_flight.transition_log)
+    if nav_cmds:
+        r.timeline.append(
+            f"Pre-navigate {sm_flight.name}: "
+            f"{pre_nav_count}/{len(nav_cmds)} steps → state='{inst_flight.current_state}'"
+        )
+
+    # ── 驱动 sm_safety，桥接到 sm_flight ─────────────────────────────────
+    safety_fired_at: Optional[int] = None
+    base_t = len(nav_cmds) * 2
+
+    for step_i, variables in enumerate(safety_plan.sequence):
+        t = float(base_t + step_i)
+        inst_safety.step(variables, time=t)
+
+        if safety_fired_at is None and inst_safety.in_fault_state():
+            safety_fired_at = step_i
+            ev = inst_safety.transition_log[-1]
+            r.timeline.append(
+                f"{sm_safety.name} fault fired at t={t:.0f}: "
+                f"{ev.from_state} → {ev.to_state}"
+            )
+            # 桥接：向 sm_flight 注入 emergency 命令
+            inst_flight.step({"__accept__": send_cmd}, time=t, command=send_cmd)
+            inst_flight.step({"__accept__": None}, time=t + 0.5)
+            break
+
+    if safety_fired_at is None:
+        r.violations.append(f"{sm_safety.name} guard never fired over the driver plan")
+        return r
+
+    # ── 验证 sm_flight 接受了命令并转移 ──────────────────────────────────
+    # 只要有任何转移因 send_cmd 而触发即视为成功（因果链完整）
+    cmd_fired = any(
+        ev.guard_description == f"accept {send_cmd}"
+        for ev in inst_flight.transition_log
+    )
+    if not cmd_fired:
+        r.violations.append(
+            f"{sm_flight.name} did not fire any transition on '{send_cmd}'; "
+            f"current state: '{inst_flight.current_state}'"
+        )
+    else:
+        target_state = inst_flight.current_state
+        is_fault = target_state in fault_states_flight
+        entry = sm_flight.entry_action_for_state(target_state) if is_fault else None
+        kind = "emergency" if is_fault else "nominal"
+        r.timeline.append(
+            f"{sm_flight.name} entered '{target_state}' [{kind}]"
+            + (f", entry action: {entry}  ✓" if entry else "")
+        )
+        # fault state 需要额外确认 entry action 被调用
+        if is_fault and entry and entry not in inst_flight.fired_actions:
+            r.violations.append(
+                f"Emergency entry action '{entry}' in '{target_state}' was not called"
+            )
+
+    r.passed = not r.violations
+    return r
+
+
+def _collect_cross_component_scenarios(
+    state_machines: List[StateMachineDef],
+) -> List[BehavioralScenarioResult]:
+    """
+    扫描所有状态机，寻找 (safety SM with sends) × (accept SM accepting that cmd) 对，
+    为每对生成一个跨组件联合仿真场景。
+    """
+    # 建立 cmd_name → [accept SM] 索引
+    accept_index: dict = {}
+    for sm in state_machines:
+        if not sm.has_accept_transitions():
+            continue
+        for t in sm.transitions:
+            if t.accept_trigger:
+                accept_index.setdefault(t.accept_trigger, []).append(sm)
+
+    results: List[BehavioralScenarioResult] = []
+    seen_pairs: set = set()
+
+    for sm in state_machines:
+        if sm.has_accept_transitions():
+            continue   # 只扫 guard-triggered SM
+        for _state_name, cmd, port in sm.all_sends():
+            for flight_sm in accept_index.get(cmd, []):
+                pair_key = (sm.name, flight_sm.name, cmd)
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+                results.append(
+                    _run_cross_component_scenario(sm, flight_sm, cmd, port)
+                )
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Cross-scenario ordering constraint
 # ---------------------------------------------------------------------------
 
@@ -673,6 +1010,198 @@ def _check_battery_ordering(results: List[BehavioralScenarioResult]
 
 
 # ---------------------------------------------------------------------------
+# Parametric constraint scenarios  (Option X)
+# ---------------------------------------------------------------------------
+
+# Matches:  [readonly] attribute <name> : <Type> [<unit>] = <number>
+_ATTR_NUM_RE = re.compile(
+    r'\b(?:readonly\s+)?attribute\s+(\w+)\s*:[^=;\n]*?=\s*([-+]?\d+(?:\.\d+)?)'
+)
+_READONLY_RE = re.compile(r'\breadonly\s+attribute\s+(\w+)')
+
+
+def _extract_all_attrs(sysml_text: str) -> Dict[str, float]:
+    """Return {attr_name: float_value} for every numeric attribute in the SysML source."""
+    out: Dict[str, float] = {}
+    for m in _ATTR_NUM_RE.finditer(sysml_text):
+        try:
+            out[m.group(1)] = float(m.group(2))
+        except ValueError:
+            pass
+    return out
+
+
+def _parse_readonly_attrs(sysml_text: str) -> set:
+    return set(_READONLY_RE.findall(sysml_text))
+
+
+def _run_parametric_constraint_scenario(
+    c: ParsedConstraint,
+    all_initial_values: Dict[str, float],
+    guard_variables: set,
+    readonly_vars: set,
+) -> Optional[BehavioralScenarioResult]:
+    """
+    Build a boundary-sweep scenario for one assert constraint.
+
+    Skipped (returns None) when:
+      - LHS is already in guard_variables  (behavioral_sim already verifies it)
+      - LHS is a readonly attr  (static check covers it)
+      - LHS or RHS values cannot be resolved
+
+    Pass criterion:
+      1. Initial value satisfies the constraint
+      2. Constraint holds throughout the valid range
+      3. Constraint fails when the limit is exceeded  (boundary is live)
+    """
+    # Already covered by state machine guard
+    if c.lhs in guard_variables:
+        return None
+
+    # Readonly LHS → static check is sufficient, skip parametric sweep
+    if c.lhs in readonly_vars:
+        return None
+
+    lhs_init = all_initial_values.get(c.lhs)
+    rhs_val  = all_initial_values.get(c.rhs)
+    if rhs_val is None:
+        try:
+            rhs_val = float(c.rhs)
+        except (TypeError, ValueError):
+            pass
+
+    result = BehavioralScenarioResult(
+        name=f"constraint_{c.name}",
+        state_machine=f"{c.owner_part}::assert",
+        description=(
+            f"{c.owner_part}.{c.name}: parametric sweep — "
+            f"{c.lhs} {c.operator} {c.rhs}"
+        ),
+        passed=False,
+        tags=["parametric_constraint"],
+    )
+
+    if lhs_init is None:
+        result.violations.append(
+            f"Cannot sweep '{c.lhs}': no initial value found. "
+            f"Add 'attribute {c.lhs} : Real = <init>;' to {c.owner_part}."
+        )
+        return result
+
+    if rhs_val is None:
+        result.violations.append(
+            f"Cannot resolve RHS '{c.rhs}': not a number and not declared in model."
+        )
+        return result
+
+    lhs_f = float(lhs_init)
+    rhs_f = float(rhs_val)
+    op    = c.operator
+
+    # Sweep direction: push lhs toward and past the limit
+    if op in ("<=", "<"):
+        sweep_end = rhs_f * 1.15 + 1.0   # guaranteed to cross the limit
+        step_size = (sweep_end - lhs_f) / _N_STEPS
+    elif op in (">=", ">"):
+        sweep_end = rhs_f * 0.85 - 1.0
+        step_size = (sweep_end - lhs_f) / _N_STEPS
+    else:
+        result.violations.append(f"Unsupported operator '{op}' for parametric sweep.")
+        return result
+
+    if abs(step_size) < 1e-9:
+        step_size = (1.0 / _N_STEPS) * (1 if op in (">=", ">") else -1)
+
+    # Run the sweep and record where constraint holds vs fails
+    last_hold: Optional[float] = None
+    first_fail: Optional[float] = None
+    val = lhs_f
+    for _ in range(_N_STEPS + 1):
+        if eval_op(val, op, rhs_f):
+            last_hold = val
+        elif first_fail is None:
+            first_fail = val
+        val += step_size
+
+    result.timeline.append(
+        f"Sweeping {c.lhs}: {lhs_f:.4g} → {sweep_end:.4g} "
+        f"({_N_STEPS} steps,  limit: {op} {rhs_f})"
+    )
+    if last_hold is not None:
+        result.timeline.append(
+            f"  holds through {c.lhs} = {last_hold:.4g}  ✓"
+        )
+    if first_fail is not None:
+        result.timeline.append(
+            f"  fails at {c.lhs} = {first_fail:.4g}  "
+            f"(boundary live — exceeding {rhs_f} triggers violation)"
+        )
+
+    # Pass criteria
+    if not eval_op(lhs_f, op, rhs_f):
+        result.violations.append(
+            f"Initial value {c.lhs}={lhs_f} already violates "
+            f"constraint ({lhs_f} {op} {rhs_f} is false)."
+        )
+    elif first_fail is None:
+        result.violations.append(
+            f"Constraint never fails even at sweep end {sweep_end:.4g} — "
+            f"boundary unreachable or limit incorrectly set."
+        )
+    else:
+        result.passed = True
+
+    return result
+
+
+def _collect_constraint_scenarios(
+    sysml_text: str,
+    state_machines: List[StateMachineDef],
+) -> List[BehavioralScenarioResult]:
+    """
+    For every assert constraint in the model that is NOT covered by an
+    existing state machine guard, produce a parametric sweep scenario.
+    """
+    constraints = extract_constraints(sysml_text)
+    if not constraints:
+        return []
+
+    # Merge attribute values: full-text scan takes precedence over per-SM dicts
+    all_initial_values: Dict[str, float] = {}
+    for sm in state_machines:
+        for k, v in sm.initial_values.items():
+            try:
+                all_initial_values[k] = float(v)
+            except (TypeError, ValueError):
+                pass
+    all_initial_values.update(_extract_all_attrs(sysml_text))
+
+    # Variables already verified by state machine guards
+    guard_variables: set = set()
+    for sm in state_machines:
+        for tr in sm.transitions:
+            for g in tr.guards:
+                if g.attribute:
+                    guard_variables.add(g.attribute)
+                if g.rhs is not None:
+                    try:
+                        guard_variables.update(g.rhs.vars())
+                    except AttributeError:
+                        pass
+
+    readonly_vars = _parse_readonly_attrs(sysml_text)
+
+    results: List[BehavioralScenarioResult] = []
+    for c in constraints:
+        r = _run_parametric_constraint_scenario(
+            c, all_initial_values, guard_variables, readonly_vars
+        )
+        if r is not None:
+            results.append(r)
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
 
@@ -682,7 +1211,14 @@ def _compute_score(results: List[BehavioralScenarioResult]) -> float:
     total_w  = 0.0
     passed_w = 0.0
     for r in results:
-        w = 2.0 if "safety" in r.tags else 1.0
+        if "cross_component" in r.tags:
+            w = 0.5          # 跨组件场景：权重 0.5（达成共识的 Option B）
+        elif "emergency" in r.tags:
+            w = 0.5          # emergency 分支场景：同等权重
+        elif "safety" in r.tags:
+            w = 2.0          # 安全 guard 场景：加重
+        else:
+            w = 1.0
         total_w  += w
         if r.passed:
             passed_w += w
@@ -710,18 +1246,32 @@ def run_behavioral_simulation(sysml_text: str,
         extracted_sm_count=len(state_machines),
     )
 
-    if not state_machines:
-        br.sim_score = 1.0   # neutral: no state machines defined
-        return br
-
     scenario_results: List[BehavioralScenarioResult] = []
-    for sm in state_machines:
-        scenario_results.append(_run_scenario(sm))
 
-    # Cross-scenario constraint
-    ordering = _check_battery_ordering(scenario_results)
-    if ordering is not None:
-        scenario_results.append(ordering)
+    if state_machines:
+        for sm in state_machines:
+            if sm.has_accept_transitions():
+                scenario_results.extend(_run_accept_machine_scenarios(sm))
+            else:
+                scenario_results.append(_run_scenario(sm))
+
+        # 跨组件联合场景（SafetyMonitor send → FlightController accept）
+        cross_results = _collect_cross_component_scenarios(state_machines)
+        scenario_results.extend(cross_results)
+
+        # Cross-scenario ordering constraint（电池优先级）
+        ordering = _check_battery_ordering(scenario_results)
+        if ordering is not None:
+            scenario_results.append(ordering)
+
+    # Parametric constraint scenarios (Option X):
+    # assert constraints whose LHS is a runtime variable not covered by any guard.
+    constraint_scenarios = _collect_constraint_scenarios(sysml_text, state_machines)
+    scenario_results.extend(constraint_scenarios)
+
+    if not scenario_results:
+        br.sim_score = 1.0   # neutral: nothing to verify
+        return br
 
     br.scenario_results = scenario_results
     br.sim_score = _compute_score(scenario_results)

@@ -281,6 +281,29 @@ Every part def MUST have:
   • ≥ 1 attribute with numeric value and unit
   • ≥ 1 satisfy link:  satisfy requirement <REQ_ID>;   (REQ_ID uses underscores)
 
+STANDARD SAFETY ATTRIBUTE NAMES — use these EXACT names when the concept applies.
+Downstream SITL parameter mapping looks them up by name; non-standard names
+silently break ArduPilot parameter generation:
+  • batterySoc          — battery state-of-charge percent  (Real, [percent])
+                           used by SafetyMonitor for battery RTB / land thresholds
+  • commLossTime        — seconds since last GCS heartbeat  (Real, [s])
+                           used by SafetyMonitor link-loss state machine
+  • controlFrequency    — primary flight control loop rate  (Real, [Hz])
+                           used by FlightController to set SCHED_LOOP_RATE
+  • parachuteDeployTime — parachute actuation delay         (Real, [s])
+                           used by SafetyMonitor → CHUTE_DELAY_MS
+  • propulsionCriticalFailure — engine/motor failure flag    (Boolean)
+                           used by SafetyMonitor parachute trigger guard
+  • sensorSelfTestFailed      — POST sensor failure flag    (Boolean)
+                           used by SafetyMonitor arming inhibit
+  • deliveryAbortConditionActive — payload abort flag        (Boolean)
+                           used by SafetyMonitor payload lock state machine
+
+State machine guards MUST reference these standard attribute names by exact spelling.
+Example:
+  ✓  if batterySoc <= 25.0     ✗  if batteryChargeLevel <= 25.0
+  ✓  if commLossTime > 10.0    ✗  if linkTimeout > 10.0
+
 Generate a complete, consistent initial prototype. Do not over-engineer.
 Enclose the entire model in exactly one ```sysml code block. No prose after the block.
 """
@@ -598,6 +621,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 behavioral_requirements=behavioral_reqs,
                 parts_fragment=parts_fragment,
                 context=ctx4,
+                platform_profile=task.get("platform_profile"),
             )
             if step4.extracted_sysml:
                 behavior_fragment = step4.extracted_sysml

@@ -255,7 +255,10 @@ class GuardCondition:
 @dataclass
 class StateNode:
     name: str
-    entry_action: Optional[str] = None   # name of the entry action, or None
+    entry_action: Optional[str] = None          # name of the entry action, or None
+    sends: List[tuple] = field(default_factory=list)
+    # [(cmd_type_name, port_name), ...]
+    # populated when the entry action body contains `send X() to port;`
 
 
 @dataclass
@@ -293,6 +296,15 @@ class StateMachineDef:
             if s.name == state_name:
                 return s.entry_action
         return None
+
+    def all_sends(self) -> List[tuple]:
+        """Return [(state_name, cmd_type, port_name)] for every fault-state send."""
+        out = []
+        for s in self.states:
+            if s.entry_action:
+                for cmd, port in s.sends:
+                    out.append((s.name, cmd, port))
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +498,137 @@ def _extract_part_attrs(part_def) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# SendActionUsage extraction helpers
+# ---------------------------------------------------------------------------
+
+def _extract_send_payload_name(sa) -> Optional[str]:
+    """
+    从 SendActionUsage.payload_argument 提取命令类型名。
+    payload_argument 是 InvocationExpression，类型引用指向 ActionDefinition。
+    syside 上 Usage.types / action_definitions / definitions 都可能返回类型列表，
+    全部尝试，取第一个非空 name。
+    """
+    try:
+        pa = sa.payload_argument
+        if pa is None:
+            return None
+        # 按优先级尝试不同属性名
+        for attr in ("action_definitions", "definitions", "types"):
+            try:
+                for defn in getattr(pa, attr):
+                    name = getattr(defn, "name", None)
+                    if name:
+                        return str(name)
+            except Exception:
+                pass
+        # FeatureReferenceExpression → referent.name
+        ref = getattr(pa, "referent", None)
+        if ref:
+            name = getattr(ref, "name", None)
+            if name:
+                return str(name)
+        return getattr(pa, "name", None)
+    except Exception:
+        return None
+
+
+def _extract_send_receiver_name(sa) -> Optional[str]:
+    """
+    从 SendActionUsage.receiver_argument 提取目标端口名。
+    receiver_argument 是 FeatureReferenceExpression，referent 是端口 Usage。
+    """
+    try:
+        ra = sa.receiver_argument
+        if ra is None:
+            return None
+        # FeatureReferenceExpression → referent → name
+        ref = getattr(ra, "referent", None)
+        if ref:
+            name = getattr(ref, "name", None)
+            if name:
+                return str(name)
+        return getattr(ra, "name", None)
+    except Exception:
+        return None
+
+
+def _iter_action_body(action_usage) -> List:
+    """
+    从一个 ActionUsage 的类型定义体里提取所有直接 owned action 节点。
+
+    syside 里 ActionDefinition 的 body 成员可能挂在以下属性之一：
+      nested_actions  — 标准 SysML API 属性
+      owned_actions   — 实现细节别名
+      owned_members   — 最宽泛的 fallback（过滤出 ActionUsage 子类）
+
+    对每个候选属性都尝试，合并去重后返回。
+    """
+    if action_usage is None:
+        return []
+
+    # 先拿到 ActionDefinition（typed by this usage）
+    defs: List = []
+    for attr in ("action_definitions", "definitions", "types"):
+        try:
+            defs = [d for d in getattr(action_usage, attr)]
+            if defs:
+                break
+        except Exception:
+            pass
+
+    nodes: List = []
+    seen_ids: set = set()
+
+    for defn in defs:
+        for attr in ("nested_actions", "owned_actions", "owned_members"):
+            try:
+                for node in getattr(defn, attr):
+                    nid = id(node)
+                    if nid not in seen_ids:
+                        seen_ids.add(nid)
+                        nodes.append(node)
+            except Exception:
+                pass
+
+    return nodes
+
+
+def _extract_send_usages(entry_action_usage) -> List[tuple]:
+    """
+    从一个 entry action usage 的定义体里找所有 SendActionUsage 节点。
+    返回 [(cmd_type_name, port_name), ...]。
+
+    访问路径:
+      entry_action_usage  (ActionUsage "onFault : initiateBatteryRtb")
+        → action_definitions / definitions / types
+          → ActionDefinition "initiateBatteryRtb"
+            → nested_actions / owned_actions / owned_members
+              → SendActionUsage  (duck-typed: has payload_argument + receiver_argument)
+    """
+    result: List[tuple] = []
+    if entry_action_usage is None:
+        return result
+
+    for node in _iter_action_body(entry_action_usage):
+        # duck-type check: SendActionUsage must have these two attributes
+        if not (hasattr(node, "payload_argument") and hasattr(node, "receiver_argument")):
+            continue
+        # 也接受 type name 匹配（防止 hasattr 在 proxy 上误报）
+        tname = type(node).__name__
+        if tname not in ("SendActionUsage",) and not (
+            hasattr(node, "payload_argument") and hasattr(node, "receiver_argument")
+            and hasattr(node, "sender_argument")
+        ):
+            continue
+        cmd = _extract_send_payload_name(node)
+        port = _extract_send_receiver_name(node)
+        if cmd and port:
+            result.append((cmd, port))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Main extraction entry point
 # ---------------------------------------------------------------------------
 
@@ -519,10 +662,12 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
         # ── States ────────────────────────────────────────────────────────────
         for st in sd.owned_states:
             entry_name: Optional[str] = None
+            sends: List[tuple] = []
             ea = st.entry_action
             if ea:
                 entry_name = ea.name
-            sm.states.append(StateNode(name=st.name, entry_action=entry_name))
+                sends = _extract_send_usages(ea)
+            sm.states.append(StateNode(name=st.name, entry_action=entry_name, sends=sends))
 
         # ── Transitions ───────────────────────────────────────────────────────
         for tr in sd.owned_transitions:

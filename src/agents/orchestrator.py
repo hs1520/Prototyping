@@ -338,6 +338,7 @@ class Orchestrator:
         system_description: str,
         additional_requirements: Optional[List[str]] = None,
         parse_strict: Optional[bool] = None,
+        platform_profile: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generate a validated SysML v2 model without Design Space Exploration.
@@ -383,7 +384,9 @@ class Orchestrator:
         print("Phase 2: Initial Design Generation")
         print("-" * 40)
         model = self._generate_initial_design(
-            system_name, requirements, parse_strict=parse_strict
+            system_name, requirements,
+            parse_strict=parse_strict,
+            platform_profile=platform_profile,
         )
         self.state.current_model = model
         print(f"  ✓ Generated model with {len(model.part_definitions)} part definitions\n")
@@ -432,6 +435,7 @@ class Orchestrator:
             "iterations":         self.state.iteration,
             "evaluation_history": self.state.evaluation_history,
             "simulation_result":  final_sim,
+            "platform_profile":   platform_profile,
         }
 
     # ---------------------------------------------------------------------- #
@@ -633,6 +637,7 @@ class Orchestrator:
         system_name: str,
         requirements: List[str],
         parse_strict: Optional[bool] = None,
+        platform_profile: Optional[Dict[str, Any]] = None,
     ) -> SysMLModel:
         """Phase 2: Generate initial SysML v2 design."""
         task = {
@@ -640,6 +645,7 @@ class Orchestrator:
             "requirements": requirements,
             "parse_strict": (parse_strict if parse_strict is not None else False),
             "verbose": self.verbose,
+            "platform_profile": platform_profile,
         }
         result = self.design_agent.run(task)
         if result.success and isinstance(result.output, _SysMLModelTypes):

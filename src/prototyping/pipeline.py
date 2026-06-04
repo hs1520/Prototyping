@@ -72,6 +72,8 @@ class PrototypingPipeline:
         description: str,
         additional_requirements: Optional[List[str]] = None,
         parse_strict: Optional[bool] = None,
+        # ── Platform Profile（影响 mode machine accept 命令命名）────────
+        platform_profile: Optional[Dict[str, Any]] = None,
         # ── Phase 5: ArduPilot SITL 验证 ──────────────────────────────
         sitl: bool = False,
         sitl_output_dir: str = "sitl_output",
@@ -110,6 +112,7 @@ class PrototypingPipeline:
             system_description=description,
             additional_requirements=additional_requirements,
             parse_strict=(parse_strict if parse_strict is not None else self.parse_strict),
+            platform_profile=platform_profile,
         )
 
         if sitl:
@@ -120,6 +123,7 @@ class PrototypingPipeline:
                 auto_launch=sitl_auto_launch,
                 host=sitl_host,
                 port=sitl_port,
+                platform_profile=platform_profile,
             )
 
         return result
@@ -136,6 +140,7 @@ class PrototypingPipeline:
         auto_launch: bool,
         host: str,
         port: int,
+        platform_profile: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """内部方法：运行 SITL 阶段并打印进度，将报告写入 result。"""
         from ..sitl.sitl_bridge import SITLBridge
@@ -144,6 +149,10 @@ class PrototypingPipeline:
         print()
         print("=" * W)
         print("Phase 5: ArduPilot SITL 验证")
+        if platform_profile:
+            print(f"  Platform: {platform_profile.get('platform', 'unknown')}")
+        else:
+            print("  Platform: none (L2 accept tests skipped — no platform_profile)")
         print("-" * W)
 
         model = result.get("model")
@@ -156,6 +165,9 @@ class PrototypingPipeline:
             model=model,
             output_dir=output_dir,
             connection_string=conn,
+            llm=self.llm,
+            platform_profile=platform_profile,
+            verbose=True,
         )
 
         # ── L1：生成 .parm + 静态验证 ────────────────────────────────
@@ -182,23 +194,16 @@ class PrototypingPipeline:
         if run_l2:
             print()
             print("  [L2] 执行测试" + (" (自动启动 SITL)" if auto_launch else ""))
-            if auto_launch:
-                ok = bridge.launch_sitl()
-                if not ok:
-                    print("  ✗ SITL 启动失败，跳过 L2 执行")
-                    run_l2 = False
-
-            if run_l2:
-                l2_results = bridge.run_l2()
-                if auto_launch:
-                    bridge.stop_sitl()
-
-                ok_l2 = sum(1 for r in l2_results if r.passed)
-                print(f"\n  L2 测试结果: {ok_l2}/{len(l2_results)} 通过")
-                for r in l2_results:
-                    icon = "✓" if r.passed else "✗"
-                    dur = f"  [{r.duration_s:.1f}s]" if r.duration_s else ""
-                    print(f"    {icon} {r.req_id:<20} {r.message}{dur}")
+            # per_test_sitl=True 时每个测试自己负责启停 SITL，无需外层 launch
+            l2_results = bridge.run_l2(
+                per_test_sitl=auto_launch,
+            )
+            ok_l2 = sum(1 for r in l2_results if r.passed)
+            print(f"\n  L2 测试结果: {ok_l2}/{len(l2_results)} 通过")
+            for r in l2_results:
+                icon = "✓" if r.passed else "✗"
+                dur = f"  [{r.duration_s:.1f}s]" if r.duration_s else ""
+                print(f"    {icon} {r.req_id:<20} {r.message}{dur}")
 
         # ── 汇总 ──────────────────────────────────────────────────────
         from ..sitl.sitl_bridge import BridgeReport

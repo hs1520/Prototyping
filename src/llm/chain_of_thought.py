@@ -327,6 +327,30 @@ Rules:
         – PerceptionSystem MUST declare `out port sensorStatus : DataPort;`
         – SafetyMonitor MUST declare `in port sensorStatus : DataPort;`
 
+RUNTIME STATE VARIABLE RULE (MANDATORY):
+  Attributes fall into two distinct categories — keep them clearly separated:
+
+  (a) Design parameters (readonly): fixed limits set at design time, never change at runtime.
+      Use the `readonly` keyword.  Names typically contain max/min/limit/threshold.
+        readonly attribute maxAltitude_m     : Real = 120.0 [m];
+        readonly attribute releaseTime_s     : Real = 2.0   [s];
+        readonly attribute controlFreq_Hz    : Real = 100.0 [Hz];
+
+  (b) Runtime state variables: values that change during system operation.
+      No `readonly` keyword.  Initial value is the safe starting point.
+        attribute currentAltitude_m  : Real = 0.0   [m];
+        attribute currentAirspeed    : Real = 0.0   [m_s];
+
+  For every performance/limit requirement, declare BOTH the design parameter AND
+  its runtime counterpart so that assert constraints can link them:
+
+      readonly attribute maxAltitude_m    : Real = 120.0 [m];   // limit (constant)
+      attribute currentAltitude_m : Real = 0.0   [m];   // runtime state (varies)
+
+  Exception — safety fault variables (batteryCharge_pct, commLossTime_s, etc.) are
+  ALREADY runtime state variables; do NOT add a separate readonly limit for them —
+  the state machine guard threshold IS the limit.
+
 Output a single ```sysml code block containing ONLY the structural fragment (no package wrapper yet).
 No prose after the block.
 """
@@ -367,6 +391,59 @@ Output a single ```sysml code block containing ONLY the item defs and typed port
 No prose after the block.
 """
 
+def _build_profile_block(profile: Optional[Dict[str, Any]]) -> str:
+    """
+    Build the platform profile injection block for BEHAVIOR_TEMPLATE.
+
+    When profile is None → returns empty string (platform-agnostic mode).
+    When profile is provided → returns a constraint block that forces LLM
+    to use MAVLink-compatible command names in mode machine transitions.
+
+    Profile keys:
+      platform      : str                 e.g. "ArduPilot Copter"
+      mode_vocabulary: List[str]          e.g. ["CMD_RTL", "CMD_LAND", ...]
+      emergency_mode : str                e.g. "CMD_LAND"
+    """
+    if not profile:
+        return ""
+
+    platform     = profile.get("platform", "unknown platform")
+    vocabulary   = profile.get("mode_vocabulary", [])
+    emergency    = profile.get("emergency_mode", "")
+
+    if not vocabulary:
+        return ""
+
+    vocab_str = ", ".join(vocabulary)
+    emrg_line = (
+        f"\n  Emergency / override command (MANDATORY): {emergency}"
+        if emergency else ""
+    )
+
+    return f"""
+PLATFORM PROFILE — {platform} (MANDATORY — overrides default naming):
+  When generating mode machine accept transitions, command names MUST be
+  chosen exclusively from the vocabulary below. Do NOT invent new names.
+
+  Allowed accept commands: {vocab_str}{emrg_line}
+
+  Rule: `accept CMD_X` in SysML maps directly to ArduPilot SET_MODE X
+  (remove the CMD_ prefix).  This enables automated SITL verification.
+
+  Correct example:
+      transition toRTL
+          first PhaseReturnState
+          accept CMD_RTL
+          then PhaseLandingState;
+
+  WRONG (free naming, breaks SITL):
+      transition toRTL
+          first PhaseReturnState
+          accept ReturnToBaseCmd      // ← not in vocabulary, skip SITL test
+          then PhaseLandingState;
+"""
+
+
 BEHAVIOR_TEMPLATE = """Generate the SysML v2 behavioral fragment for the system below.
 Write ONLY action definitions and state definitions — no part def, no port, no attribute, no connect, no satisfy yet.
 
@@ -380,7 +457,7 @@ Structural fragment (for reference — do not repeat):
 
 Behavioral requirements (FUNC and SAFE):
 {behavioral_requirements}
-
+{platform_profile_block}
 Rules:
 - For every FUNC requirement: define an action def that belongs to the responsible component.
   The action def name must be a verb phrase in camelCase (e.g., navigateToWaypoint).
@@ -436,6 +513,28 @@ When a mode machine is needed:
    - For fault/contingency exits (EMERGENCY), use a guard on an EXTERNAL sensor
      value owned by a DIFFERENT part (e.g. `batteryCharge`, `commLossTime`),
      or delegate entirely to a dedicated SafetyMonitor state machine.
+   - SEND RULE (MANDATORY when SafetyMonitor is present): Every SafetyMonitor fault
+     entry action that is intended to override the mode machine MUST close the causal
+     loop by sending the matching accept command through the override port.
+     The command name MUST match the accept trigger on the mode machine's emergency
+     transition exactly (e.g. if the transition uses `accept CmdToEmergency`, the
+     action body must send `CmdToEmergency()`).
+
+     Required pattern:
+         // OWNER: SafetyMonitor
+         action def initiateBatteryRtb {{
+             send CmdToEmergency() to overrideCmd;
+         }}
+         state def BatteryRtbSafetyBehavior {{
+             ...
+             state BatteryRtbFault {{
+                 entry action onFault : initiateBatteryRtb;
+             }}
+         }}
+
+     This makes the cross-component causal chain explicit and machine-verifiable.
+     Without `send`, the link between SafetyMonitor fault and mode machine emergency
+     exists only as a conceptual convention — not in the model.
 
    Template:
 
@@ -566,6 +665,35 @@ are not SysML v2 standard):
   ✗  if flightMode == HOVER;                               // bare identifier — missing `EnumType::` prefix
   ✗  enum def FlightMode {{ FlightMode::IDLE; ... }}        // values inside enum def use plain names, not qualified form
   ✗  enum def FlightMode {{ IDLE = 0; ARMED = 1; }}         // no integer assignments in SysML v2 enum def
+
+PARAMETRIC CONSTRAINT RULE (MANDATORY):
+  For every (readonly design parameter, runtime state variable) pair in the structural
+  fragment, generate a matching `assert constraint` block INSIDE the owning part def body.
+  Place it after the action defs, before the state defs.
+
+  Pattern:
+    // OWNER: <PartName>
+    assert constraint <descriptiveName>Bound {{
+        <runtime_var> <= <readonly_limit>    // for maximum constraints
+    }}
+    assert constraint <descriptiveName>Min {{
+        <runtime_var> >= <readonly_limit>    // for minimum constraints
+    }}
+
+  Required constraint pairs (generate ALL that apply):
+    currentAltitude_m    <= maxAltitude_m       (altitude fence)
+    actualReleaseTime_s  <= releaseTime_s        (payload timing)
+    currentAirspeed      <= maxAirspeed          (speed envelope)
+    actualControlPeriod  >= 1.0 / controlFreq_Hz (control loop rate)
+
+  Example output:
+    // OWNER: FlightController
+    assert constraint altitudeBound {{
+        currentAltitude_m <= maxAltitude_m
+    }}
+
+  Do NOT generate constraints for safety guard variables (batteryCharge_pct,
+  commLossTime_s, etc.) — those are already constrained by state machine guards.
 
 Output a single ```sysml code block containing ONLY the behavioral fragment (with OWNER comments).
 No prose after the block.
@@ -921,14 +1049,17 @@ class ChainOfThoughtPrompter:
         behavioral_requirements: List[str],
         parts_fragment: str,
         context: str = "",
+        platform_profile: Optional[Dict[str, Any]] = None,
     ) -> CoTResult:
         """Step 3: Generate behavioral SysML fragment (action def / state def)."""
         req_text = "\n".join(f"  {r}" for r in behavioral_requirements)
+        profile_block = _build_profile_block(platform_profile)
         prompt = BEHAVIOR_TEMPLATE.format(
             system_name=system_name,
             architecture=architecture,
             parts_fragment=parts_fragment,
             behavioral_requirements=req_text,
+            platform_profile_block=profile_block,
         )
         messages = [
             Message(role="system", content=self.system_prompt),

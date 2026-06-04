@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.prototyping.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
+from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +252,7 @@ def main():
         system_name="AutonomousDrone",
         description=DRONE_DESCRIPTION,
         additional_requirements=DRONE_REQUIREMENTS,
+        platform_profile=ARDUPILOT_COPTER_PROFILE,
         sitl=True,
         sitl_output_dir="sitl_output",
         sitl_run_l2=True,

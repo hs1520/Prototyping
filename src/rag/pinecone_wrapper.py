@@ -113,17 +113,11 @@ class PineconeWrapper:
 		index = self._pc.Index(index_name)
 		target_namespace = namespace or self.default_namespace
 
-		search_query: Dict[str, Any] = {
-			"inputs": {"text": query_text},
-			"top_k": top_k,
-		}
-
-		if filter_dict:
-			search_query["filter"] = filter_dict
-
 		results = index.search(
 			namespace=target_namespace,
-			query=search_query,
+			top_k=top_k,
+			inputs={"text": query_text},
+			filter=filter_dict or None,
 			fields=fields,
 		)
 		return results
