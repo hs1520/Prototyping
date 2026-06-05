@@ -536,6 +536,12 @@ When a mode machine is needed:
      Without `send`, the link between SafetyMonitor fault and mode machine emergency
      exists only as a conceptual convention — not in the model.
 
+   ENTRY ACTION RULE (MANDATORY):
+   - Nominal phase states MUST NOT have entry actions.
+     Entry actions belong ONLY on emergency/fault target states (states entered when a fault fires).
+     Nominal phases are operational markers — they do not execute actions on entry.
+   - Correct: emergency target state has entry action; all nominal phases do not.
+
    Template:
 
      // OWNER: package
@@ -543,15 +549,20 @@ When a mode machine is needed:
 
      // OWNER: <PartName>
      state def <Name>ModeMachine {{
-         state <Name><MODE_A>State;
-         state <Name><MODE_B>State {{
-             entry action activate : <activateActionDef>;
+         state <Name><MODE_A>State;          // nominal — NO entry action
+         state <Name><MODE_B>State;          // nominal — NO entry action
+         state <Name>EmergencyState {{
+             entry action respond : <emergencyActionDef>;   // ONLY emergency states have entry actions
          }}
          transition initial then <Name><MODE_A>State;
          transition <name>ToB
              first <Name><MODE_A>State
              accept <Name>To<MODE_B>Cmd
              then <Name><MODE_B>State;
+         transition <name>ToEmergency
+             first <Name><MODE_A>State
+             accept <EmergencyCmdDef>
+             then <Name>EmergencyState;
      }}
 
 GUARD CONDITION RULES — the `if <faultCondition>` expression decides whether the
