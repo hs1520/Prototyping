@@ -1178,10 +1178,10 @@ def _run_parametric_constraint_scenario(
 
     # Sweep direction: push lhs toward and past the limit
     if op in ("<=", "<"):
-        sweep_end = rhs_f * 1.15 + 1.0   # guaranteed to cross the limit
+        sweep_end = rhs_f + abs(rhs_f) * 0.15 + 1.0   # always > rhs_f regardless of sign
         step_size = (sweep_end - lhs_f) / _N_STEPS
     elif op in (">=", ">"):
-        sweep_end = rhs_f * 0.85 - 1.0
+        sweep_end = rhs_f - abs(rhs_f) * 0.15 - 1.0   # always < rhs_f regardless of sign
         step_size = (sweep_end - lhs_f) / _N_STEPS
     else:
         result.violations.append(f"Unsupported operator '{op}' for parametric sweep.")
