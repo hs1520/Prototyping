@@ -1114,7 +1114,7 @@ class ChainOfThoughtPrompter:
             Message(role="system", content=self.system_prompt),
             Message(role="user", content=prompt),
         ]
-        response = self.llm.complete(messages, temperature=0.2)
+        response = self.llm.complete(messages, temperature=0.2, max_tokens=65536)
         return self._parse_cot_response(response.content)
 
     def mcts_structural_grounding(
@@ -1243,6 +1243,9 @@ class ChainOfThoughtPrompter:
         sysml_matches = re.findall(sysml_pattern, response_text, re.DOTALL)
         if sysml_matches:
             result.extracted_sysml = sysml_matches[-1].strip()
+        elif re.search(r"```sysml\n", response_text):
+            print("  ⚠ [TOKEN LIMIT] LLM response truncated before closing ``` — "
+                  "increase max_tokens for this step.")
 
         # Extract JSON code blocks
         json_pattern = r"```json\n(.*?)```"
