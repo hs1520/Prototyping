@@ -394,20 +394,16 @@ class Orchestrator:
         # ── Phase 3: Iterative Refinement (no MCTS) ───────────────────────────
         print("Phase 3: Iterative Refinement")
         print("-" * 40)
-        final_model, final_score = self._iterative_refinement(
+        final_model, final_score, final_sim = self._iterative_refinement(
             model, requirements, mcts_best_config=None
         )
         self.state.current_model = final_model
         print(f"  ✓ Final design score: {final_score:.3f}\n")
 
         # ── Phase 4: Behavioral Reachability Simulation ───────────────────────
+        # Simulation already ran in Phase 3 — reuse the result, no duplicate run.
         print("Phase 4: Behavioral Reachability Simulation", flush=True)
         print("-" * 40)
-        final_sysml = (
-            (getattr(final_model, "metadata", None) or {}).get("last_sysml_text")
-            or final_model.to_sysml_text()
-        )
-        final_sim = self._run_simulation(final_sysml, system_name)
         self._print_final_sim(final_sim)
 
         # ── Summary ───────────────────────────────────────────────────────────
@@ -425,6 +421,10 @@ class Orchestrator:
                 print(f"  {line}")
         print(f"{'='*60}\n")
 
+        final_sysml = (
+            (getattr(final_model, "metadata", None) or {}).get("last_sysml_text")
+            or final_model.to_sysml_text()
+        )
         return {
             "system_name":        system_name,
             "requirements":       requirements,
@@ -514,20 +514,16 @@ class Orchestrator:
         # ── Phase 4-5: Refinement with MCTS constraints ───────────────────────
         print("Phase 4-5: Iterative Refinement (MCTS-grounded)")
         print("-" * 40)
-        final_model, final_score = self._iterative_refinement(
+        final_model, final_score, final_sim = self._iterative_refinement(
             model, requirements, mcts_best_config=best_config
         )
         self.state.current_model = final_model
         print(f"  ✓ Final design score: {final_score:.3f}\n")
 
         # ── Phase 6: Simulation ───────────────────────────────────────────────
+        # Simulation already ran in Phase 4-5 — reuse the result.
         print("Phase 6: Behavioral Reachability Simulation", flush=True)
         print("-" * 40)
-        final_sysml = (
-            (getattr(final_model, "metadata", None) or {}).get("last_sysml_text")
-            or final_model.to_sysml_text()
-        )
-        final_sim = self._run_simulation(final_sysml, system_name)
         self._print_final_sim(final_sim)
 
         # ── Summary ───────────────────────────────────────────────────────────
@@ -545,6 +541,10 @@ class Orchestrator:
                 print(f"  {line}")
         print(f"{'='*60}\n")
 
+        final_sysml = (
+            (getattr(final_model, "metadata", None) or {}).get("last_sysml_text")
+            or final_model.to_sysml_text()
+        )
         return {
             # ── Fields inherited / updated from generate() ────────────────────
             **generate_result,
@@ -1535,7 +1535,7 @@ class Orchestrator:
         model: SysMLModel,
         requirements: List[str],
         mcts_best_config: Optional[DesignConfiguration] = None,
-    ) -> tuple[SysMLModel, float]:
+    ) -> tuple[SysMLModel, float, Any]:
         """Phase 4-5: Evaluate and iteratively refine the design.
 
         Key improvements over the naive version:
@@ -1572,6 +1572,8 @@ class Orchestrator:
         current_model = model
         best_score = 0.0
         best_model = model
+        best_sim_result: Any = None          # tracks sim matching best_model
+        last_sim_result: Any = None          # most recent sim result
         seen_issues: Dict[str, int] = {}  # issue text → occurrence count
 
         # Pre-compute MCTS constraint text once — same for every iteration
@@ -1680,28 +1682,29 @@ class Orchestrator:
                           + ", ".join(f"{k}={v:.2f}" for k, v in cot_scores.items()))
 
             # ── P0: Best-model tracking ───────────────────────────────────
+            last_sim_result = sim_result
             if score > best_score:
                 best_score = score
                 best_model = current_model
+                best_sim_result = sim_result
 
             # ── Early exit ────────────────────────────────────────────────
+            _force_llm_refinement = False   # set True when surgical fix fails
             if score >= self.quality_threshold:
                 # Only exit if behavioral simulation, reachability, and sema
                 # are all clean.  A high rule-score can coexist with state-machine
                 # failures or connectivity gaps — those must be resolved first.
-                # Solution C: SAFE requirements must be covered by extracted state machines.
-                # extracted_sm_count == 0 is only "ok" when there are no SAFE requirements.
                 _safe_reqs = [r for r in requirements if "-SAFE-" in r or "SAFE" in r.upper()[:10]]
                 _br = sim_result.behavioral_result
                 behavioral_ok = (
                     _br is None
                     or (
                         _br.extracted_sm_count == 0
-                        and not _safe_reqs          # no SAFE reqs → genuinely no SM needed
+                        and not _safe_reqs
                     )
                     or (
                         _br.extracted_sm_count > 0
-                        and _br.sim_score >= 1.0    # require every SM to pass — transition fixer can repair
+                        and _br.sim_score >= 1.0
                     )
                 )
                 reachability_ok = not sim_result.failed_scenarios()
@@ -1710,7 +1713,7 @@ class Orchestrator:
                 if behavioral_ok and reachability_ok and sema_ok:
                     print(f"  ✓ Quality threshold {self.quality_threshold} reached",
                           flush=True)
-                    return current_model, score
+                    return current_model, score, sim_result
 
                 # Score met but hard failures remain — one targeted fix pass
                 issues_desc = ", ".join(filter(None, [
@@ -1726,7 +1729,37 @@ class Orchestrator:
                 current_model = self._sim_refinement_loop(
                     current_model, requirements, max_iters=2
                 )
-                return current_model, score
+
+                # Re-check after surgical fix
+                _sysml_after = (
+                    (getattr(current_model, "metadata", None) or {}).get("last_sysml_text")
+                    or current_model.to_sysml_text()
+                )
+                sim_result = self._run_simulation(_sysml_after, current_model.name)
+                last_sim_result = sim_result
+
+                if not sim_result.failed_scenarios():
+                    print(f"  └─ Simulation fully resolved ✓", flush=True)
+                    return current_model, score, sim_result
+
+                # Surgical fix insufficient
+                remaining = self.max_iterations - iteration - 1
+                if remaining == 0:
+                    print(
+                        f"  ⚠ Surgical fix insufficient — no iterations remaining, "
+                        f"returning best model",
+                        flush=True,
+                    )
+                    return best_model, best_score, best_sim_result or sim_result
+
+                sim_issues = self._format_sim_issues(sim_result, requirements=requirements)
+                print(
+                    f"  ⚠ Surgical fix insufficient "
+                    f"({len(sim_result.failed_scenarios())} scenario(s) still failing) "
+                    f"— escalating to LLM refinement ({remaining} iteration(s) remaining)",
+                    flush=True,
+                )
+                _force_llm_refinement = True   # trigger LLM refinement below
 
             # ── P1: Persistent issue tracking ─────────────────────────────
             for issue in eval_result.issues:
@@ -1734,7 +1767,7 @@ class Orchestrator:
             persistent = [iss for iss, cnt in seen_issues.items() if cnt > 1]
 
             # ── P1: Refinement trigger ────────────────────────────────────
-            has_issues = bool(eval_result.issues)
+            has_issues = bool(eval_result.issues) or _force_llm_refinement
             has_llm_feedback = cot_eval is not None and bool(cot_eval.final_answer)
 
             if has_issues or has_llm_feedback:
@@ -1786,7 +1819,7 @@ class Orchestrator:
                             flush=True,
                         )
 
-        return best_model, best_score
+        return best_model, best_score, best_sim_result or last_sim_result
 
     @staticmethod
     def _build_mcts_design_constraints(best_config: DesignConfiguration) -> str:

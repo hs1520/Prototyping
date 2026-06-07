@@ -691,11 +691,12 @@ PARAMETRIC CONSTRAINT RULE (MANDATORY):
         <runtime_var> >= <readonly_limit>    // for minimum constraints
     }}
 
-  Required constraint pairs (generate ALL that apply):
-    currentAltitude_m    <= maxAltitude_m       (altitude fence)
-    actualReleaseTime_s  <= releaseTime_s        (payload timing)
-    currentAirspeed      <= maxAirspeed          (speed envelope)
-    actualControlPeriod  >= 1.0 / controlFreq_Hz (control loop rate)
+  Required constraint pairs (generate ALL that apply — maximum bounds only):
+    currentAltitude_m   <= maxAltitude_m        (altitude fence)
+    actualReleaseTime_s <= releaseTime_s         (payload timing)
+    currentAirspeed     <= maxAirspeed           (speed envelope)
+    payloadMass         <= maxPayloadMass        (payload limit)
+    currentWeight       <= maxTakeoffWeight      (MTOW limit)
 
   Example output:
     // OWNER: FlightController
@@ -705,6 +706,31 @@ PARAMETRIC CONSTRAINT RULE (MANDATORY):
 
   Do NOT generate constraints for safety guard variables (batteryCharge_pct,
   commLossTime_s, etc.) — those are already constrained by state machine guards.
+
+  Do NOT generate `assert constraint` for these two categories — they are NOT
+  structural invariants and will always fail at system initialisation:
+
+  (a) Time-cumulative quantities: variables that start at 0 and accumulate over
+      the mission (e.g. currentFlightTime, missionDuration, flightElapsed).
+      A constraint like `currentFlightTime >= minFlightTime` is meaningless as an
+      invariant — at t=0 the flight has just started.  These are end-to-end
+      performance requirements verified by SITL, not instantaneous bounds.
+
+  (b) Operational-phase-only quantities: variables that are only meaningful
+      during a specific phase (e.g. currentGroundSpeed, currentForwardSpeed).
+      The system is at rest before takeoff; `currentGroundSpeed >= minGroundSpeed`
+      is false on the ground and must not be asserted as an always-true invariant.
+
+  For both categories, add a comment instead:
+      // REQ-PERF-NNN: verified by SITL — not an instantaneous invariant
+
+  SUMMARY — assert constraint IS appropriate for:
+    ✓  maximum bounds that must NEVER be exceeded at any time
+       (currentAltitude <= maxAltitude, currentAirspeed <= maxAirspeed,
+        payloadMass <= maxPayloadMass, currentWeight <= maxTakeoffWeight)
+  assert constraint is NOT appropriate for:
+    ✗  minimum endurance / throughput goals (flightTime >= minFlightTime)
+    ✗  minimum speed during a specific flight phase (groundSpeed >= minGroundSpeed)
 
 Output a single ```sysml code block containing ONLY the behavioral fragment (with OWNER comments).
 No prose after the block.
@@ -994,7 +1020,7 @@ class ChainOfThoughtPrompter:
             Message(role="system", content=self.system_prompt),
             Message(role="user", content=prompt),
         ]
-        response = self.llm.complete(messages, temperature=0.4)
+        response = self.llm.complete(messages, temperature=0.4, max_tokens=65536)
         return self._parse_cot_response(response.content)
 
     # ------------------------------------------------------------------
