@@ -461,9 +461,11 @@ Behavioral requirements (FUNC and SAFE):
 Rules:
 - For every FUNC requirement: define an action def that belongs to the responsible component.
   The action def name must be a verb phrase in camelCase (e.g., navigateToWaypoint).
-- For every SAFE requirement: define a state def with:
-    • An explicit fault-entry transition (annotated with the fault condition).
-    • An emergency action def (e.g., emergencyStop, shutdownSafely).
+- For every SAFE requirement: see SAFETY ARCHITECTURE RULE below.
+  When SAFE requirements define a priority ordering (keywords: "superseding",
+  "taking precedence", "unless a higher-priority response is already in progress"),
+  use the TWO-LAYER pattern described in SAFETY ARCHITECTURE RULE.
+  Otherwise (no priority language) use a single independent fault monitor.
 - For every OPER requirement (REQ-OPER-NNN): read the phase sequence from the requirement
   text and apply the MODE MACHINE RULES below to generate an enum def + mode machine state def.
   The enum def goes at package scope (// OWNER: package); the state def goes in the owning
@@ -564,6 +566,125 @@ When a mode machine is needed:
              accept <EmergencyCmdDef>
              then <Name>EmergencyState;
      }}
+
+SAFETY ARCHITECTURE RULE — Two-layer pattern for priority-ordered SAFE requirements:
+
+  Trigger: ANY of the SAFE requirements uses priority language:
+    "superseding", "taking precedence over all", "unless a higher-priority response
+    is already in progress", or any explicit ordering between safety responses.
+
+  When triggered, generate exactly TWO structural elements inside the SafetyMonitor:
+
+  ── LAYER 1: Fault Detection Monitors ──────────────────────────────────────────
+  One state def per SAFE requirement. Each monitor:
+    • Detects its fault condition via a guard transition.
+    • Has a fault state with an entry action for REQUIREMENT-SPECIFIC side effects
+      only (e.g., transmitting an alert, locking a payload). See examples below.
+    • MUST NOT send override commands to `overrideCmd` directly.
+      Command dispatch is the SOLE responsibility of the SafetyArbiter (Layer 2).
+
+  Examples of allowed monitor actions:
+    – transmit alert to GCS (`send alertCmd() to somePort;`)
+    – lock payload (`send lockCmd() to payloadPort;`)
+    – log fault
+
+  Examples of FORBIDDEN monitor actions:
+    – `send CMD_LAND() to overrideCmd;`   ← FORBIDDEN: arbiter's job
+    – `send CMD_RTL() to overrideCmd;`    ← FORBIDDEN
+
+  ── LAYER 2: Safety Arbiter ────────────────────────────────────────────────────
+  Exactly ONE `SafetyArbiter` state def per SafetyMonitor.
+    • States are ordered lowest → highest priority.
+    • Each fault state has the entry action that sends the appropriate override command.
+    • Priority is enforced via guard exclusions: a lower-priority state's guard
+      MUST include `and not <higher-priority-condition>` for EVERY higher-priority
+      condition above it.
+    • The highest-priority state needs NO exclusions in its guard.
+
+  Canonical template (adapt priority count and conditions to requirements):
+
+    // OWNER: SafetyMonitor
+    action def initiateBatteryRtb    {{ send CMD_RTL()  to overrideCmd; }}
+    action def initiateEmergencyLand {{ send CMD_LAND() to overrideCmd; }}
+    action def deployParachute       {{ send CMD_LAND() to parachutePort; }}
+
+    // Layer 1 monitors — fault detection only, NO override commands
+    // OWNER: SafetyMonitor
+    state def BatteryRtbMonitor {{
+        state RtbNominal;
+        state RtbDetected;        // no entry action needed here — arbiter handles response
+        transition initial then RtbNominal;
+        transition RtbNominal → RtbDetected if batterySoc <= 25.0;
+    }}
+
+    // OWNER: SafetyMonitor
+    state def BatteryLandMonitor {{
+        state LandNominal;
+        state LandDetected;
+        transition initial then LandNominal;
+        transition LandNominal → LandDetected if batterySoc < 15.0;
+    }}
+
+    // OWNER: SafetyMonitor
+    state def PropulsionFailureMonitor {{
+        state PropNominal;
+        state PropDetected;
+        transition initial then PropNominal;
+        transition PropNominal → PropDetected if propulsionCriticalFailure;
+    }}
+
+    // Layer 2 arbiter — SOLE sender of override commands, priority ordered
+    // OWNER: SafetyMonitor
+    state def SafetyArbiter {{
+        state ArbNominal;
+
+        // Priority 1 (lowest): Battery RTB
+        // Guard excludes all higher-priority conditions
+        state ArbRtbMode {{
+            entry action onRtb : initiateBatteryRtb;
+        }}
+
+        // Priority 2: Emergency land (battery critical OR comm loss)
+        // Guard excludes parachute condition (priority 3)
+        state ArbLandMode {{
+            entry action onLand : initiateEmergencyLand;
+        }}
+
+        // Priority 3 (highest): Parachute deploy
+        // No exclusions needed — overrides everything
+        state ArbParachuteMode {{
+            entry action onParachute : deployParachute;
+        }}
+
+        transition initial then ArbNominal;
+
+        // Highest priority first — guard has no exclusions
+        transition ArbNominal → ArbParachuteMode
+            if propulsionCriticalFailure;
+
+        // Second priority — exclude parachute condition
+        transition ArbNominal → ArbLandMode
+            if batterySoc < 15.0
+            and not propulsionCriticalFailure;
+
+        transition ArbNominal → ArbLandMode
+            if commLossTime > 10.0
+            and not propulsionCriticalFailure;
+
+        // Lowest priority — exclude all higher-priority conditions
+        transition ArbNominal → ArbRtbMode
+            if batterySoc <= 25.0
+            and batterySoc >= 15.0
+            and commLossTime <= 10.0
+            and not propulsionCriticalFailure;
+    }}
+
+  KEY RULES for the SafetyArbiter:
+  1. ALL override command sends MUST be in the arbiter's entry actions, NEVER in monitors.
+  2. List higher-priority transitions BEFORE lower-priority ones in the state def.
+  3. Each lower-priority guard MUST contain `and not <higher-priority-condition>`.
+  4. Use the same runtime attributes (batterySoc, commLossTime, etc.) as the monitors;
+     do NOT introduce separate flag attributes.
 
 GUARD CONDITION RULES — the `if <faultCondition>` expression decides whether the
 fault transition can ever fire.  A guard that is logically impossible produces a

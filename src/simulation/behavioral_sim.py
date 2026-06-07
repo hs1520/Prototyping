@@ -557,24 +557,36 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
             result.timeline.append(fault_event.to_line())
 
             # ── Check 1: correct target state ─────────────────────────────────
-            # Mode machines have no fault states — any transition is valid.
-            if not is_mode_machine and fault_event.to_state not in fault_states:
+            # Mode machines: no fault states — any transition is valid.
+            # Detection-only monitors: fault_states is empty (no entry actions
+            # by design) — transition firing is sufficient, skip state check.
+            if not is_mode_machine and fault_states and fault_event.to_state not in fault_states:
                 result.violations.append(
                     f"Transition target '{fault_event.to_state}' is not a known "
                     f"fault state (expected one of: {fault_states})"
                 )
 
             # ── Check 2: entry action was called ──────────────────────────────
-            # Mode machines: entry actions are optional — skip this check.
-            if not is_mode_machine:
-                if not result.fired_actions:
+            # Mode machines: entry actions are optional — skip.
+            # Detection-only monitors (fault_states empty): no entry action by
+            # design — transition firing is the verification; skip this check.
+            if not is_mode_machine and fault_states:
+                # Look up whether the target state itself has an entry action
+                target_has_entry = fault_event.to_state in fault_states
+                if target_has_entry and not result.fired_actions:
                     result.violations.append(
                         f"Fault state '{fault_event.to_state}' has no entry action "
                         "recorded — emergency response may not have been triggered"
                     )
-                else:
+                elif result.fired_actions:
                     result.timeline.append(
                         f"  entry action called: {result.fired_actions[-1]}  ✓"
+                    )
+                else:
+                    # fault state with no entry action — detection-only, pass
+                    result.timeline.append(
+                        f"  detection-only fault state (no entry action — command "
+                        f"dispatch delegated to SafetyArbiter)  ✓"
                     )
 
             # ── Check 3: trigger at roughly the expected step ────────────────
