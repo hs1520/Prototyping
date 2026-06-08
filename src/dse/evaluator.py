@@ -901,19 +901,36 @@ class DesignEvaluator:
         #   False → exactly 1 (or at most 2 with backup) controller part def
         distributed = params.get("distributed_control")
         if distributed is True:
-            ctrl_parts = re.findall(
-                r"\bpart\s+def\s+(\w*"
-                r"(?:Controller|Manager|Module|Subsystem|Node)\w*)\s*\{",
-                text, re.IGNORECASE,
-            )
+            _dist_kws = ("controller", "manager", "module", "subsystem", "node")
+            sm_obj = getattr(self, "_syside_model", None)
+            if sm_obj is not None and _SYSIDE_EVAL_OK:
+                pd_cls = getattr(_syside_eval, "PartDefinition", None)
+                ctrl_parts = list({
+                    pd.name for pd in sm_obj.nodes(pd_cls)
+                    if pd_cls and any(kw in (pd.name or "").lower() for kw in _dist_kws)
+                }) if pd_cls else []
+            else:
+                ctrl_parts = re.findall(
+                    r"\bpart\s+def\s+(\w*"
+                    r"(?:Controller|Manager|Module|Subsystem|Node)\w*)\s*\{",
+                    text, re.IGNORECASE,
+                )
             checks.append((
                 "distributed_topology", min(1.0, len(set(ctrl_parts)) / 3.0)
             ))
         elif distributed is False:
-            ctrl_parts = re.findall(
-                r"\bpart\s+def\s+\w*Controller\w*\s*\{",
-                text, re.IGNORECASE,
-            )
+            sm_obj = getattr(self, "_syside_model", None)
+            if sm_obj is not None and _SYSIDE_EVAL_OK:
+                pd_cls = getattr(_syside_eval, "PartDefinition", None)
+                ctrl_parts = [
+                    pd.name for pd in sm_obj.nodes(pd_cls)
+                    if pd_cls and "controller" in (pd.name or "").lower()
+                ] if pd_cls else []
+            else:
+                ctrl_parts = re.findall(
+                    r"\bpart\s+def\s+\w*Controller\w*\s*\{",
+                    text, re.IGNORECASE,
+                )
             n_ctrl = len(ctrl_parts)
             if n_ctrl == 1:
                 score = 1.0
@@ -1175,10 +1192,25 @@ class DesignEvaluator:
         # ── Emergency action defs (tighter — 1 per 1.5 SAFE reqs) ────────
         # Was: emerg_actions / max(n_safe / 3.0, 1) — 6 SAFE reqs only need 2 actions
         # Now: emerg_actions / max(n_safe / 1.5, 1)
-        emerg_actions = len(re.findall(
-            r"action\s+def\s+\w*(?:emergency|autoLand|emergLand|emergStop|shutdown|failsafe)\w*",
-            text, re.IGNORECASE,
-        ))
+        _emerg_kws = ("emergency", "autoland", "emergland", "emergstop", "shutdown", "failsafe")
+        sm_obj = getattr(self, "_syside_model", None)
+        if sm_obj is not None and _SYSIDE_EVAL_OK:
+            ad_cls = getattr(_syside_eval, "ActionDefinition", None)
+            if ad_cls is not None:
+                emerg_actions = sum(
+                    1 for ad in sm_obj.nodes(ad_cls)
+                    if any(kw in (ad.name or "").lower() for kw in _emerg_kws)
+                )
+            else:
+                emerg_actions = len(re.findall(
+                    r"action\s+def\s+\w*(?:emergency|autoLand|emergLand|emergStop|shutdown|failsafe)\w*",
+                    text, re.IGNORECASE,
+                ))
+        else:
+            emerg_actions = len(re.findall(
+                r"action\s+def\s+\w*(?:emergency|autoLand|emergLand|emergStop|shutdown|failsafe)\w*",
+                text, re.IGNORECASE,
+            ))
         emerg_score = min(1.0, emerg_actions / max(n_safe / 1.5, 1))
 
         return (
@@ -1805,12 +1837,21 @@ class DesignEvaluator:
 
             # ── Distributed control: topology vs. decision ────────────────
             distributed = params.get("distributed_control")
+            _diag_sm = getattr(self, "_syside_model", None)
+            _diag_pd_cls = getattr(_syside_eval, "PartDefinition", None) if _SYSIDE_EVAL_OK else None
             if distributed is True:
-                ctrl_count = len(set(re.findall(
-                    r"\bpart\s+def\s+(\w*"
-                    r"(?:Controller|Manager|Module|Subsystem|Node)\w*)\s*\{",
-                    text, re.IGNORECASE,
-                )))
+                if _diag_sm is not None and _diag_pd_cls is not None:
+                    _dist_kws = ("controller", "manager", "module", "subsystem", "node")
+                    ctrl_count = len({
+                        pd.name for pd in _diag_sm.nodes(_diag_pd_cls)
+                        if any(kw in (pd.name or "").lower() for kw in _dist_kws)
+                    })
+                else:
+                    ctrl_count = len(set(re.findall(
+                        r"\bpart\s+def\s+(\w*"
+                        r"(?:Controller|Manager|Module|Subsystem|Node)\w*)\s*\{",
+                        text, re.IGNORECASE,
+                    )))
                 if ctrl_count < 3:
                     issues.append(
                         f"MCTS: distributed_control=True but only {ctrl_count} "
@@ -1822,10 +1863,16 @@ class DesignEvaluator:
                         "PowerManager)."
                     )
             elif distributed is False:
-                ctrl_count = len(re.findall(
-                    r"\bpart\s+def\s+\w*Controller\w*\s*\{",
-                    text, re.IGNORECASE,
-                ))
+                if _diag_sm is not None and _diag_pd_cls is not None:
+                    ctrl_count = sum(
+                        1 for pd in _diag_sm.nodes(_diag_pd_cls)
+                        if "controller" in (pd.name or "").lower()
+                    )
+                else:
+                    ctrl_count = len(re.findall(
+                        r"\bpart\s+def\s+\w*Controller\w*\s*\{",
+                        text, re.IGNORECASE,
+                    ))
                 if ctrl_count > 2:
                     issues.append(
                         f"MCTS: distributed_control=False but {ctrl_count} "
