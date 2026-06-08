@@ -344,6 +344,9 @@ class DesignEvaluator:
         self._cached_syntax_result = syntax_result
         self._sim_result = sim_result
         self._syside_attr_map = _extract_attr_values_via_syside(_sysml_text(model))
+        # Cache the syside model object from SysMLLiteModel so scoring functions
+        # can do AST queries without re-parsing.
+        self._syside_model = getattr(model, "_syside_model", None)
         result = EvaluationResult(configuration_name=config.name)
 
         scorers = {
@@ -425,6 +428,7 @@ class DesignEvaluator:
         self._cached_syntax_result = None
         self._sim_result = None
         self._syside_attr_map = {}
+        self._syside_model = None
         return result
 
     def evaluate_from_scores(
@@ -440,6 +444,46 @@ class DesignEvaluator:
         )
         result.weighted_total = round(weighted_sum, 4)
         return result
+
+    # ------------------------------------------------------------------
+    # Syside AST query helpers
+    # ------------------------------------------------------------------
+
+    def _syside_count(self, cls_name: str) -> Optional[int]:
+        """
+        Count syside AST nodes of *cls_name* in the cached syside model.
+        Returns None when syside is unavailable or the type doesn't exist,
+        so callers can fall back to regex.
+        """
+        sm = getattr(self, "_syside_model", None)
+        if sm is None or not _SYSIDE_EVAL_OK:
+            return None
+        cls = getattr(_syside_eval, cls_name, None)
+        if cls is None:
+            return None
+        try:
+            return sum(1 for _ in sm.nodes(cls))
+        except Exception:
+            return None
+
+    def _syside_any(self, cls_name: str, predicate=None) -> Optional[bool]:
+        """
+        Return True/False if any syside node of *cls_name* satisfies
+        *predicate* (default: just existence).  Returns None on fallback.
+        """
+        sm = getattr(self, "_syside_model", None)
+        if sm is None or not _SYSIDE_EVAL_OK:
+            return None
+        cls = getattr(_syside_eval, cls_name, None)
+        if cls is None:
+            return None
+        try:
+            for node in sm.nodes(cls):
+                if predicate is None or predicate(node):
+                    return True
+            return False
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # Dimension 0: Syntactic Validity (8 %) — Syside diagnostics
@@ -507,7 +551,9 @@ class DesignEvaluator:
         cat_checks: List[float] = []
 
         if any("_FUNC_" in r.name for r in req_defs):
-            cat_checks.append(1.0 if re.search(r"\baction\s+def\s+\w+", text) else 0.0)
+            n = self._syside_count("ActionDefinition")
+            has_action = (n > 0) if n is not None else bool(re.search(r"\baction\s+def\s+\w+", text))
+            cat_checks.append(1.0 if has_action else 0.0)
 
         if any("_PERF_" in r.name for r in req_defs):
             has_numeric = any(
@@ -518,19 +564,45 @@ class DesignEvaluator:
             cat_checks.append(1.0 if has_numeric else 0.0)
 
         if any("_SAFE_" in r.name for r in req_defs):
-            cat_checks.append(1.0 if re.search(r"\bstate\s+def\s+\w+", text) else 0.0)
+            n = self._syside_count("StateDefinition")
+            has_state = (n > 0) if n is not None else bool(re.search(r"\bstate\s+def\s+\w+", text))
+            cat_checks.append(1.0 if has_state else 0.0)
 
         if any("_INTF_" in r.name for r in req_defs):
-            has_typed_port = bool(re.search(r"\bport\s+def\s+\w+\s*\{", text))
-            has_connect    = bool(re.search(r"\bconnect\s+\w+\.\w+\s+to\s+\w+\.\w+", text, re.IGNORECASE))
+            # Port def with a non-empty body (typed interface port)
+            has_typed_port_ast = self._syside_any(
+                "PortDefinition",
+                lambda pd: any(True for _ in (getattr(pd, "owned_ports", None) or [])),
+            )
+            if has_typed_port_ast is not None:
+                has_typed_port = has_typed_port_ast
+            else:
+                has_typed_port = bool(re.search(r"\bport\s+def\s+\w+\s*\{", text))
+
+            n_conn = self._syside_count("ConnectionUsage")
+            has_connect = (n_conn > 0) if n_conn is not None else bool(
+                re.search(r"\bconnect\s+\w+\.\w+\s+to\s+\w+\.\w+", text, re.IGNORECASE)
+            )
             cat_checks.append(1.0 if (has_typed_port and has_connect) else 0.5 if has_connect else 0.0)
 
         if any("_CONS_" in r.name for r in req_defs):
             cat_checks.append(1.0 if re.search(r"\bdoc\s+/\*", text) else 0.0)
 
         if any("_OPER_" in r.name for r in req_defs):
-            has_enum = bool(re.search(r"\benum\s+def\s+\w+", text))
-            has_mode_sm = bool(re.search(r"\bstate\s+def\s+\w*(?:Mode|Phase|Operation)\w*", text, re.IGNORECASE))
+            n_enum = self._syside_count("EnumerationDefinition")
+            has_enum = (n_enum > 0) if n_enum is not None else bool(re.search(r"\benum\s+def\s+\w+", text))
+
+            _mode_kws = ("mode", "phase", "operation")
+            has_mode_sm_ast = self._syside_any(
+                "StateDefinition",
+                lambda sd: any(kw in (sd.name or "").lower() for kw in _mode_kws),
+            )
+            if has_mode_sm_ast is not None:
+                has_mode_sm = has_mode_sm_ast
+            else:
+                has_mode_sm = bool(re.search(
+                    r"\bstate\s+def\s+\w*(?:Mode|Phase|Operation)\w*", text, re.IGNORECASE
+                ))
             cat_checks.append(1.0 if (has_enum and has_mode_sm) else 0.5 if has_enum else 0.0)
 
         category_impl = sum(cat_checks) / len(cat_checks) if cat_checks else 1.0
@@ -1079,7 +1151,8 @@ class DesignEvaluator:
         # ── State-machine coverage (tighter — 1:1 with SAFE reqs) ────────
         # Was: state_defs / max(n_safe / 1.5, 1) — 3 SAFE reqs only need 2 states
         # Now: state_defs / n_safe — every SAFE req should have its own state def
-        state_defs = len(re.findall(r"\bstate\s+def\s+\w+", text))
+        n_sd = self._syside_count("StateDefinition")
+        state_defs = n_sd if n_sd is not None else len(re.findall(r"\bstate\s+def\s+\w+", text))
         state_cov = min(1.0, state_defs / max(n_safe, 1))
 
         # ── Fault transitions (SysML v2: first/then syntax) ─────────────
@@ -1480,7 +1553,8 @@ class DesignEvaluator:
 
         # ── SAFE requirements without state machines ──────────────────────
         safe_reqs = [r for r in model.requirement_definitions if "_SAFE_" in r.name]
-        state_defs = len(re.findall(r"\bstate\s+def\s+\w+", text))
+        n_sd = self._syside_count("StateDefinition")
+        state_defs = n_sd if n_sd is not None else len(re.findall(r"\bstate\s+def\s+\w+", text))
         if safe_reqs and state_defs == 0:
             ids = ", ".join(r.name for r in safe_reqs)
             issues.append(
