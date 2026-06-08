@@ -49,6 +49,42 @@ try:
 except ModuleNotFoundError:
     _HAS_NX = False
 
+try:
+    import syside as _syside_eval
+    _SYSIDE_EVAL_OK = True
+except ImportError:
+    _syside_eval = None     # type: ignore
+    _SYSIDE_EVAL_OK = False
+
+
+def _extract_attr_values_via_syside(text: str) -> Dict[str, float]:
+    """
+    Evaluate every AttributeUsage expression in *text* via the syside Compiler.
+
+    Returns {attribute_name: float_value}.  Used to supplement IR model
+    attribute values that may be unparsed expressions (e.g. `= mass * g`).
+    Falls back to {} when syside is unavailable or parsing fails.
+    """
+    if not _SYSIDE_EVAL_OK or not text:
+        return {}
+    out: Dict[str, float] = {}
+    try:
+        model, _ = _syside_eval.try_load_model(sysml_source=text)
+        compiler = _syside_eval.Compiler()
+        for attr in model.nodes(_syside_eval.AttributeUsage):
+            try:
+                expr = attr.feature_value_expression
+                if expr is None:
+                    continue
+                val, report = compiler.evaluate(expr)
+                if not report.fatal and val is not None:
+                    out[attr.name] = float(val)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Data classes (unchanged public API)
@@ -307,6 +343,7 @@ class DesignEvaluator:
         """Evaluate model quality across all seven dimensions."""
         self._cached_syntax_result = syntax_result
         self._sim_result = sim_result
+        self._syside_attr_map = _extract_attr_values_via_syside(_sysml_text(model))
         result = EvaluationResult(configuration_name=config.name)
 
         scorers = {
@@ -387,6 +424,7 @@ class DesignEvaluator:
 
         self._cached_syntax_result = None
         self._sim_result = None
+        self._syside_attr_map = {}
         return result
 
     def evaluate_from_scores(
@@ -870,6 +908,8 @@ class DesignEvaluator:
         # carry numeric+unit attributes — those requirements are quantitative
         # by definition.  Parts satisfying only FUNC/SAFE/INTF/OPER are
         # excluded from the denominator to avoid false penalties.
+        syside_attr_map = getattr(self, "_syside_attr_map", {})
+
         def _has_numeric_unit_attr(part) -> bool:  # noqa: ANN001
             for a in part.attributes:
                 val  = getattr(a, "default_value", None)
@@ -880,6 +920,10 @@ class DesignEvaluator:
                         return True
                     except (TypeError, ValueError):
                         pass
+                # Fallback: syside evaluated this attribute to a concrete float
+                # (catches expressions like `= mass * g` the IR parser left as str)
+                if a.name in syside_attr_map:
+                    return True
             return False
 
         quantitative_parts = [
@@ -1249,6 +1293,8 @@ class DesignEvaluator:
         # are the only categories that semantically require quantitative
         # attributes.  FUNC/SAFE/INTF/OPER parts are excluded to match
         # _score_structural_completeness's denominator.
+        syside_attr_map = getattr(self, "_syside_attr_map", {})
+
         def _has_numeric_unit_attr(part) -> bool:  # noqa: ANN001
             for a in part.attributes:
                 val  = getattr(a, "default_value", None)
@@ -1259,6 +1305,8 @@ class DesignEvaluator:
                         return True
                     except (TypeError, ValueError):
                         pass
+                if a.name in syside_attr_map:
+                    return True
             return False
 
         no_attrs = [

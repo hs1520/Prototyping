@@ -33,6 +33,13 @@ from typing import Dict, List, Optional, Any, Tuple
 from src.sysml.lite_model import SysMLLiteModel
 from src.sitl.sitl_specs import InjectSpec, VerifySpec
 
+try:
+    import syside as _syside
+    _SYSIDE_OK = True
+except ImportError:
+    _syside = None      # type: ignore
+    _SYSIDE_OK = False
+
 
 # ---------------------------------------------------------------------------
 # 内容匹配器数据结构
@@ -1010,6 +1017,44 @@ class RequirementLinker:
             pass
         return guard_map
 
+    def _build_syside_attr_map(self) -> Dict[str, Dict[str, float]]:
+        """
+        Walk the syside AST and evaluate every AttributeUsage expression,
+        grouped by owner part name.  Returns {part_name: {attr_name: float}}.
+
+        Handles arithmetic expressions and unit-bearing literals that
+        _parse_attr_value (regex-based) cannot evaluate.
+        Falls back to {} when syside is unavailable or parsing fails.
+        """
+        if not _SYSIDE_OK:
+            return {}
+        sysml_text = self._model.to_sysml_text() if self._model else ""
+        if not sysml_text:
+            return {}
+        result: Dict[str, Dict[str, float]] = {}
+        try:
+            model, _ = _syside.try_load_model(sysml_source=sysml_text)
+            compiler = _syside.Compiler()
+            for attr in model.nodes(_syside.AttributeUsage):
+                try:
+                    owner = attr.owner
+                    if owner is None:
+                        continue
+                    part_name = getattr(owner, "name", None)
+                    if not part_name:
+                        continue
+                    expr = attr.feature_value_expression
+                    if expr is None:
+                        continue
+                    val, report = compiler.evaluate(expr)
+                    if not report.fatal and val is not None:
+                        result.setdefault(part_name, {})[attr.name] = float(val)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return result
+
     def _build_attr_map(self) -> Dict[str, Dict[str, float]]:
         """part_name → {attr_name: float}，用于 @attr: 直接读属性的情况。"""
         result: Dict[str, Dict[str, float]] = {}
@@ -1020,6 +1065,13 @@ class RequirementLinker:
                 if val is not None:
                     attrs[attr.name] = val
             result[part.name] = attrs
+
+        # Augment with syside-evaluated values: handles expressions like
+        # `= 10.0 [m/s]` or `= mass * g` that _parse_attr_value regex misses.
+        # Syside values take precedence when they successfully evaluate.
+        for part_name, syside_attrs in self._build_syside_attr_map().items():
+            result.setdefault(part_name, {}).update(syside_attrs)
+
         return result
 
     # ------------------------------------------------------------------

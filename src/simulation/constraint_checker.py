@@ -7,6 +7,9 @@ constraint_checker.py
   STATIC    — 两侧都是 initial_values 里的已知常量，直接计算
   GUARD     — LHS 是状态机 guard 变量（运行时变量），由 behavioral_sim 已验证
   UNCHECKED — LHS 是运行时变量但无对应 guard，需要外部仿真才能验证
+
+属性值提取：优先使用 syside Compiler 精确求值（支持算术表达式和单位），
+          降级到调用方传入的 initial_values 字典。
 """
 
 from __future__ import annotations
@@ -14,6 +17,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    import syside as _syside
+    _SYSIDE_OK = True
+except ImportError:
+    _syside = None      # type: ignore
+    _SYSIDE_OK = False
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +49,39 @@ class ConstraintCheckResult:
     detail: str        # 人可读的说明
     lhs_value: Optional[float] = None
     rhs_value: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
+# Syside-based attribute value extraction
+# ---------------------------------------------------------------------------
+
+def _extract_attribute_values_via_syside(sysml_text: str) -> Dict[str, float]:
+    """
+    Walk the syside AST and evaluate every AttributeUsage expression.
+
+    Handles arithmetic expressions and unit-bearing literals that regex cannot
+    (e.g. `mass * g`, `15.0 [m/s]`).  Returns {attribute_name: float_value}.
+    Falls back to {} when syside is unavailable or parsing fails.
+    """
+    if not _SYSIDE_OK or not sysml_text:
+        return {}
+    out: Dict[str, float] = {}
+    try:
+        model, _ = _syside.try_load_model(sysml_source=sysml_text)
+        compiler = _syside.Compiler()
+        for attr in model.nodes(_syside.AttributeUsage):
+            try:
+                expr = attr.feature_value_expression
+                if expr is None:
+                    continue
+                val, report = compiler.evaluate(expr)
+                if not report.fatal and val is not None:
+                    out[attr.name] = float(val)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -218,9 +261,16 @@ def run_constraint_checks(
     constraints = extract_constraints(sysml_text)
     if not constraints:
         return []
+
+    # Syside-evaluated values supersede regex-extracted initial_values for
+    # the same attribute name: the Compiler handles multi-operand arithmetic
+    # and unit-bearing literals that the regex path cannot evaluate.
+    syside_values = _extract_attribute_values_via_syside(sysml_text)
+    merged_values = {**all_initial_values, **syside_values}
+
     return check_constraints(
         constraints,
-        all_initial_values,
+        merged_values,
         guard_variables or set(),
     )
 

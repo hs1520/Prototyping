@@ -1740,6 +1740,18 @@ class Orchestrator:
 
                 if not sim_result.failed_scenarios():
                     print(f"  └─ Simulation fully resolved ✓", flush=True)
+                    # Re-evaluate with the fixed sim so the returned score
+                    # reflects the model's true post-fix quality.
+                    eval_after = self.evaluator.evaluate(
+                        config=DesignConfiguration(
+                            name=f"iteration_{iteration}_fixed",
+                            parameters={},
+                        ),
+                        model=current_model,
+                        syntax_result=syntax_result,
+                        sim_result=sim_result,
+                    )
+                    score = eval_after.weighted_total
                     return current_model, score, sim_result
 
                 # Surgical fix insufficient

@@ -189,6 +189,8 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
         return []
 
     sat_cls = getattr(_syside, "SatisfyRequirementUsage", None)
+    # One Compiler instance for all attribute evaluations in this call.
+    compiler = _syside.Compiler()
     parts: List[LitePartDef] = []
 
     try:
@@ -221,21 +223,41 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                     fve = getattr(attr, "feature_value_expression", None)
                     if fve is not None:
                         fve_type = type(fve).__name__
-                        if fve_type in ("LiteralRational", "LiteralInteger", "LiteralReal"):
-                            try:
-                                default_val = float(fve.value)
-                            except Exception:
-                                pass
-                        elif fve_type == "LiteralBoolean":
+                        if fve_type == "LiteralBoolean":
+                            # Compiler handles numeric expressions; keep boolean separate.
                             default_val = bool(getattr(fve, "value", False))
-                        elif fve_type == "OperatorExpression":
-                            # 带单位的量值：25.0 [percent] → operand[0] 是数值
+                        else:
+                            # Primary: Compiler handles plain literals, arithmetic
+                            # expressions (capacity * 0.15), and symbolic references.
+                            compiler_ok = False
                             try:
-                                first_op = next(iter(fve.operands))
-                                if type(first_op).__name__ in ("LiteralRational", "LiteralInteger", "LiteralReal"):
-                                    default_val = float(first_op.value)
+                                val, report = compiler.evaluate(fve)
+                                if not report.fatal and val is not None:
+                                    default_val = float(val)
+                                    compiler_ok = True
                             except Exception:
                                 pass
+
+                            if not compiler_ok:
+                                # Fallback: Compiler returns FATAL for unit-bearing
+                                # OperatorExpressions (e.g. 120.0 [m], 25.0 [percent]).
+                                # Read the first numeric operand directly.
+                                if fve_type in (
+                                    "LiteralRational", "LiteralInteger", "LiteralReal"
+                                ):
+                                    try:
+                                        default_val = float(fve.value)
+                                    except Exception:
+                                        pass
+                                elif fve_type == "OperatorExpression":
+                                    try:
+                                        first_op = next(iter(fve.operands))
+                                        if type(first_op).__name__ in (
+                                            "LiteralRational", "LiteralInteger", "LiteralReal"
+                                        ):
+                                            default_val = float(first_op.value)
+                                    except Exception:
+                                        pass
                     attrs.append(LiteAttributeUsage(name=attr.name, default_value=default_val))
             except Exception:
                 pass
