@@ -385,6 +385,12 @@ Rules:
   (e.g. `MAVLinkPort`, `ADSBOutPort`, `AES256Port`). Define a `port def` for EACH
   such name exactly as it appears in the structural fragment — do NOT rename them.
   Only introduce new port type names for types not yet referenced in the structural fragment.
+- Inside a `port def` body, feature names MUST NOT be SysML v2 reserved keywords.
+  Forbidden names: `message`, `frame`, `flow`, `connect`, `item`, `port`, `part`,
+  `action`, `state`, `binding`, `succession`, `interface`, `allocation`.
+  Use `data`, `signal`, `payload`, `telemetry`, `packet`, `value` instead.
+  Example of the WRONG name: `in item message : MAVLinkMsg;`  (message is reserved)
+  Example of the CORRECT name: `in item data : MAVLinkMsg;`
 - Use valid SysML v2 syntax.
 
 Output a single ```sysml code block containing ONLY the item defs and typed port defs.
