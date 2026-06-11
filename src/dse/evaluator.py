@@ -42,6 +42,8 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from .design_space import DesignConfiguration
 from ..sysml.model import DiagnosticSeverity, FeatureDirection, SysMLModel
+from ..utils.syside_utils import extract_attr_values as _extract_attr_values_via_syside
+from ..utils.sysml_text_utils import find_block_end
 
 try:
     import networkx as nx
@@ -57,34 +59,11 @@ except ImportError:
     _SYSIDE_EVAL_OK = False
 
 
-def _extract_attr_values_via_syside(text: str) -> Dict[str, float]:
-    """
-    Evaluate every AttributeUsage expression in *text* via the syside Compiler.
-
-    Returns {attribute_name: float_value}.  Used to supplement IR model
-    attribute values that may be unparsed expressions (e.g. `= mass * g`).
-    Falls back to {} when syside is unavailable or parsing fails.
-    """
-    if not _SYSIDE_EVAL_OK or not text:
-        return {}
-    out: Dict[str, float] = {}
-    try:
-        model, _ = _syside_eval.try_load_model(sysml_source=text)
-        compiler = _syside_eval.Compiler()
-        for attr in model.nodes(_syside_eval.AttributeUsage):
-            try:
-                expr = attr.feature_value_expression
-                if expr is None:
-                    continue
-                val, report = compiler.evaluate(expr)
-                if not report.fatal and val is not None:
-                    out[attr.name] = float(val)
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return out
-
+_SENSOR_USAGE_RE = re.compile(
+    r"\bpart\s+(\w+)\s*:\s*\w*"
+    r"(?:Sensor|Perception|Detector|Camera|Lidar|IMU|GPS|Radar)\w*\s*;",
+    re.IGNORECASE,
+)
 
 # ---------------------------------------------------------------------------
 # Data classes (unchanged public API)
@@ -659,18 +638,7 @@ class DesignEvaluator:
             bodies: List[str] = []
             for m in part_re.finditer(text):
                 brace_open = text.index("{", m.start())
-                depth = 0
-                i = brace_open
-                end = -1
-                while i < len(text):
-                    if text[i] == "{":
-                        depth += 1
-                    elif text[i] == "}":
-                        depth -= 1
-                        if depth == 0:
-                            end = i
-                            break
-                    i += 1
+                end = find_block_end(text, brace_open)
                 if end != -1:
                     bodies.append(text[brace_open:end])
             return "\n".join(bodies)
@@ -831,11 +799,6 @@ class DesignEvaluator:
         #   (c) aggregator:  a Voter/Aggregator/Fusion part type exists
         num_sensors = int(params.get("num_sensors", 0))
         if num_sensors > 1:
-            _SENSOR_USAGE_RE = re.compile(
-                r"\bpart\s+(\w+)\s*:\s*\w*"
-                r"(?:Sensor|Perception|Detector|Camera|Lidar|IMU|GPS|Radar)\w*\s*;",
-                re.IGNORECASE,
-            )
             instances = {m.group(1) for m in _SENSOR_USAGE_RE.finditer(text)}
 
             # (a) count
@@ -1618,16 +1581,7 @@ class DesignEvaluator:
                 safety_body = ""
                 if safety_match:
                     brace_open = text.index("{", safety_match.start())
-                    depth, i, end = 0, brace_open, -1
-                    while i < len(text):
-                        if text[i] == "{":
-                            depth += 1
-                        elif text[i] == "}":
-                            depth -= 1
-                            if depth == 0:
-                                end = i
-                                break
-                        i += 1
+                    end = find_block_end(text, brace_open)
                     if end != -1:
                         safety_body = text[brace_open:end]
 
@@ -1742,12 +1696,7 @@ class DesignEvaluator:
             # ── Sensor redundancy: count + connectivity + aggregator ──────
             num_sensors = int(params.get("num_sensors", 0))
             if num_sensors > 1:
-                _SENSOR_PAT = re.compile(
-                    r"\bpart\s+(\w+)\s*:\s*\w*"
-                    r"(?:Sensor|Perception|Detector|Camera|Lidar|IMU|GPS|Radar)\w*\s*;",
-                    re.IGNORECASE,
-                )
-                instances = {m.group(1) for m in _SENSOR_PAT.finditer(text)}
+                instances = {m.group(1) for m in _SENSOR_USAGE_RE.finditer(text)}
                 if len(instances) < num_sensors:
                     issues.append(
                         f"MCTS: num_sensors={num_sensors} but only "
@@ -1808,16 +1757,7 @@ class DesignEvaluator:
                 ctrl_body = ""
                 if ctrl_match:
                     brace_open = text.index("{", ctrl_match.start())
-                    depth, i, end = 0, brace_open, -1
-                    while i < len(text):
-                        if text[i] == "{":
-                            depth += 1
-                        elif text[i] == "}":
-                            depth -= 1
-                            if depth == 0:
-                                end = i
-                                break
-                        i += 1
+                    end = find_block_end(text, brace_open)
                     if end != -1:
                         ctrl_body = text[brace_open:end]
                 has_behaviour = bool(

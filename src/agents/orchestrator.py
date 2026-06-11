@@ -13,7 +13,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from .base_agent import AgentMessage
 from .design_agent import DesignAgent
 from .requirements_agent import RequirementsAgent
 from ..dse.design_space import DesignConfiguration, DesignParameter, DesignSpace, ParameterType
@@ -62,6 +61,7 @@ from ..simulation.port_fixer import (
     merge_port_additions,
 )
 from ..simulation.connect_auditor import audit_connects, AuditResult
+from ..utils.sysml_text_utils import find_block_end, get_sysml_text
 
 # System prompt for surgical LLM syntax fixes
 _SURGICAL_FIX_SYSTEM = (
@@ -91,6 +91,17 @@ _PORT_FIX_SYSTEM = (
     "become connectable. You return ONLY lines in the form "
     "`<PartDefName>: <direction> port <portName> : <PortType>;` — never any other text."
 )
+
+# Domain-detection keyword sets (ordered most-specific first)
+_DRONE_KWS      = {"drone", "uav", "aerial", "quadcopter", "rotor", "flight", "autopilot"}
+_INDUSTRIAL_KWS = {"factory", "plc", "industrial", "cnc", "conveyor", "scada", "fieldbus"}
+_ROBOT_KWS      = {"ros2", "ros ", "manipulator", "mobile robot"}
+
+# Part-classification keyword sets
+_CTRL_KWS   = {"controller", "flight", "control", "nav", "autopilot"}
+_CF_KWS     = {"controlfrequency", "controlfreq", "loopfrequency", "samplingfrequency"}
+_SENSOR_KWS = {"sensor", "perception", "detector", "camera", "lidar", "imu", "gps", "radar"}
+_SAFETY_KWS = {"safety", "monitor", "fault", "health"}
 
 # Scenario-name tag prefixes to strip when recovering the real entry instance.
 _SCEN_TAG_PREFIXES = (
@@ -175,15 +186,9 @@ def _inject_missing_guard_attrs(
     for m in _PART_DEF_BLOCK_RE.finditer(text):
         part_name = m.group(1)
         brace = text.index('{', m.start())
-        depth, end = 0, brace
-        for i in range(brace, len(text)):
-            if text[i] == '{': depth += 1
-            elif text[i] == '}':
-                depth -= 1
-                if depth == 0:
-                    end = i
-                    break
-        blocks.append((part_name, brace, end))
+        end = find_block_end(text, brace)
+        if end != -1:
+            blocks.append((part_name, brace, end))
 
     # For each guard var, find the part def block that contains it
     injections: List[tuple] = []   # (insert_pos, attr_line, var_name)
@@ -256,7 +261,7 @@ class PrototypingState:
     design_space: Optional[DesignSpace] = None
     iteration: int = 0
     evaluation_history: List[Dict[str, Any]] = field(default_factory=list)
-    messages: List[AgentMessage] = field(default_factory=list)
+
 
 
 class Orchestrator:
@@ -421,10 +426,7 @@ class Orchestrator:
                 print(f"  {line}")
         print(f"{'='*60}\n")
 
-        final_sysml = (
-            (getattr(final_model, "metadata", None) or {}).get("last_sysml_text")
-            or final_model.to_sysml_text()
-        )
+        final_sysml = get_sysml_text(final_model)
         return {
             "system_name":        system_name,
             "requirements":       requirements,
@@ -541,10 +543,7 @@ class Orchestrator:
                 print(f"  {line}")
         print(f"{'='*60}\n")
 
-        final_sysml = (
-            (getattr(final_model, "metadata", None) or {}).get("last_sysml_text")
-            or final_model.to_sysml_text()
-        )
+        final_sysml = get_sysml_text(final_model)
         return {
             # ── Fields inherited / updated from generate() ────────────────────
             **generate_result,
@@ -677,7 +676,6 @@ class Orchestrator:
         design_space = self._define_design_space(model, requirements)
         self._add_inter_parameter_constraints(design_space)
 
-        # 方案 B: score each config against real requirement bounds
         def evaluate_config(config: DesignConfiguration) -> Dict[str, float]:
             return self._score_config_against_requirements(config, requirements)
 
@@ -757,8 +755,6 @@ class Orchestrator:
         print(f"  ✓ Best config applied to model: {best_params}\n")
 
     # ------------------------------------------------------------------
-    # 方案 A: Requirements-driven design space generation
-    # ------------------------------------------------------------------
 
     def _define_design_space(
         self,
@@ -821,11 +817,6 @@ class Orchestrator:
             combined_lower = (model.name + " " + all_req_text).lower()
             # Ordered most-specific first so industrial + robotic systems
             # (e.g. a CNC arm) don't fall into the generic "robot→ROS2" bucket.
-            _DRONE_KWS    = {"drone", "uav", "aerial", "quadcopter", "rotor",
-                             "flight", "autopilot"}
-            _INDUSTRIAL_KWS = {"factory", "plc", "industrial", "cnc", "conveyor",
-                               "scada", "fieldbus"}
-            _ROBOT_KWS    = {"ros2", "ros ", "manipulator", "mobile robot"}
             if any(kw in combined_lower for kw in _DRONE_KWS):
                 domain_fallback = ["MAVLink", "Ethernet"]
             elif any(kw in combined_lower for kw in _INDUSTRIAL_KWS):
@@ -931,8 +922,6 @@ class Orchestrator:
         return space
 
     # ------------------------------------------------------------------
-    # 方案 B: Requirement-bound scoring
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _score_config_against_requirements(
@@ -1014,8 +1003,6 @@ class Orchestrator:
         return scores
 
     # ------------------------------------------------------------------
-    # 方案 C: Apply MCTS best config back to the SysMLModel
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _apply_best_config_to_model(
@@ -1039,7 +1026,6 @@ class Orchestrator:
         if freq is not None:
             freq_str = str(round(float(freq), 2))
             # Identify the "main controller" part: most FUNC/PERF satisfy links.
-            _CTRL_KWS = {"controller", "flight", "control", "nav", "autopilot"}
             ctrl_part = None
             best_ctrl_score = -1
             for part in model.part_definitions:
@@ -1055,8 +1041,6 @@ class Orchestrator:
                     ctrl_part = part
             if ctrl_part is not None:
                 # Update or inject the `controlFrequency` attribute.
-                _CF_KWS = {"controlfrequency", "controlfreq", "loopfrequency",
-                           "samplingfrequency"}
                 matched = False
                 for attr in ctrl_part.attributes:
                     if attr.name.lower() in _CF_KWS:
@@ -1316,8 +1300,6 @@ class Orchestrator:
             return
 
         # Identify the primary sensor-like part def name
-        _SENSOR_KWS = {"sensor", "perception", "detector", "camera",
-                       "lidar", "imu", "gps", "radar"}
         sensor_part_name: Optional[str] = None
         for part in model.part_definitions:
             if any(kw in part.name.lower() for kw in _SENSOR_KWS):
@@ -1471,7 +1453,6 @@ class Orchestrator:
             return
 
         # ── Identify the safety/monitor part def to inject into ───────────
-        _SAFETY_KWS = {"safety", "monitor", "fault", "health"}
         target_part: Optional[str] = None
         for part in model.part_definitions:
             if any(kw in part.name.lower() for kw in _SAFETY_KWS):
@@ -1591,10 +1572,7 @@ class Orchestrator:
             self.state.iteration = iteration + 1
 
             # ── Step 0: Syntax gate — fix errors before evaluation ────────
-            current_sysml = (
-                (getattr(current_model, "metadata", None) or {}).get("last_sysml_text")
-                or current_model.to_sysml_text()
-            )
+            current_sysml = get_sysml_text(current_model)
             current_sysml, fixed_model, syntax_result = self._syntax_gate(
                 current_sysml, current_model, requirements, max_attempts=3
             )
@@ -1731,10 +1709,7 @@ class Orchestrator:
                 )
 
                 # Re-check after surgical fix
-                _sysml_after = (
-                    (getattr(current_model, "metadata", None) or {}).get("last_sysml_text")
-                    or current_model.to_sysml_text()
-                )
+                _sysml_after = get_sysml_text(current_model)
                 sim_result = self._run_simulation(_sysml_after, current_model.name)
                 last_sim_result = sim_result
 
@@ -2117,10 +2092,7 @@ class Orchestrator:
         current = self._fix_stuck_transitions(current)
 
         for sim_iter in range(max_iters):
-            sysml = (
-                (getattr(current, "metadata", None) or {}).get("last_sysml_text")
-                or current.to_sysml_text()
-            )
+            sysml = get_sysml_text(current)
             sim_result = self._run_simulation(sysml, current.name)
             failed = sim_result.failed_scenarios()
 
@@ -2301,10 +2273,7 @@ class Orchestrator:
             print(f"  │  ✓ added {merge.n_added} validated connection(s)", flush=True)
 
         # ── Exited loop with persistent sim failures ───────────────────
-        final_sysml = (
-            (getattr(current, "metadata", None) or {}).get("last_sysml_text")
-            or current.to_sysml_text()
-        )
+        final_sysml = get_sysml_text(current)
         final_sim = self._run_simulation(final_sysml, current.name)
         remaining = final_sim.failed_scenarios()
 
@@ -2389,10 +2358,7 @@ class Orchestrator:
 
         Supports both guard-based (enum_eq) and accept-triggered mode machines.
         """
-        sysml = (
-            (getattr(model, "metadata", None) or {}).get("last_sysml_text")
-            or model.to_sysml_text()
-        )
+        sysml = get_sysml_text(model)
 
         _STUCK_RE = re.compile(
             r"only traversed (\d+)/(\d+) (?:accept )?transitions"
