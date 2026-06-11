@@ -42,7 +42,11 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from .design_space import DesignConfiguration
 from ..sysml.model import DiagnosticSeverity, FeatureDirection, SysMLModel
-from ..utils.syside_utils import extract_attr_values as _extract_attr_values_via_syside
+from ..utils.syside_utils import (
+    extract_attr_values as _extract_attr_values_via_syside,
+    syside as _syside_eval,
+    SYSIDE_OK as _SYSIDE_EVAL_OK,
+)
 from ..utils.sysml_text_utils import find_block_end
 
 try:
@@ -50,13 +54,6 @@ try:
     _HAS_NX = True
 except ModuleNotFoundError:
     _HAS_NX = False
-
-try:
-    import syside as _syside_eval
-    _SYSIDE_EVAL_OK = True
-except ImportError:
-    _syside_eval = None     # type: ignore
-    _SYSIDE_EVAL_OK = False
 
 
 _SENSOR_USAGE_RE = re.compile(
