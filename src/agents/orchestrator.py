@@ -1321,6 +1321,7 @@ class Orchestrator:
                             parameters={},
                         ),
                         model=current_model,
+                        mcts_config=mcts_best_config,
                         syntax_result=syntax_result,
                         sim_result=sim_result,
                     )
@@ -1375,9 +1376,21 @@ class Orchestrator:
                 if refine_result.success and isinstance(refine_result.output, _SysMLModelTypes):
                     candidate = refine_result.output
                     # ── P0: Regression prevention ─────────────────────────
+                    # Evaluate the candidate with the SAME inputs as rule_score
+                    # (sim + syntax + mcts_config).  Omitting sim_result makes
+                    # behavioral_verification fall back to 1.0 and omitting
+                    # mcts_config changes the weight denominator — both bias
+                    # the comparison toward accepting the candidate.
+                    # check_syntax and _run_simulation are local (no LLM cost).
+                    cand_sysml = get_sysml_text(candidate)
+                    cand_syntax = check_syntax(cand_sysml)
+                    cand_sim = self._run_simulation(cand_sysml, candidate.name)
                     candidate_eval = self.evaluator.evaluate(
                         config=DesignConfiguration(name="candidate", parameters={}),
                         model=candidate,
+                        mcts_config=mcts_best_config,
+                        syntax_result=cand_syntax,
+                        sim_result=cand_sim,
                     )
                     delta = candidate_eval.weighted_total - rule_score
                     delta_str = f"{delta:+.3f}"
