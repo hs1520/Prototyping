@@ -273,14 +273,22 @@ def diagnose(
                 if end != -1:
                     safety_body = text[brace_open:end]
 
-            voting_re = re.compile(
+            # Accept both the canonical SysML v2 form (`first X if <guard>
+            # then Y;`) and the legacy form (`from X to Y when <guard>;`) —
+            # mirrors _score_mcts_fidelity so diagnosis and scoring agree.
+            voting_canonical = re.compile(
+                r"\btransition\s+\w+\s+first\s+\w+\s+if\s+([^;]+?)\s+then\s+\w+\s*;",
+                re.IGNORECASE | re.DOTALL,
+            )
+            voting_legacy = re.compile(
                 r"\btransition\s+\w+\s+from\s+\w+\s+to\s+\w+\s+when\s+([^;]+);",
                 re.IGNORECASE,
             )
             has_voting = any(
                 " and " in m.group(1).lower() or " or " in m.group(1).lower()
                 or len(re.findall(r"channel[a-z]\w*", m.group(1).lower())) >= 2
-                for m in voting_re.finditer(safety_body)
+                for pat in (voting_canonical, voting_legacy)
+                for m in pat.finditer(safety_body)
             )
             if not has_voting:
                 issues.append(
@@ -297,7 +305,15 @@ def diagnose(
                     f"      then FailsafeActive;"
                 )
 
-            guard_names = set(re.findall(r"\bwhen\s+(\w+)", safety_body, re.IGNORECASE))
+            # Collect guard identifiers from both syntaxes; skip boolean
+            # literals which need no producer (mirrors _score_mcts_fidelity).
+            _GUARD_LITERALS = {"true", "false"}
+            guard_names = {
+                m.group(1)
+                for kw in (r"if", r"when")
+                for m in re.finditer(rf"\b{kw}\s+(\w+)", safety_body, re.IGNORECASE)
+                if m.group(1).lower() not in _GUARD_LITERALS
+            }
             ungrounded = [
                 g for g in guard_names
                 if not re.search(

@@ -999,9 +999,17 @@ class DesignEvaluator:
         state_cov = min(1.0, state_defs / max(n_safe, 1))
 
         # ── Fault transitions (SysML v2: first/then syntax) ─────────────
-        # Matches `transition X first NominalState if <guard> then FaultState`
+        # Counts ALL guard-based transitions (`first X if <guard> then Y`)
+        # regardless of target-state naming.  In the generation pipeline
+        # (chain_of_thought templates), nominal phase chains are driven by
+        # `accept CMD_*` while guard transitions appear only in fault
+        # monitors / safety arbiters — so "guard transition" is the
+        # structural definition of a fault transition.  Filtering by target
+        # name (Fault/Fail/Emergency…) missed the template's XxxDetected /
+        # ArbXxxMode naming and scored 0 systematically; min(1.0, …) caps
+        # any over-count so the looser match is safe.
         fault_tx = len(re.findall(
-            r"\btransition\s+\w+\s+first\s+\w+\s+if\s+[^;]+?\s+then\s+\w*(?:Fault|Fail|Failsafe|EMERGENCY|Emergency|Critical)\w*\s*;",
+            r"\btransition\s+\w+\s+first\s+\w+\s+if\s+[^;]+?\s+then\s+\w+\s*;",
             text, re.IGNORECASE | re.DOTALL,
         ))
         fault_tx_score = min(1.0, fault_tx / max(n_safe, 1))
