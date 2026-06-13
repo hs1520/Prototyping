@@ -645,13 +645,17 @@ class SITLBridge:
 
     def run_l2(
         self,
-        host: str = "127.0.0.1",
-        port: int = 5760,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
         per_test_sitl: bool = True,
         sitl_home: str = "51.4,-2.35,0,0",
     ) -> List[TestResult]:
         """
         执行所有 L2 测试，返回结果列表。
+
+        host / port
+          当 None（默认）时使用构造时传入的 connection_string。
+          显式指定时覆盖连接目标（优先级高于 connection_string）。
 
         per_test_sitl=True (默认)
           每个测试启动一个独立 SITL 进程，跑完即停。彻底隔离测试间状态。
@@ -665,7 +669,10 @@ class SITLBridge:
 
         specs = [s for s in self._linker.generate_test_specs() if s.tier == "L2"]
         results: List[TestResult] = []
-        conn_str = f"tcp:{host}:{port}"
+        if host is not None and port is not None:
+            conn_str = f"tcp:{host}:{port}"
+        else:
+            conn_str = self._connection_string
 
         for spec in specs:
             print(f"\n[L2] 运行测试 {spec.req_id} ...")
