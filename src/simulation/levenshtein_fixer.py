@@ -32,6 +32,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
+from ..utils.sysml_text_utils import find_block_end as _block_end
+
 
 # ---------------------------------------------------------------------------
 # Levenshtein distance (pure Python — no external deps)
@@ -104,19 +106,6 @@ def _best_match(
 # ---------------------------------------------------------------------------
 # Block helpers
 # ---------------------------------------------------------------------------
-
-def _block_end(text: str, open_brace: int) -> int:
-    """Return index of the closing '}' matching the '{' at *open_brace*."""
-    depth = 0
-    for i in range(open_brace, len(text)):
-        if text[i] == '{':
-            depth += 1
-        elif text[i] == '}':
-            depth -= 1
-            if depth == 0:
-                return i
-    return len(text) - 1
-
 
 def _char_to_line(text: str, pos: int) -> int:
     """Convert character offset *pos* to a 1-indexed line number."""

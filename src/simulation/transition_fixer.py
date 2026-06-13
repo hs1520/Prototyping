@@ -39,6 +39,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from ..utils.sysml_text_utils import find_block_end as _block_end
+
 
 # ---------------------------------------------------------------------------
 # 数据类
@@ -146,19 +148,6 @@ _TX_NAME_RE = re.compile(r'\btransition\s+(\w+)\b')
 # ---------------------------------------------------------------------------
 # 块匹配辅助
 # ---------------------------------------------------------------------------
-
-def _block_end(text: str, open_brace: int) -> int:
-    """Return the index of the `}` matching the `{` at *open_brace*."""
-    depth = 0
-    for i in range(open_brace, len(text)):
-        if text[i] == '{':
-            depth += 1
-        elif text[i] == '}':
-            depth -= 1
-            if depth == 0:
-                return i
-    return len(text) - 1
-
 
 # ---------------------------------------------------------------------------
 # 摘要构建

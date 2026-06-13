@@ -19,6 +19,7 @@ from typing import List, Optional
 
 from ..dse.design_space import DesignConfiguration
 from ..sysml.model import ElementRef, SysMLModel
+from ..utils.sysml_text_utils import find_block_end
 
 # ── Part-classification keyword sets ────────────────────────────────────────
 _CTRL_KWS   = {"controller", "flight", "control", "nav", "autopilot"}
@@ -116,7 +117,6 @@ def apply_inject_attrs_to_sysml_text(model: SysMLModel) -> None:
     if not inject_attrs or not sysml_text:
         return
 
-    from .design_agent import DesignAgent
     result = sysml_text
     applied: List[str] = []
 
@@ -143,7 +143,7 @@ def apply_inject_attrs_to_sysml_text(model: SysMLModel) -> None:
             continue
 
         brace_open = result.index("{", m_part.start())
-        closing = DesignAgent._find_block_end(result, brace_open)
+        closing = find_block_end(result, brace_open)
         if closing == -1:
             continue
 

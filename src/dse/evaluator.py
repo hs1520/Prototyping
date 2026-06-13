@@ -273,20 +273,6 @@ class DesignEvaluator:
         self._syside_model = None
         return result
 
-    def evaluate_from_scores(
-        self,
-        config: DesignConfiguration,
-        scores: Dict[str, float],
-    ) -> EvaluationResult:
-        """Build a result from pre-computed scores (LLM path)."""
-        result = EvaluationResult(configuration_name=config.name)
-        result.criteria_scores = scores
-        weighted_sum = sum(
-            scores.get(k, 0.0) * w for k, w in DIMENSION_WEIGHTS.items()
-        )
-        result.weighted_total = round(weighted_sum, 4)
-        return result
-
     # ------------------------------------------------------------------
     # Syside AST query helpers
     # ------------------------------------------------------------------
@@ -1184,12 +1170,6 @@ class DesignEvaluator:
                 tgt_domain = "power" if "power" in tgt_type.lower() else "data"
                 if src_domain != tgt_domain or src_type != tgt_type:
                     type_mismatches += 1
-        if type_checked > 0:
-            type_conn_score = max(0.0, 1.0 - type_mismatches / type_checked)
-        else:
-            # No type information available — mild penalty to encourage typed ports
-            type_conn_score = 0.8
-
         return (
             0.50 * type_consistency
             + 0.30 * fan_in_score

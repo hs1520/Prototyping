@@ -239,7 +239,6 @@ class SITLBridge:
     def validate_l1(self) -> List[TestResult]:
         """静态验证：检查所有 L1 参数是否已正确解析（无 <unresolved>）。"""
         results: List[TestResult] = []
-        parm_content = self._linker.generate_parm_file()
         specs = [s for s in self._linker.generate_test_specs() if s.tier == "L1"]
 
         for spec in specs:
