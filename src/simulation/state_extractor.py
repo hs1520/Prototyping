@@ -685,6 +685,21 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
                     guards.append(g)
 
             accept_trigger = _extract_accept_trigger(tr)
+            # Text fallback: a standalone parse without the standard library
+            # cannot resolve the accepted action def, so _extract_accept_trigger
+            # returns None for every accept transition — collapsing an
+            # event-driven mode machine into "no accepts" and misclassifying it
+            # as a monitor (→ false "No fault transitions found").  Guards survive
+            # the degraded parse (local refs + literals); accepts do not.  Recover
+            # the trigger name from the source text, keyed on the transition name.
+            if accept_trigger is None and tr.name:
+                import re as _re
+                _m = _re.search(
+                    r"\btransition\s+" + _re.escape(tr.name)
+                    + r"\b[^;{}]*?\baccept\s+(\w+)", sysml_text
+                )
+                if _m:
+                    accept_trigger = _m.group(1)
 
             td = TransitionDef(
                 name=tr.name,
