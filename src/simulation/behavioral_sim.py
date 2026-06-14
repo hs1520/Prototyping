@@ -1302,11 +1302,11 @@ def _compute_score(results: List[BehavioralScenarioResult]) -> float:
     passed_w = 0.0
     for r in results:
         if "cross_component" in r.tags:
-            w = 0.5          # 跨组件场景：权重 0.5（达成共识的 Option B）
+            w = 1.5          # 响应链完整性：故障检测后必须能送达执行器，比 nominal 更关键
         elif "emergency" in r.tags:
-            w = 0.5          # emergency 分支场景：同等权重
+            w = 0.5          # accept 分支跳转：测试性质与 nominal 相近，保持低权重
         elif "safety" in r.tags:
-            w = 2.0          # 安全 guard 场景：加重
+            w = 2.0          # 故障检测 guard：安全感知层，最高权重
         else:
             w = 1.0
         total_w  += w
