@@ -23,6 +23,7 @@ from ..sysml.model import (
     SysMLModel,
 )
 from ..sysml.lite_model import SysMLLiteModel, build_lite_model
+from ..utils.sysml_text_utils import find_block_end
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -861,24 +862,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
 
         return suspicious
 
-    @staticmethod
-    def _find_block_end(text: str, start: int) -> int:
-        """Return the index of the closing '}' that matches the '{' at or after `start`.
-
-        Scans forward from `start`, tracking brace depth.  Returns -1 if not found.
-        """
-        depth = 0
-        i = start
-        while i < len(text):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    return i
-            i += 1
-        return -1
-
     @classmethod
     def _inject_missing_state_defs(
         cls,
@@ -919,7 +902,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             if m_state:
                 name = m_state.group(1)
                 brace_pos = behavior_fragment.index("{", m_state.start())
-                end = cls._find_block_end(behavior_fragment, brace_pos)
+                end = find_block_end(behavior_fragment, brace_pos)
                 if end != -1:
                     block = behavior_fragment[m_state.start(): end + 1]
                     behavior_state_defs.append((last_owner, name, block))
@@ -975,7 +958,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 continue  # part not found — skip
 
             brace_open = result.index("{", m_part.start())
-            closing = cls._find_block_end(result, brace_open)
+            closing = find_block_end(result, brace_open)
             if closing == -1:
                 continue
 
@@ -1040,7 +1023,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 i = m.end()
             else:  # "{"
                 brace_pos = interfaces_fragment.index("{", m.start())
-                end = cls._find_block_end(interfaces_fragment, brace_pos)
+                end = find_block_end(interfaces_fragment, brace_pos)
                 if end != -1:
                     block = interfaces_fragment[m.start():end + 1]
                     extracted.append((kind, name, block))

@@ -18,12 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    import syside as _syside
-    _SYSIDE_OK = True
-except ImportError:
-    _syside = None      # type: ignore
-    _SYSIDE_OK = False
+from ..utils.syside_utils import extract_attr_values as _extract_attribute_values_via_syside
 
 
 # ---------------------------------------------------------------------------
@@ -52,38 +47,6 @@ class ConstraintCheckResult:
 
 
 # ---------------------------------------------------------------------------
-# Syside-based attribute value extraction
-# ---------------------------------------------------------------------------
-
-def _extract_attribute_values_via_syside(sysml_text: str) -> Dict[str, float]:
-    """
-    Walk the syside AST and evaluate every AttributeUsage expression.
-
-    Handles arithmetic expressions and unit-bearing literals that regex cannot
-    (e.g. `mass * g`, `15.0 [m/s]`).  Returns {attribute_name: float_value}.
-    Falls back to {} when syside is unavailable or parsing fails.
-    """
-    if not _SYSIDE_OK or not sysml_text:
-        return {}
-    out: Dict[str, float] = {}
-    try:
-        model, _ = _syside.try_load_model(sysml_source=sysml_text)
-        compiler = _syside.Compiler()
-        for attr in model.nodes(_syside.AttributeUsage):
-            try:
-                expr = attr.feature_value_expression
-                if expr is None:
-                    continue
-                val, report = compiler.evaluate(expr)
-                if not report.fatal and val is not None:
-                    out[attr.name] = float(val)
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------

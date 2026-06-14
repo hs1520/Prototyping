@@ -810,7 +810,8 @@ class Orchestrator:
             "UAVCAN", "DRONECAN",           # drone CAN variants
             "OPENAPI", "REST",              # web/cloud interfaces
         ]
-        detected = [p for p in known_protocols if p in intf_text]
+        detected = [p for p in known_protocols
+                    if re.search(rf"\b{re.escape(p)}\b", intf_text)]
 
         # Domain-adaptive fallback: when no protocol is found in INTF reqs,
         # use system-name and requirement text to pick sensible defaults.
