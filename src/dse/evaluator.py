@@ -189,6 +189,21 @@ class DesignEvaluator:
         # Cache the syside model object from SysMLLiteModel so scoring functions
         # can do AST queries without re-parsing.
         self._syside_model = getattr(model, "_syside_model", None)
+        try:
+            return self._evaluate_inner(config, model, mcts_config, syntax_result)
+        finally:
+            self._cached_syntax_result = None
+            self._sim_result = None
+            self._syside_attr_map = {}
+            self._syside_model = None
+
+    def _evaluate_inner(
+        self,
+        config: DesignConfiguration,
+        model: SysMLModel,
+        mcts_config: Optional[DesignConfiguration],
+        syntax_result,
+    ) -> EvaluationResult:
         result = EvaluationResult(configuration_name=config.name)
 
         scorers = {
@@ -222,27 +237,16 @@ class DesignEvaluator:
         result.weighted_total = round(weighted_sum, 4)
 
         # ── Veto floors (Strategy D) ─────────────────────────────────────
-        # If any critical dimension is below its floor, force refinement by
-        # capping the weighted_total just below the quality threshold.  We do
-        # NOT directly fail here — the score remains informative and the
-        # refinement loop receives a clear [VETO] tag so the LLM can prioritise.
         veto_triggered = False
-        # Skip dimension-specific vetos when the dimension is vacuously N/A:
-        #   - safety_assurance: no SAFE requirements
-        #   - mcts_fidelity:    no MCTS config supplied
-        # In both cases the scorer returns 1.0 so the veto would never trigger
-        # anyway, but skipping makes the intent explicit.
         has_safe = any(
             "_SAFE_" in r.name for r in model.requirement_definitions
         )
-        has_mcts = mcts_config is not None
         has_diagnostics = bool(model.diagnostics) or (syntax_result is not None)
         for dim, (floor, reason) in DIMENSION_VETO_FLOORS.items():
             if dim == "safety_assurance" and not has_safe:
                 continue
             if dim == "mcts_fidelity" and not has_mcts:
                 continue
-            # Skip syntactic veto when Syside has not run (no diagnostics at all)
             if dim == "syntactic_validity" and not has_diagnostics:
                 continue
             score = result.criteria_scores.get(dim, 1.0)
@@ -262,15 +266,10 @@ class DesignEvaluator:
         result.issues.extend(issues)
         result.recommendations.extend(recs)
 
-        # Append low-score summaries
         for dim, s in result.criteria_scores.items():
             if s < 0.50:
                 result.issues.append(f"{dim}: {s:.2f} — see specific issues above")
 
-        self._cached_syntax_result = None
-        self._sim_result = None
-        self._syside_attr_map = {}
-        self._syside_model = None
         return result
 
     # ------------------------------------------------------------------

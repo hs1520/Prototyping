@@ -545,6 +545,13 @@ class Orchestrator:
         print(f"{'='*60}\n")
 
         final_sysml = get_sysml_text(final_model)
+        # Merge evaluation histories: generate phase first, then explore phase.
+        # **generate_result would overwrite with generate-only history if we
+        # relied on dict spreading alone, so we concatenate explicitly.
+        combined_history = (
+            generate_result.get("evaluation_history", [])
+            + self.state.evaluation_history
+        )
         return {
             # ── Fields inherited / updated from generate() ────────────────────
             **generate_result,
@@ -553,7 +560,7 @@ class Orchestrator:
             "model_summary":      final_model.get_summary(),
             "final_score":        final_score,
             "iterations":         self.state.iteration,
-            "evaluation_history": self.state.evaluation_history,
+            "evaluation_history": combined_history,
             "simulation_result":  final_sim,
             # ── DSE-specific fields ───────────────────────────────────────────
             "design_space_summary": design_space.get_summary(),
