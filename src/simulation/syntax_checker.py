@@ -70,8 +70,11 @@ _STDLIB_UNIT_NAMES = {
     "J", "kJ", "W", "kW", "MW",
     # Voltage / current / charge
     "V", "mV", "kV", "A", "mA", "C", "Ah",
-    # Temperature
-    "K", "degC",
+    # Temperature  (Cel = UCUM/SI symbol for degree Celsius — the SI library's
+    # canonical name; degC/degF are LLM-friendly aliases)
+    "K", "degC", "Cel", "degF",
+    # Energy / charge capacity & rotation (common in drone/EV domains)
+    "Wh", "kWh", "mAh", "rpm", "Nm",
     # Sound
     "dB", "dBA",
     # Percentage / dimensionless
