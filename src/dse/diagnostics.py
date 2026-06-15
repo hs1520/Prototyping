@@ -225,19 +225,16 @@ def diagnose(
                 "that traces back to the main controller."
             )
 
-        cycles = (
-            list(nx.simple_cycles(graph))
-            if _HAS_NX
-            else graph.simple_cycles()
-        )
-        if cycles:
-            cycle_strs = [" → ".join(c) for c in cycles[:2]]
-            issues.append(
-                f"Feedback cycle(s) detected in connection graph "
-                f"({len(cycles)} total): {'; '.join(cycle_strs)}"
-                f"{'...' if len(cycles) > 2 else ''} — "
-                f"verify these are intentional control loops"
-            )
+        # NOTE: feedback cycles are intentionally NOT reported.  A closed loop
+        # in the connection graph (command down + status up, or
+        # sensor→controller→actuator→plant→sensor) is the normal, required
+        # topology of a control system — not a defect.  The graph already
+        # excludes self-loops, and bidirectional 2-cycles are legitimate, so
+        # there is no structurally "bad" cycle class to flag.  Reporting them
+        # only produced a non-actionable "verify" note that polluted the issue
+        # list and could trigger unnecessary refinement rounds.  Genuine
+        # connectivity defects are caught by the disconnected-component check
+        # above and by the reachability simulation.
 
     # ── SAFE requirements without state machines ─────────────────────────
     safe_reqs = [r for r in model.requirement_definitions if "_SAFE_" in r.name]
