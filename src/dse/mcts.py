@@ -224,8 +224,21 @@ class MCTSDesignExplorer:
             actions = self._generate_actions(current_config)
             if not actions:
                 break
-            action = self.rng.choice(actions)
-            current_config = current_config.copy_with_changes(action)
+            # Only take steps that yield a FEASIBLE configuration.  Mirrors the
+            # feasibility check in _expand: without it the rollout evaluates and
+            # backpropagates infeasible configs (e.g. triple redundancy with 1
+            # sensor), polluting the reward signal with points the search is not
+            # allowed to select.
+            self.rng.shuffle(actions)
+            next_config = None
+            for action in actions:
+                candidate = current_config.copy_with_changes(action)
+                if self.design_space.is_feasible(candidate.parameters):
+                    next_config = candidate
+                    break
+            if next_config is None:
+                break  # no feasible move from here — end the rollout
+            current_config = next_config
             current_config.scores = self.evaluate(current_config)
 
         return current_config.overall_score
