@@ -328,27 +328,28 @@ Rules:
         – SafetyMonitor MUST declare `in port sensorStatus : DataPort;`
 
 RUNTIME STATE VARIABLE RULE (MANDATORY):
-  Attributes fall into two distinct categories — keep them clearly separated:
+  Attributes fall into two distinct categories — keep them clearly separated by
+  NAMING CONVENTION (do NOT use a `readonly` keyword — it is not valid here):
 
-  (a) Design parameters (readonly): fixed limits set at design time, never change at runtime.
-      Use the `readonly` keyword.  Names typically contain max/min/limit/threshold.
-        readonly attribute maxAltitude_m     : Real = 120.0 [m];
-        readonly attribute releaseTime_s     : Real = 2.0   [s];
-        readonly attribute controlFreq_Hz    : Real = 100.0 [Hz];
+  (a) Design-limit parameters: fixed limits set at design time, never change at
+      runtime.  Name them with a max/min/limit/threshold prefix or suffix.
+        attribute maxAltitude_m   : Real = 120.0 [m];
+        attribute releaseTime_s   : Real = 2.0   [s];
+        attribute controlFreq_Hz  : Real = 100.0 [Hz];
 
   (b) Runtime state variables: values that change during system operation.
-      No `readonly` keyword.  Initial value is the safe starting point.
+      Name them with a `current` prefix.  Initial value is the safe starting point.
         attribute currentAltitude_m  : Real = 0.0   [m];
         attribute currentAirspeed    : Real = 0.0   [m_s];
 
-  For every performance/limit requirement, declare BOTH the design parameter AND
-  its runtime counterpart so that assert constraints can link them:
+  For every performance/limit requirement, declare BOTH the design-limit parameter
+  AND its runtime counterpart so that assert constraints can link them:
 
-      readonly attribute maxAltitude_m    : Real = 120.0 [m];   // limit (constant)
-      attribute currentAltitude_m : Real = 0.0   [m];   // runtime state (varies)
+      attribute maxAltitude_m     : Real = 120.0 [m];   // limit (named max*)
+      attribute currentAltitude_m : Real = 0.0   [m];   // runtime state (named current*)
 
   Exception — safety fault variables (batteryCharge_pct, commLossTime_s, etc.) are
-  ALREADY runtime state variables; do NOT add a separate readonly limit for them —
+  ALREADY runtime state variables; do NOT add a separate limit for them —
   the state machine guard threshold IS the limit.
 
 Output a single ```sysml code block containing ONLY the structural fragment (no package wrapper yet).
@@ -805,17 +806,17 @@ are not SysML v2 standard):
   ✗  enum def FlightMode {{ IDLE = 0; ARMED = 1; }}         // no integer assignments in SysML v2 enum def
 
 PARAMETRIC CONSTRAINT RULE (MANDATORY):
-  For every (readonly design parameter, runtime state variable) pair in the structural
+  For every (design-limit parameter, runtime state variable) pair in the structural
   fragment, generate a matching `assert constraint` block INSIDE the owning part def body.
   Place it after the action defs, before the state defs.
 
   Pattern:
     // OWNER: <PartName>
     assert constraint <descriptiveName>Bound {{
-        <runtime_var> <= <readonly_limit>    // for maximum constraints
+        <runtime_var> <= <limit_param>    // for maximum constraints
     }}
     assert constraint <descriptiveName>Min {{
-        <runtime_var> >= <readonly_limit>    // for minimum constraints
+        <runtime_var> >= <limit_param>    // for minimum constraints
     }}
 
   Required constraint pairs (generate ALL that apply — maximum bounds only):

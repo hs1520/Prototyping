@@ -130,6 +130,25 @@ def _fix_keyword_item_names(sysml_text: str) -> str:
     return _SYSML_KW.sub(lambda m: f"{m.group(1)} item '{m.group(2)}' :", sysml_text)
 
 
+_READONLY_ATTR_RE = re.compile(r'\breadonly\s+(attribute\b)')
+
+
+def _strip_readonly_keyword(sysml_text: str) -> str:
+    """
+    Drop the `readonly` modifier before `attribute`.
+
+    syside's parser rejects `readonly attribute X : ...` ("Unexpected
+    identifier"), and the official SysML v2 corpus never uses `readonly`
+    — constants are plain `attribute name : T = value [unit];`.  The
+    design-limit vs runtime-state distinction is carried by naming
+    convention (max/min/limit vs current*) and assert constraints, not by
+    this keyword.  The generation prompt no longer teaches `readonly`;
+    this is a deterministic safety net for residual LLM emissions so they
+    cost no syntax-gate LLM round.
+    """
+    return _READONLY_ATTR_RE.sub(r'\1', sysml_text)
+
+
 _GUARD_VAR_RE = re.compile(
     r'\bif\s+(\w+)\s*(?:[<>=!]+|$)',
 )
@@ -2103,6 +2122,36 @@ class Orchestrator:
         working_model = current_model
         latest_result = result
         lev_hints: List[Dict] = []   # distance-2 suggestions for the LLM prompt
+
+        # ── Tier 0-pre: strip `readonly` before attribute ────────────────────
+        # syside rejects `readonly attribute X : ...`; idiomatic SysML v2 uses
+        # plain `attribute`.  Strip deterministically — no LLM needed.
+        if latest_result.parser_errors:
+            stripped = _strip_readonly_keyword(working_sysml)
+            if stripped != working_sysml:
+                re_checked = check_syntax(stripped)
+                if re_checked.total_errors() < latest_result.total_errors():
+                    n_fixed = latest_result.total_errors() - re_checked.total_errors()
+                    working_sysml = stripped
+                    print(
+                        f"\n  ┌─ [RO-FIX]  {n_fixed} `readonly` modifier(s) stripped"
+                        f" — no LLM needed",
+                        flush=True,
+                    )
+                    meta = getattr(working_model, "metadata", None)
+                    if meta is None:
+                        object.__setattr__(working_model, "metadata", {})
+                        meta = working_model.metadata
+                    meta["last_sysml_text"] = working_sysml
+                    latest_result = re_checked
+                    if not latest_result.has_errors:
+                        print(f"  └─ [RO-FIX]  ✓ all errors resolved", flush=True)
+                        return working_sysml, working_model, latest_result
+                    print(
+                        f"  └─ [RO-FIX]  {latest_result.total_errors()} error(s) remain"
+                        f" — continuing",
+                        flush=True,
+                    )
 
         # ── Tier 0-pre: SysML keyword quoting ────────────────────────────────
         # `inout/in/out item <keyword> :` where <keyword> is a SysML reserved
