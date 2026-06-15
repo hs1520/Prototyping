@@ -175,7 +175,7 @@ class TestBestModelTracking:
         ])
         orch.design_agent = FakeDesignAgent([model_b])
 
-        result_model, result_score = orch._iterative_refinement(model_a, [])
+        result_model, result_score, _ = orch._iterative_refinement(model_a, [])
 
         assert result_model.name == "model_a"
         # 0.6*0.65 + 0.4*0.70 = 0.67
@@ -201,7 +201,7 @@ class TestBestModelTracking:
         ])
         orch.design_agent = FakeDesignAgent([model_b])
 
-        result_model, result_score = orch._iterative_refinement(model_a, [])
+        result_model, result_score, _ = orch._iterative_refinement(model_a, [])
 
         # Iter 2 blended: 0.6*0.70 + 0.4*0.80 = 0.74
         assert result_model.name == "model_b"
@@ -232,7 +232,7 @@ class TestRegressionPrevention:
         ])
         orch.design_agent = FakeDesignAgent([model_bad])
 
-        result_model, _ = orch._iterative_refinement(model_a, [])
+        result_model, _, _sim = orch._iterative_refinement(model_a, [])
 
         assert result_model.name == "model_a"   # model_bad was rejected
 
@@ -255,7 +255,7 @@ class TestRegressionPrevention:
         ])
         orch.design_agent = FakeDesignAgent([model_b])
 
-        result_model, result_score = orch._iterative_refinement(model_a, [])
+        result_model, result_score, _ = orch._iterative_refinement(model_a, [])
 
         # Iter 2 blended: 0.6*0.74 + 0.4*0.80 = 0.764
         assert result_model.name == "model_b"
@@ -456,7 +456,7 @@ class TestConfigurableBlendWeights:
         orch.cot = FakeCot([FakeCotResult(_scores={"overall": 0.80}, final_answer="")])
         orch.design_agent = FakeDesignAgent([])
 
-        _, score = orch._iterative_refinement(model_a, [])
+        _, score, _ = orch._iterative_refinement(model_a, [])
 
         assert abs(score - 0.66) < 1e-4
 
@@ -480,8 +480,8 @@ class TestConfigurableBlendWeights:
         orch_heavy.cot = FakeCot([FakeCotResult(_scores={"overall": 0.20}, final_answer="")])
         orch_heavy.design_agent = FakeDesignAgent([])
 
-        _, score_default = orch_default._iterative_refinement(model_a, [])
-        _, score_heavy = orch_heavy._iterative_refinement(_make_model(), [])
+        _, score_default, _ = orch_default._iterative_refinement(model_a, [])
+        _, score_heavy, _ = orch_heavy._iterative_refinement(_make_model(), [])
 
         # rule=0.80 > llm=0.20 → heavier rule weight → higher blended score
         assert score_heavy > score_default
@@ -504,7 +504,7 @@ class TestSkipLLMWhenThresholdMet:
         orch.cot = FakeCot([])  # no entries — would explode if accidentally called
         orch.design_agent = FakeDesignAgent([])
 
-        _, score = orch._iterative_refinement(model_a, [])
+        _, score, _ = orch._iterative_refinement(model_a, [])
 
         assert orch.cot.call_count == 0
         assert abs(score - 0.80) < 1e-4   # score == rule_score, not blended
@@ -518,7 +518,7 @@ class TestSkipLLMWhenThresholdMet:
         orch.cot = FakeCot([])
         orch.design_agent = FakeDesignAgent([])
 
-        _, score = orch._iterative_refinement(model_a, [])
+        _, score, _ = orch._iterative_refinement(model_a, [])
 
         assert abs(score - 0.90) < 1e-4
 
