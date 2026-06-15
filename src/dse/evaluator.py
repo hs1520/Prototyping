@@ -45,11 +45,9 @@ from .diagnostics import diagnose as _diagnose_impl
 from .eval_helpers import (
     _HAS_NX,
     _SENSOR_USAGE_RE,
-    _build_connection_graph,
     _build_port_type_map,
     _satisfied_req_ids,
     _sysml_text,
-    nx,
 )
 from ..sysml.model import DiagnosticSeverity, FeatureDirection, SysMLModel
 from ..utils.syside_utils import (
@@ -893,26 +891,10 @@ class DesignEvaluator:
             if functional else 0.0
         )
 
-        # ── Graph-based connectivity checks ─────────────────────────────
-        # Build directed graph of port connections to find isolated sub-graphs
-        # and unexpected feedback cycles.
-        graph = _build_connection_graph(text)
-        graph_nodes = graph.nodes() if callable(graph.nodes) else set(graph.nodes())
-        if graph_nodes:
-            comps = (
-                list(nx.weakly_connected_components(graph))
-                if _HAS_NX
-                else graph.weakly_connected_components()
-            )
-            # Penalise architectural fragmentation: multiple disconnected sub-graphs
-            # suggest parts of the system never exchange data.
-            n_comps = len(comps)
-            # A single connected component is ideal.  Penalty = 0.15 per extra.
-            graph_cohesion = max(0.0, 1.0 - 0.15 * (n_comps - 1))
-        else:
-            graph_cohesion = 1.0  # no connections at all already penalised above
-
-        # Weight: 20% graph cohesion, 80% split evenly among the four text metrics.
+        # Architectural fragmentation (disconnected sub-graphs) is already
+        # covered by instance_conn (connect coverage), the reachability
+        # simulation, and the diagnostics disconnected-component check, so it
+        # is not scored again here to avoid double-penalising.
         return (
             0.40 * port_cov
             + 0.40 * attr_cov
