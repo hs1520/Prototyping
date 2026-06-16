@@ -779,10 +779,22 @@ class RequirementLinker:
                 if best is not None:
                     base_entry = self._tag_to_entry.get(best.tag)
                     if base_entry:
+                        # Resolve the threshold from the guard the AST synthesizer
+                        # matched (best.guard_var), so a `@guard` placeholder is
+                        # filled here rather than leaking as <unresolved:guard>
+                        # even though the model contains the guard.
+                        g_val, g_src = self._threshold_for_guard_var(
+                            pname, best.guard_var,
+                            base_entry.guard_matcher.operators
+                            if base_entry.guard_matcher else None,
+                        )
                         if self._verbose:
                             print(f"  [AST-SYN] {req_id} → tag={best.tag} "
-                                  f"guard={best.guard_var!r} (part={pname})")
-                        d = self._entry_to_dict(base_entry)
+                                  f"guard={best.guard_var!r} (part={pname})"
+                                  + (f" thr={g_val}" if g_val is not None else ""))
+                        d = self._entry_to_dict(
+                            base_entry, guard_val=g_val, guard_src=g_src
+                        )
                         d["sitl_test"] = {
                             "tier":   base_entry.tier,
                             "inject": best.inject,
@@ -1164,6 +1176,41 @@ class RequirementLinker:
                     source=src,
                 ))
         return results
+
+    def _threshold_for_guard_var(
+        self,
+        part_name: str,
+        guard_var: str,
+        operators: Optional[List[str]] = None,
+    ) -> Tuple[Optional[float], str]:
+        """Resolve the numeric threshold of the model guard whose attribute
+        matches *guard_var* (the variable the AST synthesizer matched).
+
+        Used by the AST-synthesis layer so `@guard` placeholders are filled
+        from the guard that layer actually found — instead of leaking as
+        `<unresolved:guard>` even though the model contains the guard.
+
+        When *operators* is given (the tag's expected operators), a guard
+        whose operator is in that set is preferred.  Returns (None, "") when
+        no matching guard carries a numeric threshold (e.g. a boolean guard,
+        which needs no threshold).
+        """
+        gv = (guard_var or "").lower()
+        cands = [
+            g for g in self._guard_map.get(part_name, [])
+            if (getattr(g, "attribute", "") or "").lower() == gv
+            and getattr(g, "threshold", None) is not None
+        ]
+        if not cands:
+            return None, ""
+        if operators:
+            preferred = [g for g in cands if getattr(g, "operator", None) in operators]
+            if preferred:
+                cands = preferred
+        g = cands[0]
+        op = getattr(g, "operator", "?")
+        th = float(getattr(g, "threshold"))
+        return th, f"guard:{op}:{th} (attr:{getattr(g, 'attribute', '?')}, ast)"
 
     def _extract_guard_threshold(
         self,
