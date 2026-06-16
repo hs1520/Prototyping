@@ -933,6 +933,86 @@ class RequirementLinker:
             ))
         return specs
 
+    # ------------------------------------------------------------------
+    # SITL → LLM feedback
+    # ------------------------------------------------------------------
+
+    def unresolved_feedback(self) -> List[Dict[str, Any]]:
+        """Turn every unresolved SITL parameter into an actionable model-fix
+        instruction for the design LLM.
+
+        After the AST-synthesis threshold fix, an unresolved parameter is a
+        trustworthy "model defect" signal: the requirement matched a catalogue
+        tag, but the model genuinely lacks the guard/attribute the tag needs to
+        supply a value.  Each item names the satisfying part, what element is
+        missing, and which ArduPilot parameter depends on it.
+
+        Returns a list of dicts: {req_id, tag, kind, part, param, message}.
+        """
+        items: List[Dict[str, Any]] = []
+        for spec in self.generate_test_specs():
+            cat = self._lookup_catalogue(spec.req_id)
+            tag = (cat or {}).get("semantic_tag", "")
+            entry = self._tag_to_entry.get(tag)
+            parts = self._satisfy_map.get(spec.req_id, [])
+            part = parts[0] if parts else "<the satisfying part>"
+            for p in spec.params:
+                if not (isinstance(p.value, str) and p.value.startswith("<unresolved")):
+                    continue
+                kind = p.value[len("<unresolved:"):].rstrip(">")
+                items.append({
+                    "req_id":  spec.req_id,
+                    "tag":     tag,
+                    "kind":    kind,
+                    "part":    part,
+                    "param":   p.param_name,
+                    "message": self._unresolved_message(
+                        spec.req_id, tag, entry, kind, part, p.param_name
+                    ),
+                })
+        return items
+
+    @staticmethod
+    def _unresolved_message(req_id, tag, entry, kind, part, param_name) -> str:
+        """Render one actionable model-fix instruction for an unresolved param."""
+        gm = getattr(entry, "guard_matcher", None) if entry else None
+        am = getattr(entry, "attr_matcher", None) if entry else None
+
+        if kind.startswith("guard") and gm is not None:
+            op = next((o for o in gm.operators if o != "bool"), "<=")
+            kws = "/".join(gm.var_keywords[:3]) or "the monitored"
+            example_var = (gm.var_keywords[0] if gm.var_keywords else "x")
+            return (
+                f"{req_id} ({tag}): the part `{part}` that satisfies this "
+                f"requirement has no state-machine guard on a {kws} variable, so "
+                f"ArduPilot parameter {param_name} cannot be derived. Add a fault "
+                f"transition whose guard compares such a variable to a numeric "
+                f"literal, e.g. `... if {example_var} {op} <threshold> then "
+                f"<FaultState>;`."
+            )
+
+        if kind.startswith("attr") or kind == "chute_delay":
+            if am is not None and am.attr_keywords:
+                kws = "/".join(am.attr_keywords[:3])
+            elif kind.startswith("attr:"):
+                kws = kind.split(":", 1)[1]
+            elif kind == "chute_delay":
+                kws = "parachuteDeployTime"
+            else:
+                kws = "the required"
+            example = kws.split("/")[0]
+            return (
+                f"{req_id} ({tag}): the part `{part}` that satisfies this "
+                f"requirement has no numeric attribute named like {kws}, so "
+                f"ArduPilot parameter {param_name} cannot be derived. Add e.g. "
+                f"`attribute {example} : Real = <value> [<unit>];` to that part."
+            )
+
+        return (
+            f"{req_id} ({tag}): parameter {param_name} is unresolved — the model "
+            f"is missing the guard/attribute it maps from on part `{part}`."
+        )
+
     def coverage_report(self) -> str:
         covered = self._covered_req_ids()
         matched_content, matched_ast, matched_llm, matched_direct = (
