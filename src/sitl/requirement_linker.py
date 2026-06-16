@@ -974,21 +974,28 @@ class RequirementLinker:
 
     @staticmethod
     def _unresolved_message(req_id, tag, entry, kind, part, param_name) -> str:
-        """Render one actionable model-fix instruction for an unresolved param."""
+        """State what the model is missing and why it matters — WITHOUT
+        prescribing SysML syntax.
+
+        The generation prompt already teaches canonical SysML v2 transition/
+        attribute syntax; re-teaching it here is redundant and risky (a
+        hand-written fragment that drifts from the canonical form would
+        actively mislead the LLM, like the earlier `readonly` mistake).  So the
+        feedback gives only semantic facts — which part, what quantity must be
+        monitored/declared, which ArduPilot parameter depends on it — and lets
+        the LLM apply its own (prompt-grounded, syntax-gate-validated) code.
+        """
         gm = getattr(entry, "guard_matcher", None) if entry else None
         am = getattr(entry, "attr_matcher", None) if entry else None
 
         if kind.startswith("guard") and gm is not None:
-            op = next((o for o in gm.operators if o != "bool"), "<=")
-            kws = "/".join(gm.var_keywords[:3]) or "the monitored"
-            example_var = (gm.var_keywords[0] if gm.var_keywords else "x")
+            kws = "/".join(gm.var_keywords[:3]) or "the monitored quantity"
             return (
                 f"{req_id} ({tag}): the part `{part}` that satisfies this "
-                f"requirement has no state-machine guard on a {kws} variable, so "
-                f"ArduPilot parameter {param_name} cannot be derived. Add a fault "
-                f"transition whose guard compares such a variable to a numeric "
-                f"literal, e.g. `... if {example_var} {op} <threshold> then "
-                f"<FaultState>;`."
+                f"requirement defines no state-machine guard that compares a "
+                f"{kws} variable against a numeric threshold. ArduPilot parameter "
+                f"{param_name} is derived from that threshold, so it cannot be "
+                f"set. Add the missing threshold-based guard."
             )
 
         if kind.startswith("attr") or kind == "chute_delay":
@@ -997,15 +1004,14 @@ class RequirementLinker:
             elif kind.startswith("attr:"):
                 kws = kind.split(":", 1)[1]
             elif kind == "chute_delay":
-                kws = "parachuteDeployTime"
+                kws = "parachute deploy-time"
             else:
                 kws = "the required"
-            example = kws.split("/")[0]
             return (
                 f"{req_id} ({tag}): the part `{part}` that satisfies this "
-                f"requirement has no numeric attribute named like {kws}, so "
-                f"ArduPilot parameter {param_name} cannot be derived. Add e.g. "
-                f"`attribute {example} : Real = <value> [<unit>];` to that part."
+                f"requirement declares no numeric attribute representing the "
+                f"{kws} value. ArduPilot parameter {param_name} is derived from "
+                f"it, so it cannot be set. Add the missing attribute."
             )
 
         return (
