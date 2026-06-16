@@ -1,459 +1,564 @@
 package AutonomousDrone {
 
     // ==========================================
-    // Interface & Flow Fragment
+    // Item Definitions
     // ==========================================
-
     item def SystemData {
-        attribute timestamp_s : Real;
+        attribute value : Real;
+        attribute statusFlag : Boolean;
     }
 
-    item def OverrideCommand :> SystemData {
-        attribute manualOverride : Boolean;
-    }
-
-    item def NavigationData :> SystemData {
-        attribute heading_deg : Real;
-        attribute speed_m_s : Real;
-    }
-
-    item def WaypointData :> SystemData {
-        attribute targetLat : Real;
-        attribute targetLon : Real;
-        attribute targetAlt_m : Real;
-    }
-
-    item def MotorCommand :> SystemData {
-        attribute throttle_pct : Real;
-    }
-
-    item def StatusData :> SystemData {
-        attribute isOperational : Boolean;
-        attribute errorCode : Integer;
-    }
-
-    item def ObstacleData :> SystemData {
-        attribute distance_m : Real;
-        attribute angle_deg : Real;
-    }
-
-    item def BatteryState :> SystemData {
-        attribute charge_pct : Real;
-        attribute voltage_v : Real;
-    }
-
-    item def WeightData :> SystemData {
-        attribute weight_kg : Real;
-    }
-
-    item def AlertSignal {
-        attribute isTriggered : Boolean;
-    }
-
-    item def RfMessage {
-        attribute frequency_mhz : Real;
-        attribute encryptedPayload : String;
-    }
-
-    item def PwmSignal {
-        attribute voltage_v : Real = 5.0;
-        attribute dutyCycle_pct : Real;
-    }
-
-    item def MavlinkMessage {
-        attribute systemId : Integer;
+    item def MAVLinkMessage {
         attribute messageId : Integer;
-        attribute payload : String;
+        attribute systemId : Integer;
+        attribute componentId : Integer;
+        attribute payloadData : String;
     }
 
-    item def AdsbMessage {
-        attribute icaoAddress : String;
+    item def EncryptedRFPayload {
+        attribute cipherText : String;
+        attribute encryptionKeyId : Integer;
+    }
+
+    item def RTCMCorrectionData {
+        attribute messageType : Integer;
+        attribute referenceStationId : Integer;
+        attribute correctionValue : Real;
+    }
+
+    item def RemoteIDData {
+        attribute uasId : String;
         attribute latitude : Real;
         attribute longitude : Real;
-        attribute altitude_m : Real;
-        attribute frequency_mhz : Real = 1090.0;
-    }
-
-    port def ADSBSignal {
-        inout item data : AdsbMessage;
-    }
-
-    port def SignalPort {
-        inout item signal : AlertSignal;
-    }
-
-    port def PwmPort {
-        inout item pwm : PwmSignal;
-    }
-
-    port def MavlinkPort {
-        inout item telemetry : MavlinkMessage;
-    }
-
-    port def AdsbPort {
-        inout item broadcast : AdsbMessage;
+        attribute altitude : Real;
+        attribute timestamp : Real;
     }
 
     // ==========================================
-    // Requirements Definitions
+    // Port Definitions
     // ==========================================
+    port def DataPort {
+        inout item data : SystemData;
+    }
 
-    requirement def REQ_FUNC_001 { doc /* The drone shall navigate autonomously to GPS waypoints with < 1m precision */ }
-    requirement def REQ_FUNC_002 { doc /* The drone shall detect and avoid obstacles within 15m range */ }
-    requirement def REQ_FUNC_003 { doc /* The drone shall carry payloads of up to 2.5 kg */ }
-    requirement def REQ_FUNC_004 { doc /* The drone shall communicate with ground control via encrypted link */ }
-    requirement def REQ_PERF_001 { doc /* The drone shall maintain stable flight within 0.5° roll/pitch deviation */ }
-    requirement def REQ_PERF_002 { doc /* The drone shall achieve minimum 25 minutes flight endurance at full payload */ }
-    requirement def REQ_PERF_003 { doc /* The drone shall reach maximum airspeed of 15 m/s */ }
-    requirement def REQ_SAFE_001 { doc /* The drone shall auto-land safely if battery charge drops below 15% */ }
-    requirement def REQ_SAFE_002 { doc /* The drone shall activate emergency landing on communication loss > 10s */ }
-    requirement def REQ_SAFE_003 { doc /* The drone shall not operate if sensor self-test fails at startup */ }
-    requirement def REQ_FUNC_005 { doc /* The AutonomousDrone shall release the payload when positioned within 0.5 meters of the destination delivery coordinate. */ }
-    requirement def REQ_FUNC_006 { doc /* The AutonomousDrone shall update its active flight path within 1 second of receiving a new set of GPS waypoints from the ground control station. */ }
-    requirement def REQ_FUNC_007 { doc /* The AutonomousDrone shall execute a return-to-base navigation sequence upon receiving a mission abort command. */ }
-    requirement def REQ_FUNC_008 { doc /* The AutonomousDrone shall confirm successful payload delivery by detecting a total vehicle weight reduction equal to the payload mass. */ }
-    requirement def REQ_PERF_004 { doc /* The AutonomousDrone shall maintain a cross-track navigation error of less than 2 meters during continuous wind speeds of 15 m/s. */ }
-    requirement def REQ_PERF_005 { doc /* The AutonomousDrone shall maintain active flight operations during continuous precipitation of up to 2.5 mm/hr. */ }
-    requirement def REQ_PERF_006 { doc /* The AutonomousDrone shall complete the mechanical payload release sequence in less than 5 seconds. */ }
-    requirement def REQ_SAFE_004 { doc /* The AutonomousDrone shall automatically trigger a return-to-base sequence when the battery state of charge drops to 30%. */ }
-    requirement def REQ_SAFE_005 { doc /* The AutonomousDrone shall alter its flight path to maintain a minimum spatial separation of 50 meters from other detected aircraft. */ }
-    requirement def REQ_SAFE_006 { doc /* The AutonomousDrone shall halt all motor rotation within 1 second of detecting a physical impact force exceeding 5 Gs. */ }
-    requirement def REQ_INTF_001 { doc /* The AutonomousDrone shall transmit vehicle telemetry data to the ground control system using the MAVLink communication protocol. */ }
-    requirement def REQ_INTF_002 { doc /* The AutonomousDrone shall broadcast its real-time position using an ADS-B Out transceiver operating at the 1090 MHz frequency. */ }
-    requirement def REQ_INTF_003 { doc /* The AutonomousDrone shall actuate the physical payload locking mechanism using a standard 5V PWM signal. */ }
-    requirement def REQ_CONS_001 { doc /* The AutonomousDrone shall restrict its maximum flight altitude to 120 meters above ground level. */ }
-    requirement def REQ_CONS_002 { doc /* The AutonomousDrone shall operate with a maximum takeoff weight (MTOW) not exceeding 25 kg. */ }
-    requirement def REQ_CONS_003 { doc /* The AutonomousDrone shall emit a noise level of less than 65 dBA measured at a distance of 50 meters during hover. */ }
+    port def MAVLinkPort {
+        inout item telemetry : MAVLinkMessage;
+    }
+
+    port def AES256Port {
+        inout item signal : EncryptedRFPayload;
+    }
+
+    port def RTCM10403Port {
+        inout item payload : RTCMCorrectionData;
+    }
+
+    port def ASTMF3411Port {
+        inout item packet : RemoteIDData;
+    }
 
     // ==========================================
-    // Structural & Behavioral Part Definitions
+    // Package-Level Enums and Actions
     // ==========================================
+    enum def DronePhaseMode {
+        enum POWER_ON;
+        enum SELF_TEST;
+        enum STANDBY;
+        enum OUTBOUND_FLIGHT;
+        enum DELIVERY_HOVER;
+        enum RETURN_FLIGHT;
+        enum LANDING;
+    }
 
-    part def NavigationController {
-        in port overrideCmd : ADSBSignal;
-        in port navData : ADSBSignal;
-        in port waypoints : ADSBSignal;
-        in port obstacleData : ADSBSignal;
-        out port telemetryData : MavlinkPort;
-        out port flightPathCmd : ADSBSignal;
+    action def CMD_STABILIZE { }
+    action def CMD_GUIDED { }
+    action def CMD_AUTO { }
+    action def CMD_RTL { }
+    action def CMD_LAND { }
+    action def CMD_TAKEOFF { }
+    action def CMD_LOITER { }
+    action def CMD_POSHOLD { }
 
-        attribute navPrecision_m : Real = 1.0 [m];
-        attribute maxAltitude_m : Real = 120.0 [m];
-        attribute crossTrackError_m : Real = 2.0 [m];
-        attribute maxRollPitchDev_deg : Real = 0.5 [deg];
+    // ==========================================
+    // Requirements
+    // ==========================================
+    requirement def REQ_FUNC_001 { doc /* The system shall autonomously navigate to designated GPS waypoints with a circular error probable (CEP) of less than 1.0 metre. */ }
+    requirement def REQ_FUNC_002 { doc /* The system shall detect potential collision threats within a 15-metre sensor range and initiate an avoidance manoeuvre before the separation distance falls below 5 metres. */ }
+    requirement def REQ_FUNC_003 { doc /* The system shall transport payloads with a gross mass of up to 2.5 kg without degradation of flight stability or navigation accuracy. */ }
+    requirement def REQ_FUNC_004 { doc /* The system shall maintain a continuously encrypted bidirectional data link with the GCS for telemetry upload and mission command download throughout the operational flight envelope. */ }
+    requirement def REQ_FUNC_005 { doc /* The system shall release the payload when the current geographic position is within 1.0 metre of the designated delivery waypoint and no delivery-abort condition is active. */ }
+    requirement def REQ_FUNC_006 { doc /* The system shall incorporate a revised waypoint sequence into the active flight plan within 1.0 second of receiving a valid waypoint-modification command from the GCS. */ }
+    requirement def REQ_FUNC_007 { doc /* The system shall autonomously execute a return-to-base trajectory upon detection of any contingency condition that does not require immediate landing. */ }
+    requirement def REQ_FUNC_008 { doc /* The AutonomousDrone shall transmit a post-flight system health report to the Ground Control Station upon completion of the automated landing sequence. */ }
+    requirement def REQ_FUNC_009 { doc /* The AutonomousDrone shall execute an automated power-on self-check of the sensors, communications, and propulsion subsystems prior to arming the propulsion system. */ }
+    
+    requirement def REQ_PERF_001 { doc /* The system shall maintain roll and pitch attitude deviations within ±0.5° RMS during steady cruise flight at all authorised speeds. */ }
+    requirement def REQ_PERF_002 { doc /* The system shall sustain flight for a minimum of 25 minutes when carrying the maximum rated payload at nominal cruise speed. */ }
+    requirement def REQ_PERF_003 { doc /* The system shall achieve a maximum airspeed of 15 m/s in nil-wind, level-flight conditions. */ }
+    requirement def REQ_PERF_004 { doc /* The system shall maintain a minimum forward ground speed of 2 m/s when operating in sustained headwinds of up to 15 m/s. */ }
+    requirement def REQ_PERF_005 { doc /* The mechanical payload release actuation shall complete within 2.0 seconds from the moment the delivery coordinate condition is satisfied. */ }
+    requirement def REQ_PERF_006 { doc /* The AutonomousDrone shall execute the primary flight control loop at a frequency of no less than 100 Hz. */ }
+    requirement def REQ_PERF_007 { doc /* The AutonomousDrone shall navigate to delivery coordinates up to a maximum operational radius of 10.0 km from the fixed distribution hub. */ }
+    
+    requirement def REQ_SAFE_001 { doc /* The system shall initiate an autonomous return-to-base sequence when the battery state-of-charge reaches 25%, unless a higher-priority safety response is already in progress. */ }
+    requirement def REQ_SAFE_002 { doc /* The system shall perform a controlled descent to the nearest safe landing area when the battery state-of-charge falls below 15%, superseding any lower-priority contingency response. */ }
+    requirement def REQ_SAFE_003 { doc /* The system shall perform an autonomous safe landing at the current position when the GCS uplink has been absent for more than 10 consecutive seconds. */ }
+    requirement def REQ_SAFE_004 { doc /* The system shall not transition to the armed or airborne state if any onboard sensor reports a failure during the power-on self-test sequence. */ }
+    requirement def REQ_SAFE_005 { doc /* The system shall deploy the ballistic recovery parachute within 0.5 seconds of detecting a critical propulsion subsystem failure during flight, taking precedence over all other safety responses. */ }
+    requirement def REQ_SAFE_006 { doc /* The system shall maintain the payload in the mechanically locked state whenever a delivery-abort condition is active, regardless of geographic proximity to the delivery waypoint. */ }
+    
+    requirement def REQ_INTF_001 { doc /* The system shall exchange telemetry and mission commands with the GCS using the MAVLink v2.0 protocol over an AES-256 encrypted RF channel. */ }
+    requirement def REQ_INTF_002 { doc /* The system shall receive and apply differential GNSS corrections formatted according to the RTCM 10403.3 standard to achieve sub-metre positioning accuracy. */ }
+    requirement def REQ_INTF_003 { doc /* The system shall broadcast remote identification and real-time spatial positioning data in accordance with the ASTM F3411-22 standard. */ }
+    
+    requirement def REQ_CONS_001 { doc /* The system shall not exceed a flight altitude of 120 metres above ground level at any point during normal operations. */ }
+    requirement def REQ_CONS_002 { doc /* All airframe and electronic enclosures exposed to the external environment shall meet a minimum IP54 ingress-protection rating. */ }
+    requirement def REQ_CONS_003 { doc /* The system maximum takeoff weight, including payload and battery, shall not exceed 25.0 kg. */ }
+    requirement def REQ_CONS_004 { doc /* The AutonomousDrone shall operate without degradation in ambient temperatures ranging from -10 °C to +45 °C. */ }
+    requirement def REQ_CONS_005 { doc /* The AutonomousDrone shall comply with the technical regulations defined in the FAA Part 107 framework. */ }
+    requirement def REQ_CONS_006 { doc /* The AutonomousDrone shall comply with the technical regulations defined in the EASA UAS Category C framework. */ }
+    
+    requirement def REQ_OPER_001 { doc /* The AutonomousDrone shall operate in sequential phases: POWER-ON → SELF-TEST → STANDBY → OUTBOUND-FLIGHT → DELIVERY-HOVER → RETURN-FLIGHT → LANDING (EMERGENCY: reachable from any active phase upon detection of a system-wide fault). */ }
+
+    // ==========================================
+    // Part Definitions
+    // ==========================================
+    part def FlightController {
+        in port overrideCmd : DataPort;
+        in port navData : DataPort;
+        in port missionCmd : MAVLinkPort;
+        out port actuatorCmd : DataPort;
+        out port releaseCmd : DataPort;
+        in port payloadStatus : DataPort;
+        out port telemetry : MAVLinkPort;
+
         attribute controlFrequency : Real = 100.0 [Hz];
+        attribute maxCepTolerance : Real = 1.0 [m];
+        attribute currentCep : Real = 0.0 [m];
+        attribute flightPhase : DronePhaseMode = DronePhaseMode::POWER_ON;
 
         satisfy requirement REQ_FUNC_001;
-        satisfy requirement REQ_PERF_001;
         satisfy requirement REQ_FUNC_006;
         satisfy requirement REQ_FUNC_007;
-        satisfy requirement REQ_PERF_004;
-        satisfy requirement REQ_CONS_001;
+        satisfy requirement REQ_FUNC_009;
+        satisfy requirement REQ_PERF_006;
+        satisfy requirement REQ_OPER_001;
 
         action def navigateToWaypoint { }
-        action def updateFlightPath { }
+        action def reviseWaypointSequence { }
         action def executeReturnToBase { }
-    }
+        action def executeEmergencyLanding { }
 
-    part def PowerManager {
-        in port flightPathCmd : ADSBSignal;
-        out port motorCmd : ADSBSignal;
-        out port telemetryData : MavlinkPort;
+        assert constraint cepBound {
+            currentCep <= maxCepTolerance
+        }
 
-        attribute powerControlRate : Real = 100.0 [Hz];
-    }
-
-    part def PayloadManager {
-        in port payloadWeight : ADSBSignal;
-        out port releasePwm : PwmPort;
-        in port sensorData : ADSBSignal;
-        in port votedStatus : ADSBSignal;
-        in port overrideCmd : ADSBSignal;
-        in port batteryState : ADSBSignal;
-        out port telemetryData : MavlinkPort;
-
-        attribute payloadControlRate : Real = 10.0 [Hz];
-    }
-
-    part def SensorSuite {
-        out port sensorStatus : ADSBSignal;
-        out port navData : ADSBSignal;
-        out port obstacleData : ADSBSignal;
-        out port impactAlert : SignalPort;
-
-        attribute obstacleRange_m : Real = 15.0 [m];
-        attribute rainTolerance_mm_hr : Real = 2.5 [mm_hr];
-        attribute sensorSelfTestFailed : Boolean = false;
-
-        satisfy requirement REQ_FUNC_002;
-        satisfy requirement REQ_SAFE_003;
-        satisfy requirement REQ_PERF_005;
-
-        action def detectAndAvoidObstacles { }
-        action def haltStartupEmergencyResponse { }
-
-        state def SensorStartupSafetyBehavior {
-            state SensorStartupNominal;
-            state SensorStartupFault {
-                entry action onFault : haltStartupEmergencyResponse;
+        state def FlightPhaseModeMachine {
+            state PhasePowerOn;
+            state PhaseSelfTest;
+            state PhaseStandby;
+            state PhaseOutboundFlight;
+            state PhaseDeliveryHover;
+            state PhaseReturnFlight;
+            state PhaseLanding;
+            
+            state PhaseEmergency {
+                entry action respond : executeEmergencyLanding;
             }
-            transition initial then SensorStartupNominal;
-            transition sensorStartupFault
-                first SensorStartupNominal
-                if sensorSelfTestFailed
-                then SensorStartupFault;
+
+            transition initial then PhasePowerOn;
+
+            transition powerOnToSelfTest
+                first PhasePowerOn
+                accept CMD_AUTO
+                then PhaseSelfTest;
+
+            transition selfTestToStandby
+                first PhaseSelfTest
+                accept CMD_STABILIZE
+                then PhaseStandby;
+
+            transition standbyToOutbound
+                first PhaseStandby
+                accept CMD_TAKEOFF
+                then PhaseOutboundFlight;
+
+            transition outboundToHover
+                first PhaseOutboundFlight
+                accept CMD_LOITER
+                then PhaseDeliveryHover;
+
+            transition hoverToReturn
+                first PhaseDeliveryHover
+                accept CMD_RTL
+                then PhaseReturnFlight;
+
+            transition returnToLanding
+                first PhaseReturnFlight
+                accept CMD_LAND
+                then PhaseLanding;
+
+            transition powerOnToEmergency
+                first PhasePowerOn
+                accept CMD_LAND
+                then PhaseEmergency;
+
+            transition selfTestToEmergency
+                first PhaseSelfTest
+                accept CMD_LAND
+                then PhaseEmergency;
+
+            transition standbyToEmergency
+                first PhaseStandby
+                accept CMD_LAND
+                then PhaseEmergency;
+
+            transition outboundToEmergency
+                first PhaseOutboundFlight
+                accept CMD_LAND
+                then PhaseEmergency;
+
+            transition hoverToEmergency
+                first PhaseDeliveryHover
+                accept CMD_LAND
+                then PhaseEmergency;
+
+            transition returnToEmergency
+                first PhaseReturnFlight
+                accept CMD_LAND
+                then PhaseEmergency;
+
+            transition landingToEmergency
+                first PhaseLanding
+                accept CMD_LAND
+                then PhaseEmergency;
         }
     }
 
-    part def SensorVoter {
-        in port navA : ADSBSignal;
-        in port navB : ADSBSignal;
-        in port navC : ADSBSignal;
-        out port votedNav : ADSBSignal;
-
-        in port obsA : ADSBSignal;
-        in port obsB : ADSBSignal;
-        in port obsC : ADSBSignal;
-        out port votedObs : ADSBSignal;
-
-        in port statusA : ADSBSignal;
-        in port statusB : ADSBSignal;
-        in port statusC : ADSBSignal;
-        out port votedStatus : ADSBSignal;
-
-        in port impactA : SignalPort;
-        in port impactB : SignalPort;
-        in port impactC : SignalPort;
-        out port votedImpact : SignalPort;
-
-        attribute votingLogicEnabled : Boolean = true;
-    }
-
-    part def CommunicationSystem {
-        out port commStatus : ADSBSignal;
-        in port telemetryData : MavlinkPort;
-        out port waypoints : ADSBSignal;
-        inout port rfSignal : ADSBSignal;
-        out port adsbSignal : AdsbPort;
-        in port powerTelemetry : MavlinkPort;
-        in port payloadTelemetry : MavlinkPort;
-
-        attribute adsbFrequency_mhz : Real = 1090.0 [MHz];
-        attribute commTimeout_s : Real = 10.0 [s];
-
-        satisfy requirement REQ_FUNC_004;
-        satisfy requirement REQ_INTF_001;
-        satisfy requirement REQ_INTF_002;
-
-        action def communicateViaEncryptedLink { }
-    }
-
     part def SafetyMonitor {
-        in port commStatus : ADSBSignal;
-        in port sensorStatus : ADSBSignal;
-        in port batteryState : ADSBSignal;
-        in port impactAlert : SignalPort;
-        in port adsbSignal : AdsbPort;
-        out port overrideCmd : ADSBSignal;
+        out port overrideCmd : DataPort;
+        in port commStatus : DataPort;
+        in port sensorStatus : DataPort;
+        in port propStatus : DataPort;
+        out port chuteCmd : DataPort;
 
-        attribute criticalBattery_pct : Real = 15.0 [pct];
-        attribute rtbBattery_pct : Real = 30.0 [pct];
-        attribute impactThreshold_g : Real = 5.0 [G];
-
-        attribute batteryCharge : Real = 100.0;
-        attribute commLossTime : Real = 0.0;
-        attribute aircraftDistance : Real = 100.0;
-        attribute impactForce : Real = 0.0;
+        attribute batterySoc : Real = 100.0 [percent];
+        attribute commLossTime : Real = 0.0 [s];
+        attribute parachuteDeployTime : Real = 0.5 [s];
+        attribute propulsionCriticalFailure : Boolean = false;
+        attribute sensorSelfTestFailed : Boolean = false;
+        attribute deliveryAbortConditionActive : Boolean = false;
 
         satisfy requirement REQ_SAFE_001;
         satisfy requirement REQ_SAFE_002;
+        satisfy requirement REQ_SAFE_003;
         satisfy requirement REQ_SAFE_004;
         satisfy requirement REQ_SAFE_005;
         satisfy requirement REQ_SAFE_006;
 
-        action def autoLandSafelyEmergencyResponse { }
-        state def BatteryCriticalSafetyBehavior {
-            state BatteryCriticalNominal;
-            state BatteryCriticalFault {
-                entry action onFault : autoLandSafelyEmergencyResponse;
-            }
-            transition initial then BatteryCriticalNominal;
-            transition batteryCriticalFault
-                first BatteryCriticalNominal
-                if batteryCharge < 15.0
-                then BatteryCriticalFault;
+        action def initiateBatteryRtb {
+            send CMD_RTL() to overrideCmd;
         }
 
-        action def activateEmergencyLandingEmergencyResponse { }
-        state def CommLossSafetyBehavior {
-            state CommLossNominal;
-            state CommLossFault {
-                entry action onFault : activateEmergencyLandingEmergencyResponse;
-            }
-            transition initial then CommLossNominal;
-            transition commLossFault
-                first CommLossNominal
+        action def initiateEmergencyLand {
+            send CMD_LAND() to overrideCmd;
+        }
+
+        action def deployParachute {
+            send CMD_LAND() to chuteCmd;
+        }
+
+        action def inhibitArming { }
+        action def lockPayload { }
+
+        state def BatteryRtbMonitor {
+            state RtbNominal;
+            state RtbDetected;
+            transition initial then RtbNominal;
+            transition rtbFault
+                first RtbNominal
+                if batterySoc <= 25.0
+                then RtbDetected;
+        }
+
+        state def BatteryLandMonitor {
+            state LandNominal;
+            state LandDetected;
+            transition initial then LandNominal;
+            transition landFault
+                first LandNominal
+                if batterySoc < 15.0
+                then LandDetected;
+        }
+
+        state def CommLossMonitor {
+            state CommNominal;
+            state CommDetected;
+            transition initial then CommNominal;
+            transition commFault
+                first CommNominal
                 if commLossTime > 10.0
-                then CommLossFault;
+                then CommDetected;
         }
 
-        action def triggerReturnToBaseEmergencyResponse { }
-        state def BatteryRtbSafetyBehavior {
-            state BatteryRtbNominal;
-            state BatteryRtbFault {
-                entry action onFault : triggerReturnToBaseEmergencyResponse;
+        state def SensorTestMonitor {
+            state TestNominal;
+            state TestDetected {
+                entry action onTestFail : inhibitArming;
             }
-            transition initial then BatteryRtbNominal;
-            transition batteryRtbFault
-                first BatteryRtbNominal
-                if batteryCharge <= 30.0
-                then BatteryRtbFault;
+            transition initial then TestNominal;
+            transition testFault
+                first TestNominal
+                if sensorSelfTestFailed
+                then TestDetected;
         }
 
-        action def alterFlightPathForSeparationEmergencyResponse { }
-        state def AircraftSeparationSafetyBehavior {
-            state AircraftSeparationNominal;
-            state AircraftSeparationFault {
-                entry action onFault : alterFlightPathForSeparationEmergencyResponse;
+        state def PropulsionFailureMonitor {
+            state PropNominal;
+            state PropDetected;
+            transition initial then PropNominal;
+            transition propFault
+                first PropNominal
+                if propulsionCriticalFailure
+                then PropDetected;
+        }
+
+        state def PayloadAbortMonitor {
+            state AbortNominal;
+            state AbortDetected {
+                entry action onAbort : lockPayload;
             }
-            transition initial then AircraftSeparationNominal;
-            transition aircraftSeparationFault
-                first AircraftSeparationNominal
-                if aircraftDistance < 50.0
-                then AircraftSeparationFault;
+            transition initial then AbortNominal;
+            transition abortFault
+                first AbortNominal
+                if deliveryAbortConditionActive
+                then AbortDetected;
         }
 
-        action def haltMotorRotationEmergencyResponse { }
-        state def ImpactSafetyBehavior {
-            state ImpactNominal;
-            state ImpactFault {
-                entry action onFault : haltMotorRotationEmergencyResponse;
+        state def SafetyArbiter {
+            state ArbNominal;
+
+            state ArbParachuteMode {
+                entry action onParachute : deployParachute;
             }
-            transition initial then ImpactNominal;
-            transition impactFault
-                first ImpactNominal
-                if impactForce > 5.0
-                then ImpactFault;
-        }
 
-        attribute redundancyChannels : Integer = 3;
-        attribute channelAFailed : Boolean = false;
-        attribute channelBFailed : Boolean = false;
-        attribute channelCFailed : Boolean = false;
-
-        action def emergencyStop { }
-
-        state def TripleChannelRedundancy {
-            state Active;
-            state FailsafeActive {
-                entry action stop : emergencyStop;
+            state ArbLandMode {
+                entry action onLand : initiateEmergencyLand;
             }
-            transition initial then Active;
-            transition majorityFail
-                first Active
-                if channelAFailed and channelBFailed
-                then FailsafeActive;
+
+            state ArbRtbMode {
+                entry action onRtb : initiateBatteryRtb;
+            }
+
+            transition initial then ArbNominal;
+
+            transition arbToParachute
+                first ArbNominal
+                if propulsionCriticalFailure
+                then ArbParachuteMode;
+
+            transition arbToLandBattery
+                first ArbNominal
+                if batterySoc < 15.0
+                and not propulsionCriticalFailure
+                then ArbLandMode;
+
+            transition arbToLandComm
+                first ArbNominal
+                if commLossTime > 10.0
+                and not propulsionCriticalFailure
+                then ArbLandMode;
+
+            transition arbToRtb
+                first ArbNominal
+                if batterySoc <= 25.0
+                and batterySoc >= 15.0
+                and commLossTime <= 10.0
+                and not propulsionCriticalFailure
+                then ArbRtbMode;
         }
+    }
+
+    part def SensorSuite {
+        out port navData : DataPort;
+        out port sensorStatus : DataPort;
+        in port rtcmData : RTCM10403Port;
+
+        attribute maxSensorRange : Real = 15.0 [m];
+        attribute currentSensorRange : Real = 15.0 [m];
+        attribute minSeparationDistance : Real = 5.0 [m];
+        attribute currentSeparationDistance : Real = 100.0 [m];
+
+        satisfy requirement REQ_FUNC_002;
+        satisfy requirement REQ_INTF_002;
+
+        action def detectCollisionThreats { }
+        action def performSensorSelfCheck { }
+
+        assert constraint sensorRangeBound {
+            currentSensorRange <= maxSensorRange
+        }
+
+        assert constraint separationDistanceMin {
+            currentSeparationDistance >= minSeparationDistance
+        }
+    }
+
+    part def CommunicationSystem {
+        out port commStatus : DataPort;
+        out port missionCmd : MAVLinkPort;
+        out port rtcmData : RTCM10403Port;
+        inout port rfLink : AES256Port;
+        out port remoteId : ASTMF3411Port;
+        in port telemetry : MAVLinkPort;
+
+        attribute heartbeatRate : Real = 1.0 [Hz];
+        attribute encryptionEnabled : Boolean = true;
+
+        satisfy requirement REQ_FUNC_004;
+        satisfy requirement REQ_FUNC_008;
+        satisfy requirement REQ_INTF_001;
+        satisfy requirement REQ_INTF_003;
+
+        action def maintainEncryptedLink { }
+        action def transmitHealthReport { }
+        action def performCommSelfCheck { }
     }
 
     part def PayloadMechanism {
-        in port releasePwm : PwmPort;
-        out port payloadWeight : ADSBSignal;
-        in port flightPathCmd : ADSBSignal;
-        in port motorCmd : ADSBSignal;
+        in port releaseCmd : DataPort;
+        out port payloadStatus : DataPort;
 
-        attribute maxPayload_kg : Real = 2.5 [kg];
-        attribute releaseTime_s : Real = 5.0 [s];
-        attribute pwmVoltage_v : Real = 5.0 [V];
+        attribute maxPayloadMass : Real = 2.5 [kg];
+        attribute currentPayloadMass : Real = 0.0 [kg];
+        attribute maxReleaseTime : Real = 2.0 [s];
+        attribute currentReleaseTime : Real = 0.0 [s];
 
         satisfy requirement REQ_FUNC_003;
         satisfy requirement REQ_FUNC_005;
-        satisfy requirement REQ_FUNC_008;
-        satisfy requirement REQ_PERF_006;
-        satisfy requirement REQ_INTF_003;
+        satisfy requirement REQ_PERF_005;
 
-        action def carryPayload { }
+        action def transportPayload { }
         action def releasePayload { }
-        action def confirmPayloadDelivery { }
+
+        assert constraint payloadMassBound {
+            currentPayloadMass <= maxPayloadMass
+        }
+
+        assert constraint releaseTimeBound {
+            currentReleaseTime <= maxReleaseTime
+        }
     }
 
-    part def PowerAndPropulsion {
-        in port motorCmd : ADSBSignal;
-        out port batteryState : ADSBSignal;
+    part def PropulsionSystem {
+        in port actuatorCmd : DataPort;
+        out port propStatus : DataPort;
 
-        attribute flightEndurance_min : Real = 25.0 [min];
-        attribute maxAirspeed_m_s : Real = 15.0 [m_s];
-        attribute maxTakeoffWeight_kg : Real = 25.0 [kg];
-        attribute noiseLevel_dba : Real = 65.0 [dBA];
+        attribute maxAirspeed : Real = 15.0 [m_s];
+        attribute currentAirspeed : Real = 0.0 [m_s];
+        attribute minFlightEndurance : Real = 1500.0 [s];
+        attribute currentFlightEndurance : Real = 1500.0 [s];
+        attribute minForwardGroundSpeed : Real = 2.0 [m_s];
+        attribute currentForwardGroundSpeed : Real = 0.0 [m_s];
+        attribute maxHeadwind : Real = 15.0 [m_s];
+        attribute currentHeadwind : Real = 0.0 [m_s];
+        attribute maxRollAttitudeDeviation : Real = 0.5 [deg];
+        attribute currentRollAttitude : Real = 0.0 [deg];
+        attribute maxPitchAttitudeDeviation : Real = 0.5 [deg];
+        attribute currentPitchAttitude : Real = 0.0 [deg];
 
+        satisfy requirement REQ_PERF_001;
         satisfy requirement REQ_PERF_002;
         satisfy requirement REQ_PERF_003;
+        satisfy requirement REQ_PERF_004;
+
+        action def performPropulsionSelfCheck { }
+
+        assert constraint airspeedBound {
+            currentAirspeed <= maxAirspeed
+        }
+
+        assert constraint rollAttitudeBound {
+            currentRollAttitude <= maxRollAttitudeDeviation
+        }
+
+        assert constraint pitchAttitudeBound {
+            currentPitchAttitude <= maxPitchAttitudeDeviation
+        }
+    }
+
+    part def Airframe {
+        inout port environment : DataPort;
+        in port chuteCmd : DataPort;
+        in port remoteId : ASTMF3411Port;
+
+        attribute maxTakeoffWeight : Real = 25.0 [kg];
+        attribute currentTakeoffWeight : Real = 0.0 [kg];
+        attribute maxAltitude_m : Real = 120.0 [m];
+        attribute currentAltitude_m : Real = 0.0 [m];
+        attribute maxOperationalRadius : Real = 10000.0 [m];
+        attribute currentOperationalRadius : Real = 0.0 [m];
+        attribute minAmbientTemperature : Real = -10.0;
+        attribute maxAmbientTemperature : Real = 45.0;
+        attribute currentAmbientTemperature : Real = 20.0;
+        attribute ipRating : Real = 54.0;
+
+        satisfy requirement REQ_PERF_007;
+        satisfy requirement REQ_CONS_001;
         satisfy requirement REQ_CONS_002;
         satisfy requirement REQ_CONS_003;
+        satisfy requirement REQ_CONS_004;
+        satisfy requirement REQ_CONS_005;
+        satisfy requirement REQ_CONS_006;
+
+        assert constraint takeoffWeightBound {
+            currentTakeoffWeight <= maxTakeoffWeight
+        }
+
+        assert constraint altitudeBound {
+            currentAltitude_m <= maxAltitude_m
+        }
+
+        assert constraint operationalRadiusBound {
+            currentOperationalRadius <= maxOperationalRadius
+        }
+
+        assert constraint ambientTempMax {
+            currentAmbientTemperature <= maxAmbientTemperature
+        }
+
+        assert constraint ambientTempMin {
+            currentAmbientTemperature >= minAmbientTemperature
+        }
     }
 
     // ==========================================
-    // System Instantiation & Connections
+    // System Architecture Assembly
     // ==========================================
-
-    part navigationController : NavigationController;
-    part powerManager : PowerManager;
-    part payloadManager : PayloadManager;
+    part flightController : FlightController;
+    part safetyMonitor : SafetyMonitor;
     part sensorSuite : SensorSuite;
     part communicationSystem : CommunicationSystem;
-    part safetyMonitor : SafetyMonitor;
     part payloadMechanism : PayloadMechanism;
-    part powerAndPropulsion : PowerAndPropulsion;
-    part sensorUnit2 : SensorSuite;
-    part sensorUnit3 : SensorSuite;
-    part sensorVoter : SensorVoter;
+    part propulsionSystem : PropulsionSystem;
+    part airframe : Airframe;
 
-    // Sensor Redundancy & Voting
-    connect sensorSuite.navData to sensorVoter.navA;
-    connect sensorUnit2.navData to sensorVoter.navB;
-    connect sensorUnit3.navData to sensorVoter.navC;
-    connect sensorVoter.votedNav to navigationController.navData;
-
-    connect sensorSuite.obstacleData to sensorVoter.obsA;
-    connect sensorUnit2.obstacleData to sensorVoter.obsB;
-    connect sensorUnit3.obstacleData to sensorVoter.obsC;
-    connect sensorVoter.votedObs to navigationController.obstacleData;
-
-    connect sensorSuite.sensorStatus to sensorVoter.statusA;
-    connect sensorUnit2.sensorStatus to sensorVoter.statusB;
-    connect sensorUnit3.sensorStatus to sensorVoter.statusC;
-    connect sensorVoter.votedStatus to safetyMonitor.sensorStatus;
-
-    connect sensorSuite.impactAlert to sensorVoter.impactA;
-    connect sensorUnit2.impactAlert to sensorVoter.impactB;
-    connect sensorUnit3.impactAlert to sensorVoter.impactC;
-    connect sensorVoter.votedImpact to safetyMonitor.impactAlert;
-
-    // Communication & Navigation
-    connect communicationSystem.waypoints to navigationController.waypoints;
+    connect safetyMonitor.overrideCmd to flightController.overrideCmd;
+    connect sensorSuite.navData to flightController.navData;
+    connect communicationSystem.missionCmd to flightController.missionCmd;
+    connect payloadMechanism.payloadStatus to flightController.payloadStatus;
+    
+    connect flightController.actuatorCmd to propulsionSystem.actuatorCmd;
+    connect flightController.releaseCmd to payloadMechanism.releaseCmd;
+    
     connect communicationSystem.commStatus to safetyMonitor.commStatus;
-    connect communicationSystem.adsbSignal to safetyMonitor.adsbSignal;
-    connect navigationController.telemetryData to communicationSystem.telemetryData;
-    connect powerManager.telemetryData to communicationSystem.powerTelemetry;
-    connect payloadManager.telemetryData to communicationSystem.payloadTelemetry;
-
-    // Distributed Control Paths
-    connect navigationController.flightPathCmd to powerManager.flightPathCmd;
-    connect powerManager.motorCmd to powerAndPropulsion.motorCmd;
-
-    connect payloadMechanism.payloadWeight to payloadManager.payloadWeight;
-    connect payloadManager.releasePwm to payloadMechanism.releasePwm;
-
-    // Safety Monitoring
-    connect powerAndPropulsion.batteryState to safetyMonitor.batteryState;
-    connect safetyMonitor.overrideCmd to navigationController.overrideCmd;
-
-    // Additional Scenario Connections
-    connect sensorSuite.sensorStatus to payloadManager.sensorData;
-    connect sensorVoter.votedStatus to payloadManager.votedStatus;
-    connect safetyMonitor.overrideCmd to payloadManager.overrideCmd;
-    connect powerAndPropulsion.batteryState to payloadManager.batteryState;
-    connect navigationController.flightPathCmd to payloadMechanism.flightPathCmd;
-    connect powerManager.motorCmd to payloadMechanism.motorCmd;
+    connect sensorSuite.sensorStatus to safetyMonitor.sensorStatus;
+    connect propulsionSystem.propStatus to safetyMonitor.propStatus;
+    
+    connect communicationSystem.rtcmData to sensorSuite.rtcmData;
+    
+    connect safetyMonitor.chuteCmd to airframe.chuteCmd;
+    connect communicationSystem.remoteId to airframe.remoteId;
+    connect flightController.telemetry to communicationSystem.telemetry;
 
 }

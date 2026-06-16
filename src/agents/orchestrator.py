@@ -425,6 +425,17 @@ class Orchestrator:
         self.state.current_model = final_model
         print(f"  ✓ Final design score: {final_score:.3f}\n")
 
+        # ── Phase 3.5: SITL-L1 refinement (only when targeting a platform) ────
+        # Feed unresolved ArduPilot-parameter mappings (= model genuinely
+        # missing a guard/attribute a requirement needs) back to the design
+        # LLM.  Cheap & deterministic (no SITL process launch); L2 stays
+        # terminal.
+        if platform_profile is not None:
+            final_model, final_score, final_sim = self._sitl_refinement_loop(
+                final_model, requirements, final_score, final_sim, max_iters=2
+            )
+            self.state.current_model = final_model
+
         # ── Phase 4: Behavioral Reachability Simulation ───────────────────────
         # Simulation already ran in Phase 3 — reuse the result, no duplicate run.
         print("Phase 4: Behavioral Reachability Simulation", flush=True)
@@ -1446,6 +1457,107 @@ class Orchestrator:
 
         return best_model, best_score, best_sim_result or last_sim_result
 
+    # ------------------------------------------------------------------
+    # Phase 3.5: SITL-L1 refinement loop
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_sitl_feedback(items: List[Dict[str, Any]]) -> str:
+        """Format unresolved SITL parameter gaps as a refinement prompt section."""
+        lines = [
+            "SITL parameter-mapping gaps (ArduPilot L1):",
+            "  Each requirement below maps to an ArduPilot parameter that cannot be",
+            "  derived because the model lacks the guard/attribute it reads from.",
+            "  Add the missing element to the named part using valid SysML v2 syntax.",
+            "",
+        ]
+        for i in items:
+            lines.append(f"- {i['message']}")
+        return "\n".join(lines)
+
+    def _sitl_refinement_loop(
+        self,
+        model: SysMLModel,
+        requirements: List[str],
+        base_score: float,
+        base_sim: Any,
+        max_iters: int = 2,
+    ) -> Tuple[SysMLModel, float, Any]:
+        """Feed unresolved ArduPilot parameter mappings back to the design LLM.
+
+        An unresolved mapping means the model genuinely lacks a guard/attribute
+        a requirement needs (the tooling-side source of 'unresolved' was removed
+        by resolving AST-matched thresholds).  Each pass: run the L1 mapping →
+        if unresolved, build feedback → refine → accept only when there is no
+        syntax/sim/score regression.  Terminates on clean L1, no progress, or
+        regression.  Returns (model, score, sim) for the final accepted model.
+        """
+        from ..sitl.requirement_linker import RequirementLinker
+
+        current, cur_score, cur_sim = model, base_score, base_sim
+        last_sig = None
+
+        print(f"\n  {'─'*62}", flush=True)
+        print(f"  ▶  SITL-L1 refinement loop  (max {max_iters} pass"
+              f"{'es' if max_iters > 1 else ''})")
+
+        for it in range(max_iters):
+            linker = RequirementLinker(current, llm=self.llm, verbose=self.verbose)
+            items = linker.unresolved_feedback()
+
+            if not items:
+                print(f"  │  Pass {it+1}/{max_iters}  ✓ all SITL parameters resolved")
+                print(f"  └─ SITL-L1 clean", flush=True)
+                break
+
+            print(f"  │  Pass {it+1}/{max_iters}  {len(items)} unresolved parameter(s):",
+                  flush=True)
+            for i in items:
+                print(f"  │    ✗ {i['req_id']} → {i['param']} ({i['kind']})")
+
+            sig = frozenset((i["req_id"], i["param"]) for i in items)
+            if sig == last_sig:
+                print(f"  └─ ⚠ no progress (same unresolved set) — stopping", flush=True)
+                break
+            last_sig = sig
+
+            refine_result = self.design_agent.run({
+                "system_name": current.name,
+                "requirements": requirements,
+                "existing_model": current,
+                "refinement_feedback": self._build_sitl_feedback(items),
+                "refinement_issues": [i["message"] for i in items],
+                "verbose": self.verbose,
+            })
+            if not (refine_result.success
+                    and isinstance(refine_result.output, _SysMLModelTypes)):
+                print(f"  └─ ⚠ refinement produced no usable model — stopping", flush=True)
+                break
+
+            candidate = refine_result.output
+            # Same-basis comparison: evaluate the candidate with its own fresh
+            # syntax + sim results (mirrors the regression-check fix elsewhere).
+            cand_sysml = get_sysml_text(candidate)
+            cand_syntax = check_syntax(cand_sysml)
+            cand_sim = self._run_simulation(cand_sysml, candidate.name)
+            cand_eval = self.evaluator.evaluate(
+                config=DesignConfiguration(name="sitl_candidate", parameters={}),
+                model=candidate,
+                syntax_result=cand_syntax,
+                sim_result=cand_sim,
+            )
+            if cand_eval.weighted_total < cur_score - 0.05:
+                print(f"  └─ ⚠ regression (score {cur_score:.3f} → "
+                      f"{cand_eval.weighted_total:.3f}) — keeping previous model",
+                      flush=True)
+                break
+
+            print(f"  │  ✓ accepted  score {cur_score:.3f} → "
+                  f"{cand_eval.weighted_total:.3f}", flush=True)
+            current, cur_score, cur_sim = candidate, cand_eval.weighted_total, cand_sim
+
+        print(f"  {'─'*62}", flush=True)
+        return current, cur_score, cur_sim
 
     def _print_iteration_summary(
         self,

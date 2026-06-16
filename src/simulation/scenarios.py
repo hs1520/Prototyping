@@ -124,6 +124,43 @@ _REQ_POWER_KW  = {"power", "batt", "energy"}
 
 
 # ---------------------------------------------------------------------------
+# Production-oriented port-name lexicons
+# ---------------------------------------------------------------------------
+# A part's functional role is defined by WHAT IT PRODUCES.  These tokens are
+# matched ONLY against OUT (and inout) port names — an out-port names what the
+# part emits, so it indicates the part's role as a signal source.  (An IN-port
+# name describes what the part consumes, i.e. the *other* party's output, so it
+# must NOT drive this part's classification — that is the mistake naive
+# port-name matching makes, e.g. a controller's `in sensorData` does not make
+# it a sensor.)
+#
+# Ordered most-distinctive-first; the first category a part produces wins.
+_PRODUCE_SAFETY = ("override", "recovery", "emergency", "failsafe",
+                   "abort", "chute", "parachute")
+_PRODUCE_COMMS  = ("telemetry", "gcs", "uplink", "downlink", "mavlink",
+                   "remoteid", "broadcast", "comm", "radio", "antenna")
+_PRODUCE_CTRL   = ("cmd", "command", "control", "actuator", "steer", "setpoint")
+_PRODUCE_SENSOR = ("sensordata", "sensor", "nav", "gps", "gnss", "imu",
+                   "lidar", "radar", "perception", "position", "attitude", "odom")
+_PRODUCE_POWER  = ("power", "energy", "battery", "volt", "current",
+                   "charge", "thermal")
+# IN-port command tokens — a pure consumer of commands (produces nothing) is an
+# actuator/effector.
+_CONSUME_CMD    = ("cmd", "command", "release", "actuate", "drive", "throttle")
+
+# Ordered production rules: (lexicon, role).  Safety before comms before
+# controller so that override/recovery commands and gcs/telemetry downlinks are
+# not swallowed by the generic command (`cmd`) controller token.
+_PRODUCTION_RULES = (
+    (_PRODUCE_SAFETY, "safety"),
+    (_PRODUCE_COMMS,  "comms"),
+    (_PRODUCE_CTRL,   "controller"),
+    (_PRODUCE_SENSOR, "sensor"),
+    (_PRODUCE_POWER,  "power"),
+)
+
+
+# ---------------------------------------------------------------------------
 # Topology helpers
 # ---------------------------------------------------------------------------
 
@@ -202,21 +239,40 @@ def _classify_node(node: PartNode, bg: BehavioralGraph) -> str:
         # passive mechanical bodies.
         if any(k in low for k in _STRUCTURE_KEYWORDS): return "structure"
 
-    # ── P3: port direction topology (anonymous parts only) ───────────────────
-    # `_port_topology` counts `inout` as both in and out.  For controller
-    # promotion we require DISTINCT pure-out AND pure-in data ports — a part
-    # whose only mixed signal is a single `inout` (e.g. a physical mount) is
-    # NOT a controller and must not seed telemetry/control scenarios.
-    has_out, has_in = _port_topology(node, bg)
+    # ── P3: production-oriented classification (name carries no keyword) ──────
+    # A part's role is defined by what it PRODUCES.  Match the production
+    # lexicons against OUT (and inout) port names only — these name what the
+    # part emits.  IN-port names describe consumed signals (the other party's
+    # output) and must not classify this part, so they are excluded here.
     part_ports = [bg.ports[pid] for pid in node.port_ids if pid in bg.ports]
-    pure_out = any(p.direction == "out" for p in part_ports)
-    pure_in  = any(p.direction == "in"  for p in part_ports)
+    out_names = [
+        p.port_name.lower() for p in part_ports
+        if p.direction in ("out", "inout") and p.port_name
+    ]
+    for lexicon, role in _PRODUCTION_RULES:
+        if any(tok in pn for pn in out_names for tok in lexicon):
+            return role
+
+    # ── P3b: pure consumer of commands → actuator/effector ───────────────────
+    in_names = [
+        p.port_name.lower() for p in part_ports
+        if p.direction in ("in", "inout") and p.port_name
+    ]
+    if not out_names and any(tok in pn for pn in in_names for tok in _CONSUME_CMD):
+        return "actuator"
+
+    # ── P4: conservative direction topology (no semantic signal at all) ──────
+    # Only pure sources / pure sinks get a definite role.  A part with mixed
+    # in+out ports but no production-semantic out-port name is NOT assumed to be
+    # a controller (that over-promotion inflated and distorted the scenario set
+    # — e.g. a power/platform part with `in cmd` + `out status`).  It becomes
+    # "other"; auto_detect_scenarios promotes the highest-degree "other" to
+    # controller only when no controller was found anywhere.
+    has_out, has_in = _port_topology(node, bg)
     if node.port_ids:
         if has_out and not has_in:  return "sensor"      # pure source
         if has_in  and not has_out: return "actuator"    # pure sink
-        if pure_out and pure_in:    return "controller"  # genuine hub (distinct in+out)
-        # mixed only via inout / single physical port → not a controller
-        return "other"
+        return "other"                                   # mixed but uncharacterised
 
     return "other"
 
