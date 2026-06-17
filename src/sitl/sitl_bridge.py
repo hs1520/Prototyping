@@ -264,37 +264,38 @@ class SITLBridge:
             self.stop_sitl()
             return False
 
-        # 等待 EKF 对齐 + GPS fix（arming 需要两者都就绪）
+        # 等待飞机真正"可解锁/可起飞"再返回，否则顺序套件里后面的测试会偶发
+        # 起飞失败。判据用 EKF_STATUS_REPORT 的 EKF_POS_HORIZ_ABS 标志位——它
+        # 直接表示"EKF 已有绝对水平位置"，即 home 已设、armable。比数 STATUSTEXT
+        # ("origin set" 只播一次，连接晚了就永远抓不到）确定得多。在 Gazebo JSON
+        # FDM 下，没有 Gazebo 喂数据该位永远不会置位，所以它也顺带确认了 FDM 握手。
+        ready = False
         try:
             from pymavlink import mavutil as _mu
             _mav = _mu.mavlink_connection("tcp:127.0.0.1:5760")
-            _mav.wait_heartbeat(timeout=10)
+            _mav.wait_heartbeat(timeout=15)
             _mav.mav.request_data_stream_send(
                 _mav.target_system, _mav.target_component,
-                _mu.mavlink.MAV_DATA_STREAM_ALL, 4, 1,
+                _mu.mavlink.MAV_DATA_STREAM_ALL, 5, 1,
             )
-            # 等待 EKF IMU 对齐 + EKF origin 设置（两者都就绪才能解锁）
-            # "EKF3 IMU0 origin set" 是 AHRS home 就绪的标志
-            ekf_deadline = time.time() + 60
-            aligned = 0
-            origin_set = 0
+            _ABS = getattr(_mu.mavlink, "EKF_POS_HORIZ_ABS", 16)
+            ekf_deadline = time.time() + 90
             while time.time() < ekf_deadline:
-                msg = _mav.recv_match(type="STATUSTEXT", blocking=True, timeout=2)
-                if msg is None:
-                    continue
-                text = msg.text.lower()
-                if "alignment complete" in text:
-                    aligned += 1
-                elif "origin set" in text:
-                    origin_set += 1
-                # 两个 IMU 对齐 + 至少一个 origin 设置好 → 可以解锁
-                if aligned >= 2 and origin_set >= 1:
+                msg = _mav.recv_match(
+                    type="EKF_STATUS_REPORT", blocking=True, timeout=2)
+                if msg is not None and (msg.flags & _ABS):
+                    ready = True
                     break
             _mav.close()
         except Exception:
             pass
 
-        print(f"  ✓ SITL 已就绪，监听 tcp:127.0.0.1:5760")
+        if not ready:
+            print(f"  ✗ SITL 启动后 EKF 未就绪（无绝对位置估计），放弃本次启动")
+            self.stop_sitl()
+            return False
+
+        print(f"  ✓ SITL 已就绪（EKF 绝对位置已锁定），监听 tcp:127.0.0.1:5760")
         return True
 
     def stop_sitl(self) -> None:
@@ -527,12 +528,27 @@ class SITLBridge:
             "        mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,",
             "        0, 0, 0, 0, 0, 0, 0, altitude,",
             "    )",
+            "    # relative_alt 是相对 home 高度；home 未设的瞬间可能等于绝对海拔",
+            "    # （~584000mm），会让 '>= target' 在地面误判。按基线相对爬升判断，",
+            "    # 加合理性上限 + 连续 2 帧确认。",
+            "    target_mm = int(altitude * 0.6 * 1000)",
+            "    plausible_max_mm = int(altitude * 3 * 1000) + 5000",
+            "    baseline_mm = None",
+            "    hits = 0",
             "    deadline = time.time() + 30",
             "    while time.time() < deadline:",
             "        msg = mav.recv_match(type='GLOBAL_POSITION_INT',",
             "                             blocking=True, timeout=1)",
-            "        if msg and msg.relative_alt >= int(altitude * 0.6 * 1000):",
-            "            return True",
+            "        if msg is not None:",
+            "            if baseline_mm is None or msg.relative_alt < baseline_mm:",
+            "                baseline_mm = msg.relative_alt",
+            "            climb = msg.relative_alt - (baseline_mm or 0)",
+            "            if 0 < climb <= plausible_max_mm and climb >= target_mm:",
+            "                hits += 1",
+            "                if hits >= 2:",
+            "                    return True",
+            "            else:",
+            "                hits = 0",
             "        time.sleep(0.3)",
             "    return False",
             "",
@@ -725,11 +741,26 @@ class SITLBridge:
             "        mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,",
             "        0, 0, 0, 0, 0, 0, 0, altitude,",
             "    )",
+            "    # relative_alt 是相对 home 高度；home 未设的瞬间可能等于绝对海拔",
+            "    # （~584000mm），会让 '>= target' 在地面误判。按基线相对爬升判断，",
+            "    # 加合理性上限 + 连续 2 帧确认。",
+            "    target_mm = int(altitude * 0.7 * 1000)",
+            "    plausible_max_mm = int(altitude * 3 * 1000) + 5000",
+            "    baseline_mm = None",
+            "    hits = 0",
             "    deadline = time.time() + 30",
             "    while time.time() < deadline:",
             "        msg = mav.recv_match(type='GLOBAL_POSITION_INT', blocking=True, timeout=2)",
-            "        if msg and msg.relative_alt >= int(altitude * 0.7 * 1000):",
-            "            return True",
+            "        if msg is not None:",
+            "            if baseline_mm is None or msg.relative_alt < baseline_mm:",
+            "                baseline_mm = msg.relative_alt",
+            "            climb = msg.relative_alt - (baseline_mm or 0)",
+            "            if 0 < climb <= plausible_max_mm and climb >= target_mm:",
+            "                hits += 1",
+            "                if hits >= 2:",
+            "                    return True",
+            "            else:",
+            "                hits = 0",
             "        time.sleep(0.5)",
             "    return False",
             "",
@@ -828,7 +859,12 @@ class SITLBridge:
                     continue
 
             try:
-                result = self._run_single_test(spec, conn_str, mavutil)
+                # 本测试若是新拉起的 SITL（--wipe 全新启动），机体已是干净初始态，
+                # 无需 reset_drone_state；而且在 Gazebo 下 reset 里的 SIM_*/EKF
+                # 参数会扰乱 FDM 喂入的传感器估计，导致起飞失败。仅共享 SITL
+                # （per_test_sitl=False，测试间状态会残留）时才需要 reset。
+                result = self._run_single_test(
+                    spec, conn_str, mavutil, fresh_sitl=launched_here)
                 dt = time.time() - t0
                 results.append(TestResult(spec.req_id, "L2", result[0], result[1], dt))
             except Exception as e:
@@ -845,9 +881,15 @@ class SITLBridge:
         spec: SITLTestSpec,
         conn_str: str,
         mavutil,
+        fresh_sitl: bool = False,
     ):
         """执行单个 L2 测试，返回 (passed, message)。所有 inject/verify 调度
-        都通过 sitl_specs 注册表完成，无 if/elif 解释器。"""
+        都通过 sitl_specs 注册表完成，无 if/elif 解释器。
+
+        fresh_sitl=True 表示本测试是独立新拉起的 SITL（--wipe），机体已是
+        干净初始态，跳过 reset_drone_state（在 Gazebo 下 reset 会扰乱 FDM
+        传感器估计，导致起飞失败）。
+        """
         from src.sitl.sitl_specs import TestContext, run_inject, run_verify
 
         mav = mavutil.mavlink_connection(conn_str)
@@ -862,8 +904,9 @@ class SITLBridge:
 
         ctx = TestContext(mav=mav, mavutil=mavutil)
 
-        # 每次测试前恢复已知初始状态，避免跨测试的状态污染
-        ctx.reset_drone_state()
+        # 仅共享 SITL 时才需清理跨测试状态污染；新拉起的 SITL 已是干净态
+        if not fresh_sitl:
+            ctx.reset_drone_state()
 
         # ── Inject ──────────────────────────────────────────────────────
         try:

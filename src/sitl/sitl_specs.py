@@ -172,15 +172,30 @@ class TestContext:
                 0, 0, 0, 0, 0,
             )
 
-        # 等待爬升（目标高度 60%）
+        # 等待爬升（目标高度 60%）。注意 relative_alt 是"相对 home 高度"，但 home
+        # 未设定的瞬间该字段可能等于绝对海拔（~584000mm），会让简单的
+        # `>= target` 误判为已起飞 → 在地面就返回 True。因此：
+        #   1. 取首个读数为基线，按相对基线的爬升量判断；
+        #   2. 上限做合理性约束（剔除 > altitude*3 的离谱读数）；
+        #   3. 需连续 2 次满足，避免单帧抖动。
         target_mm = int(altitude * 0.6 * 1000)
+        plausible_max_mm = int(altitude * 3 * 1000) + 5000
+        baseline_mm = None
+        hits = 0
         deadline = time.time() + 25
         while time.time() < deadline:
             msg = self.mav.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=1)
-            if msg and msg.relative_alt >= target_mm:
-                # 恢复围栏
-                self.set_param("FENCE_ENABLE", 1)
-                return True
+            if msg is not None:
+                if baseline_mm is None or msg.relative_alt < baseline_mm:
+                    baseline_mm = msg.relative_alt
+                climb = msg.relative_alt - (baseline_mm or 0)
+                if 0 < climb <= plausible_max_mm and climb >= target_mm:
+                    hits += 1
+                    if hits >= 2:
+                        self.set_param("FENCE_ENABLE", 1)
+                        return True
+                else:
+                    hits = 0
             # 持续发速度指令（若用速度控制则需要持续发送）
             if not takeoff_accepted and time.time() < deadline - 2:
                 self.mav.mav.set_position_target_local_ned_send(
