@@ -115,6 +115,7 @@ class TestContext:
 
     def force_arm_and_takeoff(self, altitude: float = 3.0) -> bool:
         """恢复传感器 → 切 GUIDED → 解锁 → 起飞 → 等到达目标高度。"""
+        self.set_param("ARMING_CHECK", 0)   # bypass ALL PreArm checks for SITL
         self.set_param("SIM_GPS1_ENABLE", 1)
         self.set_param("SIM_BARO_DISABLE", 0)
         # FENCE_ENABLE=1 在没有 GPS fix 时会阻止解锁（Fence requires position）
@@ -122,19 +123,26 @@ class TestContext:
         self.set_param("FENCE_ENABLE", 0)
         time.sleep(0.5)
         self.set_mode("GUIDED")
-        # 解锁，过滤正确 ACK
-        self.mav.mav.command_long_send(
-            self.mav.target_system, self.mav.target_component,
-            self.mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-            0, 1, 0, 0, 0, 0, 0, 0,
-        )
+        # wait_ready_to_arm：EKF 在启动后需要数秒才能设定 origin/home
+        # （"Arm: Need Position Estimate" / "AHRS: waiting for home"），这些是
+        # 强制硬检查，ARMING_CHECK=0 和 force-arm(21196) 都绕不过。因此必须
+        # 反复重试解锁直到 EKF 就绪，而不是只试一次就放弃。
         arm_ok = False
-        deadline = time.time() + 8
+        deadline = time.time() + 45
         while time.time() < deadline:
-            ack = self.mav.recv_match(type="COMMAND_ACK", blocking=True, timeout=1)
-            if ack and ack.command == self.mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM:
-                arm_ok = (ack.result == self.mavutil.mavlink.MAV_RESULT_ACCEPTED)
+            self.mav.mav.command_long_send(
+                self.mav.target_system, self.mav.target_component,
+                self.mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+                0, 1, 21196, 0, 0, 0, 0, 0,
+            )
+            ack = self.mav.recv_match(
+                type="COMMAND_ACK", blocking=True, timeout=2)
+            if (ack
+                    and ack.command == self.mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM
+                    and ack.result == self.mavutil.mavlink.MAV_RESULT_ACCEPTED):
+                arm_ok = True
                 break
+            time.sleep(2)
         if not arm_ok:
             return False
 
@@ -198,7 +206,7 @@ class TestContext:
         self.set_param("COMPASS_ENABLE", 1)
         self.set_param("EK3_ENABLE", 1)
         self.set_param("SIM_GPS1_ENABLE", 1)
-        self.set_param("ARMING_CHECK", 1)
+        self.set_param("ARMING_CHECK", 0)   # SITL: bypass PreArm checks
         self.set_param("BATT_ARM_VOLT", 0)
         self.set_param("FS_GCS_ENABLE", 0)
         # 关闭 GCS 故障安全——pymavlink 不发心跳，10s 后会强制 LAND 打断起飞
@@ -277,13 +285,12 @@ def _render_inject_set_param(spec: InjectSpec) -> str:
 
 
 def _inject_disconnect_gcs(ctx: TestContext, spec: InjectSpec) -> None:
-    # 起飞后重新启用 GCS 故障安全
+    # 解锁（不需要真正起飞，地面解锁足以触发 GCS 故障安全）
     if spec.pre_takeoff_m > 0:
         ctx.force_arm_and_takeoff(altitude=spec.pre_takeoff_m)
     ctx.set_param("FS_GCS_ENABLE", 1)
     ctx.set_param("FS_GCS_TIMEOUT", 10)
     # 预热：持续发 HEARTBEAT 至少 15s，让 ArduCopter 建立稳定的 GCS 连接状态
-    # （ArduCopter 需要接收到心跳后才有"断连"的概念，5次@0.5s 不够）
     t_warmup = time.time() + 15
     while time.time() < t_warmup:
         ctx.mav.mav.heartbeat_send(
@@ -293,13 +300,14 @@ def _inject_disconnect_gcs(ctx: TestContext, spec: InjectSpec) -> None:
         )
         time.sleep(1.0)
     # 关闭连接，彻底切断心跳 → ArduCopter 检测到 GCS 断连
-    # 保存连接字符串供 verify 重连用
+    # 不在 inject 中 sleep — verify 立即开始轮询模式切换
     try:
         ctx._gcs_conn_str = getattr(ctx.mav, 'address', "tcp:127.0.0.1:5760")
         ctx.mav.close()
     except Exception:
         ctx._gcs_conn_str = "tcp:127.0.0.1:5760"
-    time.sleep(14)  # 超过 FS_GCS_TIMEOUT(10s) + 缓冲
+    # 小延迟让 SITL 释放 TCP 端口，让 verify 可以重连
+    time.sleep(2)
 
 
 def _render_inject_disconnect_gcs(spec: InjectSpec) -> str:
@@ -351,8 +359,10 @@ def _render_inject_mavlink_command(spec: InjectSpec) -> str:
     settle_s = float(spec.params.get("_settle_s", 1.5))
     pre = ""
     if spec.pre_takeoff_m > 0:
+        # 起飞失败必须让测试 FAIL，否则会在地面发执行器指令、靠 STATUSTEXT 假绿
         pre = (f"print('  起飞至 {spec.pre_takeoff_m}m ...')\n"
-               f"force_arm_and_takeoff(mav, altitude={spec.pre_takeoff_m})\n")
+               f"if not force_arm_and_takeoff(mav, altitude={spec.pre_takeoff_m}):\n"
+               f"    raise RuntimeError('起飞失败：未能解锁/爬升到目标高度')\n")
     return pre + textwrap.dedent(f"""\
         print("  发送 MAVLink command {cmd_id} ...")
         mav.mav.command_long_send(

@@ -99,6 +99,18 @@ ARDUPILOT_COPTER_PROFILE: dict = {
     # 需要解锁+起飞后才能有意义测试的模式
     "requires_airborne": {"CMD_RTL", "CMD_LAND", "CMD_AUTO",
                           "CMD_LOITER", "CMD_POSHOLD"},
+    # 基础 SITL 参数：--wipe 后需要显式设置，否则 motor matrix 无效
+    "base_sitl_params": {
+        "FRAME_CLASS":    1,  # QUAD
+        "FRAME_TYPE":     1,  # X-frame
+        "ARMING_CHECK":   0,  # SITL 测试：跳过全部 PreArm 检查
+        "DISARM_DELAY":   0,  # 禁止自动解除解锁（防止 EKF 健康检查触发自动缴械）
+        # 注意：EK3_CHECK_SCALE 必须保持默认 100。曾误设为 0，本意是"放宽
+        # EKF 健康检查"，实则把 GPS 精度阈值收成 0 → GPS 永远过不了检查 →
+        # EKF 拒绝融合 GPS → 无位置估计/home → "Arm: Need Position Estimate"
+        # → 无法解锁 → 起飞链路彻底失效（所有需飞行的 L2 全部假绿）。
+        "EK3_CHECK_SCALE": 100,
+    },
 }
 
 
@@ -319,6 +331,18 @@ class SITLBridge:
         """生成 .parm 文件，返回文件路径。"""
         parm_content = self._linker.generate_parm_file()
         parm_path = self._output_dir / f"{self._model.name}.parm"
+
+        # Append platform base_sitl_params (e.g. FRAME_CLASS, ARMING_CHECK)
+        # that must be present after --wipe, not overridden by requirement params
+        base_params = self._platform_profile.get("base_sitl_params", {})
+        if base_params:
+            additions = []
+            for k, v in base_params.items():
+                if k not in parm_content:
+                    additions.append(f"{k:<30} {v}  # base SITL param")
+            if additions:
+                parm_content += "\n" + "\n".join(additions) + "\n"
+
         parm_path.write_text(parm_content, encoding="utf-8")
         print(f"[L1] .parm 文件已写入: {parm_path}")
         return parm_path
@@ -480,20 +504,30 @@ class SITLBridge:
             "    mav.mav.set_mode_send(mav.target_system,",
             "        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, guided_id)",
             "    time.sleep(0.5)",
-            "    mav.mav.command_long_send(",
-            "        mav.target_system, mav.target_component,",
-            "        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,",
-            "        0, 1, 0, 0, 0, 0, 0, 0,",
-            "    )",
-            "    ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=5)",
-            "    if not ack or ack.result != mavutil.mavlink.MAV_RESULT_ACCEPTED:",
+            "    # wait_ready_to_arm：EKF 启动后需数秒设定 origin/home，重试直到就绪",
+            "    armed = False",
+            "    arm_deadline = time.time() + 45",
+            "    while time.time() < arm_deadline:",
+            "        mav.mav.command_long_send(",
+            "            mav.target_system, mav.target_component,",
+            "            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,",
+            "            0, 1, 21196, 0, 0, 0, 0, 0,",
+            "        )",
+            "        ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=2)",
+            "        if (ack",
+            "                and ack.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM",
+            "                and ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED):",
+            "            armed = True",
+            "            break",
+            "        time.sleep(2)",
+            "    if not armed:",
             "        return False",
             "    mav.mav.command_long_send(",
             "        mav.target_system, mav.target_component,",
             "        mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,",
             "        0, 0, 0, 0, 0, 0, 0, altitude,",
             "    )",
-            "    deadline = time.time() + 20",
+            "    deadline = time.time() + 30",
             "    while time.time() < deadline:",
             "        msg = mav.recv_match(type='GLOBAL_POSITION_INT',",
             "                             blocking=True, timeout=1)",
@@ -666,20 +700,32 @@ class SITLBridge:
             "    mav.mav.set_mode_send(mav.target_system,",
             "        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, guided_id)",
             "    time.sleep(1)",
-            "    mav.mav.command_long_send(",
-            "        mav.target_system, mav.target_component,",
-            "        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,",
-            "        0, 1, 21196, 0, 0, 0, 0, 0,",
-            "    )",
-            "    ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=5)",
-            "    if ack is None or ack.result != mavutil.mavlink.MAV_RESULT_ACCEPTED:",
+            "    # wait_ready_to_arm：EKF 启动后需数秒设定 origin/home，期间会",
+            "    # 报 'Arm: Need Position Estimate'，这是强制硬检查，ARMING_CHECK=0",
+            "    # 和 force-arm(21196) 都绕不过。必须反复重试直到 EKF 就绪。",
+            "    armed = False",
+            "    arm_deadline = time.time() + 45",
+            "    while time.time() < arm_deadline:",
+            "        mav.mav.command_long_send(",
+            "            mav.target_system, mav.target_component,",
+            "            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,",
+            "            0, 1, 21196, 0, 0, 0, 0, 0,",
+            "        )",
+            "        ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=2)",
+            "        if (ack is not None",
+            "                and ack.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM",
+            "                and ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED):",
+            "            armed = True",
+            "            break",
+            "        time.sleep(2)",
+            "    if not armed:",
             "        return False",
             "    mav.mav.command_long_send(",
             "        mav.target_system, mav.target_component,",
             "        mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,",
             "        0, 0, 0, 0, 0, 0, 0, altitude,",
             "    )",
-            "    deadline = time.time() + 20",
+            "    deadline = time.time() + 30",
             "    while time.time() < deadline:",
             "        msg = mav.recv_match(type='GLOBAL_POSITION_INT', blocking=True, timeout=2)",
             "        if msg and msg.relative_alt >= int(altitude * 0.7 * 1000):",

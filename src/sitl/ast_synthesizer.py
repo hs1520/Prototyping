@@ -91,7 +91,9 @@ _ACTION_TO_VERIFY: List[Tuple[List[str], VerifySpec]] = [
     # 降落伞
     (["parachute", "chute", "recovery", "deployparachute", "deploy"],
      VerifySpec(kind="wait_statustext",
-                args={"keyword": "arachute"},
+                # 必须匹配成功消息 "Parachute: Released"，不能用 "arachute"——
+                # 后者会误匹配拒绝消息 "Parachute: Landed"（地面/已着陆拒绝部署）
+                args={"keyword": "Parachute: Released"},
                 timeout=15.0)),
 
     # 阻止解锁

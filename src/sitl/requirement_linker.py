@@ -235,7 +235,9 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         ),
         verify=VerifySpec(
             kind="wait_statustext",
-            args={"keyword": "arachute"},
+            # 必须匹配成功消息，不能用 "arachute"——后者会误匹配拒绝消息
+            # "Parachute: Landed"（地面/已着陆时拒绝部署），造成假绿
+            args={"keyword": "Parachute: Released"},
             timeout=15.0,
         ),
         notes="MAV_CMD_DO_PARACHUTE RELEASE → STATUSTEXT 'Parachute: Released' (native SITL).",
