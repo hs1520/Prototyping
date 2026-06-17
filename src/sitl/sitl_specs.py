@@ -323,18 +323,62 @@ def _render_inject_skip(spec: InjectSpec) -> str:
     return f'print("  ⚠ inject skipped: {note}")\n'
 
 
+def _inject_mavlink_command(ctx: TestContext, spec: InjectSpec) -> None:
+    """发送任意 MAVLink command_long（用于 gripper、喷射器等执行器命令）。
+
+    spec.params keys:
+      command  — MAVLink 命令 ID（必填）
+      param1..param7 — 命令参数（默认 0）
+    """
+    if spec.pre_takeoff_m > 0:
+        ctx.force_arm_and_takeoff(altitude=spec.pre_takeoff_m)
+
+    cmd_id = int(spec.params.get("command", 0))
+    p = [float(spec.params.get(f"param{i}", 0)) for i in range(1, 8)]
+
+    ctx.mav.mav.command_long_send(
+        ctx.mav.target_system, ctx.mav.target_component,
+        cmd_id, 0,
+        p[0], p[1], p[2], p[3], p[4], p[5], p[6],
+    )
+    settle_s = float(spec.params.get("_settle_s", 1.5))
+    time.sleep(settle_s)
+
+
+def _render_inject_mavlink_command(spec: InjectSpec) -> str:
+    cmd_id = int(spec.params.get("command", 0))
+    params = [float(spec.params.get(f"param{i}", 0)) for i in range(1, 8)]
+    settle_s = float(spec.params.get("_settle_s", 1.5))
+    pre = ""
+    if spec.pre_takeoff_m > 0:
+        pre = (f"print('  起飞至 {spec.pre_takeoff_m}m ...')\n"
+               f"force_arm_and_takeoff(mav, altitude={spec.pre_takeoff_m})\n")
+    return pre + textwrap.dedent(f"""\
+        print("  发送 MAVLink command {cmd_id} ...")
+        mav.mav.command_long_send(
+            mav.target_system, mav.target_component,
+            {cmd_id}, 0,
+            {params[0]}, {params[1]}, {params[2]}, {params[3]},
+            {params[4]}, {params[5]}, {params[6]},
+        )
+        time.sleep({settle_s})
+    """)
+
+
 INJECT_HANDLERS: Dict[str, InjectHandler] = {
-    "noop":           _inject_noop,
-    "set_param":      _inject_set_param,
-    "disconnect_gcs": _inject_disconnect_gcs,
-    "skip":           _inject_skip,
+    "noop":             _inject_noop,
+    "set_param":        _inject_set_param,
+    "disconnect_gcs":   _inject_disconnect_gcs,
+    "mavlink_command":  _inject_mavlink_command,
+    "skip":             _inject_skip,
 }
 
 RENDER_INJECT: Dict[str, RenderInjectHandler] = {
-    "noop":           _render_inject_noop,
-    "set_param":      _render_inject_set_param,
-    "disconnect_gcs": _render_inject_disconnect_gcs,
-    "skip":           _render_inject_skip,
+    "noop":             _render_inject_noop,
+    "set_param":        _render_inject_set_param,
+    "disconnect_gcs":   _render_inject_disconnect_gcs,
+    "mavlink_command":  _render_inject_mavlink_command,
+    "skip":             _render_inject_skip,
 }
 
 

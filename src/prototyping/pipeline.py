@@ -81,6 +81,7 @@ class PrototypingPipeline:
         sitl_auto_launch: bool = False,
         sitl_host: str = "127.0.0.1",
         sitl_port: int = 5760,
+        sitl_fdm_backend: str = "native",
     ) -> Dict[str, Any]:
         """
         Generate a validated SysML v2 model without Design Space Exploration.
@@ -96,6 +97,11 @@ class PrototypingPipeline:
             Directory to write SITL artifacts (.parm, test_*.py).
         sitl_run_l2 : bool
             Also execute L2 tests against a running SITL instance.
+        sitl_fdm_backend : str
+            "native" (default) uses ArduPilot's built-in simplified physics.
+            "gazebo" switches to external FDM and auto-launches the
+            headless_gazebo Docker container (needed for requirements that
+            depend on real flight dynamics, e.g. gripper/parachute checks).
         sitl_auto_launch : bool
             Auto-launch/stop arducopter when sitl_run_l2=True.
         sitl_host / sitl_port
@@ -124,6 +130,7 @@ class PrototypingPipeline:
                 host=sitl_host,
                 port=sitl_port,
                 platform_profile=platform_profile,
+                fdm_backend=sitl_fdm_backend,
             )
 
         return result
@@ -141,6 +148,7 @@ class PrototypingPipeline:
         host: str,
         port: int,
         platform_profile: Optional[Dict[str, Any]] = None,
+        fdm_backend: str = "native",
     ) -> Dict[str, Any]:
         """内部方法：运行 SITL 阶段并打印进度，将报告写入 result。"""
         from ..sitl.sitl_bridge import SITLBridge
@@ -153,6 +161,8 @@ class PrototypingPipeline:
             print(f"  Platform: {platform_profile.get('platform', 'unknown')}")
         else:
             print("  Platform: none (L2 accept tests skipped — no platform_profile)")
+        print(f"  FDM backend: {fdm_backend}"
+              + ("  (will auto-launch headless_gazebo)" if fdm_backend == "gazebo" else ""))
         print("-" * W)
 
         model = result.get("model")
@@ -168,6 +178,7 @@ class PrototypingPipeline:
             llm=self.llm,
             platform_profile=platform_profile,
             verbose=True,
+            fdm_backend=fdm_backend,
         )
 
         # ── L1：生成 .parm + 静态验证 ────────────────────────────────

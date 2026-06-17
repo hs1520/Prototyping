@@ -35,6 +35,15 @@ _DEFAULT_ARDUCOPTER = (
     _SERVER_ARDUCOPTER if os.path.exists(_SERVER_ARDUCOPTER) else _LOCAL_ARDUCOPTER
 )
 
+# Gazebo (headless_gazebo 镜像) — fdm_backend="gazebo" 时使用
+# home 坐标必须匹配 worlds/iris_runway.sdf 里的 <spherical_coordinates>（CMAC），
+# 否则 NavSat 插件算出来的 GPS 位置和 ArduPilot 的 home 假设不一致。
+_GAZEBO_IMAGE = "headless_gazebo"
+_GAZEBO_CONTAINER = "ai_prototyping_gazebo"
+_GAZEBO_UDP_PORT = 9002
+_GAZEBO_HOME = "-35.363262,149.165237,584,0"
+_NATIVE_HOME = "51.4,-2.35,0,0"
+
 
 # ---------------------------------------------------------------------------
 # Test result
@@ -104,6 +113,7 @@ class SITLBridge:
         llm: Optional[Any] = None,
         platform_profile: Optional[dict] = None,
         verbose: bool = False,
+        fdm_backend: str = "native",
     ) -> None:
         """
         llm             : 可选 LLMInterface，启用语义标签分类。
@@ -111,6 +121,11 @@ class SITLBridge:
                           传入后 generate_l2_scripts() 额外生成 accept
                           模式切换测试（CMD_RTL → SET_MODE RTL 等）。
                           为 None 时跳过 accept 测试（S11 选项C）。
+        fdm_backend     : "native"（默认）使用 ArduPilot 内置简化物理模型
+                          （--model +）；"gazebo" 切到外部 FDM
+                          （--model JSON），并在 launch_sitl() 时自动拉起
+                          headless_gazebo 容器（需要的需求验证，如夹爪/
+                          降落伞/真实姿态动力学，才需要这个）。
         """
         self._model = model
         self._output_dir = Path(output_dir)
@@ -120,23 +135,93 @@ class SITLBridge:
         self._linker = RequirementLinker(model, llm=llm, verbose=verbose)
         self._output_dir.mkdir(parents=True, exist_ok=True)
         self._sitl_proc: Optional[subprocess.Popen] = None
+        if fdm_backend not in ("native", "gazebo"):
+            raise ValueError(f"未知 fdm_backend: {fdm_backend!r}（应为 'native' 或 'gazebo'）")
+        self._fdm_backend = fdm_backend
+        self._gazebo_started_by_us = False
 
     # ------------------------------------------------------------------
     # SITL 进程管理
     # ------------------------------------------------------------------
 
+    def _gazebo_container_running(self) -> bool:
+        try:
+            out = subprocess.run(
+                ["docker", "ps", "--filter", f"name=^{_GAZEBO_CONTAINER}$",
+                 "--format", "{{.Names}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return _GAZEBO_CONTAINER in out.stdout
+        except (subprocess.SubprocessError, FileNotFoundError):
+            return False
+
+    def _ensure_gazebo_running(self, wait_s: float = 6.0) -> bool:
+        """
+        若 headless_gazebo 容器未运行，自动 docker run 拉起一个。
+        已经在跑的容器（不管是不是我们启动的）直接复用，不重复启动。
+        """
+        if self._gazebo_container_running():
+            print(f"  ✓ Gazebo 容器 [{_GAZEBO_CONTAINER}] 已在运行，复用")
+            return True
+
+        print(f"  ▶ 拉起 Gazebo 容器 [{_GAZEBO_CONTAINER}] ...")
+        try:
+            subprocess.run(
+                ["docker", "run", "--rm", "-d",
+                 "--name", _GAZEBO_CONTAINER,
+                 "-p", f"{_GAZEBO_UDP_PORT}:{_GAZEBO_UDP_PORT}/udp",
+                 _GAZEBO_IMAGE],
+                check=True, capture_output=True, text=True, timeout=30,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
+            print(f"  ✗ 启动 Gazebo 容器失败: {e}")
+            return False
+
+        self._gazebo_started_by_us = True
+        time.sleep(wait_s)
+        if not self._gazebo_container_running():
+            print(f"  ✗ Gazebo 容器启动后未能保持运行")
+            return False
+        print(f"  ✓ Gazebo 容器已就绪")
+        return True
+
+    def _stop_gazebo(self) -> None:
+        """仅停止本实例自己拉起的 Gazebo 容器，不影响用户手动起的容器。"""
+        if not self._gazebo_started_by_us:
+            return
+        try:
+            subprocess.run(
+                ["docker", "stop", _GAZEBO_CONTAINER],
+                capture_output=True, text=True, timeout=15,
+            )
+            print(f"  ■ Gazebo 容器 [{_GAZEBO_CONTAINER}] 已停止")
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+        self._gazebo_started_by_us = False
+
     def launch_sitl(
         self,
-        home: str = "51.4,-2.35,0,0",
+        home: Optional[str] = None,
         wait_s: float = 8.0,
     ) -> bool:
         """
-        在后台启动 arducopter SITL（直接二进制，内置仿真器）。
+        在后台启动 arducopter SITL。
+        fdm_backend="native" 时用 ArduPilot 内置简化物理模型（--model +）；
+        fdm_backend="gazebo" 时自动拉起 headless_gazebo 容器，
+        并切到外部 FDM（--model JSON），home 默认对齐 Gazebo world 的
+        spherical_coordinates（CMAC），避免 GPS 原点和物理引擎不一致。
         返回 True 表示进程已启动并监听 5760 端口。
         """
         if not Path(self._arducopter_bin).exists():
             print(f"  ✗ arducopter 二进制不存在: {self._arducopter_bin}")
             return False
+
+        use_gazebo = self._fdm_backend == "gazebo"
+        if use_gazebo and not self._ensure_gazebo_running():
+            return False
+
+        if home is None:
+            home = _GAZEBO_HOME if use_gazebo else _NATIVE_HOME
 
         parm_path = self._output_dir / f"{self._model.name}.parm"
         if not parm_path.exists():
@@ -144,7 +229,7 @@ class SITLBridge:
 
         cmd = [
             self._arducopter_bin,
-            "--model", "+",
+            "--model", "JSON" if use_gazebo else "+",
             "--home", home,
             "--wipe",                    # 清空 EEPROM，确保 --defaults 生效
             "--defaults", str(parm_path),
@@ -223,6 +308,8 @@ class SITLBridge:
                 time.sleep(0.5)   # 端口还在占用，继续等
             except OSError:
                 break             # 端口已释放
+
+        self._stop_gazebo()
 
     # ------------------------------------------------------------------
     # L1 — 参数文件生成
@@ -647,7 +734,7 @@ class SITLBridge:
         host: Optional[str] = None,
         port: Optional[int] = None,
         per_test_sitl: bool = True,
-        sitl_home: str = "51.4,-2.35,0,0",
+        sitl_home: Optional[str] = None,
     ) -> List[TestResult]:
         """
         执行所有 L2 测试，返回结果列表。
@@ -752,7 +839,7 @@ class SITLBridge:
         self,
         run_l2: bool = False,
         auto_launch_sitl: bool = False,
-        sitl_home: str = "51.4,-2.35,0,0",
+        sitl_home: Optional[str] = None,
     ) -> BridgeReport:
         """
         生成完整报告。

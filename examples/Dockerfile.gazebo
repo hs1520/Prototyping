@@ -1,0 +1,249 @@
+# 1. 基础镜像：ARM64 架构的 Ubuntu 22.04
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 2. 安装基础编译工具
+RUN apt-get update && apt-get install -y \
+    git curl wget lsb-release gnupg build-essential cmake python3
+
+# 3. 安装 Gazebo Harmonic (官方源)
+RUN wget https://packages.osrfoundation.org/gazebo.gpg -O /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null && \
+    apt-get update && apt-get install -y gz-harmonic
+
+# 4. 安装 Ardupilot-Gazebo 插件依赖
+RUN apt-get install -y \
+    libgz-sim8-dev rapidjson-dev \
+    libopencv-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-bad gstreamer1.0-libav gstreamer1.0-gl
+
+# 5. 指定 Gazebo 版本变量
+ENV GZ_VERSION=harmonic
+
+# 6. 下载并编译 ArduPilot 插件（含 ParachutePlugin）
+RUN git clone https://github.com/ArduPilot/ardupilot_gazebo.git && \
+    cd ardupilot_gazebo && mkdir build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    make -j4 && make install
+
+# 7. 核心修复：<fdm_addr> 绑定 0.0.0.0（配合 docker run -p 9002:9002/udp）
+RUN grep -rl '127\.0\.0\.1' /ardupilot_gazebo/models /ardupilot_gazebo/worlds \
+        | xargs -r sed -i 's/127\.0\.0\.1/0.0.0.0/g'
+
+# 8. 设置环境变量
+ENV GZ_SIM_SYSTEM_PLUGIN_PATH=/ardupilot_gazebo/build:/usr/local/lib
+ENV GZ_SIM_RESOURCE_PATH=/ardupilot_gazebo/models:/ardupilot_gazebo/worlds
+
+# ─────────────────────────────────────────────────────────────────────────
+# 执行器集成（夹爪 + 降落伞）—— 严格复刻 ardupilot_gazebo 官方
+# zephyr_with_parachute 模式：
+#
+#   ArduPilotPlugin <control type=COMMAND> 把伺服 PWM 归一化后 publish 到
+#   cmd_topic（gz.msgs.Double），再由：
+#     · 降落伞：官方 ParachutePlugin 订阅 cmd_topic，command>0.9 时 EntityFactory
+#               部署 parachute_small 并建 DetachableJoint（部署语义）
+#     · 夹爪  ：通用 DetachableJoint 启动即固连 payload_box，TriggeredPublisher
+#               把 Double>0.6 转 Empty 触发 detach（释放语义）
+#
+#   关键约束（均为之前踩过的坑）：
+#     1. control 必须 type=COMMAND + cmd_topic（下划线），不能 POSITION+cmdTopic
+#     2. control 必须有真实 jointName，否则整个 ArduPilotPlugin 直接禁用
+#     3. iris gimbal 已占用 channel 8/9/10，夹爪/降落伞改用空闲 channel 6/7
+#        （对应 ArduPilot SERVO7_FUNCTION=28 夹爪、SERVO8_FUNCTION=27 降落伞）
+#     4. attachment link/joint 必须建在 iris_with_gimbal 顶层（直接 link），
+#        否则 DetachableJoint/ParachutePlugin 的 Model::LinkByName 无法解析
+#        嵌套子模型 iris_with_standoffs 的 `::` 作用域
+# ─────────────────────────────────────────────────────────────────────────
+
+# 9. 创建 payload_box 模型（夹爪释放的载荷，启动即被 DetachableJoint 固连）
+RUN python3 - <<'PYEOF'
+import os
+d = "/ardupilot_gazebo/models/payload_box"
+os.makedirs(d, exist_ok=True)
+open(f"{d}/model.config", "w").write("""\
+<?xml version="1.0"?>
+<model>
+  <name>payload_box</name>
+  <version>1.0</version>
+  <sdf version="1.9">model.sdf</sdf>
+  <description>Detachable payload box for gripper release tests</description>
+</model>
+""")
+open(f"{d}/model.sdf", "w").write("""\
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <model name="payload_box">
+    <link name="payload_link">
+      <inertial>
+        <mass>0.2</mass>
+        <inertia>
+          <ixx>3.3e-4</ixx><iyy>3.3e-4</iyy><izz>3.3e-4</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="col">
+        <geometry><box><size>0.12 0.08 0.06</size></box></geometry>
+      </collision>
+      <visual name="vis">
+        <geometry><box><size>0.12 0.08 0.06</size></box></geometry>
+        <material>
+          <ambient>0.9 0.5 0.1 1</ambient>
+          <diffuse>0.9 0.5 0.1 1</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>
+""")
+print("Created payload_box model.")
+PYEOF
+
+# 10. 一次性给 iris_with_gimbal/model.sdf 注入完整执行器集成
+RUN python3 - <<'PYEOF'
+import xml.etree.ElementTree as ET
+import sys
+
+SDF = "/ardupilot_gazebo/models/iris_with_gimbal/model.sdf"
+ET.register_namespace("", "")
+tree = ET.parse(SDF)
+root = tree.getroot()
+model = root.find("model") or root
+
+def has_link(name):
+    return any(l.get("name") == name for l in model.findall("link"))
+
+def add_attachment_link(name, pose, z):
+    """在 iris_with_gimbal 顶层加一个轻质 attachment link（直接 link）。"""
+    if has_link(name):
+        return
+    lk = ET.SubElement(model, "link"); lk.set("name", name)
+    ps = ET.SubElement(lk, "pose"); ps.text = pose
+    ine = ET.SubElement(lk, "inertial")
+    ET.SubElement(ine, "mass").text = "0.05"
+    iz = ET.SubElement(ine, "inertia")
+    for t, v in [("ixx","1e-5"),("ixy","0"),("ixz","0"),
+                 ("iyy","1e-5"),("iyz","0"),("izz","1e-5")]:
+        ET.SubElement(iz, t).text = v
+    vis = ET.SubElement(lk, "visual"); vis.set("name", "vis")
+    g = ET.SubElement(vis, "geometry"); sp = ET.SubElement(g, "sphere")
+    ET.SubElement(sp, "radius").text = "0.02"
+
+def add_joint(name, jtype, parent, child):
+    if any(j.get("name") == name for j in model.findall("joint")):
+        return
+    jt = ET.SubElement(model, "joint")
+    jt.set("name", name); jt.set("type", jtype)
+    ET.SubElement(jt, "parent").text = parent
+    ET.SubElement(jt, "child").text = child
+
+# ── (a) attachment links + joints（直接挂在 iris_with_gimbal 顶层）────────
+#   夹爪：固连点在机体下方；降落伞：ball 关节允许机体在伞下自由转动
+add_attachment_link("gripper_attachment_link",   "0 0 -0.05 0 0 0", -0.05)
+add_attachment_link("parachute_attachment_link", "0 0  0.05 0 0 0",  0.05)
+add_joint("gripper_attachment_joint",   "fixed",
+          "iris_with_standoffs::base_link", "gripper_attachment_link")
+add_joint("parachute_attachment_joint", "ball",
+          "iris_with_standoffs::base_link", "parachute_attachment_link")
+
+# ── (b) JointStatePublisher（官方 parachute 范例要求；缺失则补）──────────
+has_jsp = any("JointStatePublisher" in (p.get("name","")+p.get("filename",""))
+              for p in model.findall("plugin"))
+if not has_jsp:
+    jsp = ET.SubElement(model, "plugin")
+    jsp.set("filename", "gz-sim-joint-state-publisher-system")
+    jsp.set("name", "gz::sim::systems::JointStatePublisher")
+
+# ── (c) ArduPilotPlugin：追加 channel 6(夹爪) / channel 7(降落伞)─────────
+#   type=COMMAND 把伺服 PWM 归一化([servo_min,servo_max]→[0,1]) publish 到 cmd_topic
+ardu = None
+for p in model.iter("plugin"):
+    if "ArduPilotPlugin" in (p.get("filename","")+p.get("name","")):
+        ardu = p; break
+if ardu is None:
+    print("FATAL: ArduPilotPlugin not found", file=sys.stderr); sys.exit(1)
+
+def add_command_channel(chan, joint, topic):
+    if any(c.get("channel") == str(chan) for c in ardu.findall("control")):
+        return
+    c = ET.SubElement(ardu, "control"); c.set("channel", str(chan))
+    ET.SubElement(c, "jointName").text = joint
+    ET.SubElement(c, "type").text = "COMMAND"
+    ET.SubElement(c, "cmd_topic").text = topic
+    ET.SubElement(c, "servo_min").text = "1000"
+    ET.SubElement(c, "servo_max").text = "2000"
+
+add_command_channel(6, "gripper_attachment_joint",   "/gripper/cmd")
+add_command_channel(7, "parachute_attachment_joint", "/parachute/cmd_release")
+
+# ── (d) 夹爪 DetachableJoint：启动即固连 payload_box，detach_topic 触发释放
+if not any(pl.findtext("child_model") == "payload_box"
+           for pl in model.iter("plugin")
+           if "DetachableJoint" in (pl.get("name","")+pl.get("filename",""))):
+    dj = ET.SubElement(model, "plugin")
+    dj.set("filename", "gz-sim-detachable-joint-system")
+    dj.set("name", "gz::sim::systems::DetachableJoint")
+    ET.SubElement(dj, "parent_link").text = "gripper_attachment_link"
+    ET.SubElement(dj, "child_model").text = "payload_box"
+    ET.SubElement(dj, "child_link").text = "payload_link"
+    ET.SubElement(dj, "detach_topic").text = "/gripper_detach"
+
+# ── (e) 降落伞 ParachutePlugin：command>0.9 时 spawn parachute_small 并部署
+if not any("ParachutePlugin" in (pl.get("name","")+pl.get("filename",""))
+           for pl in model.iter("plugin")):
+    pp = ET.SubElement(model, "plugin")
+    pp.set("filename", "ParachutePlugin")
+    pp.set("name", "ParachutePlugin")
+    ET.SubElement(pp, "parent_link").text = "parachute_attachment_link"
+    ET.SubElement(pp, "child_model").text = "parachute_small"
+    ET.SubElement(pp, "child_link").text = "chute"
+    ET.SubElement(pp, "child_pose").text = "0 0 0 0 -1.0 0"
+    ET.SubElement(pp, "cmd_topic").text = "/parachute/cmd_release"
+
+tree.write(SDF, xml_declaration=True, encoding="unicode")
+print("Patched iris_with_gimbal: attachment links/joints, channels 6/7 (COMMAND), "
+      "gripper DetachableJoint, ParachutePlugin.")
+PYEOF
+
+# 11. iris_runway.sdf world：
+#     · include payload_box（夹爪启动即固连它）
+#     · TriggeredPublisher：/gripper/cmd (Double>0.6) → /gripper_detach (Empty)
+#     · 降落伞【不】预先 include —— ParachutePlugin 在部署时自己 spawn parachute_small
+RUN python3 - <<'PYEOF'
+import xml.etree.ElementTree as ET
+import sys
+
+W = "/ardupilot_gazebo/worlds/iris_runway.sdf"
+ET.register_namespace("", "")
+tree = ET.parse(W)
+root = tree.getroot()
+world = root.find("world") or root
+
+# include payload_box（放在机体下方附近；DetachableJoint 启动时按当前相对位姿固连）
+if not any(inc.findtext("uri") in ("payload_box", "model://payload_box")
+           for inc in world.findall("include")):
+    inc = ET.SubElement(world, "include")
+    ET.SubElement(inc, "uri").text = "payload_box"
+    ET.SubElement(inc, "pose").text = "0 0 0.10 0 0 0"
+
+# TriggeredPublisher: /gripper/cmd (Double) → /gripper_detach (Empty)
+if not any(o.get("topic") == "/gripper_detach"
+           for pl in world.iter("plugin")
+           if "TriggeredPublisher" in (pl.get("name","")+pl.get("filename",""))
+           for o in pl.findall("output")):
+    tp = ET.SubElement(world, "plugin")
+    tp.set("filename", "gz-sim-triggered-publisher-system")
+    tp.set("name", "gz::sim::systems::TriggeredPublisher")
+    inp = ET.SubElement(tp, "input")
+    inp.set("type", "gz.msgs.Double"); inp.set("topic", "/gripper/cmd")
+    m = ET.SubElement(inp, "match"); m.set("field", "data"); m.set("tol", "0.4")
+    m.text = "1.0"
+    out = ET.SubElement(tp, "output")
+    out.set("type", "gz.msgs.Empty"); out.set("topic", "/gripper_detach")
+
+tree.write(W, xml_declaration=True, encoding="unicode")
+print("Patched iris_runway: payload_box include + gripper TriggeredPublisher "
+      "(parachute spawned by ParachutePlugin, not pre-included).")
+PYEOF
+
+# 12. 启动命令：无头模式运行物理引擎
+CMD ["gz", "sim", "-s", "-r", "iris_runway.sdf"]

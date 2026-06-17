@@ -8,6 +8,7 @@ including support for Chain of Thought (CoT) prompting techniques.
 from __future__ import annotations
 
 import os
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, cast
@@ -426,14 +427,23 @@ class VertexLLM(LLMInterface):
         max_tokens: int = 20480,
     ) -> LLMResponse:
         """Call Vertex Gemini and normalize response into LLMResponse."""
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=[m.content for m in messages],
-            config={
-                "temperature": temperature,
-                "max_output_tokens": max_tokens,
-            },
-        )
+        _delays = [10, 30, 60, 120]
+        for attempt, delay in enumerate(_delays + [None]):
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=[m.content for m in messages],
+                    config={
+                        "temperature": temperature,
+                        "max_output_tokens": max_tokens,
+                    },
+                )
+                break
+            except Exception as exc:
+                if delay is None or "429" not in str(exc) and "RESOURCE_EXHAUSTED" not in str(exc):
+                    raise
+                print(f"  [VertexLLM] 429 限速，{delay}s 后重试（第 {attempt+1} 次）…")
+                time.sleep(delay)
 
         content = getattr(response, "text", None) or ""
         usage = getattr(response, "usage_metadata", None)

@@ -215,19 +215,30 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
             operators=["bool"],
             var_keywords=["propulsion", "engine", "motor", "thrust"],
         ),
-        ardu_params={"CHUTE_ENABLED": 1, "CHUTE_DELAY_MS": "@attr:parachute*1000"},
+        ardu_params={
+            "CHUTE_ENABLED": 1,
+            "CHUTE_TYPE": 10,          # 10 = servo-released parachute
+            "CHUTE_DELAY_MS": "@attr:parachute*1000",
+            # SERVO8=Parachute → Gazebo channel 7（避开 gimbal 占用的 SERVO9-11）
+            "SERVO8_FUNCTION": 27,     # 27 = k_parachute
+            "CHUTE_SERVO_ON": 2000,    # PWM 2000 → COMMAND 归一化 1.0 → ParachutePlugin(>0.9) 部署
+            "CHUTE_SERVO_OFF": 1000,   # PWM 1000 → 归一化 0.0（安全位）
+        },
         tier="L2",
         inject=InjectSpec(
-            kind="set_param",
-            params={"SIM_ENGINE_FAIL": 1.0, "_settle_s": 8.0},
+            kind="mavlink_command",
+            # MAV_CMD_DO_PARACHUTE (208): param1=2 → RELEASE
+            # 直接命令释放，native SITL 立即回 STATUSTEXT "Parachute: Released"
+            # （SIM_ENGINE_FAIL 只断电机推力，不触发坠毁检测，在 native SITL 无 STATUSTEXT）
+            params={"command": 208, "param1": 2, "_settle_s": 0.5},
             pre_takeoff_m=10.0,
         ),
         verify=VerifySpec(
             kind="wait_statustext",
             args={"keyword": "arachute"},
-            timeout=30.0,
+            timeout=15.0,
         ),
-        notes="Propulsion failure → CHUTE_ENABLED; parachute STATUSTEXT.",
+        notes="MAV_CMD_DO_PARACHUTE RELEASE → STATUSTEXT 'Parachute: Released' (native SITL).",
     ),
 
     # ── Safety: payload abort lock（bool: deliveryAbortConditionActive）
@@ -237,11 +248,27 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
             operators=["bool"],
             var_keywords=["payload", "abort", "delivery", "lock", "gripper"],
         ),
-        ardu_params={},
+        ardu_params={
+            "GRIP_ENABLE": 1,
+            "GRIP_TYPE": 1,           # 1 = servo gripper
+            # SERVO7=Gripper → Gazebo channel 6（避开 gimbal 占用的 SERVO9-11/channel 8-10）
+            "SERVO7_FUNCTION": 28,    # 28 = Gripper
+            "GRIP_RELEASE": 2000,     # PWM 2000 → COMMAND 归一化 1.0 → TriggeredPublisher 触发
+            "GRIP_GRAB": 1000,        # PWM 1000 → 归一化 0.0（不触发）
+        },
         tier="L2",
-        inject=InjectSpec(kind="skip", notes="needs Gazebo gripper plugin"),
-        verify=VerifySpec(kind="skip", notes="needs Gazebo gripper plugin"),
-        notes="Payload abort → lock actuator (Gazebo required).",
+        inject=InjectSpec(
+            kind="mavlink_command",
+            # MAV_CMD_DO_GRIPPER (211): param1=gripper_id(0), param2=action(1=RELEASE)
+            params={"command": 211, "param1": 0, "param2": 1, "_settle_s": 1.5},
+            pre_takeoff_m=5.0,
+        ),
+        verify=VerifySpec(
+            kind="wait_statustext",
+            args={"keyword": ["ripper", "grip"]},
+            timeout=10.0,
+        ),
+        notes="Payload abort → MAV_CMD_DO_GRIPPER → STATUSTEXT 'Gripper Released'.",
     ),
 
     # ── Constraint: max altitude（attr: maxAltitude）

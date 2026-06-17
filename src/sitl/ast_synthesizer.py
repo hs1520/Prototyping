@@ -60,10 +60,14 @@ _GUARD_TO_TAG_INJECT: List[Tuple[List[str], str, Optional[InjectSpec]]] = [
      "BATTERY_RTB",
      None),       # 纯 L1，不需要 SITL 注入
 
-    # 载荷中止
+    # 载荷中止 — MAV_CMD_DO_GRIPPER (211) RELEASE
     (["payload", "abort", "delivery", "gripper"],
      "PAYLOAD_ABORT_LOCK",
-     InjectSpec(kind="skip", notes="needs Gazebo gripper plugin")),
+     InjectSpec(
+         kind="mavlink_command",
+         params={"command": 211, "param1": 0, "param2": 1, "_settle_s": 1.5},
+         pre_takeoff_m=5.0,
+     )),
 ]
 
 
@@ -94,9 +98,13 @@ _ACTION_TO_VERIFY: List[Tuple[List[str], VerifySpec]] = [
     (["inhibit", "inhibitarming", "blockarm", "preventarm", "disarm"],
      VerifySpec(kind="assert_arm_rejected", timeout=6.0)),
 
-    # 载荷锁定（需要 Gazebo）
+    # 载荷锁定 — STATUSTEXT "Gripper Released"
     (["lockpayload", "payload", "lock", "gripper", "abort"],
-     VerifySpec(kind="skip", notes="needs Gazebo gripper plugin")),
+     VerifySpec(
+         kind="wait_statustext",
+         args={"keyword": ["ripper", "grip"]},
+         timeout=10.0,
+     )),
 ]
 
 

@@ -257,6 +257,7 @@ def main():
         sitl_output_dir="sitl_output",
         sitl_run_l2=True,
         sitl_auto_launch=True,
+        sitl_fdm_backend="gazebo",
     )
 
     # ── Results summary ───────────────────────────────────────────────────
