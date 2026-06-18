@@ -253,6 +253,31 @@ RenderVerifyHandler = Callable[[VerifySpec], str]
 
 
 # ---------------------------------------------------------------------------
+# 起飞前置守卫（进程内 + 渲染脚本共用同一不变量）
+#
+# 不变量：spec.pre_takeoff_m > 0 表示测试要求机体在空中。起飞失败时必须让
+# 测试 FAIL，否则会在地面发执行器/故障注入指令、再靠 STATUSTEXT 假绿。
+# 进程内 inject 由 _run_single_test 的 try/except 捕获异常 → 记为 False。
+# ---------------------------------------------------------------------------
+
+def _require_takeoff(ctx: TestContext, spec: InjectSpec) -> None:
+    """进程内：起飞失败则抛异常，让测试 FAIL（而非在地面继续注入）。"""
+    if spec.pre_takeoff_m > 0 and not ctx.force_arm_and_takeoff(
+            altitude=spec.pre_takeoff_m):
+        raise RuntimeError(
+            f"起飞失败：未能解锁/爬升到 {spec.pre_takeoff_m}m")
+
+
+def _render_require_takeoff(spec: InjectSpec) -> str:
+    """渲染脚本：起飞失败则 raise，让生成的测试脚本非零退出（FAIL）。"""
+    if spec.pre_takeoff_m <= 0:
+        return ""
+    return (f"print('  起飞至 {spec.pre_takeoff_m}m ...')\n"
+            f"if not force_arm_and_takeoff(mav, altitude={spec.pre_takeoff_m}):\n"
+            f"    raise RuntimeError('起飞失败：未能解锁/爬升到目标高度')\n")
+
+
+# ---------------------------------------------------------------------------
 # Inject handlers
 # ---------------------------------------------------------------------------
 
@@ -271,8 +296,7 @@ def _inject_set_param(ctx: TestContext, spec: InjectSpec) -> None:
         ctx.set_mode(str(pre_mode))
         time.sleep(0.5)
 
-    if spec.pre_takeoff_m > 0:
-        ctx.force_arm_and_takeoff(altitude=spec.pre_takeoff_m)
+    _require_takeoff(ctx, spec)
 
     settle_s = spec.params.get("_settle_s", 2.0)
 
@@ -287,9 +311,9 @@ def _inject_set_param(ctx: TestContext, spec: InjectSpec) -> None:
 
 def _render_inject_set_param(spec: InjectSpec) -> str:
     lines = []
-    if spec.pre_takeoff_m > 0:
-        lines.append(f"print('  起飞至 {spec.pre_takeoff_m}m ...')")
-        lines.append(f"force_arm_and_takeoff(mav, altitude={spec.pre_takeoff_m})")
+    pre = _render_require_takeoff(spec)
+    if pre:
+        lines.append(pre.rstrip("\n"))
     for name, value in spec.params.items():
         if name.startswith("_"):
             continue
@@ -300,9 +324,8 @@ def _render_inject_set_param(spec: InjectSpec) -> str:
 
 
 def _inject_disconnect_gcs(ctx: TestContext, spec: InjectSpec) -> None:
-    # 解锁（不需要真正起飞，地面解锁足以触发 GCS 故障安全）
-    if spec.pre_takeoff_m > 0:
-        ctx.force_arm_and_takeoff(altitude=spec.pre_takeoff_m)
+    # pre_takeoff_m>0 时要求真实起飞（空中失联才会触发 RTL/LAND；起飞失败则 FAIL）
+    _require_takeoff(ctx, spec)
     ctx.set_param("FS_GCS_ENABLE", 1)
     ctx.set_param("FS_GCS_TIMEOUT", 10)
     # 预热：持续发 HEARTBEAT 至少 15s，让 ArduCopter 建立稳定的 GCS 连接状态
@@ -326,9 +349,7 @@ def _inject_disconnect_gcs(ctx: TestContext, spec: InjectSpec) -> None:
 
 
 def _render_inject_disconnect_gcs(spec: InjectSpec) -> str:
-    pre = (f"print('  起飞至 {spec.pre_takeoff_m}m ...')\n"
-           f"force_arm_and_takeoff(mav, altitude={spec.pre_takeoff_m})\n"
-           if spec.pre_takeoff_m > 0 else "")
+    pre = _render_require_takeoff(spec)
     return pre + textwrap.dedent("""\
         print("  启用 GCS 故障安全，停止心跳 ...")
         set_param(mav, "FS_GCS_ENABLE", 1)
@@ -353,8 +374,7 @@ def _inject_mavlink_command(ctx: TestContext, spec: InjectSpec) -> None:
       command  — MAVLink 命令 ID（必填）
       param1..param7 — 命令参数（默认 0）
     """
-    if spec.pre_takeoff_m > 0:
-        ctx.force_arm_and_takeoff(altitude=spec.pre_takeoff_m)
+    _require_takeoff(ctx, spec)
 
     cmd_id = int(spec.params.get("command", 0))
     p = [float(spec.params.get(f"param{i}", 0)) for i in range(1, 8)]
@@ -372,12 +392,7 @@ def _render_inject_mavlink_command(spec: InjectSpec) -> str:
     cmd_id = int(spec.params.get("command", 0))
     params = [float(spec.params.get(f"param{i}", 0)) for i in range(1, 8)]
     settle_s = float(spec.params.get("_settle_s", 1.5))
-    pre = ""
-    if spec.pre_takeoff_m > 0:
-        # 起飞失败必须让测试 FAIL，否则会在地面发执行器指令、靠 STATUSTEXT 假绿
-        pre = (f"print('  起飞至 {spec.pre_takeoff_m}m ...')\n"
-               f"if not force_arm_and_takeoff(mav, altitude={spec.pre_takeoff_m}):\n"
-               f"    raise RuntimeError('起飞失败：未能解锁/爬升到目标高度')\n")
+    pre = _render_require_takeoff(spec)
     return pre + textwrap.dedent(f"""\
         print("  发送 MAVLink command {cmd_id} ...")
         mav.mav.command_long_send(

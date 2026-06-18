@@ -334,13 +334,22 @@ class SITLBridge:
         parm_path = self._output_dir / f"{self._model.name}.parm"
 
         # Append platform base_sitl_params (e.g. FRAME_CLASS, ARMING_CHECK)
-        # that must be present after --wipe, not overridden by requirement params
+        # that must be present after --wipe. 用"已定义的参数名集合"做精确判重，
+        # 不能用子串匹配（`k not in parm_content` 会被注释或更长的同名子串误伤，
+        # 例如把 base 参数静默丢弃 → EK3_CHECK_SCALE 这类关键项可能漏写）。
         base_params = self._platform_profile.get("base_sitl_params", {})
         if base_params:
-            additions = []
-            for k, v in base_params.items():
-                if k not in parm_content:
-                    additions.append(f"{k:<30} {v}  # base SITL param")
+            existing_names = set()
+            for line in parm_content.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                existing_names.add(stripped.split()[0])
+            additions = [
+                f"{k:<30} {v}  # base SITL param"
+                for k, v in base_params.items()
+                if k not in existing_names
+            ]
             if additions:
                 parm_content += "\n" + "\n".join(additions) + "\n"
 
