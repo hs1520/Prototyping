@@ -144,6 +144,7 @@ class TestContext:
                 break
             time.sleep(2)
         if not arm_ok:
+            self.set_param("FENCE_ENABLE", 1)   # 恢复围栏（123 行临时关闭）
             return False
 
         # 起飞指令（检查 ACK）
