@@ -50,14 +50,16 @@ def disk_area_m2(rotor_count: int, rotor_radius_m: float) -> float:
     return rotor_count * math.pi * rotor_radius_m ** 2
 
 
-def hover_power_w(mass_kg: float, area_m2: float, fom: float = FOM) -> float:
+def hover_power_w(mass_kg: float, area_m2: float, fom: float = None) -> float:
     """Ideal momentum-theory hover power divided by the rotor figure of merit.
 
-    P = T^1.5 / (sqrt(2 ρ A) · FOM), with thrust T = m g (hover)."""
+    P = T^1.5 / (sqrt(2 ρ A) · FOM), with thrust T = m g (hover). ``fom`` defaults to
+    the module constant FOM, read at CALL time (so FOM stays tunable/sensitivity-able)."""
     if area_m2 <= 0:
         return float("inf")
+    f = FOM if fom is None else fom
     thrust = mass_kg * G
-    return thrust ** 1.5 / (math.sqrt(2.0 * RHO * area_m2) * fom)
+    return thrust ** 1.5 / (math.sqrt(2.0 * RHO * area_m2) * f)
 
 
 def battery_energy_wh(capacity_mah: float, cells: int) -> float:

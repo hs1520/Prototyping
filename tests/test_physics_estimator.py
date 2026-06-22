@@ -80,3 +80,29 @@ def test_rotor_sizing_has_internal_optimum():
     mid = endurance_min(DesignInputs(0.5, 5000, 4, 4, 0.16))
     huge = endurance_min(DesignInputs(0.5, 5000, 4, 4, 0.30))
     assert mid >= base and mid > huge
+
+
+def test_hover_endurance_in_published_multirotor_range():
+    # vs published specs (AUW + battery + rotor); estimator HOVER vs vendor CRUISE
+    # max-flight-time → realistic hover magnitude (hover < cruise, vendor optimistic)
+    from src.dse.physics_estimator import (
+        battery_energy_wh, electrical_power_w, disk_area_m2, USABLE,
+    )
+    def hover(auw, cap, cells, rot, r):
+        return battery_energy_wh(cap, cells) * USABLE / electrical_power_w(auw, disk_area_m2(rot, r)) * 60
+    assert 18 <= hover(0.907, 3850, 4, 4, 0.110) <= 35   # DJI Mavic 2 (rated 31min cruise)
+    assert 18 <= hover(1.388, 5870, 4, 4, 0.120) <= 35   # DJI Phantom 4 Pro (rated 30min)
+
+
+def test_fom_is_runtime_tunable():
+    # regression: hover_power_w must read FOM at CALL time (was bound at import via a
+    # default arg → FOM changes / sensitivity were silently ignored)
+    import src.dse.physics_estimator as pe
+    d = DesignInputs(0.5, 5000, 4, 4, 0.13)
+    base = endurance_min(d)
+    orig = pe.FOM
+    pe.FOM = orig * 0.8
+    try:
+        assert endurance_min(d) != base   # FOM change now takes effect
+    finally:
+        pe.FOM = orig
