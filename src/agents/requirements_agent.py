@@ -54,6 +54,16 @@ Core rules:
            REQ-OPER requirement only when the system has 3+ distinct named phases
 6. Format each line as: REQ-<CATEGORY>-<NNN>: The system shall ...
    NNN is a zero-padded 3-digit number, restarting from 001 within each category.
+7. SAFETY SEVERITY (SAFE requirements only): append a failure-condition severity
+   tag classifying the WORST credible consequence if the requirement is not met,
+   per DO-178C / ARP4754A:
+     [SEV:Catastrophic] — loss of vehicle, fatalities, uncontrolled crash
+     [SEV:Hazardous]    — severe injury, large damage, near-total loss of control
+     [SEV:Major]        — significant degradation, recoverable damage, reduced safety margin
+     [SEV:Minor]        — slight degradation, nuisance, minimal safety impact
+     [SEV:No-effect]    — no safety consequence
+   Example: REQ-SAFE-001: The system shall execute an autoland on dual-engine failure. [SEV:Catastrophic]
+   Classify by SEVERITY OF CONSEQUENCE, not by likelihood. Only SAFE requirements get a tag.
 """
 
     def __init__(

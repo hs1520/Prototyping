@@ -27,6 +27,7 @@ for _name, _attrs in [
         sys.modules[_name] = _mod
 
 from src.agents.orchestrator import Orchestrator
+from src.agents.mcts_injectors import apply_best_config_to_model
 from src.dse.design_space import DesignConfiguration, ParameterType
 from src.llm.interface import LLMResponse, Message, MockLLM
 from src.sysml.model import (
@@ -251,7 +252,7 @@ class TestApplyBestConfigToModel:
             name="best",
             parameters={"control_frequency_hz": 400.0},
         )
-        Orchestrator._apply_best_config_to_model(config, model)
+        apply_best_config_to_model(config, model)
         attr = model.part_definitions[0].attributes[0]
         assert float(attr.default_value) == 400.0
 
@@ -261,7 +262,7 @@ class TestApplyBestConfigToModel:
             name="best",
             parameters={"redundancy_level": "dual"},
         )
-        Orchestrator._apply_best_config_to_model(config, model)
+        apply_best_config_to_model(config, model)
         assert "redundancy=dual" in model.description
 
     def test_redundancy_none_does_not_modify_description(self):
@@ -271,7 +272,7 @@ class TestApplyBestConfigToModel:
             name="best",
             parameters={"redundancy_level": "none"},
         )
-        Orchestrator._apply_best_config_to_model(config, model)
+        apply_best_config_to_model(config, model)
         assert model.description == original_desc
 
     def test_protocol_assigned_to_undeclared_port_type(self):
@@ -282,7 +283,7 @@ class TestApplyBestConfigToModel:
             name="best",
             parameters={"communication_protocol": "MAVLink"},
         )
-        Orchestrator._apply_best_config_to_model(config, model)
+        apply_best_config_to_model(config, model)
         port = model.part_definitions[0].ports[0]
         assert port.type_ref is not None
         assert "MAVLink" in port.type_ref.name
@@ -294,7 +295,7 @@ class TestApplyBestConfigToModel:
             name="best",
             parameters={"communication_protocol": "CAN"},
         )
-        Orchestrator._apply_best_config_to_model(config, model)
+        apply_best_config_to_model(config, model)
         # Should NOT overwrite existing type_ref
         assert model.part_definitions[0].ports[0].type_ref.name == "ExistingProtocol"
 
@@ -304,11 +305,11 @@ class TestApplyBestConfigToModel:
             name="best",
             parameters={"num_sensors": 4},
         )
-        Orchestrator._apply_best_config_to_model(config, model)
+        apply_best_config_to_model(config, model)
         assert model.metadata.get("recommended_sensor_count") == 4
         assert model.metadata.get("mcts_best_config") == "best"
 
     def test_empty_params_does_not_raise(self):
         model = self._model_with_freq_attr()
         config = DesignConfiguration(name="empty", parameters={})
-        Orchestrator._apply_best_config_to_model(config, model)  # must not raise
+        apply_best_config_to_model(config, model)  # must not raise

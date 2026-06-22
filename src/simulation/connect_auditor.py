@@ -120,8 +120,10 @@ def _check_stmt(
         return (f"target port '{stmt.tgt_port}' direction is "
                 f"{tgt_info.direction} (need in/inout)")
 
-    # Rule 3: port type match
-    if src_info.port_type != tgt_info.port_type:
+    # Rule 3: port type match (skip when either side is untyped — an inherited
+    # untyped port carries no declared type to compare against)
+    if (src_info.port_type and tgt_info.port_type
+            and src_info.port_type != tgt_info.port_type):
         return f"port type mismatch ({src_info.port_type} ≠ {tgt_info.port_type})"
 
     # Rule 4: no double-source on pure in ports

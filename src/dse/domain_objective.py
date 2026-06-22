@@ -1,0 +1,217 @@
+"""Domain-aware objective for LLM variation-DSE (requirement-target driven).
+
+Generic design-quality dims can't see a quad-vs-vtol trade-off, so the front
+collapsed. This scores each variant against the NUMERIC TARGETS of the
+requirements its variation point links to:
+
+  * a requirement like "cruise speed >= 20 m/s" -> (speed, 20)
+  * a variant's attribute `cruiseSpeedMps = 25` -> (speed, 25)
+  * matched by quantity FAMILY (speed/time/mass/...), satisfaction = value/target
+
+performance = mean satisfaction of the linked requirement targets; cost = the
+chosen variants' cost-family attributes (mass/count/power). The objectivity is
+in the numbers (requirement targets x variant attributes); only the family
+matching is heuristic.
+"""
+from __future__ import annotations
+
+import re
+from typing import Dict, List, Tuple
+
+from ..utils.sysml_text_utils import find_block_end
+from .physics_estimator import DesignInputs, estimate, total_mass_kg
+
+# quantity family -> substrings that imply it (checked in name + unit, lowercased)
+_FAMILY = {
+    "speed": ["m/s", "mps", "kph", "km/h", "airspeed", "speed", "velocity", "cruise"],
+    "time": ["endurance", "duration", "hovertime", "flighttime", "minute", "min", "hour", "sec"],
+    "range": ["range", "distance", "wingspan", "baseline", "altitude", "km", "meter", "metre"],
+    "accuracy": ["accuracy", "precision", "deviation", "resolution", "lines"],
+    "mass": ["mass", "weight", "kg", "gram"],
+    "count": ["count", "number", "rotor", "motor", "cell", "node", "channel"],
+    "power": ["power", "watt", "consumption"],
+}
+_COST_FAMILIES = {"mass", "count", "power"}
+_PERF_FAMILIES = {"speed", "time", "range", "accuracy"}
+# Variant-explorable performance families: EMERGENT metrics the estimator derives
+# from design inputs (a real trade-off + SITL-calibratable). Settable families
+# (speed→WPNAV_SPEED, count→EK3_SRC) are handled directly by L1, NOT as variant
+# objective dimensions — no component variant "owns" cruise speed, so making it a
+# variant family forces speed_sat≡0 and collapses the front (see memory
+# sitl-family-param-mapping). Range needs a cruise-speed input → deferred.
+_EMERGENT_PERF = {"time"}
+
+# Canonical attribute name per family, used by the variant generator so the
+# emitted SysML attributes parse back to the SAME family (generation ↔ parsing
+# single source of truth).  Names are chosen so _family_of resolves each to ONE
+# family unambiguously (no cross-family substring, e.g. avoid 'meter' for accuracy).
+FAMILY_ATTR = {
+    "speed": "speedMps",
+    "time": "enduranceMinutes",
+    "range": "rangeMeters",
+    "accuracy": "precisionPct",
+    "mass": "massKg",
+    "count": "unitCount",
+    "power": "powerWatts",
+}
+
+# Design inputs the variants now declare (SITL-settable), and how they map to
+# DesignInputs fields ↔ SysML attribute names. The DSE scores designs by feeding
+# these inputs through the physics estimator (analytic emergent metrics), mirroring
+# what SITL produces by simulation — so the static ranking can be calibrated.
+DESIGN_INPUTS: Tuple[Tuple[str, str], ...] = (
+    ("payload_mass_kg", "massKg"),   # a component's declared mass contribution (e.g. payload)
+    ("battery_capacity_mah", "batteryCapacityMah"),
+    ("battery_cells", "batteryCells"),
+    ("rotor_count", "rotorCount"),
+    ("rotor_radius_m", "rotorRadiusM"),
+    ("cruise_speed_mps", "cruiseSpeedMps"),
+)
+DESIGN_FIELD_ATTR = {f: a for f, a in DESIGN_INPUTS}            # field → SysML attr
+_DESIGN_ATTR_FIELD = {a.lower(): f for f, a in DESIGN_INPUTS}   # lower attr → field
+DESIGN_DEFAULTS = {
+    "payload_mass_kg": 0.5, "battery_capacity_mah": 5000.0, "battery_cells": 4,
+    "rotor_count": 4, "rotor_radius_m": 0.13, "cruise_speed_mps": 0.0,
+}
+
+_NUM_UNIT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([A-Za-z/%°]+(?:\s*/\s*[A-Za-z]+)?)?")
+_ATTR_RE = re.compile(r"\battribute\s+(\w+)\s*(?::\s*\w+)?\s*=\s*([\d.]+)\s*(?:\[\s*'?([^\]']+)'?\s*\])?")
+_REQ_ID_RE = re.compile(r"REQ[-_][A-Z]+[-_]\d+")
+
+
+def _family_of(*tokens: str) -> str:
+    blob = " ".join(t.lower() for t in tokens if t)
+    for fam, pats in _FAMILY.items():
+        if any(p in blob for p in pats):
+            return fam
+    return ""
+
+
+def requirement_targets(requirements: List[str]) -> Dict[str, List[Tuple[str, float]]]:
+    """{req_id: [(family, target_value), ...]} from requirement text numerics.
+
+    The requirement-id prefix (REQ-PERF-001) is stripped first so its digits are
+    not mistaken for targets; a number's family comes from its own UNIT only.
+    """
+    out: Dict[str, List[Tuple[str, float]]] = {}
+    for r in requirements or []:
+        m = _REQ_ID_RE.search(r)
+        if not m:
+            continue
+        rid = m.group(0).replace("_", "-")
+        body = r.split(":", 1)[1] if ":" in r else r  # drop "REQ-...:" prefix
+        targets: List[Tuple[str, float]] = []
+        for num, unit in _NUM_UNIT_RE.findall(body):
+            fam = _family_of(unit or "")   # family from the number's own unit
+            if fam:
+                targets.append((fam, float(num)))
+        if targets:
+            out[rid] = targets
+    return out
+
+
+def objective_families(requirements: List[str]) -> List[str]:
+    """Performance quantity-families present across the requirements (sorted)."""
+    fams = set()
+    for targets in requirement_targets(requirements).values():
+        for fam, _ in targets:
+            if fam in _EMERGENT_PERF:
+                fams.add(fam)
+    return sorted(fams)
+
+
+def variant_design_inputs(model_text: str, type_name: str) -> Dict[str, float]:
+    """{DesignInputs field: value} for the design-input attributes declared in part
+    def ``type_name`` (e.g. massKg → mass_kg). Non-design attributes are ignored."""
+    pat = re.compile(rf"\bpart\s+def\s+{re.escape(type_name)}\s*(?::>[^{{]*)?\{{")
+    m = pat.search(model_text)
+    if not m:
+        return {}
+    brace = model_text.index("{", m.start())
+    end = find_block_end(model_text, brace)
+    body = model_text[brace + 1 : end] if end != -1 else ""
+    out: Dict[str, float] = {}
+    for name, val, _unit in _ATTR_RE.findall(body):
+        field = _DESIGN_ATTR_FIELD.get(name.lower())
+        if field is not None:
+            out[field] = float(val)
+    return out
+
+
+def architecture_design(vps, choices: Dict[str, str], model_text: str) -> DesignInputs:
+    """Merge the chosen variants' design inputs into one DesignInputs (DESIGN_DEFAULTS
+    fill whatever no variant declares)."""
+    merged: Dict[str, float] = dict(DESIGN_DEFAULTS)
+    for vp in vps:
+        if vp.point_id in choices:
+            merged.update(variant_design_inputs(model_text, vp.type_of(choices[vp.point_id])))
+    merged["battery_cells"] = int(merged["battery_cells"])
+    merged["rotor_count"] = int(merged["rotor_count"])
+    return DesignInputs(**merged)  # all-up mass emerges in the estimator
+
+
+def objective_names(requirements: List[str]) -> List[str]:
+    """Objective vector names: one satisfaction per perf family + cost_efficiency."""
+    return [f + "_sat" for f in objective_families(requirements)] + ["cost_efficiency"]
+
+
+def _emergent_for_family(fam: str, metrics: Dict[str, float]) -> float:
+    """Map a requirement quantity-family to the estimator's emergent metric."""
+    return {
+        "speed": metrics.get("cruise_speed_mps", 0.0),
+        "time": metrics.get("endurance_min", 0.0),
+        "range": metrics.get("range_m", 0.0),
+    }.get(fam, 0.0)
+
+
+def objectives_from_design(di: DesignInputs, vps, choices: Dict[str, str],
+                           requirements: List[str]) -> Dict[str, float]:
+    """Per-family satisfaction + cost_efficiency from a COMPLETE DesignInputs (battery
+    already chosen — by a variant in the single-layer path, or by the inner BO in the
+    bilevel path). Split out so both paths share one scoring rule."""
+    metrics = estimate(di)
+    req_index = requirement_targets(requirements)
+    fams = objective_families(requirements)
+    fam_sat: Dict[str, List[float]] = {f: [] for f in fams}
+    for vp in vps:
+        if vp.point_id not in choices:
+            continue
+        for rid in vp.requirements:
+            rid = rid.replace("_", "-")
+            for fam, target in req_index.get(rid, []):
+                if fam in fam_sat and target > 0:
+                    fam_sat[fam].append(min(1.0, _emergent_for_family(fam, metrics) / target))
+    obj: Dict[str, float] = {
+        f + "_sat": (sum(v) / len(v) if v else 0.0) for f, v in fam_sat.items()
+    }
+    # cost proxy = emergent all-up mass (bigger battery → heavier → costlier)
+    obj["cost_efficiency"] = 1.0 / (1.0 + total_mass_kg(di) / 5.0)
+    return obj
+
+
+def design_arch_inputs(di: DesignInputs) -> Dict[str, float]:
+    """The NON-capacity design inputs — battery capacity is the inner-BO variable."""
+    return {
+        "payload_mass_kg": di.payload_mass_kg, "battery_cells": di.battery_cells,
+        "rotor_count": di.rotor_count, "rotor_radius_m": di.rotor_radius_m,
+        "cruise_speed_mps": di.cruise_speed_mps,
+    }
+
+
+def endurance_target(requirements: List[str]) -> float:
+    """The endurance (time-family) requirement target, for the inner BO. 0 if none."""
+    for fts in requirement_targets(requirements).values():
+        for fam, t in fts:
+            if fam == "time":
+                return t
+    return 0.0
+
+
+def architecture_objectives(vps, choices: Dict[str, str], model_text: str,
+                            requirements: List[str]) -> Dict[str, float]:
+    """Single-layer scoring: battery taken from the resolved model. Kept for the
+    non-bilevel callers/tests; the bilevel path uses objectives_from_design with an
+    inner-optimized capacity."""
+    return objectives_from_design(
+        architecture_design(vps, choices, model_text), vps, choices, requirements
+    )

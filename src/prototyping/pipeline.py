@@ -48,6 +48,7 @@ class PrototypingPipeline:
         max_iterations: int = 3,
         parse_strict: bool = False,
         verbose: bool = False,
+        dse_mode: str = "variation",
     ):
         self.llm = llm
         self.pinecone = pinecone_wrapper or PineconeWrapper(default_namespace=rag_namespace)
@@ -65,6 +66,26 @@ class PrototypingPipeline:
             max_iterations=max_iterations,
             verbose=verbose,
         )
+        # DSE mode at the user entry point. Orchestrator's own flags stay default
+        # OFF (direct-construction contract); the pipeline opts the chosen path in.
+        self.orchestrator.use_variation_dse, self.orchestrator.use_bilevel_dse = (
+            self._dse_flags(dse_mode)
+        )
+
+    @staticmethod
+    def _dse_flags(mode: str) -> tuple[bool, bool]:
+        """Map a dse_mode string to (use_variation_dse, use_bilevel_dse).
+
+        "variation" (default) — LLM-declared variation points + domain objective.
+        "bilevel"             — catalog-operator bilevel DSE (MO-MCTS + inner BO).
+        "off"                 — legacy scalar DSE (both flags off).
+        """
+        m = (mode or "").strip().lower()
+        if m == "bilevel":
+            return (False, True)
+        if m == "off":
+            return (False, False)
+        return (True, False)  # default: variation
 
     def generate_system(
         self,

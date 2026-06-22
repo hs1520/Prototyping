@@ -32,6 +32,7 @@ for _name, _attrs in [
         sys.modules[_name] = _mod
 
 from src.agents.orchestrator import Orchestrator, PrototypingState  # noqa: F401 (Orchestrator used in tests)
+from src.agents.mcts_injectors import build_mcts_design_constraints
 from src.llm.interface import MockLLM
 from src.dse.design_space import DesignConfiguration
 from src.sysml.model import PartDefinition, SysMLModel
@@ -672,7 +673,7 @@ class TestMCTSGrounding:
             name="best",
             parameters={"redundancy_level": "triple", "num_sensors": 3},
         )
-        text = Orchestrator._build_mcts_design_constraints(cfg)
+        text = build_mcts_design_constraints(cfg)
         assert "triple" in text.lower()
         assert "state def" in text.lower()
         assert "3" in text
@@ -680,5 +681,5 @@ class TestMCTSGrounding:
     def test_build_mcts_design_constraints_empty_params(self):
         """Empty parameters must produce an empty string (no spurious output)."""
         cfg = DesignConfiguration(name="best", parameters={})
-        text = Orchestrator._build_mcts_design_constraints(cfg)
+        text = build_mcts_design_constraints(cfg)
         assert text == ""

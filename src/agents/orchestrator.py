@@ -306,6 +306,8 @@ class Orchestrator:
         rule_weight: float = 0.6,
         llm_weight: float = 0.4,
         verbose: bool = False,
+        use_bilevel_dse: bool = False,
+        use_variation_dse: bool = False,
     ):
         self.llm = llm
         self.rag = rag_retriever
@@ -314,6 +316,12 @@ class Orchestrator:
         self.rule_weight = rule_weight
         self.llm_weight = llm_weight
         self.verbose = verbose
+        # Opt-in: drive Phase-3 with the bilevel multi-objective DSE (run_bilevel_dse)
+        # instead of the scalar MCTS. Default False = existing behaviour unchanged.
+        self.use_bilevel_dse = use_bilevel_dse
+        # Opt-in: "replace" mode — the LLM declares variation points in the model and
+        # the DSE explores them (run_variation_dse) instead of the catalog operators.
+        self.use_variation_dse = use_variation_dse
 
         # Initialize specialized agents
         self.requirements_agent = RequirementsAgent(llm, rag_retriever)
@@ -528,27 +536,49 @@ class Orchestrator:
         # ── Phase 3: MCTS ─────────────────────────────────────────────────────
         print("Phase 3: Design Space Exploration (MCTS)")
         print("-" * 40)
-        design_space, best_config, pareto_front = self._explore_design_space(
-            model, mcts_iterations, requirements,
-            random_seed=mcts_seed,
-            patience=mcts_patience,
-        )
-        self.state.design_space = design_space
+        if self.use_variation_dse:
+            # "Replace" mode: LLM declares variation points, DSE explores + resolves them.
+            design_space, best_config, pareto_front = self._explore_variations(
+                model, requirements, mcts_seed
+            )
+            self.state.design_space = design_space
+        else:
+            design_space, best_config, pareto_front = self._explore_design_space(
+                model, mcts_iterations, requirements,
+                random_seed=mcts_seed,
+                patience=mcts_patience,
+            )
+            self.state.design_space = design_space
 
-        # Inject MCTS decisions into the model programmatically
-        _apply_best_config_to_model(best_config, model)
-        _apply_inject_attrs_to_sysml_text(model)
-        _apply_inject_protocol_to_sysml_text(model, best_config)
-        _apply_inject_sensor_count_to_sysml_text(model, best_config)
-        # Structural grounding: LLM-driven pass for redundancy/state-machine
-        self._mcts_structural_grounding_pass(model, best_config)
+            # Opt-in bilevel DSE (Item F): shadow-compare against the scalar best_config
+            # and, when enabled, drive downstream injection with the bilevel decision.
+            if self.use_bilevel_dse:
+                best_config = self._apply_bilevel_dse(model, requirements, best_config)
+
+            # Lightweight injections (freq attr, protocol ports, doc) — common to both paths.
+            _apply_best_config_to_model(best_config, model)
+            _apply_inject_attrs_to_sysml_text(model)
+            _apply_inject_protocol_to_sysml_text(model, best_config)
+
+            if self.use_bilevel_dse:
+                # Step 4: redundancy + redundant-sensor structures via valid-by-construction
+                # operators (replaces the brittle regex sensor injection + LLM grounding pass).
+                from ..dse.operator_applicator import apply_architecture
+                applied = apply_architecture(model, best_config)
+                if applied:
+                    print(f"  [bilevel-DSE] applied via operators: {applied}")
+            else:
+                _apply_inject_sensor_count_to_sysml_text(model, best_config)
+                # Structural grounding: LLM-driven pass for redundancy/state-machine
+                self._mcts_structural_grounding_pass(model, best_config)
         self._print_exploration_summary(design_space, best_config, pareto_front)
 
         # ── Phase 4-5: Refinement with MCTS constraints ───────────────────────
         print("Phase 4-5: Iterative Refinement (MCTS-grounded)")
         print("-" * 40)
         final_model, final_score, final_sim = self._iterative_refinement(
-            model, requirements, mcts_best_config=best_config
+            model, requirements, mcts_best_config=best_config,
+            connectivity_floor=self.use_variation_dse,
         )
         self.state.current_model = final_model
         print(f"  ✓ Final design score: {final_score:.3f}\n")
@@ -558,6 +588,20 @@ class Orchestrator:
         print("Phase 6: Behavioral Reachability Simulation", flush=True)
         print("-" * 40)
         self._print_final_sim(final_sim)
+
+        # ── Phase 7: DSE→SITL verification artifact (layer 0+1, deterministic) ──
+        # Builds SysML v2 verification cases for the quantified requirements + maps
+        # settable families to ArduPilot .parm with a static L1 range check. No SITL
+        # launch; never mutates the final model — purely an added artifact.
+        print("Phase 7: DSE→SITL Verification (cases + L1)", flush=True)
+        print("-" * 40)
+        verification_artifact = self._dse_verification_artifact(
+            get_sysml_text(final_model), requirements
+        )
+        if verification_artifact:
+            print(f"  ✓ {verification_artifact['summary']}")
+        else:
+            print("  ⚠ no quantified requirements — verification skipped")
 
         # ── Summary ───────────────────────────────────────────────────────────
         sim_warnings = (getattr(final_model, "metadata", None) or {}).get("sim_warnings", "")
@@ -613,7 +657,30 @@ class Orchestrator:
                 }
                 for c in pareto_front
             ],
+            "dse_verification": verification_artifact,
         }
+
+    @staticmethod
+    def _dse_verification_artifact(model_sysml: str, requirements: List[str]):
+        """Layer 0+1 DSE→SITL artifact: SysML v2 verification cases + settable-family
+        L1. Deterministic, no flight, non-mutating. Returns None when there is nothing
+        to verify or on any failure (the artifact never breaks the pipeline)."""
+        try:
+            from ..sitl.dse_verification import build_dse_verification
+            rep = build_dse_verification(model_sysml, requirements)
+            if not rep.verification_cases and not rep.parm_lines:
+                return None
+            return {
+                "verification_cases": rep.verification_cases,
+                "parm_lines": rep.parm_lines,
+                "l1_ok": rep.l1_ok,
+                "l1_results": [vars(r) for r in rep.l1_results],
+                "verification_model_sysml": rep.verification_model,
+                "summary": rep.summary(),
+            }
+        except Exception as e:
+            print(f"  ⚠ DSE verification skipped ({e})")
+            return None
 
     def _extract_requirements(
         self,
@@ -739,6 +806,273 @@ class Orchestrator:
         )
         return design_space, best_config, pareto_front
 
+    def _apply_bilevel_dse(
+        self,
+        model: SysMLModel,
+        requirements: List[str],
+        scalar_best: DesignConfiguration,
+    ) -> DesignConfiguration:
+        """Run the bilevel multi-objective DSE and return a downstream-ready config.
+
+        Shadow-compares against the scalar best_config (logged), then returns the
+        bilevel architecture decisions merged with the scalar's control_frequency_hz
+        (which the architecture operators do not set), so the existing injectors get
+        a complete configuration. Failures fall back to the scalar config.
+        """
+        from ..dse.pipeline_adapter import run_bilevel_dse
+
+        try:
+            result = run_bilevel_dse(model, requirements, random_seed=0, score_quality=True)
+        except Exception as e:  # never let the opt-in path break the pipeline
+            print(f"  [bilevel-DSE] failed ({e}); falling back to scalar best_config")
+            return scalar_best
+
+        merged = dict(result.best_config.parameters)
+        if "control_frequency_hz" in scalar_best.parameters:
+            merged.setdefault(
+                "control_frequency_hz", scalar_best.parameters["control_frequency_hz"]
+            )
+        bilevel_config = DesignConfiguration(name="bilevel_recommended", parameters=merged)
+
+        print("  [bilevel-DSE] shadow comparison:")
+        print(f"     scalar  : {scalar_best.parameters}")
+        print(f"     bilevel : {bilevel_config.parameters}")
+        print(f"     mandated_redundancy={result.mandated_redundancy}  "
+              f"robustness={result.recommendation_robustness:.0%}  "
+              f"front={len(result.pareto_front)}")
+        if result.real_quality:
+            dims = "  ".join(f"{k}={v:.2f}" for k, v in result.real_quality.items())
+            print(f"     real design-quality (DesignEvaluator): {dims}")
+        for note in result.notes:
+            print(f"     note: {note}")
+        return bilevel_config
+
+    def _introduce_variations(self, model: SysMLModel, requirements: List[str]) -> SysMLModel:
+        """Surgically convert connected components into variation points.
+
+        CODE does the structural surgery (preserving the host's connects, variants
+        specialise the host type so ports/connects stay valid); the LLM is asked
+        ONLY for variant CONTENT per component (distinguishing attrs + rationale +
+        linked requirement). This avoids the lossy whole-model rewrite that dropped
+        connects and left variation points isolated.
+        """
+        from ..dse.variation_introducer import connected_components, introduce_variation
+        from ..dse.variation_parser import admitted, parse_variation_points
+
+        text = get_sysml_text(model)
+        if admitted(parse_variation_points(text))[0]:
+            return model  # already declares admissible variation points
+
+        # Scan ALL connected components: requirement-driven proposal skips
+        # components that don't drive a quantified requirement, so we keep looking
+        # to find the ones that DO (e.g. propulsion for speed).  Cap kept modest —
+        # each extra point multiplies the combinatorial space (and costs one LLM
+        # call), and the search budget scales with the point count downstream.
+        max_points = 6
+        introduced: List[str] = []
+        for usage, type_name in connected_components(text):
+            if len(introduced) >= max_points:
+                break
+            spec = self._propose_variants(usage, type_name, requirements)
+            if spec is None:
+                continue
+            rationale, reqs, variants = spec
+            new_text, ok = introduce_variation(
+                text, usage, type_name, variants, rationale, reqs
+            )
+            if ok:
+                text = new_text
+                introduced.append(usage)
+
+        if introduced:
+            if not hasattr(model, "metadata") or model.metadata is None:
+                object.__setattr__(model, "metadata", {})
+            model.metadata["last_sysml_text"] = text
+            print(f"  [variation-DSE] surgically introduced {len(introduced)} variation "
+                  f"point(s) (connects preserved): {introduced}")
+        return model
+
+    def _propose_variants(self, usage: str, type_name: str, requirements: List[str]):
+        """Propose variant content for one component as SITL-SETTABLE DESIGN INPUTS.
+
+        When the requirements carry quantified targets this is REQUIREMENT-DRIVEN: the
+        LLM judges whether the component materially drives a quantified requirement
+        (returns None if not → skip non-discriminating components) and emits, for the
+        DESIGN INPUTS the component controls (battery / mass / rotor / cruise speed),
+        4-6 variants spanning a real trade-off. The DSE scores these by feeding them
+        through the physics estimator; SITL reproduces them by simulation (calibration).
+        Emergent results (endurance/range) are NOT declared — they're derived.
+        Falls back to the generic free-form prompt when no quantified targets exist.
+        Returns (rationale, [req_ids], [VariantSpec]) or None.
+        """
+        import json
+
+        from ..dse.domain_objective import (
+            DESIGN_FIELD_ATTR,
+            objective_families,
+            requirement_targets,
+        )
+        from ..dse.variation_introducer import VariantSpec
+
+        targets = requirement_targets(requirements)
+        perf_fams = objective_families(requirements)
+        if not targets or not perf_fams:
+            return self._propose_variants_generic(usage, type_name, requirements)
+
+        quant = "\n".join(
+            f"{rid}: " + ", ".join(f"{f}>={t}" for f, t in fts)
+            for rid, fts in targets.items()
+        )
+        design_keys = ", ".join(k for k in DESIGN_FIELD_ATTR if k != "battery_capacity_mah")
+        prompt = (
+            f"Component '{usage}' (type {type_name}). Quantified requirements:\n"
+            f"{quant}\n\n"
+            "Design inputs (SITL-settable) that determine performance:\n"
+            f"{design_keys}\n\n"
+            f"Does '{usage}' MATERIALLY drive any of these quantified requirements? "
+            "Reply JSON ONLY.\n"
+            'If NOT: {"relevant": false}\n'
+            'If YES: {"relevant": true, "rationale": "<one line>", '
+            '"satisfies": ["REQ-..."], "variants": [{"name": "<id>", '
+            '"design": {"<design_input>": <number>}}]}\n'
+            "design keys MUST be from the list above, and ONLY the inputs THIS component "
+            "controls (e.g. a propulsion unit sets rotor_count/rotor_radius_m, a battery "
+            "sets battery_cells, an airframe sets mass_kg). Battery CAPACITY is optimized "
+            "internally by the inner layer — do NOT declare battery_capacity_mah. Give 4-6 "
+            "variants spanning a real trade-off (more rotors / bigger rotor radius → more "
+            "lift but heavier; more battery_cells → more power but heavier). satisfies must "
+            "be a subset of the ids above."
+        )
+        try:
+            raw = str(self.llm.chat(prompt)).replace("```json", "").replace("```", "").strip()
+            data = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+            if not data.get("relevant", False):
+                return None
+            rationale = str(data.get("rationale", "quantified design trade-off"))
+            valid = set(targets)
+            reqs = [r for r in (str(x).replace("_", "-") for x in data.get("satisfies", []))
+                    if r in valid]
+            if not reqs:
+                return None
+            variants = []
+            for v in data.get("variants", []):
+                name = re.sub(r"\W", "", str(v.get("name", "")))
+                if not name:
+                    continue
+                attr_lines = []
+                for field, val in (v.get("design", {}) or {}).items():
+                    field = str(field).strip().lower()
+                    if field == "battery_capacity_mah":
+                        continue  # inner-BO optimized, never variant-declared
+                    if field in DESIGN_FIELD_ATTR and isinstance(val, (int, float)):
+                        attr_lines.append(
+                            f"attribute {DESIGN_FIELD_ATTR[field]} : Real = {float(val)};"
+                        )
+                if not attr_lines:
+                    continue
+                vtype = f"{name.capitalize()}{usage.capitalize()}Impl"
+                variants.append(VariantSpec(name=name, type_name=vtype, attrs=" ".join(attr_lines)))
+            return (rationale, reqs, variants) if len(variants) >= 2 else None
+        except Exception as e:
+            print(f"  [variation-DSE] variant proposal for '{usage}' skipped ({e})")
+            return None
+
+    def _propose_variants_generic(self, usage: str, type_name: str, requirements: List[str]):
+        """Free-form variant proposal (used when requirements carry no quantified
+        targets — the domain objective then can't discriminate anyway, so the DSE
+        scores via the generic design-quality dims)."""
+        import json
+
+        from ..dse.variation_introducer import VariantSpec
+
+        prompt = (
+            f"Component '{usage}' (type {type_name}) has a genuine implementation "
+            "trade-off. Propose 4-6 alternative implementations as JSON ONLY:\n"
+            '{"rationale": "<one line>", "satisfies": ["REQ-..."], '
+            '"variants": [{"name": "<id>", "attributes": {"<attrNameWithUnit>": <number>}}]}\n'
+            "Attribute names must carry the unit (cruiseSpeedMps, maxHoverTimeMinutes, "
+            "massKg, rangeM, ...). Pick satisfies from the requirements. JSON only.\n\n"
+            "Requirements:\n" + "\n".join(requirements)
+        )
+        try:
+            raw = str(self.llm.chat(prompt)).replace("```json", "").replace("```", "").strip()
+            data = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+            rationale = str(data.get("rationale", "design trade-off"))
+            reqs = [str(r) for r in data.get("satisfies", []) if r]
+            variants = []
+            for v in data.get("variants", []):
+                name = re.sub(r"\W", "", str(v.get("name", "")))
+                if not name:
+                    continue
+                attrs = " ".join(
+                    f"attribute {re.sub(r'[^A-Za-z0-9_]', '', str(k))} : Real = {float(val)};"
+                    for k, val in (v.get("attributes", {}) or {}).items()
+                    if isinstance(val, (int, float))
+                )
+                vtype = f"{name.capitalize()}{usage.capitalize()}Impl"
+                variants.append(VariantSpec(name=name, type_name=vtype, attrs=attrs))
+            return (rationale, reqs, variants) if len(variants) >= 2 else None
+        except Exception as e:
+            print(f"  [variation-DSE] variant proposal for '{usage}' skipped ({e})")
+            return None
+
+    def _explore_variations(
+        self, model: SysMLModel, requirements: List[str], seed: Optional[int],
+    ) -> Tuple[DesignSpace, DesignConfiguration, List[DesignConfiguration]]:
+        """Variation-DSE path: introduce variation points, explore them, resolve the
+        recommendation into the model. Falls back to the scalar DSE if none admitted."""
+        from ..dse.variation_dse import run_variation_dse
+        from ..dse.variation_parser import admitted, parse_variation_points
+
+        model = self._introduce_variations(model, requirements)
+        introduced_text = get_sysml_text(model)
+        res = run_variation_dse(model, requirements=requirements, random_seed=seed or 0)
+        if res is None:
+            print("  [variation-DSE] no admissible variation space; falling back to scalar DSE")
+            return self._explore_design_space(model, 30, requirements, random_seed=seed)
+
+        # build a design space from the admitted points (for the result/report)
+        pts, _ = admitted(parse_variation_points(introduced_text))
+        ds = DesignSpace(name=f"{model.name}_VariationSpace")
+        for p in pts:
+            ds.add_parameter(DesignParameter(
+                name=p.point_id,
+                param_type=ParameterType.CATEGORICAL,
+                default_value=p.variant_names[0],
+                choices=p.variant_names,
+                description=(p.rationale or "")[:120],
+            ))
+        best_config = DesignConfiguration(
+            name="variation_recommended", parameters=dict(res.recommended_choices)
+        )
+        pareto_front = [
+            DesignConfiguration(name=f"alt{i}", parameters=dict(s), scores=dict(o))
+            for i, (s, o) in enumerate(res.pareto_front)
+        ]
+        # Record the exploration into the design space so the summary reports the
+        # real Pareto-front size (not 0): the front members carry multi-objective
+        # scores, so get_pareto_front re-derives the same non-dominated set.
+        for cfg in pareto_front:
+            ds.add_configuration(cfg)
+        ds.objective_weights = {
+            "iterations_run": float(res.evaluated),
+            "configurations_evaluated": float(res.evaluated),
+            "early_stopped": 0.0,
+        }
+        # resolve the recommendation into the model (concrete, variations bound)
+        if not hasattr(model, "metadata") or model.metadata is None:
+            object.__setattr__(model, "metadata", {})
+        model.metadata["last_sysml_text"] = res.concrete_model
+        print(f"  [variation-DSE] explored {res.admitted_points} → recommended {res.recommended_choices}")
+        if res.recommended_capacity_mah is not None:
+            print(f"  [variation-DSE] inner BO sized battery → {res.recommended_capacity_mah:.0f} mAh")
+        if res.real_quality:
+            dims = {k: round(v, 2) for k, v in res.real_quality.items()}
+            print(f"     real quality: {dims}")
+        for note in res.notes:
+            print(f"     note: {note}")
+        return ds, best_config, pareto_front
+
     @staticmethod
     def _add_inter_parameter_constraints(space: DesignSpace) -> None:
         """Register typical engineering constraints linking the parameters."""
@@ -772,10 +1106,17 @@ class Orchestrator:
         diagnostics = design_space.objective_weights or {}
         iters = int(diagnostics.get("iterations_run", 0))
         early = bool(diagnostics.get("early_stopped", 0))
+        # variation path records the true count in diagnostics (its configs aren't
+        # all stored on the space); scalar path falls back to the summary count.
+        evaluated = int(diagnostics.get("configurations_evaluated",
+                                        summary['configurations_evaluated']))
+        # size and the top-N list below must come from the SAME source, else they
+        # contradict (e.g. "size 0" above "top 2").
+        pareto_size = len(pareto_front)
 
-        print(f"  ✓ Explored {summary['configurations_evaluated']} configurations "
+        print(f"  ✓ Explored {evaluated} configurations "
               f"in {iters} iteration(s){' (early-stopped)' if early else ''}")
-        print(f"  ✓ Pareto front size: {summary['pareto_front_size']}")
+        print(f"  ✓ Pareto front size: {pareto_size}")
 
         # Show top-3 Pareto candidates
         top = pareto_front[:3]
@@ -1147,11 +1488,17 @@ class Orchestrator:
         if self.verbose:
             print(f"  ✓ MCTS Grounding — {redundancy} redundancy added to {target_part}")
 
+    @staticmethod
+    def _count_connects(model_text: str) -> int:
+        """Number of `connect a.p to b.q` statements in the model text."""
+        return len(re.findall(r"\bconnect\b", model_text, re.IGNORECASE))
+
     def _iterative_refinement(
         self,
         model: SysMLModel,
         requirements: List[str],
         mcts_best_config: Optional[DesignConfiguration] = None,
+        connectivity_floor: bool = False,
     ) -> tuple[SysMLModel, float, Any]:
         """Phase 4-5: Evaluate and iteratively refine the design.
 
@@ -1432,7 +1779,25 @@ class Orchestrator:
                     )
                     delta = candidate_eval.weighted_total - rule_score
                     delta_str = f"{delta:+.3f}"
-                    if candidate_eval.weighted_total >= rule_score - 0.05:
+                    # ── Connectivity-regression guard (variation DSE) ──────
+                    # The resolved variation model arrives fully wired; a full
+                    # LLM rewrite tends to drop connects on the converted
+                    # components, isolating them (reachability → 0).  Reject any
+                    # candidate that sheds connect statements relative to the
+                    # model it was refined from — connectivity must not regress.
+                    connectivity_ok = True
+                    if connectivity_floor:
+                        cur_connects = self._count_connects(current_sysml)
+                        cand_connects = self._count_connects(cand_sysml)
+                        if cand_connects < cur_connects:
+                            connectivity_ok = False
+                            print(
+                                f"  ⚠ Refinement dropped connectivity "
+                                f"({cur_connects} → {cand_connects} connects) — "
+                                f"rejected to preserve resolved variation wiring",
+                                flush=True,
+                            )
+                    if connectivity_ok and candidate_eval.weighted_total >= rule_score - 0.05:
                         print(
                             f"  ✓ Refinement accepted  "
                             f"rule: {rule_score:.3f} → {candidate_eval.weighted_total:.3f} "
@@ -1447,7 +1812,7 @@ class Orchestrator:
                             candidate, requirements, max_iters=3
                         )
                         current_model = candidate
-                    else:
+                    elif connectivity_ok:
                         print(
                             f"  ⚠ Refinement regression detected "
                             f"(rule: {rule_score:.3f} → {candidate_eval.weighted_total:.3f}), "

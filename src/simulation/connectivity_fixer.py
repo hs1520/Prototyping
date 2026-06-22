@@ -101,9 +101,11 @@ class ConnMergeResult:
 # ---------------------------------------------------------------------------
 
 # part def <Name> {
-_PART_DEF_RE = re.compile(r'\bpart\s+def\s+(\w+)\s*\{')
-# 端口声明: (in|out|inout) port <name> : <PortDef>
-_PORT_RE = re.compile(r'\b(in|out|inout)\s+port\s+(\w+)\s*:\s*(\w+)')
+# part def <Name> [:> Base1, Base2] {   — capture optional specialisation list
+_PART_DEF_RE = re.compile(r'\bpart\s+def\s+(\w+)\s*(?::>\s*([\w\s,]+?))?\s*\{')
+# 端口声明: (in|out|inout) port <name> [: <PortDef>]   (type optional → harvested
+# untyped ports on a specialised interface are recognised too)
+_PORT_RE = re.compile(r'\b(in|out|inout)\s+port\s+(\w+)\s*(?::\s*(\w+))?')
 # 实例用法: part <inst> : <Type> ;   (排除 part def)
 _USAGE_RE = re.compile(r'\bpart\s+(?!def\b)(\w+)\s*:\s*(\w+)\s*;')
 # connect a.x to b.y ;
@@ -127,8 +129,11 @@ def build_port_directory(sysml_text: str) -> PortDirectory:
     """
     # ── 类型级端口表: part def name → {port_name → PortInfo} ──────────────
     type_ports: Dict[str, Dict[str, PortInfo]] = {}
+    supertypes: Dict[str, List[str]] = {}  # def → [:> bases]  (for inheritance)
     for pm in _PART_DEF_RE.finditer(sysml_text):
         def_name = pm.group(1)
+        if pm.group(2):
+            supertypes[def_name] = [b.strip() for b in pm.group(2).split(',') if b.strip()]
         brace = sysml_text.index('{', pm.start())
         end = _block_end(sysml_text, brace)
         body = sysml_text[brace + 1: end]
@@ -138,6 +143,23 @@ def build_port_directory(sysml_text: str) -> PortDirectory:
             direction, pname, ptype = pmatch.group(1), pmatch.group(2), pmatch.group(3)
             ports[pname] = PortInfo(name=pname, direction=direction, port_type=ptype)
         type_ports[def_name] = ports
+
+    # ── 继承展开: `part def V :> Base` 继承 Base 的端口 ────────────────────
+    # A part bound to a variant type (`V :> Base`) must expose Base's ports or
+    # its connects get pruned as "no port".  Merge supertype ports transitively;
+    # own ports win on name clash.
+    def _resolve(name: str, seen: Set[str]) -> Dict[str, PortInfo]:
+        if name in seen or name not in type_ports:
+            return {}
+        seen.add(name)
+        merged: Dict[str, PortInfo] = {}
+        for base in supertypes.get(name, []):
+            merged.update(_resolve(base, seen))
+        merged.update(type_ports[name])  # own ports override inherited
+        return merged
+
+    if supertypes:
+        type_ports = {name: _resolve(name, set()) for name in type_ports}
 
     # ── 实例 → 类型,并展开端口 ───────────────────────────────────────────
     directory = PortDirectory()
@@ -228,8 +250,9 @@ def validate_connects(
                 (line, f"目标端口 '{stmt.tgt_port}' 方向为 {tgt_info.direction}(需 in/inout)"))
             continue
 
-        # 规则 3:端口类型一致
-        if src_info.port_type != tgt_info.port_type:
+        # 规则 3:端口类型一致(任一端无类型则跳过——继承来的无类型端口无类型可比)
+        if (src_info.port_type and tgt_info.port_type
+                and src_info.port_type != tgt_info.port_type):
             result.rejected.append(
                 (line, f"端口类型不匹配({src_info.port_type} ≠ {tgt_info.port_type})"))
             continue

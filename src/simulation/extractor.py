@@ -152,6 +152,24 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
             for port in pd.owned_ports:
                 if port.name:
                     ports[port.name] = _port_dir(port.direction)
+            # Ports inherited via `:>` specialisation are absent from owned_ports
+            # but live in inherited_features.  A part bound to a variant type
+            # (e.g. `Variant :> Base`) must expose Base's ports or its connects
+            # get pruned as "no port".  Filter to directioned PortUsages so the
+            # standard-library derived ports (direction None) are excluded.
+            _port_cls = getattr(_syside, "PortUsage", None)
+            if _port_cls is not None:
+                try:
+                    for feat in pd.inherited_features:
+                        if (
+                            isinstance(feat, _port_cls)
+                            and feat.name
+                            and feat.name not in ports
+                            and getattr(feat, "direction", None) is not None
+                        ):
+                            ports[feat.name] = _port_dir(feat.direction)
+                except Exception:
+                    pass
             def_ports[pd.name] = ports
 
             # Collect satisfy-requirement names for this PartDefinition
