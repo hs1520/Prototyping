@@ -1069,7 +1069,20 @@ class Orchestrator:
         # resolve the recommendation into the model (concrete, variations bound)
         if not hasattr(model, "metadata") or model.metadata is None:
             object.__setattr__(model, "metadata", {})
-        model.metadata["last_sysml_text"] = res.concrete_model
+        # Wire an Automator-evaluable analysis closure into the recommended model: the
+        # endurance constraint references the CHOSEN variants' design attributes
+        # (closes the bare-attribute gap). Best-effort — never break the pipeline.
+        concrete = res.concrete_model
+        try:
+            from ..dse.analysis_emitter import inject_endurance_analysis
+            injected, ok = inject_endurance_analysis(
+                concrete, requirements, capacity_mah=res.recommended_capacity_mah)
+            if ok:
+                concrete = injected
+                print("  [variation-DSE] injected Automator-evaluable endurance analysis closure")
+        except Exception:
+            pass
+        model.metadata["last_sysml_text"] = concrete
         print(f"  [variation-DSE] explored {res.admitted_points} → recommended {res.recommended_choices}")
         if res.recommended_capacity_mah is not None:
             print(f"  [variation-DSE] inner BO sized battery → {res.recommended_capacity_mah:.0f} mAh")
