@@ -207,6 +207,33 @@ def endurance_target(requirements: List[str]) -> float:
     return 0.0
 
 
+def within_requirement_bounds(design: Dict[str, float], satisfies: List[str],
+                              requirements: List[str]) -> bool:
+    """True iff a variant's design inputs respect the COST upper bounds of the
+    requirements it SATISFIES — cost families (mass/count/power) must be ≤ the linked
+    requirement's upper bound (e.g. a payload variant can't exceed the payload-mass
+    limit). PERF families (speed) are NOT filtered: they're settable parameters
+    (WPNAV_SPEED, tuned by L1), so a variant's declared cruise speed is not a hard
+    constraint. Bounds come from the requirements, not from the LLM."""
+    idx = requirement_targets(requirements)
+    upper: Dict[str, float] = {}
+    for rid in satisfies:
+        rid = rid.replace("_", "-")
+        for fam, val in idx.get(rid, []):
+            if fam in _COST_FAMILIES:
+                upper[fam] = min(upper.get(fam, val), val)   # tightest linked upper bound
+    for field, v in design.items():
+        if not isinstance(v, (int, float)):
+            continue
+        attr = DESIGN_FIELD_ATTR.get(str(field).strip().lower())
+        if attr is None:
+            continue
+        fam = _family_of(attr)
+        if fam in upper and v > upper[fam]:
+            return False
+    return True
+
+
 def architecture_objectives(vps, choices: Dict[str, str], model_text: str,
                             requirements: List[str]) -> Dict[str, float]:
     """Single-layer scoring: battery taken from the resolved model. Kept for the

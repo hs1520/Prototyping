@@ -66,3 +66,12 @@ def test_objectives_make_quad_and_vtol_nondominated():
     # vtol (light) wins cost → neither dominates.
     assert quad["time_sat"] > vtol["time_sat"]
     assert vtol["cost_efficiency"] > quad["cost_efficiency"]
+
+
+def test_within_requirement_bounds_rejects_over_spec_payload():
+    from src.dse.domain_objective import within_requirement_bounds
+    reqs = ["REQ-FUNC-003: transport payloads with a gross mass of up to 2.5 kg"]
+    assert within_requirement_bounds({"payload_mass_kg": 2.5}, ["REQ-FUNC-003"], reqs)
+    assert not within_requirement_bounds({"payload_mass_kg": 10.0}, ["REQ-FUNC-003"], reqs)
+    # unrelated requirement (not in satisfies) → no bound applied
+    assert within_requirement_bounds({"payload_mass_kg": 10.0}, [], reqs)

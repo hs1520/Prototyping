@@ -911,6 +911,7 @@ class Orchestrator:
             DESIGN_FIELD_ATTR,
             objective_families,
             requirement_targets,
+            within_requirement_bounds,
         )
         from ..dse.variation_introducer import VariantSpec
 
@@ -959,8 +960,14 @@ class Orchestrator:
                 name = re.sub(r"\W", "", str(v.get("name", "")))
                 if not name:
                     continue
+                design = v.get("design", {}) or {}
+                # objective bound filter: a variant must respect the quantified bounds of
+                # the requirements it satisfies (e.g. payload ≤ the payload-mass limit), so
+                # out-of-spec implementations never enter the variant library.
+                if not within_requirement_bounds(design, reqs, requirements):
+                    continue
                 attr_lines = []
-                for field, val in (v.get("design", {}) or {}).items():
+                for field, val in design.items():
                     field = str(field).strip().lower()
                     if field == "battery_capacity_mah":
                         continue  # inner-BO optimized, never variant-declared

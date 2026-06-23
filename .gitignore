@@ -63,3 +63,7 @@ logs/
 terrain/
 sitl_output/*.parm
 sitl_output/test_*.py
+
+# DSE pipeline run artifacts
+examples/output/
+examples/sitl_output/

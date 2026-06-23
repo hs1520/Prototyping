@@ -142,3 +142,18 @@ def test_search_budget_scales_with_variant_density():
     b_sparse = max(60, 30 * sum(len(o.variants) for o in sparse))
     b_dense = max(60, 30 * sum(len(o.variants) for o in dense))
     assert b_dense > b_sparse
+
+
+def test_out_of_bound_variants_are_filtered():
+    import json
+    reqs = ["REQ-FUNC-003: payload gross mass up to 2.5 kg.",
+            "REQ-PERF-002: endurance at least 25 minutes."]
+    def chat(_):
+        return json.dumps({"relevant": True, "rationale": "payload sizing",
+            "satisfies": ["REQ-FUNC-003", "REQ-PERF-002"],
+            "variants": [{"name": "a", "design": {"payload_mass_kg": 2.0}},
+                         {"name": "b", "design": {"payload_mass_kg": 2.5}},
+                         {"name": "c", "design": {"payload_mass_kg": 10.0}},   # over-spec
+                         {"name": "d", "design": {"payload_mass_kg": 25.0}}]})  # over-spec
+    spec = Orchestrator._propose_variants(_orch(chat), "payloadSystem", "Payload", reqs)
+    assert [v.name for v in spec[2]] == ["a", "b"]   # >2.5kg variants dropped
