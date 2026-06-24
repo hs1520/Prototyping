@@ -9,6 +9,7 @@ import pytest
 
 from src.dse.analysis_emitter import (
     emit_endurance_analysis, endurance_calc_def, inject_endurance_analysis,
+    inject_trade_study, trade_study,
 )
 from src.dse.physics_estimator import DesignInputs, endurance_min
 from src.simulation.syntax_checker import check_syntax
@@ -155,3 +156,43 @@ def test_inject_mtow_and_range_eval_match_python():
     out, _ = inject_endurance_analysis(_FLAT_CRUISE, _MULTI_REQ, capacity_mah=18000.0)
     assert abs(_eval(out, "DseDesignAnalysis", "mtowKg") - total_mass_kg(di)) < 0.01
     assert abs(_eval(out, "DseDesignAnalysis", "rangeM") - range_m(di)) < 1.0
+
+
+# --- trade_study: present the Pareto front as a SysML analysis def ---
+
+_ALTS = [DesignInputs(2.5, 18000, 12, 6, 0.1524),
+         DesignInputs(2.5, 22000, 12, 8, 0.1905),
+         DesignInputs(2.5, 12000, 8, 4, 0.127)]
+
+
+def test_trade_study_block_parses_and_lists_alternatives():
+    block, ok = trade_study(_ALTS, _EREQ, recommended=_ALTS[0])
+    assert ok
+    assert "analysis def DesignTradeStudy" in block
+    assert "calc def Endurance" in block and "calc def Mtow" in block   # self-contained
+    for i in range(3):
+        assert f"alt{i}_enduranceMin" in block and f"alt{i}_mtowKg" in block
+    assert "alt0 (RECOMMENDED)" in block                                # the picked design tagged
+
+
+def test_trade_study_empty_is_noop():
+    assert trade_study([], _EREQ) == ("", False)
+
+
+def test_inject_trade_study_into_model():
+    out, ok = inject_trade_study(_FLAT, _ALTS, _EREQ, recommended=_ALTS[0])
+    assert ok and not check_syntax(out).has_errors
+    assert "analysis def DesignTradeStudy" in out
+
+
+@pytest.mark.skipif(not _HAS_SYSIDE, reason="syside not installed")
+def test_trade_study_alternatives_eval_match_python():
+    out, _ = inject_trade_study(_FLAT, _ALTS, _EREQ, recommended=_ALTS[0])
+    import syside
+    c = syside.Compiler()
+    m, _ = syside.try_load_model(sysml_source=out)
+    ts = next(e for e in m.elements(syside.AnalysisCaseDefinition) if e.name == "DesignTradeStudy")
+    f = {x.name: x for x in ts.features if getattr(x, "name", None)}
+    for i, a in enumerate(_ALTS):
+        ev, _ = c.evaluate_feature(f[f"alt{i}_enduranceMin"], scope=ts)
+        assert abs(ev - endurance_min(a)) < 0.05

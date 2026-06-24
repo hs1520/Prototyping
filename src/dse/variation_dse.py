@@ -75,6 +75,10 @@ class VariationDSEResult:
     evaluated: int = 0  # number of distinct architectures scored during the search
     recommended_capacity_mah: Optional[float] = None  # inner-BO chosen battery capacity
     notes: List[str] = field(default_factory=list)
+    # Pareto front resolved to concrete design inputs (for the SysML trade study);
+    # recommended_design is the front member the recommendation picked.
+    pareto_designs: List[Tuple["DesignInputs", Objectives]] = field(default_factory=list)
+    recommended_design: Optional["DesignInputs"] = None
 
 
 def _design_quality(dims: Dict[str, float]) -> float:
@@ -209,6 +213,27 @@ def run_variation_dse(
         wb = _write_back_capacity(concrete, rec_cap)
         if not check_syntax(wb).has_errors:
             concrete = wb   # inner-optimized capacity now lives in the model
+
+    # Resolve each Pareto member to concrete design inputs (inner-optimized capacity) so
+    # the recommendation can be presented as a SysML trade study over real alternatives.
+    def _resolve_di(state: State) -> DesignInputs:
+        di0 = architecture_design(ok, dict(state), base_text)
+        cap = inner_cap.get(tuple(sorted(state.items())), di0.battery_capacity_mah)
+        return DesignInputs(battery_capacity_mah=cap, **design_arch_inputs(di0))
+
+    pareto_designs: List[Tuple[DesignInputs, Objectives]] = []
+    rec_design: Optional[DesignInputs] = None
+    if use_domain:
+        seen = set()
+        for state, objs in front.members:
+            di = _resolve_di(state)
+            sig = (di.battery_capacity_mah, di.battery_cells, di.rotor_count,
+                   di.rotor_radius_m, di.payload_mass_kg, di.cruise_speed_mps)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            pareto_designs.append((di, objs))
+        rec_design = _resolve_di(rec_state)
     return VariationDSEResult(
         recommended_choices=dict(rec_state),
         concrete_model=concrete,
@@ -219,4 +244,6 @@ def run_variation_dse(
         evaluated=len(cache),
         recommended_capacity_mah=rec_cap,
         notes=notes,
+        pareto_designs=pareto_designs,
+        recommended_design=rec_design,
     )

@@ -1074,12 +1074,19 @@ class Orchestrator:
         # (closes the bare-attribute gap). Best-effort — never break the pipeline.
         concrete = res.concrete_model
         try:
-            from ..dse.analysis_emitter import inject_endurance_analysis
+            from ..dse.analysis_emitter import inject_endurance_analysis, inject_trade_study
             injected, ok = inject_endurance_analysis(
                 concrete, requirements, capacity_mah=res.recommended_capacity_mah)
             if ok:
                 concrete = injected
                 print("  [variation-DSE] injected Automator-evaluable endurance analysis closure")
+            # also present the Pareto front as a SysML trade study over real alternatives
+            ts, ok_ts = inject_trade_study(
+                concrete, [d for d, _ in res.pareto_designs], requirements,
+                recommended=res.recommended_design)
+            if ok_ts:
+                concrete = ts
+                print(f"  [variation-DSE] injected DesignTradeStudy ({len(res.pareto_designs)} alternatives)")
         except Exception:
             pass
         model.metadata["last_sysml_text"] = concrete

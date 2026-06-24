@@ -258,3 +258,65 @@ def inject_endurance_analysis(
         frag = f"\n        {note}{core}\n"
     out = text[:end] + frag + text[end:]
     return (out, True) if not check_syntax(out).has_errors else (model_text, False)
+
+
+def _sig(d: DesignInputs):
+    return (d.battery_capacity_mah, d.battery_cells, d.rotor_count, d.rotor_radius_m,
+            d.payload_mass_kg, d.cruise_speed_mps)
+
+
+def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] = None,
+                indent: str = "    ") -> Tuple[str, bool]:
+    """An ``analysis def DesignTradeStudy`` comparing the DSE Pareto alternatives: each
+    alternative's endurance/MTOW/(range) is computed by EMBEDDED, Automator-evaluable
+    calc defs (self-contained, mirrors physics_estimator), with a doc recording its design
+    inputs and which one the recommendation picked. ``alternatives`` is a list of
+    DesignInputs. Returns (block, ok); ok=False if empty or it wouldn't parse."""
+    alts = list(alternatives or [])
+    if not alts:
+        return "", False
+    reqs = list(requirements or [])
+    has_range = (_family_requirement(reqs, "range")[1] > 0
+                 and any(a.cruise_speed_mps > 0 for a in alts))
+    inner = indent + "    "
+    rec_sig = _sig(recommended) if recommended is not None else None
+    lines = [
+        f"{indent}analysis def DesignTradeStudy {{",
+        f"{inner}doc /* DSE Pareto front: {len(alts)} non-dominated design(s); metrics by "
+        f"embedded calc defs (== physics_estimator). RECOMMENDED = the picked design. */",
+        endurance_calc_def(inner),
+        mtow_calc_def(inner),
+    ]
+    if has_range:
+        lines.append(range_calc_def(inner))
+    for i, a in enumerate(alts):
+        tag = " (RECOMMENDED)" if rec_sig is not None and _sig(a) == rec_sig else ""
+        five = (f"{float(a.battery_capacity_mah)}, {float(a.battery_cells)}, "
+                f"{float(a.rotor_count)}, {a.rotor_radius_m}, {a.payload_mass_kg}")
+        lines.append(f"{inner}// alt{i}{tag}: cap={a.battery_capacity_mah}mAh cells={a.battery_cells} "
+                     f"rotor={a.rotor_count}x{a.rotor_radius_m}m payload={a.payload_mass_kg}kg")
+        lines.append(f"{inner}attribute alt{i}_enduranceMin : Real = Endurance({five});")
+        lines.append(f"{inner}attribute alt{i}_mtowKg : Real = Mtow({five});")
+        if has_range:
+            lines.append(f"{inner}attribute alt{i}_rangeM : Real = RangeM({five}, {a.cruise_speed_mps});")
+    lines.append(f"{indent}}}")
+    block = "\n".join(lines)
+    ok = not check_syntax(f"package _C {{\n{block}\n}}").has_errors
+    return (block, True) if ok else ("", False)
+
+
+def inject_trade_study(model_text: str, alternatives, requirements,
+                       recommended: Optional[DesignInputs] = None) -> Tuple[str, bool]:
+    """Inject the DesignTradeStudy analysis def at package level. Returns (model_text, ok);
+    ok=False (unchanged) if there's nothing to compare or it wouldn't parse."""
+    block, ok = trade_study(alternatives, requirements, recommended=recommended)
+    if not ok:
+        return model_text, False
+    pkg = re.search(r"\bpackage\s+\w+\s*\{", model_text)
+    if not pkg:
+        return model_text, False
+    end = find_block_end(model_text, model_text.index("{", pkg.start()))
+    if end == -1:
+        return model_text, False
+    out = model_text[:end] + "\n" + block + "\n" + model_text[end:]
+    return (out, True) if not check_syntax(out).has_errors else (model_text, False)
