@@ -22,6 +22,9 @@ from typing import Dict, List, Optional, Tuple
 from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import find_block_end
 from .physics_estimator import DesignInputs, estimate, total_mass_kg
+from .requirement_spec import (
+    ENDURANCE, MASS_MTOW, PAYLOAD, RANGE, extract_requirements, max_spec, max_value,
+)
 
 # quantity family -> substrings that imply it (checked in name + unit, lowercased)
 _FAMILY = {
@@ -228,74 +231,33 @@ def design_arch_inputs(di: DesignInputs) -> Dict[str, float]:
     }
 
 
+# ── requirement → analysis-metric mapping: now queries over STRUCTURED specs (controlled
+# vocabulary), not scattered keyword greps. The brittle disambiguations (altitude≠range,
+# payload≠MTOW, second≠endurance) live once in requirement_spec; an LLM does them when
+# available, a deterministic rule extractor otherwise. ────────────────────────────────────
 def endurance_target(requirements: List[str]) -> float:
-    """The endurance (time-family) requirement target, for the inner BO. Takes the LARGEST
-    time target so a stray small time number can't shadow the real flight-endurance one
-    (seconds are already excluded from the time family — see _FAMILY). 0 if none."""
-    best = 0.0
-    for fts in requirement_targets(requirements).values():
-        for fam, t in fts:
-            if fam == "time":
-                best = max(best, t)
-    return best
-
-
-# payload-carrying language vs MTOW language: a requirement can mention "payload" yet be
-# about total takeoff weight (e.g. "MTOW including payload <= 25kg"); its mass is NOT the
-# rated payload. We include carry/transport requirements and exclude MTOW ones.
-_PAYLOAD_CARRY = ("transport", "carry", "carries", "carrying", "lift", "cargo", "payload")
-_MTOW_KW = ("takeoff", "take-off", "take off", "mtow", "all-up", "all up", "gross weight")
+    """Endurance requirement target (minutes) for the inner BO; largest ENDURANCE spec. 0 if none."""
+    return max_value(extract_requirements(requirements), ENDURANCE)
 
 
 def max_rated_payload(requirements: List[str]) -> float:
-    """Maximum rated payload mass (kg) the design must carry, from a payload requirement
-    (mentions transport/carry/payload + a mass quantity, and is NOT an MTOW requirement).
-
-    REQ_PERF_002 ties endurance to the 'maximum rated payload', so endurance/MTOW must be
-    evaluated at THIS load — not an arbitrary 0.5 kg default. 0.0 if no payload requirement
-    states a mass (then callers fall back to the chosen variant / default)."""
-    best = 0.0
-    for r in requirements or []:
-        low = r.lower()
-        if not any(k in low for k in _PAYLOAD_CARRY) or any(k in low for k in _MTOW_KW):
-            continue
-        body = r.split(":", 1)[1] if ":" in r else r
-        for num, unit in _NUM_UNIT_RE.findall(body):
-            if _family_of(unit or "") == "mass":
-                best = max(best, float(num))
-    return best
-
-
-# A length unit ("metre") cannot tell OPERATIONAL RANGE from altitude / separation / wingspan
-# — so range targets are extracted TEXT-AWARE: a requirement must name operational/flight
-# range AND not be vertical (altitude/AGL/ceiling). Avoids the wrong "altitude 120 m → rangeM
-# >= 120" mapping. Phrases are specific (not bare "range", which also means "sensor range").
-_RANGE_TERMS = ("operational range", "flight range", "maximum range", "max range",
-                "mission radius", "operational radius", "ferry range")
-_VERTICAL_TERMS = ("altitude", "height", "agl", "above ground", "ceiling", "vertical")
-_LEN_UNIT_M = {"m": 1.0, "metre": 1.0, "metres": 1.0, "meter": 1.0, "meters": 1.0,
-               "km": 1000.0, "kilometre": 1000.0, "kilometres": 1000.0,
-               "kilometer": 1000.0, "kilometers": 1000.0}
+    """Maximum rated payload mass (kg) — the largest PAYLOAD spec. REQ_PERF_002 ties endurance
+    to this load, so endurance/MTOW are evaluated here, not at an arbitrary default. 0.0 if none."""
+    return max_value(extract_requirements(requirements), PAYLOAD)
 
 
 def range_requirement(requirements: List[str]) -> Tuple[Optional[str], float]:
-    """(req_id, target_metres) for an OPERATIONAL-range requirement only — a length quantity
-    in a requirement that names operational/flight range and is NOT vertical (altitude/AGL).
-    Returns the largest such target; (None, 0.0) if none (then no range clause is emitted —
-    altitude/separation/sensor-range requirements are correctly NOT treated as flight range)."""
-    best: Optional[Tuple[float, str]] = None
-    for r in requirements or []:
-        low = r.lower()
-        if not any(k in low for k in _RANGE_TERMS) or any(k in low for k in _VERTICAL_TERMS):
-            continue
-        m = _REQ_ID_RE.search(r)
-        rid = m.group(0).replace("_", "-") if m else ""
-        body = r.split(":", 1)[1] if ":" in r else r
-        for num, unit in _NUM_UNIT_RE.findall(body):
-            mult = _LEN_UNIT_M.get((unit or "").lower())
-            if mult and (best is None or float(num) * mult > best[0]):
-                best = (float(num) * mult, rid)
-    return (best[1], best[0]) if best else (None, 0.0)
+    """(req_id, target_metres) for the operational-range requirement (largest RANGE spec);
+    (None, 0.0) if none. Altitude/separation/sensor-range are NOT range (classified apart)."""
+    s = max_spec(extract_requirements(requirements), RANGE)
+    return (s.req_id, s.value) if s else (None, 0.0)
+
+
+def mass_limit(requirements: List[str]) -> Tuple[Optional[str], float]:
+    """(req_id, MTOW limit kg) — the largest MASS_MTOW spec (gross take-off mass), NOT a
+    payload sub-bound; (None, 0.0) if no MTOW requirement."""
+    s = max_spec(extract_requirements(requirements), MASS_MTOW)
+    return (s.req_id, s.value) if s else (None, 0.0)
 
 
 def _point_fields(model_text: str, point) -> set:

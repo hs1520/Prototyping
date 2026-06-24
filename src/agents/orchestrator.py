@@ -1033,6 +1033,14 @@ class Orchestrator:
 
         model = self._introduce_variations(model, requirements)
         introduced_text = get_sysml_text(model)
+        # Prime the structured requirement extraction with the LLM (robust to phrasing;
+        # output validated against the controlled vocabulary). Memoised, so the deterministic
+        # DSE/analysis callers downstream reuse it. Best-effort — falls back to rules.
+        try:
+            from ..dse.requirement_spec import extract_requirements
+            extract_requirements(requirements, llm=self.llm)
+        except Exception:
+            pass
         res = run_variation_dse(model, requirements=requirements, random_seed=seed or 0)
         if res is None:
             print("  [variation-DSE] no admissible variation space; falling back to scalar DSE")

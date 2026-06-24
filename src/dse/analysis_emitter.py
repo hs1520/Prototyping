@@ -18,8 +18,8 @@ from typing import Optional, Tuple
 from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import find_block_end
 from .domain_objective import (
-    DESIGN_DEFAULTS, DESIGN_FIELD_ATTR, endurance_target, max_rated_payload,
-    range_requirement, requirement_targets, variant_design_inputs,
+    DESIGN_DEFAULTS, DESIGN_FIELD_ATTR, endurance_target, mass_limit, max_rated_payload,
+    range_requirement, variant_design_inputs,
 )
 from .physics_estimator import (
     AVIONICS_POWER_W, BASE_FRAME_KG, CELL_V, DesignInputs, ENERGY_DENSITY_WH_KG,
@@ -152,19 +152,6 @@ def _analysis_scope(text: str) -> Optional[Tuple[str, int, bool]]:
     return (text[brace + 1:end], end, True) if end != -1 else None
 
 
-def _family_requirement(requirements, family: str) -> Tuple[Optional[str], float]:
-    """(req_id, target) for the requirement carrying this quantity family, taking the
-    LARGEST target. For cost (mass) that picks the gross-mass/MTOW limit over a tighter
-    sub-bound like payload; for perf (range) it picks the strongest lower bound. Returns
-    (None, 0.0) if no requirement has the family."""
-    best: Optional[Tuple[float, str]] = None
-    for rid, fts in requirement_targets(requirements).items():
-        for fam, t in fts:
-            if fam == family and (best is None or t > best[0]):
-                best = (t, rid)
-    return (best[1], best[0]) if best else (None, 0.0)
-
-
 def inject_endurance_analysis(
     model_text: str, requirements, capacity_mah: Optional[float] = None,
     satisfy_req: str = "REQ-PERF-002", design: Optional[DesignInputs] = None,
@@ -257,7 +244,7 @@ def inject_endurance_analysis(
     add_metric(endurance_calc_def(indent="        "), satisfy_req,
                "enduranceMin", f"Endurance({base5})", ">=", target, "enduranceMeetsReq")
     # all-up mass / MTOW (cost, <=) — pick the loosest mass bound = the gross-mass req
-    mass_rid, mass_bound = _family_requirement(reqs, "mass")
+    mass_rid, mass_bound = mass_limit(reqs)
     if mass_rid and mass_bound > 0:
         add_metric(mtow_calc_def(indent="        "), mass_rid,
                    "mtowKg", f"Mtow({base5})", "<=", mass_bound, "mtowWithinReq")
@@ -302,7 +289,7 @@ def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] 
     binds = list(bindings or [])
     reqs = list(requirements or [])
     end_tgt = endurance_target(reqs)
-    mass_bound = _family_requirement(reqs, "mass")[1]
+    mass_bound = mass_limit(reqs)[1]
     range_tgt = range_requirement(reqs)[1]
     has_range = range_tgt > 0 and any(a.cruise_speed_mps > 0 for a in alts)
     inner = indent + "    "
