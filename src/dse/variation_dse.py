@@ -206,7 +206,22 @@ def run_variation_dse(
     # avoids the arbitrary lexicographic bias toward the first objective. (Not SAFE-
     # severity weighting: variation objectives are perf families, not failure severities.)
     rec_weights = _recommendation_weights(names, requirements)
-    rec_state, _ = weighted_recommend(front.members, rec_weights, method="chebyshev")
+    # FEASIBILITY GATE: hard "at least" perf requirements (e.g. endurance) cap their
+    # satisfaction at 1.0, so a design meets them iff every perf _sat is ~1.0. Some
+    # architectures can't reach the target even at the inner-BO capacity bound — they
+    # must not be RECOMMENDED (they still stay on the front / in the trade study to show
+    # the trade-off). Recommend among feasible designs; if none, fall back + flag it.
+    # tolerance: the inner BO sizes the CHEAPEST pack meeting the target, so a feasible
+    # design lands marginally under (e.g. 24.97/25 = 0.999); genuinely infeasible designs
+    # miss by a wide margin (a tiny-rotor craft sits at ~0.54), so 0.98 cleanly separates.
+    perf_objs = [n for n in names if n.endswith("_sat")]
+    feasible = [m for m in front.members
+                if all(m[1].get(n, 0.0) >= 0.98 for n in perf_objs)]
+    pool = feasible if feasible else front.members
+    if perf_objs and not feasible:
+        notes.append("no explored design meets all hard performance requirements at the "
+                     "capacity bounds; recommending the closest (INFEASIBLE).")
+    rec_state, _ = weighted_recommend(pool, rec_weights, method="chebyshev")
     concrete = resolve_model(base_text, ok, dict(rec_state))
     rec_cap = inner_cap.get(tuple(sorted(rec_state.items())))
     if rec_cap is not None:

@@ -54,3 +54,43 @@ def test_main_architecture_choice_is_stable_across_seeds():
 def test_inner_capacity_within_bounds_every_seed():
     caps = [r.recommended_capacity_mah for r in _runs()]
     assert all(c is not None and 3000 <= c <= 22000 for c in caps)
+
+
+# --- feasibility gate: never recommend a design that fails a hard perf requirement ---
+from src.dse.physics_estimator import endurance_min   # noqa: E402
+
+# one infeasible variant (tiny rotors can't reach 25min even maxed) + one feasible (big hex)
+_GATE_MODEL = """package Drone {
+    port def Sig;
+    part def LiftIface { in port cmd : Sig; out port thrust : Sig; }
+    part def TinyQuad :> LiftIface { attribute rotorCount : Real = 4.0; attribute rotorRadiusM : Real = 0.0635; }
+    part def BigHex   :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.1524; }
+    part def PowIface { out port p : Sig; }
+    part def Pow6S :> PowIface { attribute batteryCells : Real = 6.0; }
+    part def Airframe {
+        variation part propulsion : LiftIface { doc /* satisfies REQ-PERF-002 */
+            variant part tiny : TinyQuad; variant part hex : BigHex; }
+        part power : Pow6S;
+    }
+}"""
+
+
+def test_recommendation_is_feasible_when_a_feasible_design_exists():
+    r = run_variation_dse(SimpleNamespace(metadata={"last_sysml_text": _GATE_MODEL}),
+                          requirements=_REQS, iterations=60, random_seed=0)
+    assert r.recommended_design is not None
+    # must pick the feasible big-hex (≥25min), not the infeasible tiny quad
+    assert endurance_min(r.recommended_design) >= 25.0 - 0.5
+    assert not any("INFEASIBLE" in n for n in r.notes)
+
+
+_ALL_INFEASIBLE = _GATE_MODEL.replace(
+    "variant part tiny : TinyQuad; variant part hex : BigHex;",
+    "variant part tiny : TinyQuad; variant part tiny2 : TinyQuad;")
+
+
+def test_flags_infeasibility_when_no_design_meets_requirement():
+    r = run_variation_dse(SimpleNamespace(metadata={"last_sysml_text": _ALL_INFEASIBLE}),
+                          requirements=_REQS, iterations=60, random_seed=0)
+    assert r.recommended_design is not None                      # still returns a best-effort pick
+    assert any("INFEASIBLE" in n for n in r.notes)               # but flags it honestly
