@@ -231,3 +231,13 @@ def test_within_requirement_bounds_rejects_over_spec_payload():
     assert not within_requirement_bounds({"payload_mass_kg": 10.0}, ["REQ-FUNC-003"], reqs)
     # unrelated requirement (not in satisfies) → no bound applied
     assert within_requirement_bounds({"payload_mass_kg": 10.0}, [], reqs)
+
+
+def test_design_field_family_is_exact_not_substring():
+    # variant-attribute classification now comes from the ontology (exact), not _family_of
+    # substring matching — which mis-read "rotorRadiusM" as the 'count' family ("rotor").
+    from src.dse.domain_objective import DESIGN_FIELD_FAMILY
+    assert DESIGN_FIELD_FAMILY == {"payload_mass_kg": "mass", "battery_cells": "count",
+                                   "rotor_count": "count", "cruise_speed_mps": "speed"}
+    assert "rotor_radius_m" not in DESIGN_FIELD_FAMILY        # a dimension, not a count
+    assert "battery_capacity_mah" not in DESIGN_FIELD_FAMILY  # inner-loop, no cost family

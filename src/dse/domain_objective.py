@@ -80,6 +80,9 @@ FAMILY_ATTR = {
 #             point whose name/type matches these (else first declarer). () = no canonical owner
 #   req_cond: non-empty → value is a requirement-driven evaluation condition (e.g. payload is
 #             evaluated at the maximum rated payload, per REQ_PERF_002), not the variant value
+#   family  : quantity family for cost-bound filtering (mass/count/power/speed; "" = none) —
+#             the EXACT field→family, so variant-attribute classification no longer relies on
+#             _family_of substring matching (which e.g. mis-read "rotorRadiusM" as count).
 @dataclass(frozen=True)
 class DesignField:
     field: str
@@ -88,15 +91,16 @@ class DesignField:
     layer: str
     concern: Tuple[str, ...] = ()
     req_cond: str = ""
+    family: str = ""
 
 
 DESIGN_ONTOLOGY: Tuple[DesignField, ...] = (
-    DesignField("payload_mass_kg", "massKg", 0.5, "outer", ("payload", "cargo"), "max_rated_payload"),
+    DesignField("payload_mass_kg", "massKg", 0.5, "outer", ("payload", "cargo"), "max_rated_payload", "mass"),
     DesignField("battery_capacity_mah", "batteryCapacityMah", 5000.0, "inner", ("power", "batter", "energy")),
-    DesignField("battery_cells", "batteryCells", 4, "outer", ("power", "batter", "energy")),
-    DesignField("rotor_count", "rotorCount", 4, "outer", ("propuls", "rotor", "motor", "prop")),
+    DesignField("battery_cells", "batteryCells", 4, "outer", ("power", "batter", "energy"), "", "count"),
+    DesignField("rotor_count", "rotorCount", 4, "outer", ("propuls", "rotor", "motor", "prop"), "", "count"),
     DesignField("rotor_radius_m", "rotorRadiusM", 0.13, "outer", ("propuls", "rotor", "motor", "prop")),
-    DesignField("cruise_speed_mps", "cruiseSpeedMps", 0.0, "outer", ("propuls", "speed", "cruise")),
+    DesignField("cruise_speed_mps", "cruiseSpeedMps", 0.0, "outer", ("propuls", "speed", "cruise"), "", "speed"),
 )
 
 # Derived views (kept for existing callers; all sourced from DESIGN_ONTOLOGY)
@@ -105,6 +109,7 @@ DESIGN_FIELD_ATTR = {d.field: d.attr for d in DESIGN_ONTOLOGY}        # field �
 _DESIGN_ATTR_FIELD = {d.attr.lower(): d.field for d in DESIGN_ONTOLOGY}  # lower attr → field
 DESIGN_DEFAULTS = {d.field: d.default for d in DESIGN_ONTOLOGY}
 _FIELD_CONCERN = {d.field: d.concern for d in DESIGN_ONTOLOGY if d.concern}
+DESIGN_FIELD_FAMILY = {d.field: d.family for d in DESIGN_ONTOLOGY if d.family}  # field → cost family
 _INNER_LOOP_FIELDS = tuple(d.field for d in DESIGN_ONTOLOGY if d.layer == "inner")
 
 _NUM_UNIT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([A-Za-z/%°]+(?:\s*/\s*[A-Za-z]+)?)?")
@@ -398,10 +403,7 @@ def within_requirement_bounds(design: Dict[str, float], satisfies: List[str],
     for field, v in design.items():
         if not isinstance(v, (int, float)):
             continue
-        attr = DESIGN_FIELD_ATTR.get(str(field).strip().lower())
-        if attr is None:
-            continue
-        fam = _family_of(attr)
+        fam = DESIGN_FIELD_FAMILY.get(str(field).strip().lower())  # exact, ontology-driven
         if fam in upper and v > upper[fam]:
             return False
     return True
