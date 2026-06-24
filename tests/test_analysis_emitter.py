@@ -133,6 +133,18 @@ def test_inject_evaluates_at_rated_payload_not_default():
     assert "<= 25.0" in out          # MTOW bound still the gross-mass 25kg (not payload 2.5)
 
 
+def test_no_range_clause_or_false_satisfy_for_altitude_requirement():
+    # altitude ≤120m AGL shares the 'metre' unit with range but is NOT operational range:
+    # the closure must NOT emit rangeM >= 120 nor satisfy the altitude req. Regression.
+    reqs = ["REQ-PERF-002: endurance at least 25 minutes at maximum rated payload.",
+            "REQ-CONS-001: shall not exceed a flight altitude of 120 metres AGL.",
+            "REQ-FUNC-003: transport payloads up to 2.5 kg."]
+    out, ok = inject_endurance_analysis(_FLAT_CRUISE, reqs, capacity_mah=18000.0)
+    assert ok
+    assert "rangeMeetsReq" not in out and "RangeM(" not in out   # altitude ≠ flight range
+    assert "req_cons_001" not in out                              # no false satisfy
+
+
 @pytest.mark.skipif(not _HAS_SYSIDE, reason="syside not installed")
 def test_inject_with_design_is_consistent_with_dse_values():
     # authoritative path: the closure uses the recommended DesignInputs the DSE scored,

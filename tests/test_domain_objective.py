@@ -58,6 +58,16 @@ def test_design_ontology_is_single_source_of_truth():
     assert "battery_capacity_mah" in _INNER_LOOP_FIELDS   # the BO-sized variable
 
 
+def test_range_requirement_rejects_altitude_and_separation():
+    from src.dse.domain_objective import range_requirement
+    # altitude ≤120m AGL must NOT be read as an operational-range target (the metre-unit trap)
+    assert range_requirement(["REQ-CONS-001: shall not exceed a flight altitude of 120 metres AGL."]) == (None, 0.0)
+    assert range_requirement(["REQ-FUNC-002: avoid before separation below 5 metres."]) == (None, 0.0)
+    # a genuine operational-range requirement is still picked up (km → metres)
+    assert range_requirement(["REQ-PERF-004: operational range of at least 10000 metres."]) == ("REQ-PERF-004", 10000.0)
+    assert range_requirement(["REQ-PERF-004: maximum range of 8 km."]) == ("REQ-PERF-004", 8000.0)
+
+
 def test_evaluation_overrides_payload_from_requirement():
     from src.dse.domain_objective import evaluation_overrides
     ov = evaluation_overrides(["REQ-PERF-002: endurance at max rated payload.",

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import find_block_end
@@ -31,7 +31,11 @@ _FAMILY = {
     # flight endurance, or endurance_target/inner-BO would size for ~1 unit. Seconds are
     # deliberately excluded from this family (they contribute no endurance objective).
     "time": ["endurance", "duration", "hovertime", "flighttime", "minute", "min", "hour"],
-    "range": ["range", "distance", "wingspan", "baseline", "altitude", "km", "meter", "metre"],
+    # length UNITS only — a bare length cannot tell operational range from altitude /
+    # separation / wingspan, so range TARGETS are extracted text-aware by _range_requirement
+    # (positive range phrase, vertical excluded), NOT by unit alone. (Removed the nouns
+    # altitude/wingspan/baseline: they are lengths but NOT operational range.)
+    "range": ["range", "distance", "km", "meter", "metre"],
     "accuracy": ["accuracy", "precision", "deviation", "resolution", "lines"],
     "mass": ["mass", "weight", "kg", "gram"],
     "count": ["count", "number", "rotor", "motor", "cell", "node", "channel"],
@@ -260,6 +264,38 @@ def max_rated_payload(requirements: List[str]) -> float:
             if _family_of(unit or "") == "mass":
                 best = max(best, float(num))
     return best
+
+
+# A length unit ("metre") cannot tell OPERATIONAL RANGE from altitude / separation / wingspan
+# — so range targets are extracted TEXT-AWARE: a requirement must name operational/flight
+# range AND not be vertical (altitude/AGL/ceiling). Avoids the wrong "altitude 120 m → rangeM
+# >= 120" mapping. Phrases are specific (not bare "range", which also means "sensor range").
+_RANGE_TERMS = ("operational range", "flight range", "maximum range", "max range",
+                "mission radius", "operational radius", "ferry range")
+_VERTICAL_TERMS = ("altitude", "height", "agl", "above ground", "ceiling", "vertical")
+_LEN_UNIT_M = {"m": 1.0, "metre": 1.0, "metres": 1.0, "meter": 1.0, "meters": 1.0,
+               "km": 1000.0, "kilometre": 1000.0, "kilometres": 1000.0,
+               "kilometer": 1000.0, "kilometers": 1000.0}
+
+
+def range_requirement(requirements: List[str]) -> Tuple[Optional[str], float]:
+    """(req_id, target_metres) for an OPERATIONAL-range requirement only — a length quantity
+    in a requirement that names operational/flight range and is NOT vertical (altitude/AGL).
+    Returns the largest such target; (None, 0.0) if none (then no range clause is emitted —
+    altitude/separation/sensor-range requirements are correctly NOT treated as flight range)."""
+    best: Optional[Tuple[float, str]] = None
+    for r in requirements or []:
+        low = r.lower()
+        if not any(k in low for k in _RANGE_TERMS) or any(k in low for k in _VERTICAL_TERMS):
+            continue
+        m = _REQ_ID_RE.search(r)
+        rid = m.group(0).replace("_", "-") if m else ""
+        body = r.split(":", 1)[1] if ":" in r else r
+        for num, unit in _NUM_UNIT_RE.findall(body):
+            mult = _LEN_UNIT_M.get((unit or "").lower())
+            if mult and (best is None or float(num) * mult > best[0]):
+                best = (float(num) * mult, rid)
+    return (best[1], best[0]) if best else (None, 0.0)
 
 
 def _point_fields(model_text: str, point) -> set:

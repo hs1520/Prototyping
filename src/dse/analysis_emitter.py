@@ -19,7 +19,7 @@ from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import find_block_end
 from .domain_objective import (
     DESIGN_DEFAULTS, DESIGN_FIELD_ATTR, endurance_target, max_rated_payload,
-    requirement_targets, variant_design_inputs,
+    range_requirement, requirement_targets, variant_design_inputs,
 )
 from .physics_estimator import (
     AVIONICS_POWER_W, BASE_FRAME_KG, CELL_V, DesignInputs, ENERGY_DENSITY_WH_KG,
@@ -261,8 +261,9 @@ def inject_endurance_analysis(
     if mass_rid and mass_bound > 0:
         add_metric(mtow_calc_def(indent="        "), mass_rid,
                    "mtowKg", f"Mtow({base5})", "<=", mass_bound, "mtowWithinReq")
-    # range (perf, >=) — only if the design actually has a cruise speed to fly it
-    range_rid, range_tgt = _family_requirement(reqs, "range")
+    # range (perf, >=) — only a genuine OPERATIONAL-range requirement (not altitude/
+    # separation, which share the 'metre' unit), and only if the design has a cruise speed
+    range_rid, range_tgt = range_requirement(reqs)
     has_cruise = (cruise is not None and cruise > 0) if design is not None \
         else ("cruise_speed_mps" in field_owner)
     if range_rid and range_tgt > 0 and has_cruise:
@@ -302,7 +303,7 @@ def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] 
     reqs = list(requirements or [])
     end_tgt = endurance_target(reqs)
     mass_bound = _family_requirement(reqs, "mass")[1]
-    range_tgt = _family_requirement(reqs, "range")[1]
+    range_tgt = range_requirement(reqs)[1]
     has_range = range_tgt > 0 and any(a.cruise_speed_mps > 0 for a in alts)
     inner = indent + "    "
     rec_sig = _sig(recommended) if recommended is not None else None
