@@ -190,10 +190,30 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
         pass
 
     # ── Step 2: PartUsage → PartNode + PortNode ─────────────────────────────
+    # Parts declared inside an `analysis def` (e.g. the DSE trade study's alt{i}Design
+    # binding parts) are ANALYSIS scaffolding, not the system assembly — they have no
+    # connects and would otherwise count as "isolated", deflating reachability.
+    _analysis_cls = getattr(_syside, "AnalysisCaseDefinition", None)
+
+    def _in_analysis_scope(elem) -> bool:
+        if _analysis_cls is None:
+            return False
+        cur = elem
+        for _ in range(12):
+            o = getattr(cur, "owner", None)
+            if o is None:
+                return False
+            if isinstance(o, _analysis_cls):
+                return True
+            cur = o
+        return False
+
     try:
         for pu in model.elements(_syside.PartUsage):
             usage_name = pu.name
             if not usage_name:
+                continue
+            if _in_analysis_scope(pu):       # trade-study analysis parts ≠ system assembly
                 continue
 
             defs = list(pu.definitions)

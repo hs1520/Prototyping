@@ -253,3 +253,32 @@ class TestScenarioSelection:
         # but should still produce a list (possibly a single generic scenario).
         scenarios = auto_detect_scenarios(bg)
         assert isinstance(scenarios, list)
+
+
+class TestAnalysisScaffoldingExcluded:
+    """Parts inside an `analysis def` (the DSE trade study's alt{i}Design binding parts)
+    are analysis scaffolding, not the system assembly — they must NOT enter the behavioral
+    graph or they count as 'isolated' and deflate reachability (regression)."""
+
+    _MODEL = """package Sys {
+    port def Sig;
+    part def A { out port o : Sig; }
+    part def B { in port i : Sig; }
+    part def HexImpl { attribute rotorCount : Real = 6.0; }
+    part a : A;
+    part b : B;
+    connect a.o to b.i;
+    analysis def DesignTradeStudy {
+        part alt0Design { part propulsionSystem : HexImpl; }
+        attribute alt0_x : Real = 1.0;
+    }
+}"""
+
+    def test_analysis_parts_not_in_graph(self):
+        bg = extract_behavioral_graph(self._MODEL)
+        assert set(bg.parts) == {"a", "b"}            # only the real system parts
+        assert "alt0Design" not in bg.parts
+
+    def test_reachability_not_deflated_by_analysis_parts(self):
+        res = SimulationValidator().validate(self._MODEL)
+        assert "alt0Design" not in res.isolated_parts
