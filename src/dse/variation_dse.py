@@ -22,9 +22,8 @@ from .domain_objective import (
     architecture_objectives,
     design_arch_inputs,
     endurance_target,
-    max_rated_payload,
-    normalize_variation_ownership,
-    strip_inner_loop_attrs,
+    evaluation_overrides,
+    normalize_variation_space,
     objective_names,
     objectives_from_design,
     requirement_targets,
@@ -166,13 +165,10 @@ def run_variation_dse(
     # physical quantity (e.g. propulsion AND airframe both declaring rotorCount), the
     # search would explore incoherent combos (hexa propulsion + octo airframe). Keep each
     # field on its canonical owner, strip it from the others (notes record what changed).
-    base_text, norm_notes = normalize_variation_ownership(base_text, ok)
+    # Regularize the LLM-declared variation space (ontology-driven, one entry): dedup field
+    # ownership across variation points + strip inner-loop variables for a uniform interface.
+    base_text, norm_notes = normalize_variation_space(base_text, ok)
     notes.extend(norm_notes)
-    # Strip inner-loop variables (e.g. batteryCapacityMah) from variants: capacity is the
-    # inner-BO variable, not a discrete variant choice — pinning it per variant makes the
-    # interface inconsistent, misleads, and interferes with capacity write-back.
-    base_text, strip_notes = strip_inner_loop_attrs(base_text, ok)
-    notes.extend(strip_notes)
 
     operators = [VariationOperator(p) for p in ok]
     # Budget scales with the total number of variant choices (points × variants per
@@ -190,15 +186,13 @@ def run_variation_dse(
     use_domain = len(domain_names) > 1  # at least one perf family + cost_efficiency
     names = domain_names if use_domain else ["design_quality", "simplicity"]
     endurance_tgt = endurance_target(requirements) if use_domain else 0.0
-    # REQ_PERF_002 mandates endurance "at the maximum rated payload": evaluate every
-    # design at that worst-case load (not the 0.5 kg default) so sizing/feasibility are
-    # honest. 0 → no payload requirement → keep the resolved/default payload.
-    rated_payload = max_rated_payload(requirements) if use_domain else 0.0
+    # Requirement-driven evaluation conditions (ontology-driven): e.g. payload is evaluated
+    # at the MAXIMUM RATED PAYLOAD (REQ_PERF_002), not the 0.5 kg default — so sizing/
+    # feasibility/closure are honest. Empty → no override → keep the resolved/default value.
+    eval_overrides = evaluation_overrides(requirements) if use_domain else {}
 
     def _at_rated_payload(arch: Dict[str, float]) -> Dict[str, float]:
-        if rated_payload > 0:
-            arch = {**arch, "payload_mass_kg": rated_payload}
-        return arch
+        return {**arch, **{k: v for k, v in eval_overrides.items() if k in arch}}
 
     def objective_fn(state: State, ctx) -> Objectives:
         key = tuple(sorted(state.items()))

@@ -42,6 +42,45 @@ def test_strip_inner_loop_attrs_uniform_interface():
     assert any("batteryCapacityMah" in n for n in notes)
 
 
+def test_design_ontology_is_single_source_of_truth():
+    from src.dse.domain_objective import (
+        DESIGN_ONTOLOGY, DESIGN_INPUTS, DESIGN_FIELD_ATTR, DESIGN_DEFAULTS,
+        _FIELD_CONCERN, _INNER_LOOP_FIELDS,
+    )
+    # derived views must match the ontology exactly
+    assert DESIGN_INPUTS == tuple((d.field, d.attr) for d in DESIGN_ONTOLOGY)
+    assert DESIGN_FIELD_ATTR == {d.field: d.attr for d in DESIGN_ONTOLOGY}
+    assert DESIGN_DEFAULTS == {d.field: d.default for d in DESIGN_ONTOLOGY}
+    assert _INNER_LOOP_FIELDS == tuple(d.field for d in DESIGN_ONTOLOGY if d.layer == "inner")
+    assert _FIELD_CONCERN == {d.field: d.concern for d in DESIGN_ONTOLOGY if d.concern}
+    # every field is classified into exactly one layer
+    assert all(d.layer in ("outer", "inner") for d in DESIGN_ONTOLOGY)
+    assert "battery_capacity_mah" in _INNER_LOOP_FIELDS   # the BO-sized variable
+
+
+def test_evaluation_overrides_payload_from_requirement():
+    from src.dse.domain_objective import evaluation_overrides
+    ov = evaluation_overrides(["REQ-PERF-002: endurance at max rated payload.",
+                               "REQ-FUNC-003: transport payloads up to 2.5 kg.",
+                               "REQ-CONS-003: takeoff weight including payload <= 25 kg."])
+    assert ov == {"payload_mass_kg": 2.5}     # rated payload (not MTOW 25), ontology-driven
+    assert evaluation_overrides(["REQ-PERF-002: endurance >= 25 minutes."]) == {}
+
+
+def test_normalize_variation_space_runs_both_passes():
+    # overlapping rotor (dedup) + inner-loop capacity on a variant (strip), one entry point
+    from src.dse.domain_objective import normalize_variation_space
+    from src.dse.variation_parser import admitted, parse_variation_points
+    model = _OVERLAP.replace(
+        "part def Hexa_Prop :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.2; }",
+        "part def Hexa_Prop :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.2; attribute batteryCapacityMah : Real = 9000.0; }")
+    pts = admitted(parse_variation_points(model))[0]
+    out, notes = normalize_variation_space(model, pts)
+    assert variant_design_inputs(out, "Frame_Octo") == {}            # dedup stripped airframe rotor
+    assert "battery_capacity_mah" not in variant_design_inputs(out, "Hexa_Prop")  # inner-loop stripped
+    assert any("kept in" in n for n in notes) and any("inner-loop" in n for n in notes)
+
+
 def test_strip_inner_loop_attrs_noop_when_already_uniform():
     model = _INCONSISTENT_POWER.replace(" attribute batteryCapacityMah : Real = 3000.0;", "") \
                                .replace(" attribute batteryCapacityMah : Real = 11170.0;", "")

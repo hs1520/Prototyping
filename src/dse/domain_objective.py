@@ -16,6 +16,7 @@ matching is heuristic.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 from ..simulation.syntax_checker import check_syntax
@@ -60,24 +61,44 @@ FAMILY_ATTR = {
     "power": "powerWatts",
 }
 
-# Design inputs the variants now declare (SITL-settable), and how they map to
-# DesignInputs fields ↔ SysML attribute names. The DSE scores designs by feeding
-# these inputs through the physics estimator (analytic emergent metrics), mirroring
-# what SITL produces by simulation — so the static ranking can be calibrated.
-DESIGN_INPUTS: Tuple[Tuple[str, str], ...] = (
-    ("payload_mass_kg", "massKg"),   # a component's declared mass contribution (e.g. payload)
-    ("battery_capacity_mah", "batteryCapacityMah"),
-    ("battery_cells", "batteryCells"),
-    ("rotor_count", "rotorCount"),
-    ("rotor_radius_m", "rotorRadiusM"),
-    ("cruise_speed_mps", "cruiseSpeedMps"),
+# ── Design-input ontology (single source of truth) ──────────────────────────────────
+# Each design input the variants may declare, classified once so every variation-space
+# regularization is driven from here (no scattered field lists). The DSE scores designs by
+# feeding these through the physics estimator, mirroring what SITL produces — so the static
+# ranking can be calibrated.
+#   layer   : "outer" = a discrete variant choice (lives in variant defs)
+#             "inner" = a continuous variable SIZED by the inner BO (must NOT be pinned in a
+#                       variant — stripped for a uniform interface)
+#   concern : owning-concern keywords; a field declared by >1 variation point is kept on the
+#             point whose name/type matches these (else first declarer). () = no canonical owner
+#   req_cond: non-empty → value is a requirement-driven evaluation condition (e.g. payload is
+#             evaluated at the maximum rated payload, per REQ_PERF_002), not the variant value
+@dataclass(frozen=True)
+class DesignField:
+    field: str
+    attr: str
+    default: float
+    layer: str
+    concern: Tuple[str, ...] = ()
+    req_cond: str = ""
+
+
+DESIGN_ONTOLOGY: Tuple[DesignField, ...] = (
+    DesignField("payload_mass_kg", "massKg", 0.5, "outer", ("payload", "cargo"), "max_rated_payload"),
+    DesignField("battery_capacity_mah", "batteryCapacityMah", 5000.0, "inner", ("power", "batter", "energy")),
+    DesignField("battery_cells", "batteryCells", 4, "outer", ("power", "batter", "energy")),
+    DesignField("rotor_count", "rotorCount", 4, "outer", ("propuls", "rotor", "motor", "prop")),
+    DesignField("rotor_radius_m", "rotorRadiusM", 0.13, "outer", ("propuls", "rotor", "motor", "prop")),
+    DesignField("cruise_speed_mps", "cruiseSpeedMps", 0.0, "outer", ("propuls", "speed", "cruise")),
 )
-DESIGN_FIELD_ATTR = {f: a for f, a in DESIGN_INPUTS}            # field → SysML attr
-_DESIGN_ATTR_FIELD = {a.lower(): f for f, a in DESIGN_INPUTS}   # lower attr → field
-DESIGN_DEFAULTS = {
-    "payload_mass_kg": 0.5, "battery_capacity_mah": 5000.0, "battery_cells": 4,
-    "rotor_count": 4, "rotor_radius_m": 0.13, "cruise_speed_mps": 0.0,
-}
+
+# Derived views (kept for existing callers; all sourced from DESIGN_ONTOLOGY)
+DESIGN_INPUTS: Tuple[Tuple[str, str], ...] = tuple((d.field, d.attr) for d in DESIGN_ONTOLOGY)
+DESIGN_FIELD_ATTR = {d.field: d.attr for d in DESIGN_ONTOLOGY}        # field → SysML attr
+_DESIGN_ATTR_FIELD = {d.attr.lower(): d.field for d in DESIGN_ONTOLOGY}  # lower attr → field
+DESIGN_DEFAULTS = {d.field: d.default for d in DESIGN_ONTOLOGY}
+_FIELD_CONCERN = {d.field: d.concern for d in DESIGN_ONTOLOGY if d.concern}
+_INNER_LOOP_FIELDS = tuple(d.field for d in DESIGN_ONTOLOGY if d.layer == "inner")
 
 _NUM_UNIT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([A-Za-z/%°]+(?:\s*/\s*[A-Za-z]+)?)?")
 _ATTR_RE = re.compile(r"\battribute\s+(\w+)\s*(?::\s*\w+)?\s*=\s*([\d.]+)\s*(?:\[\s*'?([^\]']+)'?\s*\])?")
@@ -241,21 +262,6 @@ def max_rated_payload(requirements: List[str]) -> float:
     return best
 
 
-# Canonical owning CONCERN per design field: a field should be parametrised by ONE
-# variation point. If two points declare the same physical quantity (e.g. propulsion AND
-# airframe both set rotorCount), the design becomes incoherent (hexa propulsion + octo
-# airframe) and the merge is arbitrary. The owner is the point whose id/variant-type names
-# match the field's concern (a physical decomposition fact, not a tuning knob); the field
-# is stripped from the others. No/ambiguous match → keep the first declarer (deterministic).
-_FIELD_CONCERN = {
-    "rotor_count":          ("propuls", "rotor", "motor", "prop"),
-    "rotor_radius_m":       ("propuls", "rotor", "motor", "prop"),
-    "battery_cells":        ("power", "batter", "energy"),
-    "battery_capacity_mah": ("power", "batter", "energy"),
-    "payload_mass_kg":      ("payload", "cargo"),
-}
-
-
 def _point_fields(model_text: str, point) -> set:
     fields = set()
     for _, vtype in point.variants:
@@ -326,15 +332,6 @@ def normalize_variation_ownership(model_text: str, points) -> Tuple[str, List[st
     return text, notes
 
 
-# Design fields that are INNER-LOOP variables (sized by the inner BO), not discrete variant
-# choices. A variant must not pin them to a constant: it would (a) make the variant interface
-# inconsistent if only some declare it, (b) mislead (declared value ≠ the value the DSE sizes
-# and uses), (c) interfere with capacity write-back (which skips variants that already declare
-# it). They are stripped from all variants → uniform interface; the inner BO sizes the value
-# and write-back records it on the chosen variant as the OUTCOME.
-_INNER_LOOP_FIELDS = ("battery_capacity_mah",)
-
-
 def strip_inner_loop_attrs(model_text: str, points) -> Tuple[str, List[str]]:
     """Strip inner-loop-variable attributes (e.g. batteryCapacityMah) from every variant
     type, so all variants of a point share ONE consistent design-input interface (only their
@@ -357,6 +354,32 @@ def strip_inner_loop_attrs(model_text: str, points) -> Tuple[str, List[str]]:
     if notes and check_syntax(text).has_errors:
         return model_text, ["inner-loop attr strip skipped (rewrite did not parse)"]
     return text, notes
+
+
+def normalize_variation_space(model_text: str, points) -> Tuple[str, List[str]]:
+    """Single deterministic regularizer for the LLM-declared variation space, all driven by
+    DESIGN_ONTOLOGY: (1) dedup field ownership across variation points (keep each field on its
+    canonical-concern owner, strip from the rest), then (2) strip inner-loop variables (BO-
+    sized, not variant choices) for a uniform per-point interface. One entry point so new
+    ontology-classified smells get a single mount point. Returns (text, notes); each sub-pass
+    self-reverts if its rewrite wouldn't parse."""
+    text, notes = normalize_variation_ownership(model_text, points)
+    text, strip_notes = strip_inner_loop_attrs(text, points)
+    return text, notes + strip_notes
+
+
+def evaluation_overrides(requirements: List[str]) -> Dict[str, float]:
+    """Requirement-driven evaluation values for design fields whose ontology marks a
+    ``req_cond`` — e.g. payload is evaluated at the MAXIMUM RATED PAYLOAD (REQ_PERF_002),
+    not the chosen/default variant value. Returns {field: value} (empty if none apply), so
+    the DSE/inner-BO/closure all evaluate at the same requirement-mandated conditions."""
+    out: Dict[str, float] = {}
+    for d in DESIGN_ONTOLOGY:
+        if d.req_cond == "max_rated_payload":
+            v = max_rated_payload(requirements)
+            if v > 0:
+                out[d.field] = v
+    return out
 
 
 def within_requirement_bounds(design: Dict[str, float], satisfies: List[str],
