@@ -73,6 +73,27 @@ def test_extract_uses_llm_when_available_and_validates():
     assert specs == [ReqSpec("REQ-XLLM-001", ENDURANCE, ">=", 30.0, "min")]   # invalid row filtered
 
 
+def test_operator_filter_excludes_geofence_range_from_capability():
+    # a "<=" operational-radius limit must NOT be claimed as a ">=" range capability
+    specs = [
+        ReqSpec("REQ-CONS-005", RANGE, "<=", 10000.0, "km"),   # geofence (max radius)
+        ReqSpec("REQ-PERF-004", RANGE, ">=", 8000.0, "metres"),  # capability target
+    ]
+    assert max_spec(specs, RANGE, ">=").req_id == "REQ-PERF-004"   # capability only
+    assert max_value(specs, ENDURANCE, ">=") == 0.0
+
+
+def test_range_requirement_skips_geofence_via_llm(monkeypatch=None):
+    # end-to-end: LLM extracts REQ-CONS-005 as range "<=" (max radius) → range_requirement
+    # (capability, ">=") returns None, so no false "RangeM >= 10000 satisfy req_cons_005".
+    from src.dse.domain_objective import range_requirement
+    reqs = ["REQ-CONS-005Z: restrict operational flight radius to a maximum of 10.0 km."]  # unique
+    llm = _FakeLLM([{"req_id": "REQ-CONS-005Z", "quantity": "range",
+                     "operator": "<=", "value": 10000, "unit": "km"}])
+    extract_requirements(reqs, llm=llm)              # prime cache with the LLM spec
+    assert range_requirement(reqs) == (None, 0.0)    # geofence not a range capability
+
+
 def test_extract_falls_back_to_rules_when_llm_raises():
     reqs = ["REQ-XFB-002: sustain flight for 25 minutes."]   # unique → no cache hit
 

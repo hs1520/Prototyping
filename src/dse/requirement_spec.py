@@ -103,13 +103,16 @@ Output ONLY a JSON array; each element:
   {{"req_id": "REQ-...", "quantity": <one of endurance|mtow|payload|range|speed|altitude>,
     "operator": <one of ">="|"<="|"==">, "value": <number in the canonical unit>, "unit": "<original unit>"}}
 
-Canonical units & rules (follow exactly):
-- endurance  = flight time in MINUTES (hours→minutes). A response/latency time in SECONDS is NOT endurance — omit it.
-- mtow       = maximum take-off / all-up / gross mass in kg (<=).
-- payload    = the carried/transported payload mass in kg (<=). ("payload/carry/transport" mass, NOT take-off mass.)
-- range      = OPERATIONAL/flight range in metres (>=, km→metres). A maximum ALTITUDE limit is 'altitude', NOT 'range'.
-- speed      = cruise/airspeed in m/s (>=).
-- altitude   = vertical limit in metres (<=).
+Canonical units (convert to these):
+- endurance = flight time in MINUTES (hours→minutes). A response/latency time in SECONDS is NOT endurance — omit it.
+- mtow      = maximum take-off / all-up / gross mass in kg.
+- payload   = carried/transported payload mass in kg ("payload/carry/transport" mass, NOT take-off mass).
+- range     = OPERATIONAL/flight range or radius in metres (km→metres). A maximum ALTITUDE limit is 'altitude', NOT 'range'.
+- speed     = cruise/airspeed in m/s.
+- altitude  = vertical limit in metres.
+operator: take the requirement's ACTUAL bound — "at least / minimum / no less than" → ">=";
+"at most / maximum of / shall not exceed / restrict to / up to / within" → "<=". Do NOT assume a
+direction from the quantity (e.g. a 'restrict operational radius to a maximum of 10 km' is range with "<=").
 Omit non-quantitative requirements. Output the JSON array only, no prose.
 
 Requirements:
@@ -158,14 +161,19 @@ def extract_requirements(requirements, llm=None) -> List[ReqSpec]:
     return specs
 
 
-def max_value(specs: List[ReqSpec], quantity: str) -> float:
-    vals = [s.value for s in specs if s.quantity == quantity]
+def max_value(specs: List[ReqSpec], quantity: str, operator: Optional[str] = None) -> float:
+    vals = [s.value for s in specs if s.quantity == quantity
+            and (operator is None or s.operator == operator)]
     return max(vals) if vals else 0.0
 
 
-def max_spec(specs: List[ReqSpec], quantity: str) -> Optional[ReqSpec]:
+def max_spec(specs: List[ReqSpec], quantity: str, operator: Optional[str] = None) -> Optional[ReqSpec]:
+    """Largest-value spec of ``quantity``. ``operator`` filters by direction so a metric
+    clause only fires for the meaningful bound — e.g. range capability is a ">=" target, so
+    a "<=" operational-radius/geofence requirement is NOT claimed satisfied by RangeM."""
     best: Optional[ReqSpec] = None
     for s in specs:
-        if s.quantity == quantity and (best is None or s.value > best.value):
+        if s.quantity == quantity and (operator is None or s.operator == operator) \
+                and (best is None or s.value > best.value):
             best = s
     return best

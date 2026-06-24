@@ -241,8 +241,8 @@ def design_arch_inputs(di: DesignInputs) -> Dict[str, float]:
 # payload≠MTOW, second≠endurance) live once in requirement_spec; an LLM does them when
 # available, a deterministic rule extractor otherwise. ────────────────────────────────────
 def endurance_target(requirements: List[str]) -> float:
-    """Endurance requirement target (minutes) for the inner BO; largest ENDURANCE spec. 0 if none."""
-    return max_value(extract_requirements(requirements), ENDURANCE)
+    """Endurance requirement target (minutes) for the inner BO; largest ">=" ENDURANCE spec. 0 if none."""
+    return max_value(extract_requirements(requirements), ENDURANCE, ">=")
 
 
 def max_rated_payload(requirements: List[str]) -> float:
@@ -252,16 +252,17 @@ def max_rated_payload(requirements: List[str]) -> float:
 
 
 def range_requirement(requirements: List[str]) -> Tuple[Optional[str], float]:
-    """(req_id, target_metres) for the operational-range requirement (largest RANGE spec);
-    (None, 0.0) if none. Altitude/separation/sensor-range are NOT range (classified apart)."""
-    s = max_spec(extract_requirements(requirements), RANGE)
+    """(req_id, target_metres) for a range CAPABILITY requirement — the largest ">=" RANGE spec
+    ("must reach at least X"). A "<=" range (operational-radius / geofence limit) is NOT a
+    capability our RangeM satisfies, so it's excluded. (None, 0.0) if none."""
+    s = max_spec(extract_requirements(requirements), RANGE, ">=")
     return (s.req_id, s.value) if s else (None, 0.0)
 
 
 def mass_limit(requirements: List[str]) -> Tuple[Optional[str], float]:
-    """(req_id, MTOW limit kg) — the largest MASS_MTOW spec (gross take-off mass), NOT a
-    payload sub-bound; (None, 0.0) if no MTOW requirement."""
-    s = max_spec(extract_requirements(requirements), MASS_MTOW)
+    """(req_id, MTOW limit kg) — the largest "<=" MASS_MTOW spec (gross take-off mass), NOT a
+    payload sub-bound; (None, 0.0) if no MTOW limit."""
+    s = max_spec(extract_requirements(requirements), MASS_MTOW, "<=")
     return (s.req_id, s.value) if s else (None, 0.0)
 
 
