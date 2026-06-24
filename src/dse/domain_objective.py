@@ -54,20 +54,6 @@ _PERF_FAMILIES = {"speed", "time", "range", "accuracy"}
 # sitl-family-param-mapping). Range needs a cruise-speed input → deferred.
 _EMERGENT_PERF = {"time"}
 
-# Canonical attribute name per family, used by the variant generator so the
-# emitted SysML attributes parse back to the SAME family (generation ↔ parsing
-# single source of truth).  Names are chosen so _family_of resolves each to ONE
-# family unambiguously (no cross-family substring, e.g. avoid 'meter' for accuracy).
-FAMILY_ATTR = {
-    "speed": "speedMps",
-    "time": "enduranceMinutes",
-    "range": "rangeMeters",
-    "accuracy": "precisionPct",
-    "mass": "massKg",
-    "count": "unitCount",
-    "power": "powerWatts",
-}
-
 # ── Design-input ontology (single source of truth) ──────────────────────────────────
 # Each design input the variants may declare, classified once so every variation-space
 # regularization is driven from here (no scattered field lists). The DSE scores designs by

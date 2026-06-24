@@ -19,7 +19,6 @@ from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import find_block_end, get_sysml_text
 from .domain_objective import (
     architecture_design,
-    architecture_objectives,
     design_arch_inputs,
     endurance_target,
     evaluation_overrides,

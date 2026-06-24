@@ -22,7 +22,6 @@ RANGE = "range"           # operational/flight range, metres, >=
 SPEED = "speed"           # cruise/airspeed,        m/s,      >=
 ALTITUDE = "altitude"     # vertical limit,         metres,   <=  (classified so it is NOT
                           #                                        mistaken for range)
-OTHER = "other"
 QUANTITIES = (ENDURANCE, MASS_MTOW, PAYLOAD, RANGE, SPEED, ALTITUDE)
 _OPERATORS = (">=", "<=", "==")
 
@@ -30,7 +29,7 @@ _OPERATORS = (">=", "<=", "==")
 @dataclass(frozen=True)
 class ReqSpec:
     req_id: str
-    quantity: str         # one of QUANTITIES (or OTHER)
+    quantity: str         # one of QUANTITIES
     operator: str         # ">=", "<=", "=="
     value: float          # in the canonical unit: minutes / kg / metres / m·s⁻¹
     unit: str
