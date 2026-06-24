@@ -14,8 +14,41 @@ from src.dse.domain_objective import (
     objective_families,
     objective_names,
     requirement_targets,
+    strip_inner_loop_attrs,
     variant_design_inputs,
 )
+
+
+_INCONSISTENT_POWER = """package D {
+    port def Sig;
+    part def PowerIface { out port p : Sig; }
+    part def Power_4s :> PowerIface { attribute batteryCells : Real = 4.0; attribute batteryCapacityMah : Real = 3000.0; }
+    part def Power_8s :> PowerIface { attribute batteryCells : Real = 8.0; }
+    part def Power_12s :> PowerIface { attribute batteryCells : Real = 12.0; attribute batteryCapacityMah : Real = 11170.0; }
+    part def Sys {
+        variation part powerSystem : PowerIface { doc /* satisfies REQ-PERF-002 */
+            variant part p4 : Power_4s; variant part p8 : Power_8s; variant part p12 : Power_12s; }
+    }
+}"""
+
+
+def test_strip_inner_loop_attrs_uniform_interface():
+    from src.dse.variation_parser import admitted, parse_variation_points
+    pts = admitted(parse_variation_points(_INCONSISTENT_POWER))[0]
+    out, notes = strip_inner_loop_attrs(_INCONSISTENT_POWER, pts)
+    # every power variant now exposes the SAME interface: batteryCells only, no capacity
+    for t in ("Power_4s", "Power_8s", "Power_12s"):
+        assert variant_design_inputs(out, t) == {"battery_cells": float(t.split("_")[1][:-1])}
+    assert any("batteryCapacityMah" in n for n in notes)
+
+
+def test_strip_inner_loop_attrs_noop_when_already_uniform():
+    model = _INCONSISTENT_POWER.replace(" attribute batteryCapacityMah : Real = 3000.0;", "") \
+                               .replace(" attribute batteryCapacityMah : Real = 11170.0;", "")
+    from src.dse.variation_parser import admitted, parse_variation_points
+    pts = admitted(parse_variation_points(model))[0]
+    out, notes = strip_inner_loop_attrs(model, pts)
+    assert out == model and notes == []
 from src.dse.variation_parser import admitted as _admitted
 from src.dse.variation_parser import parse_variation_points as _parse
 

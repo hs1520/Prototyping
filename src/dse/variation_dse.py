@@ -24,6 +24,7 @@ from .domain_objective import (
     endurance_target,
     max_rated_payload,
     normalize_variation_ownership,
+    strip_inner_loop_attrs,
     objective_names,
     objectives_from_design,
     requirement_targets,
@@ -167,6 +168,11 @@ def run_variation_dse(
     # field on its canonical owner, strip it from the others (notes record what changed).
     base_text, norm_notes = normalize_variation_ownership(base_text, ok)
     notes.extend(norm_notes)
+    # Strip inner-loop variables (e.g. batteryCapacityMah) from variants: capacity is the
+    # inner-BO variable, not a discrete variant choice — pinning it per variant makes the
+    # interface inconsistent, misleads, and interferes with capacity write-back.
+    base_text, strip_notes = strip_inner_loop_attrs(base_text, ok)
+    notes.extend(strip_notes)
 
     operators = [VariationOperator(p) for p in ok]
     # Budget scales with the total number of variant choices (points × variants per

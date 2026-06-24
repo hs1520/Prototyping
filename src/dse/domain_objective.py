@@ -326,6 +326,39 @@ def normalize_variation_ownership(model_text: str, points) -> Tuple[str, List[st
     return text, notes
 
 
+# Design fields that are INNER-LOOP variables (sized by the inner BO), not discrete variant
+# choices. A variant must not pin them to a constant: it would (a) make the variant interface
+# inconsistent if only some declare it, (b) mislead (declared value ≠ the value the DSE sizes
+# and uses), (c) interfere with capacity write-back (which skips variants that already declare
+# it). They are stripped from all variants → uniform interface; the inner BO sizes the value
+# and write-back records it on the chosen variant as the OUTCOME.
+_INNER_LOOP_FIELDS = ("battery_capacity_mah",)
+
+
+def strip_inner_loop_attrs(model_text: str, points) -> Tuple[str, List[str]]:
+    """Strip inner-loop-variable attributes (e.g. batteryCapacityMah) from every variant
+    type, so all variants of a point share ONE consistent design-input interface (only their
+    discrete distinguishing attrs, e.g. batteryCells). Returns (new_text, notes); reverts if
+    the rewrite wouldn't parse."""
+    text = model_text
+    stripped: Dict[str, list] = {}
+    for p in points:
+        for _, vtype in p.variants:
+            if not vtype:
+                continue
+            present = variant_design_inputs(text, vtype)
+            for field in _INNER_LOOP_FIELDS:
+                if field in present:
+                    text = _strip_attr_from_type(text, vtype, DESIGN_FIELD_ATTR[field])
+                    stripped.setdefault(field, []).append(vtype)
+    notes = [f"stripped inner-loop attribute '{DESIGN_FIELD_ATTR[f]}' from {sorted(set(v))} "
+             f"(it is the inner-BO variable, sized per design — not a fixed variant attribute; "
+             f"uniform variant interface)" for f, v in stripped.items()]
+    if notes and check_syntax(text).has_errors:
+        return model_text, ["inner-loop attr strip skipped (rewrite did not parse)"]
+    return text, notes
+
+
 def within_requirement_bounds(design: Dict[str, float], satisfies: List[str],
                               requirements: List[str]) -> bool:
     """True iff a variant's design inputs respect the COST upper bounds of the
