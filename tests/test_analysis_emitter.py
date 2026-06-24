@@ -90,7 +90,7 @@ _EREQ = ["REQ-PERF-002: flight endurance of at least 25 min."]
 def test_inject_flat_wraps_and_refs_chosen_variants():
     out, ok = inject_endurance_analysis(_FLAT, _EREQ, capacity_mah=18000.0)
     assert ok and not check_syntax(out).has_errors
-    assert "part def DseEnduranceAnalysis" in out               # flat → wrapper part def
+    assert "part def DseDesignAnalysis" in out               # flat → wrapper part def
     assert "powerSystem.batteryCapacityMah" in out              # constraint refs the variant attrs
     assert "propulsionSystem.rotorCount" in out
     assert "batteryCapacityMah : Real = 18000.0" in out         # capacity written into CHOSEN power
@@ -100,7 +100,7 @@ def test_inject_flat_wraps_and_refs_chosen_variants():
 def test_inject_nested_goes_into_root_without_wrapper():
     out, ok = inject_endurance_analysis(_NESTED, _EREQ, capacity_mah=18000.0)
     assert ok and not check_syntax(out).has_errors
-    assert "part def DseEnduranceAnalysis" not in out           # nested → straight into the root
+    assert "part def DseDesignAnalysis" not in out           # nested → straight into the root
     assert "propulsionSystem.rotorCount" in out
 
 
@@ -111,7 +111,47 @@ def test_inject_noop_without_endurance_target():
 
 @pytest.mark.skipif(not _HAS_SYSIDE, reason="syside not installed")
 def test_inject_automator_eval_matches_python():
-    for model, part in ((_FLAT, "DseEnduranceAnalysis"), (_NESTED, "DeliveryDrone")):
+    for model, part in ((_FLAT, "DseDesignAnalysis"), (_NESTED, "DeliveryDrone")):
         out, _ = inject_endurance_analysis(model, _EREQ, capacity_mah=18000.0)
         val = _eval(out, part, "enduranceMin")
         assert abs(val - endurance_min(DesignInputs(2.5, 18000, 12, 6, 0.1524))) < 0.05
+
+
+# requirements with endurance (perf), MTOW + payload (both mass), and range (perf)
+_MULTI_REQ = [
+    "REQ-PERF-002: flight endurance of at least 25 min.",
+    "REQ-CONS-003: maximum take-off mass of at most 25 kg.",
+    "REQ-FUNC-003: transport payloads of up to 2.5 kg.",
+    "REQ-PERF-004: operational range of at least 10000 metres.",
+]
+# a flat model whose propulsion variant ALSO declares cruise speed (so range is wired)
+_FLAT_CRUISE = _FLAT.replace(
+    "part def Hexa :> PropulsionSystem { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.1524; }",
+    "part def Hexa :> PropulsionSystem { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.1524; attribute cruiseSpeedMps : Real = 15.0; }",
+)
+
+
+def test_inject_mtow_picks_gross_mass_bound_not_payload():
+    out, ok = inject_endurance_analysis(_FLAT, _MULTI_REQ, capacity_mah=18000.0)
+    assert ok and not check_syntax(out).has_errors
+    assert "calc def Mtow" in out and "assert constraint mtowWithinReq" in out
+    assert "<= 25.0" in out and "<= 2.5" not in out      # MTOW (loosest mass bound), not payload
+    assert "satisfy req_cons_003" in out
+    assert "calc def RangeM" not in out                  # no cruise-speed variant → range skipped
+
+
+def test_inject_range_only_when_variant_supplies_cruise_speed():
+    out, ok = inject_endurance_analysis(_FLAT_CRUISE, _MULTI_REQ, capacity_mah=18000.0)
+    assert ok and not check_syntax(out).has_errors
+    assert "calc def RangeM" in out and "assert constraint rangeMeetsReq" in out
+    assert "propulsionSystem.cruiseSpeedMps" in out      # range refs the variant's cruise speed
+    assert "satisfy req_perf_004" in out
+
+
+@pytest.mark.skipif(not _HAS_SYSIDE, reason="syside not installed")
+def test_inject_mtow_and_range_eval_match_python():
+    from src.dse.physics_estimator import total_mass_kg, range_m
+    di = DesignInputs(2.5, 18000, 12, 6, 0.1524, cruise_speed_mps=15.0)
+    out, _ = inject_endurance_analysis(_FLAT_CRUISE, _MULTI_REQ, capacity_mah=18000.0)
+    assert abs(_eval(out, "DseDesignAnalysis", "mtowKg") - total_mass_kg(di)) < 0.01
+    assert abs(_eval(out, "DseDesignAnalysis", "rangeM") - range_m(di)) < 1.0
