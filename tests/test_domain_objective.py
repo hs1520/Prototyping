@@ -9,11 +9,26 @@ from __future__ import annotations
 from src.dse.domain_objective import (
     architecture_design,
     architecture_objectives,
+    endurance_target,
     objective_families,
     objective_names,
     requirement_targets,
     variant_design_inputs,
 )
+
+
+def test_endurance_target_ignores_latency_seconds():
+    # a response-time req in SECONDS must not be mistaken for flight endurance (minutes):
+    # the inner BO would otherwise size for ~1 unit. Regression for the >=1.0 constraint bug.
+    reqs = [
+        "REQ-FUNC-006: incorporate a waypoint within 1.0 second of command.",
+        "REQ-PERF-002: sustain flight for a minimum of 25 minutes.",
+    ]
+    assert endurance_target(reqs) == 25.0
+
+
+def test_endurance_target_zero_without_minutes_or_hours():
+    assert endurance_target(["REQ-FUNC-006: respond within 1.0 second."]) == 0.0
 from src.dse.variation_parser import admitted, parse_variation_points
 
 _MODEL = """package Drone {

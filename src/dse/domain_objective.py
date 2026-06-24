@@ -24,7 +24,11 @@ from .physics_estimator import DesignInputs, estimate, total_mass_kg
 # quantity family -> substrings that imply it (checked in name + unit, lowercased)
 _FAMILY = {
     "speed": ["m/s", "mps", "kph", "km/h", "airspeed", "speed", "velocity", "cruise"],
-    "time": ["endurance", "duration", "hovertime", "flighttime", "minute", "min", "hour", "sec"],
+    # endurance is conventionally minutes/hours; "second" is LATENCY (e.g. a 1.0 s
+    # response-time requirement) — a different quantity that must NOT be mistaken for
+    # flight endurance, or endurance_target/inner-BO would size for ~1 unit. Seconds are
+    # deliberately excluded from this family (they contribute no endurance objective).
+    "time": ["endurance", "duration", "hovertime", "flighttime", "minute", "min", "hour"],
     "range": ["range", "distance", "wingspan", "baseline", "altitude", "km", "meter", "metre"],
     "accuracy": ["accuracy", "precision", "deviation", "resolution", "lines"],
     "mass": ["mass", "weight", "kg", "gram"],
@@ -199,12 +203,15 @@ def design_arch_inputs(di: DesignInputs) -> Dict[str, float]:
 
 
 def endurance_target(requirements: List[str]) -> float:
-    """The endurance (time-family) requirement target, for the inner BO. 0 if none."""
+    """The endurance (time-family) requirement target, for the inner BO. Takes the LARGEST
+    time target so a stray small time number can't shadow the real flight-endurance one
+    (seconds are already excluded from the time family — see _FAMILY). 0 if none."""
+    best = 0.0
     for fts in requirement_targets(requirements).values():
         for fam, t in fts:
             if fam == "time":
-                return t
-    return 0.0
+                best = max(best, t)
+    return best
 
 
 def within_requirement_bounds(design: Dict[str, float], satisfies: List[str],
