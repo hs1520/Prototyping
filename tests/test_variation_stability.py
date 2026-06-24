@@ -94,3 +94,31 @@ def test_flags_infeasibility_when_no_design_meets_requirement():
                           requirements=_REQS, iterations=60, random_seed=0)
     assert r.recommended_design is not None                      # still returns a best-effort pick
     assert any("INFEASIBLE" in n for n in r.notes)               # but flags it honestly
+
+
+# two variation points both parametrising rotor → must be deduplicated before search
+_OVERLAP_MODEL = """package Drone {
+    port def Sig;
+    part def LiftIface { in port cmd : Sig; out port thrust : Sig; }
+    part def Hexa_Prop :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.165; }
+    part def Octo_Prop :> LiftIface { attribute rotorCount : Real = 8.0; attribute rotorRadiusM : Real = 0.19; }
+    part def Frame_Hexa :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.165; }
+    part def Frame_Octo :> LiftIface { attribute rotorCount : Real = 8.0; attribute rotorRadiusM : Real = 0.22; }
+    part def Airframe {
+        variation part propulsionSystem : LiftIface { doc /* satisfies REQ-PERF-002 */
+            variant part p_hexa : Hexa_Prop; variant part p_octo : Octo_Prop; }
+        variation part airframe : LiftIface { doc /* satisfies REQ-PERF-002 */
+            variant part f_hexa : Frame_Hexa; variant part f_octo : Frame_Octo; }
+    }
+}"""
+
+
+def test_overlapping_variation_points_are_deduplicated():
+    r = run_variation_dse(SimpleNamespace(metadata={"last_sysml_text": _OVERLAP_MODEL}),
+                          requirements=_REQS, iterations=60, random_seed=0)
+    assert r is not None and r.recommended_design is not None
+    # rotor ownership deduplicated: kept on propulsion, airframe made physics-inert
+    assert any("kept in 'propulsionSystem'" in n for n in r.notes)
+    assert any("airframe' is now physics-inert" in n for n in r.notes)
+    # recommended rotor is one the propulsion variants actually offer (coherent, not merged)
+    assert r.recommended_design.rotor_count in (6, 8)

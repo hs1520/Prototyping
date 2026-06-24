@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Tuple
 
+from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import find_block_end
 from .physics_estimator import DesignInputs, estimate, total_mass_kg
 
@@ -238,6 +239,91 @@ def max_rated_payload(requirements: List[str]) -> float:
             if _family_of(unit or "") == "mass":
                 best = max(best, float(num))
     return best
+
+
+# Canonical owning CONCERN per design field: a field should be parametrised by ONE
+# variation point. If two points declare the same physical quantity (e.g. propulsion AND
+# airframe both set rotorCount), the design becomes incoherent (hexa propulsion + octo
+# airframe) and the merge is arbitrary. The owner is the point whose id/variant-type names
+# match the field's concern (a physical decomposition fact, not a tuning knob); the field
+# is stripped from the others. No/ambiguous match → keep the first declarer (deterministic).
+_FIELD_CONCERN = {
+    "rotor_count":          ("propuls", "rotor", "motor", "prop"),
+    "rotor_radius_m":       ("propuls", "rotor", "motor", "prop"),
+    "battery_cells":        ("power", "batter", "energy"),
+    "battery_capacity_mah": ("power", "batter", "energy"),
+    "payload_mass_kg":      ("payload", "cargo"),
+}
+
+
+def _point_fields(model_text: str, point) -> set:
+    fields = set()
+    for _, vtype in point.variants:
+        if vtype:
+            fields |= set(variant_design_inputs(model_text, vtype))
+    return fields
+
+
+def _strip_attr_from_type(text: str, type_name: str, attr: str) -> str:
+    """Remove `attribute <attr> : <T> = <v>;` from the body of part def <type_name>."""
+    m = re.search(rf"\bpart\s+def\s+{re.escape(type_name)}\b[^{{]*\{{", text)
+    if not m:
+        return text
+    brace = text.index("{", m.start())
+    end = find_block_end(text, brace)
+    if end == -1:
+        return text
+    body = text[brace + 1:end]
+    new_body = re.sub(rf"\s*attribute\s+{re.escape(attr)}\s*:\s*\w+\s*=\s*[^;]+;", "", body)
+    return text[:brace + 1] + new_body + text[end:]
+
+
+def normalize_variation_ownership(model_text: str, points) -> Tuple[str, List[str]]:
+    """Deduplicate design-field ownership across variation points (C + A): detect each
+    design field declared by >1 variation point, keep it on its canonical owner (concern
+    match; else first declarer), and STRIP it from the others' variant type defs so the
+    resolved design is coherent and the merge unambiguous. Returns (new_text, notes); the
+    notes (A) record every strip and any point left physics-inert. Best-effort: if the
+    rewrite wouldn't parse, the original text is returned with an explanatory note."""
+    text = model_text
+    notes: List[str] = []
+    field_pts: Dict[str, list] = {}
+    for p in points:
+        for f in _point_fields(text, p):
+            field_pts.setdefault(f, []).append(p)
+
+    stripped_pts: set = set()
+    for field, pts in field_pts.items():
+        if len(pts) < 2:
+            continue
+        kws = _FIELD_CONCERN.get(field, ())
+        owners = [p for p in pts
+                  if kws and any(k in (p.point_id + " " + " ".join(t for _, t in p.variants)).lower()
+                                 for k in kws)]
+        if len(owners) == 1:
+            owner, why = owners[0], f"{field} → {owners[0].point_id} concern"
+        else:
+            owner, why = pts[0], "first declarer (no/ambiguous concern match)"
+        attr = DESIGN_FIELD_ATTR[field]
+        for p in pts:
+            if p is owner:
+                continue
+            for _, vtype in p.variants:
+                if vtype and field in variant_design_inputs(text, vtype):
+                    text = _strip_attr_from_type(text, vtype, attr)
+                    stripped_pts.add(p.point_id)
+        notes.append(f"design field '{field}' declared by {sorted({p.point_id for p in pts})}; "
+                     f"kept in '{owner.point_id}' ({why}), stripped from "
+                     f"{sorted({p.point_id for p in pts if p is not owner})}")
+
+    for p in points:
+        if p.point_id in stripped_pts and not _point_fields(text, p):
+            notes.append(f"variation point '{p.point_id}' is now physics-inert "
+                         f"(structural-only) after deduplication")
+
+    if notes and check_syntax(text).has_errors:        # never ship an unparsable rewrite
+        return model_text, ["variation-ownership normalization skipped (rewrite did not parse)"]
+    return text, notes
 
 
 def within_requirement_bounds(design: Dict[str, float], satisfies: List[str],

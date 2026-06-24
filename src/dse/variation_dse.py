@@ -23,6 +23,7 @@ from .domain_objective import (
     design_arch_inputs,
     endurance_target,
     max_rated_payload,
+    normalize_variation_ownership,
     objective_names,
     objectives_from_design,
     requirement_targets,
@@ -154,6 +155,13 @@ def run_variation_dse(
         )
     if not ok:
         return None  # no admissible, resolve-safe LLM-declared variation space
+
+    # Deduplicate design-field ownership: if two variation points parametrise the same
+    # physical quantity (e.g. propulsion AND airframe both declaring rotorCount), the
+    # search would explore incoherent combos (hexa propulsion + octo airframe). Keep each
+    # field on its canonical owner, strip it from the others (notes record what changed).
+    base_text, norm_notes = normalize_variation_ownership(base_text, ok)
+    notes.extend(norm_notes)
 
     operators = [VariationOperator(p) for p in ok]
     # Budget scales with the total number of variant choices (points × variants per

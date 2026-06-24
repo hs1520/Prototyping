@@ -10,11 +10,70 @@ from src.dse.domain_objective import (
     architecture_design,
     architecture_objectives,
     endurance_target,
+    normalize_variation_ownership,
     objective_families,
     objective_names,
     requirement_targets,
     variant_design_inputs,
 )
+from src.dse.variation_parser import admitted as _admitted
+from src.dse.variation_parser import parse_variation_points as _parse
+
+
+_OVERLAP = """package Drone {
+    port def Sig;
+    part def LiftIface { in port cmd : Sig; out port thrust : Sig; }
+    part def Hexa_Prop :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.2; }
+    part def Octo_Prop :> LiftIface { attribute rotorCount : Real = 8.0; attribute rotorRadiusM : Real = 0.15; }
+    part def Frame_Hexa :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.165; }
+    part def Frame_Octo :> LiftIface { attribute rotorCount : Real = 8.0; attribute rotorRadiusM : Real = 0.22; }
+    part def Sys {
+        variation part propulsionSystem : LiftIface { doc /* satisfies REQ-PERF-002 */
+            variant part p_hexa : Hexa_Prop; variant part p_octo : Octo_Prop; }
+        variation part airframe : LiftIface { doc /* satisfies REQ-CONS-003 */
+            variant part f_hexa : Frame_Hexa; variant part f_octo : Frame_Octo; }
+    }
+}"""
+
+
+def _pts(model):
+    return _admitted(_parse(model))[0]
+
+
+def test_normalize_strips_duplicate_field_from_non_owner():
+    out, notes = normalize_variation_ownership(_OVERLAP, _pts(_OVERLAP))
+    # rotor stays on propulsion (concern match), stripped from airframe variants
+    assert variant_design_inputs(out, "Hexa_Prop") == {"rotor_count": 6.0, "rotor_radius_m": 0.2}
+    assert variant_design_inputs(out, "Frame_Octo") == {}
+    assert any("kept in 'propulsionSystem'" in n for n in notes)
+    assert any("airframe' is now physics-inert" in n for n in notes)
+
+
+def test_normalize_noop_without_overlap():
+    out, notes = normalize_variation_ownership(_MODEL, _pts(_MODEL))
+    assert out == _MODEL and notes == []
+
+
+def test_normalize_first_declarer_fallback_without_concern_match():
+    # neutral names so NO concern keyword matches either point → keep the first declarer
+    model = """package Drone {
+    port def Sig;
+    part def Iface { in port cmd : Sig; out port thrust : Sig; }
+    part def OptA1 :> Iface { attribute rotorCount : Real = 6.0; }
+    part def OptA2 :> Iface { attribute rotorCount : Real = 8.0; }
+    part def OptB1 :> Iface { attribute rotorCount : Real = 6.0; }
+    part def OptB2 :> Iface { attribute rotorCount : Real = 8.0; }
+    part def Sys {
+        variation part groupA : Iface { doc /* satisfies REQ-PERF-002 */
+            variant part a1 : OptA1; variant part a2 : OptA2; }
+        variation part groupB : Iface { doc /* satisfies REQ-CONS-003 */
+            variant part b1 : OptB1; variant part b2 : OptB2; }
+    }
+}"""
+    out, notes = normalize_variation_ownership(model, _pts(model))
+    assert any("first declarer" in n for n in notes)
+    assert variant_design_inputs(out, "OptA1") == {"rotor_count": 6.0}   # first declarer keeps it
+    assert variant_design_inputs(out, "OptB2") == {}                     # second stripped
 
 
 def test_endurance_target_ignores_latency_seconds():
