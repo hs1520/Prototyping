@@ -1084,7 +1084,7 @@ class Orchestrator:
             # also present the Pareto front as a SysML trade study over real alternatives
             ts, ok_ts = inject_trade_study(
                 concrete, [d for d, _ in res.pareto_designs], requirements,
-                recommended=res.recommended_design)
+                recommended=res.recommended_design, bindings=res.pareto_bindings)
             if ok_ts:
                 concrete = ts
                 print(f"  [variation-DSE] injected DesignTradeStudy ({len(res.pareto_designs)} alternatives)")

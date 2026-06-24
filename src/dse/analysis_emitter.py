@@ -287,15 +287,18 @@ def _sig(d: DesignInputs):
 
 
 def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] = None,
-                indent: str = "    ") -> Tuple[str, bool]:
-    """An ``analysis def DesignTradeStudy`` comparing the DSE Pareto alternatives: each
-    alternative's endurance/MTOW/(range) is computed by EMBEDDED, Automator-evaluable
-    calc defs (self-contained, mirrors physics_estimator), with a doc recording its design
-    inputs and which one the recommendation picked. ``alternatives`` is a list of
-    DesignInputs. Returns (block, ok); ok=False if empty or it wouldn't parse."""
+                bindings=None, indent: str = "    ") -> Tuple[str, bool]:
+    """An ``analysis def DesignTradeStudy`` comparing the DSE Pareto alternatives. Each
+    alternative's endurance/MTOW/(range) is computed by EMBEDDED, Automator-evaluable calc
+    defs (mirrors physics_estimator). When ``bindings`` is given (index-aligned list of
+    ``{point_id: impl_type_name}``), each alternative is FORMALLY bound to the variant
+    definitions it's composed of via a nested ``part alt{i} { part <point> : <Impl>; … }``
+    — object-level traceability (alt3 *uses* Hexa_medium + Power_6s), not a comment.
+    ``alternatives`` is a list of DesignInputs. Returns (block, ok)."""
     alts = list(alternatives or [])
     if not alts:
         return "", False
+    binds = list(bindings or [])
     reqs = list(requirements or [])
     has_range = (_family_requirement(reqs, "range")[1] > 0
                  and any(a.cruise_speed_mps > 0 for a in alts))
@@ -303,8 +306,9 @@ def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] 
     rec_sig = _sig(recommended) if recommended is not None else None
     lines = [
         f"{indent}analysis def DesignTradeStudy {{",
-        f"{inner}doc /* DSE Pareto front: {len(alts)} non-dominated design(s); metrics by "
-        f"embedded calc defs (== physics_estimator). RECOMMENDED = the picked design. */",
+        f"{inner}doc /* DSE Pareto front: {len(alts)} non-dominated design(s); each altN is "
+        f"bound to the variant impls it uses; metrics by embedded calc defs (== "
+        f"physics_estimator). RECOMMENDED = the picked design. */",
         endurance_calc_def(inner),
         mtow_calc_def(inner),
     ]
@@ -314,23 +318,33 @@ def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] 
         tag = " (RECOMMENDED)" if rec_sig is not None and _sig(a) == rec_sig else ""
         five = (f"{float(a.battery_capacity_mah)}, {float(a.battery_cells)}, "
                 f"{float(a.rotor_count)}, {a.rotor_radius_m}, {a.payload_mass_kg}")
-        lines.append(f"{inner}// alt{i}{tag}: cap={a.battery_capacity_mah}mAh cells={a.battery_cells} "
-                     f"rotor={a.rotor_count}x{a.rotor_radius_m}m payload={a.payload_mass_kg}kg")
+        b = binds[i] if i < len(binds) else {}
+        uses = ", ".join(f"{pid}={impl}" for pid, impl in b.items()) or "—"
+        lines.append(f"{inner}// alt{i}{tag}: uses {uses} | cap={a.battery_capacity_mah}mAh "
+                     f"payload={a.payload_mass_kg}kg")
+        if b:                                    # formal object-level binding to variant defs
+            lines.append(f"{inner}part alt{i}Design {{")
+            for pid, impl in b.items():
+                lines.append(f"{inner}    part {pid} : {impl};")
+            lines.append(f"{inner}}}")
         lines.append(f"{inner}attribute alt{i}_enduranceMin : Real = Endurance({five});")
         lines.append(f"{inner}attribute alt{i}_mtowKg : Real = Mtow({five});")
         if has_range:
             lines.append(f"{inner}attribute alt{i}_rangeM : Real = RangeM({five}, {a.cruise_speed_mps});")
     lines.append(f"{indent}}}")
     block = "\n".join(lines)
-    ok = not check_syntax(f"package _C {{\n{block}\n}}").has_errors
+    # self-validate in a wrapper that stubs the bound impl types (they live in the real
+    # model; inject_trade_study re-validates against the full assembly).
+    stubs = "".join(f"    part def {impl};\n" for b in binds for impl in set(b.values()))
+    ok = not check_syntax(f"package _C {{\n{stubs}{block}\n}}").has_errors
     return (block, True) if ok else ("", False)
 
 
 def inject_trade_study(model_text: str, alternatives, requirements,
-                       recommended: Optional[DesignInputs] = None) -> Tuple[str, bool]:
+                       recommended: Optional[DesignInputs] = None, bindings=None) -> Tuple[str, bool]:
     """Inject the DesignTradeStudy analysis def at package level. Returns (model_text, ok);
     ok=False (unchanged) if there's nothing to compare or it wouldn't parse."""
-    block, ok = trade_study(alternatives, requirements, recommended=recommended)
+    block, ok = trade_study(alternatives, requirements, recommended=recommended, bindings=bindings)
     if not ok:
         return model_text, False
     pkg = re.search(r"\bpackage\s+\w+\s*\{", model_text)

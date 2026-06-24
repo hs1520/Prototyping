@@ -215,6 +215,19 @@ def test_trade_study_empty_is_noop():
     assert trade_study([], _EREQ) == ("", False)
 
 
+def test_trade_study_formally_binds_alternatives_to_variant_impls():
+    binds = [{"propulsionSystem": "Hexa_mediumImpl", "powerSystem": "Power_6sImpl"},
+             {"propulsionSystem": "Octo_largeImpl", "powerSystem": "Power_12sImpl"},
+             {"propulsionSystem": "Quad_smallImpl", "powerSystem": "Power_4sImpl"}]
+    block, ok = trade_study(_ALTS, _EREQ, recommended=_ALTS[0], bindings=binds)
+    assert ok
+    # object-level binding: a nested part typed by the chosen variant impls (not a comment)
+    assert "part alt0Design {" in block
+    assert "part propulsionSystem : Hexa_mediumImpl;" in block
+    assert "part powerSystem : Power_6sImpl;" in block
+    assert "uses propulsionSystem=Hexa_mediumImpl" in block   # comment names them too
+
+
 def test_inject_trade_study_into_model():
     out, ok = inject_trade_study(_FLAT, _ALTS, _EREQ, recommended=_ALTS[0])
     assert ok and not check_syntax(out).has_errors

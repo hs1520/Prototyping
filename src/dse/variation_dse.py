@@ -81,6 +81,11 @@ class VariationDSEResult:
     # recommended_design is the front member the recommendation picked.
     pareto_designs: List[Tuple["DesignInputs", Objectives]] = field(default_factory=list)
     recommended_design: Optional["DesignInputs"] = None
+    # Per-alternative variant→implementation bindings ({point_id: impl_type_name}), index-
+    # aligned with pareto_designs, so the trade study can FORMALLY bind each alternative to
+    # the variant definitions it's composed of (object-level traceability, not a comment).
+    pareto_bindings: List[Dict[str, str]] = field(default_factory=list)
+    recommended_bindings: Dict[str, str] = field(default_factory=dict)
 
 
 def _design_quality(dims: Dict[str, float]) -> float:
@@ -254,8 +259,16 @@ def run_variation_dse(
         cap = inner_cap.get(tuple(sorted(state.items())), di0.battery_capacity_mah)
         return DesignInputs(battery_capacity_mah=cap, **_at_rated_payload(design_arch_inputs(di0)))
 
+    def _bindings(state: State) -> Dict[str, str]:
+        """{point_id: chosen variant's impl type name} — the variant defs this design uses."""
+        s = dict(state)
+        return {p.point_id: p.type_of(s[p.point_id])
+                for p in ok if p.point_id in s and p.type_of(s[p.point_id])}
+
     pareto_designs: List[Tuple[DesignInputs, Objectives]] = []
+    pareto_bindings: List[Dict[str, str]] = []
     rec_design: Optional[DesignInputs] = None
+    rec_bindings: Dict[str, str] = {}
     if use_domain:
         seen = set()
         for state, objs in front.members:
@@ -266,7 +279,9 @@ def run_variation_dse(
                 continue
             seen.add(sig)
             pareto_designs.append((di, objs))
+            pareto_bindings.append(_bindings(state))
         rec_design = _resolve_di(rec_state)
+        rec_bindings = _bindings(rec_state)
     return VariationDSEResult(
         recommended_choices=dict(rec_state),
         concrete_model=concrete,
@@ -279,4 +294,6 @@ def run_variation_dse(
         notes=notes,
         pareto_designs=pareto_designs,
         recommended_design=rec_design,
+        pareto_bindings=pareto_bindings,
+        recommended_bindings=rec_bindings,
     )
