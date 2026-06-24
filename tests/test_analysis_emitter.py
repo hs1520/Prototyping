@@ -110,6 +110,42 @@ def test_inject_noop_without_endurance_target():
     assert not ok and out == _FLAT
 
 
+# model with NO payload variant → payload must come from the requirement (REQ_PERF_002
+# "at maximum rated payload" → REQ_FUNC_003 2.5kg), not the 0.5kg default.
+_FLAT_NOPAYLOAD = """package Drone {
+    part def PropulsionSystem { attribute rotorCount : Real; attribute rotorRadiusM : Real; }
+    part def PowerSystem { attribute batteryCells : Real; }
+    part def Hexa :> PropulsionSystem { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.1524; }
+    part def Power12 :> PowerSystem { attribute batteryCells : Real = 12.0; }
+    part propulsionSystem : Hexa;
+    part powerSystem : Power12;
+}"""
+_PAYLOAD_REQ = ["REQ-PERF-002: endurance at least 25 minutes at the maximum rated payload.",
+                "REQ-FUNC-003: transport payloads of up to 2.5 kg.",
+                "REQ-CONS-003: maximum takeoff weight including payload shall not exceed 25.0 kg."]
+
+
+def test_inject_evaluates_at_rated_payload_not_default():
+    out, ok = inject_endurance_analysis(_FLAT_NOPAYLOAD, _PAYLOAD_REQ, capacity_mah=18000.0)
+    assert ok and not check_syntax(out).has_errors
+    assert ", 2.5)" in out           # endurance/MTOW evaluated at the 2.5kg rated payload
+    assert ", 0.5)" not in out       # NOT the 0.5kg default
+    assert "<= 25.0" in out          # MTOW bound still the gross-mass 25kg (not payload 2.5)
+
+
+@pytest.mark.skipif(not _HAS_SYSIDE, reason="syside not installed")
+def test_inject_with_design_is_consistent_with_dse_values():
+    # authoritative path: the closure uses the recommended DesignInputs the DSE scored,
+    # so it can't diverge from the optimization / trade study (cross-part refs can).
+    from src.dse.physics_estimator import endurance_min, total_mass_kg
+    d = DesignInputs(2.5, 16205, 4, 6, 0.203)
+    out, ok = inject_endurance_analysis(_FLAT_NOPAYLOAD, _PAYLOAD_REQ,
+                                        capacity_mah=16205.0, design=d)
+    assert ok and not check_syntax(out).has_errors
+    assert abs(_eval(out, "DseDesignAnalysis", "enduranceMin") - endurance_min(d)) < 0.05
+    assert abs(_eval(out, "DseDesignAnalysis", "mtowKg") - total_mass_kg(d)) < 0.05
+
+
 @pytest.mark.skipif(not _HAS_SYSIDE, reason="syside not installed")
 def test_inject_automator_eval_matches_python():
     for model, part in ((_FLAT, "DseDesignAnalysis"), (_NESTED, "DeliveryDrone")):

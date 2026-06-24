@@ -22,6 +22,7 @@ from .domain_objective import (
     architecture_objectives,
     design_arch_inputs,
     endurance_target,
+    max_rated_payload,
     objective_names,
     objectives_from_design,
     requirement_targets,
@@ -170,6 +171,15 @@ def run_variation_dse(
     use_domain = len(domain_names) > 1  # at least one perf family + cost_efficiency
     names = domain_names if use_domain else ["design_quality", "simplicity"]
     endurance_tgt = endurance_target(requirements) if use_domain else 0.0
+    # REQ_PERF_002 mandates endurance "at the maximum rated payload": evaluate every
+    # design at that worst-case load (not the 0.5 kg default) so sizing/feasibility are
+    # honest. 0 → no payload requirement → keep the resolved/default payload.
+    rated_payload = max_rated_payload(requirements) if use_domain else 0.0
+
+    def _at_rated_payload(arch: Dict[str, float]) -> Dict[str, float]:
+        if rated_payload > 0:
+            arch = {**arch, "payload_mass_kg": rated_payload}
+        return arch
 
     def objective_fn(state: State, ctx) -> Objectives:
         key = tuple(sorted(state.items()))
@@ -179,7 +189,7 @@ def run_variation_dse(
                 # continuous battery capacity to the cheapest pack meeting the endurance
                 # target, then we score the inner-optimized design.
                 di0 = architecture_design(ok, dict(state), base_text)
-                arch = design_arch_inputs(di0)
+                arch = _at_rated_payload(design_arch_inputs(di0))
                 if endurance_tgt > 0:
                     cap = optimize_capacity(arch, endurance_tgt, seed=random_seed or 0)["capacity_mah"]
                 else:
@@ -234,7 +244,7 @@ def run_variation_dse(
     def _resolve_di(state: State) -> DesignInputs:
         di0 = architecture_design(ok, dict(state), base_text)
         cap = inner_cap.get(tuple(sorted(state.items())), di0.battery_capacity_mah)
-        return DesignInputs(battery_capacity_mah=cap, **design_arch_inputs(di0))
+        return DesignInputs(battery_capacity_mah=cap, **_at_rated_payload(design_arch_inputs(di0)))
 
     pareto_designs: List[Tuple[DesignInputs, Objectives]] = []
     rec_design: Optional[DesignInputs] = None

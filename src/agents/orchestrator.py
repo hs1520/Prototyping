@@ -1076,7 +1076,8 @@ class Orchestrator:
         try:
             from ..dse.analysis_emitter import inject_endurance_analysis, inject_trade_study
             injected, ok = inject_endurance_analysis(
-                concrete, requirements, capacity_mah=res.recommended_capacity_mah)
+                concrete, requirements, capacity_mah=res.recommended_capacity_mah,
+                design=res.recommended_design)
             if ok:
                 concrete = injected
                 print("  [variation-DSE] injected Automator-evaluable endurance analysis closure")

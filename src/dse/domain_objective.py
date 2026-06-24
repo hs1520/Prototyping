@@ -214,6 +214,32 @@ def endurance_target(requirements: List[str]) -> float:
     return best
 
 
+# payload-carrying language vs MTOW language: a requirement can mention "payload" yet be
+# about total takeoff weight (e.g. "MTOW including payload <= 25kg"); its mass is NOT the
+# rated payload. We include carry/transport requirements and exclude MTOW ones.
+_PAYLOAD_CARRY = ("transport", "carry", "carries", "carrying", "lift", "cargo", "payload")
+_MTOW_KW = ("takeoff", "take-off", "take off", "mtow", "all-up", "all up", "gross weight")
+
+
+def max_rated_payload(requirements: List[str]) -> float:
+    """Maximum rated payload mass (kg) the design must carry, from a payload requirement
+    (mentions transport/carry/payload + a mass quantity, and is NOT an MTOW requirement).
+
+    REQ_PERF_002 ties endurance to the 'maximum rated payload', so endurance/MTOW must be
+    evaluated at THIS load — not an arbitrary 0.5 kg default. 0.0 if no payload requirement
+    states a mass (then callers fall back to the chosen variant / default)."""
+    best = 0.0
+    for r in requirements or []:
+        low = r.lower()
+        if not any(k in low for k in _PAYLOAD_CARRY) or any(k in low for k in _MTOW_KW):
+            continue
+        body = r.split(":", 1)[1] if ":" in r else r
+        for num, unit in _NUM_UNIT_RE.findall(body):
+            if _family_of(unit or "") == "mass":
+                best = max(best, float(num))
+    return best
+
+
 def within_requirement_bounds(design: Dict[str, float], satisfies: List[str],
                               requirements: List[str]) -> bool:
     """True iff a variant's design inputs respect the COST upper bounds of the

@@ -18,8 +18,8 @@ from typing import Optional, Tuple
 from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import find_block_end
 from .domain_objective import (
-    DESIGN_DEFAULTS, DESIGN_FIELD_ATTR, endurance_target, requirement_targets,
-    variant_design_inputs,
+    DESIGN_DEFAULTS, DESIGN_FIELD_ATTR, endurance_target, max_rated_payload,
+    requirement_targets, variant_design_inputs,
 )
 from .physics_estimator import (
     AVIONICS_POWER_W, BASE_FRAME_KG, CELL_V, DesignInputs, ENERGY_DENSITY_WH_KG,
@@ -167,20 +167,19 @@ def _family_requirement(requirements, family: str) -> Tuple[Optional[str], float
 
 def inject_endurance_analysis(
     model_text: str, requirements, capacity_mah: Optional[float] = None,
-    satisfy_req: str = "REQ-PERF-002",
+    satisfy_req: str = "REQ-PERF-002", design: Optional[DesignInputs] = None,
 ) -> Tuple[str, bool]:
-    """Inject an Automator-evaluable endurance closure that REFERENCES the chosen
-    subsystem parts' design attributes (``powerSystem.batteryCapacityMah``,
-    ``propulsionSystem.rotorCount`` …): a ``calc def`` + derived ``enduranceMin`` +
-    an ``assert constraint`` vs the endurance requirement + ``satisfy``.
+    """Inject an Automator-evaluable endurance/MTOW/range closure: ``calc def`` + derived
+    ``enduranceMin``/``mtowKg`` + ``assert constraint`` vs the requirement + ``satisfy``.
 
-    This is the in-model version of emit_endurance_analysis: instead of a self-contained
-    fragment with literal numbers, the constraint is wired to the actual variant
-    attributes, so the variant params finally participate in a constraint (closes the
-    bare-attribute gap on the real DSE product). The inner-BO ``capacity_mah`` is written
-    back into the CHOSEN power variant (not just the first one) so it can be referenced.
-    Works for both a nested system part def and a flat package assembly (wrapped in a
-    new ``DseDesignAnalysis`` part def, referencing the package-level part usages).
+    If ``design`` (the DSE's recommended DesignInputs) is given, the invocations use its
+    AUTHORITATIVE values — the exact design the bilevel search scored and the trade study
+    lists — so the closure can't diverge from the optimization (cross-part references are
+    fragile when variation points conflict on a field, e.g. propulsion AND airframe both
+    declaring rotorCount, or when a field's owner isn't a variation point). Without it,
+    falls back to referencing the chosen variants' attributes (legacy path). Either way the
+    design's parameters participate in a real, checkable constraint (closes the bare-attr
+    gap). Works for a nested system part def and a flat package (wrapped in DseDesignAnalysis).
 
     Returns (model_text, ok); ok=False (unchanged) if there's no endurance target, no
     assembly, no design-input owners, or the result wouldn't parse."""
@@ -192,10 +191,14 @@ def inject_endurance_analysis(
     if sc is None:
         return model_text, False
     body, end, wrap = sc
-    field_owner = {}                                 # design field -> (usage name, type)
+    # design field -> (usage name, type). LAST-wins to match architecture_design's merge
+    # (.update): when two variation points declare the same field (e.g. propulsion AND
+    # airframe both set rotorCount — a model smell), the closure must reference the SAME
+    # owner the DSE actually scored, or the constraint diverges from the optimization.
+    field_owner = {}
     for uname, utype in _USAGE_RE.findall(body):
         for field in variant_design_inputs(text, utype):
-            field_owner.setdefault(field, (uname, utype))
+            field_owner[field] = (uname, utype)
     if not field_owner:
         return model_text, False
     # battery capacity is the inner-BO variable; if the chosen power variant doesn't
@@ -210,13 +213,28 @@ def inject_endurance_analysis(
                 return model_text, False
             _, end, wrap = sc
     reqs = list(requirements or [])
+    # REQ_PERF_002 mandates endurance at the MAXIMUM RATED PAYLOAD — evaluate the analysis
+    # at that load (a requirement-driven condition), not the 0.5 kg default or a lighter
+    # chosen payload variant. Literal, since it's a worst-case condition, not a design var.
+    rated_payload = max_rated_payload(reqs)
 
     def ref(field: str) -> str:
+        if field == "payload_mass_kg" and rated_payload > 0:
+            return str(float(rated_payload))
         if field in field_owner:
             return f"{field_owner[field][0]}.{DESIGN_FIELD_ATTR[field]}"
         return str(float(DESIGN_DEFAULTS[field]))     # nothing owns it → literal default
 
-    base5 = ", ".join(ref(f) for f in _ARG_ORDER)     # the 5 Endurance/Mtow args
+    if design is not None:                            # authoritative: exactly what DSE scored
+        pay = rated_payload if rated_payload > 0 else design.payload_mass_kg
+        order_vals = {"battery_capacity_mah": design.battery_capacity_mah,
+                      "battery_cells": design.battery_cells, "rotor_count": design.rotor_count,
+                      "rotor_radius_m": design.rotor_radius_m, "payload_mass_kg": pay}
+        base5 = ", ".join(str(float(order_vals[f])) for f in _ARG_ORDER)
+        cruise = design.cruise_speed_mps
+    else:                                             # legacy: reference chosen variant attrs
+        base5 = ", ".join(ref(f) for f in _ARG_ORDER)
+        cruise = None
 
     defs: list = []                                   # calc defs (shared analysis scope)
     decls: list = []                                  # requirement usages
@@ -243,10 +261,13 @@ def inject_endurance_analysis(
     if mass_rid and mass_bound > 0:
         add_metric(mtow_calc_def(indent="        "), mass_rid,
                    "mtowKg", f"Mtow({base5})", "<=", mass_bound, "mtowWithinReq")
-    # range (perf, >=) — only if a variant actually supplies cruise speed
+    # range (perf, >=) — only if the design actually has a cruise speed to fly it
     range_rid, range_tgt = _family_requirement(reqs, "range")
-    if range_rid and range_tgt > 0 and "cruise_speed_mps" in field_owner:
-        rinv = f"RangeM({base5}, {ref('cruise_speed_mps')})"
+    has_cruise = (cruise is not None and cruise > 0) if design is not None \
+        else ("cruise_speed_mps" in field_owner)
+    if range_rid and range_tgt > 0 and has_cruise:
+        cruise_arg = str(float(cruise)) if design is not None else ref("cruise_speed_mps")
+        rinv = f"RangeM({base5}, {cruise_arg})"
         add_metric(range_calc_def(indent="        "), range_rid,
                    "rangeM", rinv, ">=", range_tgt, "rangeMeetsReq")
 
