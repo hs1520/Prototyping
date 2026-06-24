@@ -234,6 +234,28 @@ def test_inject_trade_study_into_model():
     assert "analysis def DesignTradeStudy" in out
 
 
+def test_trade_study_emits_meets_all_reqs_boolean():
+    block, ok = trade_study(_ALTS, _MULTI_REQ, recommended=_ALTS[0])
+    assert ok
+    assert "alt0_meetsAllReqs : Boolean =" in block
+    assert "alt0_enduranceMin >= 25.0" in block          # hard endurance bound
+    assert "alt0_mtowKg <= 25.0" in block                # MTOW bound (not payload 2.5)
+
+
+@pytest.mark.skipif(not _HAS_SYSIDE, reason="syside not installed")
+def test_trade_study_meets_all_reqs_evaluates_feasibility():
+    # alt A infeasible (low endurance @2.5kg), alt B feasible → booleans reflect it in-model
+    alts = [DesignInputs(2.5, 8000, 6, 6, 0.15), DesignInputs(2.5, 22000, 12, 8, 0.2)]
+    out, _ = inject_trade_study(_FLAT_NOPAYLOAD, alts, _MULTI_REQ, recommended=alts[0])
+    import syside
+    c = syside.Compiler()
+    m, _ = syside.try_load_model(sysml_source=out)
+    ts = next(e for e in m.elements(syside.AnalysisCaseDefinition) if e.name == "DesignTradeStudy")
+    f = {x.name: x for x in ts.features if getattr(x, "name", None)}
+    assert c.evaluate_feature(f["alt0_meetsAllReqs"], scope=ts)[0] is False
+    assert c.evaluate_feature(f["alt1_meetsAllReqs"], scope=ts)[0] is True
+
+
 @pytest.mark.skipif(not _HAS_SYSIDE, reason="syside not installed")
 def test_trade_study_alternatives_eval_match_python():
     out, _ = inject_trade_study(_FLAT, _ALTS, _EREQ, recommended=_ALTS[0])

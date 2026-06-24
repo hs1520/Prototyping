@@ -300,8 +300,10 @@ def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] 
         return "", False
     binds = list(bindings or [])
     reqs = list(requirements or [])
-    has_range = (_family_requirement(reqs, "range")[1] > 0
-                 and any(a.cruise_speed_mps > 0 for a in alts))
+    end_tgt = endurance_target(reqs)
+    mass_bound = _family_requirement(reqs, "mass")[1]
+    range_tgt = _family_requirement(reqs, "range")[1]
+    has_range = range_tgt > 0 and any(a.cruise_speed_mps > 0 for a in alts)
     inner = indent + "    "
     rec_sig = _sig(recommended) if recommended is not None else None
     lines = [
@@ -331,6 +333,19 @@ def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] 
         lines.append(f"{inner}attribute alt{i}_mtowKg : Real = Mtow({five});")
         if has_range:
             lines.append(f"{inner}attribute alt{i}_rangeM : Real = RangeM({five}, {a.cruise_speed_mps});")
+        # per-alternative requirement satisfaction: AND of the hard bounds (Automator-
+        # evaluable), so the trade study self-evidences which candidates are feasible —
+        # the recommendation-vs-feasibility tension becomes a model fact next to (RECOMMENDED).
+        clauses = []
+        if end_tgt > 0:
+            clauses.append(f"alt{i}_enduranceMin >= {end_tgt}")
+        if mass_bound > 0:
+            clauses.append(f"alt{i}_mtowKg <= {mass_bound}")
+        if has_range:
+            clauses.append(f"alt{i}_rangeM >= {range_tgt}")
+        if clauses:
+            lines.append(f"{inner}attribute alt{i}_meetsAllReqs : Boolean = "
+                         + " and ".join(clauses) + ";")
     lines.append(f"{indent}}}")
     block = "\n".join(lines)
     # self-validate in a wrapper that stubs the bound impl types (they live in the real
