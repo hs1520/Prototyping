@@ -62,3 +62,26 @@ def test_only_safety_requirements_classified():
     reqs = ["REQ-FUNC-020: navigate to a waypoint."] + _REQS[1:]
     st = safety_behavior_status(model, reqs)
     assert "REQ-FUNC-020" not in st                      # not a safety req → skipped
+
+
+def test_dynamic_failed_downgrades_reachable_safety_to_violated():
+    from src.dse.safety_behavior import (BEHAVIORALLY_VERIFIED, BEHAVIORALLY_VIOLATED,
+                                         safety_behavior_status)
+    # SAFE-001 is structurally reachable→verified; a dynamic 'failed' (guard never fires)
+    # downgrades it to violated — the fake-safety catch structural reachability can't make.
+    assert safety_behavior_status(_MODEL, _REQS)["REQ-SAFE-001"] == BEHAVIORALLY_VERIFIED
+    st = safety_behavior_status(_MODEL, _REQS, dynamic_fire={"MonitorA": "failed"})
+    assert st["REQ-SAFE-001"] == BEHAVIORALLY_VIOLATED
+
+
+def test_dynamic_firing_does_not_oververify_without_safe_state():
+    from src.dse.safety_behavior import BEHAVIORALLY_VIOLATED, safety_behavior_status
+    # MonitorB has no fail-safe state → a spurious non-safe 'fired' must NOT verify it
+    st = safety_behavior_status(_MODEL, _REQS, dynamic_fire={"MonitorB": "fired"})
+    assert st["REQ-SAFE-002"] == BEHAVIORALLY_VIOLATED
+
+
+def test_dynamic_fire_by_part_drives_guards():
+    from src.dse.dynamic_behavior import dynamic_fire_by_part
+    v = dynamic_fire_by_part(_MODEL)
+    assert v.get("MonitorA") == "fired"     # fault>0.5 guard driven → transition fires

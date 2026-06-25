@@ -42,8 +42,11 @@ def _norm(rid: str) -> str:
 
 
 def classify_requirement_coverage(model_text: str, requirements: List[str],
-                                  endurance_req: str = "REQ-PERF-002") -> Dict[str, str]:
-    """{req_id: evidence level} for every requirement declared in the model."""
+                                  endurance_req: str = "REQ-PERF-002",
+                                  dynamic: bool = False) -> Dict[str, str]:
+    """{req_id: evidence level} for every requirement declared in the model. ``dynamic=True``
+    runs the behavioural simulator so safety reqs are graded by whether their guarded response
+    actually FIRES (dynamic), catching guards that are present but never fire."""
     declared = [_norm(m.group(1)) for m in _REQDEF_RE.finditer(model_text)]
     satisfied = {_norm(m.group(1)) for m in _SATISFY_RE.finditer(model_text)}
 
@@ -58,7 +61,11 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
     # safety + functional requirements get a BEHAVIOURAL status from state-machine reachability
     # (safety: fail-safe reachable; functional: response action reachable), upgrading them out
     # of allocated-only. Safety takes precedence when a req qualifies for both.
-    safety = safety_behavior_status(model_text, requirements)
+    dyn = {}
+    if dynamic:
+        from .dynamic_behavior import dynamic_fire_by_part
+        dyn = dynamic_fire_by_part(model_text)
+    safety = safety_behavior_status(model_text, requirements, dynamic_fire=dyn)
     functional = functional_behavior_status(model_text, requirements)
 
     out: Dict[str, str] = {}

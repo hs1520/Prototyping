@@ -60,7 +60,7 @@ if __name__ == "__main__":
     # Honest verification-coverage of the satisfy claims: satisfy = allocation/intent, not
     # proof. Report how many requirements actually have evidence vs are allocated-only.
     from src.dse.requirement_coverage import classify_requirement_coverage, coverage_summary
-    cov = classify_requirement_coverage(final_sysml, DRONE_REQUIREMENTS)
+    cov = classify_requirement_coverage(final_sysml, DRONE_REQUIREMENTS, dynamic=True)
     print("req evidence     :", coverage_summary(cov))
     allocated = sorted(r for r, l in cov.items() if l == "allocated-only")
     if allocated:

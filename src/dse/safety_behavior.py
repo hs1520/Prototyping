@@ -88,8 +88,15 @@ def _failsafe_reachable(sm) -> str:
     return "reachable" if (reachable_states(sm) & safe) else "unreachable"
 
 
-def safety_behavior_status(model_text: str, requirements: List[str]) -> Dict[str, str]:
-    """{safety req_id: behavioural status} for every SAFE requirement satisfied in the model."""
+def safety_behavior_status(model_text: str, requirements: List[str],
+                           dynamic_fire: Dict[str, str] = None) -> Dict[str, str]:
+    """{safety req_id: behavioural status} for every SAFE requirement satisfied in the model.
+
+    If ``dynamic_fire`` ({owner_part: 'fired'|'failed'}, from dynamic_behavior) is given, the
+    DYNAMIC verdict takes precedence over structural reachability: a part whose guarded
+    transition actually fires → verified; one whose scenario fails (guard present but never
+    fires) → violated (caught dynamically, not by structural reachability)."""
+    dynamic_fire = dynamic_fire or {}
     by_part: Dict[str, list] = {}
     for sm in extract_state_machines(model_text):
         by_part.setdefault(sm.owner_part, []).append(sm)
@@ -101,10 +108,17 @@ def safety_behavior_status(model_text: str, requirements: List[str]) -> Dict[str
         if not is_safety_req(rid, text.get(rid, rid)):
             continue
         sms = [sm for p in parts for sm in by_part.get(p, [])]
+        verdicts = {dynamic_fire[p] for p in parts if p in dynamic_fire}
+        # structural: is a FAIL-SAFE state reachable? (dynamic firing of a non-safe transition
+        # must NOT count as a safety response — so the safe-state requirement gates everything.)
+        structural_ok = any(_failsafe_reachable(sm) == "reachable" for sm in sms)
         if not sms:
             out[rid] = BEHAVIOR_ABSENT
-        elif any(_failsafe_reachable(sm) == "reachable" for sm in sms):
-            out[rid] = BEHAVIORALLY_VERIFIED
+        elif not structural_ok:
+            out[rid] = BEHAVIORALLY_VIOLATED        # no reachable fail-safe state
+        elif "failed" in verdicts:
+            out[rid] = BEHAVIORALLY_VIOLATED        # safe state reachable but dynamically NEVER
+            #                                         fires → "fake safety" (dynamic-only catch)
         else:
-            out[rid] = BEHAVIORALLY_VIOLATED
+            out[rid] = BEHAVIORALLY_VERIFIED        # fail-safe reachable (+ fires if dynamic ran)
     return out
