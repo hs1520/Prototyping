@@ -58,7 +58,7 @@ MISSION PROFILE
 
 PAYLOAD HANDLING
 ────────────────
-  • Capacity         : up to 2.5 kg gross payload mass
+  • Capacity         : up to 1.5 kg gross payload mass
   • Release actuator : mechanically locked by default; released under
                        flight-computer command when delivery conditions are met
   • Delivery trigger : geographic position within 1.0 m of the target waypoint
@@ -141,7 +141,7 @@ DRONE_REQUIREMENTS = [
     "separation distance falls below 5 metres.",
 
     "REQ-FUNC-003: The system shall transport payloads with a gross mass of up "
-    "to 2.5 kg without degradation of flight stability or navigation accuracy.",
+    "to 1.5 kg without degradation of flight stability or navigation accuracy.",
 
     "REQ-FUNC-004: The system shall maintain a continuously encrypted "
     "bidirectional data link with the GCS for telemetry upload and mission "
@@ -163,7 +163,7 @@ DRONE_REQUIREMENTS = [
     "REQ-PERF-001: The system shall maintain roll and pitch attitude deviations "
     "within ±0.5° RMS during steady cruise flight at all authorised speeds.",
 
-    "REQ-PERF-002: The system shall sustain flight for a minimum of 25 minutes "
+    "REQ-PERF-002: The system shall sustain flight for a minimum of 20 minutes "
     "when carrying the maximum rated payload at nominal cruise speed.",
 
     "REQ-PERF-003: The system shall achieve a maximum airspeed of 15 m/s in "
