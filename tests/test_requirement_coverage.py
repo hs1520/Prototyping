@@ -10,6 +10,7 @@ from src.dse.requirement_coverage import (
     ALLOCATED_ONLY, ANALYSIS_VERIFIED, QUANTITATIVE, UNALLOCATED,
     classify_requirement_coverage, coverage_summary,
 )
+from src.dse.safety_behavior import BEHAVIOR_ABSENT
 
 _MODEL = """package D {
     requirement def REQ_PERF_002 { doc /* endurance >= 20 min */ }
@@ -42,7 +43,8 @@ def test_classifies_by_real_evidence():
     assert cov["REQ-PERF-002"] == ANALYSIS_VERIFIED      # injected endurance assert
     assert cov["REQ-CONS-003"] == ANALYSIS_VERIFIED      # injected MTOW assert
     assert cov["REQ-PERF-003"] == QUANTITATIVE           # numeric target, no inline assert
-    assert cov["REQ-FUNC-005"] == ALLOCATED_ONLY         # behaviour: satisfy only, unverified
+    # FUNC-005 mentions "abort" → safety-related, but its part has no state machine → absent
+    assert cov["REQ-FUNC-005"] == BEHAVIOR_ABSENT
     assert cov["REQ-INTF-003"] == ALLOCATED_ONLY         # protocol: satisfy only, unverified
 
 

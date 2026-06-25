@@ -25,6 +25,7 @@ from typing import Dict, List
 
 from .domain_objective import endurance_target, mass_limit, range_requirement
 from .requirement_spec import extract_requirements
+from .safety_behavior import safety_behavior_status
 
 ANALYSIS_VERIFIED = "analysis-verified"
 QUANTITATIVE = "quantitative"
@@ -53,6 +54,9 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
     if "rangeMeetsReq" in model_text and range_requirement(requirements)[0]:
         analysis.add(_norm(range_requirement(requirements)[0]))
     quant = {_norm(s.req_id) for s in extract_requirements(requirements)}
+    # safety requirements get a three-state BEHAVIOURAL status (verified/violated/absent)
+    # from the state-machine reachability check, upgrading them out of allocated-only.
+    safety = safety_behavior_status(model_text, requirements)
 
     out: Dict[str, str] = {}
     for rid in declared:
@@ -60,6 +64,8 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
             out[rid] = ANALYSIS_VERIFIED
         elif rid in quant:
             out[rid] = QUANTITATIVE
+        elif rid in safety:
+            out[rid] = safety[rid]              # behaviorally-verified / -violated / behavior-absent
         elif rid in satisfied:
             out[rid] = ALLOCATED_ONLY
         else:
@@ -68,9 +74,14 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
 
 
 def coverage_summary(cov: Dict[str, str]) -> str:
+    from .safety_behavior import (BEHAVIOR_ABSENT, BEHAVIORALLY_VERIFIED,
+                                  BEHAVIORALLY_VIOLATED)
     c = Counter(cov.values())
     return (f"requirement evidence ({len(cov)} reqs): "
             f"{c.get(ANALYSIS_VERIFIED, 0)} analysis-verified, "
             f"{c.get(QUANTITATIVE, 0)} quantitative-checkable, "
+            f"{c.get(BEHAVIORALLY_VERIFIED, 0)} behaviorally-verified, "
+            f"{c.get(BEHAVIORALLY_VIOLATED, 0)} behaviorally-violated, "
+            f"{c.get(BEHAVIOR_ABSENT, 0)} behavior-absent, "
             f"{c.get(ALLOCATED_ONLY, 0)} allocated-only (intent, UNVERIFIED), "
             f"{c.get(UNALLOCATED, 0)} unallocated")
