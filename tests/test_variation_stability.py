@@ -122,3 +122,29 @@ def test_overlapping_variation_points_are_deduplicated():
     assert any("airframe' is now physics-inert" in n for n in r.notes)
     # recommended rotor is one the propulsion variants actually offer (coherent, not merged)
     assert r.recommended_design.rotor_count in (6, 8)
+
+
+# component masses (sensor/gimbal massKg) must enter the all-up mass, not just delivery payload
+_COMP_MODEL = """package Drone {
+    port def Sig;
+    part def LiftIface { in port cmd : Sig; out port thrust : Sig; }
+    part def Hexa :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.19; }
+    part def SensorIface { in port s : Sig; out port d : Sig; }
+    part def Gimbal :> SensorIface { attribute massKg : Real = 1.5; }
+    part def Airframe2 {
+        variation part propulsionSystem : LiftIface { doc /* satisfies REQ-PERF-002 */
+            variant part hex : Hexa; }
+        variation part sensorSuite : SensorIface { doc /* satisfies REQ-FUNC-003 */
+            variant part gimbal : Gimbal; }
+    }
+}"""
+_COMP_REQS = ["REQ-PERF-002: endurance at least 20 minutes at maximum rated payload.",
+              "REQ-FUNC-003: transport payloads of up to 1.0 kg."]
+
+
+def test_component_mass_enters_all_up_mass():
+    r = run_variation_dse(SimpleNamespace(metadata={"last_sysml_text": _COMP_MODEL}),
+                          requirements=_COMP_REQS, iterations=40, random_seed=0)
+    assert r.recommended_design is not None
+    # all-up NON-structural mass = delivery payload (1.0 rated) + gimbal component (1.5) = 2.5
+    assert abs(r.recommended_design.payload_mass_kg - 2.5) < 1e-6

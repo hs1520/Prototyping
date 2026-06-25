@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import find_block_end, get_sysml_text
 from .domain_objective import (
+    DESIGN_DEFAULTS,
     architecture_design,
     design_arch_inputs,
     endurance_target,
@@ -26,6 +27,7 @@ from .domain_objective import (
     objective_names,
     objectives_from_design,
     requirement_targets,
+    variant_design_inputs,
 )
 from .inner_sizing import optimize_capacity
 from .physics_estimator import DesignInputs
@@ -185,13 +187,25 @@ def run_variation_dse(
     use_domain = len(domain_names) > 1  # at least one perf family + cost_efficiency
     names = domain_names if use_domain else ["design_quality", "simplicity"]
     endurance_tgt = endurance_target(requirements) if use_domain else 0.0
-    # Requirement-driven evaluation conditions (ontology-driven): e.g. payload is evaluated
-    # at the MAXIMUM RATED PAYLOAD (REQ_PERF_002), not the 0.5 kg default — so sizing/
-    # feasibility/closure are honest. Empty → no override → keep the resolved/default value.
-    eval_overrides = evaluation_overrides(requirements) if use_domain else {}
+    # All-up NON-structural mass = DELIVERY payload (the rated requirement load, REQ_PERF_002
+    # "at maximum rated payload") + Σ COMPONENT masses (massKg) of the chosen variants
+    # (sensor/gimbal/airframe/…). Otherwise the chosen components' mass never enters
+    # Endurance/MTOW → optimistic. (Assumes variant massKg = equipment mass, distinct from the
+    # requirement's delivery payload — true for the current generation: payload is requirement-
+    # driven, variants carry component masses.)
+    _rated = evaluation_overrides(requirements).get("payload_mass_kg", 0.0) if use_domain else 0.0
+    _delivery = _rated if _rated > 0 else DESIGN_DEFAULTS["payload_mass_kg"]
 
-    def _at_rated_payload(arch: Dict[str, float]) -> Dict[str, float]:
-        return {**arch, **{k: v for k, v in eval_overrides.items() if k in arch}}
+    def _added_mass(state: State) -> float:
+        s = dict(state)
+        comp = sum(variant_design_inputs(base_text, vp.type_of(s[vp.point_id])).get("payload_mass_kg", 0.0)
+                   for vp in ok if vp.point_id in s)
+        return _delivery + comp
+
+    def _design_with_mass(state: State, di0: DesignInputs) -> Dict[str, float]:
+        arch = design_arch_inputs(di0)
+        arch["payload_mass_kg"] = _added_mass(state)   # delivery + components
+        return arch
 
     def objective_fn(state: State, ctx) -> Objectives:
         key = tuple(sorted(state.items()))
@@ -201,7 +215,7 @@ def run_variation_dse(
                 # continuous battery capacity to the cheapest pack meeting the endurance
                 # target, then we score the inner-optimized design.
                 di0 = architecture_design(ok, dict(state), base_text)
-                arch = _at_rated_payload(design_arch_inputs(di0))
+                arch = _design_with_mass(state, di0)
                 if endurance_tgt > 0:
                     cap = optimize_capacity(arch, endurance_tgt, seed=random_seed or 0)["capacity_mah"]
                 else:
@@ -256,7 +270,7 @@ def run_variation_dse(
     def _resolve_di(state: State) -> DesignInputs:
         di0 = architecture_design(ok, dict(state), base_text)
         cap = inner_cap.get(tuple(sorted(state.items())), di0.battery_capacity_mah)
-        return DesignInputs(battery_capacity_mah=cap, **_at_rated_payload(design_arch_inputs(di0)))
+        return DesignInputs(battery_capacity_mah=cap, **_design_with_mass(state, di0))
 
     def _bindings(state: State) -> Dict[str, str]:
         """{point_id: chosen variant's impl type name} — the variant defs this design uses."""

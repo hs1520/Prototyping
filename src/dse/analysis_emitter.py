@@ -213,10 +213,12 @@ def inject_endurance_analysis(
         return str(float(DESIGN_DEFAULTS[field]))     # nothing owns it → literal default
 
     if design is not None:                            # authoritative: exactly what DSE scored
-        pay = rated_payload if rated_payload > 0 else design.payload_mass_kg
+        # design.payload_mass_kg already encodes delivery payload + component masses (the DSE's
+        # all-up added mass) — use it directly, don't re-override with the bare rated payload
+        # (that would drop the component masses and diverge from the trade study).
         order_vals = {"battery_capacity_mah": design.battery_capacity_mah,
                       "battery_cells": design.battery_cells, "rotor_count": design.rotor_count,
-                      "rotor_radius_m": design.rotor_radius_m, "payload_mass_kg": pay}
+                      "rotor_radius_m": design.rotor_radius_m, "payload_mass_kg": design.payload_mass_kg}
         base5 = ", ".join(str(float(order_vals[f])) for f in _ARG_ORDER)
         cruise = design.cruise_speed_mps
     else:                                             # legacy: reference chosen variant attrs
