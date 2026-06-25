@@ -55,17 +55,16 @@ def _req_owner_parts(model_text: str) -> Dict[str, Set[str]]:
     return out
 
 
-def _failsafe_reachable(sm) -> str:
-    """'reachable' | 'unreachable' | 'no_safe_state' for one state machine."""
-    safe = {s.name for s in sm.states if any(k in s.name.lower() for k in _SAFE_STATE_KW)}
-    if not safe:
-        return "no_safe_state"
+def reachable_states(sm) -> Set[str]:
+    """State names reachable from the initial state via transitions. If the initial state
+    can't be determined (extractor limitation), treat all states as reachable (lenient — so
+    we never falsely claim a behaviour is unreachable)."""
     starts: Set[str] = set()
     if sm.initial_state:
         starts.add(sm.initial_state)
     starts |= {t.target for t in sm.transitions if t.is_initial and t.target}
     if not starts:
-        return "reachable"                      # initial undetermined → don't claim violated
+        return {s.name for s in sm.states}
     adj: Dict[str, List[str]] = {}
     for t in sm.transitions:
         if t.source and t.target:
@@ -78,7 +77,15 @@ def _failsafe_reachable(sm) -> str:
             continue
         seen.add(s)
         stack.extend(adj.get(s, []))
-    return "reachable" if (seen & safe) else "unreachable"
+    return seen
+
+
+def _failsafe_reachable(sm) -> str:
+    """'reachable' | 'unreachable' | 'no_safe_state' for one state machine."""
+    safe = {s.name for s in sm.states if any(k in s.name.lower() for k in _SAFE_STATE_KW)}
+    if not safe:
+        return "no_safe_state"
+    return "reachable" if (reachable_states(sm) & safe) else "unreachable"
 
 
 def safety_behavior_status(model_text: str, requirements: List[str]) -> Dict[str, str]:

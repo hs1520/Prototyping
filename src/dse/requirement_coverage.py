@@ -25,6 +25,7 @@ from typing import Dict, List
 
 from .domain_objective import endurance_target, mass_limit, range_requirement
 from .requirement_spec import extract_requirements
+from .functional_behavior import functional_behavior_status
 from .safety_behavior import safety_behavior_status
 
 ANALYSIS_VERIFIED = "analysis-verified"
@@ -54,9 +55,11 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
     if "rangeMeetsReq" in model_text and range_requirement(requirements)[0]:
         analysis.add(_norm(range_requirement(requirements)[0]))
     quant = {_norm(s.req_id) for s in extract_requirements(requirements)}
-    # safety requirements get a three-state BEHAVIOURAL status (verified/violated/absent)
-    # from the state-machine reachability check, upgrading them out of allocated-only.
+    # safety + functional requirements get a BEHAVIOURAL status from state-machine reachability
+    # (safety: fail-safe reachable; functional: response action reachable), upgrading them out
+    # of allocated-only. Safety takes precedence when a req qualifies for both.
     safety = safety_behavior_status(model_text, requirements)
+    functional = functional_behavior_status(model_text, requirements)
 
     out: Dict[str, str] = {}
     for rid in declared:
@@ -66,6 +69,8 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
             out[rid] = QUANTITATIVE
         elif rid in safety:
             out[rid] = safety[rid]              # behaviorally-verified / -violated / behavior-absent
+        elif rid in functional:
+            out[rid] = functional[rid]          # functional response reachable? verified / absent
         elif rid in satisfied:
             out[rid] = ALLOCATED_ONLY
         else:
