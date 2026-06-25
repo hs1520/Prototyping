@@ -56,5 +56,16 @@ if __name__ == "__main__":
     print("pareto front     :", len(res.get("pareto_alternatives", [])), "non-dominated point(s)")
     dv = res.get("dse_verification")
     print("DSE→SITL verify  :", dv["summary"] if dv else "(no quantified requirements)")
+
+    # Honest verification-coverage of the satisfy claims: satisfy = allocation/intent, not
+    # proof. Report how many requirements actually have evidence vs are allocated-only.
+    from src.dse.requirement_coverage import classify_requirement_coverage, coverage_summary
+    cov = classify_requirement_coverage(final_sysml, DRONE_REQUIREMENTS)
+    print("req evidence     :", coverage_summary(cov))
+    allocated = sorted(r for r, l in cov.items() if l == "allocated-only")
+    if allocated:
+        print("  allocated-only (satisfy=intent, NOT verified — behaviour/protocol, out of scope):")
+        print("   ", ", ".join(allocated))
+
     print("\n初始模型 (DSE 前) →", initial_path)
     print("最终模型 (DSE 后) →", final_path)
