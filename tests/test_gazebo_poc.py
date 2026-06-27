@@ -229,6 +229,9 @@ def test_redundancy_requirement_detection():
             "propulsion unit (one motor inoperative)."]
     assert _redundancy_req(reqs) == "REQ-SAFE-007"
     assert _redundancy_req(["REQ-PERF-001: cruise."]) is None
+    # the parachute req ("critical propulsion subsystem failure") must NOT be mistaken for it
+    assert _redundancy_req(["REQ-SAFE-005: deploy the parachute within 0.5s of detecting a "
+                            "critical propulsion subsystem failure."]) is None
 
 
 def test_motor_failure_upgrades_redundancy_req_to_flight_verified():

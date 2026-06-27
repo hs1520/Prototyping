@@ -17,8 +17,10 @@ from src.dse.physics_estimator import total_mass_kg
 
 import re
 
+# match "maintain controlled flight on SINGLE motor failure" (controllability/redundancy) — NOT a
+# generic "propulsion failure" response like parachute deploy (which is a different requirement).
 _REDUNDANCY_RE = re.compile(
-    r"(motor|propulsion).{0,30}(fail|inoperative|loss)|single.{0,20}(motor|propulsion|unit)|redundan",
+    r"single.{0,25}(motor|propulsion|rotor|unit)|one\s+motor|motor.{0,15}inoperative|redundan",
     re.IGNORECASE)
 
 
