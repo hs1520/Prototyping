@@ -1099,6 +1099,8 @@ class Orchestrator:
         except Exception:
             pass
         model.metadata["last_sysml_text"] = concrete
+        # expose the recommended design for opt-in high-fidelity (Gazebo) verification downstream
+        self.last_recommended_design = res.recommended_design
         print(f"  [variation-DSE] explored {res.admitted_points} → recommended {res.recommended_choices}")
         if res.recommended_capacity_mah is not None:
             print(f"  [variation-DSE] inner BO sized battery → {res.recommended_capacity_mah:.0f} mAh")

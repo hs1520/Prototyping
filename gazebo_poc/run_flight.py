@@ -106,7 +106,12 @@ def _cleanup(proc):
     _sh("docker", "stop", _CONTAINER)
 
 
+# last flight's measurements, for programmatic callers (gazebo_verify / pipeline integration)
+LAST_RESULT: dict = {}
+
+
 def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None) -> int:
+    LAST_RESULT.clear()
     out = Path("gazebo_poc/generated")
     g = generate_sdf(mass_kg, 4, rotor_radius, Path("gazebo_poc/templates"), out,
                      area_override=area_override)
@@ -292,11 +297,13 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None)
 
         # per-rotor mechanical power (Σ Cp·ρ·n³·D⁵), analytical curve, and backed-out drag area
         from gazebo_poc.forward_flight import power_at_speed, effective_drag_area_from_power
-        D = 2 * 0.19
+        D = 2 * rotor_radius
         p_hover = _per_rotor_power_w(cap_path, D)
         p_fwd = _per_rotor_power_w(fwd_cap, D)
-        p_model = power_at_speed(5.5, 4, 0.19, max(fwd_speed, 0.1)).power_w
-        f_eff = effective_drag_area_from_power(p_fwd, max(fwd_speed, 0.1), 5.5, 4, 0.19)
+        p_model = power_at_speed(mass_kg, 4, rotor_radius, max(fwd_speed, 0.1)).power_w
+        f_eff = effective_drag_area_from_power(p_fwd, max(fwd_speed, 0.1), mass_kg, 4, rotor_radius)
+        LAST_RESULT.update(fwd_speed_mps=fwd_speed, fwd_power_w=p_fwd, hover_power_w=p_hover,
+                           analytical_fwd_power_w=p_model, drag_area_m2=f_eff)
         print(f"[FWD] speed={fwd_speed:.1f} m/s  hover_rpm={hover_rpm:.0f}  fwd_rpm={fwd_rpm:.0f}",
               flush=True)
         print(f"[FWD] Gazebo power (per-rotor): hover {p_hover:.0f} W → forward {p_fwd:.0f} W  | "
@@ -310,6 +317,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None)
         band = max(rels[-n:]) - min(rels[-n:])
         flew = peak > 1.0
         stable = flew and band < 2.0
+        LAST_RESULT.update(hover_stable=stable, hover_throttle_pct=hov_thr, hover_rpm=hover_rpm,
+                           hover_alt_m=hov_alt, mass_kg=mass_kg, rotor_radius_m=rotor_radius,
+                           rotor_count=4, capacity_mah=capacity_mah, ok=stable)
         print(f"[RESULT] climb_peak={peak:.2f}m  hover_alt={hov_alt:.2f}m  "
               f"alt_band=±{band/2:.2f}m  hover_throttle={hov_thr:.0f}%", flush=True)
         print(f"[RESULT] dynamics: "

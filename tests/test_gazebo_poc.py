@@ -143,3 +143,18 @@ def test_drag_area_backout_roundtrips():
     p = power_at_speed(5.5, 4, 0.19, 20.0, drag_area=0.08).power_w
     f = effective_drag_area_from_power(p, 20.0, 5.5, 4, 0.19)
     assert abs(f - 0.08) < 0.005                       # measured power → recovers drag area
+
+
+def test_gazebo_verify_skips_without_design():
+    from gazebo_poc.gazebo_verify import summary_line, verify_recommended_design
+    v = verify_recommended_design(None)
+    assert v["status"] == "skipped"
+    assert "skipped" in summary_line(v)
+
+
+def test_gazebo_verify_skips_non_quad():
+    from src.dse.domain_objective import DesignInputs
+    from gazebo_poc.gazebo_verify import verify_recommended_design
+    d = DesignInputs(payload_mass_kg=1.5, battery_capacity_mah=16000, battery_cells=6,
+                     rotor_count=6, rotor_radius_m=0.19, cruise_speed_mps=0.0)
+    assert verify_recommended_design(d)["status"] == "skipped"   # generator supports quad only

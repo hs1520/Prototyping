@@ -67,5 +67,13 @@ if __name__ == "__main__":
         print("  allocated-only (satisfy=intent, NOT verified — behaviour/protocol, out of scope):")
         print("   ", ", ".join(allocated))
 
+    # Opt-in high-fidelity verification: fly the DSE-recommended design in Gazebo (~5 min, Docker).
+    # Gated by RUN_GAZEBO=1 — off by default (heavy, like RUN_SITL).
+    if os.environ.get("RUN_GAZEBO") == "1":
+        design = getattr(pipe.orchestrator, "last_recommended_design", None)
+        from gazebo_poc.gazebo_verify import summary_line, verify_recommended_design
+        print("\n[RUN_GAZEBO] flying recommended design in Gazebo ...", flush=True)
+        print("gazebo verify  :", summary_line(verify_recommended_design(design)))
+
     print("\n初始模型 (DSE 前) →", initial_path)
     print("最终模型 (DSE 后) →", final_path)
