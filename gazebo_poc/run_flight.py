@@ -25,7 +25,9 @@ _IMG = "headless_gazebo"
 _CONTAINER = "ai_prototyping_gazebo"
 _HOME = "-35.363262,149.165237,584,0"
 _ARDUCOPTER = os.path.expanduser("~/PycharmProjects/ardupilot/build/sitl/bin/arducopter")
-_MODEL_BASE = "/usr/local/share/ardupilot_gazebo/models"
+# gz resolves model:// via GZ_SIM_RESOURCE_PATH=/ardupilot_gazebo/models — NOT the
+# /usr/local/share copy (mounting there is a no-op; this was a real bug found in audit).
+_MODEL_BASE = "/ardupilot_gazebo/models"
 _PARM = """FRAME_CLASS 1
 FRAME_TYPE 1
 ARMING_CHECK 0
@@ -90,11 +92,13 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None)
           f"area={0.002*g.area_scale:.6f} (scale={g.area_scale:.2f})", flush=True)
 
     _sh("docker", "rm", "-f", _CONTAINER)
-    so = str((out / "iris_with_standoffs").resolve())
-    gm = str((out / "iris_with_gimbal").resolve())
+    # Mount the individual model.sdf FILES (not the dirs) so the original meshes/config in the
+    # image are preserved — mounting the whole dir hides iris_collision.stl → gz fails to load.
+    so = str((out / "iris_with_standoffs" / "model.sdf").resolve())
+    gm = str((out / "iris_with_gimbal" / "model.sdf").resolve())
     run = _sh("docker", "run", "-d", "--name", _CONTAINER, "-p", "9002:9002/udp",
-              "-v", f"{so}:{_MODEL_BASE}/iris_with_standoffs",
-              "-v", f"{gm}:{_MODEL_BASE}/iris_with_gimbal", _IMG)
+              "-v", f"{so}:{_MODEL_BASE}/iris_with_standoffs/model.sdf",
+              "-v", f"{gm}:{_MODEL_BASE}/iris_with_gimbal/model.sdf", _IMG)
     if run.returncode != 0:
         print("[docker] failed:", run.stderr, flush=True)
         return 2
@@ -112,6 +116,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None)
          "--home", _HOME, "--wipe", "--defaults", str(parm)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print(f"[sitl] arducopter pid={proc.pid}, connecting ...", flush=True)
+    time.sleep(5)                       # let arducopter bind TCP 5760 before we connect
 
     try:
         from pymavlink import mavutil
@@ -162,18 +167,30 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None)
         m.set_mode("ALT_HOLD")
         if not wait(lambda h: h.custom_mode == ALT_HOLD, 8, "ALT_HOLD mode"):
             _cleanup(proc); return 5
-        print("[sitl] in ALT_HOLD. arming ...", flush=True)
+        # let EKF finish tilt alignment before arming (else arm is rejected)
+        print("[sitl] in ALT_HOLD; settling EKF before arm ...", flush=True)
+        for _ in range(10):
+            rc(1000); time.sleep(1); drain_status()
 
         ARMED = mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
-        for attempt, p2 in (("normal", 0), ("force", 21196)):
+
+        def is_armed():
+            for _ in range(6):                  # poll several heartbeats
+                h = hb()
+                if h and (h.base_mode & ARMED):
+                    return True
+            return False
+
+        armed = False
+        for attempt, p2 in (("normal", 0), ("force", 21196), ("force", 21196)):
             rc(1000)
             m.mav.command_long_send(m.target_system, m.target_component,
                                     mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0,
                                     1, p2, 0, 0, 0, 0, 0)
             time.sleep(2); drain_status()
-            if wait(lambda h: h.base_mode & ARMED, 4, f"armed({attempt})"):
-                break
-        if not (hb() and (hb().base_mode & ARMED)):
+            if is_armed():
+                armed = True; break
+        if not armed:
             print("[RESULT] failed to arm", flush=True); _cleanup(proc); return 5
         print("[sitl] ARMED. climbing (throttle up) ...", flush=True)
 
@@ -201,7 +218,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None)
         peak = 0.0
         thr, rels = [], []
         cap_proc, cap_path = None, Path("gazebo_poc/generated/jointstate.txt")
-        topic = "/world/iris_runway/model/iris_with_gimbal/joint_state"
+        topic = ("/world/iris_runway/model/iris_with_gimbal/model/"
+                 "iris_with_standoffs/joint_state")    # nested model — has rotor_*_joint
         t_end = time.time() + 40
         while time.time() < t_end:
             v = m.recv_match(type="VFR_HUD", blocking=True, timeout=2)

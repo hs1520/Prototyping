@@ -93,6 +93,13 @@ def generate_sdf(total_mass_kg: float, rotor_count: int, rotor_radius_m: float,
         f"<ixx>{ixx:.6f}</ixx>\n          <ixy>0</ixy>\n          <ixz>0</ixz>\n"
         f"          <iyy>{iyy:.6f}</iyy>\n          <iyz>0</iyz>\n          <izz>{izz:.6f}</izz>",
         "standoffs inertia")
+    # expose rotor_*_joint velocities (the iris_with_gimbal publisher misses nested-model joints)
+    # so rotor RPM is observable for fidelity audit / cross-validation
+    so = _replace_once(
+        so, "  </model>\n</sdf>",
+        '    <plugin filename="gz-sim-joint-state-publisher-system"\n'
+        '      name="gz::sim::systems::JointStatePublisher"></plugin>\n  </model>\n</sdf>',
+        "standoffs joint-state publisher")
 
     # --- iris_with_gimbal: 8 LiftDrag areas ---
     gm_src = (template_dir / "all_models" / "iris_with_gimbal" / "model.sdf").read_text()

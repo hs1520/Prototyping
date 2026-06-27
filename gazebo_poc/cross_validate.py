@@ -1,12 +1,12 @@
 """Cross-validate the two independent fidelity sources (Gazebo dynamics vs datasheet power)
 on the one quantity where they genuinely meet: HOVER THRUST PER ROTOR (stage 4).
 
-Why not throttle-%: we tried comparing the simulator's trimmed hover throttle to the datasheet
-throttle and found it INVALID — ArduCopter's VFR_HUD throttle is a normalised/learned value, not
-the physical motor command (scaling the rotor LiftDrag area 2.4× left the reported hover throttle
-unchanged at 37%). The physically comparable quantity would be rotor RPM, but the iris model's
-joint-state publisher does not expose the rotor joints, so RPM isn't observable without an SDF
-change (documented as the remaining refinement).
+Physical axes: with our airframe actually loaded (see AUDIT in README — a 3-bug mount issue had
+us flying the stock iris through stages 2-4), both hover throttle (29%) and rotor RPM (4204) DO
+respond to the model. RPM is now observable (we inject a joint-state publisher into
+iris_with_standoffs); Gazebo hover RPM 4204 vs real 18in-prop theory ~2900 RPM quantifies the
+uncalibrated iris-aero gap (stage 5 = real Ct/Cp). The simplest model-independent anchor remains
+hover thrust per rotor (below).
 
 What DOES cross-validate: at hover, thrust per rotor = m·g/N by force balance — both sources must
 honour this. Gazebo confirms the airframe reaches that thrust in STABLE controlled flight
