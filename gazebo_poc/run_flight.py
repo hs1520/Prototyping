@@ -251,12 +251,10 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         TGT = 10.0
 
         def alt_hold_stick(rel):
+            # proportional climb-rate command; gentle climb cap (+90) so high-T/W frames (octa)
+            # don't overshoot, firmer descent (-180) to settle. Works across quad/hexa/octa.
             err = TGT - rel
-            if err > 1.0:
-                return 1650
-            if err < -1.0:
-                return 1350
-            return 1500 + int(max(-120, min(120, err * 120)))   # gentle proportional trim
+            return 1500 + int(max(-180, min(90, err * 30)))
 
         peak = 0.0
         thr, rels = [], []

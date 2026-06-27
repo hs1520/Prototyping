@@ -21,8 +21,13 @@ from pathlib import Path
 from typing import List, Tuple
 
 # (angle_deg_cw_from_fwd, spin)  spin: +1 = CCW (multiplier +838), -1 = CW (multiplier -838)
+# tables are ArduCopter's own (AP_MotorsMatrix.cpp) so SDF positions+spins match the mixer.
 HEXA_X: List[Tuple[float, int]] = [
-    (90, -1), (-90, +1), (-30, -1), (150, +1), (30, +1), (-150, -1),   # ArduCopter HEXA X
+    (90, -1), (-90, +1), (-30, -1), (150, +1), (30, +1), (-150, -1),
+]
+OCTA_X: List[Tuple[float, int]] = [
+    (22.5, -1), (-157.5, -1), (67.5, +1), (157.5, +1),
+    (-22.5, +1), (-112.5, +1), (-67.5, -1), (112.5, -1),
 ]
 FRAME_CLASS = {4: 1, 6: 2, 8: 3}        # ArduCopter FRAME_CLASS: QUAD=1, HEXA=2, OCTA=3
 
@@ -85,7 +90,9 @@ _ARDUPILOT_HEAD = """    <plugin name="ArduPilotPlugin" filename="ArduPilotPlugi
 def _motor_table(n: int):
     if n == 6:
         return HEXA_X
-    raise NotImplementedError(f"motor table for rotor_count={n} not defined (have hexa)")
+    if n == 8:
+        return OCTA_X
+    raise NotImplementedError(f"motor table for rotor_count={n} not defined (have hexa/octa)")
 
 
 def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius_m: float,

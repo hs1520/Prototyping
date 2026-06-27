@@ -21,9 +21,9 @@ def verify_recommended_design(design) -> Dict[str, Any]:
     if design is None:
         return {"status": "skipped", "reason": "no recommended design from DSE"}
     n = getattr(design, "rotor_count", 4)
-    if n not in (4, 6):
+    if n not in (4, 6, 8):
         return {"status": "skipped",
-                "reason": f"rotor_count={n}: SDF generator supports quad/hexa only"}
+                "reason": f"rotor_count={n}: SDF generator supports quad/hexa/octa only"}
 
     mass = total_mass_kg(design)
     try:
