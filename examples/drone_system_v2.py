@@ -200,6 +200,8 @@ DRONE_REQUIREMENTS = [
     "REQ-SAFE-006: The system shall maintain the payload in the mechanically "
     "locked state whenever a delivery-abort condition is active, regardless "
     "of geographic proximity to the delivery waypoint.",
+    "REQ-SAFE-007: The system shall maintain controlled flight following the "
+    "failure of a single propulsion unit (one motor inoperative).",
 
     # ── Interface ─────────────────────────────────────────────────────────
     "REQ-INTF-001: The system shall exchange telemetry and mission commands "

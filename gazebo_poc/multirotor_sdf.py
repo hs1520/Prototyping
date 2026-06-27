@@ -100,10 +100,13 @@ def _unsupported(n):
 
 def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius_m: float,
                             inertia: Tuple[float, float, float], area: float,
-                            template_dir: Path, out_dir: Path, max_rotor_rad_s: float = 838.0):
+                            template_dir: Path, out_dir: Path, max_rotor_rad_s: float = 838.0,
+                            fail_rotor: int = None):
     """Write parametric standoffs + gimbal SDFs for an N-rotor airframe. ``max_rotor_rad_s`` is the
     full-throttle rotor speed (ArduPilotPlugin multiplier) — lower it (real-motor calibration) to
-    get a realistic thrust-to-weight instead of iris's over-powered default."""
+    get a realistic thrust-to-weight. ``fail_rotor`` (index) sets that rotor's LiftDrag area to 0
+    (dead motor — produces no thrust though ArduCopter still commands it): simulates a single
+    propulsion-unit failure to test controllability/redundancy."""
     table = _motor_table(rotor_count)
     L = 2.2 * rotor_radius_m
     ixx, iyy, izz = inertia
@@ -134,8 +137,9 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
     for i, (ang, spin) in enumerate(table):
         # CCW: blade1 forward +y, blade2 forward -y; CW flips both
         f1, f2 = ("1", "-1") if spin > 0 else ("-1", "1")
-        gm += _LIFTDRAG.format(area=area, cpx="0.084", fwd=f1, i=i)
-        gm += _LIFTDRAG.format(area=area, cpx="-0.084", fwd=f2, i=i)
+        a = 0.0 if i == fail_rotor else area        # fail_rotor → zero thrust (dead motor)
+        gm += _LIFTDRAG.format(area=a, cpx="0.084", fwd=f1, i=i)
+        gm += _LIFTDRAG.format(area=a, cpx="-0.084", fwd=f2, i=i)
     for i in range(rotor_count):
         gm += _APPLYFORCE.format(i=i)
     gm += _ARDUPILOT_HEAD

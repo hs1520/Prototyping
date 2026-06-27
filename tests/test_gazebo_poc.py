@@ -220,3 +220,30 @@ def test_quad_via_multirotor_calibrated_structure(tmp_path):
     assert g.count("<multiplier>745.0</multiplier>") == 2     # calibrated max rotor speed
     assert g.count("<multiplier>-745.0</multiplier>") == 2    # 2 CCW + 2 CW
     md.parseString(s); md.parseString(g)
+
+
+def test_redundancy_requirement_detection():
+    from gazebo_poc.gazebo_verify import _redundancy_req
+    reqs = ["REQ-PERF-001: cruise at 15 m/s.",
+            "REQ-SAFE-007: maintain controlled flight following the failure of a single "
+            "propulsion unit (one motor inoperative)."]
+    assert _redundancy_req(reqs) == "REQ-SAFE-007"
+    assert _redundancy_req(["REQ-PERF-001: cruise."]) is None
+
+
+def test_motor_failure_upgrades_redundancy_req_to_flight_verified():
+    from src.dse.requirement_coverage import classify_requirement_coverage, FLIGHT_VERIFIED
+    model = """package D {
+        requirement def REQ_SAFE_007 { doc /* single motor failure */ }
+        part def Drone { satisfy requirement REQ_SAFE_007; }
+    }"""
+    reqs = ["REQ-SAFE-007: maintain controlled flight following the failure of a single "
+            "propulsion unit."]
+    # without Gazebo → not flight-verified
+    assert classify_requirement_coverage(model, reqs).get("REQ-SAFE-007") != FLIGHT_VERIFIED
+    # Gazebo confirmed 1-motor-out controllable → flight-verified
+    gv = {"status": "ok", "motor_failure_tolerant": True, "redundancy_req": "REQ-SAFE-007"}
+    assert classify_requirement_coverage(model, reqs, gazebo=gv)["REQ-SAFE-007"] == FLIGHT_VERIFIED
+    # lost control → NOT flight-verified
+    gv2 = {"status": "ok", "motor_failure_tolerant": False, "redundancy_req": "REQ-SAFE-007"}
+    assert classify_requirement_coverage(model, reqs, gazebo=gv2)["REQ-SAFE-007"] != FLIGHT_VERIFIED

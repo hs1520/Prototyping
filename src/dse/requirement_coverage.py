@@ -57,12 +57,16 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
     declared = [_norm(m.group(1)) for m in _REQDEF_RE.finditer(model_text)]
     satisfied = {_norm(m.group(1)) for m in _SATISFY_RE.finditer(model_text)}
 
-    # flight-verified (strongest): Gazebo flew the design stably + real datasheet meets endurance
+    # flight-verified (strongest): Gazebo FLEW the design and confirmed a physical property only
+    # flight can show — (a) endurance (stable hover + real datasheet ≥ target), and (b) single-
+    # motor-failure controllability (the redundancy requirement, unique to physical flight sim).
     flight = set()
     if gazebo and gazebo.get("status") == "ok":
         et = endurance_target(requirements)
         if et > 0 and gazebo.get("datasheet_endurance_min", 0) >= et:
             flight.add(_norm(endurance_req))
+        if gazebo.get("motor_failure_tolerant") and gazebo.get("redundancy_req"):
+            flight.add(_norm(gazebo["redundancy_req"]))
 
     analysis = set()                                   # reqs an injected assert actually checks
     if "enduranceMeetsReq" in model_text and endurance_target(requirements) > 0:

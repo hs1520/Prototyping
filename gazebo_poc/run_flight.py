@@ -112,7 +112,7 @@ LAST_RESULT: dict = {}
 
 
 def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
-         rotor_count=4, calibrate=False) -> int:
+         rotor_count=4, calibrate=False, fail_rotor=None) -> int:
     LAST_RESULT.clear()
     out = Path("gazebo_poc/generated")
     tdir = Path("gazebo_poc/templates")
@@ -139,10 +139,12 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             area = (area_override if area_override is not None
                     else (mass_kg / IRIS_MASS_KG) * IRIS_AREA)
         _, _, frame_class = generate_multirotor_sdf(
-            mass_kg, rotor_count, rotor_radius, inertia, area, tdir, out, max_rotor_rad_s=mult)
+            mass_kg, rotor_count, rotor_radius, inertia, area, tdir, out, max_rotor_rad_s=mult,
+            fail_rotor=fail_rotor)
         print(f"[gen] {rotor_count}-rotor mass={mass_kg}kg inertia={tuple(round(x,4) for x in inertia)} "
               f"area={area:.6f} max_rotor={mult:.0f}rad/s FRAME_CLASS={frame_class}"
-              f"{' [calibrated]' if calibrate else ''}", flush=True)
+              f"{' [calibrated]' if calibrate else ''}"
+              f"{f' [MOTOR {fail_rotor} FAILED]' if fail_rotor is not None else ''}", flush=True)
 
     _sh("docker", "rm", "-f", _CONTAINER)
     # Mount the individual model.sdf FILES (not the dirs) so the original meshes/config in the
@@ -340,8 +342,10 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         hov_thr = sum(thr[-n:]) / n
         hov_alt = sum(rels[-n:]) / n
         band = max(rels[-n:]) - min(rels[-n:])
-        flew = peak > 1.0
-        stable = flew and band < 2.0
+        # stable = SUSTAINED altitude near target + small band. A crashed/grounded vehicle has
+        # band≈0 (sitting on the ground) and a brief peak, so check the steady altitude is held
+        # well above ground — this correctly fails a non-redundant frame after a motor loss.
+        stable = hov_alt > TGT * 0.5 and band < 1.5
         LAST_RESULT.update(hover_stable=stable, hover_throttle_pct=hov_thr, hover_rpm=hover_rpm,
                            hover_alt_m=hov_alt, mass_kg=mass_kg, rotor_radius_m=rotor_radius,
                            rotor_count=4, capacity_mah=capacity_mah, ok=stable)

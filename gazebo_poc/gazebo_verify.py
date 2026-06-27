@@ -15,9 +15,27 @@ from typing import Any, Dict
 from src.dse.physics_estimator import total_mass_kg
 
 
-def verify_recommended_design(design) -> Dict[str, Any]:
+import re
+
+_REDUNDANCY_RE = re.compile(
+    r"(motor|propulsion).{0,30}(fail|inoperative|loss)|single.{0,20}(motor|propulsion|unit)|redundan",
+    re.IGNORECASE)
+
+
+def _redundancy_req(requirements):
+    """req_id of a single-motor-failure / redundancy requirement, if present."""
+    for r in requirements or []:
+        if _REDUNDANCY_RE.search(r):
+            m = re.search(r"REQ[-_][A-Z]+[-_]\d+", r)
+            if m:
+                return m.group(0).replace("_", "-")
+    return None
+
+
+def verify_recommended_design(design, requirements=None) -> Dict[str, Any]:
     """Fly the recommended DesignInputs in Gazebo and cross-validate. Returns a result dict with
-    'status' in {ok, infeasible, failed, skipped}."""
+    'status' in {ok, infeasible, failed, skipped}. If a single-motor-failure requirement is present,
+    also flies with one motor dead to test redundancy (the unique-to-flight verification)."""
     if design is None:
         return {"status": "skipped", "reason": "no recommended design from DSE"}
     n = getattr(design, "rotor_count", 4)
@@ -48,7 +66,7 @@ def verify_recommended_design(design) -> Dict[str, Any]:
     rpm = rpm_cross_check(r["hover_rpm"], mass, n, design.rotor_radius_m)
     ds = datasheet_endurance(mass, n, design.battery_capacity_mah)
     cv = cross_validate(mass, n, design.battery_capacity_mah, gazebo_stable=r.get("hover_stable", False))
-    return {
+    result = {
         "status": "ok" if r.get("hover_stable") else "infeasible",
         "mass_kg": round(mass, 2),
         "hover_stable": r.get("hover_stable"),
@@ -65,13 +83,32 @@ def verify_recommended_design(design) -> Dict[str, Any]:
         "cross_validation_consistent": cv.consistent,
     }
 
+    # single-motor-failure controllability (unique-to-flight): only if a redundancy requirement
+    # exists and the nominal flight was stable. Fly again with one motor dead.
+    rreq = _redundancy_req(requirements)
+    if rreq and r.get("hover_stable"):
+        try:
+            run_flight.main(mass_kg=mass, rotor_radius=design.rotor_radius_m,
+                            capacity_mah=design.battery_capacity_mah, rotor_count=n,
+                            calibrate=(n != 4), fail_rotor=0)
+            result["motor_failure_tolerant"] = bool(run_flight.LAST_RESULT.get("hover_stable"))
+            result["redundancy_req"] = rreq
+        except Exception as e:
+            result["motor_failure_tolerant"] = None
+            result["redundancy_reason"] = repr(e)
+    return result
+
 
 def summary_line(v: Dict[str, Any]) -> str:
     if v.get("status") in ("skipped", "failed"):
         return f"Gazebo verify: {v['status']} ({v.get('reason', '')})"
+    mft = v.get("motor_failure_tolerant")
+    mft_s = ("" if mft is None
+             else f"; 1-motor-out: {'TOLERANT' if mft else 'LOST CONTROL'}")
     return (f"Gazebo verify [{v['status']}]: {v['mass_kg']}kg hover "
             f"{'STABLE' if v['hover_stable'] else 'UNSTABLE'} @{v['hover_throttle_pct']}% "
             f"throttle, {v['hover_rpm']} RPM (vs prop theory {v['rpm_theory']}, "
             f"{v['rpm_pct_diff']:+}%, Ct {v['implied_ct']}); datasheet endurance "
             f"{v['datasheet_endurance_min']} min; fwd {v['forward_speed_mps']} m/s "
-            f"→ drag f={v['drag_area_m2']} m²; cross-val consistent={v['cross_validation_consistent']}")
+            f"→ drag f={v['drag_area_m2']} m²; cross-val consistent={v['cross_validation_consistent']}"
+            f"{mft_s}")

@@ -65,7 +65,7 @@ if __name__ == "__main__":
         design = getattr(pipe.orchestrator, "last_recommended_design", None)
         from gazebo_poc.gazebo_verify import summary_line, verify_recommended_design
         print("\n[RUN_GAZEBO] flying recommended design in Gazebo ...", flush=True)
-        gv = verify_recommended_design(design)
+        gv = verify_recommended_design(design, DRONE_REQUIREMENTS)
         print("gazebo verify  :", summary_line(gv))
 
     # Honest verification-coverage of the satisfy claims: satisfy = allocation/intent, not
