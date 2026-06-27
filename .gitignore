@@ -70,3 +70,4 @@ examples/sitl_output/
 
 # Gazebo PoC: iris templates regenerable from headless_gazebo image (docker cp)
 gazebo_poc/templates/
+gazebo_poc/generated/
