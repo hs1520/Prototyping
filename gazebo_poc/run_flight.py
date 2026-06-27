@@ -54,24 +54,46 @@ def _sh(*args, **kw):
 
 
 def _parse_rotor_velocity(path) -> float:
-    """Mean |velocity| (rad/s) of the rotor_*_joint entries in a captured gz joint_state dump.
-    The msg lists 'name: "<joint>"' then 'velocity: <x>'; we keep velocities whose preceding
-    joint name contains 'rotor'."""
+    """Mean |velocity| (rad/s) over all rotor_*_joint entries in a captured gz joint_state dump."""
+    per = _parse_rotor_velocities(path)
+    allv = [w for ws in per.values() for w in ws]
+    return sum(allv) / len(allv) if allv else 0.0
+
+
+def _parse_rotor_velocities(path):
+    """{rotor_joint_name: [|velocity| rad/s, ...]} from a gz joint_state dump (per-rotor, so power
+    ∝ n³ can be summed correctly — the mean underestimates it in forward flight)."""
+    import re
     try:
         lines = Path(path).read_text().splitlines()
     except OSError:
-        return 0.0
-    vels, cur_rotor = [], False
+        return {}
+    per, cur = {}, None
     for ln in lines:
         s = ln.strip()
-        if s.startswith("name:"):
-            cur_rotor = "rotor" in s.lower()
-        elif s.startswith("velocity:") and cur_rotor:
+        m = re.match(r'name:\s*"(rotor_\d_joint)"', s)
+        if m:
+            cur = m.group(1); continue
+        if s.startswith("velocity:") and cur:
             try:
-                vels.append(abs(float(s.split(":", 1)[1])))
+                per.setdefault(cur, []).append(abs(float(s.split(":", 1)[1])))
             except ValueError:
                 pass
-    return sum(vels) / len(vels) if vels else 0.0
+            cur = None
+    return per
+
+
+def _per_rotor_power_w(path, diameter_m):
+    """Total shaft power Σ Cp·ρ·n_i³·D⁵ from per-rotor mean speeds (last samples)."""
+    from gazebo_poc.prop_theory import mechanical_power_w
+    per = _parse_rotor_velocities(path)
+    total = 0.0
+    for ws in per.values():
+        tail = ws[-50:] if ws else []
+        if tail:
+            rpm = (sum(tail) / len(tail)) * 9.5493
+            total += mechanical_power_w(rpm, diameter_m)
+    return total
 
 
 def _cleanup(proc):
@@ -158,9 +180,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None)
                     break
                 print(f"[sitl] STATUSTEXT: {s.text}", flush=True)
 
-        def rc(throttle):                       # roll/pitch=neutral, ch3=throttle, yaw=neutral
+        def rc(throttle, pitch=1500):           # roll=neutral, ch2=pitch, ch3=throttle, yaw=neutral
             m.mav.rc_channels_override_send(m.target_system, m.target_component,
-                                            1500, 1500, throttle, 1500, 0, 0, 0, 0)
+                                            1500, pitch, throttle, 1500, 0, 0, 0, 0)
 
         ALT_HOLD = 2
         rc(1000)                                # throttle low before arming
@@ -237,10 +259,49 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None)
         if cap_proc:
             cap_proc.terminate()
         rotor_rad_s = _parse_rotor_velocity(cap_path)
+        hover_rpm = rotor_rad_s * 9.5493
         print(f"[sitl] climb peak={peak:.2f} m; steady hover sampled. "
-              f"rotor |omega|~{rotor_rad_s:.1f} rad/s ({rotor_rad_s*9.5493:.0f} RPM)", flush=True)
+              f"rotor |omega|~{rotor_rad_s:.1f} rad/s ({hover_rpm:.0f} RPM)", flush=True)
+
+        # --- forward-flight dash: pitch forward, hold altitude, measure speed + rotor RPM ---
+        # (stage 6b — the regime where Gazebo beats hover thrust=weight; NB body drag is iris-shaped)
+        print("[sitl] forward dash (pitch fwd, hold alt) ...", flush=True)
+        fwd_cap = Path("gazebo_poc/generated/jointstate_fwd.txt")
+        fcap, spds = None, []
+        t_end = time.time() + 18
+        while time.time() < t_end:
+            v = m.recv_match(type="VFR_HUD", blocking=True, timeout=2)
+            if v is None:
+                continue
+            rel = v.alt - alt0
+            rc(alt_hold_stick(rel), pitch=1330)     # nose down → fly forward
+            if time.time() > t_end - 9:             # steady-state last 9 s
+                spds.append(v.groundspeed)
+                if fcap is None:
+                    fcap = subprocess.Popen(
+                        ["docker", "exec", _CONTAINER, "gz", "topic", "-e", "-t", topic],
+                        stdout=open(fwd_cap, "w"), stderr=subprocess.DEVNULL)
+        if fcap:
+            fcap.terminate()
+        fwd_rad_s = _parse_rotor_velocity(fwd_cap)
+        fwd_rpm = fwd_rad_s * 9.5493
+        ns = max(1, len(spds) // 2)
+        fwd_speed = sum(spds[-ns:]) / ns if spds else 0.0
         m.mav.rc_channels_override_send(m.target_system, m.target_component, *([0] * 8))
         _cleanup(proc)
+
+        # per-rotor mechanical power (Σ Cp·ρ·n³·D⁵), analytical curve, and backed-out drag area
+        from gazebo_poc.forward_flight import power_at_speed, effective_drag_area_from_power
+        D = 2 * 0.19
+        p_hover = _per_rotor_power_w(cap_path, D)
+        p_fwd = _per_rotor_power_w(fwd_cap, D)
+        p_model = power_at_speed(5.5, 4, 0.19, max(fwd_speed, 0.1)).power_w
+        f_eff = effective_drag_area_from_power(p_fwd, max(fwd_speed, 0.1), 5.5, 4, 0.19)
+        print(f"[FWD] speed={fwd_speed:.1f} m/s  hover_rpm={hover_rpm:.0f}  fwd_rpm={fwd_rpm:.0f}",
+              flush=True)
+        print(f"[FWD] Gazebo power (per-rotor): hover {p_hover:.0f} W → forward {p_fwd:.0f} W  | "
+              f"analytical@{fwd_speed:.0f}m/s = {p_model:.0f} W  | backed-out drag area "
+              f"f={f_eff:.3f} m²", flush=True)
         if not thr:
             print("[RESULT] armed but no telemetry", flush=True); return 6
         n = max(1, len(thr) // 3)               # steady-state = last third

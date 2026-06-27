@@ -24,6 +24,22 @@ PROP_CT = 0.115        # cited typical T-Motor multirotor prop (Tyto Robotics)
 PROP_CT_SOURCE = "https://www.tytorobotics.com/blogs/articles/how-to-calculate-propeller-thrust"
 
 
+FOM = 0.62             # figure of merit (matches src/dse/physics_estimator)
+
+
+def power_coefficient(ct: float = PROP_CT, fom: float = FOM) -> float:
+    """Cp from Ct via the figure-of-merit identity FM = Ct^1.5 / (sqrt(2)·Cp).
+    For Ct=0.115, FM=0.62 → Cp≈0.045 (typical multirotor prop)."""
+    return ct ** 1.5 / (math.sqrt(2.0) * fom)
+
+
+def mechanical_power_w(rpm: float, diameter_m: float, cp: float = None) -> float:
+    """Shaft power of one rotor: P = Cp·ρ·n³·D⁵ (n in rev/s)."""
+    cp = power_coefficient() if cp is None else cp
+    n = rpm / 60.0
+    return cp * RHO * n ** 3 * diameter_m ** 5
+
+
 def prop_hover_rpm(thrust_per_rotor_n: float, diameter_m: float, ct: float = PROP_CT) -> float:
     """Rotor speed (RPM) a real prop of this diameter needs to make the given thrust (momentum
     theory, static hover)."""

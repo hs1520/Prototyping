@@ -62,6 +62,16 @@ def power_at_speed(mass_kg: float, rotor_count: int, rotor_radius_m: float, spee
     return ForwardPower(speed_mps, induced + parasite + profile, induced, parasite, profile)
 
 
+def effective_drag_area_from_power(power_w: float, speed_mps: float, mass_kg: float,
+                                   rotor_count: int, rotor_radius_m: float) -> float:
+    """Back out the airframe's equivalent flat-plate drag area f from a MEASURED forward-flight
+    power (e.g. from Gazebo): f = (P - P_induced - P_profile) / (0.5·ρ·V³). This is the parameter
+    the lumped model assumes — a forward-flight simulation/flight pins it down for the real body."""
+    base = power_at_speed(mass_kg, rotor_count, rotor_radius_m, speed_mps, drag_area=0.0)
+    non_parasite = base.induced_w + base.profile_w
+    return max(0.0, (power_w - non_parasite) / (0.5 * RHO * speed_mps ** 3))
+
+
 @dataclass(frozen=True)
 class RangeResult:
     hover_power_w: float

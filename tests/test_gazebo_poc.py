@@ -129,3 +129,17 @@ def test_range_estimate_sane():
     assert r.best_range_speed_mps > r.best_endurance_speed_mps   # always, physically
     assert r.min_power_w < r.hover_power_w                        # cruise cheaper than hover
     assert 5 < r.range_km < 100                                   # plausible for this class
+
+
+def test_power_coefficient_and_mechanical_power():
+    from gazebo_poc.prop_theory import power_coefficient, mechanical_power_w
+    assert 0.03 < power_coefficient() < 0.06          # Cp from Ct+FOM, realistic
+    # 4 rotors at the measured hover RPM ≈ the analytical hover power (~600 W)
+    assert 500 < 4 * mechanical_power_w(4204, 0.38) < 700
+
+
+def test_drag_area_backout_roundtrips():
+    from gazebo_poc.forward_flight import power_at_speed, effective_drag_area_from_power
+    p = power_at_speed(5.5, 4, 0.19, 20.0, drag_area=0.08).power_w
+    f = effective_drag_area_from_power(p, 20.0, 5.5, 4, 0.19)
+    assert abs(f - 0.08) < 0.005                       # measured power → recovers drag area
