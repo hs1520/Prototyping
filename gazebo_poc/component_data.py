@@ -53,6 +53,20 @@ class MotorProp:
                         a.power_w + f * (b.power_w - a.power_w))
         return pts[-1].current_a, pts[-1].power_w
 
+    def throttle_at_thrust(self, thrust_g: float) -> float:
+        """Linear-interpolate the throttle fraction (0..1) needed to produce a per-motor thrust
+        (g) — the real motor's hover throttle, for cross-checking a simulator's trimmed hover."""
+        pts: List[MotorPropPoint] = sorted(self.curve, key=lambda p: p.thrust_g)
+        if thrust_g <= pts[0].thrust_g:
+            return pts[0].throttle
+        if thrust_g >= pts[-1].thrust_g:
+            return pts[-1].throttle
+        for a, b in zip(pts, pts[1:]):
+            if a.thrust_g <= thrust_g <= b.thrust_g:
+                f = (thrust_g - a.thrust_g) / (b.thrust_g - a.thrust_g)
+                return a.throttle + f * (b.throttle - a.throttle)
+        return pts[-1].throttle
+
 
 # T-Motor MN5008 KV340 + P18×6.1" CF, 24V/6S (per-motor bench rows).
 MN5008_KV340_18x61 = MotorProp(

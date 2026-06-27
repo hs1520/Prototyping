@@ -61,17 +61,26 @@ def _replace_once(text: str, old: str, new: str, ctx: str) -> str:
 
 
 def generate_sdf(total_mass_kg: float, rotor_count: int, rotor_radius_m: float,
-                 template_dir: Path, out_dir: Path) -> GeneratedSdf:
+                 template_dir: Path, out_dir: Path,
+                 area_override: float = None) -> GeneratedSdf:
     """Write parametric iris_with_standoffs + iris_with_gimbal SDFs for our design. Returns the
     output paths and the physical quantities injected. rotor_count!=4 is not yet supported
-    (iris is a quad; adding/removing rotor links+channels is a later stage)."""
+    (iris is a quad; adding/removing rotor links+channels is a later stage).
+
+    ``area_override`` (per-blade LiftDrag area) bypasses the default mass-ratio scaling — used in
+    stage-4 calibration to set full-throttle thrust to a real motor's max (so the trimmed hover
+    throttle can be cross-checked against the datasheet)."""
     if rotor_count != 4:
         raise NotImplementedError(
             f"rotor_count={rotor_count}: only quad (iris layout) supported in this PoC stage")
     template_dir, out_dir = Path(template_dir), Path(out_dir)
     ixx, iyy, izz = multirotor_inertia(total_mass_kg, rotor_count, rotor_radius_m)
-    area_scale = total_mass_kg / IRIS_MASS_KG            # preserve iris thrust-to-weight
-    new_area = IRIS_AREA * area_scale
+    if area_override is not None:
+        new_area = area_override
+        area_scale = area_override / IRIS_AREA
+    else:
+        area_scale = total_mass_kg / IRIS_MASS_KG        # preserve iris thrust-to-weight
+        new_area = IRIS_AREA * area_scale
 
     # --- iris_with_standoffs: mass + inertia ---
     so_src = (template_dir / "all_models" / "iris_with_standoffs" / "model.sdf").read_text()

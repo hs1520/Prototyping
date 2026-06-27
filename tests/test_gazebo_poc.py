@@ -67,3 +67,22 @@ def test_generate_sdf_injects_mass_inertia_area(tmp_path):
 def test_non_quad_not_supported():
     with pytest.raises(NotImplementedError):
         generate_sdf(5.5, 6, 0.19, template_dir=_TEMPLATES, out_dir=Path("/tmp/x"))
+
+
+def test_throttle_at_thrust_interp():
+    m = MN5008_KV340_18x61
+    assert m.throttle_at_thrust(500.0) == m.curve[0].throttle      # clamp low
+    t = m.throttle_at_thrust(1390.0)                               # between 45% and 50%
+    assert 0.45 < t < 0.50
+
+
+def test_cross_validate_consistent_and_inconsistent():
+    from gazebo_poc.cross_validate import cross_validate
+    cv = cross_validate(5.5, 4, 16000, gazebo_stable=True)
+    assert cv.consistent and cv.datasheet_within_envelope
+    assert abs(cv.hover_thrust_per_rotor_g - 5.5 * 1000 / 4) < 1.0
+    assert 20 < cv.endurance_min < 45
+    # unstable sim → not consistent even if power is fine
+    assert not cross_validate(5.5, 4, 16000, gazebo_stable=False).consistent
+    # overweight → outside motor envelope → not consistent
+    assert not cross_validate(20.0, 4, 16000, gazebo_stable=True).datasheet_within_envelope

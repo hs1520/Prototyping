@@ -51,6 +51,27 @@ def _sh(*args, **kw):
     return subprocess.run(args, capture_output=True, text=True, **kw)
 
 
+def _parse_rotor_velocity(path) -> float:
+    """Mean |velocity| (rad/s) of the rotor_*_joint entries in a captured gz joint_state dump.
+    The msg lists 'name: "<joint>"' then 'velocity: <x>'; we keep velocities whose preceding
+    joint name contains 'rotor'."""
+    try:
+        lines = Path(path).read_text().splitlines()
+    except OSError:
+        return 0.0
+    vels, cur_rotor = [], False
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("name:"):
+            cur_rotor = "rotor" in s.lower()
+        elif s.startswith("velocity:") and cur_rotor:
+            try:
+                vels.append(abs(float(s.split(":", 1)[1])))
+            except ValueError:
+                pass
+    return sum(vels) / len(vels) if vels else 0.0
+
+
 def _cleanup(proc):
     if proc and proc.poll() is None:
         proc.terminate()
@@ -61,11 +82,12 @@ def _cleanup(proc):
     _sh("docker", "stop", _CONTAINER)
 
 
-def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000) -> int:
+def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None) -> int:
     out = Path("gazebo_poc/generated")
-    g = generate_sdf(mass_kg, 4, rotor_radius, Path("gazebo_poc/templates"), out)
+    g = generate_sdf(mass_kg, 4, rotor_radius, Path("gazebo_poc/templates"), out,
+                     area_override=area_override)
     print(f"[gen] mass={g.mass_kg}kg inertia={tuple(round(x,4) for x in g.inertia)} "
-          f"area_scale={g.area_scale:.2f}", flush=True)
+          f"area={0.002*g.area_scale:.6f} (scale={g.area_scale:.2f})", flush=True)
 
     _sh("docker", "rm", "-f", _CONTAINER)
     so = str((out / "iris_with_standoffs").resolve())
@@ -178,7 +200,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000) -> int:
 
         peak = 0.0
         thr, rels = [], []
-        t_end = time.time() + 38
+        cap_proc, cap_path = None, Path("gazebo_poc/generated/jointstate.txt")
+        topic = "/world/iris_runway/model/iris_with_gimbal/joint_state"
+        t_end = time.time() + 40
         while time.time() < t_end:
             v = m.recv_match(type="VFR_HUD", blocking=True, timeout=2)
             if v is None:
@@ -188,7 +212,15 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000) -> int:
             rc(alt_hold_stick(rel))
             if time.time() > t_end - 18:          # sample steady-state in the final 18 s
                 thr.append(v.throttle); rels.append(rel)
-        print(f"[sitl] climb peak={peak:.2f} m above start; sampled steady hover.", flush=True)
+                if cap_proc is None:              # capture rotor RPM while hovering
+                    cap_proc = subprocess.Popen(
+                        ["docker", "exec", _CONTAINER, "gz", "topic", "-e", "-t", topic],
+                        stdout=open(cap_path, "w"), stderr=subprocess.DEVNULL)
+        if cap_proc:
+            cap_proc.terminate()
+        rotor_rad_s = _parse_rotor_velocity(cap_path)
+        print(f"[sitl] climb peak={peak:.2f} m; steady hover sampled. "
+              f"rotor |omega|~{rotor_rad_s:.1f} rad/s ({rotor_rad_s*9.5493:.0f} RPM)", flush=True)
         m.mav.rc_channels_override_send(m.target_system, m.target_component, *([0] * 8))
         _cleanup(proc)
         if not thr:
@@ -210,4 +242,6 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # optional: python run_flight.py <area_override>  (stage-4 calibrated-thrust flight)
+    ao = float(sys.argv[1]) if len(sys.argv) > 1 else None
+    sys.exit(main(area_override=ao))
