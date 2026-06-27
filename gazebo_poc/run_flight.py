@@ -24,6 +24,7 @@ from gazebo_poc.sdf_generator import generate_sdf
 _IMG = "headless_gazebo"
 _CONTAINER = "ai_prototyping_gazebo"
 _HOME = "-35.363262,149.165237,584,0"
+_FWD_PITCH = int(os.environ.get("FWD_PITCH", "1330"))   # RC2 for the forward dash (lower = faster)
 _ARDUCOPTER = os.path.expanduser("~/PycharmProjects/ardupilot/build/sitl/bin/arducopter")
 # gz resolves model:// via GZ_SIM_RESOURCE_PATH=/ardupilot_gazebo/models — NOT the
 # /usr/local/share copy (mounting there is a no-op; this was a real bug found in audit).
@@ -279,7 +280,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None)
             if v is None:
                 continue
             rel = v.alt - alt0
-            rc(alt_hold_stick(rel), pitch=1330)     # nose down → fly forward
+            rc(alt_hold_stick(rel), pitch=_FWD_PITCH)  # nose down → fly forward (env-tunable)
             if time.time() > t_end - 9:             # steady-state last 9 s
                 spds.append(v.groundspeed)
                 if fcap is None:
