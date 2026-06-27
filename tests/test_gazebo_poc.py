@@ -86,3 +86,27 @@ def test_cross_validate_consistent_and_inconsistent():
     assert not cross_validate(5.5, 4, 16000, gazebo_stable=False).consistent
     # overweight → outside motor envelope → not consistent
     assert not cross_validate(20.0, 4, 16000, gazebo_stable=True).datasheet_within_envelope
+
+
+def test_prop_hover_rpm_physical():
+    from gazebo_poc.prop_theory import prop_hover_rpm
+    # higher thrust → higher RPM; bigger prop → lower RPM for same thrust
+    assert prop_hover_rpm(20, 0.38) > prop_hover_rpm(10, 0.38)
+    assert prop_hover_rpm(13.5, 0.46) < prop_hover_rpm(13.5, 0.38)
+
+
+def test_rpm_cross_check_passes_at_design_diameter():
+    from gazebo_poc.prop_theory import rpm_cross_check
+    # Gazebo-measured 4204 RPM for the 5.5 kg quad at the DESIGN diameter (0.19 m radius)
+    c = rpm_cross_check(gazebo_rpm=4204, mass_kg=5.5, rotor_count=4, rotor_radius_m=0.19)
+    assert abs(c.diameter_m - 0.38) < 1e-9          # design diameter, not 18"
+    assert c.within_ct_band                          # agrees with real-prop theory
+    assert 0.10 <= c.ct_implied <= 0.13              # implied Ct is physically realistic
+    assert abs(c.pct_diff) < 8.0                     # within a few %
+
+
+def test_rpm_cross_check_flags_wrong_diameter_error():
+    from gazebo_poc.prop_theory import rpm_cross_check
+    # the earlier 2900-RPM (18" prop) figure is NOT consistent with the 15" design rotor
+    c = rpm_cross_check(gazebo_rpm=2900, mass_kg=5.5, rotor_count=4, rotor_radius_m=0.19)
+    assert not c.within_ct_band                       # would imply an unphysical Ct

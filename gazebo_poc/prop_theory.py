@@ -1,0 +1,64 @@
+"""Blade-element / momentum prop theory — the independent analytical model that Gazebo's
+measured hover rotor RPM is cross-validated against (stage 5).
+
+Static thrust:  T = Ct · ρ · n² · D⁴   (n in rev/s, D = rotor diameter).
+So the rotor speed needed to hover (T = m·g/N per rotor) is  n = sqrt(T / (Ct·ρ·D⁴)).
+
+Ct: thrust coefficient. ~0.115 is a realistic full-throttle figure for a T-Motor multirotor
+prop (Tyto Robotics, "How to Calculate & Measure Propeller Thrust",
+https://www.tytorobotics.com/blogs/articles/how-to-calculate-propeller-thrust). Ct varies with
+RPM/prop; we report the cross-check across a Ct band so the agreement isn't hostage to one value.
+
+IMPORTANT: use the DESIGN's rotor diameter (2·rotor_radius), not an arbitrary motor's prop —
+the earlier "Gazebo 4204 vs 2900 RPM gap" was an error from using an 18" prop against a design
+that specs 0.19 m radius (15" / 0.38 m).
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+RHO = 1.225            # kg/m³, ISA sea level
+G = 9.81
+PROP_CT = 0.115        # cited typical T-Motor multirotor prop (Tyto Robotics)
+PROP_CT_SOURCE = "https://www.tytorobotics.com/blogs/articles/how-to-calculate-propeller-thrust"
+
+
+def prop_hover_rpm(thrust_per_rotor_n: float, diameter_m: float, ct: float = PROP_CT) -> float:
+    """Rotor speed (RPM) a real prop of this diameter needs to make the given thrust (momentum
+    theory, static hover)."""
+    n_rev_s = math.sqrt(thrust_per_rotor_n / (ct * RHO * diameter_m ** 4))
+    return n_rev_s * 60.0
+
+
+@dataclass(frozen=True)
+class RpmCrossCheck:
+    gazebo_rpm: float
+    diameter_m: float
+    theory_rpm: float            # at PROP_CT
+    theory_rpm_lo: float         # Ct band (high Ct → low RPM)
+    theory_rpm_hi: float
+    pct_diff: float              # gazebo vs theory(PROP_CT)
+    within_ct_band: bool         # gazebo RPM falls inside the [lo, hi] Ct band
+    ct_implied: float            # the Ct that would make theory match the measured RPM
+
+
+def rpm_cross_check(gazebo_rpm: float, mass_kg: float, rotor_count: int, rotor_radius_m: float,
+                    ct: float = PROP_CT, ct_band=(0.10, 0.13)) -> RpmCrossCheck:
+    """Cross-validate Gazebo's measured hover RPM against prop theory at the DESIGN diameter.
+    Independent of the simulator's aero — if they agree, the Gazebo rotor aero is physically
+    consistent with a real prop of the design's size."""
+    d = 2.0 * rotor_radius_m
+    thrust = mass_kg * G / rotor_count
+    theory = prop_hover_rpm(thrust, d, ct)
+    rpm_hi = prop_hover_rpm(thrust, d, ct_band[0])    # low Ct → high RPM
+    rpm_lo = prop_hover_rpm(thrust, d, ct_band[1])
+    # Ct implied by the measured RPM: Ct = T/(ρ D⁴ (rpm/60)²)
+    ct_implied = thrust / (RHO * d ** 4 * (gazebo_rpm / 60.0) ** 2)
+    return RpmCrossCheck(
+        gazebo_rpm=gazebo_rpm, diameter_m=d, theory_rpm=theory,
+        theory_rpm_lo=rpm_lo, theory_rpm_hi=rpm_hi,
+        pct_diff=(gazebo_rpm / theory - 1.0) * 100.0,
+        within_ct_band=rpm_lo <= gazebo_rpm <= rpm_hi,
+        ct_implied=ct_implied,
+    )
