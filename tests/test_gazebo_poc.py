@@ -156,5 +156,22 @@ def test_gazebo_verify_skips_non_quad():
     from src.dse.domain_objective import DesignInputs
     from gazebo_poc.gazebo_verify import verify_recommended_design
     d = DesignInputs(payload_mass_kg=1.5, battery_capacity_mah=16000, battery_cells=6,
-                     rotor_count=6, rotor_radius_m=0.19, cruise_speed_mps=0.0)
-    assert verify_recommended_design(d)["status"] == "skipped"   # generator supports quad only
+                     rotor_count=8, rotor_radius_m=0.19, cruise_speed_mps=0.0)
+    assert verify_recommended_design(d)["status"] == "skipped"   # generator supports quad/hexa only
+
+
+@pytest.mark.skipif(not _HAS_TEMPLATES, reason="iris templates absent")
+def test_hexa_sdf_structure(tmp_path):
+    import xml.dom.minidom as md
+    from gazebo_poc.multirotor_sdf import generate_multirotor_sdf
+    so, gm, fc = generate_multirotor_sdf(6.0, 6, 0.19, multirotor_inertia(6.0, 6, 0.19),
+                                         0.008, _TEMPLATES, tmp_path)
+    s, g = so.read_text(), gm.read_text()
+    assert fc == 2                                       # ArduCopter HEXA
+    assert s.count("<link name='rotor_") == 6           # 6 rotor links
+    assert g.count("gz-sim-lift-drag-system") == 12     # 2 blades each
+    assert g.count("<control channel=") == 6
+    # 3 CCW (+838) + 3 CW (-838) — matches ArduCopter HEXA-X spin pattern
+    assert g.count("<multiplier>838</multiplier>") == 3
+    assert g.count("<multiplier>-838</multiplier>") == 3
+    md.parseString(s); md.parseString(g)                # both well-formed

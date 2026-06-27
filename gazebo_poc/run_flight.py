@@ -111,13 +111,28 @@ def _cleanup(proc):
 LAST_RESULT: dict = {}
 
 
-def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None) -> int:
+def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
+         rotor_count=4) -> int:
     LAST_RESULT.clear()
     out = Path("gazebo_poc/generated")
-    g = generate_sdf(mass_kg, 4, rotor_radius, Path("gazebo_poc/templates"), out,
-                     area_override=area_override)
-    print(f"[gen] mass={g.mass_kg}kg inertia={tuple(round(x,4) for x in g.inertia)} "
-          f"area={0.002*g.area_scale:.6f} (scale={g.area_scale:.2f})", flush=True)
+    tdir = Path("gazebo_poc/templates")
+    frame_class = 1
+    if rotor_count == 4:
+        g = generate_sdf(mass_kg, 4, rotor_radius, tdir, out, area_override=area_override)
+        print(f"[gen] quad mass={g.mass_kg}kg inertia={tuple(round(x,4) for x in g.inertia)} "
+              f"area={0.002*g.area_scale:.6f}", flush=True)
+    else:
+        from gazebo_poc.multirotor_sdf import generate_multirotor_sdf
+        from gazebo_poc.sdf_generator import IRIS_AREA, IRIS_MASS_KG, multirotor_inertia
+        inertia = multirotor_inertia(mass_kg, rotor_count, rotor_radius)
+        # per-rotor area = iris-sized scaling (same formula as quad) so per-rotor RPM stays
+        # physically comparable to prop theory; N>4 just gives more total thrust margin
+        area = (area_override if area_override is not None
+                else (mass_kg / IRIS_MASS_KG) * IRIS_AREA)
+        _, _, frame_class = generate_multirotor_sdf(
+            mass_kg, rotor_count, rotor_radius, inertia, area, tdir, out)
+        print(f"[gen] {rotor_count}-rotor mass={mass_kg}kg inertia={tuple(round(x,4) for x in inertia)} "
+              f"area={area:.6f} FRAME_CLASS={frame_class}", flush=True)
 
     _sh("docker", "rm", "-f", _CONTAINER)
     # Mount the individual model.sdf FILES (not the dirs) so the original meshes/config in the
@@ -134,7 +149,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None)
     time.sleep(8)
 
     parm = out / "poc.parm"
-    parm.write_text(_PARM)
+    parm.write_text(_PARM.replace("FRAME_CLASS 1", f"FRAME_CLASS {frame_class}"))
     if not Path(_ARDUCOPTER).exists():
         print("[sitl] arducopter binary missing:", _ARDUCOPTER, flush=True)
         _cleanup(None)
@@ -301,8 +316,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None)
         D = 2 * rotor_radius
         p_hover = _per_rotor_power_w(cap_path, D)
         p_fwd = _per_rotor_power_w(fwd_cap, D)
-        p_model = power_at_speed(mass_kg, 4, rotor_radius, max(fwd_speed, 0.1)).power_w
-        f_eff = effective_drag_area_from_power(p_fwd, max(fwd_speed, 0.1), mass_kg, 4, rotor_radius)
+        p_model = power_at_speed(mass_kg, rotor_count, rotor_radius, max(fwd_speed, 0.1)).power_w
+        f_eff = effective_drag_area_from_power(p_fwd, max(fwd_speed, 0.1), mass_kg,
+                                              rotor_count, rotor_radius)
         LAST_RESULT.update(fwd_speed_mps=fwd_speed, fwd_power_w=p_fwd, hover_power_w=p_hover,
                            analytical_fwd_power_w=p_model, drag_area_m2=f_eff)
         print(f"[FWD] speed={fwd_speed:.1f} m/s  hover_rpm={hover_rpm:.0f}  fwd_rpm={fwd_rpm:.0f}",

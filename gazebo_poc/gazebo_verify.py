@@ -20,9 +20,10 @@ def verify_recommended_design(design) -> Dict[str, Any]:
     'status' in {ok, infeasible, failed, skipped}."""
     if design is None:
         return {"status": "skipped", "reason": "no recommended design from DSE"}
-    if getattr(design, "rotor_count", 4) != 4:
+    n = getattr(design, "rotor_count", 4)
+    if n not in (4, 6):
         return {"status": "skipped",
-                "reason": f"rotor_count={design.rotor_count}: SDF generator supports quad only"}
+                "reason": f"rotor_count={n}: SDF generator supports quad/hexa only"}
 
     mass = total_mass_kg(design)
     try:
@@ -35,7 +36,7 @@ def verify_recommended_design(design) -> Dict[str, Any]:
 
     try:
         run_flight.main(mass_kg=mass, rotor_radius=design.rotor_radius_m,
-                        capacity_mah=design.battery_capacity_mah)
+                        capacity_mah=design.battery_capacity_mah, rotor_count=n)
     except Exception as e:
         return {"status": "failed", "reason": f"flight: {e!r}", "mass_kg": mass}
 
@@ -43,9 +44,9 @@ def verify_recommended_design(design) -> Dict[str, Any]:
     if not r.get("hover_rpm"):
         return {"status": "failed", "reason": "no hover telemetry captured", "mass_kg": mass}
 
-    rpm = rpm_cross_check(r["hover_rpm"], mass, 4, design.rotor_radius_m)
-    ds = datasheet_endurance(mass, 4, design.battery_capacity_mah)
-    cv = cross_validate(mass, 4, design.battery_capacity_mah, gazebo_stable=r.get("hover_stable", False))
+    rpm = rpm_cross_check(r["hover_rpm"], mass, n, design.rotor_radius_m)
+    ds = datasheet_endurance(mass, n, design.battery_capacity_mah)
+    cv = cross_validate(mass, n, design.battery_capacity_mah, gazebo_stable=r.get("hover_stable", False))
     return {
         "status": "ok" if r.get("hover_stable") else "infeasible",
         "mass_kg": round(mass, 2),
