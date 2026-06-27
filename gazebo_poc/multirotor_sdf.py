@@ -22,6 +22,9 @@ from typing import List, Tuple
 
 # (angle_deg_cw_from_fwd, spin)  spin: +1 = CCW (multiplier +838), -1 = CW (multiplier -838)
 # tables are ArduCopter's own (AP_MotorsMatrix.cpp) so SDF positions+spins match the mixer.
+QUAD_X: List[Tuple[float, int]] = [
+    (45, +1), (-135, +1), (-45, -1), (135, -1),
+]
 HEXA_X: List[Tuple[float, int]] = [
     (90, -1), (-90, +1), (-30, -1), (150, +1), (30, +1), (-150, -1),
 ]
@@ -88,11 +91,11 @@ _ARDUPILOT_HEAD = """    <plugin name="ArduPilotPlugin" filename="ArduPilotPlugi
 
 
 def _motor_table(n: int):
-    if n == 6:
-        return HEXA_X
-    if n == 8:
-        return OCTA_X
-    raise NotImplementedError(f"motor table for rotor_count={n} not defined (have hexa/octa)")
+    return {4: QUAD_X, 6: HEXA_X, 8: OCTA_X}.get(n) or _unsupported(n)
+
+
+def _unsupported(n):
+    raise NotImplementedError(f"motor table for rotor_count={n} not defined (have quad/hexa/octa)")
 
 
 def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius_m: float,

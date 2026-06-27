@@ -37,7 +37,7 @@ def verify_recommended_design(design) -> Dict[str, Any]:
     try:
         run_flight.main(mass_kg=mass, rotor_radius=design.rotor_radius_m,
                         capacity_mah=design.battery_capacity_mah, rotor_count=n,
-                        calibrate=(n != 4))     # hexa/octa: real-motor area+max-speed (sane T/W)
+                        calibrate=True)         # all frames: real-motor area+max-speed anchoring
     except Exception as e:
         return {"status": "failed", "reason": f"flight: {e!r}", "mass_kg": mass}
 

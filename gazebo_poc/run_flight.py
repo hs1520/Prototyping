@@ -117,7 +117,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
     out = Path("gazebo_poc/generated")
     tdir = Path("gazebo_poc/templates")
     frame_class = 1
-    if rotor_count == 4:
+    if rotor_count == 4 and not calibrate:
+        # legacy quad path (in-place iris edit, iris-default aero/T-W) — kept for back-compat
         g = generate_sdf(mass_kg, 4, rotor_radius, tdir, out, area_override=area_override)
         print(f"[gen] quad mass={g.mass_kg}kg inertia={tuple(round(x,4) for x in g.inertia)} "
               f"area={0.002*g.area_scale:.6f}", flush=True)

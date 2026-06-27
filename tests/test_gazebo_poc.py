@@ -204,3 +204,19 @@ def test_real_motor_calibration():
     assert 600 < w < 900                       # realistic, below iris's over-powered 838 default
     # bigger prop → larger Ct-matched area
     assert calibrated_area(0.46) > calibrated_area(0.38)
+
+
+@pytest.mark.skipif(not _HAS_TEMPLATES, reason="iris templates absent")
+def test_quad_via_multirotor_calibrated_structure(tmp_path):
+    import xml.dom.minidom as md
+    from gazebo_poc.multirotor_sdf import generate_multirotor_sdf
+    so, gm, fc = generate_multirotor_sdf(5.5, 4, 0.19, multirotor_inertia(5.5, 4, 0.19),
+                                         0.00783, _TEMPLATES, tmp_path, max_rotor_rad_s=745.0)
+    s, g = so.read_text(), gm.read_text()
+    assert fc == 1                                       # QUAD via the unified path
+    assert s.count("<link name='rotor_") == 4
+    assert g.count("gz-sim-lift-drag-system") == 8
+    assert g.count("<control channel=") == 4
+    assert g.count("<multiplier>745.0</multiplier>") == 2     # calibrated max rotor speed
+    assert g.count("<multiplier>-745.0</multiplier>") == 2    # 2 CCW + 2 CW
+    md.parseString(s); md.parseString(g)
