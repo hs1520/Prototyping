@@ -110,3 +110,22 @@ def test_rpm_cross_check_flags_wrong_diameter_error():
     # the earlier 2900-RPM (18" prop) figure is NOT consistent with the 15" design rotor
     c = rpm_cross_check(gazebo_rpm=2900, mass_kg=5.5, rotor_count=4, rotor_radius_m=0.19)
     assert not c.within_ct_band                       # would imply an unphysical Ct
+
+
+def test_forward_flight_power_is_u_shaped():
+    from gazebo_poc.forward_flight import power_at_speed
+    hover = power_at_speed(5.5, 4, 0.19, 0.01).power_w
+    mid = power_at_speed(5.5, 4, 0.19, 12.0).power_w
+    fast = power_at_speed(5.5, 4, 0.19, 25.0).power_w
+    assert mid < hover and mid < fast               # U-shape: cheaper to cruise than hover/fast
+    # induced drops with speed, parasite grows
+    assert power_at_speed(5.5,4,0.19,15).induced_w < power_at_speed(5.5,4,0.19,5).induced_w
+    assert power_at_speed(5.5,4,0.19,15).parasite_w > power_at_speed(5.5,4,0.19,5).parasite_w
+
+
+def test_range_estimate_sane():
+    from gazebo_poc.forward_flight import range_estimate
+    r = range_estimate(5.5, 4, 0.19, 16000, 6)
+    assert r.best_range_speed_mps > r.best_endurance_speed_mps   # always, physically
+    assert r.min_power_w < r.hover_power_w                        # cruise cheaper than hover
+    assert 5 < r.range_km < 100                                   # plausible for this class
