@@ -112,7 +112,7 @@ LAST_RESULT: dict = {}
 
 
 def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
-         rotor_count=4) -> int:
+         rotor_count=4, calibrate=False) -> int:
     LAST_RESULT.clear()
     out = Path("gazebo_poc/generated")
     tdir = Path("gazebo_poc/templates")
@@ -125,14 +125,23 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         from gazebo_poc.multirotor_sdf import generate_multirotor_sdf
         from gazebo_poc.sdf_generator import IRIS_AREA, IRIS_MASS_KG, multirotor_inertia
         inertia = multirotor_inertia(mass_kg, rotor_count, rotor_radius)
-        # per-rotor area = iris-sized scaling (same formula as quad) so per-rotor RPM stays
-        # physically comparable to prop theory; N>4 just gives more total thrust margin
-        area = (area_override if area_override is not None
-                else (mass_kg / IRIS_MASS_KG) * IRIS_AREA)
+        mult = 838.0
+        if calibrate:
+            # real-motor calibration: area matches the prop's Ct (→ physical hover RPM) and the
+            # max rotor speed is set so full throttle = the real motor's max thrust (→ real T/W,
+            # so the controller can park a high-rotor-count airframe cleanly).
+            from gazebo_poc.component_data import MN5008_KV340_18x61 as motor
+            from gazebo_poc.prop_theory import calibrated_area, calibrated_max_rad_s
+            area = calibrated_area(2 * rotor_radius)
+            mult = calibrated_max_rad_s(area, motor.max_thrust_g() / 1000.0 * 9.81)
+        else:
+            area = (area_override if area_override is not None
+                    else (mass_kg / IRIS_MASS_KG) * IRIS_AREA)
         _, _, frame_class = generate_multirotor_sdf(
-            mass_kg, rotor_count, rotor_radius, inertia, area, tdir, out)
+            mass_kg, rotor_count, rotor_radius, inertia, area, tdir, out, max_rotor_rad_s=mult)
         print(f"[gen] {rotor_count}-rotor mass={mass_kg}kg inertia={tuple(round(x,4) for x in inertia)} "
-              f"area={area:.6f} FRAME_CLASS={frame_class}", flush=True)
+              f"area={area:.6f} max_rotor={mult:.0f}rad/s FRAME_CLASS={frame_class}"
+              f"{' [calibrated]' if calibrate else ''}", flush=True)
 
     _sh("docker", "rm", "-f", _CONTAINER)
     # Mount the individual model.sdf FILES (not the dirs) so the original meshes/config in the

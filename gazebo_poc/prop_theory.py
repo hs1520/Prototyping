@@ -27,6 +27,24 @@ PROP_CT_SOURCE = "https://www.tytorobotics.com/blogs/articles/how-to-calculate-p
 FOM = 0.62             # figure of merit (matches src/dse/physics_estimator)
 
 
+# iris LiftDrag thrust constant κ (T = κ·area·ω²), back-calculated from the validated quad flight:
+# hover thrust 13.49 N at ω=440 rad/s, area=0.00733 → κ = 13.49/(0.00733·440²) ≈ 9.506e-3.
+IRIS_LIFTDRAG_KAPPA = 9.506e-3
+
+
+def calibrated_area(diameter_m: float, ct: float = PROP_CT) -> float:
+    """LiftDrag `area` that makes Gazebo's thrust-vs-ω curve equal a real prop's (Ct): set
+    κ·area = Ct·ρ·D⁴/(4π²). Then the trimmed hover RPM equals the real prop's RPM."""
+    kappa_real = ct * RHO * diameter_m ** 4 / (4.0 * math.pi ** 2)
+    return kappa_real / IRIS_LIFTDRAG_KAPPA
+
+
+def calibrated_max_rad_s(area: float, motor_max_thrust_n: float) -> float:
+    """Max rotor speed (ArduPilotPlugin multiplier) so full throttle gives the real motor's max
+    thrust: T_max = κ·area·ω_max² → ω_max = sqrt(T_max/(κ·area)). Sets a realistic T/W."""
+    return math.sqrt(motor_max_thrust_n / (IRIS_LIFTDRAG_KAPPA * area))
+
+
 def power_coefficient(ct: float = PROP_CT, fom: float = FOM) -> float:
     """Cp from Ct via the figure-of-merit identity FM = Ct^1.5 / (sqrt(2)·Cp).
     For Ct=0.115, FM=0.62 → Cp≈0.045 (typical multirotor prop)."""

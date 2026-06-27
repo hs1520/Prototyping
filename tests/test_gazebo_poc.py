@@ -172,8 +172,8 @@ def test_hexa_sdf_structure(tmp_path):
     assert g.count("gz-sim-lift-drag-system") == 12     # 2 blades each
     assert g.count("<control channel=") == 6
     # 3 CCW (+838) + 3 CW (-838) — matches ArduCopter HEXA-X spin pattern
-    assert g.count("<multiplier>838</multiplier>") == 3
-    assert g.count("<multiplier>-838</multiplier>") == 3
+    assert g.count("<multiplier>838.0</multiplier>") == 3
+    assert g.count("<multiplier>-838.0</multiplier>") == 3
     md.parseString(s); md.parseString(g)                # both well-formed
 
 
@@ -188,6 +188,19 @@ def test_octa_sdf_structure(tmp_path):
     assert s.count("<link name='rotor_") == 8
     assert g.count("gz-sim-lift-drag-system") == 16
     assert g.count("<control channel=") == 8
-    assert g.count("<multiplier>838</multiplier>") == 4    # 4 CCW + 4 CW (yaw-balanced)
-    assert g.count("<multiplier>-838</multiplier>") == 4
+    assert g.count("<multiplier>838.0</multiplier>") == 4    # 4 CCW + 4 CW (yaw-balanced)
+    assert g.count("<multiplier>-838.0</multiplier>") == 4
     md.parseString(s); md.parseString(g)
+
+
+def test_real_motor_calibration():
+    from gazebo_poc.prop_theory import calibrated_area, calibrated_max_rad_s
+    from gazebo_poc.component_data import MN5008_KV340_18x61 as motor
+    # Ct-matched area for the design diameter is iris-scale and positive
+    a = calibrated_area(0.38)
+    assert 0.005 < a < 0.012
+    # max rotor speed set so full throttle = real motor max thrust
+    w = calibrated_max_rad_s(a, motor.max_thrust_g() / 1000.0 * 9.81)
+    assert 600 < w < 900                       # realistic, below iris's over-powered 838 default
+    # bigger prop → larger Ct-matched area
+    assert calibrated_area(0.46) > calibrated_area(0.38)

@@ -97,8 +97,10 @@ def _motor_table(n: int):
 
 def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius_m: float,
                             inertia: Tuple[float, float, float], area: float,
-                            template_dir: Path, out_dir: Path):
-    """Write parametric standoffs + gimbal SDFs for an N-rotor (hexa) airframe."""
+                            template_dir: Path, out_dir: Path, max_rotor_rad_s: float = 838.0):
+    """Write parametric standoffs + gimbal SDFs for an N-rotor airframe. ``max_rotor_rad_s`` is the
+    full-throttle rotor speed (ArduPilotPlugin multiplier) — lower it (real-motor calibration) to
+    get a realistic thrust-to-weight instead of iris's over-powered default."""
     table = _motor_table(rotor_count)
     L = 2.2 * rotor_radius_m
     ixx, iyy, izz = inertia
@@ -134,8 +136,9 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
     for i in range(rotor_count):
         gm += _APPLYFORCE.format(i=i)
     gm += _ARDUPILOT_HEAD
+    mv = f"{max_rotor_rad_s:.1f}"
     for i, (ang, spin) in enumerate(table):
-        gm += _CONTROL.format(i=i, mult="838" if spin > 0 else "-838")
+        gm += _CONTROL.format(i=i, mult=mv if spin > 0 else "-" + mv)
     gm += "    </plugin>\n  </model>\n</sdf>\n"
 
     so_out = out_dir / "iris_with_standoffs" / "model.sdf"
