@@ -7,6 +7,10 @@ what evidence actually exists, so a baseline states its verification maturity in
 implying all requirements are met.
 
 Levels (strongest → weakest):
+  flight-verified    : the recommended design was FLOWN in Gazebo (stable hover, real-motor
+                       calibrated) AND a real motor+prop datasheet meets the target — the
+                       highest-fidelity evidence (physical flight + real components). Opt-in
+                       (RUN_GAZEBO); applies to the endurance/flight requirement.
   analysis-verified  : an injected, Automator-evaluable `assert constraint` checks it
                        (endurance / MTOW / range — the physics axis we actually model).
   quantitative       : carries a numeric target → coverable by the DSE→SITL quantitative
@@ -28,6 +32,7 @@ from .requirement_spec import extract_requirements
 from .functional_behavior import functional_behavior_status
 from .safety_behavior import safety_behavior_status
 
+FLIGHT_VERIFIED = "flight-verified"
 ANALYSIS_VERIFIED = "analysis-verified"
 QUANTITATIVE = "quantitative"
 ALLOCATED_ONLY = "allocated-only"
@@ -43,12 +48,21 @@ def _norm(rid: str) -> str:
 
 def classify_requirement_coverage(model_text: str, requirements: List[str],
                                   endurance_req: str = "REQ-PERF-002",
-                                  dynamic: bool = False) -> Dict[str, str]:
+                                  dynamic: bool = False, gazebo: Dict = None) -> Dict[str, str]:
     """{req_id: evidence level} for every requirement declared in the model. ``dynamic=True``
     runs the behavioural simulator so safety reqs are graded by whether their guarded response
-    actually FIRES (dynamic), catching guards that are present but never fire."""
+    actually FIRES. ``gazebo`` (a verify_recommended_design result dict) upgrades the endurance
+    requirement to flight-verified when the recommended design flew stably AND a real motor+prop
+    datasheet meets the endurance target."""
     declared = [_norm(m.group(1)) for m in _REQDEF_RE.finditer(model_text)]
     satisfied = {_norm(m.group(1)) for m in _SATISFY_RE.finditer(model_text)}
+
+    # flight-verified (strongest): Gazebo flew the design stably + real datasheet meets endurance
+    flight = set()
+    if gazebo and gazebo.get("status") == "ok":
+        et = endurance_target(requirements)
+        if et > 0 and gazebo.get("datasheet_endurance_min", 0) >= et:
+            flight.add(_norm(endurance_req))
 
     analysis = set()                                   # reqs an injected assert actually checks
     if "enduranceMeetsReq" in model_text and endurance_target(requirements) > 0:
@@ -70,7 +84,9 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
 
     out: Dict[str, str] = {}
     for rid in declared:
-        if rid in analysis:
+        if rid in flight:
+            out[rid] = FLIGHT_VERIFIED          # flown in Gazebo + real datasheet (highest)
+        elif rid in analysis:
             out[rid] = ANALYSIS_VERIFIED
         elif rid in quant:
             out[rid] = QUANTITATIVE
@@ -90,6 +106,7 @@ def coverage_summary(cov: Dict[str, str]) -> str:
                                   BEHAVIORALLY_VIOLATED)
     c = Counter(cov.values())
     return (f"requirement evidence ({len(cov)} reqs): "
+            f"{c.get(FLIGHT_VERIFIED, 0)} flight-verified, "
             f"{c.get(ANALYSIS_VERIFIED, 0)} analysis-verified, "
             f"{c.get(QUANTITATIVE, 0)} quantitative-checkable, "
             f"{c.get(BEHAVIORALLY_VERIFIED, 0)} behaviorally-verified, "

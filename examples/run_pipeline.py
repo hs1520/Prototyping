@@ -57,23 +57,26 @@ if __name__ == "__main__":
     dv = res.get("dse_verification")
     print("DSE→SITL verify  :", dv["summary"] if dv else "(no quantified requirements)")
 
+    # Opt-in high-fidelity verification: fly the DSE-recommended design in Gazebo (~5 min, Docker).
+    # Gated by RUN_GAZEBO=1 — off by default (heavy, like RUN_SITL). Run BEFORE coverage so its
+    # verdict can upgrade the endurance requirement to flight-verified.
+    gv = None
+    if os.environ.get("RUN_GAZEBO") == "1":
+        design = getattr(pipe.orchestrator, "last_recommended_design", None)
+        from gazebo_poc.gazebo_verify import summary_line, verify_recommended_design
+        print("\n[RUN_GAZEBO] flying recommended design in Gazebo ...", flush=True)
+        gv = verify_recommended_design(design)
+        print("gazebo verify  :", summary_line(gv))
+
     # Honest verification-coverage of the satisfy claims: satisfy = allocation/intent, not
     # proof. Report how many requirements actually have evidence vs are allocated-only.
     from src.dse.requirement_coverage import classify_requirement_coverage, coverage_summary
-    cov = classify_requirement_coverage(final_sysml, DRONE_REQUIREMENTS, dynamic=True)
+    cov = classify_requirement_coverage(final_sysml, DRONE_REQUIREMENTS, dynamic=True, gazebo=gv)
     print("req evidence     :", coverage_summary(cov))
     allocated = sorted(r for r, l in cov.items() if l == "allocated-only")
     if allocated:
         print("  allocated-only (satisfy=intent, NOT verified — behaviour/protocol, out of scope):")
         print("   ", ", ".join(allocated))
-
-    # Opt-in high-fidelity verification: fly the DSE-recommended design in Gazebo (~5 min, Docker).
-    # Gated by RUN_GAZEBO=1 — off by default (heavy, like RUN_SITL).
-    if os.environ.get("RUN_GAZEBO") == "1":
-        design = getattr(pipe.orchestrator, "last_recommended_design", None)
-        from gazebo_poc.gazebo_verify import summary_line, verify_recommended_design
-        print("\n[RUN_GAZEBO] flying recommended design in Gazebo ...", flush=True)
-        print("gazebo verify  :", summary_line(verify_recommended_design(design)))
 
     print("\n初始模型 (DSE 前) →", initial_path)
     print("最终模型 (DSE 后) →", final_path)

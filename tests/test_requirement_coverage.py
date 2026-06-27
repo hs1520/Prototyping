@@ -60,3 +60,25 @@ def test_endurance_not_analysis_verified_without_the_assert():
     model = _MODEL.replace("assert constraint enduranceMeetsReq { 21.0 >= 20.0 }", "")
     cov = classify_requirement_coverage(model, _REQS)
     assert cov["REQ-PERF-002"] == QUANTITATIVE           # numeric target remains, but no assert
+
+
+def test_gazebo_upgrades_endurance_to_flight_verified():
+    from src.dse.requirement_coverage import classify_requirement_coverage, FLIGHT_VERIFIED
+    # a model where endurance is analysis-verified (assert present)
+    model = """package D {
+        requirement def REQ_PERF_002 { doc /* endurance */ }
+        part def Drone { attribute enduranceMeetsReq : Boolean; satisfy requirement REQ_PERF_002; }
+    }"""
+    reqs = ["REQ-PERF-002: the system shall sustain flight for a minimum of 20 minutes."]
+    base = classify_requirement_coverage(model, reqs)
+    assert base["REQ-PERF-002"] == "analysis-verified"          # without Gazebo
+    # Gazebo flew stably + datasheet endurance 35 ≥ 20 → flight-verified (upgrade)
+    gv = {"status": "ok", "datasheet_endurance_min": 35.2}
+    up = classify_requirement_coverage(model, reqs, gazebo=gv)
+    assert up["REQ-PERF-002"] == FLIGHT_VERIFIED
+    # but NOT if datasheet endurance falls short of the target
+    short = classify_requirement_coverage(model, reqs, gazebo={"status": "ok", "datasheet_endurance_min": 12})
+    assert short["REQ-PERF-002"] == "analysis-verified"
+    # and NOT if the flight wasn't stable
+    unstable = classify_requirement_coverage(model, reqs, gazebo={"status": "infeasible", "datasheet_endurance_min": 35})
+    assert unstable["REQ-PERF-002"] == "analysis-verified"
