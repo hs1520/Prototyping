@@ -92,7 +92,7 @@ def verify_recommended_design(design, requirements=None) -> Dict[str, Any]:
         try:
             run_flight.main(mass_kg=mass, rotor_radius=design.rotor_radius_m,
                             capacity_mah=design.battery_capacity_mah, rotor_count=n,
-                            calibrate=(n != 4), fail_rotor=0)
+                            calibrate=True, fail_rotor=0)   # same calibrated path as nominal
             result["motor_failure_tolerant"] = bool(run_flight.LAST_RESULT.get("hover_stable"))
             result["redundancy_req"] = rreq
         except Exception as e:
