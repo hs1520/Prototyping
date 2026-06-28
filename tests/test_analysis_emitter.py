@@ -279,3 +279,40 @@ def test_trade_study_alternatives_eval_match_python():
     for i, a in enumerate(_ALTS):
         ev, _ = c.evaluate_feature(f[f"alt{i}_enduranceMin"], scope=ts)
         assert abs(ev - endurance_min(a)) < 0.05
+
+
+def test_design_path_emits_bound_recommendeddesign():
+    """The authoritative (design) path BINDS the analysis to a named recommendedDesign part with
+    unified attribute names, not inline literals — genuine model-internal binding (issue #2/#3)."""
+    from src.dse.analysis_emitter import inject_endurance_analysis
+    from src.dse.domain_objective import DesignInputs
+    d = DesignInputs(payload_mass_kg=2.0, battery_capacity_mah=22000, battery_cells=4,
+                     rotor_count=4, rotor_radius_m=0.254, cruise_speed_mps=15.0)
+    base = "package P {\n  requirement def REQ_PERF_002 { doc /* e */ }\n  part def Drone { }\n}"
+    reqs = ["REQ-PERF-002: sustain flight for a minimum of 20 minutes.",
+            "REQ-CONS-001: MTOW shall not exceed 25 kg."]
+    out, ok = inject_endurance_analysis(base, reqs, design=d, satisfy_req="REQ-PERF-002")
+    assert ok
+    assert "part recommendedDesign {" in out                       # named design point
+    assert "Endurance(recommendedDesign.capacityMah" in out        # analysis BINDS to it
+    assert "Endurance(22000" not in out                            # NOT inline literals
+
+
+def test_bound_closure_is_automator_evaluable():
+    syside = pytest.importorskip("syside")
+    from src.dse.analysis_emitter import inject_endurance_analysis
+    from src.dse.domain_objective import DesignInputs
+    d = DesignInputs(payload_mass_kg=2.0, battery_capacity_mah=22000, battery_cells=4,
+                     rotor_count=4, rotor_radius_m=0.254, cruise_speed_mps=0.0)
+    base = "package P {\n  requirement def REQ_PERF_002 { doc /* e */ }\n  part def Drone { }\n}"
+    out, ok = inject_endurance_analysis(
+        base, ["REQ-PERF-002: sustain flight for a minimum of 20 minutes.",
+               "REQ-CONS-001: MTOW shall not exceed 25 kg."], design=d, satisfy_req="REQ-PERF-002")
+    assert ok
+    model, _ = syside.try_load_model(sysml_source=out)
+    comp = syside.Compiler()
+    vals = {a.name: comp.evaluate(a.feature_value_expression)
+            for a in model.nodes(syside.AttributeUsage)
+            if a.name in ("enduranceMin", "mtowKg") and a.feature_value_expression}
+    # both bound metrics evaluate (cross-part refs resolved) — non-fatal, positive
+    assert all(not r.fatal and float(v) > 0 for v, r in vals.values()) and len(vals) == 2

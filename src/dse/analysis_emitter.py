@@ -188,11 +188,13 @@ def inject_endurance_analysis(
     for uname, utype in _USAGE_RE.findall(body):
         for field in variant_design_inputs(text, utype):
             field_owner[field] = (uname, utype)
-    if not field_owner:
-        return model_text, False
+    if not field_owner and design is None:
+        return model_text, False                      # legacy path needs variant attrs to ref
     # battery capacity is the inner-BO variable; if the chosen power variant doesn't
     # declare it, write the chosen value INTO that variant's type so it's referenceable.
-    if "battery_capacity_mah" not in field_owner and capacity_mah and "battery_cells" in field_owner:
+    # (legacy path only — the bound design path references recommendedDesign, not variants.)
+    if design is None and "battery_capacity_mah" not in field_owner and capacity_mah \
+            and "battery_cells" in field_owner:
         uname, utype = field_owner["battery_cells"]
         text, ok2 = _inject_attr_into_type(text, utype, "batteryCapacityMah", float(capacity_mah))
         if ok2:
@@ -214,15 +216,26 @@ def inject_endurance_analysis(
             return f"{field_owner[field][0]}.{DESIGN_FIELD_ATTR[field]}"
         return str(float(DESIGN_DEFAULTS[field]))     # nothing owns it → literal default
 
+    design_member = None
     if design is not None:                            # authoritative: exactly what DSE scored
-        # design.payload_mass_kg already encodes delivery payload + component masses (the DSE's
-        # all-up added mass) — use it directly, don't re-override with the bare rated payload
-        # (that would drop the component masses and diverge from the trade study).
-        order_vals = {"battery_capacity_mah": design.battery_capacity_mah,
-                      "battery_cells": design.battery_cells, "rotor_count": design.rotor_count,
-                      "rotor_radius_m": design.rotor_radius_m, "payload_mass_kg": design.payload_mass_kg}
-        base5 = ", ".join(str(float(order_vals[f])) for f in _ARG_ORDER)
+        # Genuine model-internal BINDING (not inline literals): emit the scored design point as a
+        # named `recommendedDesign` part with UNIFIED-name attributes, and have the analysis
+        # REFERENCE them (Automator-evaluable cross-part refs — verified). One traceable source;
+        # editing the design attribute flows into the analysis. addedMassKg = design.payload_mass_kg
+        # already encodes delivery payload + component masses (the DSE's all-up added mass).
         cruise = design.cruise_speed_mps
+        design_member = (
+            "        part recommendedDesign {\n"
+            f"            attribute capacityMah : Real = {float(design.battery_capacity_mah)};\n"
+            f"            attribute cells : Real = {float(design.battery_cells)};\n"
+            f"            attribute rotorCount : Real = {float(design.rotor_count)};\n"
+            f"            attribute rotorRadiusM : Real = {float(design.rotor_radius_m)};\n"
+            f"            attribute addedMassKg : Real = {float(design.payload_mass_kg)};\n"
+            + (f"            attribute cruiseSpeedMps : Real = {float(cruise)};\n" if cruise else "")
+            + "        }")
+        base5 = ("recommendedDesign.capacityMah, recommendedDesign.cells, "
+                 "recommendedDesign.rotorCount, recommendedDesign.rotorRadiusM, "
+                 "recommendedDesign.addedMassKg")
     else:                                             # legacy: reference chosen variant attrs
         base5 = ", ".join(ref(f) for f in _ARG_ORDER)
         cruise = None
@@ -258,13 +271,15 @@ def inject_endurance_analysis(
     has_cruise = (cruise is not None and cruise > 0) if design is not None \
         else ("cruise_speed_mps" in field_owner)
     if range_rid and range_tgt > 0 and has_cruise:
-        cruise_arg = str(float(cruise)) if design is not None else ref("cruise_speed_mps")
+        cruise_arg = "recommendedDesign.cruiseSpeedMps" if design is not None else ref("cruise_speed_mps")
         rinv = f"RangeM({base5}, {cruise_arg})"
         add_metric(range_calc_def(indent="        "), range_rid,
                    "rangeM", rinv, ">=", range_tgt, "rangeMeetsReq")
 
+    if design_member:                                 # bound design point first (refs resolve to it)
+        members.insert(0, design_member)
     core = "\n".join(defs + decls + members)
-    note = "    // --- DSE analysis closure (Automator-evaluable; refs chosen variants) ---\n"
+    note = "    // --- DSE analysis closure (Automator-evaluable; analysis BINDS to recommendedDesign) ---\n"
     if wrap:                                          # flat package → wrapper part def
         frag = f"\n{note}    part def DseDesignAnalysis {{\n{core}\n    }}\n"
     else:                                             # nested → straight into the root body
