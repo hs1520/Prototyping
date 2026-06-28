@@ -316,3 +316,22 @@ def test_bound_closure_is_automator_evaluable():
             if a.name in ("enduranceMin", "mtowKg") and a.feature_value_expression}
     # both bound metrics evaluate (cross-part refs resolved) — non-fatal, positive
     assert all(not r.fatal and float(v) > 0 for v, r in vals.values()) and len(vals) == 2
+
+
+def test_evidence_chain_satisfy_on_design_plus_verify():
+    """Issue #4: the DESIGN element (recommendedDesign) satisfies the requirement, and a
+    verification def `verify`s it — not a bare `satisfy` floating in the analysis block."""
+    from src.dse.analysis_emitter import inject_endurance_analysis
+    from src.dse.domain_objective import DesignInputs
+    d = DesignInputs(payload_mass_kg=2.0, battery_capacity_mah=22000, battery_cells=4,
+                     rotor_count=4, rotor_radius_m=0.254, cruise_speed_mps=0.0)
+    base = "package P {\n  requirement def REQ_PERF_002 { doc /* e */ }\n  part def Drone { }\n}"
+    out, ok = inject_endurance_analysis(
+        base, ["REQ-PERF-002: sustain flight for a minimum of 20 minutes.",
+               "REQ-CONS-001: MTOW shall not exceed 25 kg."], design=d, satisfy_req="REQ-PERF-002")
+    assert ok
+    design_block = out.split("part recommendedDesign {", 1)[1].split("        }", 1)[0]
+    assert "satisfy req_perf_002" in design_block        # DESIGN satisfies (not the analysis block)
+    assert "verification def REQ_PERF_002_check" in out  # explicit verification
+    assert "verify req_perf_002;" in out                 # verify linkage to the requirement
+    assert "assert constraint enduranceMeetsReq" in out  # evaluable evidence retained

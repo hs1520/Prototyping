@@ -216,7 +216,7 @@ def inject_endurance_analysis(
             return f"{field_owner[field][0]}.{DESIGN_FIELD_ATTR[field]}"
         return str(float(DESIGN_DEFAULTS[field]))     # nothing owns it → literal default
 
-    design_member = None
+    design_attr_lines = None
     if design is not None:                            # authoritative: exactly what DSE scored
         # Genuine model-internal BINDING (not inline literals): emit the scored design point as a
         # named `recommendedDesign` part with UNIFIED-name attributes, and have the analysis
@@ -224,15 +224,13 @@ def inject_endurance_analysis(
         # editing the design attribute flows into the analysis. addedMassKg = design.payload_mass_kg
         # already encodes delivery payload + component masses (the DSE's all-up added mass).
         cruise = design.cruise_speed_mps
-        design_member = (
-            "        part recommendedDesign {\n"
+        design_attr_lines = (
             f"            attribute capacityMah : Real = {float(design.battery_capacity_mah)};\n"
             f"            attribute cells : Real = {float(design.battery_cells)};\n"
             f"            attribute rotorCount : Real = {float(design.rotor_count)};\n"
             f"            attribute rotorRadiusM : Real = {float(design.rotor_radius_m)};\n"
             f"            attribute addedMassKg : Real = {float(design.payload_mass_kg)};\n"
-            + (f"            attribute cruiseSpeedMps : Real = {float(cruise)};\n" if cruise else "")
-            + "        }")
+            + (f"            attribute cruiseSpeedMps : Real = {float(cruise)};\n" if cruise else ""))
         base5 = ("recommendedDesign.capacityMah, recommendedDesign.cells, "
                  "recommendedDesign.rotorCount, recommendedDesign.rotorRadiusM, "
                  "recommendedDesign.addedMassKg")
@@ -242,7 +240,8 @@ def inject_endurance_analysis(
 
     defs: list = []                                   # calc defs (shared analysis scope)
     decls: list = []                                  # requirement usages
-    members: list = []                                # derived attrs + constraints + satisfy
+    members: list = []                                # derived attrs + constraints + verification
+    satisfied: list = []                              # req usages the DESIGN element satisfies
     seen = set(re.findall(r"requirement\s+def\s+(\w+)", text))
 
     def add_metric(calc_def_src, rid_raw, attr, expr, op, bound, cname):
@@ -255,7 +254,12 @@ def inject_endurance_analysis(
         decls.append(f"        requirement {rid.lower()} : {rid};")
         members.append(f"        attribute {attr} : Real = {expr};")
         members.append(f"        assert constraint {cname} {{ {expr} {op} {bound} }}")
-        members.append(f"        satisfy {rid.lower()};")
+        # Proper evidence chain (issue #4): the DESIGN element satisfies the requirement, and a
+        # verification VERIFIES it (objective → verify), with the assert above as the evaluable
+        # evidence — not a bare `satisfy` floating in the analysis block.
+        satisfied.append(rid.lower())
+        members.append(f"        verification def {rid}_check {{ objective {rid.lower()}_obj "
+                       f"{{ verify {rid.lower()}; }} }}")
 
     # endurance (perf, >=) — the required trigger
     add_metric(endurance_calc_def(indent="        "), satisfy_req,
@@ -276,8 +280,11 @@ def inject_endurance_analysis(
         add_metric(range_calc_def(indent="        "), range_rid,
                    "rangeM", rinv, ">=", range_tgt, "rangeMeetsReq")
 
-    if design_member:                                 # bound design point first (refs resolve to it)
-        members.insert(0, design_member)
+    if design_attr_lines is not None:                 # bound design point first (refs resolve to it)
+        sat = "".join(f"            satisfy {r};\n" for r in satisfied)
+        members.insert(0, "        part recommendedDesign {\n" + design_attr_lines + sat + "        }")
+    else:                                             # legacy path: design doesn't exist → satisfy
+        members += [f"        satisfy {r};" for r in satisfied]   #   in the closure (as before)
     core = "\n".join(defs + decls + members)
     note = "    // --- DSE analysis closure (Automator-evaluable; analysis BINDS to recommendedDesign) ---\n"
     if wrap:                                          # flat package → wrapper part def
