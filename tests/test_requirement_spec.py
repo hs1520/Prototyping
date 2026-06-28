@@ -119,3 +119,16 @@ def test_enforce_requirement_text_restores_verbatim():
     assert "all other safety responses" in out and "all calculations" not in out
     assert "up to 1.5 kg" in out and "up to 9 kg" not in out          # corrupted value restored
     assert "unknown, leave as-is" in out                              # unknown req untouched
+
+
+def test_bind_current_payload_unvacuums_bound():
+    from src.dse.requirement_spec import bind_current_payload
+    m = ("part def P {\n  attribute maxPayloadMass_kg : Real = 1.5 [kg];\n"
+         "  attribute currentPayloadMass_kg : Real = 0.0 [kg];\n"
+         "  assert constraint payloadMassBound { currentPayloadMass_kg <= maxPayloadMass_kg }\n}")
+    reqs = ["REQ-FUNC-003: transport payloads with a gross mass of up to 1.5 kg."]
+    out = bind_current_payload(m, reqs)
+    assert "currentPayloadMass_kg : Real = 1.5" in out          # bound to rated delivery payload
+    assert "currentPayloadMass_kg : Real = 0.0" not in out      # vacuous placeholder gone
+    # no payload requirement → untouched
+    assert bind_current_payload(m, ["REQ-PERF-001: cruise at 15 m/s."]) == m

@@ -204,3 +204,18 @@ def enforce_requirement_text(model_text: str, requirements: List[str]) -> str:
         return f"{mo.group(1)} {canon[rid]} {mo.group(4)}"
 
     return _REQDOC_RE.sub(_sub, model_text)
+
+
+_CUR_PAYLOAD_RE = re.compile(
+    r"(current[A-Za-z]*[Pp]ayload[A-Za-z_]*\s*:\s*Real\s*=\s*)0\.0")
+
+
+def bind_current_payload(model_text: str, requirements: List[str]) -> str:
+    """Bind the LLM's placeholder ``current…Payload…Mass : Real = 0.0`` to the actual rated
+    delivery payload (the max PAYLOAD spec), so the generated ``payloadMassBound`` constraint
+    becomes a REAL check (rated payload ≤ declared capacity) instead of the vacuous 0.0 ≤ max.
+    No payload requirement → model unchanged."""
+    rated = max_value(extract_requirements(requirements), "payload")
+    if not rated or rated <= 0:
+        return model_text
+    return _CUR_PAYLOAD_RE.sub(lambda m: f"{m.group(1)}{float(rated)}", model_text)

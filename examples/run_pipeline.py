@@ -41,9 +41,12 @@ if __name__ == "__main__":
 
     # Restore VERBATIM requirement doc text (the LLM paraphrases/corrupts it during generation,
     # e.g. SAFE-005 "all other safety responses" → "all calculations"). Deterministic fidelity pass.
-    from src.dse.requirement_spec import enforce_requirement_text
-    initial_sysml = enforce_requirement_text(initial_sysml, DRONE_REQUIREMENTS)
-    final_sysml = enforce_requirement_text(final_sysml, DRONE_REQUIREMENTS)
+    from src.dse.requirement_spec import bind_current_payload, enforce_requirement_text
+    for fn in (enforce_requirement_text, bind_current_payload):
+        # enforce_requirement_text: restore verbatim requirement doc text (LLM paraphrase fix)
+        # bind_current_payload: bind currentPayloadMass=0.0 → rated payload (un-vacuum the bound)
+        initial_sysml = fn(initial_sysml, DRONE_REQUIREMENTS)
+        final_sysml = fn(final_sysml, DRONE_REQUIREMENTS)
 
     outdir = os.path.join(os.path.dirname(__file__), "output")
     os.makedirs(outdir, exist_ok=True)
