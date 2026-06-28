@@ -250,3 +250,6 @@ def test_motor_failure_upgrades_redundancy_req_to_flight_verified():
     # lost control → NOT flight-verified
     gv2 = {"status": "ok", "motor_failure_tolerant": False, "redundancy_req": "REQ-SAFE-007"}
     assert classify_requirement_coverage(model, reqs, gazebo=gv2)["REQ-SAFE-007"] != FLIGHT_VERIFIED
+    # inconclusive (flight errored) → also NOT flight-verified (a transient can't earn the green)
+    gv3 = {"status": "ok", "motor_failure_tolerant": None, "redundancy_req": "REQ-SAFE-007"}
+    assert classify_requirement_coverage(model, reqs, gazebo=gv3)["REQ-SAFE-007"] != FLIGHT_VERIFIED

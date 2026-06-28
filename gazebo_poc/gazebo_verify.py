@@ -89,12 +89,16 @@ def verify_recommended_design(design, requirements=None) -> Dict[str, Any]:
     # exists and the nominal flight was stable. Fly again with one motor dead.
     rreq = _redundancy_req(requirements)
     if rreq and r.get("hover_stable"):
+        result["redundancy_req"] = rreq
         try:
             run_flight.main(mass_kg=mass, rotor_radius=design.rotor_radius_m,
                             capacity_mah=design.battery_capacity_mah, rotor_count=n,
                             calibrate=True, fail_rotor=0)   # same calibrated path as nominal
-            result["motor_failure_tolerant"] = bool(run_flight.LAST_RESULT.get("hover_stable"))
-            result["redundancy_req"] = rreq
+            # hover_stable is only set when the flight COMPLETES; None = the flight errored
+            # (e.g. SITL connection reset) → INCONCLUSIVE, NOT a controllability failure, so a
+            # transient can't false-fail a redundant design.
+            hs = run_flight.LAST_RESULT.get("hover_stable")
+            result["motor_failure_tolerant"] = hs if hs is None else bool(hs)
         except Exception as e:
             result["motor_failure_tolerant"] = None
             result["redundancy_reason"] = repr(e)
@@ -104,9 +108,13 @@ def verify_recommended_design(design, requirements=None) -> Dict[str, Any]:
 def summary_line(v: Dict[str, Any]) -> str:
     if v.get("status") in ("skipped", "failed"):
         return f"Gazebo verify: {v['status']} ({v.get('reason', '')})"
-    mft = v.get("motor_failure_tolerant")
-    mft_s = ("" if mft is None
-             else f"; 1-motor-out: {'TOLERANT' if mft else 'LOST CONTROL'}")
+    if "motor_failure_tolerant" in v:
+        mft = v["motor_failure_tolerant"]
+        verdict = ("TOLERANT" if mft else "INCONCLUSIVE (flight error)" if mft is None
+                   else "LOST CONTROL")
+        mft_s = f"; 1-motor-out: {verdict}"
+    else:
+        mft_s = ""
     return (f"Gazebo verify [{v['status']}]: {v['mass_kg']}kg hover "
             f"{'STABLE' if v['hover_stable'] else 'UNSTABLE'} @{v['hover_throttle_pct']}% "
             f"throttle, {v['hover_rpm']} RPM (vs prop theory {v['rpm_theory']}, "
