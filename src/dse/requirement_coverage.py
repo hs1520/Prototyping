@@ -107,14 +107,16 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
 
 def coverage_summary(cov: Dict[str, str]) -> str:
     from .safety_behavior import (BEHAVIOR_ABSENT, BEHAVIORALLY_VERIFIED,
-                                  BEHAVIORALLY_VIOLATED)
+                                  BEHAVIORALLY_VIOLATED, RESPONSE_COLLAPSED)
     c = Counter(cov.values())
+    cc = c.get(RESPONSE_COLLAPSED, 0)
     return (f"requirement evidence ({len(cov)} reqs): "
             f"{c.get(FLIGHT_VERIFIED, 0)} flight-verified, "
             f"{c.get(ANALYSIS_VERIFIED, 0)} analysis-verified, "
             f"{c.get(QUANTITATIVE, 0)} quantitative-checkable, "
             f"{c.get(BEHAVIORALLY_VERIFIED, 0)} behaviorally-verified, "
             f"{c.get(BEHAVIORALLY_VIOLATED, 0)} behaviorally-violated, "
-            f"{c.get(BEHAVIOR_ABSENT, 0)} behavior-absent, "
+            + (f"{cc} response-collapsed, " if cc else "")
+            + f"{c.get(BEHAVIOR_ABSENT, 0)} behavior-absent, "
             f"{c.get(ALLOCATED_ONLY, 0)} allocated-only (intent, UNVERIFIED), "
             f"{c.get(UNALLOCATED, 0)} unallocated")

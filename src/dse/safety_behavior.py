@@ -26,6 +26,50 @@ from ..utils.sysml_text_utils import find_block_end
 BEHAVIORALLY_VERIFIED = "behaviorally-verified"
 BEHAVIORALLY_VIOLATED = "behaviorally-violated"
 BEHAVIOR_ABSENT = "behavior-absent"
+RESPONSE_COLLAPSED = "response-collapsed"
+
+# distinct mandated safety RESPONSES → keywords (in requirement text AND in action names).
+# If two DIFFERENT response categories emit the SAME command, the arbitration is lost at the
+# behaviour interface (e.g. battery-low LAND, comm-loss LAND, propulsion PARACHUTE all collapse
+# to one CmdToEmergency → the flight controller can't do the right thing per cause).
+_RESPONSE_CATEGORIES = {
+    "parachute": ("parachute", "ballistic recovery", "chute"),
+    "rtb":       ("return-to-base", "return to base", "return-to-home", "rtb", "return trajectory"),
+    "land":      ("controlled descent", "safe landing", "land", "landing", "touchdown", "descend"),
+    "lock":      ("lock", "locked", "inhibit release", "mechanically locked"),
+}
+
+
+def _response_category(text: str):
+    """The distinct safety RESPONSE a requirement mandates (parachute/rtb/land/lock), or None.
+    Order matters: parachute & rtb are checked before land (a parachute/RTB req may also say
+    'land')."""
+    t = text.lower()
+    for cat in ("parachute", "rtb", "land", "lock"):
+        if any(k in t for k in _RESPONSE_CATEGORIES[cat]):
+            return cat
+    return None
+
+
+def _name_category(name: str):
+    return _response_category(name)
+
+
+def collapsed_response_categories(model_text: str) -> Set[str]:
+    """Response categories that COLLAPSE — i.e. a single emitted command is sent by actions of
+    ≥2 distinct response categories (the arbitration distinction is lost at the interface)."""
+    cats_by_cmd: Dict[str, Set[str]] = {}
+    for m in re.finditer(r"action\s+def\s+(\w+)\s*\{(.*?)\}", model_text, re.DOTALL):
+        cat = _name_category(m.group(1))
+        if not cat:
+            continue
+        for cmd in re.findall(r"send\s+(\w+)", m.group(2)):
+            cats_by_cmd.setdefault(cmd, set()).add(cat)
+    collapsed: Set[str] = set()
+    for cmd, cats in cats_by_cmd.items():
+        if len(cats) >= 2:                  # one command serves ≥2 distinct responses → collapse
+            collapsed |= cats
+    return collapsed
 
 _SAFE_STATE_KW = ("failsafe", "fail_safe", "safe", "abort", "lock", "disarm", "rtb",
                   "return", "land", "hold", "emergency", "parachute", "contingency")
@@ -102,6 +146,7 @@ def safety_behavior_status(model_text: str, requirements: List[str],
         by_part.setdefault(sm.owner_part, []).append(sm)
     text = {m.group(0).replace("_", "-"): r for r in requirements
             for m in [_REQ_ID_RE.search(r)] if m}
+    collapsed = collapsed_response_categories(model_text)   # categories sharing one command
 
     out: Dict[str, str] = {}
     for rid, parts in _req_owner_parts(model_text).items():
@@ -112,10 +157,15 @@ def safety_behavior_status(model_text: str, requirements: List[str],
         # structural: is a FAIL-SAFE state reachable? (dynamic firing of a non-safe transition
         # must NOT count as a safety response — so the safe-state requirement gates everything.)
         structural_ok = any(_failsafe_reachable(sm) == "reachable" for sm in sms)
+        cat = _response_category(text.get(rid, rid))
         if not sms:
             out[rid] = BEHAVIOR_ABSENT
         elif not structural_ok:
             out[rid] = BEHAVIORALLY_VIOLATED        # no reachable fail-safe state
+        elif cat in collapsed:
+            out[rid] = RESPONSE_COLLAPSED           # this response shares one command with a
+            #   DIFFERENT mandated response → arbitration lost at the interface (e.g. LAND, RTB
+            #   and PARACHUTE all emit the same CmdToEmergency → flight ctrl can't act per cause)
         elif "failed" in verdicts:
             out[rid] = BEHAVIORALLY_VIOLATED        # safe state reachable but dynamically NEVER
             #                                         fires → "fake safety" (dynamic-only catch)

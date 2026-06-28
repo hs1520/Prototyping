@@ -85,3 +85,56 @@ def test_dynamic_fire_by_part_drives_guards():
     from src.dse.dynamic_behavior import dynamic_fire_by_part
     v = dynamic_fire_by_part(_MODEL)
     assert v.get("MonitorA") == "fired"     # fault>0.5 guard driven → transition fires
+
+
+_COLLAPSE_MODEL = """package D {
+    requirement def REQ_SAFE_010 { doc /* perform a controlled descent and land */ }
+    requirement def REQ_SAFE_011 { doc /* execute a return-to-base trajectory */ }
+    requirement def REQ_SAFE_012 { doc /* keep the payload mechanically locked */ }
+    part def Arbiter {
+        action def CmdEmergency { }
+        action def CmdLock { }
+        action def doLand { send CmdEmergency() to o; }
+        action def doRtb { send CmdEmergency() to o; }
+        action def doLock { send CmdLock() to p; }
+        attribute x : Real = 0.0;
+        state def M {
+            state nominal;
+            state failsafe { entry action s : doLand; }
+            transition initial then nominal;
+            transition t first nominal if x > 0.5 then failsafe;
+        }
+        satisfy requirement REQ_SAFE_010;
+        satisfy requirement REQ_SAFE_011;
+        satisfy requirement REQ_SAFE_012;
+    }
+}"""
+_COLLAPSE_REQS = [
+    "REQ-SAFE-010: perform a controlled descent and land.",
+    "REQ-SAFE-011: execute a return-to-base trajectory.",
+    "REQ-SAFE-012: keep the payload mechanically locked.",
+]
+
+
+def test_response_category():
+    from src.dse.safety_behavior import _response_category
+    assert _response_category("perform a controlled descent") == "land"
+    assert _response_category("return-to-base trajectory") == "rtb"
+    assert _response_category("deploy the ballistic recovery parachute") == "parachute"
+    assert _response_category("keep payload locked") == "lock"
+    assert _response_category("cruise at 15 m/s") is None
+
+
+def test_collapsed_response_categories():
+    from src.dse.safety_behavior import collapsed_response_categories
+    # land + rtb both send CmdEmergency → collapsed; lock sends CmdLock → not
+    assert collapsed_response_categories(_COLLAPSE_MODEL) == {"land", "rtb"}
+
+
+def test_response_collapse_downgrades_safety_reqs():
+    from src.dse.safety_behavior import (BEHAVIORALLY_VERIFIED, RESPONSE_COLLAPSED,
+                                         safety_behavior_status)
+    st = safety_behavior_status(_COLLAPSE_MODEL, _COLLAPSE_REQS)
+    assert st["REQ-SAFE-010"] == RESPONSE_COLLAPSED      # land collapsed with rtb
+    assert st["REQ-SAFE-011"] == RESPONSE_COLLAPSED      # rtb collapsed with land
+    assert st["REQ-SAFE-012"] == BEHAVIORALLY_VERIFIED   # lock distinct → still verified
