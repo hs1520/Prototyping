@@ -2152,6 +2152,18 @@ class Orchestrator:
 
         for sim_iter in range(max_iters):
             sysml = get_sysml_text(current)
+            # Deterministic port-DIRECTION fix BEFORE simulating (no LLM): widen direction-blocking
+            # ports so existing connects are traversable as written — resolves 'connected but signal
+            # direction may be wrong' cheaply, so only genuinely-missing connections reach the LLM
+            # step below (avoids escalating direction errors to slow LLM refinement). Idempotent.
+            from ..simulation.direction_fixer import fix_signal_directions
+            sysml, _n_dir, _dir_names = fix_signal_directions(sysml)
+            if _n_dir:
+                print(f"  │  ⟳  direction fix (deterministic): widened {_n_dir} port(s) → inout: "
+                      f"{', '.join(_dir_names)}", flush=True)
+                if not getattr(current, "metadata", None):
+                    object.__setattr__(current, "metadata", {})
+                current.metadata["last_sysml_text"] = sysml
             sim_result = self._run_simulation(sysml, current.name)
             failed = sim_result.failed_scenarios()
 
