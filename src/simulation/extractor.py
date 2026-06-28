@@ -196,14 +196,17 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
     _analysis_cls = getattr(_syside, "AnalysisCaseDefinition", None)
 
     def _in_analysis_scope(elem) -> bool:
-        if _analysis_cls is None:
-            return False
+        # True if elem is scaffolding: inside an `analysis def` (trade-study alt parts) OR inside
+        # the injected DSE analysis closure `part def DseDesignAnalysis` (its recommendedDesign /
+        # design-point part is NOT a system component and must not count toward reachability).
         cur = elem
         for _ in range(12):
             o = getattr(cur, "owner", None)
             if o is None:
                 return False
-            if isinstance(o, _analysis_cls):
+            if _analysis_cls is not None and isinstance(o, _analysis_cls):
+                return True
+            if getattr(o, "name", None) == "DseDesignAnalysis":
                 return True
             cur = o
         return False

@@ -287,9 +287,13 @@ def inject_endurance_analysis(
         members += [f"        satisfy {r};" for r in satisfied]   #   in the closure (as before)
     core = "\n".join(defs + decls + members)
     note = "    // --- DSE analysis closure (Automator-evaluable; analysis BINDS to recommendedDesign) ---\n"
-    if wrap:                                          # flat package → wrapper part def
+    # The bound (design) closure owns a `part recommendedDesign` — it MUST live inside the
+    # `part def DseDesignAnalysis` wrapper (excluded from the reachability graph) so it isn't
+    # mistaken for a system component and wired up by the connectivity refiner. Only the legacy
+    # path (no parts, just refs into the root scope) may inline into the root body.
+    if wrap or design_attr_lines is not None:
         frag = f"\n{note}    part def DseDesignAnalysis {{\n{core}\n    }}\n"
-    else:                                             # nested → straight into the root body
+    else:                                             # legacy nested → straight into the root body
         frag = f"\n        {note}{core}\n"
     out = text[:end] + frag + text[end:]
     return (out, True) if not check_syntax(out).has_errors else (model_text, False)

@@ -282,3 +282,24 @@ class TestAnalysisScaffoldingExcluded:
     def test_reachability_not_deflated_by_analysis_parts(self):
         res = SimulationValidator().validate(self._MODEL)
         assert "alt0Design" not in res.isolated_parts
+
+
+def test_dse_analysis_closure_excluded_from_reachability():
+    """The injected DSE analysis closure (part def DseDesignAnalysis holding recommendedDesign) is
+    scaffolding, NOT a system component — it must be excluded from the reachability graph, else the
+    connectivity refiner bolts bogus ports/connects onto real parts to 'wire it up' (a real bug)."""
+    from src.simulation import extractor as ex
+    model = """package P {
+        port def DataPort;
+        part def Motor { out port t : DataPort; }
+        part def Frame { in port t : DataPort; }
+        part def Drone { part motor : Motor; part airframe : Frame; connect motor.t to airframe.t; }
+        part def DseDesignAnalysis {
+            part recommendedDesign { attribute capacityMah : Real = 22000.0; }
+            attribute enduranceMin : Real = recommendedDesign.capacityMah / 1000.0;
+        }
+    }"""
+    parts = list(ex.extract_behavioral_graph(model).parts)
+    assert not any("recommendedDesign" in str(p) for p in parts)   # closure part excluded
+    assert any("motor" in str(p) for p in parts)                   # real assembly kept
+    assert any("airframe" in str(p) for p in parts)
