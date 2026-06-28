@@ -39,6 +39,12 @@ if __name__ == "__main__":
     res = pipe.orchestrator.explore(gen, mcts_iterations=20)    # DSE + refinement + verification
     final_sysml = res["model_sysml"]                            # AFTER DSE
 
+    # Restore VERBATIM requirement doc text (the LLM paraphrases/corrupts it during generation,
+    # e.g. SAFE-005 "all other safety responses" → "all calculations"). Deterministic fidelity pass.
+    from src.dse.requirement_spec import enforce_requirement_text
+    initial_sysml = enforce_requirement_text(initial_sysml, DRONE_REQUIREMENTS)
+    final_sysml = enforce_requirement_text(final_sysml, DRONE_REQUIREMENTS)
+
     outdir = os.path.join(os.path.dirname(__file__), "output")
     os.makedirs(outdir, exist_ok=True)
     initial_path = os.path.join(outdir, "initial_model.sysml")

@@ -38,12 +38,14 @@ def endurance_calc_def(indent: str = "    ") -> str:
     pi = math.pi
     return (
         f"{indent}calc def Endurance {{\n"
+        f"{indent}    // addedMassKg = delivery payload + onboard component masses (NOT delivery\n"
+        f"{indent}    // payload alone, which REQ_FUNC_003 bounds separately).\n"
         f"{indent}    in capacityMah : Real; in cells : Real; in rotorCount : Real;\n"
-        f"{indent}    in rotorRadiusM : Real; in payloadKg : Real;\n"
+        f"{indent}    in rotorRadiusM : Real; in addedMassKg : Real;\n"
         f"{indent}    attribute energyWh : Real = capacityMah / 1000.0 * cells * {CELL_V};\n"
         f"{indent}    attribute diskArea : Real = rotorCount * {pi} * (rotorRadiusM ** 2);\n"
         f"{indent}    attribute totalMass : Real = {BASE_FRAME_KG} + {ROTOR_MASS_COEF} * diskArea "
-        f"+ energyWh / {ENERGY_DENSITY_WH_KG} + payloadKg;\n"
+        f"+ energyWh / {ENERGY_DENSITY_WH_KG} + addedMassKg;\n"
         f"{indent}    attribute hoverPower : Real = (totalMass * {G}) ** 1.5 "
         f"/ (((2.0 * {RHO} * diskArea) ** 0.5) * {FOM});\n"
         f"{indent}    attribute elecPower : Real = hoverPower / {ETA_DRIVE} + {AVIONICS_POWER_W};\n"
@@ -59,10 +61,10 @@ def mtow_calc_def(indent: str = "    ") -> str:
     return (
         f"{indent}calc def Mtow {{\n"
         f"{indent}    in capacityMah : Real; in cells : Real; in rotorCount : Real;\n"
-        f"{indent}    in rotorRadiusM : Real; in payloadKg : Real;\n"
+        f"{indent}    in rotorRadiusM : Real; in addedMassKg : Real;\n"
         f"{indent}    attribute energyWh : Real = capacityMah / 1000.0 * cells * {CELL_V};\n"
         f"{indent}    attribute diskArea : Real = rotorCount * {pi} * (rotorRadiusM ** 2);\n"
-        f"{indent}    {BASE_FRAME_KG} + {ROTOR_MASS_COEF} * diskArea + energyWh / {ENERGY_DENSITY_WH_KG} + payloadKg\n"
+        f"{indent}    {BASE_FRAME_KG} + {ROTOR_MASS_COEF} * diskArea + energyWh / {ENERGY_DENSITY_WH_KG} + addedMassKg\n"
         f"{indent}}}"
     )
 
@@ -73,8 +75,8 @@ def range_calc_def(indent: str = "    ") -> str:
     return (
         f"{indent}calc def RangeM {{\n"
         f"{indent}    in capacityMah : Real; in cells : Real; in rotorCount : Real;\n"
-        f"{indent}    in rotorRadiusM : Real; in payloadKg : Real; in cruiseSpeedMps : Real;\n"
-        f"{indent}    Endurance(capacityMah, cells, rotorCount, rotorRadiusM, payloadKg) * 60.0 * cruiseSpeedMps\n"
+        f"{indent}    in rotorRadiusM : Real; in addedMassKg : Real; in cruiseSpeedMps : Real;\n"
+        f"{indent}    Endurance(capacityMah, cells, rotorCount, rotorRadiusM, addedMassKg) * 60.0 * cruiseSpeedMps\n"
         f"{indent}}}"
     )
 
@@ -313,7 +315,7 @@ def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] 
         b = binds[i] if i < len(binds) else {}
         uses = ", ".join(f"{pid}={impl}" for pid, impl in b.items()) or "—"
         lines.append(f"{inner}// alt{i}{tag}: uses {uses} | cap={a.battery_capacity_mah}mAh "
-                     f"payload={a.payload_mass_kg}kg")
+                     f"addedMass={a.payload_mass_kg}kg (delivery+components)")
         if b:                                    # formal object-level binding to variant defs
             lines.append(f"{inner}part alt{i}Design {{")
             for pid, impl in b.items():

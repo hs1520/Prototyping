@@ -176,3 +176,31 @@ def max_spec(specs: List[ReqSpec], quantity: str, operator: Optional[str] = None
                 and (best is None or s.value > best.value):
             best = s
     return best
+
+
+_REQDOC_RE = re.compile(
+    r"(requirement\s+def\s+(REQ[-_][A-Z]+[-_]\d+)\s*\{\s*doc\s*/\*)(.*?)(\*/)",
+    re.DOTALL | re.IGNORECASE)
+
+
+def enforce_requirement_text(model_text: str, requirements: List[str]) -> str:
+    """Overwrite each ``requirement def`` doc body with the VERBATIM canonical requirement text
+    from the input list — the LLM paraphrases doc strings during generation and can corrupt the
+    meaning (e.g. 'all other safety responses' → 'all calculations'). This restores fidelity.
+    Requirements unknown to the input list are left untouched."""
+    canon = {}
+    for r in requirements or []:
+        m = _REQ_ID_RE.search(r)
+        if not m:
+            continue
+        rid = m.group(0).upper().replace("_", "-")
+        text = r.split(":", 1)[1].strip() if ":" in r else r.strip()
+        canon[rid] = text
+
+    def _sub(mo):
+        rid = mo.group(2).upper().replace("_", "-")
+        if rid not in canon:
+            return mo.group(0)
+        return f"{mo.group(1)} {canon[rid]} {mo.group(4)}"
+
+    return _REQDOC_RE.sub(_sub, model_text)

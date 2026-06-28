@@ -103,3 +103,19 @@ def test_extract_falls_back_to_rules_when_llm_raises():
 
     specs = extract_requirements(reqs, llm=_Boom())
     assert max_value(specs, ENDURANCE) == 25.0   # deterministic fallback
+
+
+def test_enforce_requirement_text_restores_verbatim():
+    from src.dse.requirement_spec import enforce_requirement_text
+    # LLM-corrupted doc ("all calculations") gets overwritten with the canonical input text
+    model = ("package D {\n"
+             "  requirement def REQ_SAFE_005 { doc /* deploy parachute, taking precedence over "
+             "all calculations. */ }\n"
+             "  requirement def REQ_FUNC_003 { doc /* carry up to 9 kg. */ }\n"
+             "  requirement def REQ_XXX_999 { doc /* unknown, leave as-is. */ }\n}")
+    reqs = ["REQ-SAFE-005: deploy the parachute, taking precedence over all other safety responses.",
+            "REQ-FUNC-003: transport payloads with a gross mass of up to 1.5 kg."]
+    out = enforce_requirement_text(model, reqs)
+    assert "all other safety responses" in out and "all calculations" not in out
+    assert "up to 1.5 kg" in out and "up to 9 kg" not in out          # corrupted value restored
+    assert "unknown, leave as-is" in out                              # unknown req untouched
