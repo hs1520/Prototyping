@@ -72,13 +72,40 @@ def test_missing_connect_adds_feedback_path():
     assert nx.has_path(G, "pay", "fc")
 
 
-def test_missing_connect_noop_when_no_matching_ports():
+def test_missing_connect_noop_when_no_type_match():
     from src.simulation.direction_fixer import fix_missing_connects
+    # different TYPES (and names) → no name match, no type match → nothing fabricated
     model = """package P {
-        port def DataPort;
+        port def DataPort; port def CtrlPort;
         part def A { out port x : DataPort; }
-        part def B { in port y : DataPort; }
+        part def B { in port y : CtrlPort; }
         part def Sys { part a : A; part b : B; }
     }"""
     out, n, _ = fix_missing_connects(model, [{"src": "a", "tgts": ["b"]}])
-    assert n == 0 and out == model            # no same-name match → nothing fabricated
+    assert n == 0 and out == model            # no compatible port → nothing fabricated
+
+
+def test_missing_connect_unambiguous_type_match_diff_names():
+    from src.simulation.direction_fixer import fix_missing_connects
+    # diff names, same type, exactly one each side → safe to connect (telemetry→telemetryData style)
+    model = """package P {
+        port def DataPort;
+        part def FC { out port telemetry : DataPort; }
+        part def Comm { in port telemetryData : DataPort; }
+        part def Sys { part fc : FC; part comm : Comm; }
+    }"""
+    out, n, lines = fix_missing_connects(model, [{"src": "fc", "tgts": ["comm"]}])
+    assert n == 1 and "connect fc.telemetry to comm.telemetryData;" in out
+
+
+def test_missing_connect_ambiguous_type_match_skipped():
+    from src.simulation.direction_fixer import fix_missing_connects
+    # TWO DataPort in-ports on tgt → ambiguous → do NOT guess (leave to LLM)
+    model = """package P {
+        port def DataPort;
+        part def FC { out port telemetry : DataPort; }
+        part def Comm { in port a : DataPort; in port b : DataPort; }
+        part def Sys { part fc : FC; part comm : Comm; }
+    }"""
+    out, n, _ = fix_missing_connects(model, [{"src": "fc", "tgts": ["comm"]}])
+    assert n == 0 and out == model            # ambiguous → no fabrication

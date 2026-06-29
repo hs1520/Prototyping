@@ -82,6 +82,8 @@ def fix_missing_connects(sysml_text: str, failed_payload) -> Tuple[str, int, Lis
         src_ports = directory.instances.get(src, {})
         for tgt in f.get("tgts", []):
             tgt_ports = directory.instances.get(tgt, {})
+            # pass 1: exact same NAME + same type (highest precision, e.g. payloadStatus↔payloadStatus)
+            matched = False
             for name, oi in src_ports.items():
                 ti = tgt_ports.get(name)
                 if (oi.direction in ("out", "inout") and ti is not None
@@ -90,6 +92,28 @@ def fix_missing_connects(sysml_text: str, failed_payload) -> Tuple[str, int, Lis
                     if key not in seen:
                         seen.add(key)
                         cand_lines.append(f"connect {src}.{name} to {tgt}.{name};")
+                    matched = True
+                    break
+            if matched:
+                continue
+            # pass 2: UNAMBIGUOUS type match — exactly one src out-port and one tgt in-port of a
+            # given type (names may differ, e.g. telemetry:DataPort → telemetryData:DataPort). Only
+            # fires when there's a single candidate each side → no guessing (ambiguous → LLM's job).
+            outs, ins = {}, {}
+            for n, oi in src_ports.items():
+                if oi.direction in ("out", "inout"):
+                    outs.setdefault(oi.port_type, []).append(n)
+            for n, ti in tgt_ports.items():
+                if ti.direction in ("in", "inout"):
+                    ins.setdefault(ti.port_type, []).append(n)
+            for ptype, onames in outs.items():
+                inames = ins.get(ptype, [])
+                if len(onames) == 1 and len(inames) == 1:
+                    sp, tp = onames[0], inames[0]
+                    key = (src, sp, tgt, tp)
+                    if key not in seen:
+                        seen.add(key)
+                        cand_lines.append(f"connect {src}.{sp} to {tgt}.{tp};")
                     break                                  # one bridge per (src, tgt)
     if not cand_lines:
         return sysml_text, 0, []
