@@ -14,7 +14,8 @@ import re
 from typing import List, Tuple
 
 from ..utils.sysml_text_utils import find_block_end
-from .connectivity_fixer import build_port_directory, parse_connects
+from .connectivity_fixer import (build_port_directory, merge_connects, parse_connects,
+                                 validate_connects)
 
 _PART_DEF_RE = re.compile(r"\bpart\s+def\s+{name}\b[^{{]*\{{")
 
@@ -58,3 +59,42 @@ def fix_signal_directions(sysml_text: str) -> Tuple[str, int, List[str]]:
         if ok:
             fixed.append(f"{def_name}.{port}")
     return out, len(fixed), fixed
+
+
+def fix_missing_connects(sysml_text: str, failed_payload) -> Tuple[str, int, List[str]]:
+    """Deterministically add the connect a failed scenario needs: for each `src → unreachable tgt`,
+    if `src` has an OUT port and `tgt` has an IN port of the SAME name + type that isn't already
+    driven, propose `connect src.<p> to tgt.<p>` (the missing status/feedback path). All proposals
+    are run through validate_connects (type / direction / single-driver) before merging — so this
+    is the deterministic equivalent of the LLM connectivity fix for the common same-name case.
+
+    failed_payload: [{"src": <instance>, "tgts": [<instance>, …]}, …]
+    Returns (new_text, n_added, [connect lines]).
+    """
+    directory = build_port_directory(sysml_text)
+    existing = parse_connects(sysml_text)
+    cand_lines: List[str] = []
+    seen = set()
+    for f in failed_payload or []:
+        src = f.get("src")
+        if not src or src not in directory.instances:
+            continue
+        src_ports = directory.instances.get(src, {})
+        for tgt in f.get("tgts", []):
+            tgt_ports = directory.instances.get(tgt, {})
+            for name, oi in src_ports.items():
+                ti = tgt_ports.get(name)
+                if (oi.direction in ("out", "inout") and ti is not None
+                        and ti.direction in ("in", "inout") and ti.port_type == oi.port_type):
+                    key = (src, name, tgt, name)
+                    if key not in seen:
+                        seen.add(key)
+                        cand_lines.append(f"connect {src}.{name} to {tgt}.{name};")
+                    break                                  # one bridge per (src, tgt)
+    if not cand_lines:
+        return sysml_text, 0, []
+    val = validate_connects(cand_lines, directory, existing)   # type/direction/single-driver
+    if not val.accepted:
+        return sysml_text, 0, []
+    merged = merge_connects(sysml_text, val.accepted)
+    return merged.merged_text, merged.n_added, [c.to_sysml() for c in val.accepted]

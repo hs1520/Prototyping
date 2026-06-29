@@ -46,3 +46,39 @@ def test_noop_when_directions_already_valid():
     }"""
     out, n, names = fix_signal_directions(good)
     assert n == 0 and out == good                       # valid → untouched (non-breaking)
+
+
+def test_missing_connect_adds_feedback_path():
+    from src.simulation.direction_fixer import fix_missing_connects
+    # payload→flightController unreachable: only the command connect exists (fc→payload); the
+    # feedback connect (payload.payloadStatus → fc.payloadStatus) is missing but the ports match.
+    model = """package P {
+        port def DataPort;
+        part def FC { out port payloadCmd : DataPort; in port payloadStatus : DataPort; }
+        part def Pay { in port payloadCmd : DataPort; out port payloadStatus : DataPort; }
+        part def Sys {
+            part fc : FC; part pay : Pay;
+            connect fc.payloadCmd to pay.payloadCmd;
+        }
+    }"""
+    out, n, lines = fix_missing_connects(model, [{"src": "pay", "tgts": ["fc"]}])
+    assert n == 1
+    assert "connect pay.payloadStatus to fc.payloadStatus;" in out
+    # now pay→fc reachable
+    import networkx as nx
+    from src.simulation import extractor as ex
+    from src.simulation.exec_graph import build_exec_graph
+    G = build_exec_graph(ex.extract_behavioral_graph(out))
+    assert nx.has_path(G, "pay", "fc")
+
+
+def test_missing_connect_noop_when_no_matching_ports():
+    from src.simulation.direction_fixer import fix_missing_connects
+    model = """package P {
+        port def DataPort;
+        part def A { out port x : DataPort; }
+        part def B { in port y : DataPort; }
+        part def Sys { part a : A; part b : B; }
+    }"""
+    out, n, _ = fix_missing_connects(model, [{"src": "a", "tgts": ["b"]}])
+    assert n == 0 and out == model            # no same-name match → nothing fabricated

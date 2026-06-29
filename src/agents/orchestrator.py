@@ -2205,6 +2205,27 @@ class Orchestrator:
                 for w in r.warnings:
                     print(f"  │      ⚠ {w}")
 
+            # ── Deterministic missing-connect fix (no LLM) ─────────────
+            # For each failed scenario the design is often just missing a same-name/type out→in
+            # connect (e.g. payloadStatus payload→flightController). Add those deterministically
+            # (validated: type/direction/single-driver) BEFORE spending an LLM call. Resolves the
+            # common churn cheaply; only genuinely-ambiguous gaps reach the LLM below.
+            from ..simulation.direction_fixer import fix_missing_connects
+            _fp = [{"src": _scenario_src_instance(r.scenario_name),
+                    "tgts": list(r.unreachable_targets)} for r in failed]
+            _mc_text, _n_mc, _mc_lines = fix_missing_connects(sysml, _fp)
+            if _n_mc:
+                print(f"  │  ⟳  connect fix (deterministic): added {_n_mc} — "
+                      f"{'; '.join(_mc_lines)}", flush=True)
+                sysml = _mc_text
+                if not getattr(current, "metadata", None):
+                    object.__setattr__(current, "metadata", {})
+                current.metadata["last_sysml_text"] = sysml
+                sim_result = self._run_simulation(sysml, current.name)
+                failed = sim_result.failed_scenarios()
+                if not failed and not sim_result.isolated_parts:
+                    continue                      # resolved deterministically → skip the LLM step
+
             if sim_iter == max_iters - 1:
                 # Last pass — no more LLM calls, attach warning and exit
                 break
