@@ -21,7 +21,7 @@ class MotorPropPoint:
 @dataclass(frozen=True)
 class MotorPropCombo:
     name: str
-    source_url: str
+    source_url: str          # motor product page (bench curve + motor mass)
     retrieved: str
     voltage_v: float
     cells: int
@@ -30,6 +30,7 @@ class MotorPropCombo:
     prop_diameter_in: float
     curve: Tuple[MotorPropPoint, ...]
     price_usd: float | None = None
+    prop_source_url: str = ""  # prop product page (prop mass/diameter), when distinct
 
     def max_thrust_g(self) -> float:
         return max(p.thrust_g for p in self.curve)
@@ -108,6 +109,7 @@ TMOTOR_P18_URL = "https://store.tmotor.com/product/polish-carbon-fiber-18x6_1-pr
 MN5008_KV340_18x61 = MotorPropCombo(
     name="T-Motor MN5008 KV340 + P18x6.1 (6S)",
     source_url=TMOTOR_MN5008_URL,
+    prop_source_url=TMOTOR_P18_URL,
     retrieved="2026-07-03",
     voltage_v=22.2,
     cells=6,
@@ -128,12 +130,108 @@ MN5008_KV340_18x61 = MotorPropCombo(
 )
 
 
-DEFAULT_CATALOG = ComponentCatalog(
-    combos=(MN5008_KV340_18x61,),
-    packs=(),
-    frames=(),
+TMOTOR_MN4006_URL = "https://store.tmotor.com/product/mn4006-kv380-motor-antigravity-type.html"
+TMOTOR_P16_URL = "https://store.tmotor.com/product/polish-carbon-fiber-16x5_4-prop.html"
+
+# T-Motor Antigravity MN4006 KV380 + P16x5.4 CF, bench table published at 24V (6S).
+# Manufacturer lines used (retrieved 2026-07-03):
+# - MN4006 page: bench rows below (24V, 16x5.4 CF prop); motor weight 68g incl cable.
+# - P16x5.4 page: single-blade integrated propeller weight 25±1.5g.
+# price_usd=None: the store listing price ($149.90) is ambiguous between single motor
+# and 2PCS/SET across T-Motor pages — omitted rather than guessed (§7 rule).
+MN4006_KV380_16x54 = MotorPropCombo(
+    name="T-Motor MN4006 KV380 + P16x5.4 (6S)",
+    source_url=TMOTOR_MN4006_URL,
+    prop_source_url=TMOTOR_P16_URL,
+    retrieved="2026-07-03",
+    voltage_v=24.0,
+    cells=6,
+    motor_mass_g=68.0,
+    prop_mass_g=25.0,
+    prop_diameter_in=16.0,
+    price_usd=None,
+    curve=(
+        MotorPropPoint(0.50, 928.0, 3.70, 89.0),
+        MotorPropPoint(0.55, 1096.0, 4.80, 115.0),
+        MotorPropPoint(0.60, 1258.0, 5.90, 142.0),
+        MotorPropPoint(0.65, 1427.0, 7.20, 173.0),
+        MotorPropPoint(0.75, 1740.0, 10.00, 240.0),
+        MotorPropPoint(0.85, 1970.0, 12.90, 310.0),
+        MotorPropPoint(1.00, 2309.0, 17.50, 420.0),
+    ),
 )
 
 
-CATALOG = {MN5008_KV340_18x61.name: MN5008_KV340_18x61}
+# ── Battery packs — all 6S (cells_match with the 6S combos), Gens Ace/Tattu official
+# product pages (genstattu.com), net weights as published, retrieved 2026-07-03.
+# price_usd=None: page prices not captured at collection time (mass axis is default).
+TATTU_PACKS = (
+    BatteryPack(
+        name="Tattu G-Tech 8000mAh 6S 25C",
+        source_url="https://genstattu.com/tattu-8000mah-22-2v-25c-6s1p-lipo-battery-pack-with-xt60-plug.html",
+        retrieved="2026-07-03",
+        capacity_mah=8000.0, cells=6, mass_g=1160.0, c_rating=25.0,
+    ),
+    BatteryPack(
+        name="Tattu Plus 10000mAh 6S 25C",
+        source_url="https://genstattu.com/tattu-plus-22-2v-25c-6s-liPo-battery-10000-mah-with-as150-xt150-plug.html",
+        retrieved="2026-07-03",
+        capacity_mah=10000.0, cells=6, mass_g=1517.0, c_rating=25.0,
+    ),
+    BatteryPack(
+        name="Tattu Plus 12000mAh 6S 15C",
+        source_url="https://genstattu.com/tattu-plus-15c-12000mah-6s1p-as150-xt150-plug-lipo-battery.html",
+        retrieved="2026-07-03",
+        capacity_mah=12000.0, cells=6, mass_g=1670.0, c_rating=15.0,
+    ),
+    BatteryPack(
+        name="Tattu Plus 16000mAh 6S 15C",
+        source_url="https://genstattu.com/tattu-plus-16000mah-6s-15c-22-2v-lipo-battery-pack-with-xt90s/",
+        retrieved="2026-07-03",
+        capacity_mah=16000.0, cells=6, mass_g=1932.0, c_rating=15.0,
+    ),
+    BatteryPack(
+        name="Tattu Plus 22000mAh 6S 25C",
+        source_url="https://genstattu.com/tattu-plus-25c-22000mah-6s1p-xt90-smart-lipo-battery.html",
+        retrieved="2026-07-03",
+        capacity_mah=22000.0, cells=6, mass_g=2650.0, c_rating=25.0,
+    ),
+)
+
+
+# ── Frames.
+# PROVENANCE NOTE (§7 flagged): the Tarot official site is not reliably reachable, so
+# both frame entries cite the largest authorized distributor pages that reproduce the
+# manufacturer spec sheet (net weight / wheelbase / prop range). This is a deliberate,
+# documented relaxation of the manufacturer-first rule — review before publication.
+# Holybro S500/X650 were REJECTED: only ARF/kit-with-motors weights are published,
+# never the bare-frame mass this catalog's mass model requires.
+TAROT_FRAMES = (
+    Frame(
+        # Tarot X6 TL6X001 umbrella-folding hexa: wheelbase 960mm, 18in props,
+        # net weight 2.0kg (incl. electronic retractable landing gear), MTOW 12kg.
+        name="Tarot X6 TL6X001 (hexa 960mm)",
+        source_url="https://www.foxtechfpv.com/tarot-x6-hexacopter-frame-p-1945.html",
+        retrieved="2026-07-03",
+        mass_g=2000.0, arms=6, max_prop_in=18.0,
+    ),
+    Frame(
+        # Tarot 650 Sport TL65S01 foldable quad: wheelbase 600mm, 12-15in props,
+        # net weight 750g (incl. electric retractable landing skid).
+        name="Tarot 650 Sport TL65S01 (quad 600mm)",
+        source_url="https://www.arrishobby.com/products/tarot-650-sport-quadcopter-tl65s01-with-electric-retractable-landing-skid",
+        retrieved="2026-07-03",
+        mass_g=750.0, arms=4, max_prop_in=15.0,
+    ),
+)
+
+
+DEFAULT_CATALOG = ComponentCatalog(
+    combos=(MN5008_KV340_18x61, MN4006_KV380_16x54),
+    packs=TATTU_PACKS,
+    frames=TAROT_FRAMES,
+)
+
+
+CATALOG = {c.name: c for c in DEFAULT_CATALOG.combos}
 
