@@ -1,6 +1,7 @@
 """Tests for DSE over LLM-declared variation points (the replace path)."""
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from src.dse.variation_dse import run_variation_dse
@@ -115,3 +116,102 @@ def test_recommendation_weights_track_requirement_emphasis():
     w = _recommendation_weights(names, reqs)
     assert abs(sum(w.values()) - 1.0) < 1e-9        # normalised
     assert w["time_sat"] > w["speed_sat"]           # more endurance targets → more weight
+
+
+_REALIZABILITY_MODEL = """package Drone {
+    port def Sig;
+    part def LiftIface { in port cmd : Sig; out port thrust : Sig; }
+    part def Octo4S :> LiftIface {
+        in port cmd : Sig; out port thrust : Sig;
+        attribute rotorCount : Real = 8.0;
+        attribute batteryCells : Real = 4.0;
+        attribute rotorRadiusM : Real = 0.1905;
+    }
+    part def Hexa6S :> LiftIface {
+        in port cmd : Sig; out port thrust : Sig;
+        attribute rotorCount : Real = 6.0;
+        attribute batteryCells : Real = 6.0;
+        attribute rotorRadiusM : Real = 0.2286;
+    }
+    part def Airframe {
+        variation part liftArch : LiftIface {
+            doc /* rationale: endurance vs catalogue availability; satisfies REQ-PERF-002 */
+            variant part octo : Octo4S;
+            variant part hexa : Hexa6S;
+        }
+    }
+}"""
+
+
+def _front_for_realizability(self, iterations):
+    return SimpleNamespace(members=[
+        ({"liftArch": "octo"}, {"time_sat": 1.0, "cost_efficiency": 1.0}),
+        ({"liftArch": "hexa"}, {"time_sat": 0.90, "cost_efficiency": 0.90}),
+    ])
+
+
+def test_realizability_recommendation_prefers_realizable_subset(monkeypatch):
+    monkeypatch.setattr(
+        "src.dse.variation_dse.MultiObjectiveMCTS.search",
+        _front_for_realizability,
+    )
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=["REQ-PERF-002: endurance at least 20 minutes."],
+        realizability=lambda di: di.rotor_count == 6,
+    )
+    assert res is not None
+    assert res.recommended_choices == {"liftArch": "hexa"}
+    assert res.recommended_design is not None
+    assert res.recommended_design.rotor_count == 6
+    assert res.recommended_realizable is True
+    assert res.realizable_front_count == 1
+    assert any("recommendation restricted to 1/2 realizable front members" in n
+               for n in res.notes)
+
+
+def test_realizability_recommendation_honestly_falls_back_when_none_match(monkeypatch):
+    monkeypatch.setattr(
+        "src.dse.variation_dse.MultiObjectiveMCTS.search",
+        _front_for_realizability,
+    )
+    reqs = ["REQ-PERF-002: endurance at least 20 minutes."]
+    baseline = run_variation_dse(_model(_REALIZABILITY_MODEL), requirements=reqs)
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=reqs,
+        realizability=lambda di: False,
+    )
+    assert res is not None and baseline is not None
+    assert res.recommended_choices == baseline.recommended_choices
+    assert res.recommended_realizable is False
+    assert res.realizable_front_count == 0
+    assert any("no front member realizable" in n for n in res.notes)
+
+
+def test_realizability_none_keeps_legacy_recommendation_metadata(monkeypatch):
+    monkeypatch.setattr(
+        "src.dse.variation_dse.MultiObjectiveMCTS.search",
+        _front_for_realizability,
+    )
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=["REQ-PERF-002: endurance at least 20 minutes."],
+        realizability=None,
+    )
+    assert res is not None
+    assert res.recommended_choices == {"liftArch": "octo"}
+    assert res.recommended_realizable is None
+    assert res.realizable_front_count is None
+    assert not any("realizable front members" in n or "front member realizable" in n
+                   for n in res.notes)
+
+
+def test_dse_layer_does_not_import_realization():
+    dse_dir = Path(__file__).resolve().parents[1] / "src" / "dse"
+    offenders = []
+    for path in dse_dir.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "realization" in text:
+            offenders.append(path.name)
+    assert offenders == []

@@ -37,16 +37,25 @@ def test_default_real_catalog_closes_feasible_hexa_recommendation():
     assert rep.per_requirement and all(v.met for v in rep.per_requirement)
 
 
-def test_default_real_catalog_quad_18in_is_honestly_infeasible():
-    # A quad design with 18in rotors cannot realize: the only quad frame (Tarot 650
-    # Sport) caps at 15in props while both combos carry 16/18in props. The nearest
-    # combination is the hexa X6 frame (arms_match fails) or a quad frame with an
-    # oversized prop (prop_fits fails) — either way the gap must be attributed to a
-    # named structural check, not silently passed.
-    d = DesignInputs(1.5, 16000, 6, 4, 18 * 0.0254 / 2, 0.0)
-    rep = close_the_loop(d, [], ["REQ-PERF-002: flight endurance of at least 25 minutes."],
+def test_default_real_catalog_closes_4s_quad_after_catalog_extension():
+    # The 4S extension gives the matcher a structurally consistent quad path:
+    # Tarot 650 Sport + MN3508/P15x5 4S + Tattu 4S pack.
+    d = DesignInputs(0.2, 1300, 4, 4, 15 * 0.0254 / 2, 0.0)
+    rep = close_the_loop(d, [], ["REQ-PERF-002: flight endurance of at least 5 minutes."],
+                         DEFAULT_CATALOG)
+    assert rep.verdict in {"CLOSED", "CLOSED_AFTER_RESIZE"}
+    assert rep.chosen is not None
+    assert rep.chosen.rd.combo.cells == 4
+    assert rep.chosen.rd.pack.cells == 4
+    assert rep.chosen.rd.frame.arms == 4
+
+
+def test_default_real_catalog_octo_without_x8_frame_is_honestly_infeasible():
+    # X8 frame data is not in the real catalog unless it has traceable source fields,
+    # so an octo design must still fail structurally rather than silently pass.
+    d = DesignInputs(0.2, 1300, 4, 8, 15 * 0.0254 / 2, 0.0)
+    rep = close_the_loop(d, [], ["REQ-PERF-002: flight endurance of at least 5 minutes."],
                          DEFAULT_CATALOG)
     assert rep.verdict == "INFEASIBLE_REALIZATION"
     assert rep.failed_checks
-    assert all(ch.name in {"arms_match", "prop_fits"} for ch in rep.failed_checks)
-
+    assert any(ch.name == "arms_match" for ch in rep.failed_checks)

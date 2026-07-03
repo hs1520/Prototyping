@@ -162,6 +162,38 @@ MN4006_KV380_16x54 = MotorPropCombo(
 )
 
 
+TMOTOR_MN3508_URL = "https://store.tmotor.com/product/mn3508-motor-navigator-type.html"
+TMOTOR_P15_URL = "https://store.tmotor.com/product/polish-carbon-fiber-15x5-prop.html"
+
+# T-Motor Navigator MN3508 KV380 + P15x5 CF. Manufacturer lines used
+# (retrieved 2026-07-03, verified against store.tmotor.com):
+# - MN3508 page: KV380 motor weight 103g incl cable; the 15x5CF bench table is
+#   published ONLY at 14.8V (4S). The page's 22.2V tables use 12x4 / 13x4.4 props,
+#   NOT 15x5 — so there is NO 6S/15x5 combo here (a 6S variant would require
+#   fabricating a bench curve, forbidden by §7). Hence 4S-only.
+# - P15x5 page: model 15x5; single-blade integrated propeller weight 21±1.5g.
+# price_usd = single motor listing ($69.90) + half of 2PCS/PAIR P15x5 listing ($55.90/2).
+MN3508_KV380_15x5_4S = MotorPropCombo(
+    name="T-Motor MN3508 KV380 + P15x5 (4S)",
+    source_url=TMOTOR_MN3508_URL,
+    prop_source_url=TMOTOR_P15_URL,
+    retrieved="2026-07-03",
+    voltage_v=14.8,
+    cells=4,
+    motor_mass_g=103.0,
+    prop_mass_g=21.0,
+    prop_diameter_in=15.0,
+    price_usd=69.90 + 55.90 / 2.0,
+    curve=(
+        MotorPropPoint(0.50, 430.0, 1.6, 23.68),
+        MotorPropPoint(0.65, 670.0, 3.4, 50.32),
+        MotorPropPoint(0.75, 820.0, 5.0, 74.0),
+        MotorPropPoint(0.85, 1000.0, 6.4, 94.72),
+        MotorPropPoint(1.00, 1100.0, 7.5, 111.0),
+    ),
+)
+
+
 # ── Battery packs — all 6S (cells_match with the 6S combos), Gens Ace/Tattu official
 # product pages (genstattu.com), net weights as published, retrieved 2026-07-03.
 # price_usd=None: page prices not captured at collection time (mass axis is default).
@@ -198,6 +230,45 @@ TATTU_PACKS = (
     ),
 )
 
+TATTU_4S_PACKS = (
+    BatteryPack(
+        name="Tattu R-Line V5 1300mAh 4S 150C",
+        source_url=(
+            "https://genstattu.com/"
+            "tattu-r-line-version-5-0-1300mah-4s-14-8v-150c-lipo-battery-pack-with-xt60-plug/"
+        ),
+        retrieved="2026-07-03",
+        capacity_mah=1300.0,
+        cells=4,
+        mass_g=156.0,
+        c_rating=150.0,
+        price_usd=29.99,
+    ),
+    BatteryPack(
+        name="Tattu R-Line V5 850mAh 4S 150C",
+        source_url=(
+            "https://genstattu.com/"
+            "tattu-r-line-version-5-0-850mah-4s-150c-14-8v-lipo-battery-pack-with-xt30u-f-plug/"
+        ),
+        retrieved="2026-07-03",
+        capacity_mah=850.0,
+        cells=4,
+        mass_g=100.0,
+        c_rating=150.0,
+        price_usd=22.99,
+    ),
+    BatteryPack(
+        name="Tattu 650mAh 4S 95C LiHV",
+        source_url="https://genstattu.com/tattu-650mah-4s-15-2v-95c-lipo-battery-long-pack-with-xt30-plug/",
+        retrieved="2026-07-03",
+        capacity_mah=650.0,
+        cells=4,
+        mass_g=60.0,
+        c_rating=95.0,
+        price_usd=16.49,
+    ),
+)
+
 
 # ── Frames.
 # PROVENANCE NOTE (§7 flagged): the Tarot official site is not reliably reachable, so
@@ -227,11 +298,10 @@ TAROT_FRAMES = (
 
 
 DEFAULT_CATALOG = ComponentCatalog(
-    combos=(MN5008_KV340_18x61, MN4006_KV380_16x54),
-    packs=TATTU_PACKS,
+    combos=(MN5008_KV340_18x61, MN4006_KV380_16x54, MN3508_KV380_15x5_4S),
+    packs=TATTU_PACKS + TATTU_4S_PACKS,
     frames=TAROT_FRAMES,
 )
 
 
 CATALOG = {c.name: c for c in DEFAULT_CATALOG.combos}
-

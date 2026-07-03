@@ -1128,7 +1128,16 @@ class Orchestrator:
             extract_requirements(requirements, llm=self.llm)
         except Exception:
             pass
-        res = run_variation_dse(model, requirements=requirements, random_seed=seed or 0)
+        realizability = None
+        try:
+            from ..realization.matcher import match
+            realizability = lambda di: bool(match(di, requirements))
+        except Exception as e:
+            print(f"  [variation-DSE] realizability-aware recommendation disabled ({e})")
+        res = run_variation_dse(
+            model, requirements=requirements, random_seed=seed or 0,
+            realizability=realizability,
+        )
         if res is None:
             print("  [variation-DSE] no admissible variation space; "
                   "falling back to catalog bilevel DSE")

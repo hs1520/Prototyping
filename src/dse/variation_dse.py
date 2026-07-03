@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import find_block_end, get_sysml_text
@@ -82,6 +82,8 @@ class VariationDSEResult:
     # recommended_design is the front member the recommendation picked.
     pareto_designs: List[Tuple["DesignInputs", Objectives]] = field(default_factory=list)
     recommended_design: Optional["DesignInputs"] = None
+    recommended_realizable: Optional[bool] = None
+    realizable_front_count: Optional[int] = None
     # Per-alternative variant→implementation bindings ({point_id: impl_type_name}), index-
     # aligned with pareto_designs, so the trade study can FORMALLY bind each alternative to
     # the variant definitions it's composed of (object-level traceability, not a comment).
@@ -137,6 +139,7 @@ def run_variation_dse(
     requirements: Optional[List[str]] = None,
     iterations: Optional[int] = None,
     random_seed: Optional[int] = 0,
+    realizability: Optional[Callable[[DesignInputs], bool]] = None,
 ) -> Optional[VariationDSEResult]:
     requirements = requirements or []
     base_text = get_sysml_text(model)
@@ -237,6 +240,11 @@ def run_variation_dse(
                              random_seed=random_seed)
     front = mcts.search(iterations=iterations)
 
+    def _resolve_di(state: State) -> DesignInputs:
+        di0 = architecture_design(ok, dict(state), base_text)
+        cap = inner_cap.get(tuple(sorted(state.items())), di0.battery_capacity_mah)
+        return DesignInputs(battery_capacity_mah=cap, **_design_with_mass(state, di0))
+
     # recommend objectively: per-objective weights from requirement emphasis (how many
     # targets each family carries; cost a baseline), then Chebyshev (max-min balance) —
     # avoids the arbitrary lexicographic bias toward the first objective. (Not SAFE-
@@ -257,6 +265,27 @@ def run_variation_dse(
     if perf_objs and not feasible:
         notes.append("no explored design meets all hard performance requirements at the "
                      "capacity bounds; recommending the closest (INFEASIBLE).")
+    recommended_realizable: Optional[bool] = None
+    realizable_front_count: Optional[int] = None
+    if realizability is not None:
+        realizable = []
+        for member in front.members:
+            try:
+                if bool(realizability(_resolve_di(member[0]))):
+                    realizable.append(member)
+            except Exception:
+                continue
+        realizable_front_count = len(realizable)
+        if realizable:
+            pool = realizable
+            recommended_realizable = True
+            notes.append(
+                f"recommendation restricted to {len(realizable)}/{len(front.members)} "
+                "realizable front members"
+            )
+        else:
+            recommended_realizable = False
+            notes.append("no front member realizable — recommending estimator-best")
     rec_state, _ = weighted_recommend(pool, rec_weights, method="chebyshev")
     concrete = resolve_model(base_text, ok, dict(rec_state))
     rec_cap = inner_cap.get(tuple(sorted(rec_state.items())))
@@ -267,11 +296,6 @@ def run_variation_dse(
 
     # Resolve each Pareto member to concrete design inputs (inner-optimized capacity) so
     # the recommendation can be presented as a SysML trade study over real alternatives.
-    def _resolve_di(state: State) -> DesignInputs:
-        di0 = architecture_design(ok, dict(state), base_text)
-        cap = inner_cap.get(tuple(sorted(state.items())), di0.battery_capacity_mah)
-        return DesignInputs(battery_capacity_mah=cap, **_design_with_mass(state, di0))
-
     def _bindings(state: State) -> Dict[str, str]:
         """{point_id: chosen variant's impl type name} — the variant defs this design uses."""
         s = dict(state)
@@ -307,6 +331,8 @@ def run_variation_dse(
         notes=notes,
         pareto_designs=pareto_designs,
         recommended_design=rec_design,
+        recommended_realizable=recommended_realizable,
+        realizable_front_count=realizable_front_count,
         pareto_bindings=pareto_bindings,
         recommended_bindings=rec_bindings,
     )
