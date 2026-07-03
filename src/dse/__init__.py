@@ -1,4 +1,10 @@
-"""Design Space Exploration (DSE) package."""
+"""Design Space Exploration (DSE) package.
+
+Search engines live in :mod:`mo_mcts` (multi-objective MCTS), :mod:`bilevel` /
+:mod:`inner_bo` (bilevel coupling + inner Bayesian optimisation), and
+:mod:`variation_dse` (LLM-declared variation points).  The legacy scalar
+weighted-sum MCTS was removed.
+"""
 
 from .design_space import (
     DesignConfiguration,
@@ -7,7 +13,6 @@ from .design_space import (
     ParameterType,
 )
 from .evaluator import DesignEvaluator, EvaluationCriteria, EvaluationResult
-from .mcts import MCTSDesignExplorer, MCTSNode
 
 __all__ = [
     "DesignConfiguration",
@@ -16,7 +21,5 @@ __all__ = [
     "DesignSpace",
     "EvaluationCriteria",
     "EvaluationResult",
-    "MCTSDesignExplorer",
-    "MCTSNode",
     "ParameterType",
 ]

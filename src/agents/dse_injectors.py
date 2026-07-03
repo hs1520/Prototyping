@@ -1,16 +1,16 @@
-"""MCTS parameter → SysML model injection helpers.
+"""DSE best-config → SysML model injection helpers.
 
 All functions are pure (no Orchestrator state) and are extracted from
 Orchestrator so the main class focuses on coordination rather than
-text-level mutations.
+text-level mutations.  Sensor redundancy is applied by the valid-by-
+construction operators (``dse.operator_applicator``), not regex injection —
+the legacy ``apply_inject_sensor_count_to_sysml_text`` was removed.
 
 Public API
 ----------
 apply_best_config_to_model(best_config, model)
 apply_inject_attrs_to_sysml_text(model)
-apply_inject_protocol_to_sysml_text(model, best_config)
-apply_inject_sensor_count_to_sysml_text(model, best_config)
-build_mcts_design_constraints(best_config) -> str
+build_dse_design_constraints(best_config) -> str
 """
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ def apply_best_config_to_model(
         if not hasattr(model, "metadata") or model.metadata is None:
             object.__setattr__(model, "metadata", {})
         model.metadata["recommended_sensor_count"] = int(num_sensors)
-        model.metadata["mcts_best_config"] = best_config.name
+        model.metadata["dse_best_config"] = best_config.name
 
 
 def apply_inject_attrs_to_sysml_text(model: SysMLModel) -> None:
@@ -163,178 +163,19 @@ def apply_inject_attrs_to_sysml_text(model: SysMLModel) -> None:
         model.metadata["mcts_injected_attrs_applied"] = applied
 
 
-def apply_inject_protocol_to_sysml_text(
-    model: SysMLModel,
-    best_config: DesignConfiguration,
-) -> None:
-    """Replace generic DataPort/RFPort with the MCTS protocol signal type in SysML text."""
-    meta = getattr(model, "metadata", None) or {}
-    sysml_text = meta.get("last_sysml_text", "")
-    if not sysml_text:
-        return
+def build_dse_design_constraints(best_config: DesignConfiguration) -> str:
+    """Translate DSE best-config parameters into concrete SysML implementation guidance.
 
-    protocol = str(best_config.parameters.get("communication_protocol", ""))
-    if not protocol or protocol.lower() == "none":
-        return
-
-    proto_id = re.sub(r"[^A-Za-z0-9]", "", protocol)
-    if not proto_id:
-        return
-
-    signal_type = f"{proto_id}Signal"
-
-    # 1. Add port def at package level if absent
-    if not re.search(rf"\bport\s+def\s+{re.escape(signal_type)}\b", sysml_text):
-        pkg_open_re = re.compile(r"(\bpackage\s+\w+\s*\{)")
-        sysml_text = pkg_open_re.sub(
-            rf"\1\n    port def {signal_type};",
-            sysml_text,
-            count=1,
-        )
-
-    # 2. Replace directed port type annotations
-    port_usage_re = re.compile(
-        r"\b((?:in|out|inout)\s+port\s+(\w+)\s*:\s*)"
-        r"(DataPort|RFPort|RfPort)\b",
-        re.IGNORECASE,
-    )
-    _PWR_EXACT = re.compile(
-        r"\b(power|pwr)(supply|in|out|bus|rail|link|feed|connector|line)\b",
-        re.IGNORECASE,
-    )
-
-    def _replace(m: re.Match) -> str:  # type: ignore[type-arg]
-        port_name: str = m.group(2)
-        pn_lower = port_name.lower()
-        if _PWR_EXACT.search(pn_lower) or pn_lower in ("power", "pwr"):
-            return m.group(0)
-        return f"{m.group(1)}{signal_type}"
-
-    result = port_usage_re.sub(_replace, sysml_text)
-
-    # 3. Remove stale generic port def declarations
-    for _generic_def in ("DataPort", "RFPort", "RfPort", "GenericPort"):
-        result = re.sub(
-            rf"^[ \t]*\bport\s+def\s+{_generic_def}\s*;[ \t]*\n?",
-            "",
-            result,
-            flags=re.IGNORECASE | re.MULTILINE,
-        )
-
-    if result != sysml_text:
-        model.metadata["last_sysml_text"] = result
-        model.metadata["mcts_injected_protocol_signal"] = signal_type
-
-
-def apply_inject_sensor_count_to_sysml_text(
-    model: SysMLModel,
-    best_config: DesignConfiguration,
-) -> None:
-    """Programmatically add extra part usages to reach the MCTS sensor count target."""
-    meta = getattr(model, "metadata", None) or {}
-    sysml_text = meta.get("last_sysml_text", "")
-    if not sysml_text:
-        return
-
-    target = int(best_config.parameters.get("num_sensors", 0))
-    if target <= 1:
-        return
-
-    sensor_part_name: Optional[str] = None
-    for part in model.part_definitions:
-        if any(kw in part.name.lower() for kw in _SENSOR_KWS):
-            sensor_part_name = part.name
-            break
-    if sensor_part_name is None:
-        return
-
-    usage_re = re.compile(
-        rf"\bpart\s+(?!def\b)\w+\s*:\s*{re.escape(sensor_part_name)}\s*;",
-        re.IGNORECASE,
-    )
-    existing = len(usage_re.findall(sysml_text))
-    if existing >= target:
-        return
-
-    any_usage_re = re.compile(r"\bpart\s+(?!def\b)\w+\s*:\s*\w+\s*;")
-    last_usage_end = 0
-    for m in any_usage_re.finditer(sysml_text):
-        last_usage_end = m.end()
-    if last_usage_end == 0:
-        return
-
-    primary_usage_re = re.compile(
-        rf"\bpart\s+(\w+)\s*:\s*{re.escape(sensor_part_name)}\s*;",
-        re.IGNORECASE,
-    )
-    primary_match = primary_usage_re.search(sysml_text)
-    primary_instance = primary_match.group(1) if primary_match else None
-
-    connect_re = re.compile(
-        r"\bconnect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)\s*;",
-        re.IGNORECASE,
-    )
-    occupied_targets: set = set()
-    primary_out_ports: list = []
-    if primary_instance:
-        for cm in connect_re.finditer(sysml_text):
-            src_inst, src_port, tgt_inst, tgt_port = cm.groups()
-            tgt_key = f"{tgt_inst}.{tgt_port}"
-            occupied_targets.add(tgt_key)
-            if src_inst.lower() == primary_instance.lower():
-                primary_out_ports.append((src_port, tgt_inst, tgt_port))
-
-    new_lines: list = []
-    new_connects: list = []
-    actually_injected = 0
-
-    for i in range(existing + 1, target + 1):
-        unit_name = f"sensorUnit{i}"
-        unit_connects: list = []
-
-        for src_port, tgt_inst, tgt_port in primary_out_ports:
-            tgt_key = f"{tgt_inst}.{tgt_port}"
-            if tgt_key not in occupied_targets:
-                unit_connects.append(
-                    f"    connect {unit_name}.{src_port} to {tgt_inst}.{tgt_port};"
-                )
-                occupied_targets.add(tgt_key)
-
-        if not unit_connects:
-            continue
-
-        new_lines.append(f"    part {unit_name} : {sensor_part_name};")
-        new_connects.extend(unit_connects)
-        actually_injected += 1
-
-    if not new_lines:
-        return
-
-    usage_block = "\n" + "\n".join(new_lines)
-    result = sysml_text[:last_usage_end] + usage_block + sysml_text[last_usage_end:]
-
-    if new_connects:
-        connect_block = (
-            "\n    // MCTS-injected redundant sensor connects (fan-in-safe only):\n"
-            + "\n".join(new_connects)
-            + "\n"
-        )
-        last_brace = result.rfind("}")
-        if last_brace != -1:
-            result = result[:last_brace] + connect_block + result[last_brace:]
-
-    model.metadata["last_sysml_text"] = result
-    model.metadata["mcts_injected_sensor_units"] = actually_injected
-
-
-def build_mcts_design_constraints(best_config: DesignConfiguration) -> str:
-    """Translate MCTS best-config parameters into concrete SysML implementation guidance."""
+    Only the catalog decision keys produce guidance; a config carrying none of
+    them (e.g. a variation-DSE config of variant choices) yields "" — no
+    dangling header is injected into the refinement prompt.
+    """
     params = best_config.parameters
     if not params:
         return ""
 
     lines = [
-        "MCTS Architectural Decisions"
+        "DSE Architectural Decisions"
         " (these must be faithfully implemented in the SysML model):"
     ]
 
@@ -404,4 +245,6 @@ def build_mcts_design_constraints(best_config: DesignConfiguration) -> str:
             f"{num_sensors} sensor-related part def(s) or part usage(s)"
         )
 
+    if len(lines) == 1:  # header only — no catalog decision matched
+        return ""
     return "\n".join(lines)

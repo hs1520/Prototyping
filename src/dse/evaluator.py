@@ -29,7 +29,7 @@ among the remaining six rather than being awarded as a free 1.0.
          Only penalises DataPort on INTF-external ports; internal DataPort is
          legitimate and no longer counted against the score.
 
-  Dim 7  mcts_fidelity             10 %
+  Dim 7  dse_fidelity             10 %
          MCTS architectural decisions present in the SysML text.
          Dropped (weight redistributed) when no MCTS config is supplied.
 """
@@ -80,6 +80,9 @@ class EvaluationResult:
     weighted_total: float = 0.0
     issues: List[str] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
+    # normalised weights actually applied (prior or requirement-derived) —
+    # recorded so every verdict is traceable to its weighting
+    weights_used: Dict[str, float] = field(default_factory=dict)
 
     def is_acceptable(self, threshold: float = 0.6) -> bool:
         return self.weighted_total >= threshold
@@ -88,6 +91,13 @@ class EvaluationResult:
 # ---------------------------------------------------------------------------
 # Dimension weights (must sum to 1.0)
 # ---------------------------------------------------------------------------
+# DIMENSION_WEIGHTS is the *prior*, used only when no requirements are supplied.
+# With requirements available, derive_dimension_weights() re-allocates the mass
+# of the requirement-sensitive dimensions in proportion to the severity-weighted
+# requirement mass behind each dimension (traceable to the input requirements);
+# the model-integrity dimensions (syntax / structure / dse_fidelity) keep their
+# prior share — they are invariants of a well-formed model, not a function of
+# which requirement categories dominate.
 
 DIMENSION_WEIGHTS: Dict[str, float] = {
     "syntactic_validity":       0.10,
@@ -96,10 +106,44 @@ DIMENSION_WEIGHTS: Dict[str, float] = {
     "behavioral_verification":  0.30,
     "safety_assurance":         0.15,
     "interface_quality":        0.05,
-    "mcts_fidelity":            0.10,
+    "dse_fidelity":            0.10,
 }
 
 assert abs(sum(DIMENSION_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
+
+# Which requirement categories feed each requirement-sensitive dimension.
+_DIMENSION_CATEGORIES: Dict[str, List[str]] = {
+    "requirement_coverage":    ["FUNC", "PERF", "SAFE", "INTF", "CONS", "OPER"],
+    "behavioral_verification": ["FUNC", "OPER", "SAFE"],
+    "safety_assurance":        ["SAFE"],
+    "interface_quality":       ["INTF"],
+}
+
+
+def derive_dimension_weights(requirements: Optional[List[str]]) -> Dict[str, float]:
+    """Requirement-traceable evaluator dimension weights.
+
+    The requirement-sensitive dimensions share their combined prior mass in
+    proportion to the severity-weighted requirement mass behind them
+    (``weighting.derive_weights_from_profile`` — SAFE counts by hazard-severity
+    importance, other categories by count).  Invariant dimensions keep their
+    prior.  No requirements (or none classifiable) → the prior unchanged.
+    """
+    if not requirements:
+        return dict(DIMENSION_WEIGHTS)
+    from .requirements_profile import RequirementProfile
+    from .weighting import derive_weights_from_profile
+
+    profile = RequirementProfile.from_requirements(requirements)
+    if not any(profile.category_counts.values()):
+        return dict(DIMENSION_WEIGHTS)
+    shares = derive_weights_from_profile(profile, _DIMENSION_CATEGORIES)
+    sensitive_mass = sum(DIMENSION_WEIGHTS[d] for d in _DIMENSION_CATEGORIES)
+    out = dict(DIMENSION_WEIGHTS)
+    for dim, share in shares.items():
+        out[dim] = sensitive_mass * share
+    total = sum(out.values())
+    return {k: v / total for k, v in out.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -116,9 +160,9 @@ DIMENSION_VETO_FLOORS: Dict[str, Tuple[float, str]] = {
         0.50,
         "more than half the requirements have no SysML construct implementing them",
     ),
-    "mcts_fidelity": (
+    "dse_fidelity": (
         0.60,
-        "MCTS architectural decisions present only as injected keywords — "
+        "DSE architectural decisions present only as injected keywords — "
         "LLM did not produce the design-level details (voting topology, "
         "grounded guards, item-typed protocol port defs, sensor aggregator) "
         "that injection cannot generate",
@@ -155,7 +199,7 @@ class DesignEvaluator:
 
     Usage
     -----
-    result = evaluator.evaluate(config, model, mcts_config=best_config)
+    result = evaluator.evaluate(config, model, dse_config=best_config)
     """
 
     def __init__(self, quality_threshold: float = 0.75) -> None:
@@ -176,9 +220,10 @@ class DesignEvaluator:
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration] = None,
+        dse_config: Optional[DesignConfiguration] = None,
         syntax_result=None,    # Optional[SyntaxCheckResult] — cached from syntax gate
         sim_result=None,       # Optional[SimulationResult] — structural + behavioral sim
+        requirements: Optional[List[str]] = None,  # enables requirement-derived weights
     ) -> EvaluationResult:
         """Evaluate model quality across all seven dimensions."""
         self._cached_syntax_result = syntax_result
@@ -188,19 +233,30 @@ class DesignEvaluator:
         # can do AST queries without re-parsing.
         self._syside_model = getattr(model, "_syside_model", None)
         try:
-            return self._evaluate_inner(config, model, mcts_config, syntax_result)
+            return self._evaluate_inner(
+                config, model, dse_config, syntax_result, requirements
+            )
         finally:
             self._cached_syntax_result = None
             self._sim_result = None
             self._syside_attr_map = {}
             self._syside_model = None
 
+    # The dse_fidelity checks key off these catalog decision parameters; a config
+    # without any of them (e.g. a variation-DSE config of variant choices) has
+    # nothing this dimension can measure → treated as N/A, weight redistributed.
+    _DSE_SCALAR_KEYS = frozenset({
+        "redundancy_level", "communication_protocol", "num_sensors",
+        "control_frequency_hz", "distributed_control",
+    })
+
     def _evaluate_inner(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
         syntax_result,
+        requirements: Optional[List[str]] = None,
     ) -> EvaluationResult:
         result = EvaluationResult(configuration_name=config.name)
 
@@ -211,23 +267,31 @@ class DesignEvaluator:
             "behavioral_verification": self._score_behavioral_verification,
             "safety_assurance":        self._score_safety_assurance,
             "interface_quality":       self._score_interface_quality,
-            "mcts_fidelity":           self._score_mcts_fidelity,
+            "dse_fidelity":           self._score_dse_fidelity,
         }
 
-        # When no MCTS config is supplied, drop mcts_fidelity and redistribute
-        # its weight proportionally so the free 1.0 doesn't inflate the total.
-        has_mcts = mcts_config is not None
+        # dse_fidelity only participates when the config carries catalog decision
+        # keys it can actually check; otherwise (no config, or a variation config
+        # of variant choices) it is dropped and its weight redistributed so the
+        # free 1.0 doesn't inflate the total.
+        has_dse = dse_config is not None and any(
+            k in (dse_config.parameters or {}) for k in self._DSE_SCALAR_KEYS
+        )
+        weights = derive_dimension_weights(requirements)
         active_weights = {
-            dim: w for dim, w in DIMENSION_WEIGHTS.items()
-            if has_mcts or dim != "mcts_fidelity"
+            dim: w for dim, w in weights.items()
+            if has_dse or dim != "dse_fidelity"
         }
         total_active_w = sum(active_weights.values())
+        result.weights_used = {
+            d: round(w / total_active_w, 4) for d, w in active_weights.items()
+        }
 
         weighted_sum = 0.0
         for dim, fn in scorers.items():
             if dim not in active_weights:
                 continue
-            raw = float(fn(config, model, mcts_config))
+            raw = float(fn(config, model, dse_config))
             clamped = max(0.0, min(1.0, raw))
             result.criteria_scores[dim] = round(clamped, 4)
             weighted_sum += clamped * (active_weights[dim] / total_active_w)
@@ -243,7 +307,7 @@ class DesignEvaluator:
         for dim, (floor, reason) in DIMENSION_VETO_FLOORS.items():
             if dim == "safety_assurance" and not has_safe:
                 continue
-            if dim == "mcts_fidelity" and not has_mcts:
+            if dim == "dse_fidelity" and not has_dse:
                 continue
             if dim == "syntactic_validity" and not has_diagnostics:
                 continue
@@ -260,7 +324,7 @@ class DesignEvaluator:
             if result.weighted_total > cap:
                 result.weighted_total = round(cap, 4)
 
-        issues, recs = self._diagnose(model, mcts_config)
+        issues, recs = self._diagnose(model, dse_config)
         result.issues.extend(issues)
         result.recommendations.extend(recs)
 
@@ -269,6 +333,42 @@ class DesignEvaluator:
                 result.issues.append(f"{dim}: {s:.2f} — see specific issues above")
 
         return result
+
+    def verdict_robustness(
+        self,
+        result: EvaluationResult,
+        threshold: Optional[float] = None,
+        n_samples: int = 300,
+        random_seed: int = 1,
+    ) -> float:
+        """How robust the pass/fail verdict is to the dimension weighting.
+
+        Samples weight vectors uniformly on the simplex over the scored
+        dimensions (Dirichlet(1,…,1)) and returns the fraction whose weighted
+        total lands on the same side of ``threshold`` as the nominal verdict.
+        1.0 = the verdict does not depend on the weights at all; low values
+        mean the weighting (not the model) decides — the honest answer to
+        "would a different weighting change the outcome?".
+        """
+        import random as _random
+
+        thr = self.quality_threshold if threshold is None else threshold
+        dims = sorted(result.criteria_scores)
+        if not dims:
+            return 1.0
+        nominal_pass = result.weighted_total >= thr
+        rng = _random.Random(random_seed)
+        agree = 0
+        for _ in range(n_samples):
+            draws = [rng.gammavariate(1.0, 1.0) for _ in dims]
+            total = sum(draws) or 1.0
+            score = sum(
+                (d / total) * result.criteria_scores[dim]
+                for d, dim in zip(draws, dims)
+            )
+            if (score >= thr) == nominal_pass:
+                agree += 1
+        return agree / n_samples
 
     # ------------------------------------------------------------------
     # Syside AST query helpers
@@ -318,7 +418,7 @@ class DesignEvaluator:
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
         """
         Scores syntactic/semantic correctness.
@@ -348,7 +448,7 @@ class DesignEvaluator:
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
         """
         Two sub-metrics:
@@ -438,11 +538,11 @@ class DesignEvaluator:
     # Dimension 2: MCTS Fidelity (25 %)
     # ------------------------------------------------------------------
 
-    def _score_mcts_fidelity(
+    def _score_dse_fidelity(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
         """
         Scores the LLM's design judgment in implementing MCTS decisions.
@@ -468,10 +568,10 @@ class DesignEvaluator:
         larger weights on LLM-judgment indicators.  Returns 1.0 (N/A) when no
         MCTS config is supplied.
         """
-        if mcts_config is None:
+        if dse_config is None:
             return 1.0
 
-        params = mcts_config.parameters
+        params = dse_config.parameters
         text = _sysml_text(model)
         checks: List[Tuple[str, float]] = []
 
@@ -764,7 +864,7 @@ class DesignEvaluator:
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
         """
         Three sub-metrics focused on static structural quality:
@@ -909,7 +1009,7 @@ class DesignEvaluator:
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
         """
         Primary quality signal: combines structural reachability and state-machine
@@ -942,7 +1042,7 @@ class DesignEvaluator:
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
         """
         Four weighted sub-metrics (only applied when SAFE requirements exist):
@@ -1029,7 +1129,7 @@ class DesignEvaluator:
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
         """
         Three sub-metrics:
@@ -1164,11 +1264,11 @@ class DesignEvaluator:
     def _diagnose(
         self,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> Tuple[List[str], List[str]]:
         return _diagnose_impl(
             model,
-            mcts_config,
+            dse_config,
             syside_attr_map=getattr(self, "_syside_attr_map", {}),
             n_state_defs=self._syside_count("StateDefinition"),
             syside_model=getattr(self, "_syside_model", None),
@@ -1182,7 +1282,7 @@ class DesignEvaluator:
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration] = None,
+        dse_config: Optional[DesignConfiguration] = None,
     ) -> float:
         """
         Build a port-connection graph from the parsed SysMLModel and check
@@ -1239,7 +1339,7 @@ class DesignEvaluator:
         param_count = len(config.parameters)
         return {
             "requirement_satisfaction": min(1.0, param_count / 5.0),
-            "mcts_fidelity":           1.0,   # N/A without model
+            "dse_fidelity":           1.0,   # N/A without model
             "structural_quality":      min(1.0, param_count / 5.0),
             "interface_consistency":   0.75,
             "requirement_traceability": 0.70,  # legacy key name

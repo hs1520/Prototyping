@@ -13,10 +13,16 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import itertools
+
 from src.prototyping.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
-from src.dse.design_space import DesignParameter, DesignSpace, ParameterType
-from src.dse.mcts import MCTSDesignExplorer
+from src.dse.design_space import (
+    DesignConfiguration,
+    DesignParameter,
+    DesignSpace,
+    ParameterType,
+)
 
 
 BUILDING_DESCRIPTION = """
@@ -49,10 +55,10 @@ BUILDING_REQUIREMENTS = [
 ]
 
 
-def demonstrate_mcts_standalone():
-    """Demonstrate standalone MCTS design space exploration for BMS."""
+def demonstrate_design_space_exploration():
+    """Demonstrate standalone multi-objective design space exploration for BMS."""
     print("\n" + "=" * 60)
-    print("Standalone MCTS Design Space Exploration for BMS")
+    print("Standalone Design Space Exploration for BMS")
     print("=" * 60)
 
     # Define BMS-specific design space
@@ -128,21 +134,35 @@ def demonstrate_mcts_standalone():
 
         return scores
 
-    explorer = MCTSDesignExplorer(
-        design_space=space,
-        evaluation_function=bms_evaluate,
-        exploration_constant=1.5,
-        max_depth=4,
-        random_seed=42,
-    )
+    # The discrete space is small, so enumerate it exhaustively (the continuous
+    # update frequency is sampled at three representative settings) and let the
+    # Pareto machinery surface the multi-objective trade-offs.  Larger spaces
+    # are searched with the MO-MCTS engine (src/dse/mo_mcts.py).
+    print("Enumerating the design space...")
+    best_config = None
+    for i, (strategy, density, freq, edge, redundancy) in enumerate(itertools.product(
+        ["reactive", "predictive", "adaptive_ml"],
+        [1, 2, 3, 4],
+        [0.016, 0.033, 0.1],
+        [False, True],
+        ["none", "backup_server", "full_redundancy"],
+    )):
+        config = DesignConfiguration(
+            name=f"bms_{i}",
+            parameters={
+                "hvac_control_strategy": strategy,
+                "sensor_density": density,
+                "update_frequency_hz": freq,
+                "edge_computing": edge,
+                "redundancy": redundancy,
+            },
+        )
+        config.scores = bms_evaluate(config)
+        space.add_configuration(config)
+        if best_config is None or config.overall_score > best_config.overall_score:
+            best_config = config
 
-    print(f"Starting MCTS exploration...")
-    best_config = explorer.search(num_iterations=50)
-
-    tree_summary = explorer.get_exploration_tree_summary()
-    print(f"Explored {tree_summary['total_configurations']} configurations")
-    print(f"Tree nodes: {tree_summary['total_nodes']}")
-    print(f"Max depth reached: {tree_summary['max_depth_reached']}")
+    print(f"Explored {len(space.configurations)} configurations")
 
     print(f"\nBest configuration: {best_config.name}")
     print(f"Parameters:")
@@ -201,7 +221,7 @@ def main():
         print(f"... ({len(lines) - 50} more lines)")
 
     # Demonstrate standalone MCTS
-    demonstrate_mcts_standalone()
+    demonstrate_design_space_exploration()
 
     print("\n✓ Smart Building BMS prototyping complete!")
 

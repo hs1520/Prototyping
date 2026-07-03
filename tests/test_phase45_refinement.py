@@ -26,13 +26,18 @@ for _name, _attrs in [
     ("syside", {}),
 ]:
     if _name not in sys.modules:
+        try:  # prefer the real package — a stub here poisons later test files
+            __import__(_name)
+            continue
+        except ImportError:
+            pass
         _mod = ModuleType(_name)
         for _k, _v in _attrs.items():
             setattr(_mod, _k, _v)
         sys.modules[_name] = _mod
 
 from src.agents.orchestrator import Orchestrator, PrototypingState  # noqa: F401 (Orchestrator used in tests)
-from src.agents.mcts_injectors import build_mcts_design_constraints
+from src.agents.dse_injectors import build_dse_design_constraints
 from src.llm.interface import MockLLM
 from src.dse.design_space import DesignConfiguration
 from src.sysml.model import PartDefinition, SysMLModel
@@ -134,6 +139,10 @@ class FakeDesignAgent:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_orch(**kwargs) -> Orchestrator:
+    # These tests exercise the legacy whole-model-rewrite path (FakeDesignAgent
+    # call counts etc.), so the surgical block-level path is disabled here; it
+    # has its own suite in test_surgical_refiner.py.
+    kwargs.setdefault("use_surgical_refinement", False)
     orch = Orchestrator(llm=MockLLM(), **kwargs)
     orch.state = PrototypingState(system_name="Test", system_description="")
     return orch
@@ -589,7 +598,7 @@ class TestMCTSGrounding:
         return DesignConfiguration(name="best", parameters=params)
 
     def test_mcts_constraints_appear_in_refinement_feedback(self):
-        """When mcts_best_config is provided, _iterative_refinement must
+        """When dse_best_config is provided, _iterative_refinement must
         include the MCTS architectural decisions in the refinement prompt."""
         model_a = _make_model("model_a")
         model_b = _make_model("model_b")
@@ -609,10 +618,10 @@ class TestMCTSGrounding:
             control_frequency_hz=200.0,
             communication_protocol="MAVLink",
         )
-        orch._iterative_refinement(model_a, [], mcts_best_config=mcts_cfg)
+        orch._iterative_refinement(model_a, [], dse_best_config=mcts_cfg)
 
         feedback = orch.design_agent.last_task.get("refinement_feedback", "")
-        assert "MCTS Architectural Decisions" in feedback
+        assert "DSE Architectural Decisions" in feedback
         assert "triple" in feedback
         assert "200.0" in feedback
         assert "MAVLink" in feedback
@@ -634,10 +643,10 @@ class TestMCTSGrounding:
         orch.design_agent = FakeDesignAgent([model_b])
 
         mcts_cfg = self._make_config(redundancy_level="dual")
-        orch._iterative_refinement(model_a, [], mcts_best_config=mcts_cfg)
+        orch._iterative_refinement(model_a, [], dse_best_config=mcts_cfg)
 
         feedback = orch.design_agent.last_task.get("refinement_feedback", "")
-        mcts_pos = feedback.find("MCTS Architectural Decisions")
+        mcts_pos = feedback.find("DSE Architectural Decisions")
         targets_pos = feedback.find("Refinement targets:")
         assert mcts_pos != -1
         assert targets_pos != -1
@@ -646,7 +655,7 @@ class TestMCTSGrounding:
         )
 
     def test_no_mcts_section_when_config_is_none(self):
-        """When no mcts_best_config is supplied, the feedback must NOT contain
+        """When no dse_best_config is supplied, the feedback must NOT contain
         any MCTS section (backward-compatible path)."""
         model_a = _make_model()
         model_b = _make_model()
@@ -661,25 +670,25 @@ class TestMCTSGrounding:
         ])
         orch.design_agent = FakeDesignAgent([model_b])
 
-        # No mcts_best_config → default None
+        # No dse_best_config → default None
         orch._iterative_refinement(model_a, [])
 
         feedback = orch.design_agent.last_task.get("refinement_feedback", "")
-        assert "MCTS Architectural Decisions" not in feedback
+        assert "DSE Architectural Decisions" not in feedback
 
-    def test_build_mcts_design_constraints_triple_redundancy(self):
+    def test_build_dse_design_constraints_triple_redundancy(self):
         """Triple redundancy must map to a three-channel state def instruction."""
         cfg = DesignConfiguration(
             name="best",
             parameters={"redundancy_level": "triple", "num_sensors": 3},
         )
-        text = build_mcts_design_constraints(cfg)
+        text = build_dse_design_constraints(cfg)
         assert "triple" in text.lower()
         assert "state def" in text.lower()
         assert "3" in text
 
-    def test_build_mcts_design_constraints_empty_params(self):
+    def test_build_dse_design_constraints_empty_params(self):
         """Empty parameters must produce an empty string (no spurious output)."""
         cfg = DesignConfiguration(name="best", parameters={})
-        text = build_mcts_design_constraints(cfg)
+        text = build_dse_design_constraints(cfg)
         assert text == ""

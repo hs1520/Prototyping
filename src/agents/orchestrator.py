@@ -17,7 +17,6 @@ from .design_agent import DesignAgent
 from .requirements_agent import RequirementsAgent
 from ..dse.design_space import DesignConfiguration, DesignParameter, DesignSpace, ParameterType
 from ..dse.evaluator import DesignEvaluator
-from ..dse.mcts import MCTSDesignExplorer
 from ..llm.chain_of_thought import ChainOfThoughtPrompter
 from ..llm.interface import LLMInterface
 from ..rag.retriever import RAGRetriever
@@ -62,12 +61,10 @@ from ..simulation.port_fixer import (
 )
 from ..simulation.connect_auditor import audit_connects, AuditResult
 from ..utils.sysml_text_utils import find_block_end, get_sysml_text
-from .mcts_injectors import (
+from .dse_injectors import (
     apply_best_config_to_model as _apply_best_config_to_model,
     apply_inject_attrs_to_sysml_text as _apply_inject_attrs_to_sysml_text,
-    apply_inject_protocol_to_sysml_text as _apply_inject_protocol_to_sysml_text,
-    apply_inject_sensor_count_to_sysml_text as _apply_inject_sensor_count_to_sysml_text,
-    build_mcts_design_constraints as _build_mcts_design_constraints,
+    build_dse_design_constraints as _build_dse_design_constraints,
 )
 
 # System prompt for surgical LLM syntax fixes
@@ -271,6 +268,29 @@ def _scenario_src_instance(scenario_name: str) -> str:
     return base
 
 
+def _chat_json(llm, prompt: str) -> Dict[str, Any]:
+    """One LLM call → parsed JSON object.
+
+    When the provider supports it (LLMInterface), a low-temperature answer that
+    fails to parse is retried at escalating temperatures before giving up;
+    duck-typed LLMs fall back to a single call.  Raises on unparseable output —
+    callers already catch and skip.
+    """
+    import json
+
+    def _extract(raw: str) -> Dict[str, Any]:
+        raw = str(raw).replace("```json", "").replace("```", "").strip()
+        return json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+
+    escalate = getattr(llm, "chat_with_escalation", None)
+    if callable(escalate):
+        content, _ok = escalate(
+            prompt, validate=lambda c: isinstance(_extract(c), dict)
+        )
+        return _extract(content)
+    return _extract(str(llm.chat(prompt)))
+
+
 @dataclass
 class PrototypingState:
     """Tracks the current state of the prototyping session."""
@@ -306,8 +326,8 @@ class Orchestrator:
         rule_weight: float = 0.6,
         llm_weight: float = 0.4,
         verbose: bool = False,
-        use_bilevel_dse: bool = False,
         use_variation_dse: bool = False,
+        use_surgical_refinement: bool = True,
     ):
         self.llm = llm
         self.rag = rag_retriever
@@ -316,12 +336,16 @@ class Orchestrator:
         self.rule_weight = rule_weight
         self.llm_weight = llm_weight
         self.verbose = verbose
-        # Opt-in: drive Phase-3 with the bilevel multi-objective DSE (run_bilevel_dse)
-        # instead of the scalar MCTS. Default False = existing behaviour unchanged.
-        self.use_bilevel_dse = use_bilevel_dse
-        # Opt-in: "replace" mode — the LLM declares variation points in the model and
-        # the DSE explores them (run_variation_dse) instead of the catalog operators.
+        # "Replace" mode — the LLM declares variation points in the model and the
+        # DSE explores them (run_variation_dse).  Default False = catalog path:
+        # bilevel MO-MCTS + inner BO over the operator space (_explore_bilevel).
+        # The legacy scalar MCTS path was removed.
         self.use_variation_dse = use_variation_dse
+        # Refinement asks the LLM for block-level replacements first (surgical:
+        # untouched blocks cannot lose connects, output ~10× smaller) and only
+        # falls back to the legacy whole-model rewrite when no valid merge is
+        # produced. Disable to force the legacy path (tests / A-B comparison).
+        self.use_surgical_refinement = use_surgical_refinement
 
         # Initialize specialized agents
         self.requirements_agent = RequirementsAgent(llm, rag_retriever)
@@ -428,7 +452,7 @@ class Orchestrator:
         print("Phase 3: Iterative Refinement")
         print("-" * 40)
         final_model, final_score, final_sim = self._iterative_refinement(
-            model, requirements, mcts_best_config=None
+            model, requirements, dse_best_config=None
         )
         self.state.current_model = final_model
         print(f"  ✓ Final design score: {final_score:.3f}\n")
@@ -463,6 +487,9 @@ class Orchestrator:
             print()
             for line in sim_warnings.splitlines():
                 print(f"  {line}")
+        ledger = getattr(self.llm, "ledger", None)
+        if ledger is not None and getattr(ledger, "calls", 0):
+            print(f"  LLM usage:        {ledger.summary()}")
         print(f"{'='*60}\n")
 
         final_sysml = get_sysml_text(final_model)
@@ -477,6 +504,7 @@ class Orchestrator:
             "evaluation_history": self.state.evaluation_history,
             "simulation_result":  final_sim,
             "platform_profile":   platform_profile,
+            "llm_usage":          ledger.as_dict() if ledger is not None else None,
         }
 
     # ---------------------------------------------------------------------- #
@@ -491,24 +519,27 @@ class Orchestrator:
         mcts_patience: Optional[int] = 15,
     ) -> Dict[str, Any]:
         """
-        Run MCTS Design Space Exploration on a validated model.
+        Run multi-objective Design Space Exploration on a validated model.
 
-        Takes the output of generate() as input.  Explores the parameter
-        space, injects the winning configuration into the model, then runs
-        a final refinement pass to implement those architectural decisions.
+        Takes the output of generate() as input.  Explores either the
+        LLM-declared variation space (``use_variation_dse``) or the catalog
+        operator space via the bilevel MO-MCTS + inner BO, applies the winning
+        configuration to the model, then runs a final refinement pass to
+        implement those architectural decisions.
 
         Pipeline
         ────────
-        Phase 3  MCTS exploration + programmatic injection + grounding pass
-        Phase 4-5  Iterative Refinement (with MCTS constraints in prompt)
+        Phase 3  DSE (variation or catalog bilevel) + operator application
+        Phase 4-5  Iterative Refinement (with DSE constraints in prompt)
         Phase 6  Behavioral Reachability Simulation
 
         Parameters
         ----------
         generate_result   Dict returned by generate().
-        mcts_iterations   Number of MCTS simulation steps.
-        mcts_seed         Random seed (None = non-deterministic).
-        mcts_patience     Early-stop patience (steps without improvement).
+        mcts_iterations   Retained for API compatibility — the bilevel search
+                          uses its own budget (run_bilevel_dse ``iterations``).
+        mcts_seed         Random seed (None = 0 for the catalog path).
+        mcts_patience     Retained for API compatibility (unused).
 
         Returns
         -------
@@ -533,8 +564,8 @@ class Orchestrator:
         print(f"[explore]  {system_name}")
         print(f"{'='*60}\n")
 
-        # ── Phase 3: MCTS ─────────────────────────────────────────────────────
-        print("Phase 3: Design Space Exploration (MCTS)")
+        # ── Phase 3: DSE ──────────────────────────────────────────────────────
+        print("Phase 3: Design Space Exploration")
         print("-" * 40)
         if self.use_variation_dse:
             # "Replace" mode: LLM declares variation points, DSE explores + resolves them.
@@ -543,41 +574,30 @@ class Orchestrator:
             )
             self.state.design_space = design_space
         else:
-            design_space, best_config, pareto_front = self._explore_design_space(
-                model, mcts_iterations, requirements,
-                random_seed=mcts_seed,
-                patience=mcts_patience,
+            # Catalog path: bilevel MO-MCTS (outer architecture operators) +
+            # inner BO (control frequency).  The legacy scalar MCTS is retired.
+            design_space, best_config, pareto_front = self._explore_bilevel(
+                model, requirements, random_seed=mcts_seed
             )
             self.state.design_space = design_space
 
-            # Opt-in bilevel DSE (Item F): shadow-compare against the scalar best_config
-            # and, when enabled, drive downstream injection with the bilevel decision.
-            if self.use_bilevel_dse:
-                best_config = self._apply_bilevel_dse(model, requirements, best_config)
-
-            # Lightweight injections (freq attr, protocol ports, doc) — common to both paths.
+            # Lightweight injections (freq attr, doc annotation).
             _apply_best_config_to_model(best_config, model)
             _apply_inject_attrs_to_sysml_text(model)
-            _apply_inject_protocol_to_sysml_text(model, best_config)
 
-            if self.use_bilevel_dse:
-                # Step 4: redundancy + redundant-sensor structures via valid-by-construction
-                # operators (replaces the brittle regex sensor injection + LLM grounding pass).
-                from ..dse.operator_applicator import apply_architecture
-                applied = apply_architecture(model, best_config)
-                if applied:
-                    print(f"  [bilevel-DSE] applied via operators: {applied}")
-            else:
-                _apply_inject_sensor_count_to_sysml_text(model, best_config)
-                # Structural grounding: LLM-driven pass for redundancy/state-machine
-                self._mcts_structural_grounding_pass(model, best_config)
+            # Redundancy + protocol structures via valid-by-construction operator
+            # merges (syntax-gated; replaced all regex text injection).
+            from ..dse.operator_applicator import apply_architecture
+            applied = apply_architecture(model, best_config)
+            if applied:
+                print(f"  [bilevel-DSE] applied via operators: {applied}")
         self._print_exploration_summary(design_space, best_config, pareto_front)
 
-        # ── Phase 4-5: Refinement with MCTS constraints ───────────────────────
-        print("Phase 4-5: Iterative Refinement (MCTS-grounded)")
+        # ── Phase 4-5: Refinement with DSE constraints ────────────────────────
+        print("Phase 4-5: Iterative Refinement (DSE-grounded)")
         print("-" * 40)
         final_model, final_score, final_sim = self._iterative_refinement(
-            model, requirements, mcts_best_config=best_config,
+            model, requirements, dse_best_config=best_config,
             connectivity_floor=self.use_variation_dse,
         )
         self.state.current_model = final_model
@@ -616,6 +636,9 @@ class Orchestrator:
             print()
             for line in sim_warnings.splitlines():
                 print(f"  {line}")
+        ledger = getattr(self.llm, "ledger", None)
+        if ledger is not None and getattr(ledger, "calls", 0):
+            print(f"  LLM usage:        {ledger.summary()}")
         print(f"{'='*60}\n")
 
         final_sysml = get_sysml_text(final_model)
@@ -658,6 +681,7 @@ class Orchestrator:
                 for c in pareto_front
             ],
             "dse_verification": verification_artifact,
+            "llm_usage": ledger.as_dict() if ledger is not None else None,
         }
 
     @staticmethod
@@ -765,78 +789,65 @@ class Orchestrator:
         self.requirements_agent.create_sysml_requirements(requirements, model)
         return model
 
-    def _explore_design_space(
-        self,
-        model: SysMLModel,
-        mcts_iterations: int,
-        requirements: Optional[List[str]] = None,
-        random_seed: Optional[int] = None,
-        patience: Optional[int] = None,
-    ) -> Tuple[DesignSpace, DesignConfiguration, List[DesignConfiguration]]:
-        """Phase 3: Define and explore the design space using MCTS.
-
-        Returns (DesignSpace, best_config, pareto_front).
-        """
-        requirements = requirements or []
-        design_space = self._define_design_space(model, requirements)
-        self._add_inter_parameter_constraints(design_space)
-
-        def evaluate_config(config: DesignConfiguration) -> Dict[str, float]:
-            return self._score_config_against_requirements(config, requirements)
-
-        explorer = MCTSDesignExplorer(
-            design_space=design_space,
-            evaluation_function=evaluate_config,
-            max_depth=4,
-            random_seed=random_seed,
-        )
-        best_config = explorer.search(
-            num_iterations=mcts_iterations,
-            patience=patience,
-        )
-        # Track exploration diagnostics in design space metadata
-        design_space.objective_weights = {
-            "iterations_run": float(explorer.iterations_run),
-            "early_stopped": 1.0 if explorer.early_stopped else 0.0,
-        }
-        pareto_front = sorted(
-            design_space.get_pareto_front(),
-            key=lambda c: c.overall_score,
-            reverse=True,
-        )
-        return design_space, best_config, pareto_front
-
-    def _apply_bilevel_dse(
+    def _explore_bilevel(
         self,
         model: SysMLModel,
         requirements: List[str],
-        scalar_best: DesignConfiguration,
-    ) -> DesignConfiguration:
-        """Run the bilevel multi-objective DSE and return a downstream-ready config.
+        random_seed: Optional[int] = None,
+    ) -> Tuple[DesignSpace, DesignConfiguration, List[DesignConfiguration]]:
+        """Phase 3 (catalog path): bilevel MO-MCTS + inner BO over the operator space.
 
-        Shadow-compares against the scalar best_config (logged), then returns the
-        bilevel architecture decisions merged with the scalar's control_frequency_hz
-        (which the architecture operators do not set), so the existing injectors get
-        a complete configuration. Failures fall back to the scalar config.
+        Outer MO-MCTS explores the catalog architecture operators (redundancy /
+        topology / sensing / protocol); the inner BO tunes control_frequency_hz per
+        architecture.  Returns (DesignSpace, best_config, pareto_front) with the
+        same shapes the variation path produces.  On failure returns an empty
+        design space + empty config so downstream refinement still runs.
         """
-        from ..dse.pipeline_adapter import run_bilevel_dse
+        from ..dse.pipeline_adapter import run_bilevel_dse, _to_design_configuration
 
         try:
-            result = run_bilevel_dse(model, requirements, random_seed=0, score_quality=True)
-        except Exception as e:  # never let the opt-in path break the pipeline
-            print(f"  [bilevel-DSE] failed ({e}); falling back to scalar best_config")
-            return scalar_best
-
-        merged = dict(result.best_config.parameters)
-        if "control_frequency_hz" in scalar_best.parameters:
-            merged.setdefault(
-                "control_frequency_hz", scalar_best.parameters["control_frequency_hz"]
+            result = run_bilevel_dse(
+                model, requirements,
+                random_seed=random_seed if random_seed is not None else 0,
+                score_quality=True,
             )
-        bilevel_config = DesignConfiguration(name="bilevel_recommended", parameters=merged)
+        except Exception as e:  # DSE failure must not break the pipeline
+            print(f"  [bilevel-DSE] failed ({e}); continuing without DSE decisions")
+            return (
+                DesignSpace(name=f"{model.name}_CatalogSpace"),
+                DesignConfiguration(name="dse_failed", parameters={}),
+                [],
+            )
 
-        print("  [bilevel-DSE] shadow comparison:")
-        print(f"     scalar  : {scalar_best.parameters}")
-        print(f"     bilevel : {bilevel_config.parameters}")
+        best_config = result.best_config
+
+        # Report-facing design space: the catalog operator space the outer MCTS explored.
+        ds = DesignSpace(name=f"{model.name}_CatalogSpace")
+        for pname, choices in (
+            ("redundancy_level", ["none", "dual", "triple"]),
+            ("num_sensors", [1, 2, 3]),
+            ("distributed_control", [False, True]),
+            ("communication_protocol", ["MAVLink", "CAN", "Ethernet"]),
+        ):
+            ds.add_parameter(DesignParameter(
+                name=pname,
+                param_type=ParameterType.CATEGORICAL,
+                default_value=choices[0],
+                choices=list(choices),
+                description="catalog operator variation point",
+            ))
+        pareto_front = [
+            DesignConfiguration(
+                name=f"alt{i}",
+                parameters=dict(_to_design_configuration(state).parameters),
+                scores=dict(objectives),
+            )
+            for i, (state, objectives) in enumerate(result.pareto_front)
+        ]
+        for cfg in pareto_front:
+            ds.add_configuration(cfg)
+
+        print(f"  [bilevel-DSE] recommended: {best_config.parameters}")
         print(f"     mandated_redundancy={result.mandated_redundancy}  "
               f"robustness={result.recommendation_robustness:.0%}  "
               f"front={len(result.pareto_front)}")
@@ -845,7 +856,7 @@ class Orchestrator:
             print(f"     real design-quality (DesignEvaluator): {dims}")
         for note in result.notes:
             print(f"     note: {note}")
-        return bilevel_config
+        return ds, best_config, pareto_front
 
     def _introduce_variations(self, model: SysMLModel, requirements: List[str]) -> SysMLModel:
         """Surgically convert connected components into variation points.
@@ -905,8 +916,6 @@ class Orchestrator:
         Falls back to the generic free-form prompt when no quantified targets exist.
         Returns (rationale, [req_ids], [VariantSpec]) or None.
         """
-        import json
-
         from ..dse.domain_objective import (
             DESIGN_FIELD_ATTR,
             objective_families,
@@ -945,8 +954,7 @@ class Orchestrator:
             "be a subset of the ids above."
         )
         try:
-            raw = str(self.llm.chat(prompt)).replace("```json", "").replace("```", "").strip()
-            data = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+            data = _chat_json(self.llm, prompt)
             if not data.get("relevant", False):
                 return None
             rationale = str(data.get("rationale", "quantified design trade-off"))
@@ -988,8 +996,6 @@ class Orchestrator:
         """Free-form variant proposal (used when requirements carry no quantified
         targets — the domain objective then can't discriminate anyway, so the DSE
         scores via the generic design-quality dims)."""
-        import json
-
         from ..dse.variation_introducer import VariantSpec
 
         prompt = (
@@ -1002,8 +1008,7 @@ class Orchestrator:
             "Requirements:\n" + "\n".join(requirements)
         )
         try:
-            raw = str(self.llm.chat(prompt)).replace("```json", "").replace("```", "").strip()
-            data = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+            data = _chat_json(self.llm, prompt)
             rationale = str(data.get("rationale", "design trade-off"))
             reqs = [str(r) for r in data.get("satisfies", []) if r]
             variants = []
@@ -1043,8 +1048,9 @@ class Orchestrator:
             pass
         res = run_variation_dse(model, requirements=requirements, random_seed=seed or 0)
         if res is None:
-            print("  [variation-DSE] no admissible variation space; falling back to scalar DSE")
-            return self._explore_design_space(model, 30, requirements, random_seed=seed)
+            print("  [variation-DSE] no admissible variation space; "
+                  "falling back to catalog bilevel DSE")
+            return self._explore_bilevel(model, requirements, random_seed=seed)
 
         # build a design space from the admitted points (for the result/report)
         pts, _ = admitted(parse_variation_points(introduced_text))
@@ -1112,28 +1118,6 @@ class Orchestrator:
         return ds, best_config, pareto_front
 
     @staticmethod
-    def _add_inter_parameter_constraints(space: DesignSpace) -> None:
-        """Register typical engineering constraints linking the parameters."""
-
-        def triple_redundancy_needs_sensors(p: Dict[str, Any]) -> bool:
-            # Triple modular redundancy needs ≥3 sensors to be coherent
-            return not (p.get("redundancy_level") == "triple"
-                        and int(p.get("num_sensors", 0)) < 3)
-
-        def dual_redundancy_needs_sensors(p: Dict[str, Any]) -> bool:
-            return not (p.get("redundancy_level") == "dual"
-                        and int(p.get("num_sensors", 0)) < 2)
-
-        def centralised_caps_sensors(p: Dict[str, Any]) -> bool:
-            # Centralised control struggles past 4 sensor inputs
-            return not (p.get("distributed_control") is False
-                        and int(p.get("num_sensors", 0)) > 5)
-
-        space.add_constraint(triple_redundancy_needs_sensors)
-        space.add_constraint(dual_redundancy_needs_sensors)
-        space.add_constraint(centralised_caps_sensors)
-
-    @staticmethod
     def _print_exploration_summary(
         design_space: DesignSpace,
         best_config: DesignConfiguration,
@@ -1173,359 +1157,6 @@ class Orchestrator:
 
     # ------------------------------------------------------------------
 
-    def _define_design_space(
-        self,
-        model: SysMLModel,
-        requirements: Optional[List[str]] = None,
-    ) -> DesignSpace:
-        """Build a system-specific design space derived from requirements and model."""
-        requirements = requirements or []
-        space = DesignSpace(name=f"{model.name}_DesignSpace")
-
-        # ── Redundancy (SAFE-driven) ───────────────────────────────────
-        safe_count = sum(1 for r in requirements if "-SAFE-" in r)
-        if safe_count == 0:
-            redundancy_choices = ["none"]
-        elif safe_count == 1:
-            redundancy_choices = ["none", "dual"]
-        else:
-            redundancy_choices = ["none", "dual", "triple"]
-
-        # Safety-driven default: start MCTS from the most appropriate redundancy
-        # level given the number of SAFE requirements.  Starting from "none" traps
-        # the search in the safety-floor zone (overall ≤ 0.30) before it can
-        # discover higher-redundancy configurations — especially when the
-        # triple_redundancy_needs_sensors constraint requires ≥ 3 sensors first.
-        if safe_count >= 3:
-            default_redundancy = "triple"
-        elif safe_count >= 1:
-            default_redundancy = "dual"
-        else:
-            default_redundancy = "none"
-
-        space.add_parameter(DesignParameter(
-            name="redundancy_level",
-            param_type=ParameterType.CATEGORICAL,
-            default_value=default_redundancy,
-            choices=redundancy_choices,
-            description=f"Hardware redundancy level (derived from {safe_count} SAFE requirement(s))",
-        ))
-
-        # ── Communication protocol (INTF-driven) ──────────────────────
-        all_req_text = " ".join(requirements)
-        intf_text = " ".join(r for r in requirements if "-INTF-" in r).upper()
-        # Expanded known-protocols list, including drone/aerospace standards
-        known_protocols = [
-            "CAN", "ETHERNET", "SPI", "I2C",
-            "MAVLINK",                      # drone ground-control
-            "ROS2",                         # robotic middleware
-            "WIRELESS",
-            "MODBUS", "PROFINET",
-            "ASTM",                         # ASTM F3411-22 Remote ID (drone)
-            "ADSB", "ADS-B",                # Automatic Dependent Surveillance
-            "UAVCAN", "DRONECAN",           # drone CAN variants
-            "OPENAPI", "REST",              # web/cloud interfaces
-        ]
-        detected = [p for p in known_protocols
-                    if re.search(rf"\b{re.escape(p)}\b", intf_text)]
-
-        # Domain-adaptive fallback: when no protocol is found in INTF reqs,
-        # use system-name and requirement text to pick sensible defaults.
-        if len(detected) < 2:
-            combined_lower = (model.name + " " + all_req_text).lower()
-            # Ordered most-specific first so industrial + robotic systems
-            # (e.g. a CNC arm) don't fall into the generic "robot→ROS2" bucket.
-            if any(kw in combined_lower for kw in _DRONE_KWS):
-                domain_fallback = ["MAVLink", "Ethernet"]
-            elif any(kw in combined_lower for kw in _INDUSTRIAL_KWS):
-                domain_fallback = ["CAN", "Modbus"]
-            elif any(kw in combined_lower for kw in _ROBOT_KWS):
-                domain_fallback = ["ROS2", "Ethernet"]
-            else:
-                domain_fallback = ["CAN", "Ethernet"]
-            protocol_choices = (detected + domain_fallback)[:4]
-        else:
-            protocol_choices = detected[:4]
-
-        # Normalise to mixed-case display names
-        _display = {
-            "ETHERNET": "Ethernet", "MAVLINK": "MAVLink", "ROS2": "ROS2",
-            "WIRELESS": "Wireless", "MODBUS": "Modbus", "PROFINET": "PROFINET",
-            "ASTM": "ASTM", "ADSB": "ADSB", "ADS-B": "ADS-B",
-            "UAVCAN": "UAVCAN", "DRONECAN": "DroneCAN",
-        }
-        protocol_choices = [_display.get(p, p) for p in dict.fromkeys(protocol_choices)]
-        # First detected protocol is the best default; else first fallback
-        default_protocol = (
-            _display.get(detected[0], detected[0]) if detected else protocol_choices[0]
-        )
-        space.add_parameter(DesignParameter(
-            name="communication_protocol",
-            param_type=ParameterType.CATEGORICAL,
-            default_value=default_protocol,
-            choices=protocol_choices,
-            description="Communication protocol between components (derived from INTF requirements)",
-        ))
-
-        # ── Control frequency (PERF-driven) ───────────────────────────
-        perf_nums = []
-        for req in requirements:
-            if "-PERF-" not in req:
-                continue
-            body = req.split(":", 1)[-1]
-            # Match numbers followed by Hz / kHz / frequency-related units
-            hz_matches = re.findall(
-                r'\b(\d+(?:\.\d+)?)\s*(?:hz|khz|kHz|Hz|KHz)\b', body, re.IGNORECASE
-            )
-            perf_nums.extend(float(m) for m in hz_matches)
-        if perf_nums:
-            target_hz = max(perf_nums)
-            # Allow exploring half to double the stated requirement
-            min_hz = max(1.0, target_hz * 0.5)
-            max_hz = target_hz * 2.0
-            default_hz = target_hz
-        else:
-            min_hz, max_hz, default_hz = 10.0, 1000.0, 100.0
-        space.add_parameter(DesignParameter(
-            name="control_frequency_hz",
-            param_type=ParameterType.CONTINUOUS,
-            default_value=default_hz,
-            min_value=min_hz,
-            max_value=max_hz,
-            unit="Hz",
-            description="Main control loop frequency (derived from PERF requirements)",
-        ))
-
-        # ── Distributed vs. centralised (structural, from part count) ─
-        part_count = len(model.part_definitions)
-        space.add_parameter(DesignParameter(
-            name="distributed_control",
-            param_type=ParameterType.BOOLEAN,
-            default_value=(part_count > 4),   # lean distributed if already complex
-            description="Distributed vs. centralised control (based on model complexity)",
-        ))
-
-        # ── Sensor count (PERF + model-driven) ────────────────────────
-        # Count parts whose name contains sensor-like keywords
-        sensor_kws = {"sensor", "detector", "monitor", "camera", "lidar", "imu", "gps"}
-        existing_sensors = sum(
-            1 for p in model.part_definitions
-            if any(kw in p.name.lower() for kw in sensor_kws)
-        )
-        min_sensors = max(1, existing_sensors)
-        max_sensors = max(6, existing_sensors + 3)
-        sensor_choices = list(range(min_sensors, max_sensors + 1))
-
-        # Ensure the default sensor count satisfies the inter-parameter constraint
-        # (triple_redundancy_needs_sensors requires num_sensors ≥ 3 for TMR,
-        # dual_redundancy_needs_sensors requires num_sensors ≥ 2 for dual).
-        # This prevents the root MCTS node from being infeasible-at-first-step
-        # when the safety-driven default redundancy is triple or dual.
-        if default_redundancy == "triple":
-            raw_default_sensors = max(3, min_sensors)
-        elif default_redundancy == "dual":
-            raw_default_sensors = max(2, min_sensors)
-        else:
-            raw_default_sensors = max(1, existing_sensors) if existing_sensors else 2
-        default_sensors = min(max_sensors, max(min_sensors, raw_default_sensors))
-
-        space.add_parameter(DesignParameter(
-            name="num_sensors",
-            param_type=ParameterType.DISCRETE,
-            default_value=default_sensors,
-            choices=sensor_choices,
-            description=f"Number of sensor units (model has {existing_sensors} sensor-like parts)",
-        ))
-
-        return space
-
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _score_config_against_requirements(
-        config: DesignConfiguration,
-        requirements: List[str],
-    ) -> Dict[str, float]:
-        """Score a DesignConfiguration against extracted requirement bounds.
-
-        Replaces the generic parameter-count heuristic so MCTS explores
-        a semantically grounded fitness landscape.
-        """
-        scores: Dict[str, float] = {}
-
-        # ── PERF satisfaction ──────────────────────────────────────────
-        perf_reqs = [r for r in requirements if "-PERF-" in r]
-        if perf_reqs:
-            hz_values: List[float] = []
-            for req in perf_reqs:
-                body = req.split(":", 1)[-1]
-                hz_matches = re.findall(
-                    r'\b(\d+(?:\.\d+)?)\s*(?:hz|kHz|Hz|KHz)\b', body, re.IGNORECASE
-                )
-                hz_values.extend(float(m) for m in hz_matches)
-            freq = float(config.parameters.get("control_frequency_hz", 100.0))
-            if hz_values:
-                target = max(hz_values)
-                scores["perf_satisfaction"] = min(1.0, freq / max(target, 1.0))
-            else:
-                # No frequency bound found — score neutral
-                scores["perf_satisfaction"] = 0.7
-        else:
-            scores["perf_satisfaction"] = 1.0
-
-        # ── Safety margin ──────────────────────────────────────────────
-        safe_count = sum(1 for r in requirements if "-SAFE-" in r)
-        redundancy_map = {"none": 0, "dual": 1, "triple": 2}
-        redundancy = redundancy_map.get(
-            str(config.parameters.get("redundancy_level", "none")), 0
-        )
-        if safe_count == 0:
-            scores["safety_margin"] = 1.0
-        else:
-            needed = min(2, safe_count)
-            raw = min(1.0, (redundancy + 0.1) / (needed + 0.1))
-            # Hard penalty: when ≥ 3 SAFE requirements exist, redundancy=none is
-            # architecturally unacceptable — clamp safety_margin to near-zero so
-            # MCTS consistently selects dual or triple redundancy.
-            if safe_count >= 3 and redundancy == 0:
-                raw = 0.01
-            scores["safety_margin"] = raw
-
-        # ── Protocol match ─────────────────────────────────────────────
-        intf_reqs = [r for r in requirements if "-INTF-" in r]
-        protocol = str(config.parameters.get("communication_protocol", "")).upper()
-        if intf_reqs:
-            intf_text = " ".join(intf_reqs).upper()
-            all_req_text = " ".join(requirements).upper()
-            if protocol and protocol in intf_text:
-                # Protocol explicitly named in INTF requirements
-                scores["protocol_match"] = 1.0
-            elif protocol and protocol in all_req_text:
-                # Protocol mentioned somewhere in requirements (not just INTF)
-                scores["protocol_match"] = 0.7
-            elif protocol in ("MAVLINK", "ROS2", "UAVCAN", "DRONECAN", "ASTM"):
-                # Domain-appropriate protocol for aerial/robotic systems;
-                # not penalised as heavily as generic bus protocols
-                scores["protocol_match"] = 0.65
-            else:
-                scores["protocol_match"] = 0.4
-        else:
-            scores["protocol_match"] = 0.8
-
-        # ── Structural simplicity (cost proxy) ────────────────────────
-        sensor_count = int(config.parameters.get("num_sensors", 3))
-        all_sensor_choices = [1, 2, 3, 4, 5, 6]
-        max_s = max(all_sensor_choices)
-        scores["simplicity"] = 1.0 - (sensor_count - 1) / max(max_s - 1, 1)
-
-        return scores
-
-    # ------------------------------------------------------------------
-
-
-    def _mcts_structural_grounding_pass(
-        self,
-        model: SysMLModel,
-        best_config: DesignConfiguration,
-    ) -> None:
-        """Run a focused, unconditional LLM call to implement structural MCTS decisions.
-
-        Specifically handles ``redundancy_level`` — the only MCTS decision that
-        requires LLM to generate new SysML structure (a triple/dual-channel state def).
-        Unlike the refinement loop this pass is **not gated by the quality threshold**:
-        it always runs when MCTS selected a non-trivial redundancy level, regardless of
-        how high the initial model scored.
-
-        The call uses a minimal, single-task prompt so the LLM cannot drift into
-        unrelated changes.  A regression guard reverts the result if part defs were
-        dropped or the expected redundancy structure is absent.
-        """
-        redundancy = str(best_config.parameters.get("redundancy_level", "none"))
-        if redundancy == "none":
-            return
-
-        meta = getattr(model, "metadata", None) or {}
-        sysml_text = meta.get("last_sysml_text", "")
-        if not sysml_text:
-            return
-
-        # ── Already-implemented check ──────────────────────────────────────
-        _TRIPLE_SIGNALS = re.compile(
-            r"TripleChannel|redundancyChannels\s*:\s*Integer\s*=\s*3"
-            r"|ChannelA\b.*ChannelB\b.*ChannelC\b",
-            re.DOTALL,
-        )
-        _DUAL_SIGNALS = re.compile(
-            r"DualChannel|redundancyChannels\s*:\s*Integer\s*=\s*2"
-        )
-        if redundancy == "triple" and _TRIPLE_SIGNALS.search(sysml_text):
-            if self.verbose:
-                print("  [DEBUG] MCTS Grounding — triple redundancy already present, skipping")
-            return
-        if redundancy == "dual" and _DUAL_SIGNALS.search(sysml_text):
-            if self.verbose:
-                print("  [DEBUG] MCTS Grounding — dual redundancy already present, skipping")
-            return
-
-        # ── Identify the safety/monitor part def to inject into ───────────
-        target_part: Optional[str] = None
-        for part in model.part_definitions:
-            if any(kw in part.name.lower() for kw in _SAFETY_KWS):
-                target_part = part.name
-                break
-        if target_part is None and model.part_definitions:
-            target_part = model.part_definitions[-1].name  # last-resort fallback
-        if target_part is None:
-            return
-
-        if self.verbose:
-            print(f"\n  {'─'*60}")
-            print(f"  [DEBUG] MCTS Structural Grounding Pass")
-            print(f"  {'─'*60}")
-            print(f"  Adding {redundancy} redundancy → {target_part}")
-
-        # ── Single focused LLM call ────────────────────────────────────────
-        grounding_result = self.design_agent.cot.mcts_structural_grounding(
-            redundancy_level=redundancy,
-            target_part=target_part,
-            sysml_text=sysml_text,
-        )
-
-        if not grounding_result.extracted_sysml:
-            if self.verbose:
-                print("  ⚠ MCTS Grounding — no SysML extracted, reverting")
-            return
-
-        from .design_agent import DesignAgent
-        fixed, _ = DesignAgent._fix_doc_syntax(grounding_result.extracted_sysml)
-
-        # ── Regression guard: part def count must not drop ─────────────────
-        orig_parts = len(re.findall(r"\bpart\s+def\s+\w+", sysml_text))
-        new_parts  = len(re.findall(r"\bpart\s+def\s+\w+", fixed))
-        if new_parts < orig_parts:
-            if self.verbose:
-                print(f"  ⚠ MCTS Grounding — part def count dropped "
-                      f"({orig_parts} → {new_parts}), reverting")
-            return
-
-        # ── Verify the redundancy structure was actually added ─────────────
-        _TRIPLE_CHECK = re.compile(r"ChannelA|TripleChannel|redundancyChannels")
-        _DUAL_CHECK   = re.compile(r"DualChannel|redundancyChannels")
-        if redundancy == "triple" and not _TRIPLE_CHECK.search(fixed):
-            if self.verbose:
-                print("  ⚠ MCTS Grounding — LLM did not add triple structure, reverting")
-            return
-        if redundancy == "dual" and not _DUAL_CHECK.search(fixed):
-            if self.verbose:
-                print("  ⚠ MCTS Grounding — LLM did not add dual structure, reverting")
-            return
-
-        # ── Accept ────────────────────────────────────────────────────────
-        model.metadata["last_sysml_text"] = fixed
-        model.metadata["mcts_grounding_applied"] = redundancy
-        if self.verbose:
-            print(f"  ✓ MCTS Grounding — {redundancy} redundancy added to {target_part}")
-
     @staticmethod
     def _count_connects(model_text: str) -> int:
         """Number of `connect a.p to b.q` statements in the model text."""
@@ -1535,7 +1166,7 @@ class Orchestrator:
         self,
         model: SysMLModel,
         requirements: List[str],
-        mcts_best_config: Optional[DesignConfiguration] = None,
+        dse_best_config: Optional[DesignConfiguration] = None,
         connectivity_floor: bool = False,
     ) -> tuple[SysMLModel, float, Any]:
         """Phase 4-5: Evaluate and iteratively refine the design.
@@ -1580,8 +1211,8 @@ class Orchestrator:
 
         # Pre-compute MCTS constraint text once — same for every iteration
         mcts_constraints = (
-            _build_mcts_design_constraints(mcts_best_config)
-            if mcts_best_config else ""
+            _build_dse_design_constraints(dse_best_config)
+            if dse_best_config else ""
         )
         if self.verbose and mcts_constraints:
             print(f"\n  {'─'*60}")
@@ -1609,18 +1240,25 @@ class Orchestrator:
             sim_result = self._run_simulation(current_sysml, current_model.name)
             sim_issues = self._format_sim_issues(sim_result, requirements=requirements)
 
-            # ── Rule-based evaluation (pass cached syntax + sim results) ──
+            # ── Rule-based evaluation (pass cached syntax + sim results;
+            #    requirements enable requirement-derived dimension weights) ──
             eval_result = self.evaluator.evaluate(
                 config=DesignConfiguration(
                     name=f"iteration_{iteration}",
                     parameters={},
                 ),
                 model=current_model,
-                mcts_config=mcts_best_config,
+                dse_config=dse_best_config,
                 syntax_result=syntax_result,
                 sim_result=sim_result,
+                requirements=requirements,
             )
             rule_score = eval_result.weighted_total
+            # How much the pass/fail verdict depends on the weighting at all —
+            # sampled over the weight simplex (answers "would another weighting
+            # flip the outcome?").  Defensive: test doubles may not provide it.
+            _rob_fn = getattr(self.evaluator, "verdict_robustness", None)
+            verdict_rob = _rob_fn(eval_result) if callable(_rob_fn) else None
 
             # ── LLM evaluation (skip when rule score already sufficient OR
             #    when a [VETO] fired in the rule evaluator) ─────────────────
@@ -1660,7 +1298,12 @@ class Orchestrator:
                 "sim_score": sim_result.reachability_score,
                 "sim_passed": len(sim_result.passed_scenarios()),
                 "sim_total": len(sim_result.scenario_results),
+                "weights_used": getattr(eval_result, "weights_used", {}),
+                "verdict_robustness": verdict_rob,
             })
+            if verdict_rob is not None:
+                print(f"  Verdict robustness over the weight simplex: "
+                      f"{verdict_rob:.0%} of sampled weightings agree", flush=True)
 
             # ── Always-visible iteration summary ─────────────────────────
             self._print_iteration_summary(
@@ -1744,9 +1387,10 @@ class Orchestrator:
                             parameters={},
                         ),
                         model=current_model,
-                        mcts_config=mcts_best_config,
+                        dse_config=dse_best_config,
                         syntax_result=syntax_result,
                         sim_result=sim_result,
+                        requirements=requirements,
                     )
                     score = eval_after.weighted_total
                     return current_model, score, sim_result
@@ -1788,16 +1432,46 @@ class Orchestrator:
                     mcts_constraints=mcts_constraints,
                     sim_issues=sim_issues,
                 )
-                refine_result = self.design_agent.run({
-                    "system_name": current_model.name,
-                    "requirements": requirements,
-                    "existing_model": current_model,
-                    "refinement_feedback": refinement_feedback,
-                    "refinement_issues": eval_result.issues + eval_result.recommendations,
-                    "verbose": self.verbose,
-                })
-                if refine_result.success and isinstance(refine_result.output, _SysMLModelTypes):
-                    candidate = refine_result.output
+
+                # ── Surgical refinement first: the LLM returns only the blocks
+                #    it changes; the merge is syntax-gated and cannot shed
+                #    connects on untouched components (prevention, not the
+                #    after-the-fact rejection the full rewrite needs). Falls
+                #    back to the legacy whole-model rewrite on any failure.
+                candidate = None
+                if self.use_surgical_refinement:
+                    from .surgical_refiner import attempt_surgical_refinement
+                    surgical = attempt_surgical_refinement(
+                        llm=self.llm,
+                        model_text=current_sysml,
+                        issues=eval_result.issues + eval_result.recommendations,
+                        feedback=refinement_feedback,
+                        verbose=self.verbose,
+                    )
+                    if surgical is not None:
+                        print(f"  ✓ Surgical refinement: {surgical.summary()}",
+                              flush=True)
+                        candidate = build_lite_model(
+                            surgical.merged_text, model_name=current_model.name
+                        )
+                    else:
+                        print("  ⚠ Surgical refinement not applicable — "
+                              "falling back to full rewrite", flush=True)
+
+                if candidate is None:
+                    refine_result = self.design_agent.run({
+                        "system_name": current_model.name,
+                        "requirements": requirements,
+                        "existing_model": current_model,
+                        "refinement_feedback": refinement_feedback,
+                        "refinement_issues": eval_result.issues + eval_result.recommendations,
+                        "verbose": self.verbose,
+                    })
+                    if (refine_result.success
+                            and isinstance(refine_result.output, _SysMLModelTypes)):
+                        candidate = refine_result.output
+
+                if candidate is not None:
                     # ── P0: Regression prevention ─────────────────────────
                     # Evaluate the candidate with the SAME inputs as rule_score
                     # (sim + syntax + mcts_config).  Omitting sim_result makes
@@ -1811,9 +1485,10 @@ class Orchestrator:
                     candidate_eval = self.evaluator.evaluate(
                         config=DesignConfiguration(name="candidate", parameters={}),
                         model=candidate,
-                        mcts_config=mcts_best_config,
+                        dse_config=dse_best_config,
                         syntax_result=cand_syntax,
                         sim_result=cand_sim,
+                        requirements=requirements,
                     )
                     delta = candidate_eval.weighted_total - rule_score
                     delta_str = f"{delta:+.3f}"
@@ -1948,6 +1623,7 @@ class Orchestrator:
                 model=candidate,
                 syntax_result=cand_syntax,
                 sim_result=cand_sim,
+                requirements=requirements,
             )
             if cand_eval.weighted_total < cur_score - 0.05:
                 print(f"  └─ ⚠ regression (score {cur_score:.3f} → "

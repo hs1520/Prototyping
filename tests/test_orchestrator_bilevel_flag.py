@@ -1,42 +1,24 @@
-"""Tests for the opt-in bilevel-DSE flag wired into the orchestrator (Item F, step 2).
+"""Tests for the catalog bilevel DSE path (_explore_bilevel).
 
-The flag defaults OFF (existing behaviour unchanged). When on, Phase-3 is driven by
-the bilevel DSE; the helper merges its architecture decisions with the scalar
-control_frequency_hz and falls back to the scalar config on any failure.
+With the legacy scalar MCTS removed, the non-variation Phase-3 branch is the
+bilevel MO-MCTS + inner BO over the catalog operator space.  These tests cover
+the severity→redundancy chain, the inner-BO-tuned frequency, the report shapes
+(DesignSpace / pareto_front), and the failure fallback (empty config, never
+breaking the pipeline).
 """
 from __future__ import annotations
 
-import inspect
 from types import SimpleNamespace
-
-import pytest
 
 import src.dse.pipeline_adapter as adapter
 from src.agents.orchestrator import Orchestrator
-from src.dse.design_space import DesignConfiguration
+from src.dse.design_space import DesignConfiguration, DesignSpace
 
 
 def _model():
     parts = [SimpleNamespace(name=f"Sensor{i}") for i in range(2)]
     parts.append(SimpleNamespace(name="FlightController"))
-    return SimpleNamespace(part_definitions=parts)
-
-
-def _scalar():
-    return DesignConfiguration(
-        name="scalar",
-        parameters={
-            "redundancy_level": "none",
-            "num_sensors": 1,
-            "control_frequency_hz": 100.0,
-            "communication_protocol": "DataPort",
-            "distributed_control": False,
-        },
-    )
-
-
-def test_flag_defaults_off():
-    assert inspect.signature(Orchestrator.__init__).parameters["use_bilevel_dse"].default is False
+    return SimpleNamespace(part_definitions=parts, name="TestSystem")
 
 
 def test_bilevel_severity_drives_redundancy_and_tunes_frequency():
@@ -44,29 +26,50 @@ def test_bilevel_severity_drives_redundancy_and_tunes_frequency():
         "REQ-SAFE-001: autoland on dual-engine failure. [SEV:Catastrophic]",
         "REQ-PERF-001: maintain 50 Hz control.",
     ]
-    cfg = Orchestrator._apply_bilevel_dse(SimpleNamespace(), _model(), reqs, _scalar())
+    ds, cfg, front = Orchestrator._explore_bilevel(
+        SimpleNamespace(), _model(), reqs, random_seed=0
+    )
     assert cfg.parameters["redundancy_level"] == "triple"        # severity-driven
-    # control_frequency tuned by the INNER BO toward the PERF target (~50 Hz),
-    # not borrowed from the scalar path (100 Hz)
+    # control_frequency tuned by the INNER BO toward the PERF target (~50 Hz)
     assert 40.0 <= cfg.parameters["control_frequency_hz"] <= 75.0
     assert cfg.parameters["num_sensors"] >= 3                     # coherent with redundancy
 
 
 def test_bilevel_returns_complete_config_for_injectors():
-    cfg = Orchestrator._apply_bilevel_dse(
-        SimpleNamespace(), _model(), ["REQ-SAFE-001: x. [SEV:Major]"], _scalar()
+    _, cfg, _ = Orchestrator._explore_bilevel(
+        SimpleNamespace(), _model(), ["REQ-SAFE-001: x. [SEV:Major]"], random_seed=0
     )
-    # the existing injectors consume these keys
+    # the injectors + refinement constraints consume these keys
     for key in ("redundancy_level", "num_sensors", "communication_protocol",
                 "distributed_control", "control_frequency_hz"):
         assert key in cfg.parameters
 
 
-def test_bilevel_failure_falls_back_to_scalar(monkeypatch):
+def test_bilevel_report_shapes():
+    ds, cfg, front = Orchestrator._explore_bilevel(
+        SimpleNamespace(), _model(), [], random_seed=0
+    )
+    assert isinstance(ds, DesignSpace)
+    param_names = {p.name for p in ds.parameters}
+    assert {"redundancy_level", "num_sensors",
+            "distributed_control", "communication_protocol"} <= param_names
+    assert front, "outer MO-MCTS must return a non-empty Pareto front"
+    for alt in front:
+        assert isinstance(alt, DesignConfiguration)
+        assert alt.scores            # multi-objective vector attached
+        assert "redundancy_level" in alt.parameters
+
+
+def test_bilevel_failure_returns_empty_config(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("simulated bilevel failure")
 
     monkeypatch.setattr(adapter, "run_bilevel_dse", boom)
-    scalar = _scalar()
-    cfg = Orchestrator._apply_bilevel_dse(SimpleNamespace(), _model(), [], scalar)
-    assert cfg is scalar  # opt-in path never breaks the pipeline
+    ds, cfg, front = Orchestrator._explore_bilevel(
+        SimpleNamespace(), _model(), [], random_seed=0
+    )
+    # DSE failure must not break the pipeline: refinement still runs, with no
+    # architectural decisions injected.
+    assert cfg.parameters == {}
+    assert front == []
+    assert isinstance(ds, DesignSpace)

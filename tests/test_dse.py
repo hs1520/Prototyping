@@ -12,6 +12,11 @@ for _name, _attrs in [
     ("syside", {}),
 ]:
     if _name not in sys.modules:
+        try:  # prefer the real package — a stub here poisons later test files
+            __import__(_name)
+            continue
+        except ImportError:
+            pass
         _mod = ModuleType(_name)
         for _k, _v in _attrs.items():
             setattr(_mod, _k, _v)
@@ -23,7 +28,6 @@ from src.dse.design_space import (
     ParameterType,
 )
 from src.dse.evaluator import DesignEvaluator, EvaluationResult
-from src.dse.mcts import MCTSDesignExplorer, MCTSNode
 from src.sysml.model import (
     ConnectionEnd,
     ConnectionUsage,
@@ -196,95 +200,6 @@ class TestDesignSpace:
         summary = design_space.get_summary()
         assert summary["parameters"] == 2
         assert summary["configurations_evaluated"] == 1
-
-
-class TestMCTSDesignExplorer:
-    @pytest.fixture
-    def design_space(self):
-        space = DesignSpace(name="MCTSTest")
-        space.add_parameter(DesignParameter(
-            name="protocol",
-            param_type=ParameterType.CATEGORICAL,
-            default_value="CAN",
-            choices=["CAN", "Ethernet", "SPI"],
-        ))
-        space.add_parameter(DesignParameter(
-            name="frequency",
-            param_type=ParameterType.CONTINUOUS,
-            default_value=100.0,
-            min_value=10.0,
-            max_value=500.0,
-        ))
-        space.add_parameter(DesignParameter(
-            name="redundant",
-            param_type=ParameterType.BOOLEAN,
-            default_value=False,
-        ))
-        return space
-
-    def test_search_runs(self, design_space):
-        def evaluator(config):
-            return {"performance": 0.7, "reliability": 0.6}
-
-        explorer = MCTSDesignExplorer(
-            design_space=design_space,
-            evaluation_function=evaluator,
-            random_seed=42,
-        )
-        best = explorer.search(num_iterations=10)
-        assert best is not None
-        assert isinstance(best.overall_score, float)
-
-    def test_search_explores_configs(self, design_space):
-        def evaluator(config):
-            return {"score": config.parameters.get("frequency", 0) / 500.0}
-
-        explorer = MCTSDesignExplorer(
-            design_space=design_space,
-            evaluation_function=evaluator,
-            random_seed=42,
-        )
-        explorer.search(num_iterations=20)
-        # Should explore more than 1 configuration
-        assert len(design_space.configurations) > 1
-
-    def test_mcts_tree_summary(self, design_space):
-        def evaluator(config):
-            return {"score": 0.5}
-
-        explorer = MCTSDesignExplorer(
-            design_space=design_space,
-            evaluation_function=evaluator,
-            random_seed=0,
-        )
-        explorer.search(num_iterations=15)
-        summary = explorer.get_exploration_tree_summary()
-        assert "total_nodes" in summary
-        assert summary["total_nodes"] >= 1
-        assert "best_score" in summary
-
-    def test_ucb1_score(self):
-        parent_config = DesignConfiguration(name="root")
-        parent = MCTSNode(config=parent_config, visits=10, total_reward=5.0)
-        child_config = DesignConfiguration(name="child")
-        child = MCTSNode(
-            config=child_config, parent=parent, visits=3, total_reward=2.0
-        )
-        score = child.ucb1_score(exploration_constant=math.sqrt(2))
-        assert score > 0
-        # UCB1 = exploitation + exploration
-        # = 2/3 + sqrt(2) * sqrt(log(10)/3)
-        exploitation = 2.0 / 3.0
-        exploration = math.sqrt(2) * math.sqrt(math.log(10) / 3)
-        expected = exploitation + exploration
-        assert abs(score - expected) < 1e-6
-
-    def test_unvisited_node_gets_infinite_ucb(self):
-        parent_config = DesignConfiguration(name="root")
-        parent = MCTSNode(config=parent_config, visits=5)
-        child_config = DesignConfiguration(name="child")
-        child = MCTSNode(config=child_config, parent=parent, visits=0)
-        assert child.ucb1_score() == float("inf")
 
 
 class TestDesignEvaluator:

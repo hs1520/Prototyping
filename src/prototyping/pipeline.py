@@ -51,14 +51,24 @@ class PrototypingPipeline:
         dse_mode: str = "variation",
     ):
         self.llm = llm
-        self.pinecone = pinecone_wrapper or PineconeWrapper(default_namespace=rag_namespace)
         self.parse_strict = parse_strict
-        self.rag = RAGRetriever(
-            llm=self.llm,
-            pinecone_wrapper=self.pinecone,
-            index_name=rag_index_name,
-            namespace=rag_namespace,
-        )
+        # RAG is an enhancement, not a hard dependency: without a Pinecone key
+        # the pipeline runs RAG-free (agents accept rag_retriever=None) instead
+        # of crashing — enabling offline runs and clean RAG on/off ablations.
+        self.pinecone: Optional[PineconeWrapper] = None
+        self.rag: Optional[RAGRetriever] = None
+        try:
+            self.pinecone = pinecone_wrapper or PineconeWrapper(
+                default_namespace=rag_namespace
+            )
+            self.rag = RAGRetriever(
+                llm=self.llm,
+                pinecone_wrapper=self.pinecone,
+                index_name=rag_index_name,
+                namespace=rag_namespace,
+            )
+        except Exception as e:
+            print(f"  ⚠ RAG unavailable ({e}) — continuing without retrieval")
         self.orchestrator = Orchestrator(
             llm=self.llm,
             rag_retriever=self.rag,
@@ -66,26 +76,28 @@ class PrototypingPipeline:
             max_iterations=max_iterations,
             verbose=verbose,
         )
-        # DSE mode at the user entry point. Orchestrator's own flags stay default
+        # DSE mode at the user entry point. Orchestrator's own flag stays default
         # OFF (direct-construction contract); the pipeline opts the chosen path in.
-        self.orchestrator.use_variation_dse, self.orchestrator.use_bilevel_dse = (
-            self._dse_flags(dse_mode)
-        )
+        self.orchestrator.use_variation_dse = self._dse_flags(dse_mode)
 
     @staticmethod
-    def _dse_flags(mode: str) -> tuple[bool, bool]:
-        """Map a dse_mode string to (use_variation_dse, use_bilevel_dse).
+    def _dse_flags(mode: str) -> bool:
+        """Map a dse_mode string to use_variation_dse.
 
         "variation" (default) — LLM-declared variation points + domain objective.
         "bilevel"             — catalog-operator bilevel DSE (MO-MCTS + inner BO).
-        "off"                 — legacy scalar DSE (both flags off).
+
+        The legacy scalar DSE ("off") was removed; requesting it is an error.
         """
         m = (mode or "").strip().lower()
-        if m == "bilevel":
-            return (False, True)
         if m == "off":
-            return (False, False)
-        return (True, False)  # default: variation
+            raise ValueError(
+                "dse_mode='off' (legacy scalar DSE) was removed; "
+                "use 'variation' or 'bilevel'."
+            )
+        if m == "bilevel":
+            return False
+        return True  # default: variation
 
     def generate_system(
         self,
@@ -154,6 +166,7 @@ class PrototypingPipeline:
                 fdm_backend=sitl_fdm_backend,
             )
 
+        self.save_run_report(result)
         return result
 
     # ------------------------------------------------------------------
@@ -266,10 +279,12 @@ class PrototypingPipeline:
         mcts_patience: Optional[int] = 15,
     ) -> Dict[str, Any]:
         """
-        Run MCTS Design Space Exploration on a previously validated model.
+        Run multi-objective Design Space Exploration on a previously validated model.
 
-        Takes the dict returned by generate_system() and explores the
-        parameter space to find the optimal configuration.
+        Takes the dict returned by generate_system() and explores the variation /
+        catalog operator space (per ``dse_mode``) to find the recommended
+        configuration.  The mcts_* parameters are retained for API compatibility;
+        the bilevel search manages its own budget.
 
         Returns
         -------
@@ -278,12 +293,14 @@ class PrototypingPipeline:
         {design_space_summary, design_space_parameters,
          best_config, pareto_alternatives}
         """
-        return self.orchestrator.explore(
+        result = self.orchestrator.explore(
             generate_result=generate_result,
             mcts_iterations=mcts_iterations,
             mcts_seed=mcts_seed,
             mcts_patience=mcts_patience,
         )
+        self.save_run_report(result)
+        return result
 
     def prototype_system(
         self,
@@ -311,13 +328,71 @@ class PrototypingPipeline:
             - final_score: Quality score of the final design (0-1)
             - evaluation_history: Per-iteration scores
         """
-        return self.orchestrator.prototype(
+        result = self.orchestrator.prototype(
             system_name=system_name,
             system_description=description,
             additional_requirements=additional_requirements,
             mcts_iterations=mcts_iterations,
             parse_strict=(parse_strict if parse_strict is not None else self.parse_strict),
         )
+        self.save_run_report(result)
+        return result
+
+    @staticmethod
+    def build_run_report(result: Dict[str, Any]) -> Dict[str, Any]:
+        """JSON-serialisable snapshot of a pipeline run (no model objects).
+
+        Captures what a benchmark/paper needs from a run: scores, per-iteration
+        history, simulation outcome, DSE decision + front, verification summary,
+        and the LLM token/call ledger.
+        """
+        sim = result.get("simulation_result")
+        report: Dict[str, Any] = {
+            "system_name": result.get("system_name"),
+            "final_score": result.get("final_score"),
+            "iterations": result.get("iterations"),
+            "requirements_count": len(result.get("requirements") or []),
+            "evaluation_history": result.get("evaluation_history"),
+            "best_config": result.get("best_config"),
+            "pareto_alternatives": result.get("pareto_alternatives"),
+            "design_space_summary": result.get("design_space_summary"),
+            "llm_usage": result.get("llm_usage"),
+        }
+        if sim is not None:
+            report["simulation"] = {
+                "reachability_score": getattr(sim, "reachability_score", None),
+                "scenarios_passed": len(sim.passed_scenarios()),
+                "scenarios_total": len(sim.scenario_results),
+            }
+        ver = result.get("dse_verification")
+        if ver:
+            report["dse_verification_summary"] = ver.get("summary")
+        return report
+
+    def save_run_report(
+        self, result: Dict[str, Any], directory: str = "logs"
+    ) -> Optional[str]:
+        """Write the run report to ``logs/run_<system>_<timestamp>.json``.
+
+        Best-effort: any failure is reported but never breaks the pipeline.
+        Returns the path written, or None.
+        """
+        import json
+        import time
+        from pathlib import Path
+
+        try:
+            report = self.build_run_report(result)
+            out_dir = Path(directory)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            name = str(result.get("system_name") or "system").replace(" ", "_")
+            path = out_dir / f"run_{name}_{time.strftime('%Y%m%d_%H%M%S')}.json"
+            path.write_text(json.dumps(report, indent=2, default=str))
+            print(f"  ✓ Run report saved: {path}")
+            return str(path)
+        except Exception as e:
+            print(f"  ⚠ run report not saved ({e})")
+            return None
 
     def quick_design(
         self,

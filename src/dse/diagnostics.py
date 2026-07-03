@@ -5,7 +5,7 @@ on numeric metrics while this module owns the human-readable feedback.
 
 Public API
 ----------
-diagnose(model, mcts_config, *, syside_attr_map, n_state_defs, syside_model)
+diagnose(model, dse_config, *, syside_attr_map, n_state_defs, syside_model)
     -> Tuple[List[str], List[str]]   (issues, recommendations)
 """
 from __future__ import annotations
@@ -30,7 +30,7 @@ from ..utils.syside_utils import SYSIDE_OK as _SYSIDE_EVAL_OK, syside as _syside
 
 def diagnose(
     model: SysMLModel,
-    mcts_config: Optional[DesignConfiguration],
+    dse_config: Optional[DesignConfiguration],
     *,
     syside_attr_map: Optional[Dict[str, float]] = None,
     n_state_defs: Optional[int] = None,
@@ -251,8 +251,8 @@ def diagnose(
         )
 
     # ── MCTS decision gaps ───────────────────────────────────────────────
-    if mcts_config:
-        params = mcts_config.parameters
+    if dse_config:
+        params = dse_config.parameters
 
         # Redundancy
         redundancy = str(params.get("redundancy_level", "none")).lower()
@@ -272,7 +272,7 @@ def diagnose(
 
             # Accept both the canonical SysML v2 form (`first X if <guard>
             # then Y;`) and the legacy form (`from X to Y when <guard>;`) —
-            # mirrors _score_mcts_fidelity so diagnosis and scoring agree.
+            # mirrors _score_dse_fidelity so diagnosis and scoring agree.
             voting_canonical = re.compile(
                 r"\btransition\s+\w+\s+first\s+\w+\s+if\s+([^;]+?)\s+then\s+\w+\s*;",
                 re.IGNORECASE | re.DOTALL,
@@ -303,7 +303,7 @@ def diagnose(
                 )
 
             # Collect guard identifiers from both syntaxes; skip boolean
-            # literals which need no producer (mirrors _score_mcts_fidelity).
+            # literals which need no producer (mirrors _score_dse_fidelity).
             _GUARD_LITERALS = {"true", "false"}
             guard_names = {
                 m.group(1)

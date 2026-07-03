@@ -119,3 +119,48 @@ def test_prototyping_pipeline_requires_injected_llm_and_builds_components():
     assert pipeline.pinecone.default_namespace == "ns"
     assert pipeline.orchestrator is not None
     assert pipeline.orchestrator.design_agent is not None
+
+
+def test_pipeline_degrades_gracefully_without_pinecone(monkeypatch):
+    """RAG is an enhancement, not a hard dependency: no Pinecone key must not
+    crash the pipeline — it runs RAG-free (enabling offline runs + ablations)."""
+
+    class ExplodingPinecone:
+        def __init__(self, *a, **kw):
+            raise ValueError("Pinecone API key is required.")
+
+    monkeypatch.setattr(orchestration_module, "PineconeWrapper", ExplodingPinecone)
+    pipeline = orchestration_module.PrototypingPipeline(llm=DummyLLM())
+    assert pipeline.rag is None
+    assert pipeline.pinecone is None
+    assert pipeline.orchestrator is not None  # agents accept rag_retriever=None
+
+
+def test_save_run_report_writes_json(tmp_path):
+    pipeline = orchestration_module.PrototypingPipeline(
+        llm=DummyLLM(), pinecone_wrapper=DummyPineconeWrapper()
+    )
+    path = pipeline.save_run_report(
+        {"system_name": "T", "final_score": 0.9}, directory=str(tmp_path)
+    )
+    assert path is not None
+    import json
+    saved = json.loads((tmp_path / path.split("/")[-1]).read_text())
+    assert saved["system_name"] == "T"
+
+
+def test_build_run_report_is_json_serialisable():
+    import json
+
+    report = orchestration_module.PrototypingPipeline.build_run_report({
+        "system_name": "T",
+        "final_score": 0.9,
+        "iterations": 2,
+        "requirements": ["REQ-1", "REQ-2"],
+        "evaluation_history": [{"iteration": 1, "score": 0.9}],
+        "best_config": {"redundancy_level": "dual"},
+        "llm_usage": {"calls": 3, "total_tokens": 100},
+    })
+    assert report["system_name"] == "T"
+    assert report["requirements_count"] == 2
+    json.dumps(report)  # must not raise
