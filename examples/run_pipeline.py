@@ -9,7 +9,7 @@
   PYTHONPATH=. /Users/huangsongyi/miniforge3/envs/AI-Prototyping/bin/python examples/run_pipeline.py
 
 改 system / 需求：编辑下面的 SYSTEM 和 DESC。
-切 DSE 路径：改 PrototypingPipeline(dse_mode=...) — "variation"(默认,双层) / "bilevel"(算子) / "off"(标量)。
+切 DSE 路径：改 PrototypingPipeline(dse_mode=...) — "variation"(默认,双层) / "bilevel"(算子目录)。
 """
 import os
 import sys
@@ -38,6 +38,9 @@ if __name__ == "__main__":
     initial_sysml = gen["model_sysml"]                          # after generate, BEFORE DSE
     res = pipe.orchestrator.explore(gen, mcts_iterations=20)    # DSE + refinement + verification
     final_sysml = res["model_sysml"]                            # AFTER DSE
+    # This script drives the orchestrator directly (to capture the pre-DSE model),
+    # bypassing the pipeline entry points that auto-save — so save explicitly.
+    pipe.save_run_report(res)
 
     # Restore VERBATIM requirement doc text (the LLM paraphrases/corrupts it during generation,
     # e.g. SAFE-005 "all other safety responses" → "all calculations"). Deterministic fidelity pass.
@@ -76,6 +79,26 @@ if __name__ == "__main__":
         print("\n[RUN_GAZEBO] flying recommended design in Gazebo ...", flush=True)
         gv = verify_recommended_design(design, DRONE_REQUIREMENTS)
         print("gazebo verify  :", summary_line(gv))
+
+    # Opt-in architecture-axis calibration: sweep quad/hexa/octa variants of the
+    # recommended design through Gazebo and rank-correlate the estimator's hover
+    # power against the measured one — the high-fidelity anchor the architecture
+    # dimension lacks on SITL-default (frame mass fixed → octa==quad).  Three
+    # flights ≈15 min, so it has its own gate on top of RUN_GAZEBO.
+    if (os.environ.get("RUN_GAZEBO") == "1"
+            and os.environ.get("RUN_GAZEBO_CALIB") == "1"):
+        design = getattr(pipe.orchestrator, "last_recommended_design", None)
+        if design is not None:
+            from src.dse.gazebo_oracle import calibrate_architecture_axis
+            print("\n[RUN_GAZEBO_CALIB] architecture sweep (quad/hexa/octa) ...",
+                  flush=True)
+            arch = calibrate_architecture_axis(design)
+            print("gazebo arch calib:", arch.summary())
+            for p in arch.points:
+                measured = (f"{p.measured_power_w:.0f} W"
+                            if p.measured_power_w is not None else f"— ({p.note})")
+                print(f"  {p.label}: predicted {p.predicted_power_w:.0f} W, "
+                      f"measured {measured}, stable={p.hover_stable}")
 
     # Honest verification-coverage of the satisfy claims: satisfy = allocation/intent, not
     # proof. Report how many requirements actually have evidence vs are allocated-only.

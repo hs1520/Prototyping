@@ -38,10 +38,12 @@ class CalibrationResult:
                 f"(ranking {'trustworthy' if self.rank_trustworthy else 'NOT trustworthy'})")
 
 
-def calibrate_endurance(
+def calibrate_ranking(
     labels: List[str], predicted: List[float], measured: List[float]
 ) -> CalibrationResult:
-    """Calibrate estimator-predicted vs SITL-measured endurance over design points."""
+    """Rank-calibrate estimator-predicted vs oracle-measured values over design
+    points.  Metric-agnostic: endurance vs SITL (capacity axis) and hover power
+    vs Gazebo (architecture axis) both go through here."""
     if not (len(labels) == len(predicted) == len(measured)) or len(labels) < 2:
         raise ValueError("need ≥2 aligned (label, predicted, measured) points")
     deltas = [p - m for p, m in zip(predicted, measured)]
@@ -57,3 +59,7 @@ def calibrate_endurance(
         deltas=deltas,
         max_abs_deviation=max((abs(d) for d in deltas), default=0.0),
     )
+
+
+# Original (capacity-axis) name kept as an alias — same computation.
+calibrate_endurance = calibrate_ranking
