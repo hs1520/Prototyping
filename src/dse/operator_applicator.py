@@ -22,12 +22,19 @@ from typing import List, Tuple
 
 from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import get_sysml_text
+from .operators.protocol import CATALOG as PROTO_CATALOG
 from .operators.redundantize import CATALOG
 
 # pipeline redundancy_level -> operator variant
 _LEVEL_TO_VARIANT = {"none": "single", "dual": "dual", "triple": "triple"}
 
 _PREFIX = "Bdse"  # collision-safe prefix for the injected package-level type defs
+
+# power-carrying port names are never retyped to a data protocol (domain separation)
+_PWR_EXACT = re.compile(
+    r"\b(power|pwr)(supply|in|out|bus|rail|link|feed|connector|line)\b",
+    re.IGNORECASE,
+)
 
 
 def _merge(model_text: str, variant: str) -> Tuple[str, bool]:
@@ -60,11 +67,71 @@ def _merge(model_text: str, variant: str) -> Tuple[str, bool]:
     return merged, True
 
 
-def apply_architecture(model, best_config) -> List[str]:
-    """Apply redundancy/failsafe as an addressable part usage in the host model.
+def _merge_protocol(model_text: str, protocol: str) -> Tuple[str, bool, str]:
+    """Retype generic data ports to the chosen catalog protocol signal.
 
+    Injects the protocol operator's rich signal port def (item-typed payload;
+    base ``Frame``/``Signal`` types Bdse-prefixed for collision safety), retypes
+    directed ``DataPort``/``RfPort`` usages (power ports untouched), removes the
+    stale semicolon-form generic defs, and keeps the result only if the whole
+    model still parses — the same valid-by-construction gate as the redundancy
+    merge.  Replaces the retired unvalidated regex injector
+    (``apply_inject_protocol_to_sysml_text``).
+    """
+    key = re.sub(r"[^a-z0-9]", "", protocol.lower())
+    if key not in PROTO_CATALOG:
+        return model_text, False, ""
+    signal, frame, _interop = PROTO_CATALOG[key]
+
+    text = model_text
+    # 1. Rich signal port def at package level (skip if the model has one)
+    if not re.search(rf"\bport\s+def\s+{signal}\b", text):
+        idx = text.rfind("}")
+        if idx == -1:
+            return model_text, False, ""
+        defs = (
+            f"    item def {_PREFIX}Frame;\n"
+            f"    item def {frame} :> {_PREFIX}Frame;\n"
+            f"    abstract port def {_PREFIX}Signal;\n"
+            f"    port def {signal} :> {_PREFIX}Signal {{ in item payload : {frame}; }}\n"
+        )
+        text = text[:idx] + "\n" + defs + text[idx:]
+
+    # 2. Retype directed generic data ports; power ports keep their type
+    port_usage_re = re.compile(
+        r"\b((?:in|out|inout)\s+port\s+(\w+)\s*:\s*)(DataPort|RFPort|RfPort)\b",
+        re.IGNORECASE,
+    )
+
+    def _retype(m: re.Match) -> str:
+        port_name = m.group(2).lower()
+        if _PWR_EXACT.search(port_name) or port_name in ("power", "pwr"):
+            return m.group(0)
+        return f"{m.group(1)}{signal}"
+
+    text = port_usage_re.sub(_retype, text)
+
+    # 3. Drop stale semicolon-form generic port defs
+    for generic in ("DataPort", "RFPort", "RfPort", "GenericPort"):
+        text = re.sub(
+            rf"^[ \t]*\bport\s+def\s+{generic}\s*;[ \t]*\n?",
+            "", text, flags=re.IGNORECASE | re.MULTILINE,
+        )
+
+    if text == model_text:
+        return model_text, False, ""
+    if check_syntax(text).has_errors:
+        return model_text, False, ""
+    return text, True, signal
+
+
+def apply_architecture(model, best_config) -> List[str]:
+    """Apply the DSE architecture decisions via valid-by-construction merges.
+
+    Redundancy/failsafe becomes an addressable part usage in the host model;
+    the communication protocol retypes generic data ports to the catalog signal.
     Mutates ``model.metadata['last_sysml_text']``. Returns the applied decisions
-    (empty if nothing applied or the merge was skipped to stay valid). The
+    (empty if nothing applied or a merge was skipped to stay valid). The
     downstream connectivity_fixer wires ``bdseSafetyMonitor`` to the controller.
     """
     params = getattr(best_config, "parameters", {}) or {}
@@ -79,6 +146,13 @@ def apply_architecture(model, best_config) -> List[str]:
         if ok:
             text = text2
             applied.append(f"redundancy={variant} (addressable part bdseSafetyMonitor)")
+
+    protocol = str(params.get("communication_protocol", "") or "")
+    if protocol and protocol.lower() != "none":
+        text3, ok, signal = _merge_protocol(text, protocol)
+        if ok:
+            text = text3
+            applied.append(f"protocol={protocol} (validated retype → {signal})")
 
     if applied:
         if not hasattr(model, "metadata") or model.metadata is None:

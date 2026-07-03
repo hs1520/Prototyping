@@ -68,3 +68,73 @@ def test_merge_skipped_if_it_would_break_parsing():
     before = m.metadata["last_sysml_text"]
     apply_architecture(m, _cfg("triple"))
     assert m.metadata["last_sysml_text"] == before
+
+
+# ── Protocol application (validated retype — replaces the regex injector) ───
+
+_PROTO_MODEL = """package DroneSystem {
+    part def FlightController {
+        in port gnssIn : DataPort;
+        out port telemetryOut : RfPort;
+        in port powerIn : PowerPort;
+    }
+    port def DataPort;
+    port def RfPort;
+    port def PowerPort;
+}"""
+
+
+def _proto_cfg(protocol):
+    return DesignConfiguration(
+        name="b", parameters={"communication_protocol": protocol}
+    )
+
+
+def test_protocol_retype_is_valid_by_construction():
+    m = _model(_PROTO_MODEL)
+    applied = apply_architecture(m, _proto_cfg("MAVLink"))
+    assert any("protocol=MAVLink" in a for a in applied)
+    txt = m.metadata["last_sysml_text"]
+    assert not check_syntax(txt).has_errors
+    # data ports retyped to the rich catalog signal
+    assert "in port gnssIn : MAVLinkSignal;" in txt
+    assert "out port telemetryOut : MAVLinkSignal;" in txt
+    # rich def with item-typed payload (what the old empty `port def X;` lacked)
+    assert "port def MAVLinkSignal :> BdseSignal { in item payload : MAVLinkFrame; }" in txt
+
+
+def test_protocol_leaves_power_ports_untouched():
+    m = _model(_PROTO_MODEL)
+    apply_architecture(m, _proto_cfg("CAN"))
+    txt = m.metadata["last_sysml_text"]
+    assert "in port powerIn : PowerPort;" in txt
+    assert "port def PowerPort;" in txt
+
+
+def test_protocol_removes_stale_generic_defs():
+    m = _model(_PROTO_MODEL)
+    apply_architecture(m, _proto_cfg("Ethernet"))
+    txt = m.metadata["last_sysml_text"]
+    assert "port def DataPort;" not in txt
+    assert "port def RfPort;" not in txt
+
+
+def test_unknown_protocol_applies_nothing():
+    m = _model(_PROTO_MODEL)
+    assert apply_architecture(m, _proto_cfg("Zigbee")) == []
+    assert m.metadata["last_sysml_text"] == _PROTO_MODEL
+
+
+def test_redundancy_and_protocol_compose():
+    m = _model(_PROTO_MODEL)
+    applied = apply_architecture(
+        m,
+        DesignConfiguration(name="b", parameters={
+            "redundancy_level": "triple",
+            "communication_protocol": "MAVLink",
+        }),
+    )
+    assert len(applied) == 2
+    txt = m.metadata["last_sysml_text"]
+    assert not check_syntax(txt).has_errors
+    assert "bdseSafetyMonitor" in txt and "MAVLinkSignal" in txt
