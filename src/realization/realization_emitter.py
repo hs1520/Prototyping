@@ -1,0 +1,126 @@
+"""Emit SysML v2 realization artifacts for datasheet closure."""
+from __future__ import annotations
+
+import re
+from typing import Tuple
+
+from ..dse.physics_estimator import AVIONICS_POWER_W, USABLE
+from ..simulation.syntax_checker import check_syntax
+from ..utils.sysml_text_utils import find_block_end
+from .closure import ClosureReport
+
+
+def _slug(text: str) -> str:
+    s = re.sub(r"[^A-Za-z0-9_]+", "_", text).strip("_")
+    if not s:
+        return "RealizedComponent"
+    if s[0].isdigit():
+        s = "_" + s
+    return s[:64]
+
+
+def emit_realization_package(report: ClosureReport,
+                             package_name: str = "RealizationPackage") -> Tuple[str, bool]:
+    """Return a standalone realization package and whether it passes syntax checking."""
+    if report.chosen is None:
+        sysml = (
+            f"package {package_name} {{\n"
+            f"    part def UnrealizedDesign {{\n"
+            f"        doc /* INFEASIBLE_REALIZATION: no catalog implementation passed interface checks */\n"
+            f"        attribute realizedEnduranceMin : Real = 0.0;\n"
+            f"        assert constraint realizationCloses {{ false }}\n"
+            f"    }}\n"
+            f"}}"
+        )
+        return (sysml, not check_syntax(sysml).has_errors)
+
+    c = report.chosen
+    rd = c.rd
+    metrics = c.metrics
+    combo_t = _slug(rd.combo.name)
+    pack_t = _slug(rd.pack.name)
+    frame_t = _slug(rd.frame.name)
+    avionics_a = AVIONICS_POWER_W / rd.combo.voltage_v
+    asserts = []
+    satisfies = []
+    req_decls = []
+    for i, v in enumerate(report.per_requirement or ()):
+        req_name = v.req_id.replace("-", "_")
+        req_decls.append(
+            f"    requirement def {req_name} {{ attribute target : Real = {float(v.target)}; }}\n"
+            f"    requirement {req_name.lower()} : {req_name};"
+        )
+        op = "<=" if v.family == "mass" else ">="
+        attr = {
+            "time": "realizedEnduranceMin",
+            "range": "realizedRangeM",
+            "mass": "realizedMassKg",
+            "speed": "realizedCruiseSpeedMps",
+        }.get(v.family, "realizedEnduranceMin")
+        cname = f"realizationCloses{i}"
+        asserts.append(f"        assert constraint {cname} {{ {attr} {op} {float(v.target)} }}")
+        satisfies.append(f"        satisfy {v.req_id.replace('-', '_').lower()};")
+    if not asserts:
+        asserts.append("        assert constraint realizationCloses { realizedEnduranceMin >= 0.0 }")
+    sysml = (
+        f"package {package_name} {{\n"
+        f"    part def {combo_t} {{\n"
+        f"        doc /* source: {rd.combo.source_url} retrieved {rd.combo.retrieved} */\n"
+        f"        attribute motorMassG : Real = {float(rd.combo.motor_mass_g)};\n"
+        f"        attribute propMassG : Real = {float(rd.combo.prop_mass_g)};\n"
+        f"        attribute hoverCurrentA : Real = {metrics.hover_current_per_motor_a:.9f};\n"
+        f"        attribute hoverThrottle : Real = {metrics.hover_throttle:.9f};\n"
+        f"        attribute maxThrustG : Real = {float(rd.combo.max_thrust_g())};\n"
+        f"    }}\n"
+        f"    part def {pack_t} {{\n"
+        f"        doc /* source: {rd.pack.source_url} retrieved {rd.pack.retrieved} */\n"
+        f"        attribute capacityMah : Real = {float(rd.pack.capacity_mah)};\n"
+        f"        attribute cells : Real = {float(rd.pack.cells)};\n"
+        f"        attribute massG : Real = {float(rd.pack.mass_g)};\n"
+        f"    }}\n"
+        f"    part def {frame_t} {{\n"
+        f"        doc /* source: {rd.frame.source_url} retrieved {rd.frame.retrieved} */\n"
+        f"        attribute massG : Real = {float(rd.frame.mass_g)};\n"
+        f"        attribute arms : Real = {float(rd.frame.arms)};\n"
+        f"    }}\n"
+        f"    part realizedPropulsion : {combo_t};\n"
+        f"    part realizedPower : {pack_t};\n"
+        f"    part realizedAirframe : {frame_t};\n"
+        + ("\n".join(req_decls) + "\n" if req_decls else "")
+        + f"    calc def RealizedEndurance {{\n"
+        f"        in capacityMah : Real; in hoverCurrentA : Real; in rotorCount : Real;\n"
+        f"        in avionicsA : Real;\n"
+        f"        (capacityMah / 1000.0 * {USABLE}) / (hoverCurrentA * rotorCount + avionicsA) * 60.0\n"
+        f"    }}\n"
+        f"    part def RealizedDesign {{\n"
+        f"        attribute realizedEnduranceMin : Real = RealizedEndurance({float(rd.pack.capacity_mah)}, "
+        f"{metrics.hover_current_per_motor_a:.9f}, {float(rd.rotor_count)}, {avionics_a:.9f});\n"
+        f"        attribute realizedRangeM : Real = {metrics.range_m:.9f};\n"
+        f"        attribute realizedMassKg : Real = {metrics.total_mass_kg:.9f};\n"
+        f"        attribute realizedCruiseSpeedMps : Real = "
+        f"{(metrics.range_m / (metrics.endurance_min * 60.0)) if metrics.endurance_min > 0 else 0.0:.9f};\n"
+        + "\n".join(asserts) + "\n"
+        + "\n".join(satisfies) + "\n"
+        + f"    }}\n"
+        f"}}"
+    )
+    return (sysml, not check_syntax(sysml).has_errors)
+
+
+def inject_realization_analysis(model_text: str, report: ClosureReport) -> Tuple[str, bool]:
+    """Inject RealizationPackage into a model package; return original text if syntax fails."""
+    fragment, ok = emit_realization_package(report)
+    if not ok:
+        return model_text, False
+    pkg = re.search(r"\bpackage\s+\w+\s*\{", model_text or "")
+    if not pkg:
+        return model_text, False
+    brace = model_text.index("{", pkg.start())
+    end = find_block_end(model_text, brace)
+    if end == -1:
+        return model_text, False
+    body = fragment[fragment.index("{") + 1:fragment.rfind("}")]
+    injected = model_text[:end] + "\n" + body + "\n" + model_text[end:]
+    if check_syntax(injected).has_errors:
+        return model_text, False
+    return injected, True

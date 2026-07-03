@@ -81,6 +81,12 @@ _CONNECTIVITY_FIX_SYSTEM = (
     "You never invent ports and never output anything but connect statements."
 )
 
+
+def _public_realization(realization):
+    if not realization:
+        return None
+    return {k: v for k, v in realization.items() if not k.startswith("_")}
+
 # System prompt for surgical transition source fixes (transition statements only)
 _TRANSITION_FIX_SYSTEM = (
     "You are a SysML v2 state machine expert. "
@@ -328,6 +334,7 @@ class Orchestrator:
         verbose: bool = False,
         use_variation_dse: bool = False,
         use_surgical_refinement: bool = True,
+        realization_inject: bool = False,
     ):
         self.llm = llm
         self.rag = rag_retriever
@@ -341,6 +348,10 @@ class Orchestrator:
         # bilevel MO-MCTS + inner BO over the operator space (_explore_bilevel).
         # The legacy scalar MCTS path was removed.
         self.use_variation_dse = use_variation_dse
+        self.realization_inject = realization_inject
+        self.last_recommended_design = None
+        self.last_pareto_designs = []
+        self.last_recommended_bindings = {}
         # Refinement asks the LLM for block-level replacements first (surgical:
         # untouched blocks cannot lose connects, output ~10× smaller) and only
         # falls back to the legacy whole-model rewrite when no valid merge is
@@ -623,6 +634,33 @@ class Orchestrator:
         else:
             print("  ⚠ no quantified requirements — verification skipped")
 
+        # ── Phase 8: Realization meet-in-the-middle (deterministic, non-mutating by default) ──
+        print("Phase 8: Realization (meet-in-the-middle)", flush=True)
+        print("-" * 40)
+        realization = None
+        if self.use_variation_dse and getattr(self, "last_recommended_design", None):
+            realization = self._realization_artifact(
+                self.last_recommended_design,
+                getattr(self, "last_pareto_designs", []) or [],
+                requirements,
+            )
+        if realization:
+            print(f"  ✓ {realization['summary']}")
+            if self.realization_inject and realization.get("realization_model_sysml"):
+                try:
+                    from ..realization.realization_emitter import inject_realization_analysis
+                    base_text = get_sysml_text(final_model)
+                    injected, ok = inject_realization_analysis(base_text, realization["_report"])
+                    if ok:
+                        if not hasattr(final_model, "metadata") or final_model.metadata is None:
+                            object.__setattr__(final_model, "metadata", {})
+                        final_model.metadata["last_sysml_text"] = injected
+                        print("  [realization] injected RealizationPackage into final model")
+                except Exception as e:
+                    print(f"  ⚠ realization model injection skipped ({e})")
+        else:
+            print("  ⚠ no recommended design / realization skipped")
+
         # ── Summary ───────────────────────────────────────────────────────────
         sim_warnings = (getattr(final_model, "metadata", None) or {}).get("sim_warnings", "")
         print(f"{'='*60}")
@@ -681,6 +719,7 @@ class Orchestrator:
                 for c in pareto_front
             ],
             "dse_verification": verification_artifact,
+            "realization": _public_realization(realization),
             "llm_usage": ledger.as_dict() if ledger is not None else None,
         }
 
@@ -704,6 +743,49 @@ class Orchestrator:
             }
         except Exception as e:
             print(f"  ⚠ DSE verification skipped ({e})")
+            return None
+
+    @staticmethod
+    def _realization_artifact(design, pareto_designs, requirements):
+        """Phase 8 realization artifact. Best-effort; never breaks the pipeline."""
+        try:
+            from ..realization.closure import close_the_loop
+            from ..realization.realization_emitter import emit_realization_package
+
+            report = close_the_loop(design, pareto_designs, requirements)
+            sysml, _ok = emit_realization_package(report)
+            chosen = None
+            if report.chosen is not None:
+                c = report.chosen
+                chosen = {
+                    "combo": c.rd.combo.name,
+                    "pack": c.rd.pack.name,
+                    "frame": c.rd.frame.name,
+                    "total_mass_kg": c.metrics.total_mass_kg,
+                    "endurance_min": c.metrics.endurance_min,
+                    "hover_throttle": c.metrics.hover_throttle,
+                    "twr": c.metrics.twr_max,
+                    "cost": c.metrics.cost,
+                    "cost_axis": "mass",
+                    "distance": c.distance,
+                }
+            if report.verdict in ("CLOSED", "CLOSED_AFTER_RESIZE"):
+                summary = "MEET-IN-THE-MIDDLE CLOSED — refinement terminus reached"
+            else:
+                summary = "REALIZATION GAP — top-down and bottom-up have not met (see failed_checks)"
+            return {
+                "verdict": report.verdict,
+                "chosen": chosen,
+                "per_requirement": [vars(v) for v in report.per_requirement],
+                "rank_preservation": dict(report.rank_preservation),
+                "failed_checks": [vars(c) for c in report.failed_checks],
+                "resize_note": report.resize_note,
+                "realization_model_sysml": sysml,
+                "summary": summary,
+                "_report": report,
+            }
+        except Exception as e:
+            print(f"  ⚠ realization skipped ({e})")
             return None
 
     def _extract_requirements(
@@ -1107,6 +1189,8 @@ class Orchestrator:
         model.metadata["last_sysml_text"] = concrete
         # expose the recommended design for opt-in high-fidelity (Gazebo) verification downstream
         self.last_recommended_design = res.recommended_design
+        self.last_pareto_designs = res.pareto_designs
+        self.last_recommended_bindings = res.recommended_bindings
         print(f"  [variation-DSE] explored {res.admitted_points} → recommended {res.recommended_choices}")
         if res.recommended_capacity_mah is not None:
             print(f"  [variation-DSE] inner BO sized battery → {res.recommended_capacity_mah:.0f} mAh")
@@ -2861,4 +2945,3 @@ class Orchestrator:
             lines.append("LLM evaluation summary:")
             lines.append(cot_feedback)
         return "\n".join(lines)
-
