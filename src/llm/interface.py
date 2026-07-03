@@ -3,20 +3,43 @@ LLM interface module for AI-assisted MBSE prototyping.
 
 Provides abstract interface and concrete implementations for LLM integration,
 including support for Chain of Thought (CoT) prompting techniques.
+
+The base class is a template method: ``complete()`` resolves the default
+temperature (low, for structured SysML output), retries transient provider
+errors with jittered backoff, enforces a per-request timeout (provider side),
+and records every call into a per-instance :class:`TokenLedger`.  Providers
+implement ``_complete_impl()`` only.
 """
 
 from __future__ import annotations
 
 import os
+import random
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 import requests
 
 from src.config import Config
 from .github_auth import GitHubAuthManager, GitHubCLIAuthError
+
+
+# Structured SysML/JSON generation wants determinism first; escalation helpers
+# raise the temperature only when a low-temperature answer fails validation.
+DEFAULT_TEMPERATURE = 0.2
+DEFAULT_MAX_TOKENS = 20480
+# Escalation ladder used by *_with_escalation helpers.
+ESCALATION_TEMPERATURES: Tuple[float, ...] = (DEFAULT_TEMPERATURE, 0.6, 1.0)
+
+
+def _default_timeout_seconds() -> float:
+    """Per-request timeout, overridable via LLM_TIMEOUT_SECONDS."""
+    try:
+        return float(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))
+    except ValueError:
+        return 120.0
 
 
 @dataclass
@@ -43,26 +66,223 @@ class LLMResponse:
         return self.prompt_tokens + self.completion_tokens
 
 
-class LLMInterface(ABC):
-    """Abstract base class for LLM integrations."""
+@dataclass
+class TokenLedger:
+    """Cumulative usage accounting for one LLM instance (all calls in a run)."""
+    calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    retries: int = 0
+    failures: int = 0
+    elapsed_seconds: float = 0.0
 
-    @abstractmethod
+    def record(self, response: LLMResponse, elapsed: float, retries: int) -> None:
+        self.calls += 1
+        self.prompt_tokens += int(response.prompt_tokens or 0)
+        self.completion_tokens += int(response.completion_tokens or 0)
+        self.retries += retries
+        self.elapsed_seconds += elapsed
+
+    def record_failure(self, elapsed: float, retries: int) -> None:
+        self.failures += 1
+        self.retries += retries
+        self.elapsed_seconds += elapsed
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "calls": self.calls,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "retries": self.retries,
+            "failures": self.failures,
+            "elapsed_seconds": round(self.elapsed_seconds, 1),
+        }
+
+    def summary(self) -> str:
+        def fmt(n: int) -> str:
+            return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+        parts = [
+            f"{self.calls} calls",
+            f"{fmt(self.prompt_tokens)} prompt + {fmt(self.completion_tokens)} completion tokens",
+            f"{self.elapsed_seconds:.0f}s in LLM",
+        ]
+        if self.retries:
+            parts.append(f"{self.retries} retries")
+        if self.failures:
+            parts.append(f"{self.failures} failed calls")
+        return ", ".join(parts)
+
+
+class LLMInterface(ABC):
+    """Abstract base class for LLM integrations.
+
+    ``complete()`` is concrete: it resolves the default temperature, retries
+    transient errors (429/5xx/timeouts) with jittered backoff, and records
+    usage in :attr:`ledger`.  Subclasses implement :meth:`_complete_impl`.
+    Duck-typed stand-ins that define their own ``complete`` keep working.
+    """
+
+    # Backoff schedule for transient errors; jittered ±25% per attempt.
+    # Override per instance (e.g. in tests) to speed up or disable retries.
+    RETRY_DELAYS: Tuple[float, ...] = (2.0, 5.0, 15.0, 40.0)
+
+    _RETRYABLE_MARKERS: Tuple[str, ...] = (
+        "429", "rate limit", "resource_exhausted", "resource exhausted",
+        "500", "502", "503", "504", "unavailable", "overloaded",
+        "timeout", "timed out", "deadline", "connection",
+        "temporarily", "server error", "internal error",
+    )
+    _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+    @property
+    def ledger(self) -> TokenLedger:
+        """Cumulative token/call accounting for this instance (lazy, survives
+        subclasses that never call super().__init__())."""
+        led = self.__dict__.get("_ledger")
+        if led is None:
+            led = TokenLedger()
+            self.__dict__["_ledger"] = led
+        return led
+
     def complete(
         self,
         messages: List[Message],
-        temperature: float = 0.7,
-        max_tokens: int = 20480,
+        temperature: Optional[float] = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> LLMResponse:
-        """Generate a completion from the LLM."""
+        """Generate a completion with unified retry, timeout, and accounting."""
+        resolved_temp = DEFAULT_TEMPERATURE if temperature is None else temperature
+        delays = list(self.RETRY_DELAYS)
+        retries = 0
+        start = time.monotonic()
+        while True:
+            try:
+                response = self._complete_impl(
+                    messages, temperature=resolved_temp, max_tokens=max_tokens
+                )
+                self.ledger.record(response, time.monotonic() - start, retries)
+                return response
+            except Exception as exc:
+                if not delays or not self._is_retryable(exc):
+                    self.ledger.record_failure(time.monotonic() - start, retries)
+                    raise
+                delay = delays.pop(0) * random.uniform(0.75, 1.25)
+                retries += 1
+                print(
+                    f"  [LLM] transient error ({type(exc).__name__}: "
+                    f"{str(exc)[:120]}) — retry {retries} in {delay:.0f}s"
+                )
+                time.sleep(delay)
 
-    def chat(self, user_message: str, system_prompt: str = "") -> str:
+    @abstractmethod
+    def _complete_impl(
+        self,
+        messages: List[Message],
+        temperature: float,
+        max_tokens: int,
+    ) -> LLMResponse:
+        """Provider-specific single API call (no retry/accounting concerns)."""
+
+    @classmethod
+    def _is_retryable(cls, exc: Exception) -> bool:
+        status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+        if isinstance(status, int) and status in cls._RETRYABLE_STATUS:
+            return True
+        text = f"{type(exc).__name__} {exc}".lower()
+        return any(marker in text for marker in cls._RETRYABLE_MARKERS)
+
+    # ------------------------------------------------------------------
+    # Convenience helpers
+    # ------------------------------------------------------------------
+
+    def chat(
+        self,
+        user_message: str,
+        system_prompt: str = "",
+        temperature: Optional[float] = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> str:
         """Simple single-turn chat interface."""
         messages: List[Message] = []
         if system_prompt:
             messages.append(Message(role="system", content=system_prompt))
         messages.append(Message(role="user", content=user_message))
-        response = self.complete(messages)
+        response = self.complete(messages, temperature=temperature, max_tokens=max_tokens)
         return response.content
+
+    def complete_with_escalation(
+        self,
+        messages: List[Message],
+        validate: Callable[[str], bool],
+        temperatures: Tuple[float, ...] = ESCALATION_TEMPERATURES,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> Tuple[LLMResponse, bool]:
+        """Low-temperature-first completion with temperature escalation.
+
+        Calls ``complete`` at each temperature in ``temperatures`` until
+        ``validate(content)`` returns truthy.  Returns ``(response, ok)`` —
+        on exhaustion the last response is returned with ``ok=False`` so the
+        caller can apply its own fallback.
+        """
+        last: Optional[LLMResponse] = None
+        for temp in temperatures:
+            last = self.complete(messages, temperature=temp, max_tokens=max_tokens)
+            try:
+                if validate(last.content):
+                    return last, True
+            except Exception:
+                pass  # validation failure at this temperature → escalate
+        assert last is not None
+        return last, False
+
+    def chat_with_escalation(
+        self,
+        user_message: str,
+        system_prompt: str = "",
+        validate: Optional[Callable[[str], bool]] = None,
+        temperatures: Tuple[float, ...] = ESCALATION_TEMPERATURES,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> Tuple[str, bool]:
+        """chat() variant of :meth:`complete_with_escalation`; returns (content, ok)."""
+        if validate is None:
+            return self.chat(user_message, system_prompt, max_tokens=max_tokens), True
+        messages: List[Message] = []
+        if system_prompt:
+            messages.append(Message(role="system", content=system_prompt))
+        messages.append(Message(role="user", content=user_message))
+        response, ok = self.complete_with_escalation(
+            messages, validate, temperatures=temperatures, max_tokens=max_tokens
+        )
+        return response.content, ok
+
+
+def _split_gemini_messages(
+    messages: List[Message],
+) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """Split messages into (system_instruction, role-tagged contents).
+
+    google-genai carries the system prompt in ``config.system_instruction``;
+    conversation turns are role-tagged Content dicts ("user" / "model").
+    Flattening everything into anonymous strings (the previous behaviour)
+    demotes the system prompt to ordinary user text.
+    """
+    system_parts = [m.content for m in messages if m.role == "system"]
+    system_instruction = "\n\n".join(system_parts) if system_parts else None
+    contents: List[Dict[str, Any]] = [
+        {
+            "role": "model" if m.role == "assistant" else "user",
+            "parts": [{"text": m.content}],
+        }
+        for m in messages
+        if m.role != "system"
+    ]
+    return system_instruction, contents
 
 
 class GeminiLLM(LLMInterface):
@@ -74,6 +294,7 @@ class GeminiLLM(LLMInterface):
         api_key: Optional[str] = None,
         use_test_key: Optional[bool] = None,
         enable_langsmith: bool = True,
+        timeout_seconds: Optional[float] = None,
     ):
         try:
             from google import genai
@@ -84,6 +305,9 @@ class GeminiLLM(LLMInterface):
 
         self.model = model
         self.langsmith_enabled = False
+        self.timeout_seconds = (
+            timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
+        )
 
         # Load and export runtime env from .env through centralized config.
         Config.setup_langsmith_env(use_test=use_test_key)
@@ -94,7 +318,10 @@ class GeminiLLM(LLMInterface):
                 "Gemini API key is missing. Please set GEMINI_API_KEY or GEMINI_API_KEY_TEST in .env."
             )
 
-        base_client = genai.Client(api_key=selected_api_key)
+        base_client = genai.Client(
+            api_key=selected_api_key,
+            http_options={"timeout": int(self.timeout_seconds * 1000)},
+        )
         self.client = self._maybe_wrap_with_langsmith(base_client, enable_langsmith)
 
     def _maybe_wrap_with_langsmith(self, base_client: Any, enable_langsmith: bool) -> Any:
@@ -121,21 +348,26 @@ class GeminiLLM(LLMInterface):
             # Keep normal Gemini calls working even if LangSmith package is absent.
             return base_client
 
-    def complete(
+    def _complete_impl(
         self,
         messages: List[Message],
-        temperature: float = 1.0,
-        max_tokens: int = 20480,
+        temperature: float,
+        max_tokens: int,
     ) -> LLMResponse:
         """Call Gemini and normalize structured response fields into LLMResponse."""
+        system_instruction, contents = _split_gemini_messages(messages)
         # google-genai expects generation settings in `config`, not top-level kwargs.
+        config: Dict[str, Any] = {
+            "temperature": temperature,
+            "max_output_tokens": max_tokens,
+        }
+        if system_instruction:
+            config["system_instruction"] = system_instruction
+
         response = self.client.models.generate_content(
             model=self.model,
-            contents=[m.content for m in messages],
-            config={
-                "temperature": temperature,
-                "max_output_tokens": max_tokens,
-            },
+            contents=contents,
+            config=config,
         )
 
         content, finish_reason = self._extract_content_and_finish_reason(response)
@@ -207,6 +439,7 @@ class GitHubCopilotLLM(LLMInterface):
         auto_login: bool = True,
         enable_langsmith: bool = True,
         auth_manager: Optional[GitHubAuthManager] = None,
+        timeout_seconds: Optional[float] = None,
     ):
         try:
             from openai import OpenAI
@@ -223,6 +456,9 @@ class GitHubCopilotLLM(LLMInterface):
         self.auth_manager = auth_manager or GitHubAuthManager(auto_login=auto_login)
         self._openai_cls = OpenAI
         self._enable_langsmith = enable_langsmith
+        self.timeout_seconds = (
+            timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
+        )
 
         # Reuse centralized env setup so GitHub Models calls can be traced like Gemini calls.
         Config.setup_langsmith_env()
@@ -238,7 +474,11 @@ class GitHubCopilotLLM(LLMInterface):
 
     def _build_client(self, token: str) -> Any:
         """Create an OpenAI-compatible client and wrap with LangSmith when available."""
-        base_client = self._openai_cls(api_key=token, base_url=self.base_url)
+        client_kwargs: Dict[str, Any] = {"api_key": token, "base_url": self.base_url}
+        timeout = getattr(self, "timeout_seconds", None)
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+        base_client = self._openai_cls(**client_kwargs)
         return self._maybe_wrap_with_langsmith(
             base_client,
             getattr(self, "_enable_langsmith", False),
@@ -328,11 +568,11 @@ class GitHubCopilotLLM(LLMInterface):
 
         return []
 
-    def complete(
+    def _complete_impl(
         self,
         messages: List[Message],
-        temperature: float = 1,
-        max_tokens: int = 20480,
+        temperature: float,
+        max_tokens: int,
     ) -> LLMResponse:
         """Call GitHub Models chat completions using OpenAI-compatible schema."""
         retried_auth = False
@@ -370,11 +610,16 @@ class GitHubCopilotLLM(LLMInterface):
 class VertexLLM(LLMInterface):
     """Vertex-backed Gemini LLM implementation."""
 
+    # Vertex quota (429) recovers slowly — keep the wider ladder the previous
+    # bespoke retry loop used rather than the base class's faster schedule.
+    RETRY_DELAYS = (10.0, 30.0, 60.0, 120.0)
+
     def __init__(
         self,
         model: str = "gemini-3.1-pro-preview",
         api_key: Optional[str] = None,
         enable_langsmith: bool = True,
+        timeout_seconds: Optional[float] = None,
     ):
         try:
             from google import genai
@@ -385,6 +630,9 @@ class VertexLLM(LLMInterface):
 
         self.model = model
         self.langsmith_enabled = False
+        self.timeout_seconds = (
+            timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
+        )
 
         Config.setup_langsmith_env()
         selected_api_key = api_key or Config.get_vertex_api_key()
@@ -393,7 +641,11 @@ class VertexLLM(LLMInterface):
                 "Vertex API key is missing. Please set VERTEX_API_KEY in .env."
             )
 
-        base_client = genai.Client(vertexai=True, api_key=selected_api_key)
+        base_client = genai.Client(
+            vertexai=True,
+            api_key=selected_api_key,
+            http_options={"timeout": int(self.timeout_seconds * 1000)},
+        )
         self.client = self._maybe_wrap_with_langsmith(base_client, enable_langsmith)
 
     def _maybe_wrap_with_langsmith(self, base_client: Any, enable_langsmith: bool) -> Any:
@@ -420,30 +672,30 @@ class VertexLLM(LLMInterface):
         except ImportError:
             return base_client
 
-    def complete(
+    def _complete_impl(
         self,
         messages: List[Message],
-        temperature: float = 1.0,
-        max_tokens: int = 20480,
+        temperature: float,
+        max_tokens: int,
     ) -> LLMResponse:
-        """Call Vertex Gemini and normalize response into LLMResponse."""
-        _delays = [10, 30, 60, 120]
-        for attempt, delay in enumerate(_delays + [None]):
-            try:
-                response = self.client.models.generate_content(
-                    model=self.model,
-                    contents=[m.content for m in messages],
-                    config={
-                        "temperature": temperature,
-                        "max_output_tokens": max_tokens,
-                    },
-                )
-                break
-            except Exception as exc:
-                if delay is None or "429" not in str(exc) and "RESOURCE_EXHAUSTED" not in str(exc):
-                    raise
-                print(f"  [VertexLLM] 429 限速，{delay}s 后重试（第 {attempt+1} 次）…")
-                time.sleep(delay)
+        """Call Vertex Gemini and normalize response into LLMResponse.
+
+        Transient errors (429/RESOURCE_EXHAUSTED/5xx/timeouts) are retried by
+        the LLMInterface.complete() wrapper — no bespoke retry loop here.
+        """
+        system_instruction, contents = _split_gemini_messages(messages)
+        config: Dict[str, Any] = {
+            "temperature": temperature,
+            "max_output_tokens": max_tokens,
+        }
+        if system_instruction:
+            config["system_instruction"] = system_instruction
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=contents,
+            config=config,
+        )
 
         content = getattr(response, "text", None) or ""
         usage = getattr(response, "usage_metadata", None)
@@ -479,11 +731,11 @@ class MockLLM(LLMInterface):
         """Inject the next response returned by complete()."""
         self._injected_response = response
 
-    def complete(
+    def _complete_impl(
         self,
         messages: List[Message],
-        temperature: float = 0.7,
-        max_tokens: int = 20480,
+        temperature: float,
+        max_tokens: int,
     ) -> LLMResponse:
         self._call_count += 1
 
@@ -525,5 +777,3 @@ class MockLLM(LLMInterface):
             completion_tokens=0,
             metadata={"temperature": temperature, "max_tokens": max_tokens},
         )
-
-
