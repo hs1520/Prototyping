@@ -12,8 +12,10 @@ from .bottom_up import RealizedMetrics
 # Datasheet realization can decide only quantities that emerge from component choice:
 # hover/endurance from motor+prop bench curves and pack capacity, and total mass from
 # component masses. Forward-flight speed/range are L1/SITL/Gazebo concerns; static
-# hover bench data cannot honestly close them, so all other families are deferred.
+# hover bench data cannot honestly close them. Speed/range are evaluated in a
+# separate lumped forward-flight tier; all unknown future families stay deferred.
 CLOSURE_SCOPE_FAMILIES = {"time", "mass"}
+FORWARD_FLIGHT_SCOPE_FAMILIES = {"speed", "range"}
 
 
 @dataclass(frozen=True)
@@ -25,10 +27,24 @@ class RequirementVerdict:
     realized_value: float
     met: bool
     scope: str = "closure"
+    fidelity: str | None = None
+    note: str = ""
 
 
 def closure_scope(verdict: RequirementVerdict) -> bool:
     return verdict.scope == "closure"
+
+
+def forward_flight_scope(verdict: RequirementVerdict) -> bool:
+    return verdict.scope == "forward_flight"
+
+
+def _scope_for_family(fam: str) -> str:
+    if fam in CLOSURE_SCOPE_FAMILIES:
+        return "closure"
+    if fam in FORWARD_FLIGHT_SCOPE_FAMILIES:
+        return "forward_flight"
+    return "deferred"
 
 
 def _realized_metric_for_family(fam: str, metrics: RealizedMetrics, design) -> float:
@@ -41,9 +57,12 @@ def _realized_metric_for_family(fam: str, metrics: RealizedMetrics, design) -> f
 
 
 def requirement_verdicts(design, metrics: RealizedMetrics,
-                         requirements: List[str]) -> Tuple[RequirementVerdict, ...]:
+                         requirements: List[str],
+                         forward_flight: Dict[Tuple[str, str, float], object] | None = None
+                         ) -> Tuple[RequirementVerdict, ...]:
     est = estimate(design)
     verdicts = []
+    forward_flight = forward_flight or {}
     mtow_id, mtow_target = mass_limit(requirements)
     mtow_id = mtow_id.replace("_", "-") if mtow_id else None
     seen = set()
@@ -57,12 +76,18 @@ def requirement_verdicts(design, metrics: RealizedMetrics,
                 met = realized_value <= target
             else:
                 estimator_value = _emergent_for_family(fam, est)
-                realized_value = _realized_metric_for_family(fam, metrics, design)
-                met = realized_value >= target
+                ff = forward_flight.get((rid, fam, target))
+                if ff is not None:
+                    realized_value = ff.realized_value
+                    met = ff.met
+                else:
+                    realized_value = _realized_metric_for_family(fam, metrics, design)
+                    met = realized_value >= target
             key = (rid, fam, target)
             if key in seen:
                 continue
             seen.add(key)
+            ff = forward_flight.get(key)
             verdicts.append(RequirementVerdict(
                 req_id=rid,
                 family=fam,
@@ -70,7 +95,9 @@ def requirement_verdicts(design, metrics: RealizedMetrics,
                 estimator_value=estimator_value,
                 realized_value=realized_value,
                 met=met,
-                scope="closure" if fam in CLOSURE_SCOPE_FAMILIES else "deferred",
+                scope=_scope_for_family(fam),
+                fidelity=getattr(ff, "fidelity", None),
+                note=getattr(ff, "note", ""),
             ))
     if mtow_id and (mtow_id, "mass", mtow_target) not in seen:
         verdicts.append(RequirementVerdict(

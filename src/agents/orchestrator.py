@@ -771,26 +771,32 @@ class Orchestrator:
                 }
             closure_families = sorted({v.family for v in report.per_requirement
                                        if getattr(v, "scope", "closure") == "closure"})
+            forward_families = sorted({v.family for v in report.per_requirement
+                                       if getattr(v, "scope", "closure") == "forward_flight"})
             deferred_families = sorted({v.family for v in report.per_requirement
                                         if getattr(v, "scope", "closure") == "deferred"})
             closure_text = ", ".join(closure_families) if closure_families else "none"
+            forward_text = ", ".join(forward_families) if forward_families else "none"
             deferred_text = ", ".join(deferred_families) if deferred_families else "none"
             if report.verdict in ("CLOSED", "CLOSED_AFTER_RESIZE"):
                 summary = (
                     "MEET-IN-THE-MIDDLE CLOSED — realizable + endurance/mass closed; "
-                    "speed/range are L1-set and SITL/Gazebo-verified "
-                    f"(closure verdict families: {closure_text}; "
-                    f"deferred L1/SITL families: {deferred_text})"
+                    "speed/range evaluated separately by lumped forward-flight fidelity "
+                    f"(datasheet closure families: {closure_text}; "
+                    f"forward_flight families: {forward_text}; "
+                    f"deferred families: {deferred_text})"
                 )
             else:
                 summary = (
                     "REALIZATION GAP — top-down and bottom-up have not met for closure "
-                    f"verdict families: {closure_text}; deferred L1/SITL families: {deferred_text}"
+                    f"verdict families: {closure_text}; forward_flight families: {forward_text}; "
+                    f"deferred families: {deferred_text}"
                 )
             return {
                 "verdict": report.verdict,
                 "chosen": chosen,
                 "per_requirement": [vars(v) for v in report.per_requirement],
+                "forward_flight_ok": report.forward_flight_ok,
                 "rank_preservation": dict(report.rank_preservation),
                 "failed_checks": [vars(c) for c in report.failed_checks],
                 "resize_note": report.resize_note,

@@ -7,7 +7,13 @@ from typing import Dict, List, Optional, Tuple
 from ..dse.physics_estimator import DesignInputs, endurance_min
 from ..sitl.dse_calibration import calibrate_ranking
 from .catalog import ComponentCatalog, DEFAULT_CATALOG
-from .closure_types import RequirementVerdict, closure_scope, requirement_verdicts
+from .closure_types import (
+    RequirementVerdict,
+    closure_scope,
+    forward_flight_scope,
+    requirement_verdicts,
+)
+from .forward_flight_check import forward_flight_verdicts
 from .matcher import InterfaceCheck, RealizedCandidate, all_combinations, match
 from .resizing import resize_on_real_packs
 
@@ -21,6 +27,7 @@ class ClosureReport:
     rank_preservation: Dict[str, float]
     resize_note: str
     notes: Tuple[str, ...]
+    forward_flight_ok: Optional[bool] = None
 
 
 def close_the_loop(design: DesignInputs,
@@ -41,17 +48,36 @@ def close_the_loop(design: DesignInputs,
             rank_preservation=rank,
             resize_note="",
             notes=tuple(notes),
+            forward_flight_ok=None,
         )
     chosen = ranked[0]
-    per_req = requirement_verdicts(design, chosen.metrics, requirements)
+    ff = forward_flight_verdicts(chosen.rd, requirements)
+    per_req = requirement_verdicts(design, chosen.metrics, requirements, ff)
+    forward_ok = _forward_flight_ok(per_req)
     closure_req = _closure_scope_verdicts(per_req)
     if closure_req and all(v.met for v in closure_req):
-        return ClosureReport("CLOSED", chosen, per_req, (), rank, "", tuple(notes))
+        return ClosureReport("CLOSED", chosen, per_req, (), rank, "", tuple(notes), forward_ok)
     resized = resize_on_real_packs(chosen, requirements, catalog, cost_axis)
     if resized is not None:
-        resized_req = requirement_verdicts(_design_for_candidate(design, resized), resized.metrics, requirements)
+        resized_ff = forward_flight_verdicts(resized.rd, requirements)
+        resized_req = requirement_verdicts(
+            _design_for_candidate(design, resized),
+            resized.metrics,
+            requirements,
+            resized_ff,
+        )
+        resized_forward_ok = _forward_flight_ok(resized_req)
         note = f"battery resized from {chosen.rd.pack.name} to {resized.rd.pack.name}"
-        return ClosureReport("CLOSED_AFTER_RESIZE", resized, resized_req, (), rank, note, tuple(notes))
+        return ClosureReport(
+            "CLOSED_AFTER_RESIZE",
+            resized,
+            resized_req,
+            (),
+            rank,
+            note,
+            tuple(notes),
+            resized_forward_ok,
+        )
     failed = tuple(ch for ch in chosen.checks if not ch.passed)
     if not failed:
         failed = tuple(
@@ -73,11 +99,17 @@ def close_the_loop(design: DesignInputs,
         rank,
         "",
         tuple(notes),
+        forward_ok,
     )
 
 
 def _closure_scope_verdicts(per_req: Tuple[RequirementVerdict, ...]) -> Tuple[RequirementVerdict, ...]:
     return tuple(v for v in per_req if closure_scope(v))
+
+
+def _forward_flight_ok(per_req: Tuple[RequirementVerdict, ...]) -> Optional[bool]:
+    scoped = [v for v in per_req if forward_flight_scope(v)]
+    return all(v.met for v in scoped) if scoped else None
 
 
 def _nearest_failed_checks(design, requirements, catalog, cost_axis) -> Tuple[InterfaceCheck, ...]:

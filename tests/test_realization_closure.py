@@ -11,6 +11,7 @@ def _design(capacity=16000, payload=1.0):
 def test_closed_verdict():
     rep = close_the_loop(_design(), [], ["REQ-PERF-002: endurance at least 15 minutes."], catalog())
     assert rep.verdict == "CLOSED"
+    assert rep.forward_flight_ok is None
     assert rep.chosen is not None
     assert all(v.met for v in rep.per_requirement)
 
@@ -38,7 +39,7 @@ def test_no_feasible_candidate_reports_interface_failures():
     assert any(ch.name == "arms_match" for ch in rep.failed_checks)
 
 
-def test_speed_and_range_are_deferred_and_do_not_block_closure():
+def test_speed_and_range_are_forward_flight_and_do_not_block_closure():
     reqs = [
         "REQ-PERF-002: endurance at least 15 minutes.",
         "REQ-CONS-003: maximum takeoff weight shall be below 25 kg.",
@@ -47,16 +48,34 @@ def test_speed_and_range_are_deferred_and_do_not_block_closure():
     ]
     rep = close_the_loop(_design(), [], reqs, catalog())
     assert rep.verdict == "CLOSED"
+    assert rep.forward_flight_ok is True
     assert not rep.failed_checks
 
     scoped = {(v.family, v.scope): v for v in rep.per_requirement}
     assert scoped[("time", "closure")].met is True
     assert scoped[("mass", "closure")].met is True
-    assert scoped[("speed", "deferred")].met is False
-    assert scoped[("range", "deferred")].met is False
+    assert scoped[("speed", "forward_flight")].realized_value > 0.0
+    assert scoped[("range", "forward_flight")].realized_value > 0.0
+    assert scoped[("speed", "forward_flight")].fidelity == "lumped_forward_flight"
+    assert "drag area" in scoped[("range", "forward_flight")].note
 
 
-def test_deferred_failures_do_not_appear_in_failed_checks_when_closure_fails():
+def test_forward_flight_range_failure_does_not_flip_datasheet_verdict():
+    reqs = [
+        "REQ-PERF-002: endurance at least 15 minutes.",
+        "REQ-FUNC-001: operational range of at least 1000000 metres.",
+    ]
+    rep = close_the_loop(_design(), [], reqs, catalog())
+    assert rep.verdict == "CLOSED"
+    assert rep.forward_flight_ok is False
+    assert not rep.failed_checks
+    range_req = next(v for v in rep.per_requirement if v.family == "range")
+    assert range_req.scope == "forward_flight"
+    assert range_req.realized_value > 0.0
+    assert range_req.met is False
+
+
+def test_forward_flight_failures_do_not_appear_in_failed_checks_when_closure_fails():
     reqs = [
         "REQ-PERF-002: endurance at least 80 minutes.",
         "REQ-PERF-003: cruise speed at least 15 m/s.",
@@ -64,9 +83,10 @@ def test_deferred_failures_do_not_appear_in_failed_checks_when_closure_fails():
     ]
     rep = close_the_loop(_design(), [], reqs, catalog())
     assert rep.verdict == "INFEASIBLE_REALIZATION"
+    assert rep.forward_flight_ok is True
     assert rep.failed_checks
     assert {ch.name for ch in rep.failed_checks} == {"REQ-PERF-002"}
-    assert {v.family for v in rep.per_requirement if v.scope == "deferred"} == {"speed", "range"}
+    assert {v.family for v in rep.per_requirement if v.scope == "forward_flight"} == {"speed", "range"}
 
 
 def test_rank_skipped_when_fewer_than_three_candidates():

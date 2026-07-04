@@ -32,10 +32,11 @@ def test_realization_artifact_reports_deferred_requirement_scope():
     )
     public = _public_realization(artifact)
     assert public["verdict"] in {"CLOSED", "CLOSED_AFTER_RESIZE"}
-    assert "closure verdict families" in public["summary"]
-    assert "deferred L1/SITL families" in public["summary"]
+    assert "datasheet closure families" in public["summary"]
+    assert "forward_flight families" in public["summary"]
+    assert public["forward_flight_ok"] is not None
     assert all("scope" in v for v in public["per_requirement"])
-    assert {v["family"] for v in public["per_requirement"] if v["scope"] == "deferred"} == {
+    assert {v["family"] for v in public["per_requirement"] if v["scope"] == "forward_flight"} == {
         "range",
         "speed",
     }
