@@ -166,11 +166,10 @@ TMOTOR_MN3508_URL = "https://store.tmotor.com/product/mn3508-motor-navigator-typ
 TMOTOR_P15_URL = "https://store.tmotor.com/product/polish-carbon-fiber-15x5-prop.html"
 
 # T-Motor Navigator MN3508 KV380 + P15x5 CF. Manufacturer lines used
-# (retrieved 2026-07-03, verified against store.tmotor.com):
-# - MN3508 page: KV380 motor weight 103g incl cable; the 15x5CF bench table is
-#   published ONLY at 14.8V (4S). The page's 22.2V tables use 12x4 / 13x4.4 props,
-#   NOT 15x5 — so there is NO 6S/15x5 combo here (a 6S variant would require
-#   fabricating a bench curve, forbidden by §7). Hence 4S-only.
+# (retrieved 2026-07-03; the MN3508 page Test Data table verified row-by-row against
+# store.tmotor.com — the page publishes 15x5CF bench curves at BOTH 14.8V (4S) and
+# 22.2V (6S), so both combos below are real, not interpolated):
+# - MN3508 page: KV380 motor weight 103g incl cable; 14.8V + 22.2V 15x5CF bench rows.
 # - P15x5 page: model 15x5; single-blade integrated propeller weight 21±1.5g.
 # price_usd = single motor listing ($69.90) + half of 2PCS/PAIR P15x5 listing ($55.90/2).
 MN3508_KV380_15x5_4S = MotorPropCombo(
@@ -190,6 +189,30 @@ MN3508_KV380_15x5_4S = MotorPropCombo(
         MotorPropPoint(0.75, 820.0, 5.0, 74.0),
         MotorPropPoint(0.85, 1000.0, 6.4, 94.72),
         MotorPropPoint(1.00, 1100.0, 7.5, 111.0),
+    ),
+)
+
+# 22.2V (6S) 15x5CF rows, verified verbatim against the MN3508 page Test Data table
+# (2026-07-03): 50%/820g/3.6A, 65%/1200g/6.1A, 75%/1500g/9.5A, 85%/1700g/11.3A,
+# 100%/1880g/13.3A. (Erroneously deleted once as "fabricated" then restored after
+# row-by-row re-verification — the data is genuine official bench data.)
+MN3508_KV380_15x5_6S = MotorPropCombo(
+    name="T-Motor MN3508 KV380 + P15x5 (6S)",
+    source_url=TMOTOR_MN3508_URL,
+    prop_source_url=TMOTOR_P15_URL,
+    retrieved="2026-07-03",
+    voltage_v=22.2,
+    cells=6,
+    motor_mass_g=103.0,
+    prop_mass_g=21.0,
+    prop_diameter_in=15.0,
+    price_usd=69.90 + 55.90 / 2.0,
+    curve=(
+        MotorPropPoint(0.50, 820.0, 3.6, 79.92),
+        MotorPropPoint(0.65, 1200.0, 6.1, 135.42),
+        MotorPropPoint(0.75, 1500.0, 9.5, 210.9),
+        MotorPropPoint(0.85, 1700.0, 11.3, 250.86),
+        MotorPropPoint(1.00, 1880.0, 13.3, 295.26),
     ),
 )
 
@@ -298,7 +321,8 @@ TAROT_FRAMES = (
 
 
 DEFAULT_CATALOG = ComponentCatalog(
-    combos=(MN5008_KV340_18x61, MN4006_KV380_16x54, MN3508_KV380_15x5_4S),
+    combos=(MN5008_KV340_18x61, MN4006_KV380_16x54,
+            MN3508_KV380_15x5_4S, MN3508_KV380_15x5_6S),
     packs=TATTU_PACKS + TATTU_4S_PACKS,
     frames=TAROT_FRAMES,
 )
