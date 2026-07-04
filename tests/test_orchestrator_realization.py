@@ -18,6 +18,29 @@ def test_realization_artifact_is_best_effort_and_public_shape_has_no_internal_re
     assert "_report" not in public
 
 
+def test_realization_artifact_reports_deferred_requirement_scope():
+    d = DesignInputs(1.5, 16000, 6, 6, 18 * 0.0254 / 2, 0.0)
+    artifact = Orchestrator._realization_artifact(
+        d,
+        [(d, {})],
+        [
+            "REQ-PERF-002: endurance at least 25 minutes.",
+            "REQ-CONS-003: maximum takeoff weight shall be below 25 kg.",
+            "REQ-PERF-003: cruise speed at least 15 m/s.",
+            "REQ-FUNC-001: operational range of at least 0.1 km.",
+        ],
+    )
+    public = _public_realization(artifact)
+    assert public["verdict"] in {"CLOSED", "CLOSED_AFTER_RESIZE"}
+    assert "closure verdict families" in public["summary"]
+    assert "deferred L1/SITL families" in public["summary"]
+    assert all("scope" in v for v in public["per_requirement"])
+    assert {v["family"] for v in public["per_requirement"] if v["scope"] == "deferred"} == {
+        "range",
+        "speed",
+    }
+
+
 def test_orchestrator_constructor_accepts_realization_inject_flag():
     orch = Orchestrator(llm=object(), realization_inject=True)
     assert orch.realization_inject is True

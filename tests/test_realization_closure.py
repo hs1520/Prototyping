@@ -38,6 +38,37 @@ def test_no_feasible_candidate_reports_interface_failures():
     assert any(ch.name == "arms_match" for ch in rep.failed_checks)
 
 
+def test_speed_and_range_are_deferred_and_do_not_block_closure():
+    reqs = [
+        "REQ-PERF-002: endurance at least 15 minutes.",
+        "REQ-CONS-003: maximum takeoff weight shall be below 25 kg.",
+        "REQ-PERF-003: cruise speed at least 15 m/s.",
+        "REQ-FUNC-001: operational range of at least 0.1 km.",
+    ]
+    rep = close_the_loop(_design(), [], reqs, catalog())
+    assert rep.verdict == "CLOSED"
+    assert not rep.failed_checks
+
+    scoped = {(v.family, v.scope): v for v in rep.per_requirement}
+    assert scoped[("time", "closure")].met is True
+    assert scoped[("mass", "closure")].met is True
+    assert scoped[("speed", "deferred")].met is False
+    assert scoped[("range", "deferred")].met is False
+
+
+def test_deferred_failures_do_not_appear_in_failed_checks_when_closure_fails():
+    reqs = [
+        "REQ-PERF-002: endurance at least 80 minutes.",
+        "REQ-PERF-003: cruise speed at least 15 m/s.",
+        "REQ-FUNC-001: operational range of at least 0.1 km.",
+    ]
+    rep = close_the_loop(_design(), [], reqs, catalog())
+    assert rep.verdict == "INFEASIBLE_REALIZATION"
+    assert rep.failed_checks
+    assert {ch.name for ch in rep.failed_checks} == {"REQ-PERF-002"}
+    assert {v.family for v in rep.per_requirement if v.scope == "deferred"} == {"speed", "range"}
+
+
 def test_rank_skipped_when_fewer_than_three_candidates():
     rep = close_the_loop(_design(), [(_design(), {})], ["REQ-PERF-002: endurance at least 15 minutes."],
                          catalog())

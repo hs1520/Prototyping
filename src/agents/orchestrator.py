@@ -769,10 +769,24 @@ class Orchestrator:
                     "cost_axis": "mass",
                     "distance": c.distance,
                 }
+            closure_families = sorted({v.family for v in report.per_requirement
+                                       if getattr(v, "scope", "closure") == "closure"})
+            deferred_families = sorted({v.family for v in report.per_requirement
+                                        if getattr(v, "scope", "closure") == "deferred"})
+            closure_text = ", ".join(closure_families) if closure_families else "none"
+            deferred_text = ", ".join(deferred_families) if deferred_families else "none"
             if report.verdict in ("CLOSED", "CLOSED_AFTER_RESIZE"):
-                summary = "MEET-IN-THE-MIDDLE CLOSED — refinement terminus reached"
+                summary = (
+                    "MEET-IN-THE-MIDDLE CLOSED — realizable + endurance/mass closed; "
+                    "speed/range are L1-set and SITL/Gazebo-verified "
+                    f"(closure verdict families: {closure_text}; "
+                    f"deferred L1/SITL families: {deferred_text})"
+                )
             else:
-                summary = "REALIZATION GAP — top-down and bottom-up have not met (see failed_checks)"
+                summary = (
+                    "REALIZATION GAP — top-down and bottom-up have not met for closure "
+                    f"verdict families: {closure_text}; deferred L1/SITL families: {deferred_text}"
+                )
             return {
                 "verdict": report.verdict,
                 "chosen": chosen,

@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 from ..dse.physics_estimator import DesignInputs, endurance_min
 from ..sitl.dse_calibration import calibrate_ranking
 from .catalog import ComponentCatalog, DEFAULT_CATALOG
-from .closure_types import RequirementVerdict, requirement_verdicts
+from .closure_types import RequirementVerdict, closure_scope, requirement_verdicts
 from .matcher import InterfaceCheck, RealizedCandidate, all_combinations, match
 from .resizing import resize_on_real_packs
 
@@ -44,7 +44,8 @@ def close_the_loop(design: DesignInputs,
         )
     chosen = ranked[0]
     per_req = requirement_verdicts(design, chosen.metrics, requirements)
-    if per_req and all(v.met for v in per_req):
+    closure_req = _closure_scope_verdicts(per_req)
+    if closure_req and all(v.met for v in closure_req):
         return ClosureReport("CLOSED", chosen, per_req, (), rank, "", tuple(notes))
     resized = resize_on_real_packs(chosen, requirements, catalog, cost_axis)
     if resized is not None:
@@ -56,8 +57,14 @@ def close_the_loop(design: DesignInputs,
         failed = tuple(
             InterfaceCheck(v.req_id, False,
                            f"{v.family}: realized {v.realized_value:.3f} vs target {v.target:.3f}")
-            for v in per_req if not v.met
+            for v in closure_req if not v.met
         )
+    if not failed and not closure_req:
+        failed = (InterfaceCheck(
+            "closure_scope",
+            False,
+            "no endurance/mass requirement in datasheet-closure scope",
+        ),)
     return ClosureReport(
         "INFEASIBLE_REALIZATION",
         chosen,
@@ -67,6 +74,10 @@ def close_the_loop(design: DesignInputs,
         "",
         tuple(notes),
     )
+
+
+def _closure_scope_verdicts(per_req: Tuple[RequirementVerdict, ...]) -> Tuple[RequirementVerdict, ...]:
+    return tuple(v for v in per_req if closure_scope(v))
 
 
 def _nearest_failed_checks(design, requirements, catalog, cost_axis) -> Tuple[InterfaceCheck, ...]:
@@ -116,4 +127,3 @@ def _design_for_candidate(original: DesignInputs, candidate: RealizedCandidate) 
         rotor_radius_m=original.rotor_radius_m,
         cruise_speed_mps=original.cruise_speed_mps,
     )
-

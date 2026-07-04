@@ -9,6 +9,13 @@ from ..dse.physics_estimator import estimate
 from .bottom_up import RealizedMetrics
 
 
+# Datasheet realization can decide only quantities that emerge from component choice:
+# hover/endurance from motor+prop bench curves and pack capacity, and total mass from
+# component masses. Forward-flight speed/range are L1/SITL/Gazebo concerns; static
+# hover bench data cannot honestly close them, so all other families are deferred.
+CLOSURE_SCOPE_FAMILIES = {"time", "mass"}
+
+
 @dataclass(frozen=True)
 class RequirementVerdict:
     req_id: str
@@ -17,6 +24,11 @@ class RequirementVerdict:
     estimator_value: float
     realized_value: float
     met: bool
+    scope: str = "closure"
+
+
+def closure_scope(verdict: RequirementVerdict) -> bool:
+    return verdict.scope == "closure"
 
 
 def _realized_metric_for_family(fam: str, metrics: RealizedMetrics, design) -> float:
@@ -58,6 +70,7 @@ def requirement_verdicts(design, metrics: RealizedMetrics,
                 estimator_value=estimator_value,
                 realized_value=realized_value,
                 met=met,
+                scope="closure" if fam in CLOSURE_SCOPE_FAMILIES else "deferred",
             ))
     if mtow_id and (mtow_id, "mass", mtow_target) not in seen:
         verdicts.append(RequirementVerdict(
@@ -67,11 +80,12 @@ def requirement_verdicts(design, metrics: RealizedMetrics,
             estimator_value=est.get("total_mass_kg", 0.0),
             realized_value=metrics.total_mass_kg,
             met=metrics.total_mass_kg <= mtow_target,
+            scope="closure",
         ))
     return tuple(verdicts)
 
 
 def requirement_verdicts_met(design, metrics: RealizedMetrics, requirements: List[str]) -> bool:
     verdicts = requirement_verdicts(design, metrics, requirements)
-    return bool(verdicts) and all(v.met for v in verdicts)
-
+    scoped = [v for v in verdicts if closure_scope(v)]
+    return bool(scoped) and all(v.met for v in scoped)
