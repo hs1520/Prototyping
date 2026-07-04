@@ -39,11 +39,13 @@ if __name__ == "__main__":
         realization = dict(realization)
         realization["recommended_realizable"] = getattr(orch, "last_recommended_realizable", None)
         realization["realizable_front_count"] = getattr(orch, "last_realizable_front_count", None)
+        realization["recommended_by"] = getattr(orch, "last_recommended_by", None)
     out = {
         "elapsed_s": round(time.time() - t0, 1),
         "final_score": res.get("final_score"),
         "best_config": res.get("best_config"),
         "pareto_alternatives": res.get("pareto_alternatives"),
+        "recommended_by": res.get("recommended_by"),
         "recommended_design_inputs": (vars(rec) if rec is not None else None),
         "dse_verification_summary": (res.get("dse_verification") or {}).get("summary"),
         "realization": realization,

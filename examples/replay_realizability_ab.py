@@ -1,15 +1,15 @@
-"""确定性 A/B 复演:验证 D5 可实现性感知推荐会避开不可实现的 OctoSmall。
+"""确定性 A/B/C 复演:D5 可实现子集 + D8/F3 datasheet 重排。
 
 变体空间 propulsionSystem: {OctoSmall(8旋翼), HexBig(6旋翼)},构成真实的
 续航-成本权衡(两者都在 Pareto 前沿:octo 更轻更省成本、hex 续航更好)。target
 调到刀刃点(24min),使 chebyshev 基线偏偏推荐 octo——复现真跑里 octo 以微弱
 成本优势胜出的情形(真跑 octo time_sat=0.997,此处 0.998)。用真实组件目录的
 match() 作 realizability 谓词,对比:
-  A) realizability=None(旧行为)—— 推荐估算器最优的 octo(目录无八轴机架 → 不可实现)
-  B) realizability=真实 match ——  只在可实现子集内推荐 → 翻转到 hex
+  A) realizability=None(旧行为)—— 推荐估算器最优的 octo
+  B) realizability=真实 match(D5)——可实现子集非空,仍用估算器 chebyshev → octo
+  C) realizability + realization_rank(D8/F3)——同一可实现子集用数据手册续航重排 → hex
 
-再把两侧推荐各自过 Phase 8 close_the_loop:A→INFEASIBLE_REALIZATION,B→CLOSED。
-无 LLM,完全确定性。
+再把推荐各自过 Phase 8 close_the_loop。无 LLM,完全确定性。
 
 运行: PYTHONPATH=. .venv/bin/python examples/replay_realizability_ab.py
 """
@@ -22,8 +22,8 @@ from src.realization.matcher import match
 from src.realization.closure import close_the_loop
 
 # 两个 propulsion 变体,携带 SITL-可设定设计输入(rotorCount/rotorRadiusM/batteryCells)。
-# Octo=8 旋翼小桨(更轻→成本效率高,估算器基线在刀刃点选它),但目录无八轴机架→不可实现。
-# Hex=6 旋翼大桨(续航更好但更重,可实现:Tarot X6 + MN5008 6S + Tattu 6S)。
+# Octo=8 旋翼小桨(更轻→成本效率高,估算器基线在刀刃点选它),现已可实现(X8目录已补)。
+# Hex=6 旋翼大桨(续航更好但更重,可实现:Tarot X6 + MN5008/MN4006 6S + Tattu 6S)。
 MODEL = """package DeliveryDrone {
     part def LiftIface { in port cmd; out port thrust; }
     part def OctoSmall :> LiftIface { attribute rotorCount : Real = 8.0; attribute rotorRadiusM : Real = 0.15; attribute batteryCells : Real = 6.0; }
@@ -65,9 +65,22 @@ def realizable(di: DesignInputs) -> bool:
     return bool(match(di, REQS, DEFAULT_CATALOG))
 
 
-def run(label, realizability):
+def realization_rank(di: DesignInputs) -> float:
+    rep = close_the_loop(di, [], REQS, DEFAULT_CATALOG)
+    closes = 1.0 if rep.verdict in {"CLOSED", "CLOSED_AFTER_RESIZE"} else 0.0
+    endurance = rep.chosen.metrics.endurance_min if rep.chosen else 0.0
+    return closes * 1_000_000.0 + endurance
+
+
+def run(label, realizability, rank=None):
     model = SimpleNamespace(metadata={"last_sysml_text": MODEL})
-    res = run_variation_dse(model, requirements=REQS, random_seed=0, realizability=realizability)
+    res = run_variation_dse(
+        model,
+        requirements=REQS,
+        random_seed=0,
+        realizability=realizability,
+        realization_rank=rank,
+    )
     rec = res.recommended_choices.get("propulsionSystem", "?")
     print(f"\n[{label}]")
     print(f"  front (estimator objectives):")
@@ -77,6 +90,7 @@ def run(label, realizability):
     print(f"  recommended       : {rec}")
     print(f"  recommended_realizable: {res.recommended_realizable}")
     print(f"  realizable_front_count: {res.realizable_front_count}")
+    print(f"  recommended_by    : {res.recommended_by}")
     for n in res.notes:
         print(f"  note: {n}")
     # Phase 8 on the recommendation
@@ -89,7 +103,7 @@ def run(label, realizability):
               f"| endurance {c.metrics.endurance_min:.1f} min")
     else:
         print(f"    -> failed_checks: {[ch.name for ch in rep.failed_checks]}")
-    return rec, res.recommended_realizable, rep.verdict
+    return rec, res.recommended_realizable, rep.verdict, res.recommended_by
 
 
 def _score_variant(attrs):
@@ -122,13 +136,14 @@ if __name__ == "__main__":
 
     a = run("A: realizability OFF (legacy)", None)
     b = run("B: realizability ON (D5)", realizable)
+    c = run("C: realizability + datasheet rank (D8/F3)", realizable, realization_rank)
 
     print("\n=== VERDICT OF THE REPLAY ===")
-    if a[0] == "octo" and b[0] != "octo" and b[1] is True:
-        print(f"  PASS: D5 flipped recommendation {a[0]} (unrealizable) -> {b[0]} (realizable);"
-              f" Phase 8 {a[2]} -> {b[2]}")
+    if b[0] == "octo" and c[0] == "hex" and c[3] == "datasheet":
+        print(f"  PASS: F3 reranked the realizable front {b[0]} -> {c[0]};"
+              f" Phase 8 {b[2]} -> {c[2]}, recommended_by={c[3]}")
     elif b[1] is True and b[2] in {"CLOSED", "CLOSED_AFTER_RESIZE"}:
         print(f"  PASS(soft): D5 recommended a realizable member {b[0]} -> Phase 8 {b[2]};"
-              f" baseline recommended {a[0]} ({a[2]}).")
+              f" F3 recommended {c[0]} ({c[2]}, recommended_by={c[3]}).")
     else:
-        print(f"  INSPECT: A={a}  B={b}")
+        print(f"  INSPECT: A={a}  B={b}  C={c}")

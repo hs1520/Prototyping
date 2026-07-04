@@ -718,6 +718,7 @@ class Orchestrator:
                 }
                 for c in pareto_front
             ],
+            "recommended_by": getattr(self, "last_recommended_by", None),
             "dse_verification": verification_artifact,
             "realization": _public_realization(realization),
             "llm_usage": ledger.as_dict() if ledger is not None else None,
@@ -1149,14 +1150,25 @@ class Orchestrator:
         except Exception:
             pass
         realizability = None
+        realization_rank = None
         try:
             from ..realization.matcher import match
             realizability = lambda di: bool(match(di, requirements))
+            from ..realization.closure import close_the_loop
+
+            def _realization_rank(di):
+                rep = close_the_loop(di, [], requirements)
+                closes = 1.0 if rep.verdict in {"CLOSED", "CLOSED_AFTER_RESIZE"} else 0.0
+                endurance = rep.chosen.metrics.endurance_min if rep.chosen is not None else 0.0
+                return closes * 1_000_000.0 + endurance
+
+            realization_rank = _realization_rank
         except Exception as e:
             print(f"  [variation-DSE] realizability-aware recommendation disabled ({e})")
         res = run_variation_dse(
             model, requirements=requirements, random_seed=seed or 0,
             realizability=realizability,
+            realization_rank=realization_rank,
         )
         if res is None:
             print("  [variation-DSE] no admissible variation space; "
@@ -1222,6 +1234,7 @@ class Orchestrator:
         self.last_recommended_bindings = res.recommended_bindings
         self.last_recommended_realizable = res.recommended_realizable
         self.last_realizable_front_count = res.realizable_front_count
+        self.last_recommended_by = res.recommended_by
         print(f"  [variation-DSE] explored {res.admitted_points} → recommended {res.recommended_choices}")
         if res.recommended_capacity_mah is not None:
             print(f"  [variation-DSE] inner BO sized battery → {res.recommended_capacity_mah:.0f} mAh")

@@ -170,6 +170,27 @@ def test_realizability_recommendation_prefers_realizable_subset(monkeypatch):
                for n in res.notes)
 
 
+def test_datasheet_rank_reorders_realizable_subset(monkeypatch):
+    monkeypatch.setattr(
+        "src.dse.variation_dse.MultiObjectiveMCTS.search",
+        _front_for_realizability,
+    )
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=["REQ-PERF-002: endurance at least 20 minutes."],
+        realizability=lambda di: True,
+        realization_rank=lambda di: 100.0 if di.rotor_count == 6 else 10.0,
+    )
+    assert res is not None
+    assert res.recommended_choices == {"liftArch": "hexa"}
+    assert res.recommended_design is not None
+    assert res.recommended_design.rotor_count == 6
+    assert res.recommended_realizable is True
+    assert res.realizable_front_count == 2
+    assert res.recommended_by == "datasheet"
+    assert any("datasheet realization rank" in n for n in res.notes)
+
+
 def test_realizability_recommendation_honestly_falls_back_when_none_match(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
@@ -186,7 +207,28 @@ def test_realizability_recommendation_honestly_falls_back_when_none_match(monkey
     assert res.recommended_choices == baseline.recommended_choices
     assert res.recommended_realizable is False
     assert res.realizable_front_count == 0
+    assert res.recommended_by is None
     assert any("no front member realizable" in n for n in res.notes)
+
+
+def test_datasheet_rank_honestly_falls_back_when_none_realizable(monkeypatch):
+    monkeypatch.setattr(
+        "src.dse.variation_dse.MultiObjectiveMCTS.search",
+        _front_for_realizability,
+    )
+    reqs = ["REQ-PERF-002: endurance at least 20 minutes."]
+    baseline = run_variation_dse(_model(_REALIZABILITY_MODEL), requirements=reqs)
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=reqs,
+        realizability=lambda di: False,
+        realization_rank=lambda di: 1.0,
+    )
+    assert res is not None and baseline is not None
+    assert res.recommended_choices == baseline.recommended_choices
+    assert res.recommended_realizable is False
+    assert res.realizable_front_count == 0
+    assert res.recommended_by == "estimator-fallback"
 
 
 def test_realizability_none_keeps_legacy_recommendation_metadata(monkeypatch):
@@ -203,6 +245,7 @@ def test_realizability_none_keeps_legacy_recommendation_metadata(monkeypatch):
     assert res.recommended_choices == {"liftArch": "octo"}
     assert res.recommended_realizable is None
     assert res.realizable_front_count is None
+    assert res.recommended_by is None
     assert not any("realizable front members" in n or "front member realizable" in n
                    for n in res.notes)
 
@@ -212,6 +255,6 @@ def test_dse_layer_does_not_import_realization():
     offenders = []
     for path in dse_dir.glob("*.py"):
         text = path.read_text(encoding="utf-8")
-        if "realization" in text:
+        if "src.realization" in text or "..realization" in text or " import realization" in text:
             offenders.append(path.name)
     assert offenders == []

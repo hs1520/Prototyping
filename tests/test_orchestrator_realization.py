@@ -125,8 +125,9 @@ def test_variation_dse_receives_best_effort_realizability_predicate(monkeypatch)
     design = DesignInputs(1.5, 16000, 6, 6, 18 * 0.0254 / 2, 0.0)
 
     def fake_run_variation_dse(model, requirements=None, iterations=None,
-                               random_seed=0, realizability=None):
+                               random_seed=0, realizability=None, realization_rank=None):
         captured["realizability"] = realizability
+        captured["realization_rank"] = realization_rank
         return VariationDSEResult(
             recommended_choices={"liftArch": "hexa"},
             concrete_model=text.replace("variation part liftArch", "part liftArch"),
@@ -138,6 +139,7 @@ def test_variation_dse_receives_best_effort_realizability_predicate(monkeypatch)
             recommended_design=design,
             recommended_realizable=True,
             realizable_front_count=1,
+            recommended_by="datasheet",
         )
 
     monkeypatch.setattr(
@@ -152,8 +154,11 @@ def test_variation_dse_receives_best_effort_realizability_predicate(monkeypatch)
     )
     assert callable(captured["realizability"])
     assert captured["realizability"](design) is True
+    assert callable(captured["realization_rank"])
+    assert captured["realization_rank"](design) > 0.0
     assert best.parameters == {"liftArch": "hexa"}
     assert len(front) == 1
     assert ds.parameter_by_name("liftArch") is not None
     assert orch.last_recommended_realizable is True
     assert orch.last_realizable_front_count == 1
+    assert orch.last_recommended_by == "datasheet"
