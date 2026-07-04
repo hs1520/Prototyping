@@ -131,3 +131,5 @@ def test_variation_dse_receives_best_effort_realizability_predicate(monkeypatch)
     assert best.parameters == {"liftArch": "hexa"}
     assert len(front) == 1
     assert ds.parameter_by_name("liftArch") is not None
+    assert orch.last_recommended_realizable is True
+    assert orch.last_realizable_front_count == 1

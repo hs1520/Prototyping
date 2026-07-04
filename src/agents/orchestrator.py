@@ -1200,6 +1200,8 @@ class Orchestrator:
         self.last_recommended_design = res.recommended_design
         self.last_pareto_designs = res.pareto_designs
         self.last_recommended_bindings = res.recommended_bindings
+        self.last_recommended_realizable = res.recommended_realizable
+        self.last_realizable_front_count = res.realizable_front_count
         print(f"  [variation-DSE] explored {res.admitted_points} → recommended {res.recommended_choices}")
         if res.recommended_capacity_mah is not None:
             print(f"  [variation-DSE] inner BO sized battery → {res.recommended_capacity_mah:.0f} mAh")

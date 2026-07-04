@@ -29,10 +29,14 @@ def test_mn5008_has_traceable_realization_fields():
     assert m.prop_diameter_in == 18.0
 
 
+def _has_source_url(url: str) -> bool:
+    return url.startswith(("http://", "https://"))
+
+
 def test_default_catalog_entries_keep_source_and_retrieval_traceability():
     for combo in DEFAULT_CATALOG.combos:
-        assert combo.source_url.startswith("https://")
-        assert combo.retrieved == "2026-07-03"
+        assert _has_source_url(combo.source_url)
+        assert combo.retrieved.startswith("2026-07-")
         assert combo.motor_mass_g > 0
         assert combo.prop_mass_g > 0
         assert combo.prop_diameter_in > 0
@@ -42,15 +46,15 @@ def test_default_catalog_entries_keep_source_and_retrieval_traceability():
             assert point.current_a > 0
             assert point.power_w > 0
     for pack in DEFAULT_CATALOG.packs:
-        assert pack.source_url.startswith("https://")
-        assert pack.retrieved == "2026-07-03"
+        assert _has_source_url(pack.source_url)
+        assert pack.retrieved.startswith("2026-07-")
         assert pack.capacity_mah > 0
         assert pack.cells > 0
         assert pack.mass_g > 0
         assert pack.c_rating > 0
     for frame in DEFAULT_CATALOG.frames:
-        assert frame.source_url.startswith("https://")
-        assert frame.retrieved == "2026-07-03"
+        assert _has_source_url(frame.source_url)
+        assert frame.retrieved.startswith("2026-07-")
         assert frame.mass_g > 0
         assert frame.arms > 0
         assert frame.max_prop_in > 0

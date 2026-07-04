@@ -50,12 +50,14 @@ def test_default_real_catalog_closes_4s_quad_after_catalog_extension():
     assert rep.chosen.rd.frame.arms == 4
 
 
-def test_default_real_catalog_octo_without_x8_frame_is_honestly_infeasible():
-    # X8 frame data is not in the real catalog unless it has traceable source fields,
-    # so an octo design must still fail structurally rather than silently pass.
-    d = DesignInputs(0.2, 1300, 4, 8, 15 * 0.0254 / 2, 0.0)
-    rep = close_the_loop(d, [], ["REQ-PERF-002: flight endurance of at least 5 minutes."],
+def test_default_real_catalog_closes_feasible_octo_after_x8_collection():
+    # The traced X8 frame removes the former octo structural gap. A feasible 6S octo
+    # should now match X8 + MN3508/P15x5 6S + Tattu 6S and close honestly.
+    d = DesignInputs(1.5, 16000, 6, 8, 15 * 0.0254 / 2, 0.0)
+    rep = close_the_loop(d, [], ["REQ-PERF-002: flight endurance of at least 25 minutes."],
                          DEFAULT_CATALOG)
-    assert rep.verdict == "INFEASIBLE_REALIZATION"
-    assert rep.failed_checks
-    assert any(ch.name == "arms_match" for ch in rep.failed_checks)
+    assert rep.verdict in {"CLOSED", "CLOSED_AFTER_RESIZE"}
+    assert rep.chosen is not None
+    assert rep.chosen.rd.frame.arms == 8
+    assert rep.chosen.rd.frame.name.startswith("Tarot X8")
+    assert rep.per_requirement and all(v.met for v in rep.per_requirement)

@@ -294,10 +294,10 @@ TATTU_4S_PACKS = (
 
 
 # ── Frames.
-# PROVENANCE NOTE (§7 flagged): the Tarot official site is not reliably reachable, so
-# both frame entries cite the largest authorized distributor pages that reproduce the
-# manufacturer spec sheet (net weight / wheelbase / prop range). This is a deliberate,
-# documented relaxation of the manufacturer-first rule — review before publication.
+# PROVENANCE NOTE (§7 flagged): older X6/650 entries cite large distributor pages
+# that reproduce the manufacturer spec sheet (net weight / wheelbase / prop range)
+# because the Tarot official site was not reliably reachable when they were collected.
+# New entries prefer Tarot manufacturer pages when reachable.
 # Holybro S500/X650 were REJECTED: only ARF/kit-with-motors weights are published,
 # never the bare-frame mass this catalog's mass model requires.
 TAROT_FRAMES = (
@@ -316,6 +316,23 @@ TAROT_FRAMES = (
         source_url="https://www.arrishobby.com/products/tarot-650-sport-quadcopter-tl65s01-with-electric-retractable-landing-skid",
         retrieved="2026-07-03",
         mass_g=750.0, arms=4, max_prop_in=15.0,
+    ),
+    Frame(
+        # Tarot X8 TL8X000 octocopter frame kit with retractable landing gear.
+        # Tarot manufacturer page: eight power arms; shaft 1050MM, prop 15'', Weight 2.7KG.
+        # NET frame mass = 2250g: the manufacturer's single "2.7KG" figure equals the GROSS
+        # weight (with packaging) reported consistently across distributors as N.W./G.W.
+        # = 2250g/2700g. The mass model needs the bare-frame NET weight, and the rest of
+        # this catalog (X6=2000g, 650=750g) is net too, so 2250g is used for consistency;
+        # 2700g would be box-inclusive gross. max_prop 15'' = the manufacturer's suggested
+        # 1555 prop (conservative; the 1050mm frame likely accepts larger).
+        name="Tarot X8 TL8X000 (octo 1050mm)",
+        source_url=(
+            "http://tarotrc.com/Product/Detail.aspx?Lang=en&Id="
+            "4166ffb8-2821-4b12-b23a-558fd5d85d7c"
+        ),
+        retrieved="2026-07-04",
+        mass_g=2250.0, arms=8, max_prop_in=15.0,
     ),
 )
 

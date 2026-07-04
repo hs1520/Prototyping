@@ -34,6 +34,11 @@ if __name__ == "__main__":
 
     orch = pipe.orchestrator
     rec = getattr(orch, "last_recommended_design", None)
+    realization = res.get("realization")
+    if realization is not None:
+        realization = dict(realization)
+        realization["recommended_realizable"] = getattr(orch, "last_recommended_realizable", None)
+        realization["realizable_front_count"] = getattr(orch, "last_realizable_front_count", None)
     out = {
         "elapsed_s": round(time.time() - t0, 1),
         "final_score": res.get("final_score"),
@@ -41,7 +46,7 @@ if __name__ == "__main__":
         "pareto_alternatives": res.get("pareto_alternatives"),
         "recommended_design_inputs": (vars(rec) if rec is not None else None),
         "dse_verification_summary": (res.get("dse_verification") or {}).get("summary"),
-        "realization": res.get("realization"),
+        "realization": realization,
     }
     outdir = os.path.join(os.path.dirname(__file__), "output")
     os.makedirs(outdir, exist_ok=True)
