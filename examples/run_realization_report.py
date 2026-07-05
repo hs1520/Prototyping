@@ -15,6 +15,8 @@ import time
 import src.config  # noqa: F401  (loads .env)
 from src.prototyping.provider_factory import create_llm
 from src.prototyping.pipeline import PrototypingPipeline
+from src.sitl.dse_sitl_params import design_to_sitl_parm
+from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
 sys.path.insert(0, os.path.dirname(__file__))
 from drone_system_v2 import DRONE_DESCRIPTION, DRONE_REQUIREMENTS  # noqa: E402
@@ -55,6 +57,28 @@ if __name__ == "__main__":
     path = os.path.join(outdir, "realization_run.json")
     with open(path, "w") as f:
         json.dump(out, f, indent=2, ensure_ascii=False, default=str)
+    # S2 traceability: persist the exact final SysML and the recommended design's
+    # native-SITL parameterization. Best-effort: never break the JSON artifact.
+    try:
+        final_sysml_path = os.path.join(outdir, "final_model.sysml")
+        with open(final_sysml_path, "w", encoding="utf-8") as f:
+            f.write(res.get("model_sysml") or "")
+        if rec is not None:
+            lines = list(design_to_sitl_parm(rec))
+            existing = {
+                line.split()[0]
+                for line in lines
+                if line.strip() and not line.lstrip().startswith("#")
+            }
+            for key, value in (ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {}).items():
+                if key not in existing:
+                    lines.append(f"{key:<20} {value}")
+            parm_path = os.path.join(outdir, "recommended.parm")
+            with open(parm_path, "w", encoding="utf-8") as f:
+                f.write("# Recommended design SITL params; native SITL is architecture-nondiscriminating for endurance.\n")
+                f.write("\n".join(lines) + "\n")
+    except Exception as e:
+        print(f"  ⚠ final model / recommended.parm persistence skipped ({e})", flush=True)
     print(f"\n=== realization run dumped → {path} ({out['elapsed_s']}s) ===", flush=True)
     r = out["realization"] or {}
     print("verdict:", r.get("verdict"), "|", r.get("summary"), flush=True)
