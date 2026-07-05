@@ -68,7 +68,8 @@ def test_s4_catalogue_cases_use_standard_mavlink_state_not_statustext():
     gripper = _TAG_TO_ENTRY["PAYLOAD_ABORT_LOCK"]
     assert gripper.ardu_params["SERVO7_FUNCTION"] == 28
     assert gripper.verify.kind == "assert_servo_pwm"
-    assert gripper.verify.args == {"channel": 7, "target_pwm": 2000, "tol": 50}
+    # abort → LOCK = GRAB → GRIP_GRAB=1000 (not release 2000); see catalogue note.
+    assert gripper.verify.args == {"channel": 7, "target_pwm": 1000, "tol": 50}
 
 
 def test_new_verify_handlers_are_registered_and_renderable():

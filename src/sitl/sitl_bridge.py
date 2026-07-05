@@ -923,6 +923,25 @@ class SITLBridge:
         if not fresh_sitl:
             ctx.reset_drone_state()
 
+        # ── Apply this test's resolved ArduPilot params to the running SITL ──
+        # These carry the actuator wiring the verify depends on (e.g. parachute
+        # SERVO8_FUNCTION=27 / CHUTE_SERVO_ON=2000, gripper SERVO7_FUNCTION=28 /
+        # GRIP_RELEASE=2000). They live in the catalogue but are NOT in the boot
+        # .parm, so without this the release drives an unassigned servo channel and
+        # SERVO_OUTPUT_RAW-based verifies read 0 (deterministic false negative).
+        # Applied BEFORE inject (hence before takeoff), so the servo latches at the
+        # release PWM when the fault fires. Non-numeric (unresolved) values skipped.
+        for rp in getattr(spec, "params", None) or []:
+            val = getattr(rp, "value", None)
+            if isinstance(val, bool):
+                continue
+            if isinstance(val, (int, float)):
+                try:
+                    ctx.set_param(rp.param_name, float(val))
+                except Exception:
+                    pass
+        time.sleep(0.5)  # let SERVOx_FUNCTION re-evaluate before the fault
+
         # ── Inject ──────────────────────────────────────────────────────
         try:
             run_inject(ctx, spec.inject)

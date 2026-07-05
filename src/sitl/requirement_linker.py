@@ -198,12 +198,16 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         tier="L2",
         inject=InjectSpec(
             kind="set_param",
-            params={"GPS_TYPE": 0.0, "_settle_s": 3.0, "_pre_mode": "GUIDED"},
+            # SIM_GPS1_ENABLE=0 cuts the simulated GPS feed at runtime (immediate),
+            # so EKF marks GPS unhealthy and the SYS_STATUS GPS bit clears. GPS_TYPE=0
+            # (previous) is a driver-config param that generally needs a reboot to take
+            # effect, so it left GPS "healthy" at runtime → false negative.
+            params={"SIM_GPS1_ENABLE": 0.0, "_settle_s": 5.0, "_pre_mode": "GUIDED"},
         ),
         verify=VerifySpec(
             kind="assert_sensor_unhealthy",
             args={"sensor": "gps"},
-            timeout=12.0,
+            timeout=20.0,
         ),
         notes="Sensor failure → SYS_STATUS GPS health bit cleared.",
     ),
@@ -259,16 +263,19 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         tier="L2",
         inject=InjectSpec(
             kind="mavlink_command",
-            # MAV_CMD_DO_GRIPPER (211): param1=gripper_id(0), param2=action(1=RELEASE)
+            # MAV_CMD_DO_GRIPPER (211): param1=gripper_id(0), param2=action.
+            # MAVLink GRIPPER_ACTIONS: 0=RELEASE, 1=GRAB. Requirement is payload-abort
+            # → LOCK (hold the payload) = GRAB, so param2=1 is correct.
             params={"command": 211, "param1": 0, "param2": 1, "_settle_s": 1.5},
             pre_takeoff_m=5.0,
         ),
         verify=VerifySpec(
             kind="assert_servo_pwm",
-            args={"channel": 7, "target_pwm": 2000, "tol": 50},
+            # abort → LOCK = GRAB → servo drives to GRIP_GRAB=1000 (NOT release 2000).
+            args={"channel": 7, "target_pwm": 1000, "tol": 50},
             timeout=10.0,
         ),
-        notes="Payload abort → MAV_CMD_DO_GRIPPER → SERVO_OUTPUT_RAW.servo7_raw≈2000.",
+        notes="Payload abort → MAV_CMD_DO_GRIPPER GRAB → SERVO_OUTPUT_RAW.servo7_raw≈1000 (lock).",
     ),
 
     # ── Constraint: max altitude（attr: maxAltitude）
