@@ -95,7 +95,9 @@ def grounded_safety(sysml_text: str, channel_reliability: float = 0.85) -> Groun
         try:
             if not bsim._run_scenario(sm).violations:
                 safety_verified = True
-        except Exception:
+        except Exception as exc:
+            from ..utils.suppressed import record_suppressed
+            record_suppressed("dse.grounded_eval.scenario", exc)
             pass
 
     channels = _count_channels(sysml_text)

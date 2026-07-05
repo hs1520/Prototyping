@@ -527,7 +527,9 @@ class RequirementLinker:
             from src.simulation.state_extractor import extract_state_machines
             text = self._model.to_sysml_text() or ""
             sms = extract_state_machines(text)
-        except Exception:
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.semantic_state_extract", exc)
             sms = []
 
         # sm_name → (owner_part, guard 涉及的所有属性名)
@@ -715,7 +717,9 @@ class RequirementLinker:
                                 getattr(g, "operator", "") ==
                                 getattr(guard, "operator", "")):
                             return sm.entry_action_for_state(tr.target or "")
-        except Exception:
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.entry_action_lookup", exc)
             pass
         return None
 
@@ -1160,7 +1164,9 @@ class RequirementLinker:
             for sm in state_machines:
                 for trans in sm.fault_transitions():
                     guard_map.setdefault(sm.owner_part, []).extend(trans.guards)
-        except Exception:
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.guard_map", exc)
             pass
         return guard_map
 
@@ -1196,9 +1202,13 @@ class RequirementLinker:
                     val, report = compiler.evaluate(expr)
                     if not report.fatal and val is not None:
                         result.setdefault(part_name, {})[attr.name] = float(val)
-                except Exception:
+                except Exception as exc:
+                    from src.utils.suppressed import record_suppressed
+                    record_suppressed("sitl.requirement_linker.syside_attr_node", exc)
                     pass
-        except Exception:
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.syside_attr_map", exc)
             pass
         return result
 

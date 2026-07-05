@@ -15,6 +15,7 @@ from ..rag.pinecone_wrapper import PineconeWrapper
 from ..rag.retriever import RAGRetriever
 from ..sysml.model import SysMLModel
 from ..sysml.lite_model import SysMLLiteModel, build_lite_model
+from ..utils.suppressed import suppressed_summary
 
 _SysMLModelTypes = (SysMLModel, SysMLLiteModel)
 
@@ -358,6 +359,9 @@ class PrototypingPipeline:
             "design_space_summary": result.get("design_space_summary"),
             "llm_usage": result.get("llm_usage"),
         }
+        suppressed = suppressed_summary()
+        if suppressed:
+            report["suppressed"] = suppressed
         if sim is not None:
             report["simulation"] = {
                 "reachability_score": getattr(sim, "reachability_score", None),
@@ -494,5 +498,4 @@ class PrototypingPipeline:
             })
 
         return alternatives
-
 

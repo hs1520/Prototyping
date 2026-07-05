@@ -145,7 +145,9 @@ def synthesize_specs(
         from src.simulation.state_extractor import extract_state_machines
         text = model.to_sysml_text() or ""
         state_machines = extract_state_machines(text)
-    except Exception:
+    except Exception as exc:
+        from src.utils.suppressed import record_suppressed
+        record_suppressed("sitl.ast_synthesizer.state_extract", exc)
         return {}
 
     result: Dict[str, List[SynthesizedSpec]] = {}

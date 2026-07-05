@@ -430,6 +430,9 @@ class Orchestrator:
           simulation_result,
         }
         """
+        from ..utils.suppressed import reset_suppressed
+        reset_suppressed()
+
         self.state = PrototypingState(
             system_name=system_name,
             system_description=system_description,
@@ -501,6 +504,11 @@ class Orchestrator:
         ledger = getattr(self.llm, "ledger", None)
         if ledger is not None and getattr(ledger, "calls", 0):
             print(f"  LLM usage:        {ledger.summary()}")
+        if self.verbose:
+            from ..utils.suppressed import suppressed_summary
+            summary = suppressed_summary()
+            if summary:
+                print(f"  suppressed:       {summary}")
         print(f"{'='*60}\n")
 
         final_sysml = get_sysml_text(final_model)
@@ -677,6 +685,11 @@ class Orchestrator:
         ledger = getattr(self.llm, "ledger", None)
         if ledger is not None and getattr(ledger, "calls", 0):
             print(f"  LLM usage:        {ledger.summary()}")
+        if self.verbose:
+            from ..utils.suppressed import suppressed_summary
+            summary = suppressed_summary()
+            if summary:
+                print(f"  suppressed:       {summary}")
         print(f"{'='*60}\n")
 
         final_sysml = get_sysml_text(final_model)
@@ -1147,7 +1160,9 @@ class Orchestrator:
         try:
             from ..dse.requirement_spec import extract_requirements
             extract_requirements(requirements, llm=self.llm)
-        except Exception:
+        except Exception as exc:
+            from ..utils.suppressed import record_suppressed
+            record_suppressed("orchestrator.requirement_spec_prime", exc)
             pass
         realizability = None
         realization_rank = None
@@ -1225,7 +1240,9 @@ class Orchestrator:
             if ok_ts:
                 concrete = ts
                 print(f"  [variation-DSE] injected DesignTradeStudy ({len(res.pareto_designs)} alternatives)")
-        except Exception:
+        except Exception as exc:
+            from ..utils.suppressed import record_suppressed
+            record_suppressed("orchestrator.variation_analysis_injection", exc)
             pass
         model.metadata["last_sysml_text"] = concrete
         # expose the recommended design for opt-in high-fidelity (Gazebo) verification downstream

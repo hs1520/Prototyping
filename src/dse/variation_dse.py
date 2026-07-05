@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 from ..simulation.syntax_checker import check_syntax
+from ..utils.suppressed import record_suppressed
 from ..utils.sysml_text_utils import find_block_end, get_sysml_text
 from .domain_objective import (
     DESIGN_DEFAULTS,
@@ -276,7 +277,8 @@ def run_variation_dse(
             try:
                 if bool(realizability(_resolve_di(member[0]))):
                     realizable.append(member)
-            except Exception:
+            except Exception as exc:
+                record_suppressed("variation_dse.realizability", exc)
                 continue
         realizable_front_count = len(realizable)
         if realizable:
@@ -291,7 +293,8 @@ def run_variation_dse(
                 for member in realizable:
                     try:
                         ranked.append((float(realization_rank(_resolve_di(member[0]))), member))
-                    except Exception:
+                    except Exception as exc:
+                        record_suppressed("variation_dse.realization_rank", exc)
                         continue
                 if ranked:
                     rec_state, _ = max(

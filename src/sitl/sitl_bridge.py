@@ -287,7 +287,9 @@ class SITLBridge:
                     ready = True
                     break
             _mav.close()
-        except Exception:
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.bridge.ekf_probe", exc)
             pass
 
         if not ready:
@@ -938,7 +940,9 @@ class SITLBridge:
             if isinstance(val, (int, float)):
                 try:
                     ctx.set_param(rp.param_name, float(val))
-                except Exception:
+                except Exception as exc:
+                    from src.utils.suppressed import record_suppressed
+                    record_suppressed("sitl.bridge.apply_ardu_param", exc)
                     pass
         time.sleep(0.5)  # let SERVOx_FUNCTION re-evaluate before the fault
 
