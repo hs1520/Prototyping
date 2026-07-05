@@ -859,7 +859,13 @@ class SITLBridge:
                         eeprom.unlink()
                     except OSError:
                         pass
-                launched_here = self.launch_sitl(home=sitl_home)
+                for attempt in range(2):
+                    launched_here = self.launch_sitl(home=sitl_home)
+                    if launched_here:
+                        break
+                    if attempt == 0:
+                        print("  ↻ SITL 启动/EKF 就绪失败，重试一次 ...")
+                        time.sleep(2.0)
                 if not launched_here:
                     results.append(TestResult(
                         spec.req_id, "L2", False, "独立 SITL 启动失败",

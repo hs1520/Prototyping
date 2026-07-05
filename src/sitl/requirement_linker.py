@@ -194,18 +194,18 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
             var_keywords=["sensor", "selftest", "post", "prearm"],
             action_kws=["alert", "report", "transmit", "notify", "ground"],
         ),
-        ardu_params={},  # ArduPilot 原生发 STATUSTEXT，无需设参
+        ardu_params={},
         tier="L2",
         inject=InjectSpec(
             kind="set_param",
             params={"GPS_TYPE": 0.0, "_settle_s": 3.0, "_pre_mode": "GUIDED"},
         ),
         verify=VerifySpec(
-            kind="wait_statustext",
-            args={"keyword": ["prearm", "PreArm", "gps", "sensor"]},
-            timeout=10.0,
+            kind="assert_sensor_unhealthy",
+            args={"sensor": "gps"},
+            timeout=12.0,
         ),
-        notes="Sensor failure → GCS alert (STATUSTEXT).",
+        notes="Sensor failure → SYS_STATUS GPS health bit cleared.",
     ),
 
     # ── Safety: parachute deploy（bool: propulsionCriticalFailure）
@@ -228,19 +228,17 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         inject=InjectSpec(
             kind="mavlink_command",
             # MAV_CMD_DO_PARACHUTE (208): param1=2 → RELEASE
-            # 直接命令释放，native SITL 立即回 STATUSTEXT "Parachute: Released"
-            # （SIM_ENGINE_FAIL 只断电机推力，不触发坠毁检测，在 native SITL 无 STATUSTEXT）
+            # 直接命令释放；verify 读 SERVO8 PWM，不依赖 STATUSTEXT。
+            # （SIM_ENGINE_FAIL 只断电机推力，不触发坠毁检测）
             params={"command": 208, "param1": 2, "_settle_s": 0.5},
             pre_takeoff_m=10.0,
         ),
         verify=VerifySpec(
-            kind="wait_statustext",
-            # 必须匹配成功消息，不能用 "arachute"——后者会误匹配拒绝消息
-            # "Parachute: Landed"（地面/已着陆时拒绝部署），造成假绿
-            args={"keyword": "Parachute: Released"},
+            kind="assert_servo_pwm",
+            args={"channel": 8, "target_pwm": 2000, "tol": 50},
             timeout=15.0,
         ),
-        notes="MAV_CMD_DO_PARACHUTE RELEASE → STATUSTEXT 'Parachute: Released' (native SITL).",
+        notes="MAV_CMD_DO_PARACHUTE RELEASE → SERVO_OUTPUT_RAW.servo8_raw≈2000.",
     ),
 
     # ── Safety: payload abort lock（bool: deliveryAbortConditionActive）
@@ -266,11 +264,11 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
             pre_takeoff_m=5.0,
         ),
         verify=VerifySpec(
-            kind="wait_statustext",
-            args={"keyword": ["ripper", "grip"]},
+            kind="assert_servo_pwm",
+            args={"channel": 7, "target_pwm": 2000, "tol": 50},
             timeout=10.0,
         ),
-        notes="Payload abort → MAV_CMD_DO_GRIPPER → STATUSTEXT 'Gripper Released'.",
+        notes="Payload abort → MAV_CMD_DO_GRIPPER → SERVO_OUTPUT_RAW.servo7_raw≈2000.",
     ),
 
     # ── Constraint: max altitude（attr: maxAltitude）
@@ -824,10 +822,25 @@ class RequirementLinker:
                         d = self._entry_to_dict(
                             base_entry, guard_val=g_val, guard_src=g_src
                         )
+                        # AST fallback may infer a useful inject from guard/action names,
+                        # but S4 fixed these catalogue tags to deterministic MAVLink
+                        # conformance checks. Do not let older AST wait_statustext
+                        # templates reintroduce run-to-run flaky verification.
+                        verify = best.verify
+                        if (
+                            base_entry.verify is not None
+                            and base_entry.verify.kind in {
+                                "assert_servo_pwm",
+                                "assert_sensor_unhealthy",
+                                "assert_arm_rejected",
+                                "wait_mode",
+                            }
+                        ):
+                            verify = base_entry.verify
                         d["sitl_test"] = {
                             "tier":   base_entry.tier,
                             "inject": best.inject,
-                            "verify": best.verify,
+                            "verify": verify,
                             "notes":  base_entry.notes,
                         }
                         result = d

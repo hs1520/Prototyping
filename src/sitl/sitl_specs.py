@@ -176,18 +176,26 @@ class TestContext:
         # 等待爬升（目标高度 60%）。注意 relative_alt 是"相对 home 高度"，但 home
         # 未设定的瞬间该字段可能等于绝对海拔（~584000mm），会让简单的
         # `>= target` 误判为已起飞 → 在地面就返回 True。因此：
-        #   1. 取首个读数为基线，按相对基线的爬升量判断；
+        #   1. 清掉旧高度帧，取起飞指令后的首个可信读数为基线；
         #   2. 上限做合理性约束（剔除 > altitude*3 的离谱读数）；
         #   3. 需连续 2 次满足，避免单帧抖动。
         target_mm = int(altitude * 0.6 * 1000)
         plausible_max_mm = int(altitude * 3 * 1000) + 5000
+        drain_until = time.time() + 0.5
+        while time.time() < drain_until:
+            self.mav.recv_match(type="GLOBAL_POSITION_INT", blocking=False)
         baseline_mm = None
         hits = 0
         deadline = time.time() + 25
         while time.time() < deadline:
             msg = self.mav.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=1)
             if msg is not None:
-                if baseline_mm is None or msg.relative_alt < baseline_mm:
+                if baseline_mm is None:
+                    if -1000 <= msg.relative_alt <= plausible_max_mm:
+                        baseline_mm = msg.relative_alt
+                    else:
+                        continue
+                elif msg.relative_alt < baseline_mm and -1000 <= msg.relative_alt <= plausible_max_mm:
                     baseline_mm = msg.relative_alt
                 climb = msg.relative_alt - (baseline_mm or 0)
                 if 0 < climb <= plausible_max_mm and climb >= target_mm:
@@ -557,6 +565,102 @@ def _render_verify_wait_statustext(spec: VerifySpec) -> str:
     """)
 
 
+def _verify_assert_servo_pwm(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
+    channel = int(spec.args.get("channel", 0))
+    target_pwm = int(spec.args.get("target_pwm", 0))
+    tol = int(spec.args.get("tol", 50))
+    if not (1 <= channel <= 16):
+        return False, f"无效舵机通道: {channel}"
+    field_name = f"servo{channel}_raw"
+    deadline = time.time() + spec.timeout
+    last_pwm = None
+    while time.time() < deadline:
+        msg = ctx.mav.recv_match(type="SERVO_OUTPUT_RAW", blocking=True, timeout=1)
+        if msg is None:
+            continue
+        last_pwm = getattr(msg, field_name, None)
+        if last_pwm is not None and abs(int(last_pwm) - target_pwm) <= tol:
+            return True, f"{field_name}={last_pwm} within {target_pwm}±{tol}"
+    return False, f"{field_name} 未达到 {target_pwm}±{tol} (last={last_pwm})"
+
+
+def _render_verify_assert_servo_pwm(spec: VerifySpec) -> str:
+    channel = int(spec.args.get("channel", 0))
+    target_pwm = int(spec.args.get("target_pwm", 0))
+    tol = int(spec.args.get("tol", 50))
+    field_name = f"servo{channel}_raw"
+    return textwrap.dedent(f"""\
+        print("  等待 SERVO_OUTPUT_RAW.{field_name} 达到 {target_pwm}±{tol} ...")
+        deadline = time.time() + {spec.timeout}
+        last_pwm = None
+        ok = False
+        while time.time() < deadline:
+            msg = mav.recv_match(type="SERVO_OUTPUT_RAW", blocking=True, timeout=1)
+            if msg is None:
+                continue
+            last_pwm = getattr(msg, "{field_name}", None)
+            if last_pwm is not None and abs(int(last_pwm) - {target_pwm}) <= {tol}:
+                ok = True
+                break
+        if ok:
+            print(f"  ✓ {field_name}={{last_pwm}} within {target_pwm}±{tol}")
+        else:
+            print(f"  ✗ {field_name} 未达到 {target_pwm}±{tol} (last={{last_pwm}})")
+        return ok
+    """)
+
+
+def _sensor_bit(ctx: TestContext, sensor_name: str) -> Optional[int]:
+    name = sensor_name.lower()
+    if name == "gps":
+        return int(getattr(ctx.mavutil.mavlink, "MAV_SYS_STATUS_SENSOR_GPS", 32))
+    return None
+
+
+def _verify_assert_sensor_unhealthy(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
+    sensor = str(spec.args.get("sensor", "gps")).lower()
+    bit = _sensor_bit(ctx, sensor)
+    if bit is None:
+        return False, f"未知传感器健康位: {sensor}"
+    deadline = time.time() + spec.timeout
+    last_health = None
+    while time.time() < deadline:
+        msg = ctx.mav.recv_match(type="SYS_STATUS", blocking=True, timeout=1)
+        if msg is None:
+            continue
+        last_health = int(getattr(msg, "onboard_control_sensors_health", 0))
+        if (last_health & bit) == 0:
+            return True, f"{sensor.upper()} health bit cleared in SYS_STATUS"
+    last = f"0x{last_health:x}" if last_health is not None else "None"
+    return False, f"{sensor.upper()} health bit still set in SYS_STATUS (last_health={last})"
+
+
+def _render_verify_assert_sensor_unhealthy(spec: VerifySpec) -> str:
+    sensor = str(spec.args.get("sensor", "gps")).lower()
+    timeout = spec.timeout
+    return textwrap.dedent(f"""\
+        print("  等待 SYS_STATUS 中 {sensor.upper()} health bit 清零 ...")
+        sensor_bit = getattr(mavutil.mavlink, "MAV_SYS_STATUS_SENSOR_{sensor.upper()}", 32)
+        deadline = time.time() + {timeout}
+        last_health = None
+        ok = False
+        while time.time() < deadline:
+            msg = mav.recv_match(type="SYS_STATUS", blocking=True, timeout=1)
+            if msg is None:
+                continue
+            last_health = int(getattr(msg, "onboard_control_sensors_health", 0))
+            if (last_health & sensor_bit) == 0:
+                ok = True
+                break
+        if ok:
+            print("  ✓ {sensor.upper()} health bit cleared in SYS_STATUS")
+        else:
+            last = f"0x{{last_health:x}}" if last_health is not None else "None"
+            print(f"  ✗ {sensor.upper()} health bit still set in SYS_STATUS (last_health={{last}})")
+        return ok
+    """)
+
+
 def _verify_skip(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
     note = spec.notes or "verification skipped"
     return True, note
@@ -574,6 +678,8 @@ VERIFY_HANDLERS: Dict[str, VerifyHandler] = {
     "noop":                _verify_noop,
     "wait_mode":           _verify_wait_mode,
     "assert_arm_rejected": _verify_assert_arm_rejected,
+    "assert_servo_pwm":    _verify_assert_servo_pwm,
+    "assert_sensor_unhealthy": _verify_assert_sensor_unhealthy,
     "wait_statustext":     _verify_wait_statustext,
     "skip":                _verify_skip,
 }
@@ -582,6 +688,8 @@ RENDER_VERIFY: Dict[str, RenderVerifyHandler] = {
     "noop":                _render_verify_noop,
     "wait_mode":           _render_verify_wait_mode,
     "assert_arm_rejected": _render_verify_assert_arm_rejected,
+    "assert_servo_pwm":    _render_verify_assert_servo_pwm,
+    "assert_sensor_unhealthy": _render_verify_assert_sensor_unhealthy,
     "wait_statustext":     _render_verify_wait_statustext,
     "skip":                _render_verify_skip,
 }
