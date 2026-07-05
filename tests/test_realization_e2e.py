@@ -50,6 +50,20 @@ def test_default_real_catalog_closes_4s_quad_after_catalog_extension():
     assert rep.chosen.rd.frame.arms == 4
 
 
+def test_default_real_catalog_4s_quad_snaps_to_endurance_pack_for_realistic_need():
+    # A1 regression: the 4S catalog must overlap the inner BO capacity axis, not only
+    # the small R-Line racing packs. This realistic 18min request now snaps to the
+    # traced 5200mAh 4S pack and closes on datasheet hover metrics.
+    d = DesignInputs(0.2, 5200, 4, 4, 15 * 0.0254 / 2, 0.0)
+    rep = close_the_loop(d, [], ["REQ-PERF-002: flight endurance of at least 18 minutes."],
+                         DEFAULT_CATALOG)
+    assert rep.verdict in {"CLOSED", "CLOSED_AFTER_RESIZE"}
+    assert rep.chosen is not None
+    assert rep.chosen.rd.combo.cells == 4
+    assert rep.chosen.rd.pack.name == "Tattu G-Tech 5200mAh 4S 35C"
+    assert rep.chosen.metrics.endurance_min >= 18.0
+
+
 def test_default_real_catalog_closes_feasible_octo_after_x8_collection():
     # The traced X8 frame removes the former octo structural gap. A feasible 6S octo
     # should now match X8 + MN3508/P15x5 6S + Tattu 6S and close honestly.

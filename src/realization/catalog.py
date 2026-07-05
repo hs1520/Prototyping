@@ -253,7 +253,40 @@ TATTU_PACKS = (
     ),
 )
 
+# Tattu/Gens Ace official pages, retrieved 2026-07-05. These larger 4S packs
+# keep the 4S catalog aligned with the inner BO capacity domain; the smaller
+# R-Line packs remain for short-endurance/racing-size designs.
 TATTU_4S_PACKS = (
+    BatteryPack(
+        name="Tattu G-Tech 5200mAh 4S 35C",
+        source_url="https://genstattu.com/tattu-5200mah-14-8v-35c-4s1p-lipo-battery-pack-with-xt60-plug.html",
+        retrieved="2026-07-05",
+        capacity_mah=5200.0,
+        cells=4,
+        mass_g=436.5,
+        c_rating=35.0,
+        price_usd=62.99,
+    ),
+    BatteryPack(
+        name="Tattu 16000mAh 4S 30C",
+        source_url="https://genstattu.com/tattu-16000mah-30c-14-8v-4s-lipo-battery-pack-with-xt90s-f-plug/",
+        retrieved="2026-07-05",
+        capacity_mah=16000.0,
+        cells=4,
+        mass_g=1590.0,
+        c_rating=30.0,
+        price_usd=335.99,
+    ),
+    BatteryPack(
+        name="Tattu G-Tech 22000mAh 4S 25C (UAV)",
+        source_url="https://genstattu.com/tattu-g-tech-4s-22000mah-14-8v-25c-lipo-battery-with-xt90-s-plug-for-uav/",
+        retrieved="2026-07-05",
+        capacity_mah=22000.0,
+        cells=4,
+        mass_g=2450.0,
+        c_rating=25.0,
+        price_usd=354.99,
+    ),
     BatteryPack(
         name="Tattu R-Line V5 1300mAh 4S 150C",
         source_url=(
