@@ -335,8 +335,10 @@ def _render_inject_set_param(spec: InjectSpec) -> str:
 def _inject_disconnect_gcs(ctx: TestContext, spec: InjectSpec) -> None:
     # pre_takeoff_m>0 时要求真实起飞（空中失联才会触发 RTL/LAND；起飞失败则 FAIL）
     _require_takeoff(ctx, spec)
-    ctx.set_param("FS_GCS_ENABLE", 1)
-    ctx.set_param("FS_GCS_TIMEOUT", 10)
+    # 动作可由条目指定（1=RTL、5=Land），否则保持 ArduPilot 默认 RTL。之前
+    # 硬编码 1 会把 GCS_LOSS_LAND 的 boot 值覆盖回 RTL，verify 等 LAND 必假阴。
+    ctx.set_param("FS_GCS_ENABLE", float(spec.params.get("FS_GCS_ENABLE", 1)))
+    ctx.set_param("FS_GCS_TIMEOUT", float(spec.params.get("FS_GCS_TIMEOUT", 10)))
     # 预热：持续发 HEARTBEAT 至少 15s，让 ArduCopter 建立稳定的 GCS 连接状态
     t_warmup = time.time() + 15
     while time.time() < t_warmup:
@@ -359,10 +361,12 @@ def _inject_disconnect_gcs(ctx: TestContext, spec: InjectSpec) -> None:
 
 def _render_inject_disconnect_gcs(spec: InjectSpec) -> str:
     pre = _render_require_takeoff(spec)
-    return pre + textwrap.dedent("""\
+    enable = float(spec.params.get("FS_GCS_ENABLE", 1))
+    timeout = float(spec.params.get("FS_GCS_TIMEOUT", 10))
+    return pre + textwrap.dedent(f"""\
         print("  启用 GCS 故障安全，停止心跳 ...")
-        set_param(mav, "FS_GCS_ENABLE", 1)
-        set_param(mav, "FS_GCS_TIMEOUT", 10)
+        set_param(mav, "FS_GCS_ENABLE", {enable})
+        set_param(mav, "FS_GCS_TIMEOUT", {timeout})
         time.sleep(12)
     """)
 
@@ -382,11 +386,17 @@ def _inject_mavlink_command(ctx: TestContext, spec: InjectSpec) -> None:
     spec.params keys:
       command  — MAVLink 命令 ID（必填）
       param1..param7 — 命令参数（默认 0）
+      other numeric keys — runtime params applied after takeoff, before command
     """
     _require_takeoff(ctx, spec)
 
     cmd_id = int(spec.params.get("command", 0))
     p = [float(spec.params.get(f"param{i}", 0)) for i in range(1, 8)]
+    command_keys = {"command", "_settle_s"} | {f"param{i}" for i in range(1, 8)}
+    for name, value in spec.params.items():
+        if name in command_keys or name.startswith("_"):
+            continue
+        ctx.set_param(name, float(value))
 
     ctx.mav.mav.command_long_send(
         ctx.mav.target_system, ctx.mav.target_component,
@@ -402,7 +412,15 @@ def _render_inject_mavlink_command(spec: InjectSpec) -> str:
     params = [float(spec.params.get(f"param{i}", 0)) for i in range(1, 8)]
     settle_s = float(spec.params.get("_settle_s", 1.5))
     pre = _render_require_takeoff(spec)
-    return pre + textwrap.dedent(f"""\
+    command_keys = {"command", "_settle_s"} | {f"param{i}" for i in range(1, 8)}
+    setup_lines = []
+    for name, value in spec.params.items():
+        if name in command_keys or name.startswith("_"):
+            continue
+        setup_lines.append(f'print("  设置参数 {name}={float(value)}")')
+        setup_lines.append(f'set_param(mav, "{name}", {float(value)})')
+    setup = ("\n".join(setup_lines) + "\n") if setup_lines else ""
+    return pre + setup + textwrap.dedent(f"""\
         print("  发送 MAVLink command {cmd_id} ...")
         mav.mav.command_long_send(
             mav.target_system, mav.target_component,
@@ -624,39 +642,57 @@ def _verify_assert_sensor_unhealthy(ctx: TestContext, spec: VerifySpec) -> Tuple
         return False, f"未知传感器健康位: {sensor}"
     deadline = time.time() + spec.timeout
     last_health = None
+    last_fix_type = None
     while time.time() < deadline:
-        msg = ctx.mav.recv_match(type="SYS_STATUS", blocking=True, timeout=1)
+        msg = ctx.mav.recv_match(type=["SYS_STATUS", "GPS_RAW_INT"], blocking=True, timeout=1)
         if msg is None:
             continue
-        last_health = int(getattr(msg, "onboard_control_sensors_health", 0))
-        if (last_health & bit) == 0:
-            return True, f"{sensor.upper()} health bit cleared in SYS_STATUS"
+        mtype = msg.get_type() if hasattr(msg, "get_type") else (
+            "SYS_STATUS" if hasattr(msg, "onboard_control_sensors_health") else ""
+        )
+        if mtype == "SYS_STATUS":
+            last_health = int(getattr(msg, "onboard_control_sensors_health", 0))
+            if (last_health & bit) == 0:
+                return True, f"{sensor.upper()} health bit cleared in SYS_STATUS"
+        elif sensor == "gps" and mtype == "GPS_RAW_INT":
+            last_fix_type = int(getattr(msg, "fix_type", 0) or 0)
+            if last_fix_type <= 1:
+                return True, f"GPS_RAW_INT.fix_type={last_fix_type} indicates no GPS fix"
     last = f"0x{last_health:x}" if last_health is not None else "None"
-    return False, f"{sensor.upper()} health bit still set in SYS_STATUS (last_health={last})"
+    fix = f", last_fix_type={last_fix_type}" if last_fix_type is not None else ""
+    return False, f"{sensor.upper()} health still healthy (last_health={last}{fix})"
 
 
 def _render_verify_assert_sensor_unhealthy(spec: VerifySpec) -> str:
     sensor = str(spec.args.get("sensor", "gps")).lower()
     timeout = spec.timeout
     return textwrap.dedent(f"""\
-        print("  等待 SYS_STATUS 中 {sensor.upper()} health bit 清零 ...")
+        print("  等待 SYS_STATUS 中 {sensor.upper()} health bit 清零或 GPS_RAW_INT.fix_type 无解 ...")
         sensor_bit = getattr(mavutil.mavlink, "MAV_SYS_STATUS_SENSOR_{sensor.upper()}", 32)
         deadline = time.time() + {timeout}
         last_health = None
+        last_fix_type = None
         ok = False
         while time.time() < deadline:
-            msg = mav.recv_match(type="SYS_STATUS", blocking=True, timeout=1)
+            msg = mav.recv_match(type=["SYS_STATUS", "GPS_RAW_INT"], blocking=True, timeout=1)
             if msg is None:
                 continue
-            last_health = int(getattr(msg, "onboard_control_sensors_health", 0))
-            if (last_health & sensor_bit) == 0:
-                ok = True
-                break
+            mtype = msg.get_type()
+            if mtype == "SYS_STATUS":
+                last_health = int(getattr(msg, "onboard_control_sensors_health", 0))
+                if (last_health & sensor_bit) == 0:
+                    ok = True
+                    break
+            elif "{sensor}" == "gps" and mtype == "GPS_RAW_INT":
+                last_fix_type = int(getattr(msg, "fix_type", 0) or 0)
+                if last_fix_type <= 1:
+                    ok = True
+                    break
         if ok:
-            print("  ✓ {sensor.upper()} health bit cleared in SYS_STATUS")
+            print("  ✓ {sensor.upper()} unhealthy/no-fix state observed")
         else:
             last = f"0x{{last_health:x}}" if last_health is not None else "None"
-            print(f"  ✗ {sensor.upper()} health bit still set in SYS_STATUS (last_health={{last}})")
+            print(f"  ✗ {sensor.upper()} health still healthy (last_health={{last}}, last_fix_type={{last_fix_type}})")
         return ok
     """)
 

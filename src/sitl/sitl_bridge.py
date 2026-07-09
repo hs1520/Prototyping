@@ -64,17 +64,35 @@ class BridgeReport:
     parm_file: str
     l1_results: List[TestResult] = field(default_factory=list)
     l2_results: List[TestResult] = field(default_factory=list)
+    trace_results: List[TestResult] = field(default_factory=list)
 
     def passed(self) -> bool:
-        return all(r.passed for r in self.l1_results + self.l2_results)
+        return all(r.passed for r in self.l1_results + self.l2_results + self.trace_results)
+
+    def safety_status(self) -> str:
+        """Summarise executable L2 safety checks without hiding traceability blocks."""
+        blocked = any(not r.passed for r in self.trace_results)
+        if blocked and self.l2_results:
+            return "PARTIAL"
+        if blocked:
+            return "BLOCKED"
+        if not self.l2_results:
+            return "NOT_RUN"
+        if all(r.passed for r in self.l2_results):
+            return "PASS"
+        return "FAIL"
 
     def summary(self) -> str:
-        all_results = self.l1_results + self.l2_results
-        n = len(all_results)
-        ok = sum(1 for r in all_results if r.passed)
+        executable_results = self.l1_results + self.l2_results
+        all_results = executable_results + self.trace_results
+        ok = sum(1 for r in executable_results if r.passed)
+        trace_blocked = sum(1 for r in self.trace_results if not r.passed)
+        l2_ok = sum(1 for r in self.l2_results if r.passed)
         lines = [
             f"SITL Bridge Report — {self.model_name}",
-            f"  Passed: {ok}/{n}",
+            f"  L1/L2 passed: {ok}/{len(executable_results)}",
+            f"  L2 safety status: {self.safety_status()} ({l2_ok}/{len(self.l2_results)} executable passed)",
+            f"  Traceability blocked: {trace_blocked}",
             "",
         ]
         for r in all_results:
@@ -379,6 +397,18 @@ class SITLBridge:
                 results.append(TestResult(spec.req_id, "L1", True, param_strs))
 
         return results
+
+    def validate_traceability(self) -> List[TestResult]:
+        """Report requirement-text/tag mismatches that block trustworthy SITL tests."""
+        return [
+            TestResult(
+                req_id=str(m.get("req_id", "?")),
+                tier="TRACE",
+                passed=False,
+                message=str(m.get("message", "traceability mismatch")),
+            )
+            for m in self._linker.traceability_mismatches()
+        ]
 
     # ------------------------------------------------------------------
     # L2 — pymavlink 测试脚本生成
@@ -977,6 +1007,7 @@ class SITLBridge:
         """
         parm_path = self.generate_l1()
         l1_results = self.validate_l1()
+        trace_results = self.validate_traceability()
         self.generate_l2_scripts()
 
         l2_results: List[TestResult] = []
@@ -994,4 +1025,5 @@ class SITLBridge:
             parm_file=str(parm_path),
             l1_results=l1_results,
             l2_results=l2_results,
+            trace_results=trace_results,
         )
