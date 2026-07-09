@@ -45,6 +45,8 @@ def emit_realization_package(report: ClosureReport,
     satisfies = []
     req_decls = []
     for i, v in enumerate(report.per_requirement or ()):
+        if getattr(v, "scope", "closure") != "closure":
+            continue
         req_name = v.req_id.replace("-", "_")
         req_decls.append(
             f"    requirement def {req_name} {{ attribute target : Real = {float(v.target)}; }}\n"

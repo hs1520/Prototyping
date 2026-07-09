@@ -13,6 +13,13 @@ RHO = 1.225
 G = 9.81
 FOM = 0.62                 # rotor figure of merit (matches src/dse/physics_estimator)
 DEFAULT_DRAG_AREA = 0.05   # m², equivalent flat-plate area f for a small multirotor
+MAX_GRID_SPEED_MPS = 60.0  # wide enough that speed checks are bounded by physics, not array length
+
+
+def speed_grid(step_mps: float = 0.5, max_mps: float = MAX_GRID_SPEED_MPS) -> list[float]:
+    """Deterministic forward-flight speed grid used by the lumped fidelity tier."""
+    n = int(max_mps / step_mps)
+    return [step_mps * i for i in range(1, n + 1)]
 
 
 def _induced_velocity_forward(V: float, v_h: float) -> float:
@@ -72,7 +79,7 @@ def range_estimate(mass_kg: float, rotor_count: int, rotor_radius_m: float,
                    usable: float = 0.8, cell_v: float = 3.7) -> RangeResult:
     """Best-range / best-endurance speeds and range from the forward-flight power curve."""
     usable_wh = (battery_capacity_mah / 1000.0) * battery_cells * cell_v * usable
-    speeds = [0.5 * i for i in range(1, 60)]  # 0.5 .. 29.5 m/s
+    speeds = speed_grid()
     curve = [power_at_speed(mass_kg, rotor_count, rotor_radius_m, v, drag_area) for v in speeds]
     hover = power_at_speed(mass_kg, rotor_count, rotor_radius_m, 0.01, drag_area).power_w
     best_end = min(curve, key=lambda p: p.power_w)

@@ -24,7 +24,7 @@ class ClosureReport:
     chosen: Optional[RealizedCandidate]
     per_requirement: Tuple[RequirementVerdict, ...]
     failed_checks: Tuple[InterfaceCheck, ...]
-    rank_preservation: Dict[str, float]
+    rank_preservation: Dict[str, object]  # floats + labels/predicted/measured series
     resize_note: str
     notes: Tuple[str, ...]
     forward_flight_ok: Optional[bool] = None
@@ -78,13 +78,13 @@ def close_the_loop(design: DesignInputs,
             tuple(notes),
             resized_forward_ok,
         )
-    failed = tuple(ch for ch in chosen.checks if not ch.passed)
-    if not failed:
-        failed = tuple(
-            InterfaceCheck(v.req_id, False,
-                           f"{v.family}: realized {v.realized_value:.3f} vs target {v.target:.3f}")
-            for v in closure_req if not v.met
-        )
+    # chosen came from match(), whose candidates pass every interface check, so
+    # a resize-failed INFEASIBLE is attributed to the unmet closure requirements.
+    failed = tuple(
+        InterfaceCheck(v.req_id, False,
+                       f"{v.family}: realized {v.realized_value:.3f} vs target {v.target:.3f}")
+        for v in closure_req if not v.met
+    )
     if not failed and not closure_req:
         failed = (InterfaceCheck(
             "closure_scope",
@@ -127,7 +127,7 @@ def _nearest_failed_checks(design, requirements, catalog, cost_axis) -> Tuple[In
     return tuple(ch for ch in best.checks if not ch.passed)
 
 
-def _rank_preservation(pareto_designs, requirements, catalog, cost_axis, notes) -> Dict[str, float]:
+def _rank_preservation(pareto_designs, requirements, catalog, cost_axis, notes) -> Dict[str, object]:
     labels, predicted, measured = [], [], []
     for i, item in enumerate(pareto_designs or []):
         di = item[0]
@@ -138,15 +138,28 @@ def _rank_preservation(pareto_designs, requirements, catalog, cost_axis, notes) 
         labels.append(f"pareto[{i}]")
         predicted.append(endurance_min(di))
         measured.append(ms[0].metrics.endurance_min)
+    # Persist the raw series either way: a bare correlation number cannot be
+    # diagnosed after the fact (ties from catalog snapping look identical to a
+    # genuine rank inversion — exactly the ambiguity the 2026-07 real run hit).
+    details = {
+        "n": float(len(labels)),
+        "labels": list(labels),
+        "predicted": [float(p) for p in predicted],
+        "measured": [float(m) for m in measured],
+    }
     if len(labels) < 3:
         notes.append("rank preservation skipped: fewer than 3 realized Pareto candidates")
-        return {"n": float(len(labels))}
+        return details
+    if len(set(measured)) < len(measured):
+        notes.append("rank preservation: measured endurances contain ties — multiple "
+                     "Pareto designs snap to the same catalog realization, so the "
+                     "correlation reflects catalog granularity, not estimator fidelity")
     cal = calibrate_ranking(labels, predicted, measured)
     return {
+        **details,
         "spearman": cal.spearman,
         "kendall": cal.kendall,
         "top1_match": 1.0 if cal.top1_match else 0.0,
-        "n": float(len(labels)),
     }
 
 

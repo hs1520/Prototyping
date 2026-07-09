@@ -39,6 +39,9 @@ class MotorPropCombo:
         """Return (current_a, power_w) at per-motor thrust using linear interpolation."""
         pts: List[MotorPropPoint] = sorted(self.curve, key=lambda p: p.thrust_g)
         if thrust_g <= pts[0].thrust_g:
+            # Below the lowest published bench row we clamp to that row rather than
+            # extrapolate: hover current for very light builds is OVERestimated
+            # (endurance conservative), because manufacturers publish no data there.
             return pts[0].current_a, pts[0].power_w
         if thrust_g > pts[-1].thrust_g:
             raise ValueError(

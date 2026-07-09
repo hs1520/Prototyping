@@ -51,3 +51,15 @@ def test_distance_sorting_is_stable():
     far = pack("far", capacity=18000)
     got = match(_design(), [], catalog(packs=[far, near]))
     assert [c.rd.pack.name for c in got] == ["near", "far"]
+
+
+def test_design_drift_is_reported_without_filtering_candidate():
+    d = _design(battery_capacity_mah=10000, rotor_radius_m=0.20)
+    got = match(d, [], catalog(packs=[pack(capacity=12000)]))
+    assert got
+    drift = {d.name: d for d in got[0].design_drift}
+    assert drift["battery_capacity_mah"].expected == 10000
+    assert drift["battery_capacity_mah"].realized == 12000
+    assert drift["battery_capacity_mah"].delta == 2000
+    assert drift["rotor_radius_m"].realized != drift["rotor_radius_m"].expected
+    assert drift["battery_cells"].delta == 0

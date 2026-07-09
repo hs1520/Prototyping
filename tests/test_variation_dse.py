@@ -146,6 +146,13 @@ _REALIZABILITY_MODEL = """package Drone {
 def _front_for_realizability(self, iterations):
     return SimpleNamespace(members=[
         ({"liftArch": "octo"}, {"time_sat": 1.0, "cost_efficiency": 1.0}),
+        ({"liftArch": "hexa"}, {"time_sat": 1.0, "cost_efficiency": 0.90}),
+    ])
+
+
+def _front_with_only_infeasible_realizable(self, iterations):
+    return SimpleNamespace(members=[
+        ({"liftArch": "octo"}, {"time_sat": 1.0, "cost_efficiency": 1.0}),
         ({"liftArch": "hexa"}, {"time_sat": 0.90, "cost_efficiency": 0.90}),
     ])
 
@@ -166,7 +173,8 @@ def test_realizability_recommendation_prefers_realizable_subset(monkeypatch):
     assert res.recommended_design.rotor_count == 6
     assert res.recommended_realizable is True
     assert res.realizable_front_count == 1
-    assert any("recommendation restricted to 1/2 realizable front members" in n
+    assert res.recommended_estimator_feasible is True
+    assert any("recommendation restricted to 1/2 estimator-feasible and realizable front members" in n
                for n in res.notes)
 
 
@@ -188,7 +196,45 @@ def test_datasheet_rank_reorders_realizable_subset(monkeypatch):
     assert res.recommended_realizable is True
     assert res.realizable_front_count == 2
     assert res.recommended_by == "datasheet"
+    assert res.recommended_estimator_feasible is True
     assert any("datasheet realization rank" in n for n in res.notes)
+
+
+def test_datasheet_rank_tie_uses_estimator_recommendation_not_lexicographic(monkeypatch):
+    monkeypatch.setattr(
+        "src.dse.variation_dse.MultiObjectiveMCTS.search",
+        _front_for_realizability,
+    )
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=["REQ-PERF-002: endurance at least 20 minutes."],
+        realizability=lambda di: True,
+        realization_rank=lambda di: 10.0,
+    )
+    assert res is not None
+    assert res.recommended_choices == {"liftArch": "octo"}
+    assert res.recommended_by == "datasheet"
+    assert any("rank tie broken by estimator" in n for n in res.notes)
+
+
+def test_realizable_but_estimator_infeasible_member_does_not_bypass_gate(monkeypatch):
+    monkeypatch.setattr(
+        "src.dse.variation_dse.MultiObjectiveMCTS.search",
+        _front_with_only_infeasible_realizable,
+    )
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=["REQ-PERF-002: endurance at least 20 minutes."],
+        realizability=lambda di: di.rotor_count == 6,
+        realization_rank=lambda di: 100.0,
+    )
+    assert res is not None
+    assert res.recommended_choices == {"liftArch": "octo"}
+    assert res.recommended_realizable is False
+    assert res.realizable_front_count == 1
+    assert res.recommended_by == "estimator-fallback"
+    assert res.recommended_estimator_feasible is True
+    assert any("no estimator-feasible front member is realizable" in n for n in res.notes)
 
 
 def test_realizability_recommendation_honestly_falls_back_when_none_match(monkeypatch):
@@ -208,6 +254,7 @@ def test_realizability_recommendation_honestly_falls_back_when_none_match(monkey
     assert res.recommended_realizable is False
     assert res.realizable_front_count == 0
     assert res.recommended_by is None
+    assert res.recommended_estimator_feasible is True
     assert any("no front member realizable" in n for n in res.notes)
 
 
@@ -229,6 +276,7 @@ def test_datasheet_rank_honestly_falls_back_when_none_realizable(monkeypatch):
     assert res.recommended_realizable is False
     assert res.realizable_front_count == 0
     assert res.recommended_by == "estimator-fallback"
+    assert res.recommended_estimator_feasible is True
 
 
 def test_realizability_none_keeps_legacy_recommendation_metadata(monkeypatch):
@@ -246,6 +294,7 @@ def test_realizability_none_keeps_legacy_recommendation_metadata(monkeypatch):
     assert res.recommended_realizable is None
     assert res.realizable_front_count is None
     assert res.recommended_by is None
+    assert res.recommended_estimator_feasible is True
     assert not any("realizable front members" in n or "front member realizable" in n
                    for n in res.notes)
 

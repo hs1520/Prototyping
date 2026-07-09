@@ -10,15 +10,17 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
-from ..dse.domain_objective import requirement_targets
+from ..dse.requirement_spec import RANGE, SPEED, extract_requirements
 from .bottom_up import RealizedDesign, realized_total_mass_kg
-from .forward_flight import DEFAULT_DRAG_AREA, G, RHO, range_estimate
+from .forward_flight import DEFAULT_DRAG_AREA, G, RHO, power_at_speed, range_estimate, speed_grid
 
 FORWARD_FLIGHT_SCOPE_FAMILIES = {"speed", "range"}
 FIDELITY = "lumped_forward_flight"
 NOTE = (
     "lumped forward-flight momentum model; equivalent drag area assumed "
-    f"{DEFAULT_DRAG_AREA:g} m^2; Gazebo/SITL can calibrate this fidelity tier"
+    f"{DEFAULT_DRAG_AREA:g} m^2; max speed is capped by tilted thrust and "
+    "datasheet electrical power (published bench power plus pack C-rate); "
+    "continuous thermal limits remain unavailable; Gazebo/SITL can calibrate this fidelity tier"
 )
 
 
@@ -39,10 +41,9 @@ def forward_flight_verdicts(
 ) -> Dict[Tuple[str, str, float], ForwardFlightRequirement]:
     """Return speed/range checks keyed by ``(req_id, family, target)``."""
     relevant = [
-        (rid, fam, target)
-        for rid, targets in requirement_targets(requirements).items()
-        for fam, target in targets
-        if fam in FORWARD_FLIGHT_SCOPE_FAMILIES
+        (spec.req_id.replace("_", "-"), spec.quantity, spec.value)
+        for spec in extract_requirements(requirements)
+        if spec.quantity in {SPEED, RANGE} and spec.operator == ">="
     ]
     if not relevant:
         return {}
@@ -80,15 +81,40 @@ def max_sustainable_speed_mps(
     rotor_radius_m: float | None = None,
     drag_area: float = DEFAULT_DRAG_AREA,
 ) -> float:
-    """Largest grid speed whose required tilted thrust fits the combo max thrust."""
+    """Largest grid speed fitting both thrust and datasheet electrical-power limits."""
     mass = realized_total_mass_kg(rd) if mass_kg is None else mass_kg
     radius = rd.combo.prop_diameter_in * 0.0254 / 2.0 if rotor_radius_m is None else rotor_radius_m
-    _ = radius  # radius is part of the public calculation context; thrust limit is drag/mass based.
+    power_limit_w = _forward_power_limit_w(rd)
     feasible = []
-    for speed in (0.5 * i for i in range(1, 60)):
-        drag = 0.5 * RHO * speed ** 2 * drag_area
-        thrust_n = math.hypot(mass * G, drag)
-        per_motor_thrust_g = thrust_n / rd.rotor_count / G * 1000.0
-        if per_motor_thrust_g <= rd.combo.max_thrust_g():
+    for speed in speed_grid():
+        per_motor_thrust_g = _required_per_motor_thrust_g(mass, rd.rotor_count, speed, drag_area)
+        required_power_w = power_at_speed(mass, rd.rotor_count, radius, speed, drag_area).power_w
+        if per_motor_thrust_g <= rd.combo.max_thrust_g() and required_power_w <= power_limit_w:
             feasible.append(speed)
     return max(feasible) if feasible else 0.0
+
+
+def _required_per_motor_thrust_g(
+    mass_kg: float,
+    rotor_count: int,
+    speed_mps: float,
+    drag_area: float,
+) -> float:
+    drag = 0.5 * RHO * speed_mps ** 2 * drag_area
+    thrust_n = math.hypot(mass_kg * G, drag)
+    return thrust_n / rotor_count / G * 1000.0
+
+
+def _forward_power_limit_w(rd: RealizedDesign) -> float:
+    """Electrical power ceiling from published bench rows and pack C-rate.
+
+    The catalog does not carry thermal continuous-power ratings. We therefore use
+    the maximum official bench-table electrical power as a motor-side upper bound
+    and the pack C-rating as a battery-side upper bound. This remains a lumped
+    fidelity check, but avoids claiming speeds that exceed the real component
+    power envelope.
+    """
+    motor_limit_w = max(p.power_w for p in rd.combo.curve) * rd.rotor_count
+    pack_voltage_v = rd.pack.cells * 3.7
+    pack_limit_w = (rd.pack.capacity_mah / 1000.0) * rd.pack.c_rating * pack_voltage_v
+    return min(motor_limit_w, pack_limit_w)

@@ -51,6 +51,30 @@ _MTOW_KW = ("takeoff", "take-off", "take off", "mtow", "all-up", "all up", "gros
 _RANGE_TERMS = ("operational range", "flight range", "maximum range", "max range",
                 "mission radius", "operational radius", "ferry range")
 _VERTICAL_TERMS = ("altitude", "height", "agl", "above ground", "ceiling", "vertical")
+_SPEED_CAPABILITY_TERMS = (
+    "cruise speed", "cruise at", "airspeed", "flight speed", "ground speed",
+    "maximum speed", "max speed", "fly at", "fly with speed",
+)
+_CONDITION_SPEED_TERMS = ("wind", "gust", "headwind", "tailwind", "crosswind")
+_CAPABILITY_VERBS = ("achieve", "attain", "reach", "provide", "support", "maintain")
+
+
+def _operator_for(body: str, default: str = ">=") -> str:
+    low = body.lower()
+    upper_terms = (
+        "at most", "maximum", "max ", "shall not exceed", "not exceed",
+        "no more than", "up to", "within", "below", "less than", "under",
+        "restrict", "limited to", "limit",
+    )
+    lower_terms = (
+        "at least", "minimum", "min ", "no less than", "not less than",
+        "greater than", "more than",
+    )
+    if any(t in low for t in lower_terms):
+        return ">="
+    if any(t in low for t in upper_terms):
+        return "<="
+    return default
 
 
 def _first(body: str, unit_map) -> Optional[Tuple[float, str]]:
@@ -75,9 +99,10 @@ def _rule_extract(requirements) -> List[ReqSpec]:
         is_vertical = any(k in low for k in _VERTICAL_TERMS)
         is_range = any(k in low for k in _RANGE_TERMS) and not is_vertical
 
+        op = _operator_for(body)
         t = _first(body, _TIME_UNIT_MIN)        # endurance (minutes; hours→minutes)
         if t:
-            specs.append(ReqSpec(rid, ENDURANCE, ">=", t[0], t[1]))
+            specs.append(ReqSpec(rid, ENDURANCE, op, t[0], t[1]))
         mss = _first(body, _MASS_UNIT_KG)        # MTOW (take-off) vs payload (carry)
         if mss and is_mtow:
             specs.append(ReqSpec(rid, MASS_MTOW, "<=", mss[0], mss[1]))
@@ -85,12 +110,32 @@ def _rule_extract(requirements) -> List[ReqSpec]:
             specs.append(ReqSpec(rid, PAYLOAD, "<=", mss[0], mss[1]))
         ln = _first(body, _LEN_UNIT_M)           # operational range vs altitude
         if ln and is_range:
-            specs.append(ReqSpec(rid, RANGE, ">=", ln[0], ln[1]))
+            range_op = op
+            if ("maximum range" in low or "max range" in low) and not any(
+                k in low for k in ("restrict", "radius", "geofence", "limited to", "limit")
+            ):
+                range_op = ">="
+            specs.append(ReqSpec(rid, RANGE, range_op, ln[0], ln[1]))
         elif ln and is_vertical:
             specs.append(ReqSpec(rid, ALTITUDE, "<=", ln[0], ln[1]))
         sp = _first(body, _SPEED_UNIT_MPS)       # cruise/airspeed
-        if sp:
-            specs.append(ReqSpec(rid, SPEED, ">=", sp[0], sp[1]))
+        is_wind_condition = (
+            any(k in low for k in _CONDITION_SPEED_TERMS)
+            and not any(k in low for k in ("nil-wind", "nil wind", "no-wind", "no wind"))
+        )
+        is_speed_capability = (
+            any(k in low for k in _SPEED_CAPABILITY_TERMS)
+            and not is_wind_condition
+        )
+        if sp and is_speed_capability:
+            speed_op = op
+            if (
+                any(term in low for term in ("maximum airspeed", "max airspeed", "maximum speed", "max speed"))
+                and any(verb in low for verb in _CAPABILITY_VERBS)
+                and not any(k in low for k in ("shall not exceed", "not exceed", "restrict", "limited to", "limit", "up to", "within"))
+            ):
+                speed_op = ">="
+            specs.append(ReqSpec(rid, SPEED, speed_op, sp[0], sp[1]))
     return specs
 
 
@@ -107,7 +152,8 @@ Canonical units (convert to these):
 - mtow      = maximum take-off / all-up / gross mass in kg.
 - payload   = carried/transported payload mass in kg ("payload/carry/transport" mass, NOT take-off mass).
 - range     = OPERATIONAL/flight range or radius in metres (km→metres). A maximum ALTITUDE limit is 'altitude', NOT 'range'.
-- speed     = cruise/airspeed in m/s.
+- speed     = cruise/airspeed in m/s. "Achieve/attain/reach a maximum airspeed of X" is
+              a capability target (">="); "shall not exceed / limited to / up to X" is a limit ("<=").
 - altitude  = vertical limit in metres.
 operator: take the requirement's ACTUAL bound — "at least / minimum / no less than" → ">=";
 "at most / maximum of / shall not exceed / restrict to / up to / within" → "<=". Do NOT assume a

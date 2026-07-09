@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 
 from src.dse.requirement_spec import (
-    ALTITUDE, ENDURANCE, MASS_MTOW, PAYLOAD, RANGE, ReqSpec, _rule_extract,
+    ALTITUDE, ENDURANCE, MASS_MTOW, PAYLOAD, RANGE, SPEED, ReqSpec, _rule_extract,
     extract_requirements, max_spec, max_value,
 )
 
@@ -41,6 +41,25 @@ def test_rule_extract_operational_range_and_km():
     assert max_spec(_rule_extract(["REQ-PERF-004: operational range of at least 10 km."]), RANGE).value == 10000.0
     # a sensor "detection range" is not operational flight range
     assert _q(_rule_extract(["REQ-FUNC-002: detection range of 15 metres."]), RANGE) == []
+
+
+def test_rule_extract_speed_skips_wind_condition():
+    cruise = _rule_extract(["REQ-PERF-003: cruise speed at least 15 m/s."])
+    assert _q(cruise, SPEED) == [ReqSpec("REQ-PERF-003", SPEED, ">=", 15.0, "m/s")]
+    wind = _rule_extract(["REQ-PERF-004: operate in wind conditions up to 15 m/s."])
+    assert _q(wind, SPEED) == []
+
+
+def test_rule_extract_maximum_airspeed_capability_is_lower_bound():
+    capability = _rule_extract([
+        "REQ-PERF-003: The system shall achieve a maximum airspeed of 15 m/s in nil-wind level flight."
+    ])
+    assert _q(capability, SPEED) == [ReqSpec("REQ-PERF-003", SPEED, ">=", 15.0, "m/s")]
+
+    limit = _rule_extract([
+        "REQ-CONS-010: The system shall not exceed a maximum speed of 15 m/s near the depot."
+    ])
+    assert _q(limit, SPEED) == [ReqSpec("REQ-CONS-010", SPEED, "<=", 15.0, "m/s")]
 
 
 def test_query_helpers():

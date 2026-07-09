@@ -86,6 +86,7 @@ class VariationDSEResult:
     recommended_realizable: Optional[bool] = None
     realizable_front_count: Optional[int] = None
     recommended_by: Optional[str] = None
+    recommended_estimator_feasible: Optional[bool] = None
     # Per-alternative variant→implementation bindings ({point_id: impl_type_name}), index-
     # aligned with pareto_designs, so the trade study can FORMALLY bind each alternative to
     # the variant definitions it's composed of (object-level traceability, not a comment).
@@ -264,6 +265,7 @@ def run_variation_dse(
     perf_objs = [n for n in names if n.endswith("_sat")]
     feasible = [m for m in front.members
                 if all(m[1].get(n, 0.0) >= 0.98 for n in perf_objs)]
+    feasible_keys = {tuple(sorted(m[0].items())) for m in feasible}
     pool = feasible if feasible else front.members
     if perf_objs and not feasible:
         notes.append("no explored design meets all hard performance requirements at the "
@@ -281,31 +283,30 @@ def run_variation_dse(
                 record_suppressed("variation_dse.realizability", exc)
                 continue
         realizable_front_count = len(realizable)
-        if realizable:
-            pool = realizable
+        eligible = [m for m in realizable if tuple(sorted(m[0].items())) in feasible_keys]
+        if eligible:
+            pool = eligible
             recommended_realizable = True
             notes.append(
-                f"recommendation restricted to {len(realizable)}/{len(front.members)} "
-                "realizable front members"
+                f"recommendation restricted to {len(eligible)}/{len(front.members)} "
+                "estimator-feasible and realizable front members"
             )
             if realization_rank is not None:
                 ranked = []
-                for member in realizable:
+                for member in eligible:
                     try:
                         ranked.append((float(realization_rank(_resolve_di(member[0]))), member))
                     except Exception as exc:
                         record_suppressed("variation_dse.realization_rank", exc)
                         continue
                 if ranked:
-                    rec_state, _ = max(
-                        ranked,
-                        key=lambda item: (
-                            item[0],
-                            tuple(sorted(item[1][0].items())),
-                        ),
-                    )[1]
+                    best_rank = max(r for r, _ in ranked)
+                    tied = [m for r, m in ranked if abs(r - best_rank) <= 1e-9]
+                    rec_state, _ = weighted_recommend(tied, rec_weights, method="chebyshev")
                     recommended_by = "datasheet"
                     notes.append("recommendation selected by datasheet realization rank")
+                    if len(tied) > 1:
+                        notes.append("datasheet rank tie broken by estimator recommendation")
                 else:
                     recommended_by = "estimator-fallback"
                     notes.append("realization_rank failed for all realizable front members — "
@@ -314,9 +315,19 @@ def run_variation_dse(
             recommended_realizable = False
             if realization_rank is not None:
                 recommended_by = "estimator-fallback"
-            notes.append("no front member realizable — recommending estimator-best")
+            if realizable:
+                notes.append("no estimator-feasible front member is realizable — "
+                             "recommending estimator-best")
+            else:
+                notes.append("no front member realizable — recommending estimator-best")
     if recommended_by != "datasheet":
         rec_state, _ = weighted_recommend(pool, rec_weights, method="chebyshev")
+    recommended_estimator_feasible = (
+        tuple(sorted(rec_state.items())) in feasible_keys
+        if perf_objs else None
+    )
+    if perf_objs and not recommended_estimator_feasible:
+        notes.append("recommended design does not meet the estimator feasibility gate")
     concrete = resolve_model(base_text, ok, dict(rec_state))
     rec_cap = inner_cap.get(tuple(sorted(rec_state.items())))
     if rec_cap is not None:
@@ -364,6 +375,7 @@ def run_variation_dse(
         recommended_realizable=recommended_realizable,
         realizable_front_count=realizable_front_count,
         recommended_by=recommended_by,
+        recommended_estimator_feasible=recommended_estimator_feasible,
         pareto_bindings=pareto_bindings,
         recommended_bindings=rec_bindings,
     )

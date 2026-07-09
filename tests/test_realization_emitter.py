@@ -41,6 +41,22 @@ def test_inject_realization_analysis_into_valid_package():
     assert not check_syntax(out).has_errors
 
 
+def test_emit_realization_package_asserts_only_closure_scope_requirements():
+    d = DesignInputs(1.0, 12000, 6, 4, 18 * 0.0254 / 2, 0.0)
+    rep = close_the_loop(d, [], [
+        "REQ-PERF-002: endurance at least 15 minutes.",
+        "REQ-PERF-003: cruise speed at least 15 m/s.",
+        "REQ-FUNC-001: operational range of at least 0.1 km.",
+    ], catalog())
+    assert {v.scope for v in rep.per_requirement} == {"closure", "forward_flight"}
+    sysml, ok = emit_realization_package(rep)
+    assert ok
+    assert "REQ_PERF_002" in sysml
+    assert "REQ_PERF_003" not in sysml
+    assert "REQ_FUNC_001" not in sysml
+    assert sysml.count("assert constraint realizationCloses") == 1
+
+
 def test_infeasible_report_still_emits_false_assert():
     d = DesignInputs(1.0, 12000, 6, 4, 18 * 0.0254 / 2, 0.0)
     rep = close_the_loop(d, [], ["REQ-PERF-002: endurance at least 15 minutes."],

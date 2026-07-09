@@ -20,11 +20,21 @@ class InterfaceCheck:
 
 
 @dataclass(frozen=True)
+class DesignDrift:
+    name: str
+    expected: float
+    realized: float
+    delta: float
+    relative_delta: float
+
+
+@dataclass(frozen=True)
 class RealizedCandidate:
     rd: RealizedDesign
     metrics: RealizedMetrics
     distance: float
     checks: Tuple[InterfaceCheck, ...]
+    design_drift: Tuple[DesignDrift, ...]
 
 
 def per_rotor_radius_m(combo) -> float:
@@ -43,6 +53,31 @@ def _distance(design: DesignInputs, rd: RealizedDesign) -> float:
         abs(per_rotor_radius_m(rd.combo) - design.rotor_radius_m) / radius_den
         + abs(rd.pack.capacity_mah - design.battery_capacity_mah) / cap_den
         + abs(rd.pack.cells - design.battery_cells) / cells_den
+    )
+
+
+def _design_drift(design: DesignInputs, rd: RealizedDesign) -> Tuple[DesignDrift, ...]:
+    radius_expected = design.rotor_radius_m
+    radius_realized = per_rotor_radius_m(rd.combo)
+    cap_expected = design.battery_capacity_mah
+    cap_realized = rd.pack.capacity_mah
+    cells_expected = float(design.battery_cells)
+    cells_realized = float(rd.pack.cells)
+
+    def drift(name: str, expected: float, realized: float) -> DesignDrift:
+        denom = abs(expected) if expected else 1.0
+        return DesignDrift(
+            name=name,
+            expected=expected,
+            realized=realized,
+            delta=realized - expected,
+            relative_delta=(realized - expected) / denom,
+        )
+
+    return (
+        drift("rotor_radius_m", radius_expected, radius_realized),
+        drift("battery_capacity_mah", cap_expected, cap_realized),
+        drift("battery_cells", cells_expected, cells_realized),
     )
 
 
@@ -110,8 +145,13 @@ def evaluate_combination(design: DesignInputs, requirements: List[str],
         capacity_a * pack.c_rating >= required_a,
         f"{capacity_a * pack.c_rating:.1f}A available vs {required_a:.1f}A required",
     ))
-    return RealizedCandidate(rd=rd, metrics=metrics, distance=_distance(design, rd),
-                             checks=tuple(checks))
+    return RealizedCandidate(
+        rd=rd,
+        metrics=metrics,
+        distance=_distance(design, rd),
+        checks=tuple(checks),
+        design_drift=_design_drift(design, rd),
+    )
 
 
 def all_combinations(design: DesignInputs, requirements: List[str],
@@ -137,4 +177,3 @@ def match(design: DesignInputs, requirements: List[str],
         c.rd.pack.name,
         c.rd.frame.name,
     ))
-
