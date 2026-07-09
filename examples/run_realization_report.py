@@ -67,6 +67,7 @@ if __name__ == "__main__":
         "recommended_by": res.get("recommended_by"),
         "recommended_estimator_feasible": res.get("recommended_estimator_feasible"),
         "variation_proposal_source": getattr(orch, "last_variation_proposal_source", None),
+        "estimator_calibration": getattr(orch, "last_estimator_calibration", None),
         "recommended_design_inputs": (vars(rec) if rec is not None else None),
         "dse_verification_summary": (res.get("dse_verification") or {}).get("summary"),
         "realization": realization,

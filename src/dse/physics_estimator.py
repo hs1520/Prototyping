@@ -28,6 +28,52 @@ ENERGY_DENSITY_WH_KG = 150.0  # LiPo pack gravimetric energy density (typical)
 BASE_FRAME_KG = 0.5           # bare frame + avionics (propulsion mass is separate, below)
 ROTOR_MASS_COEF = 2.5         # propulsion-group mass (motors+props+arms) per m² disk area
 
+# ── Catalog calibration overrides (F1) ─────────────────────────────────────────
+# The constants above are generic engineering values; the datasheet layer proved
+# them biased (~36% low on endurance, experiment B). set_calibration() lets the
+# orchestrator inject catalog-derived EFFECTIVE values (fitted in
+# src/realization/estimator_calibration.py — this module must NOT import
+# realization) around the search. State is explicit and restorable; when empty,
+# behavior is bit-identical to the uncalibrated legacy estimator.
+_CALIBRATION: dict = {}
+_CALIBRATION_KEYS = frozenset(
+    {"fom", "eta_drive", "energy_density_wh_kg", "base_frame_kg", "rotor_mass_coef"}
+)
+
+
+def set_calibration(**overrides: float) -> None:
+    """Install effective-constant overrides (unknown keys rejected loudly)."""
+    bad = set(overrides) - _CALIBRATION_KEYS
+    if bad:
+        raise ValueError(f"unknown calibration key(s): {sorted(bad)}")
+    _CALIBRATION.update({k: float(v) for k, v in overrides.items()})
+
+
+def clear_calibration() -> None:
+    _CALIBRATION.clear()
+
+
+def calibration_active() -> dict:
+    return dict(_CALIBRATION)
+
+
+class calibrated:
+    """Context manager: apply overrides, restore the previous state on exit."""
+
+    def __init__(self, **overrides: float) -> None:
+        self._overrides = overrides
+        self._saved: dict = {}
+
+    def __enter__(self) -> "calibrated":
+        self._saved = dict(_CALIBRATION)
+        clear_calibration()
+        set_calibration(**self._overrides)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        clear_calibration()
+        _CALIBRATION.update(self._saved)
+
 
 @dataclass(frozen=True)
 class DesignInputs:
@@ -57,7 +103,7 @@ def hover_power_w(mass_kg: float, area_m2: float, fom: float = None) -> float:
     the module constant FOM, read at CALL time (so FOM stays tunable/sensitivity-able)."""
     if area_m2 <= 0:
         return float("inf")
-    f = FOM if fom is None else fom
+    f = _CALIBRATION.get("fom", FOM) if fom is None else fom
     thrust = mass_kg * G
     return thrust ** 1.5 / (math.sqrt(2.0 * RHO * area_m2) * f)
 
@@ -69,19 +115,21 @@ def battery_energy_wh(capacity_mah: float, cells: int) -> float:
 
 def battery_mass_kg(capacity_mah: float, cells: int) -> float:
     """Pack mass from energy ÷ gravimetric energy density."""
-    return battery_energy_wh(capacity_mah, cells) / ENERGY_DENSITY_WH_KG
+    return battery_energy_wh(capacity_mah, cells) / _CALIBRATION.get(
+        "energy_density_wh_kg", ENERGY_DENSITY_WH_KG)
 
 
 def propulsion_mass_kg(rotor_count: int, rotor_radius_m: float) -> float:
     """Motors + props + arms scale with total disk area — bigger / more rotors are
     heavier. This gives rotor sizing a real COST so the outer search doesn't collapse
     to the largest rotor (otherwise larger rotors would be free efficiency)."""
-    return ROTOR_MASS_COEF * disk_area_m2(rotor_count, rotor_radius_m)
+    return _CALIBRATION.get("rotor_mass_coef", ROTOR_MASS_COEF) * disk_area_m2(
+        rotor_count, rotor_radius_m)
 
 
 def total_mass_kg(d: DesignInputs) -> float:
     """Emergent all-up mass = frame base + propulsion group + battery pack + payload."""
-    return (BASE_FRAME_KG
+    return (_CALIBRATION.get("base_frame_kg", BASE_FRAME_KG)
             + propulsion_mass_kg(d.rotor_count, d.rotor_radius_m)
             + battery_mass_kg(d.battery_capacity_mah, d.battery_cells)
             + d.payload_mass_kg)
@@ -94,7 +142,7 @@ def electrical_power_w(mass_kg: float, area_m2: float) -> float:
     mech = hover_power_w(mass_kg, area_m2)
     if math.isinf(mech):
         return float("inf")
-    return mech / ETA_DRIVE + AVIONICS_POWER_W
+    return mech / _CALIBRATION.get("eta_drive", ETA_DRIVE) + AVIONICS_POWER_W
 
 
 def endurance_min(d: DesignInputs) -> float:

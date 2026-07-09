@@ -394,7 +394,7 @@ class PrototypingPipeline:
                 "resize_note": realization.get("resize_note"),
             }
         for key in ("recommended_by", "recommended_estimator_feasible",
-                    "variation_proposal_source"):
+                    "variation_proposal_source", "estimator_calibration"):
             if result.get(key) is not None:
                 report[key] = result.get(key)
         sitl = result.get("sitl_report")

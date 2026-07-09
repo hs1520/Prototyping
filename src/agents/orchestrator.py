@@ -335,6 +335,7 @@ class Orchestrator:
         use_variation_dse: bool = False,
         use_surgical_refinement: bool = True,
         realization_inject: bool = False,
+        estimator_calibration: bool = True,
     ):
         self.llm = llm
         self.rag = rag_retriever
@@ -356,6 +357,11 @@ class Orchestrator:
         # "fallback" (deterministic ontology set injected because the LLM proposed
         # none), or None (no variation space / not run yet). Reported, never hidden.
         self.last_variation_proposal_source = None
+        # F1: catalog-grid estimator calibration, applied ONLY around the search
+        # (the injected SysML calc defs and Phase 8's estimator_value column keep
+        # the documented textbook constants). Provenance recorded, never hidden.
+        self.use_estimator_calibration = estimator_calibration
+        self.last_estimator_calibration = None
         # Refinement asks the LLM for block-level replacements first (surgical:
         # untouched blocks cannot lose connects, output ~10× smaller) and only
         # falls back to the legacy whole-model rewrite when no valid merge is
@@ -738,6 +744,7 @@ class Orchestrator:
             "recommended_by": getattr(self, "last_recommended_by", None),
             "recommended_estimator_feasible": getattr(self, "last_recommended_estimator_feasible", None),
             "variation_proposal_source": getattr(self, "last_variation_proposal_source", None),
+            "estimator_calibration": getattr(self, "last_estimator_calibration", None),
             "dse_verification": verification_artifact,
             "realization": _public_realization(realization),
             "llm_usage": ledger.as_dict() if ledger is not None else None,
@@ -1277,11 +1284,39 @@ class Orchestrator:
             realization_rank = _realization_rank
         except Exception as e:
             print(f"  [variation-DSE] realizability-aware recommendation disabled ({e})")
-        res = run_variation_dse(
-            model, requirements=requirements, random_seed=seed or 0,
-            realizability=realizability,
-            realization_rank=realization_rank,
-        )
+        calibration = None
+        self.last_estimator_calibration = None
+        if getattr(self, "use_estimator_calibration", True):
+            try:
+                from ..realization.estimator_calibration import (
+                    catalog_rank_check, fit_from_catalog,
+                )
+                calibration = fit_from_catalog()
+                self.last_estimator_calibration = {
+                    **calibration.as_dict(),
+                    "rank_check": catalog_rank_check(fit=calibration),
+                    "scope": ("search-only: SysML calc defs and Phase 8 "
+                              "estimator_value keep the textbook constants"),
+                }
+                print("  [variation-DSE] estimator calibrated on catalog grid: "
+                      f"fom_eff={calibration.fom_eff:.3f}, "
+                      f"ED={calibration.energy_density_wh_kg:.0f} Wh/kg, "
+                      f"endurance MAPE {calibration.endurance_mape_before:.0%}→"
+                      f"{calibration.endurance_mape_after:.0%} "
+                      f"(n={calibration.n_points})")
+            except Exception as e:
+                print(f"  [variation-DSE] estimator calibration skipped ({e})")
+                calibration = None
+        from contextlib import nullcontext
+
+        from ..dse.physics_estimator import calibrated
+        cal_ctx = calibrated(**calibration.overrides()) if calibration else nullcontext()
+        with cal_ctx:
+            res = run_variation_dse(
+                model, requirements=requirements, random_seed=seed or 0,
+                realizability=realizability,
+                realization_rank=realization_rank,
+            )
         if res is None:
             print("  [variation-DSE] no admissible variation space; "
                   "falling back to catalog bilevel DSE")
