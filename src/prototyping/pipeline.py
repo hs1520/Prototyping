@@ -221,12 +221,18 @@ class PrototypingPipeline:
         print("  [L1] 参数文件生成")
         parm_path = bridge.generate_l1()
         l1_results = bridge.validate_l1()
+        trace_results = bridge.validate_traceability()
 
         ok_l1 = sum(1 for r in l1_results if r.passed)
         print(f"  参数验证: {ok_l1}/{len(l1_results)} 通过")
         for r in l1_results:
             icon = "✓" if r.passed else "✗"
             print(f"    {icon} {r.req_id:<20} {r.message}")
+        if trace_results:
+            print()
+            print("  [TRACE] 需求-验证一致性")
+            for r in trace_results:
+                print(f"    ✗ {r.req_id:<20} {r.message}")
 
         # ── L2：生成测试脚本 ─────────────────────────────────────────
         print()
@@ -258,18 +264,22 @@ class PrototypingPipeline:
             parm_file=str(parm_path),
             l1_results=l1_results,
             l2_results=l2_results,
+            trace_results=trace_results,
         )
 
         all_n = len(l1_results) + len(l2_results)
         all_ok = sum(1 for r in l1_results + l2_results if r.passed)
         print()
-        print(f"  SITL 阶段完成  ({all_ok}/{all_n} 通过)")
+        blocked = len([r for r in trace_results if not r.passed])
+        suffix = f", TRACE blocked {blocked}" if blocked else ""
+        print(f"  SITL 阶段完成  ({all_ok}/{all_n} 通过{suffix})")
         print(f"  .parm 文件: {parm_path}")
         print("=" * W)
 
         result["sitl_report"] = report
         result["sitl_parm_file"] = str(parm_path)
         result["sitl_l2_scripts"] = [str(s) for s in scripts]
+        result["sitl_traceability"] = [vars(r) for r in trace_results]
         return result
 
     def explore_design_space(
@@ -371,6 +381,44 @@ class PrototypingPipeline:
         ver = result.get("dse_verification")
         if ver:
             report["dse_verification_summary"] = ver.get("summary")
+        # Phase 8 outcome belongs in the canonical run report: without it the
+        # meet-in-the-middle verdict only existed in the example script's dump.
+        realization = result.get("realization")
+        if realization:
+            report["realization"] = {
+                "verdict": realization.get("verdict"),
+                "summary": realization.get("summary"),
+                "chosen": realization.get("chosen"),
+                "forward_flight_ok": realization.get("forward_flight_ok"),
+                "rank_preservation": realization.get("rank_preservation"),
+                "resize_note": realization.get("resize_note"),
+            }
+        for key in ("recommended_by", "recommended_estimator_feasible",
+                    "variation_proposal_source"):
+            if result.get(key) is not None:
+                report[key] = result.get(key)
+        sitl = result.get("sitl_report")
+        if sitl is not None:
+            l1 = list(getattr(sitl, "l1_results", []) or [])
+            l2 = list(getattr(sitl, "l2_results", []) or [])
+            trace = list(getattr(sitl, "trace_results", []) or [])
+            report["sitl"] = {
+                "safety_status": (
+                    sitl.safety_status() if hasattr(sitl, "safety_status") else None
+                ),
+                "l1_passed": sum(1 for r in l1 if getattr(r, "passed", False)),
+                "l1_total": len(l1),
+                "l2_passed": sum(1 for r in l2 if getattr(r, "passed", False)),
+                "l2_total": len(l2),
+                "traceability_blocked": sum(1 for r in trace if not getattr(r, "passed", False)),
+                "traceability": [vars(r) for r in trace],
+            }
+        elif result.get("sitl_traceability"):
+            trace = list(result.get("sitl_traceability") or [])
+            report["sitl"] = {
+                "traceability_blocked": sum(1 for r in trace if not r.get("passed")),
+                "traceability": trace,
+            }
         return report
 
     def save_run_report(
@@ -498,4 +546,3 @@ class PrototypingPipeline:
             })
 
         return alternatives
-

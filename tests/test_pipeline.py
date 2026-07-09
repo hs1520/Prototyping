@@ -3,6 +3,7 @@
 from src.llm.interface import LLMResponse, MockLLM
 from src.prototyping import pipeline as orchestration_module
 from src.prototyping import provider_factory as provider_module
+from src.sitl.sitl_bridge import BridgeReport, TestResult as SITLTestResult
 
 
 class DummyLLM:
@@ -164,3 +165,59 @@ def test_build_run_report_is_json_serialisable():
     assert report["system_name"] == "T"
     assert report["requirements_count"] == 2
     json.dumps(report)  # must not raise
+
+
+def test_build_run_report_includes_sitl_traceability():
+    report = orchestration_module.PrototypingPipeline.build_run_report({
+        "system_name": "T",
+        "requirements": [],
+        "sitl_report": BridgeReport(
+            model_name="T",
+            parm_file="T.parm",
+            l1_results=[SITLTestResult("REQ_L1", "L1", True, "ok")],
+            l2_results=[SITLTestResult("REQ_SAFE_005", "L2", False, "servo8_raw last=1000")],
+            trace_results=[
+                SITLTestResult(
+                    "REQ_SAFE_003",
+                    "TRACE",
+                    False,
+                    "traceability mismatch: requirement text implies GCS",
+                )
+            ],
+        ),
+    })
+
+    assert report["sitl"]["l1_passed"] == 1
+    assert report["sitl"]["safety_status"] == "PARTIAL"
+    assert report["sitl"]["l2_passed"] == 0
+    assert report["sitl"]["l2_total"] == 1
+    assert report["sitl"]["traceability_blocked"] == 1
+    assert report["sitl"]["traceability"][0]["req_id"] == "REQ_SAFE_003"
+
+
+def test_build_run_report_includes_phase8_realization_outcome():
+    report = orchestration_module.PrototypingPipeline.build_run_report({
+        "system_name": "T",
+        "requirements": [],
+        "recommended_by": "datasheet",
+        "recommended_estimator_feasible": True,
+        "variation_proposal_source": "llm",
+        "realization": {
+            "verdict": "CLOSED",
+            "summary": "MEET-IN-THE-MIDDLE CLOSED — ...",
+            "chosen": {"combo": "c", "pack": "p", "frame": "f"},
+            "forward_flight_ok": True,
+            "rank_preservation": {"n": 2.0},
+            "resize_note": "",
+            "per_requirement": [{"req_id": "REQ-PERF-002"}],  # not copied wholesale
+        },
+    })
+
+    assert report["realization"]["verdict"] == "CLOSED"
+    assert report["realization"]["chosen"]["combo"] == "c"
+    assert "per_requirement" not in report["realization"]  # summary-level only
+    assert report["recommended_by"] == "datasheet"
+    assert report["recommended_estimator_feasible"] is True
+    assert report["variation_proposal_source"] == "llm"
+    import json
+    json.dumps(report)  # must stay JSON-serialisable

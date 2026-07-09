@@ -11,8 +11,9 @@ Run:
 from __future__ import annotations
 
 import json
+import argparse
+import re
 import signal
-import shutil
 import statistics
 import sys
 import time
@@ -21,7 +22,8 @@ from pathlib import Path
 from pymavlink import mavutil
 
 from src.dse.physics_estimator import DesignInputs
-from src.sitl.dse_sitl_params import design_to_sitl_parm
+from src.realization.closure import close_the_loop
+from src.sitl.dse_sitl_params import FRAME_CLASS, design_to_sitl_parm
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE, SITLBridge
 from src.sitl.sitl_specs import TestContext
 from src.sysml.lite_model import build_lite_model
@@ -35,6 +37,8 @@ RUN_JSON = OUT / "realization_run.json"
 WORK = OUT / "sitl_feasibility"
 REPORT_JSON = OUT / "sitl_feasibility_report.json"
 REPORT_MD = OUT / "sitl_feasibility_report.md"
+STATIC_REPORT_JSON = OUT / "sitl_feasibility_static_report.json"
+STATIC_REPORT_MD = OUT / "sitl_feasibility_static_report.md"
 MODEL_NAME = "AutonomousDrone"
 
 
@@ -63,16 +67,69 @@ def _parm_lines_from_json() -> list[str]:
     return lines
 
 
-def _prepare_bridge_inputs(model) -> tuple[SITLBridge, str]:
+def _parm_key(line: str) -> str | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    return stripped.split()[0]
+
+
+def merge_parm_lines(primary: list[str], supplemental: list[str]) -> list[str]:
+    """Merge .parm defaults without overriding the recommended design params."""
+    merged = list(primary)
+    seen = {key for line in merged if (key := _parm_key(line))}
+    additions = []
+    for line in supplemental:
+        key = _parm_key(line)
+        if key is None or key in seen:
+            continue
+        additions.append(line)
+        seen.add(key)
+    if additions:
+        merged.extend(["", "# Safety/L2 actuator params from requirement linker"])
+        merged.extend(additions)
+    return merged
+
+
+def parm_freshness(primary_lines: list[str], run_json: dict | None) -> tuple[bool, str]:
+    """Cross-check recommended.parm against the latest realization run.
+
+    Guards against silently flying a previous run's design: a pipeline run that
+    falls back before Phase 8 leaves no recommendation, and an older
+    recommended.parm on disk would otherwise be picked up as if it were current.
+    Returns (fresh, reason).
+    """
+    if run_json is None:
+        return True, "no realization_run.json to check against (standalone parm accepted)"
+    d = run_json.get("recommended_design_inputs")
+    if not d:
+        return False, ("latest realization_run.json has no recommended design "
+                       "(DSE fell back before Phase 8); recommended.parm is from an earlier run")
+    values: dict[str, float] = {}
+    for line in primary_lines:
+        key = _parm_key(line)
+        if key is None:
+            continue
+        parts = line.split()
+        if len(parts) >= 2:
+            try:
+                values[key] = float(parts[1])
+            except ValueError:
+                continue
+    cap = float(d.get("battery_capacity_mah", 0.0))
+    if "BATT_CAPACITY" in values and abs(values["BATT_CAPACITY"] - round(cap)) > 0.5:
+        return False, (f"BATT_CAPACITY {values['BATT_CAPACITY']:.0f} does not match the "
+                       f"latest recommended design ({cap:.0f} mAh)")
+    fc = FRAME_CLASS.get(int(d.get("rotor_count", 0)))
+    if fc is not None and "FRAME_CLASS" in values and int(values["FRAME_CLASS"]) != fc:
+        return False, (f"FRAME_CLASS {int(values['FRAME_CLASS'])} does not match the latest "
+                       f"recommended rotor count ({int(d.get('rotor_count', 0))} → {fc})")
+    return True, "consistent with the latest realization_run.json recommended design"
+
+
+def _prepare_bridge_inputs(model, allow_stale: bool = False) -> tuple[SITLBridge, str]:
     WORK.mkdir(parents=True, exist_ok=True)
     bridge_parm = WORK / f"{MODEL_NAME}.parm"
-    source = "examples/output/recommended.parm"
-    if PARM_PATH.exists():
-        shutil.copyfile(PARM_PATH, bridge_parm)
-    else:
-        source = "reconstructed_from_existing_realization_run.json"
-        lines = _parm_lines_from_json()
-        bridge_parm.write_text("\n".join(lines) + "\n", encoding="utf-8")
     bridge = SITLBridge(
         model=model,
         output_dir=str(WORK),
@@ -80,6 +137,25 @@ def _prepare_bridge_inputs(model) -> tuple[SITLBridge, str]:
         fdm_backend="native",
         verbose=False,
     )
+    source = "examples/output/recommended.parm + requirement_linker safety params"
+    if PARM_PATH.exists():
+        primary = PARM_PATH.read_text(encoding="utf-8").splitlines()
+        run_json = json.loads(RUN_JSON.read_text(encoding="utf-8")) if RUN_JSON.exists() else None
+        fresh, reason = parm_freshness(primary, run_json)
+        if not fresh and not allow_stale:
+            raise SystemExit(
+                f"recommended.parm is STALE: {reason}\n"
+                "Re-run examples/run_realization_report.py to regenerate it, "
+                "or pass --allow-stale to proceed (the report will be marked STALE)."
+            )
+        if not fresh:
+            source += f" [STALE: {reason}]"
+    else:
+        source = "reconstructed_from_existing_realization_run.json + requirement_linker safety params"
+        primary = _parm_lines_from_json()
+    supplemental = bridge._linker.generate_parm_file().splitlines()  # noqa: SLF001
+    lines = merge_parm_lines(primary, supplemental)
+    bridge_parm.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return bridge, source
 
 
@@ -242,11 +318,14 @@ def _alarm_handler(signum, frame):  # noqa: ARG001 - signal handler signature
     raise _CaseTimeout("L2 case timeout")
 
 
-def _l2_note(req_id: str, passed: bool, message: str) -> str:
-    if req_id == "REQ_SAFE_003" and not passed and "STATUSTEXT" in message.upper():
-        return "suspected STATUSTEXT keyword fragility, not confirmed safety defect"
+def _l2_note(req_id: str, passed: bool, message: str, inject_kind: str = "") -> str:  # noqa: ARG001
     if not passed and "L2 case timeout" in message:
         return "bounded SITL run timed out; not counted as a safety pass"
+    if passed and inject_kind == "mavlink_command":
+        # Parachute/gripper cases command the actuator directly instead of
+        # injecting the fault condition: they verify actuation exists, not the
+        # detect→react chain (that chain is the behavioral-sim tier's job).
+        return "actuator-existence check; fault-trigger chain covered by behavioral sim tier"
     return ""
 
 
@@ -285,7 +364,7 @@ def _run_single_l2_with_timeout(bridge: SITLBridge, spec, timeout_s: int = 240) 
             "passed": bool(passed),
             "message": message,
             "duration_s": round(time.time() - t0, 2),
-            "note": _l2_note(spec.req_id, bool(passed), message),
+            "note": _l2_note(spec.req_id, bool(passed), message, spec.inject.kind),
         }
     except _CaseTimeout:
         return {
@@ -304,7 +383,7 @@ def _run_single_l2_with_timeout(bridge: SITLBridge, spec, timeout_s: int = 240) 
             "passed": False,
             "message": message,
             "duration_s": round(time.time() - t0, 2),
-            "note": _l2_note(spec.req_id, False, message),
+            "note": _l2_note(spec.req_id, False, message, spec.inject.kind),
         }
     finally:
         signal.alarm(0)
@@ -313,29 +392,165 @@ def _run_single_l2_with_timeout(bridge: SITLBridge, spec, timeout_s: int = 240) 
             bridge.stop_sitl()
 
 
-def run_safety_l2(model, parm_source: str) -> list[dict]:  # noqa: ARG001 - parm source is reported by caller
-    # Delegate to the bridge's own tested per-test L2 flow (arm/takeoff/inject/verify).
-    # A previous custom signal.alarm harness here reinvented the per-test flow and
-    # under-reported passes (1/6 vs the bridge-native 5/6) — the bridge path is
-    # authoritative, so we call it directly and map its TestResults to our dict.
-    bridge, _ = _prepare_bridge_inputs(model)
-    results = bridge.run_l2(per_test_sitl=True)
+def run_safety_l2(model, parm_source: str, allow_stale: bool = False) -> list[dict]:  # noqa: ARG001 - parm source is reported by caller
+    bridge, _ = _prepare_bridge_inputs(model, allow_stale=allow_stale)
+    specs = [s for s in bridge._linker.generate_test_specs() if s.tier == "L2"]  # noqa: SLF001
+    results = []
+    for spec in specs:
+        result = _run_single_l2_with_timeout(bridge, spec)
+        result["model_guard"] = _model_guard(bridge, spec.req_id)
+        results.append(result)
+    return results
+
+
+def _model_guard(bridge: SITLBridge, req_id: str) -> str | None:
+    """The model guard a spec traces to — grounds 'behavioral sim covers the trigger'."""
+    assigned = getattr(bridge._linker, "_guard_assignment", {}).get(req_id)  # noqa: SLF001
+    if not assigned:
+        return None
+    g = assigned["guard"]
+    attr = getattr(g, "attribute", "?")
+    op = getattr(g, "operator", "")
+    th = getattr(g, "threshold", None)
+    if getattr(g, "kind", "") == "bool_true" or not op or th is None:
+        return f"{attr} (bool)"
+    return f"{attr} {op} {th}"
+
+
+def coverage_summary(bridge: SITLBridge) -> dict:
+    return bridge._linker.coverage_stats()  # noqa: SLF001
+
+
+def traceability_results(bridge: SITLBridge) -> list[dict]:
     return [
         {
             "req_id": r.req_id,
-            "tier": "L2",
+            "tier": r.tier,
             "passed": bool(r.passed),
-            "message": getattr(r, "message", ""),
+            "message": r.message,
             "duration_s": getattr(r, "duration_s", None),
         }
-        for r in results
+        for r in bridge.validate_traceability()
     ]
+
+
+def planned_l2_specs(bridge: SITLBridge) -> list[dict]:
+    return [
+        {
+            "req_id": s.req_id,
+            "tier": s.tier,
+            "inject": s.inject.kind,
+            "verify": s.verify.kind,
+            "pre_takeoff_m": s.inject.pre_takeoff_m,
+            "notes": s.notes,
+            "model_guard": _model_guard(bridge, s.req_id),
+        }
+        for s in bridge._linker.generate_test_specs()
+        if s.tier == "L2"
+    ]
+
+
+def build_static_report(model, model_source: str, model_source_note: str,
+                        allow_stale: bool = False) -> dict:
+    bridge, parm_source = _prepare_bridge_inputs(model, allow_stale=allow_stale)
+    trace = traceability_results(bridge)
+    planned_l2 = planned_l2_specs(bridge)
+    return {
+        "model_source": model_source,
+        "model_source_note": model_source_note,
+        "parm_source": parm_source,
+        "static_only": True,
+        "honesty_redline": (
+            "Dry-run only: no arducopter process was launched, no flight occurred, "
+            "and no L2 behavior was verified."
+        ),
+        "traceability": trace,
+        "planned_l2": planned_l2,
+        "planned_l2_total": len(planned_l2),
+        "traceability_blocked": sum(1 for r in trace if not r.get("passed")),
+        "coverage": coverage_summary(bridge),
+        "realization_summary": _load_realization_summary(),
+    }
+
+
+def _coverage_lines(coverage: dict) -> list[str]:
+    """MD lines for the honest-gap bucket, so 'blocked = 0' is not over-read."""
+    n = coverage.get("unmapped", 0)
+    ids = ", ".join(coverage.get("unmapped_req_ids", [])) or "none"
+    return [
+        f"- Requirements with no SITL mapping: {n}/{coverage.get('satisfied', 0)} "
+        f"satisfied (honest gap — not verified at any SITL tier): {ids}",
+    ]
+
+
+def _write_static_report(report: dict) -> None:
+    STATIC_REPORT_JSON.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    lines = [
+        "# SITL Feasibility Static Plan",
+        "",
+        f"- Model source: {report.get('model_source')} ({report.get('model_source_note')})",
+        f"- Parameter source: {report.get('parm_source')}",
+        "- Dry-run only: no arducopter process was launched and no flight/L2 behavior was verified.",
+        f"- Traceability blocked: {report.get('traceability_blocked')}",
+        f"- Planned executable L2 checks: {report.get('planned_l2_total')}",
+        *_coverage_lines(report.get("coverage", {})),
+        "",
+        "## Traceability blocked",
+    ]
+    trace = report.get("traceability", [])
+    if trace:
+        for r in trace:
+            lines.append(f"- {r['req_id']}: {r['message']}")
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Planned L2 Checks"])
+    for r in report.get("planned_l2", []):
+        guard = f", guard={r['model_guard']}" if r.get("model_guard") else ""
+        lines.append(
+            f"- {r['req_id']}: inject={r['inject']}, verify={r['verify']}, "
+            f"pre_takeoff_m={r['pre_takeoff_m']}{guard}"
+        )
+    STATIC_REPORT_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def safety_verification_status(l2: list[dict], trace: list[dict]) -> dict:
+    blocked = sum(1 for r in trace if not r.get("passed"))
+    l2_total = len(l2)
+    l2_passed = sum(1 for r in l2 if r.get("passed"))
+    if blocked and l2_total:
+        status = "PARTIAL"
+        message = (
+            f"{blocked} requirement(s) blocked by traceability mismatch; "
+            f"{l2_passed}/{l2_total} executable L2 checks passed."
+        )
+    elif blocked:
+        status = "BLOCKED"
+        message = f"{blocked} requirement(s) blocked by traceability mismatch; no trustworthy L2 checks executed."
+    elif l2_total == 0:
+        status = "NOT_RUN"
+        message = "No traceability blocks and no executable L2 checks were run."
+    elif l2_passed == l2_total:
+        status = "PASS"
+        message = f"All executable L2 checks passed ({l2_passed}/{l2_total})."
+    else:
+        status = "FAIL"
+        message = f"Executable L2 checks failed ({l2_passed}/{l2_total} passed)."
+    return {
+        "status": status,
+        "l2_passed": l2_passed,
+        "l2_total": l2_total,
+        "traceability_blocked": blocked,
+        "message": message,
+    }
 
 
 def _load_realization_summary() -> dict:
     if not RUN_JSON.exists():
         return {}
     data = json.loads(RUN_JSON.read_text(encoding="utf-8"))
+    recomputed = _recompute_realization_summary(data)
+    if recomputed:
+        return recomputed
     realization = data.get("realization") or {}
     chosen = realization.get("chosen") or {}
     per_req = realization.get("per_requirement") or []
@@ -355,10 +570,65 @@ def _load_realization_summary() -> dict:
     }
 
 
+def _requirements_from_sysml(text: str) -> list[str]:
+    out = []
+    for m in re.finditer(
+        r"requirement\s+def\s+([A-Za-z_][\w]*)\s*\{(?P<body>.*?)\}",
+        text,
+        re.S,
+    ):
+        doc = re.search(r"doc\s*/\*(.*?)\*/", m.group("body"), re.S)
+        if doc:
+            out.append(f"{m.group(1).replace('_', '-')}: {doc.group(1).strip()}")
+    return out
+
+
+def _recompute_realization_summary(data: dict) -> dict:
+    """Best-effort Phase-8 recompute so reports use the current realization code."""
+    try:
+        design_inputs = data.get("recommended_design_inputs") or {}
+        if not design_inputs or not SYSML_PATH.exists():
+            return {}
+        requirements = _requirements_from_sysml(SYSML_PATH.read_text(encoding="utf-8"))
+        rep = close_the_loop(DesignInputs(**design_inputs), [], requirements)
+        chosen = rep.chosen
+        if chosen is None:
+            return {
+                "recommended_by": data.get("recommended_by"),
+                "verdict": rep.verdict,
+                "forward_flight_ok": rep.forward_flight_ok,
+            }
+        speed_values = [
+            v.realized_value for v in rep.per_requirement
+            if v.scope == "forward_flight" and v.family == "speed" and v.realized_value is not None
+        ]
+        range_values = [
+            v.realized_value for v in rep.per_requirement
+            if v.scope == "forward_flight" and v.family == "range" and v.realized_value is not None
+        ]
+        return {
+            "recommended_by": data.get("recommended_by"),
+            "verdict": rep.verdict,
+            "combo": chosen.rd.combo.name,
+            "pack": chosen.rd.pack.name,
+            "frame": chosen.rd.frame.name,
+            "endurance_min": chosen.metrics.endurance_min,
+            "total_mass_kg": chosen.metrics.total_mass_kg,
+            "forward_flight_ok": rep.forward_flight_ok,
+            "max_speed_mps": max(speed_values) if speed_values else None,
+            "range_km": max(range_values) / 1000.0 if range_values else None,
+        }
+    except Exception:
+        return {}
+
+
 def _write_reports(report: dict) -> None:
     REPORT_JSON.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     l2 = report.get("safety_l2", [])
     l2_ok = sum(1 for r in l2 if r.get("passed"))
+    safety = report.get("safety_verification") or safety_verification_status(
+        l2, report.get("traceability", [])
+    )
     realization = report.get("realization_summary") or {}
     endurance = realization.get("endurance_min")
     mass = realization.get("total_mass_kg")
@@ -375,7 +645,19 @@ def _write_reports(report: dict) -> None:
         f"- Flight feasibility: {'PASS' if report['flight']['passed'] else 'FAIL'} — {report['flight'].get('message', '')}",
         f"- Arm: {report['flight'].get('arm')}  Takeoff: {report['flight'].get('takeoff')}  Max climb: {report['flight'].get('max_climb_m')} m",
         f"- Hover: {report['flight'].get('hover')}",
-        f"- L2 safety: {l2_ok}/{len(l2)} passed",
+        f"- L2 safety status: {safety.get('status')} — {safety.get('message')}",
+        f"- Executable L2 safety: {l2_ok}/{len(l2)} passed",
+        *_coverage_lines(report.get("coverage", {})),
+        "",
+        "## Traceability blocked",
+    ]
+    trace = report.get("traceability", [])
+    if trace:
+        for r in trace:
+            lines.append(f"- {r['req_id']}: {r['message']}")
+    else:
+        lines.append("- none")
+    lines.extend([
         "",
         "## Datasheet-verified (not true flight)",
         f"- Realization verdict: {realization.get('verdict', 'unknown')}",
@@ -391,16 +673,43 @@ def _write_reports(report: dict) -> None:
         "- speed/range come from the lumped momentum-theory forward_flight tier; Gazebo calibration remains future work.",
         "",
         "## L2 Details",
-    ]
+        "- note: actuator-existence cases verify actuation only; each case's "
+        "fault-trigger guard (shown below) exists in the model and is exercised "
+        "at the behavioral-sim tier.",
+    ])
     for r in l2:
         suffix = f" ({r['note']})" if r.get("note") else ""
-        lines.append(f"- {r['req_id']}: {'PASS' if r['passed'] else 'FAIL'} — {r['message']}{suffix}")
+        guard = f" [guard: {r['model_guard']}]" if r.get("model_guard") else ""
+        lines.append(f"- {r['req_id']}: {'PASS' if r['passed'] else 'FAIL'} — {r['message']}{suffix}{guard}")
     REPORT_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only build the traceability/L2 execution plan; do not launch native SITL.",
+    )
+    parser.add_argument(
+        "--allow-stale",
+        action="store_true",
+        help="Proceed even if recommended.parm does not match the latest realization "
+             "run (parm_source is then marked STALE in the reports).",
+    )
+    args = parser.parse_args(argv)
     model, model_source, model_source_note = _read_model()
-    bridge, parm_source = _prepare_bridge_inputs(model)
+    if args.dry_run:
+        report = build_static_report(model, model_source, model_source_note,
+                                     allow_stale=args.allow_stale)
+        _write_static_report(report)
+        print(json.dumps({
+            "traceability_blocked": report["traceability_blocked"],
+            "planned_l2_total": report["planned_l2_total"],
+            "static_report": str(STATIC_REPORT_JSON),
+        }, indent=2), flush=True)
+        return 0
+    bridge, parm_source = _prepare_bridge_inputs(model, allow_stale=args.allow_stale)
     report = {
         "model_source": model_source,
         "model_source_note": model_source_note,
@@ -411,13 +720,27 @@ def main() -> int:
         ),
         "realization_summary": _load_realization_summary(),
     }
+    report["coverage"] = coverage_summary(bridge)
+    report["traceability"] = traceability_results(bridge)
+    if report["traceability"]:
+        print("=== Traceability blocked ===", flush=True)
+        for item in report["traceability"]:
+            print(f"{item['req_id']}: {item['message']}", flush=True)
     print("=== SITL flight feasibility ===", flush=True)
     report["flight"] = run_flight_feasibility(bridge)
     print(json.dumps(report["flight"], indent=2), flush=True)
     print("\n=== SITL L2 safety ===", flush=True)
-    report["safety_l2"] = run_safety_l2(model, parm_source)
+    report["safety_l2"] = run_safety_l2(model, parm_source, allow_stale=args.allow_stale)
+    report["safety_verification"] = safety_verification_status(
+        report["safety_l2"], report["traceability"]
+    )
     for item in report["safety_l2"]:
         print(f"{item['req_id']}: {'PASS' if item['passed'] else 'FAIL'} — {item['message']}")
+    print(
+        f"Safety verification: {report['safety_verification']['status']} — "
+        f"{report['safety_verification']['message']}",
+        flush=True,
+    )
     _write_reports(report)
     print(f"\nWrote {REPORT_JSON}")
     print(f"Wrote {REPORT_MD}")

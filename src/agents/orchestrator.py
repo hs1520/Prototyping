@@ -352,6 +352,10 @@ class Orchestrator:
         self.last_recommended_design = None
         self.last_pareto_designs = []
         self.last_recommended_bindings = {}
+        # Where the explored variation space came from: "llm" (proposed variants),
+        # "fallback" (deterministic ontology set injected because the LLM proposed
+        # none), or None (no variation space / not run yet). Reported, never hidden.
+        self.last_variation_proposal_source = None
         # Refinement asks the LLM for block-level replacements first (surgical:
         # untouched blocks cannot lose connects, output ~10× smaller) and only
         # falls back to the legacy whole-model rewrite when no valid merge is
@@ -732,6 +736,8 @@ class Orchestrator:
                 for c in pareto_front
             ],
             "recommended_by": getattr(self, "last_recommended_by", None),
+            "recommended_estimator_feasible": getattr(self, "last_recommended_estimator_feasible", None),
+            "variation_proposal_source": getattr(self, "last_variation_proposal_source", None),
             "dse_verification": verification_artifact,
             "realization": _public_realization(realization),
             "llm_usage": ledger.as_dict() if ledger is not None else None,
@@ -782,6 +788,7 @@ class Orchestrator:
                     "cost": c.metrics.cost,
                     "cost_axis": "mass",
                     "distance": c.distance,
+                    "design_drift": [vars(d) for d in getattr(c, "design_drift", ())],
                 }
             closure_families = sorted({v.family for v in report.per_requirement
                                        if getattr(v, "scope", "closure") == "closure"})
@@ -997,6 +1004,7 @@ class Orchestrator:
         # call), and the search budget scales with the point count downstream.
         max_points = 6
         introduced: List[str] = []
+        self.last_variation_proposal_source = None
         for usage, type_name in connected_components(text):
             if len(introduced) >= max_points:
                 break
@@ -1010,6 +1018,28 @@ class Orchestrator:
             if ok:
                 text = new_text
                 introduced.append(usage)
+        if introduced:
+            self.last_variation_proposal_source = "llm"
+
+        # T13 guard: the LLM proposal is the ONLY source of the variation space, and
+        # it can (and did, 2/2 real runs on 2026-07-08) judge every component "not
+        # relevant" — silently dropping the whole objective-DSE + realization path to
+        # the catalog-bilevel fallback. When quantified emergent targets exist, inject
+        # ONE deterministic ontology-driven variation point instead, so the main path
+        # always has a variant space. The source is recorded and reported, not hidden.
+        if not introduced:
+            fb = self._fallback_variation(text, requirements)
+            if fb is not None:
+                usage, type_name, rationale, reqs, variants = fb
+                new_text, ok = introduce_variation(
+                    text, usage, type_name, variants, rationale, reqs
+                )
+                if ok:
+                    text = new_text
+                    introduced.append(usage)
+                    self.last_variation_proposal_source = "fallback"
+                    print("  [variation-DSE] LLM proposed no admissible variants; "
+                          f"injected deterministic ontology fallback on '{usage}'")
 
         if introduced:
             if not hasattr(model, "metadata") or model.metadata is None:
@@ -1144,6 +1174,73 @@ class Orchestrator:
             print(f"  [variation-DSE] variant proposal for '{usage}' skipped ({e})")
             return None
 
+    @staticmethod
+    def _fallback_variation(model_text: str, requirements: List[str]):
+        """Deterministic ontology-driven variation point for when the LLM proposes none.
+
+        Only fires when the requirements carry quantified EMERGENT targets (time
+        family) — i.e. the objective DSE has something real to optimize — and the
+        model has a connected component whose name matches a DESIGN_ONTOLOGY concern
+        (propulsion/airframe/power). The variant set is a standard engineering
+        rotor-count/radius/cells trade (more disk area → endurance ↑ but mass ↑),
+        NOT catalog-derived, so it does not pre-bias Phase 8 realization.
+        Returns (usage, type_name, rationale, req_ids, variants) or None.
+        """
+        from ..dse.domain_objective import (
+            DESIGN_FIELD_ATTR,
+            objective_families,
+            requirement_targets,
+            within_requirement_bounds,
+        )
+        from ..dse.variation_introducer import VariantSpec, connected_components
+
+        fams = set(objective_families(requirements))
+        if not fams:
+            return None
+        req_ids = sorted(
+            rid for rid, targets in requirement_targets(requirements).items()
+            if any(f in fams for f, _ in targets)
+        )
+        if not req_ids:
+            return None
+
+        # Preference-ordered concern keywords: the propulsion-ish component is the
+        # natural owner of rotor variants; airframe and power are acceptable hosts.
+        concern_order = ("propuls", "rotor", "motor", "prop", "lift",
+                         "airframe", "frame", "power", "batter", "energy")
+        best = None
+        for usage, type_name in connected_components(model_text):
+            blob = f"{usage} {type_name}".lower()
+            rank = next((i for i, k in enumerate(concern_order) if k in blob), None)
+            if rank is not None and (best is None or rank < best[0]):
+                best = (rank, usage, type_name)
+        if best is None:
+            return None
+        _, usage, type_name = best
+
+        # Standard engineering trade set (quad/hexa/octo); values are generic
+        # defaults spanning a real endurance-vs-mass trade-off.
+        designs = [
+            ("quad_fallback", {"rotor_count": 4, "rotor_radius_m": 0.19, "battery_cells": 4}),
+            ("hexa_fallback", {"rotor_count": 6, "rotor_radius_m": 0.19, "battery_cells": 6}),
+            ("octo_fallback", {"rotor_count": 8, "rotor_radius_m": 0.15, "battery_cells": 6}),
+        ]
+        variants = []
+        for name, design in designs:
+            if not within_requirement_bounds(design, req_ids, requirements):
+                continue
+            attrs = " ".join(
+                f"attribute {DESIGN_FIELD_ATTR[field]} : Real = {float(val)};"
+                for field, val in design.items()
+            )
+            vtype = f"{name.capitalize()}{usage.capitalize()}Impl"
+            variants.append(VariantSpec(name=name, type_name=vtype, attrs=attrs))
+        if len(variants) < 2:
+            return None
+        rationale = ("deterministic ontology fallback: rotor count/radius vs mass "
+                     "endurance trade (LLM proposed no admissible variation points)")
+        return usage, type_name, rationale, req_ids, variants
+
     def _explore_variations(
         self, model: SysMLModel, requirements: List[str], seed: Optional[int],
     ) -> Tuple[DesignSpace, DesignConfiguration, List[DesignConfiguration]]:
@@ -1252,6 +1349,7 @@ class Orchestrator:
         self.last_recommended_realizable = res.recommended_realizable
         self.last_realizable_front_count = res.realizable_front_count
         self.last_recommended_by = res.recommended_by
+        self.last_recommended_estimator_feasible = res.recommended_estimator_feasible
         print(f"  [variation-DSE] explored {res.admitted_points} → recommended {res.recommended_choices}")
         if res.recommended_capacity_mah is not None:
             print(f"  [variation-DSE] inner BO sized battery → {res.recommended_capacity_mah:.0f} mAh")

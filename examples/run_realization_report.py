@@ -23,6 +23,21 @@ from drone_system_v2 import DRONE_DESCRIPTION, DRONE_REQUIREMENTS  # noqa: E402
 
 SYSTEM = "AutonomousDrone"
 
+
+def retire_stale_parm(parm_path: str) -> bool:
+    """No recommendation this run → retire any leftover recommended.parm.
+
+    A run that falls back before Phase 8 (no recommended design) must not leave a
+    previous run's recommended.parm in place: downstream SITL runs would silently
+    fly a design unrelated to the current model. Returns True if a file was retired
+    (renamed to ``<parm_path>.stale``).
+    """
+    if not os.path.exists(parm_path):
+        return False
+    os.replace(parm_path, parm_path + ".stale")
+    return True
+
+
 if __name__ == "__main__":
     t0 = time.time()
     llm = create_llm(provider="vertex")
@@ -42,12 +57,16 @@ if __name__ == "__main__":
         realization["recommended_realizable"] = getattr(orch, "last_recommended_realizable", None)
         realization["realizable_front_count"] = getattr(orch, "last_realizable_front_count", None)
         realization["recommended_by"] = getattr(orch, "last_recommended_by", None)
+        realization["recommended_estimator_feasible"] = getattr(
+            orch, "last_recommended_estimator_feasible", None)
     out = {
         "elapsed_s": round(time.time() - t0, 1),
         "final_score": res.get("final_score"),
         "best_config": res.get("best_config"),
         "pareto_alternatives": res.get("pareto_alternatives"),
         "recommended_by": res.get("recommended_by"),
+        "recommended_estimator_feasible": res.get("recommended_estimator_feasible"),
+        "variation_proposal_source": getattr(orch, "last_variation_proposal_source", None),
         "recommended_design_inputs": (vars(rec) if rec is not None else None),
         "dse_verification_summary": (res.get("dse_verification") or {}).get("summary"),
         "realization": realization,
@@ -63,6 +82,7 @@ if __name__ == "__main__":
         final_sysml_path = os.path.join(outdir, "final_model.sysml")
         with open(final_sysml_path, "w", encoding="utf-8") as f:
             f.write(res.get("model_sysml") or "")
+        parm_path = os.path.join(outdir, "recommended.parm")
         if rec is not None:
             lines = list(design_to_sitl_parm(rec))
             existing = {
@@ -73,10 +93,12 @@ if __name__ == "__main__":
             for key, value in (ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {}).items():
                 if key not in existing:
                     lines.append(f"{key:<20} {value}")
-            parm_path = os.path.join(outdir, "recommended.parm")
             with open(parm_path, "w", encoding="utf-8") as f:
                 f.write("# Recommended design SITL params; native SITL is architecture-nondiscriminating for endurance.\n")
                 f.write("\n".join(lines) + "\n")
+        elif retire_stale_parm(parm_path):
+            print("  ⚠ no recommended design this run — retired stale recommended.parm "
+                  "→ recommended.parm.stale", flush=True)
     except Exception as e:
         print(f"  ⚠ final model / recommended.parm persistence skipped ({e})", flush=True)
     print(f"\n=== realization run dumped → {path} ({out['elapsed_s']}s) ===", flush=True)
