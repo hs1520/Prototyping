@@ -421,6 +421,33 @@ def coverage_summary(bridge: SITLBridge) -> dict:
     return bridge._linker.coverage_stats()  # noqa: SLF001
 
 
+def matrix_summary(model, bridge: SITLBridge) -> dict | None:
+    """Verification-matrix counts (best-effort): tiers make 'unmapped' interpretable."""
+    try:
+        from src.prototyping.verification_matrix import build_matrix, summarize
+
+        realization = None
+        if RUN_JSON.exists():
+            realization = json.loads(RUN_JSON.read_text(encoding="utf-8")).get("realization")
+        return summarize(build_matrix(model, realization, bridge._linker))  # noqa: SLF001
+    except Exception:
+        return None
+
+
+def _matrix_lines(matrix: dict | None) -> list[str]:
+    if not matrix:
+        return []
+    st = matrix.get("by_status", {})
+    return [
+        "- Verification strategy matrix: "
+        f"{st.get('verified', 0)}/{matrix.get('total', 0)} verified across tiers, "
+        f"{st.get('planned', 0)} planned (Gazebo), "
+        f"{st.get('out-of-sim-scope', 0)} inspection/analysis, "
+        f"{st.get('blocked', 0)} blocked, "
+        f"{st.get('unassigned', 0)} unassigned — see verification_matrix.md",
+    ]
+
+
 def traceability_results(bridge: SITLBridge) -> list[dict]:
     return [
         {
@@ -469,6 +496,7 @@ def build_static_report(model, model_source: str, model_source_note: str,
         "planned_l2_total": len(planned_l2),
         "traceability_blocked": sum(1 for r in trace if not r.get("passed")),
         "coverage": coverage_summary(bridge),
+        "verification_matrix": matrix_summary(model, bridge),
         "realization_summary": _load_realization_summary(),
     }
 
@@ -494,6 +522,7 @@ def _write_static_report(report: dict) -> None:
         f"- Traceability blocked: {report.get('traceability_blocked')}",
         f"- Planned executable L2 checks: {report.get('planned_l2_total')}",
         *_coverage_lines(report.get("coverage", {})),
+        *_matrix_lines(report.get("verification_matrix")),
         "",
         "## Traceability blocked",
     ]
@@ -648,6 +677,7 @@ def _write_reports(report: dict) -> None:
         f"- L2 safety status: {safety.get('status')} — {safety.get('message')}",
         f"- Executable L2 safety: {l2_ok}/{len(l2)} passed",
         *_coverage_lines(report.get("coverage", {})),
+        *_matrix_lines(report.get("verification_matrix")),
         "",
         "## Traceability blocked",
     ]
@@ -721,6 +751,7 @@ def main(argv: list[str] | None = None) -> int:
         "realization_summary": _load_realization_summary(),
     }
     report["coverage"] = coverage_summary(bridge)
+    report["verification_matrix"] = matrix_summary(model, bridge)
     report["traceability"] = traceability_results(bridge)
     if report["traceability"]:
         print("=== Traceability blocked ===", flush=True)
