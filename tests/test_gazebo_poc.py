@@ -206,6 +206,64 @@ def test_real_motor_calibration():
     assert calibrated_area(0.46) > calibrated_area(0.38)
 
 
+def test_thrust_diagnostics_separates_sdf_margin_from_controller_failure():
+    from gazebo_poc.prop_theory import calibrated_area, calibrated_max_rad_s
+    from gazebo_poc.run_flight import _parm_text, _thrust_diagnostics
+    area = calibrated_area(0.381)
+    max_rad_s = calibrated_max_rad_s(area, 1880.0 / 1000.0 * 9.81)
+    d = _thrust_diagnostics(4.678, 4, area, max_rad_s, 1880.0)
+
+    assert d["sdf_can_hover"]
+    assert 1.5 < d["model_twr"] < 1.7
+    assert 0.7 < d["hover_rad_s_fraction_of_max"] < 0.9
+    assert "MOT_THST_HOVER 0.638" in _parm_text(frame_class=1, hover_throttle=0.638)
+    actuator_parms = _parm_text(
+        frame_class=1, hover_throttle=0.638, gripper_servo=7, parachute_servo=8
+    )
+    assert "SERVO7_FUNCTION 28" in actuator_parms
+    assert "SERVO8_FUNCTION 27" in actuator_parms
+    assert "CHUTE_DELAY_MS 0" in actuator_parms
+
+
+def test_wind_effects_working_point_is_lumped_and_explicit():
+    from gazebo_poc.run_flight import (
+        _lidar_scan_min,
+        _obstacle_requirement_met,
+        _obstacle_world_text,
+        _wind_force_scale,
+        _wind_world_text,
+    )
+
+    scale = _wind_force_scale(4.678, 15.0, 0.05)
+    expected_force = 4.678 * scale * 15.0
+    assert expected_force == pytest.approx(0.5 * 1.2041 * 0.05 * 15.0 ** 2)
+
+    world = _wind_world_text("<sdf><world name='iris_runway'></world></sdf>", scale)
+    assert "gz::sim::systems::WindEffects" in world
+    assert f"{scale:.9f}" in world
+    obstacle = _obstacle_world_text("<sdf><world name='iris_runway'></world></sdf>")
+    assert 'model name="gazebo_test_obstacle"' in obstacle
+    assert "<size>6 2 20</size>" in obstacle
+    assert _lidar_scan_min([float("inf")] * 61) == 15.0
+    assert _lidar_scan_min([float("inf"), 7.2, 5.4]) == 5.4
+    assert _obstacle_requirement_met(True, True, 5.0, True, 5.0)
+    assert not _obstacle_requirement_met(True, True, 4.999, True, 5.0)
+
+
+def test_payload_model_uses_requested_mass_and_physical_inertia(tmp_path):
+    from gazebo_poc.run_flight import _parse_model_z, _prepare_payload_model
+
+    path = _prepare_payload_model(tmp_path, 1.5)
+    text = path.read_text()
+    assert "<mass>1.500000</mass>" in text
+    assert "<ixx>0.001250000</ixx>" in text
+    assert _parse_model_z("Pose [ XYZ [1.0 2.0 9.75] RPY [0 0 0] ]") == 9.75
+    assert _parse_model_z(
+        "Model: [49]\n  - Pose [ XYZ (m) ] [ RPY (rad) ]:\n"
+        "    [-0.000000 0.000000 10.949999]\n    [0 0 0]\n"
+    ) == 10.949999
+
+
 @pytest.mark.skipif(not _HAS_TEMPLATES, reason="iris templates absent")
 def test_quad_via_multirotor_calibrated_structure(tmp_path):
     import xml.dom.minidom as md
@@ -220,6 +278,31 @@ def test_quad_via_multirotor_calibrated_structure(tmp_path):
     assert g.count("<multiplier>745.0</multiplier>") == 2     # calibrated max rotor speed
     assert g.count("<multiplier>-745.0</multiplier>") == 2    # 2 CCW + 2 CW
     md.parseString(s); md.parseString(g)
+
+
+@pytest.mark.skipif(not _HAS_TEMPLATES, reason="iris templates absent")
+def test_generated_airframe_can_enable_wind_and_physical_payload_release(tmp_path):
+    import xml.dom.minidom as md
+    from gazebo_poc.multirotor_sdf import generate_multirotor_sdf
+
+    so, gm, _ = generate_multirotor_sdf(
+        3.178, 4, 0.1905, multirotor_inertia(4.678, 4, 0.1905),
+        0.00783, _TEMPLATES, tmp_path, max_rotor_rad_s=500.0,
+        enable_wind=True, payload_release=True, parachute_deploy=True,
+        forward_lidar=True,
+    )
+    standoffs, gimbal = so.read_text(), gm.read_text()
+    assert "<enable_wind>true</enable_wind>" in standoffs
+    assert '<control channel="6">' in gimbal
+    assert "gz-sim-detachable-joint-system" in gimbal
+    assert "<child_model>payload_box</child_model>" in gimbal
+    assert '<control channel="7">' in gimbal
+    assert "ParachutePlugin" in gimbal
+    assert "<child_model>parachute_small</child_model>" in gimbal
+    assert 'sensor name="forward_lidar" type="gpu_lidar"' in standoffs
+    assert "<topic>/forward_lidar</topic>" in standoffs
+    md.parseString(standoffs)
+    md.parseString(gimbal)
 
 
 def test_redundancy_requirement_detection():

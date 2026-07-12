@@ -79,6 +79,71 @@ _CONTROL = """      <control channel="{i}">
       </control>
 """
 
+_GRIPPER_CONTROL = """      <control channel="{channel}">
+        <jointName>gripper_attachment_joint</jointName>
+        <type>COMMAND</type><cmd_topic>/gripper/cmd</cmd_topic>
+        <servo_min>1000</servo_min><servo_max>2000</servo_max>
+      </control>
+"""
+
+_GRIPPER_ATTACHMENT = """    <link name="gripper_attachment_link">
+      <pose>0 0 -0.05 0 0 0</pose>
+      <inertial><mass>0.05</mass>
+        <inertia><ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>1e-5</iyy><iyz>0</iyz><izz>1e-5</izz></inertia>
+      </inertial>
+    </link>
+    <joint name="gripper_attachment_joint" type="fixed">
+      <parent>iris_with_standoffs::base_link</parent>
+      <child>gripper_attachment_link</child>
+    </joint>
+    <plugin filename="gz-sim-detachable-joint-system"
+      name="gz::sim::systems::DetachableJoint">
+      <parent_link>gripper_attachment_link</parent_link>
+      <child_model>payload_box</child_model><child_link>payload_link</child_link>
+      <detach_topic>/gripper_detach</detach_topic>
+    </plugin>
+"""
+
+_PARACHUTE_CONTROL = """      <control channel="{channel}">
+        <jointName>parachute_attachment_joint</jointName>
+        <type>COMMAND</type><cmd_topic>/parachute/cmd_release</cmd_topic>
+        <servo_min>1000</servo_min><servo_max>2000</servo_max>
+      </control>
+"""
+
+_PARACHUTE_ATTACHMENT = """    <link name="parachute_attachment_link">
+      <pose>0 0 0.05 0 0 0</pose>
+      <inertial><mass>0.05</mass>
+        <inertia><ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>1e-5</iyy><iyz>0</iyz><izz>1e-5</izz></inertia>
+      </inertial>
+    </link>
+    <joint name="parachute_attachment_joint" type="ball">
+      <parent>iris_with_standoffs::base_link</parent>
+      <child>parachute_attachment_link</child>
+    </joint>
+    <plugin filename="ParachutePlugin" name="ParachutePlugin">
+      <parent_link>parachute_attachment_link</parent_link>
+      <child_model>parachute_small</child_model><child_link>chute</child_link>
+      <child_pose>0 0 0 0 -1.0 0</child_pose>
+      <cmd_topic>/parachute/cmd_release</cmd_topic>
+    </plugin>
+"""
+
+_FORWARD_LIDAR = """      <sensor name="forward_lidar" type="gpu_lidar">
+        <pose>{nose_x:.4f} 0 0 0 0 0</pose>
+        <topic>/forward_lidar</topic><update_rate>20</update_rate>
+        <always_on>true</always_on><visualize>false</visualize>
+        <lidar><scan><horizontal>
+          <samples>61</samples><resolution>1</resolution>
+          <min_angle>-0.523599</min_angle><max_angle>0.523599</max_angle>
+        </horizontal></scan>
+        <range><min>0.2</min><max>15.0</max><resolution>0.01</resolution></range>
+        </lidar>
+      </sensor>
+"""
+
 _ARDUPILOT_HEAD = """    <plugin name="ArduPilotPlugin" filename="ArduPilotPlugin">
       <fdm_addr>0.0.0.0</fdm_addr>
       <fdm_port_in>9002</fdm_port_in>
@@ -101,7 +166,10 @@ def _unsupported(n):
 def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius_m: float,
                             inertia: Tuple[float, float, float], area: float,
                             template_dir: Path, out_dir: Path, max_rotor_rad_s: float = 838.0,
-                            fail_rotor: int = None):
+                            fail_rotor: int = None, enable_wind: bool = False,
+                            payload_release: bool = False,
+                            parachute_deploy: bool = False,
+                            forward_lidar: bool = False):
     """Write parametric standoffs + gimbal SDFs for an N-rotor airframe. ``max_rotor_rad_s`` is the
     full-throttle rotor speed (ArduPilotPlugin multiplier) — lower it (real-motor calibration) to
     get a realistic thrust-to-weight. ``fail_rotor`` (index) sets that rotor's LiftDrag area to 0
@@ -116,6 +184,18 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
     so_src = (template_dir / "all_models" / "iris_with_standoffs" / "model.sdf").read_text()
     head = so_src[: so_src.index("    <link name='rotor_0'>")]
     head = head.replace("<mass>1.5</mass>", f"<mass>{total_mass_kg:.4f}</mass>")
+    if enable_wind:
+        head = head.replace(
+            "    <link name='base_link'>",
+            "    <link name='base_link'>\n      <enable_wind>true</enable_wind>",
+            1,
+        )
+    if forward_lidar:
+        head = head.replace(
+            "    </link>",
+            _FORWARD_LIDAR.format(nose_x=1.6 * rotor_radius_m) + "    </link>",
+            1,
+        )
     head = head.replace(
         "<ixx>0.008</ixx>\n          <ixy>0</ixy>\n          <ixz>0</ixz>\n"
         "          <iyy>0.015</iyy>\n          <iyz>0</iyz>\n          <izz>0.017</izz>",
@@ -146,7 +226,20 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
     mv = f"{max_rotor_rad_s:.1f}"
     for i, (ang, spin) in enumerate(table):
         gm += _CONTROL.format(i=i, mult=mv if spin > 0 else "-" + mv)
-    gm += "    </plugin>\n  </model>\n</sdf>\n"
+    if payload_release:
+        # ArduPilotPlugin channel numbers are zero-based. Keep SERVO7 for
+        # quad/hexa, but move above motor outputs for octa.
+        gripper_channel = max(6, rotor_count)
+        gm += _GRIPPER_CONTROL.format(channel=gripper_channel)
+    if parachute_deploy:
+        parachute_channel = max(6, rotor_count) + 1
+        gm += _PARACHUTE_CONTROL.format(channel=parachute_channel)
+    gm += "    </plugin>\n"
+    if payload_release:
+        gm += _GRIPPER_ATTACHMENT
+    if parachute_deploy:
+        gm += _PARACHUTE_ATTACHMENT
+    gm += "  </model>\n</sdf>\n"
 
     so_out = out_dir / "iris_with_standoffs" / "model.sdf"
     gm_out = out_dir / "iris_with_gimbal" / "model.sdf"
