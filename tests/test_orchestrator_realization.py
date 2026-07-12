@@ -86,7 +86,10 @@ def test_explore_phase8_returns_realization_and_can_inject(monkeypatch):
     monkeypatch.setattr(Orchestrator, "_explore_variations", fake_explore_variations)
     monkeypatch.setattr(Orchestrator, "_iterative_refinement", fake_refine)
     monkeypatch.setattr(Orchestrator, "_print_final_sim", lambda self, sim: None)
-    orch = Orchestrator(llm=object(), use_variation_dse=True, realization_inject=True)
+    # phase9_hifi=None isolates the Phase 8 assertions from the (default-ON) Phase 9
+    # high-fidelity runner, which would otherwise try to launch native SITL/Gazebo.
+    orch = Orchestrator(llm=object(), use_variation_dse=True, realization_inject=True,
+                        phase9_hifi=None)
     result = orch.explore({
         "model": Model(),
         "requirements": ["REQ-PERF-002: endurance at least 25 minutes."],

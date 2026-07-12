@@ -336,6 +336,7 @@ class Orchestrator:
         use_surgical_refinement: bool = True,
         realization_inject: bool = False,
         estimator_calibration: bool = True,
+        phase9_hifi: Optional[str] = "both",
     ):
         self.llm = llm
         self.rag = rag_retriever
@@ -362,6 +363,14 @@ class Orchestrator:
         # the documented textbook constants). Provenance recorded, never hidden.
         self.use_estimator_calibration = estimator_calibration
         self.last_estimator_calibration = None
+        # Phase 9: high-fidelity closure. Default "both" (ON): explore() auto-connects
+        # the Phase 8 recommendation to native SITL + Gazebo. When the environment
+        # lacks Docker/arducopter it reports an honest "skipped" (fast, never faked),
+        # so the ON default degrades gracefully off-rig. Set None to disable, or
+        # "sitl"/"gazebo" for a single layer. Best-effort and non-mutating like
+        # Phase 7/8 — NEVER upgrades datasheet CLOSED (SITL/Gazebo verify
+        # feasibility/dynamics, not endurance).
+        self.phase9_hifi = phase9_hifi
         # Refinement asks the LLM for block-level replacements first (surgical:
         # untouched blocks cannot lose connects, output ~10× smaller) and only
         # falls back to the legacy whole-model rewrite when no valid merge is
@@ -679,6 +688,28 @@ class Orchestrator:
         else:
             print("  ⚠ no recommended design / realization skipped")
 
+        # ── Phase 9: opt-in high-fidelity closure (native SITL / Gazebo) ──────────
+        # OFF by default: real flight needs Docker/arducopter and minutes per run,
+        # so it is not on the default explore() path. When enabled it auto-connects
+        # the Phase 8 recommendation to the high-fidelity feasibility runners and
+        # attaches a summary. Best-effort; never mutates the model; never upgrades
+        # datasheet CLOSED (SITL/Gazebo verify feasibility/dynamics, not endurance).
+        hifi = None
+        if getattr(self, "phase9_hifi", None):
+            print("Phase 9: High-fidelity closure (native SITL / Gazebo)", flush=True)
+            print("-" * 40)
+            if getattr(self, "last_recommended_design", None):
+                hifi = self._phase9_hifi_artifact(
+                    self.phase9_hifi,
+                    self.last_recommended_design,
+                    get_sysml_text(final_model),
+                    requirements,
+                )
+            if hifi:
+                print(f"  ✓ {hifi['summary']}")
+            else:
+                print("  ⚠ no recommended design / high-fidelity closure skipped")
+
         # ── Summary ───────────────────────────────────────────────────────────
         sim_warnings = (getattr(final_model, "metadata", None) or {}).get("sim_warnings", "")
         print(f"{'='*60}")
@@ -747,6 +778,7 @@ class Orchestrator:
             "estimator_calibration": getattr(self, "last_estimator_calibration", None),
             "dse_verification": verification_artifact,
             "realization": _public_realization(realization),
+            "phase9_hifi": hifi,
             "llm_usage": ledger.as_dict() if ledger is not None else None,
         }
 
@@ -834,6 +866,40 @@ class Orchestrator:
             }
         except Exception as e:
             print(f"  ⚠ realization skipped ({e})")
+            return None
+
+    @staticmethod
+    def _phase9_hifi_artifact(mode, design, model_text, requirements):
+        """Phase 9 opt-in high-fidelity closure. Best-effort; never breaks the
+        pipeline; never upgrades datasheet CLOSED (SITL/Gazebo verify feasibility/
+        dynamics, not endurance). Environment absence is reported, not faked."""
+        try:
+            from .phase9_hifi import VALID_MODES, run_hifi_closure
+
+            if str(mode).strip().lower() not in VALID_MODES:
+                print(f"  ⚠ phase9_hifi mode {mode!r} not in {VALID_MODES}; skipped")
+                return None
+            result = run_hifi_closure(mode, design, model_text, requirements)
+            parts = []
+            for layer in result.get("layers", []):
+                name = layer.get("layer")
+                if layer.get("status") == "skipped":
+                    parts.append(f"{name}=skipped({layer.get('reason')})")
+                elif name == "sitl":
+                    parts.append(f"sitl(flight={layer.get('flight_passed')}, "
+                                 f"safety={layer.get('safety_status')})")
+                elif name == "gazebo":
+                    parts.append(f"gazebo({layer.get('gazebo_status')})")
+                else:
+                    parts.append(f"{name}={layer.get('status')}")
+            result["summary"] = (
+                "PHASE 9 HIGH-FIDELITY — " + "; ".join(parts) + " "
+                "[verifies feasibility/dynamics only; datasheet CLOSED unchanged; "
+                "endurance never validated by SITL/Gazebo]"
+            )
+            return result
+        except Exception as e:
+            print(f"  ⚠ phase 9 high-fidelity closure skipped ({e})")
             return None
 
     def _extract_requirements(
@@ -1000,8 +1066,12 @@ class Orchestrator:
         from ..dse.variation_introducer import connected_components, introduce_variation
         from ..dse.variation_parser import admitted, parse_variation_points
 
+        # Reset per-run provenance before every return path.  Reusing an
+        # Orchestrator must never leak the previous run's proposal source.
+        self.last_variation_proposal_source = None
         text = get_sysml_text(model)
         if admitted(parse_variation_points(text))[0]:
+            self.last_variation_proposal_source = "model-existing"
             return model  # already declares admissible variation points
 
         # Scan ALL connected components: requirement-driven proposal skips
@@ -1011,7 +1081,6 @@ class Orchestrator:
         # call), and the search budget scales with the point count downstream.
         max_points = 6
         introduced: List[str] = []
-        self.last_variation_proposal_source = None
         for usage, type_name in connected_components(text):
             if len(introduced) >= max_points:
                 break
@@ -1047,6 +1116,15 @@ class Orchestrator:
                     self.last_variation_proposal_source = "fallback"
                     print("  [variation-DSE] LLM proposed no admissible variants; "
                           f"injected deterministic ontology fallback on '{usage}'")
+            else:
+                from ..dse.domain_objective import objective_families
+                if objective_families(requirements):
+                    self.last_variation_proposal_source = "fallback-unavailable"
+                    print("  [variation-DSE] LLM proposed no admissible variants and the "
+                          "deterministic fallback could not form at least two legal, "
+                          "non-degenerate variants")
+                else:
+                    self.last_variation_proposal_source = "fallback-not-required"
 
         if introduced:
             if not hasattr(model, "metadata") or model.metadata is None:

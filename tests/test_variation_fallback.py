@@ -67,7 +67,7 @@ def test_fallback_skipped_without_quantified_emergent_targets(monkeypatch):
     out = orch._introduce_variations(model, ["REQ-FUNC-001: navigate autonomously."])
 
     assert parse_variation_points(out.metadata["last_sysml_text"]) == []
-    assert orch.last_variation_proposal_source is None
+    assert orch.last_variation_proposal_source == "fallback-not-required"
 
 
 def test_fallback_skipped_when_no_component_matches_a_concern(monkeypatch):
@@ -84,7 +84,7 @@ def test_fallback_skipped_when_no_component_matches_a_concern(monkeypatch):
     out = orch._introduce_variations(_model(text), _REQS)
 
     assert parse_variation_points(out.metadata["last_sysml_text"]) == []
-    assert orch.last_variation_proposal_source is None
+    assert orch.last_variation_proposal_source == "fallback-unavailable"
 
 
 def test_llm_proposals_take_precedence_over_fallback(monkeypatch):
@@ -113,3 +113,31 @@ def test_llm_proposals_take_precedence_over_fallback(monkeypatch):
     assert orch.last_variation_proposal_source == "llm"
     assert "AlphaAirframeImpl" in text
     assert "Quad_fallbackAirframeImpl" not in text
+
+
+def test_existing_variation_resets_stale_source_and_records_model_origin(monkeypatch):
+    monkeypatch.setattr(Orchestrator, "_propose_variants", _decline_all)
+    orch = Orchestrator(llm=object(), use_variation_dse=True)
+    model = orch._introduce_variations(_model(), _REQS)
+    assert orch.last_variation_proposal_source == "fallback"
+
+    orch._introduce_variations(model, _REQS)
+
+    assert orch.last_variation_proposal_source == "model-existing"
+
+
+def test_bounds_that_leave_only_one_fallback_variant_are_reported_not_silenced(monkeypatch):
+    import src.dse.domain_objective as objective
+
+    monkeypatch.setattr(Orchestrator, "_propose_variants", _decline_all)
+    monkeypatch.setattr(
+        objective,
+        "within_requirement_bounds",
+        lambda design, req_ids, requirements: design["rotor_count"] == 4,
+    )
+    orch = Orchestrator(llm=object(), use_variation_dse=True)
+
+    out = orch._introduce_variations(_model(), _REQS)
+
+    assert parse_variation_points(out.metadata["last_sysml_text"]) == []
+    assert orch.last_variation_proposal_source == "fallback-unavailable"

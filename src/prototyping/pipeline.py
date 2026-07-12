@@ -50,6 +50,7 @@ class PrototypingPipeline:
         parse_strict: bool = False,
         verbose: bool = False,
         dse_mode: str = "variation",
+        phase9_hifi: Optional[str] = "both",
     ):
         self.llm = llm
         self.parse_strict = parse_strict
@@ -80,6 +81,9 @@ class PrototypingPipeline:
         # DSE mode at the user entry point. Orchestrator's own flag stays default
         # OFF (direct-construction contract); the pipeline opts the chosen path in.
         self.orchestrator.use_variation_dse = self._dse_flags(dse_mode)
+        # Phase 9 high-fidelity closure defaults ON ("both"); degrades to an honest
+        # skip when Docker/arducopter are absent. Pass None to disable.
+        self.orchestrator.phase9_hifi = phase9_hifi
 
     @staticmethod
     def _dse_flags(mode: str) -> bool:
@@ -397,6 +401,13 @@ class PrototypingPipeline:
                     "variation_proposal_source", "estimator_calibration"):
             if result.get(key) is not None:
                 report[key] = result.get(key)
+        hifi = result.get("phase9_hifi")
+        if hifi:
+            report["phase9_hifi"] = {
+                "mode": hifi.get("mode"),
+                "summary": hifi.get("summary"),
+                "layers": hifi.get("layers"),
+            }
         sitl = result.get("sitl_report")
         if sitl is not None:
             l1 = list(getattr(sitl, "l1_results", []) or [])
