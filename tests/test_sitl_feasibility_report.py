@@ -1,4 +1,5 @@
 from examples.run_realization_report import retire_stale_parm
+from src.prototyping.artifact_provenance import build_run_provenance
 from examples.run_sitl_feasibility import (
     merge_parm_lines,
     parm_freshness,
@@ -123,18 +124,24 @@ def test_parm_freshness_detects_design_mismatch_and_accepts_match():
     assert stale is False
     assert "BATT_CAPACITY" in reason
 
-    fresh, reason = parm_freshness(
-        ["BATT_CAPACITY        22000", "FRAME_CLASS          1", "# comment"],
-        {"recommended_design_inputs": {"battery_capacity_mah": 22000.0, "rotor_count": 4}},
+    lines = ["BATT_CAPACITY        22000", "FRAME_CLASS          1", "# comment"]
+    run = {
+        "recommended_design_inputs": {"battery_capacity_mah": 22000.0, "rotor_count": 4},
+        "realization": None,
+    }
+    run["artifact_provenance"] = build_run_provenance(
+        model_sysml="model", recommended_design=run["recommended_design_inputs"],
+        realization=None, parm_text="\n".join(lines) + "\n", run_id="test-run",
     )
+    fresh, reason = parm_freshness(lines, run, model_sysml="model")
     assert fresh is True
     assert "consistent" in reason
 
 
-def test_parm_freshness_without_run_json_is_accepted_but_labelled():
+def test_parm_freshness_without_run_json_is_rejected():
     fresh, reason = parm_freshness(["BATT_CAPACITY 1"], None)
-    assert fresh is True
-    assert "no realization_run.json" in reason
+    assert fresh is False
+    assert "required" in reason
 
 
 def test_retire_stale_parm_renames_leftover_file(tmp_path):
