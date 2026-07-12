@@ -15,6 +15,7 @@ import time
 import src.config  # noqa: F401  (loads .env)
 from src.prototyping.provider_factory import create_llm
 from src.prototyping.pipeline import PrototypingPipeline
+from src.prototyping.artifact_provenance import build_run_provenance
 from src.sitl.dse_sitl_params import design_to_sitl_parm
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
@@ -59,6 +60,21 @@ if __name__ == "__main__":
         realization["recommended_by"] = getattr(orch, "last_recommended_by", None)
         realization["recommended_estimator_feasible"] = getattr(
             orch, "last_recommended_estimator_feasible", None)
+    final_sysml = res.get("model_sysml") or ""
+    parm_text = None
+    if rec is not None:
+        lines = list(design_to_sitl_parm(rec))
+        existing = {
+            line.split()[0] for line in lines
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        for key, value in (ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {}).items():
+            if key not in existing:
+                lines.append(f"{key:<20} {value}")
+        parm_text = (
+            "# Recommended design SITL params; native SITL is architecture-"
+            "nondiscriminating for endurance.\n" + "\n".join(lines) + "\n"
+        )
     out = {
         "elapsed_s": round(time.time() - t0, 1),
         "final_score": res.get("final_score"),
@@ -72,6 +88,12 @@ if __name__ == "__main__":
         "dse_verification_summary": (res.get("dse_verification") or {}).get("summary"),
         "realization": realization,
     }
+    out["artifact_provenance"] = build_run_provenance(
+        model_sysml=final_sysml,
+        recommended_design=out["recommended_design_inputs"],
+        realization=realization,
+        parm_text=parm_text,
+    )
     outdir = os.path.join(os.path.dirname(__file__), "output")
     os.makedirs(outdir, exist_ok=True)
     path = os.path.join(outdir, "realization_run.json")
@@ -82,21 +104,11 @@ if __name__ == "__main__":
     try:
         final_sysml_path = os.path.join(outdir, "final_model.sysml")
         with open(final_sysml_path, "w", encoding="utf-8") as f:
-            f.write(res.get("model_sysml") or "")
+            f.write(final_sysml)
         parm_path = os.path.join(outdir, "recommended.parm")
-        if rec is not None:
-            lines = list(design_to_sitl_parm(rec))
-            existing = {
-                line.split()[0]
-                for line in lines
-                if line.strip() and not line.lstrip().startswith("#")
-            }
-            for key, value in (ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {}).items():
-                if key not in existing:
-                    lines.append(f"{key:<20} {value}")
+        if parm_text is not None:
             with open(parm_path, "w", encoding="utf-8") as f:
-                f.write("# Recommended design SITL params; native SITL is architecture-nondiscriminating for endurance.\n")
-                f.write("\n".join(lines) + "\n")
+                f.write(parm_text)
         elif retire_stale_parm(parm_path):
             print("  ⚠ no recommended design this run — retired stale recommended.parm "
                   "→ recommended.parm.stale", flush=True)
