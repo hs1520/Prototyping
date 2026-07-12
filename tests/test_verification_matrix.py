@@ -6,6 +6,8 @@ items, and Gazebo-planned physics must not be lumped into one "unmapped" bucket.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from src.prototyping.verification_matrix import build_matrix, summarize, to_markdown
 from src.sitl.requirement_linker import RequirementLinker
 from src.sysml.lite_model import build_lite_model
@@ -57,7 +59,10 @@ _REALIZATION = {
 def _rows():
     model = build_lite_model(_MODEL, model_name="D")
     linker = RequirementLinker(model)
-    return {r.req_id: r for r in build_matrix(model, _REALIZATION, linker)}
+    return {r.req_id: r for r in build_matrix(
+        model, _REALIZATION, linker,
+        l2_results=[{"req_id": "REQ_SAFE_003", "passed": True}],
+    )}
 
 
 def test_matrix_assigns_each_requirement_class_to_the_right_tier():
@@ -104,6 +109,69 @@ def test_matrix_summary_and_markdown_surface_the_honest_gap():
     assert "REQ_MISC_001" in md
 
 
+def test_matrix_does_not_mark_planned_l2_as_verified_without_execution_result():
+    model = build_lite_model(_MODEL, model_name="D")
+    linker = RequirementLinker(model)
+
+    row = {r.req_id: r for r in build_matrix(model, _REALIZATION, linker)}["REQ_SAFE_003"]
+
+    assert "l2_sitl_planned" in row.tiers
+    assert "l2_sitl" not in row.tiers
+    assert row.status == "partial"  # behavioral model evidence exists; native SITL remains planned
+    assert any("planned, not executed" in e for e in row.evidence)
+
+
+def test_matrix_marks_executed_l2_pass_and_fail_from_results():
+    model = build_lite_model(_MODEL, model_name="D")
+    linker = RequirementLinker(model)
+
+    passed = {r.req_id: r for r in build_matrix(
+        model, _REALIZATION, linker,
+        l2_results=[{"req_id": "REQ-SAFE-003", "passed": True}],
+    )}["REQ_SAFE_003"]
+    failed = {r.req_id: r for r in build_matrix(
+        model, _REALIZATION, linker,
+        l2_results=[{"req_id": "REQ_SAFE_003", "passed": False}],
+    )}["REQ_SAFE_003"]
+
+    assert "l2_sitl" in passed.tiers and passed.status == "verified"
+    assert "l2_sitl_failed" in failed.tiers and failed.status == "failed"
+
+
+def test_matrix_requires_an_l1_validation_result_before_marking_l1_verified():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_PERF_006 { doc /* Control loop rate shall be at least 10 Hz. */ }
+            part Drone { satisfy requirement REQ_PERF_006; }
+        }""",
+        model_name="D",
+    )
+    spec = SimpleNamespace(
+        req_id="REQ_PERF_006", tier="L1",
+        params=[SimpleNamespace(param_name="SCHED_LOOP_RATE")],
+    )
+    linker = SimpleNamespace(
+        _req_texts={"REQ_PERF_006": "Control loop rate shall be at least 10 Hz."},
+        _satisfy_map={"REQ_PERF_006": ["Drone"]},
+        _guard_assignment={},
+        generate_test_specs=lambda: [spec],
+    )
+
+    planned = build_matrix(model, None, linker)[0]
+    passed = build_matrix(
+        model, None, linker,
+        l1_results=[{"req_id": "REQ_PERF_006", "passed": True}],
+    )[0]
+    failed = build_matrix(
+        model, None, linker,
+        l1_results=[{"req_id": "REQ_PERF_006", "passed": False}],
+    )[0]
+
+    assert planned.tiers == ("l1_param_planned",) and planned.status == "planned"
+    assert passed.tiers == ("l1_param",) and passed.status == "verified"
+    assert failed.tiers == ("l1_param_failed",) and failed.status == "failed"
+
+
 def test_matrix_marks_trace_blocked_requirements():
     model = build_lite_model(
         """package D {
@@ -129,3 +197,91 @@ def test_matrix_marks_trace_blocked_requirements():
 
     assert rows["REQ_SAFE_003"].status == "blocked"
     assert any("TRACE blocked" in e for e in rows["REQ_SAFE_003"].evidence)
+
+
+def test_matrix_marks_mixed_verified_and_gazebo_deferred_as_partial():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_PERF_005 {
+                doc /* The system shall maintain cruise speed in a 12 m/s headwind. */
+            }
+            part Drone {
+                satisfy requirement REQ_PERF_005;
+            }
+        }""",
+        model_name="D",
+    )
+    realization = {
+        "per_requirement": [
+            {"req_id": "REQ-PERF-005", "family": "speed", "scope": "forward_flight",
+             "target": 8.0, "realized_value": 13.5, "met": True},
+        ],
+    }
+    linker = RequirementLinker(model)
+    rows = {r.req_id: r for r in build_matrix(model, realization, linker)}
+
+    row = rows["REQ_PERF_005"]
+    assert "forward_flight" in row.tiers
+    assert "gazebo_deferred" in row.tiers
+    assert row.status == "partial"
+
+
+def test_matrix_consumes_gazebo_pass_and_fail_results():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_SAFE_007 {
+                doc /* The system shall maintain controlled flight following the failure of a single propulsion unit. */
+            }
+            requirement def REQ_FUNC_002 {
+                doc /* Detect obstacles and initiate collision avoidance manoeuvres. */
+            }
+            part Drone {
+                satisfy requirement REQ_SAFE_007;
+                satisfy requirement REQ_FUNC_002;
+            }
+        }""",
+        model_name="D",
+    )
+    linker = RequirementLinker(model)
+    gazebo = {
+        "req_results": [
+            {"req_id": "REQ-SAFE-007", "check": "single_motor_out", "status": "PASS",
+             "message": "stable one-motor-out hover"},
+            {"req_id": "REQ-FUNC-002", "check": "obstacle_avoidance", "status": "FAIL",
+             "message": "collision occurred"},
+        ]
+    }
+    rows = {r.req_id: r for r in build_matrix(model, None, linker, gazebo=gazebo)}
+
+    assert rows["REQ_SAFE_007"].status == "verified"
+    assert rows["REQ_SAFE_007"].tiers == ("gazebo",)
+    assert any("Gazebo PASS" in e for e in rows["REQ_SAFE_007"].evidence)
+
+    assert rows["REQ_FUNC_002"].status == "failed"
+    assert "gazebo_failed" in rows["REQ_FUNC_002"].tiers
+    assert any("Gazebo FAIL" in e for e in rows["REQ_FUNC_002"].evidence)
+
+
+def test_matrix_preserves_partial_gazebo_evidence_without_false_green():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_PERF_004 {
+                doc /* Maintain 2 m/s ground speed in a 15 m/s headwind. */
+            }
+            part Drone { satisfy requirement REQ_PERF_004; }
+        }""",
+        model_name="D",
+    )
+    linker = RequirementLinker(model)
+    gazebo = {"req_results": [{
+        "req_id": "REQ-PERF-004",
+        "check": "wind_condition",
+        "status": "PARTIAL",
+        "message": "closed-loop flight passed with lumped drag calibration",
+    }]}
+
+    row = {r.req_id: r for r in build_matrix(model, None, linker, gazebo=gazebo)}["REQ_PERF_004"]
+    assert row.status == "partial"
+    assert "gazebo_partial" in row.tiers
+    assert "gazebo_deferred" in row.tiers
+    assert any("Gazebo partial" in e for e in row.evidence)

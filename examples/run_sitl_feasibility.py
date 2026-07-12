@@ -23,6 +23,9 @@ from pymavlink import mavutil
 
 from src.dse.physics_estimator import DesignInputs
 from src.realization.closure import close_the_loop
+from src.prototyping.artifact_provenance import (
+    validate_derived_provenance, validate_run_provenance,
+)
 from src.sitl.dse_sitl_params import FRAME_CLASS, design_to_sitl_parm
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE, SITLBridge
 from src.sitl.sitl_specs import TestContext
@@ -34,6 +37,7 @@ SYSML_PATH = OUT / "final_model.sysml"
 FALLBACK_SYSML_PATH = ROOT / "examples" / "drone_system_v2.sysml"
 PARM_PATH = OUT / "recommended.parm"
 RUN_JSON = OUT / "realization_run.json"
+GAZEBO_REPORT_JSON = OUT / "gazebo_feasibility_report.json"
 WORK = OUT / "sitl_feasibility"
 REPORT_JSON = OUT / "sitl_feasibility_report.json"
 REPORT_MD = OUT / "sitl_feasibility_report.md"
@@ -47,10 +51,10 @@ def _read_model():
         text = SYSML_PATH.read_text(encoding="utf-8")
         note = "current" if PARM_PATH.exists() else "existing_model_not_from_this_run"
         return build_lite_model(text, model_name=MODEL_NAME), str(SYSML_PATH), note
-    if FALLBACK_SYSML_PATH.exists():
-        text = FALLBACK_SYSML_PATH.read_text(encoding="utf-8")
-        return build_lite_model(text, model_name=MODEL_NAME), str(FALLBACK_SYSML_PATH), "fallback_existing_model"
-    raise FileNotFoundError(f"{SYSML_PATH} not found and fallback {FALLBACK_SYSML_PATH} is unavailable")
+    raise FileNotFoundError(
+        f"{SYSML_PATH} not found; provenance-safe SITL requires the exact model "
+        "persisted by examples/run_realization_report.py"
+    )
 
 
 def _parm_lines_from_json() -> list[str]:
@@ -91,7 +95,8 @@ def merge_parm_lines(primary: list[str], supplemental: list[str]) -> list[str]:
     return merged
 
 
-def parm_freshness(primary_lines: list[str], run_json: dict | None) -> tuple[bool, str]:
+def parm_freshness(primary_lines: list[str], run_json: dict | None,
+                   model_sysml: str | None = None) -> tuple[bool, str]:
     """Cross-check recommended.parm against the latest realization run.
 
     Guards against silently flying a previous run's design: a pipeline run that
@@ -100,7 +105,7 @@ def parm_freshness(primary_lines: list[str], run_json: dict | None) -> tuple[boo
     Returns (fresh, reason).
     """
     if run_json is None:
-        return True, "no realization_run.json to check against (standalone parm accepted)"
+        return False, "realization_run.json is required; standalone parm is untrusted"
     d = run_json.get("recommended_design_inputs")
     if not d:
         return False, ("latest realization_run.json has no recommended design "
@@ -124,6 +129,14 @@ def parm_freshness(primary_lines: list[str], run_json: dict | None) -> tuple[boo
     if fc is not None and "FRAME_CLASS" in values and int(values["FRAME_CLASS"]) != fc:
         return False, (f"FRAME_CLASS {int(values['FRAME_CLASS'])} does not match the latest "
                        f"recommended rotor count ({int(d.get('rotor_count', 0))} → {fc})")
+    if model_sysml is None and SYSML_PATH.exists():
+        model_sysml = SYSML_PATH.read_text(encoding="utf-8")
+    parm_text = "\n".join(primary_lines) + "\n"
+    fresh, reason = validate_run_provenance(
+        run_json, model_sysml=model_sysml, parm_text=parm_text,
+    )
+    if not fresh:
+        return False, reason
     return True, "consistent with the latest realization_run.json recommended design"
 
 
@@ -152,6 +165,13 @@ def _prepare_bridge_inputs(model, allow_stale: bool = False) -> tuple[SITLBridge
             source += f" [STALE: {reason}]"
     else:
         source = "reconstructed_from_existing_realization_run.json + requirement_linker safety params"
+        if not RUN_JSON.exists():
+            raise SystemExit("realization_run.json is required to reconstruct recommended.parm")
+        run_json = json.loads(RUN_JSON.read_text(encoding="utf-8"))
+        model_sysml = SYSML_PATH.read_text(encoding="utf-8") if SYSML_PATH.exists() else None
+        fresh, reason = validate_run_provenance(run_json, model_sysml=model_sysml)
+        if not fresh:
+            raise SystemExit(f"STALE artifact set: {reason}")
         primary = _parm_lines_from_json()
     supplemental = bridge._linker.generate_parm_file().splitlines()  # noqa: SLF001
     lines = merge_parm_lines(primary, supplemental)
@@ -421,17 +441,36 @@ def coverage_summary(bridge: SITLBridge) -> dict:
     return bridge._linker.coverage_stats()  # noqa: SLF001
 
 
-def matrix_summary(model, bridge: SITLBridge) -> dict | None:
+def matrix_summary(model, bridge: SITLBridge,
+                   l1_results=None, l2_results=None) -> dict | None:
     """Verification-matrix counts (best-effort): tiers make 'unmapped' interpretable."""
     try:
         from src.prototyping.verification_matrix import build_matrix, summarize
 
+        run_json = None
         realization = None
         if RUN_JSON.exists():
-            realization = json.loads(RUN_JSON.read_text(encoding="utf-8")).get("realization")
-        return summarize(build_matrix(model, realization, bridge._linker))  # noqa: SLF001
+            run_json = json.loads(RUN_JSON.read_text(encoding="utf-8"))
+            realization = run_json.get("realization")
+        gazebo = _fresh_gazebo_report(run_json)
+        return summarize(build_matrix(
+            model, realization, bridge._linker, gazebo=gazebo,  # noqa: SLF001
+            l1_results=l1_results, l2_results=l2_results,
+        ))
     except Exception:
         return None
+
+
+def _fresh_gazebo_report(run_json: dict | None) -> dict | None:
+    if not GAZEBO_REPORT_JSON.exists():
+        return None
+    report = json.loads(GAZEBO_REPORT_JSON.read_text(encoding="utf-8"))
+    if not run_json or not SYSML_PATH.exists():
+        return None
+    fresh, _ = validate_derived_provenance(
+        report, run_json, SYSML_PATH.read_text(encoding="utf-8")
+    )
+    return report if fresh else None
 
 
 def _matrix_lines(matrix: dict | None) -> list[str]:
@@ -441,7 +480,9 @@ def _matrix_lines(matrix: dict | None) -> list[str]:
     return [
         "- Verification strategy matrix: "
         f"{st.get('verified', 0)}/{matrix.get('total', 0)} verified across tiers, "
+        f"{st.get('partial', 0)} partial, "
         f"{st.get('planned', 0)} planned (Gazebo), "
+        f"{st.get('failed', 0)} failed (Gazebo), "
         f"{st.get('out-of-sim-scope', 0)} inspection/analysis, "
         f"{st.get('blocked', 0)} blocked, "
         f"{st.get('unassigned', 0)} unassigned — see verification_matrix.md",
@@ -496,7 +537,9 @@ def build_static_report(model, model_source: str, model_source_note: str,
         "planned_l2_total": len(planned_l2),
         "traceability_blocked": sum(1 for r in trace if not r.get("passed")),
         "coverage": coverage_summary(bridge),
-        "verification_matrix": matrix_summary(model, bridge),
+        "verification_matrix": matrix_summary(
+            model, bridge, l1_results=bridge.validate_l1(), l2_results=[]
+        ),
         "realization_summary": _load_realization_summary(),
     }
 
@@ -751,7 +794,6 @@ def main(argv: list[str] | None = None) -> int:
         "realization_summary": _load_realization_summary(),
     }
     report["coverage"] = coverage_summary(bridge)
-    report["verification_matrix"] = matrix_summary(model, bridge)
     report["traceability"] = traceability_results(bridge)
     if report["traceability"]:
         print("=== Traceability blocked ===", flush=True)
@@ -762,6 +804,12 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(report["flight"], indent=2), flush=True)
     print("\n=== SITL L2 safety ===", flush=True)
     report["safety_l2"] = run_safety_l2(model, parm_source, allow_stale=args.allow_stale)
+    report["verification_matrix"] = matrix_summary(
+        model,
+        bridge,
+        l1_results=bridge.validate_l1(),
+        l2_results=report["safety_l2"],
+    )
     report["safety_verification"] = safety_verification_status(
         report["safety_l2"], report["traceability"]
     )

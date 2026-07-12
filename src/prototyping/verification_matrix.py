@@ -20,7 +20,14 @@ from typing import Dict, List, Optional, Tuple
 # several (e.g. max airspeed: L1 param + forward-flight analysis).
 TIER_METHOD: Dict[str, str] = {
     "l2_sitl": "Test (native SITL)",
+    "l2_sitl_planned": "Test (native SITL — planned, not executed)",
+    "l2_sitl_failed": "Test (native SITL — failed)",
+    "gazebo": "Test (Gazebo high-fidelity FDM)",
+    "gazebo_partial": "Test (Gazebo FDM — partial requirement evidence)",
+    "gazebo_failed": "Test (Gazebo high-fidelity FDM — failed)",
     "l1_param": "Inspection (config consistency)",
+    "l1_param_planned": "Inspection (config consistency — planned, not executed)",
+    "l1_param_failed": "Inspection (config consistency — failed)",
     "datasheet": "Analysis (manufacturer datasheet)",
     "forward_flight": "Analysis (lumped momentum model)",
     "behavioral_sim": "Analysis (model-level simulation)",
@@ -28,7 +35,9 @@ TIER_METHOD: Dict[str, str] = {
     "inspection_analysis": "Inspection/Analysis (outside simulation scope)",
 }
 
-_VERIFIED_TIERS = {"l2_sitl", "l1_param", "datasheet", "forward_flight", "behavioral_sim"}
+_VERIFIED_TIERS = {"l2_sitl", "gazebo", "l1_param", "datasheet", "forward_flight", "behavioral_sim"}
+_FAILED_TIERS = {"l2_sitl_failed", "l1_param_failed", "gazebo_failed"}
+_PLANNED_TIERS = {"l2_sitl_planned", "l1_param_planned", "gazebo_deferred"}
 
 # Requirements that are inspection/analysis work in any real programme — the
 # simulation toolchain honestly cannot test them.
@@ -54,7 +63,7 @@ class MatrixRow:
     text: str
     tiers: Tuple[str, ...]
     methods: Tuple[str, ...]
-    status: str  # verified | planned | out-of-sim-scope | blocked | unassigned
+    status: str  # verified | partial | planned | failed | out-of-sim-scope | blocked | unassigned
     evidence: Tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -75,7 +84,28 @@ def _positional_release(low: str) -> bool:
     return "release" in low and ("metre" in low or "meter" in low)
 
 
-def build_matrix(model, realization: Optional[dict], linker) -> List[MatrixRow]:
+def _norm_req_id(req_id: object) -> str:
+    return str(req_id or "").replace("-", "_")
+
+
+def _result_map(results) -> Dict[str, bool]:
+    """Normalise TestResult objects or report dictionaries by requirement id."""
+    mapped: Dict[str, bool] = {}
+    for result in results or []:
+        if isinstance(result, dict):
+            rid = result.get("req_id")
+            passed = result.get("passed")
+        else:
+            rid = getattr(result, "req_id", None)
+            passed = getattr(result, "passed", None)
+        if rid is not None and passed is not None:
+            mapped[_norm_req_id(rid)] = bool(passed)
+    return mapped
+
+
+def build_matrix(model, realization: Optional[dict], linker,
+                 gazebo: Optional[dict] = None,
+                 l1_results=None, l2_results=None) -> List[MatrixRow]:
     """Derive the per-requirement verification assignment from existing artifacts.
 
     ``realization`` is the Phase 8 dict (``realization_run.json``'s "realization"
@@ -92,19 +122,36 @@ def build_matrix(model, realization: Optional[dict], linker) -> List[MatrixRow]:
     evidence: Dict[str, List[str]] = {r: [] for r in universe}
     blocked: set = set()
 
-    # 1. Linker specs → L1 / L2 / TRACE.
+    # 1. Linker specs describe verification intent only.  They become verified
+    # only when a matching execution result is supplied; otherwise they remain
+    # explicitly planned.  This prevents dry-run/spec generation from becoming
+    # a false green in the verification matrix.
+    l1_by_req = _result_map(l1_results)
+    l2_by_req = _result_map(l2_results)
     for spec in linker.generate_test_specs():
         rid = spec.req_id
         if rid not in tiers:
             continue
         if spec.tier == "L2":
             strength = _l2_strength(spec.inject.kind, spec.verify.kind)
-            tiers[rid].add("l2_sitl")
-            evidence[rid].append(f"L2 {spec.inject.kind}→{spec.verify.kind} ({strength})")
+            outcome = l2_by_req.get(_norm_req_id(rid))
+            tier = "l2_sitl" if outcome is True else (
+                "l2_sitl_failed" if outcome is False else "l2_sitl_planned"
+            )
+            tiers[rid].add(tier)
+            state = "PASS" if outcome is True else "FAIL" if outcome is False else "planned, not executed"
+            evidence[rid].append(
+                f"L2 {spec.inject.kind}→{spec.verify.kind} ({strength}; {state})"
+            )
         elif spec.tier == "L1":
             names = ", ".join(p.param_name for p in spec.params) or "params"
-            tiers[rid].add("l1_param")
-            evidence[rid].append(f"L1 param consistency: {names}")
+            outcome = l1_by_req.get(_norm_req_id(rid))
+            tier = "l1_param" if outcome is True else (
+                "l1_param_failed" if outcome is False else "l1_param_planned"
+            )
+            tiers[rid].add(tier)
+            state = "PASS" if outcome is True else "FAIL" if outcome is False else "planned, not executed"
+            evidence[rid].append(f"L1 param consistency ({state}): {names}")
         elif spec.tier == "TRACE":
             blocked.add(rid)
             evidence[rid].append(f"TRACE blocked: {spec.notes}")
@@ -164,13 +211,47 @@ def build_matrix(model, realization: Optional[dict], linker) -> List[MatrixRow]:
             tiers[rid].add("gazebo_deferred")
             evidence[rid].append("needs Gazebo-tier physics (S8 boundary) — planned")
 
+    # 6. Optional Gazebo high-fidelity results. A PASS upgrades only the exact
+    #    requirement the Gazebo runner names; other Gazebo-planned requirements
+    #    remain planned/partial so one high-fidelity result cannot greenwash an
+    #    entire mixed-scope requirement.
+    for item in (gazebo or {}).get("req_results", []) or []:
+        rid = _norm_req_id(item.get("req_id"))
+        if rid not in tiers:
+            continue
+        status = str(item.get("status", "")).upper()
+        check = item.get("check") or item.get("name") or "Gazebo"
+        message = item.get("message") or item.get("evidence") or ""
+        suffix = f": {message}" if message else ""
+        if status == "PASS":
+            tiers[rid].discard("gazebo_deferred")
+            tiers[rid].add("gazebo")
+            evidence[rid].append(f"Gazebo PASS ({check}){suffix}")
+        elif status == "FAIL":
+            tiers[rid].add("gazebo_failed")
+            evidence[rid].append(f"Gazebo FAIL ({check}){suffix}")
+        elif status == "PARTIAL":
+            tiers[rid].add("gazebo_deferred")
+            tiers[rid].add("gazebo_partial")
+            evidence[rid].append(f"Gazebo partial ({check}){suffix}")
+        elif status in {"INCONCLUSIVE", "PLANNED", "SKIPPED", "SUSPENDED"}:
+            tiers[rid].add("gazebo_deferred")
+            evidence[rid].append(f"Gazebo {status.lower()} ({check}){suffix}")
+
     rows: List[MatrixRow] = []
     for rid in universe:
         t = tuple(sorted(tiers[rid]))
-        if set(t) & _VERIFIED_TIERS:
-            status = "verified"
-        elif rid in blocked:
+        has_verified = bool(set(t) & _VERIFIED_TIERS)
+        if rid in blocked:
             status = "blocked"
+        elif set(t) & _FAILED_TIERS:
+            status = "failed"
+        elif "gazebo_partial" in t:
+            status = "partial"
+        elif set(t) & _PLANNED_TIERS:
+            status = "partial" if has_verified else "planned"
+        elif has_verified:
+            status = "verified"
         elif "gazebo_deferred" in t:
             status = "planned"
         elif "inspection_analysis" in t:

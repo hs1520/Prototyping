@@ -1,0 +1,93 @@
+"""Deterministic provenance fingerprints for cross-stage verification artifacts."""
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from dataclasses import asdict, is_dataclass
+from typing import Any, Mapping
+
+
+SCHEMA_VERSION = 1
+PROVENANCE_FIELD = "artifact_provenance"
+
+
+def _json_default(value: Any) -> Any:
+    if is_dataclass(value):
+        return asdict(value)
+    if isinstance(value, tuple):
+        return list(value)
+    raise TypeError(f"cannot fingerprint {type(value).__name__}")
+
+
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def sha256_json(value: Any) -> str:
+    payload = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        default=_json_default,
+    )
+    return sha256_text(payload)
+
+
+def catalog_sha256() -> str:
+    from src.realization.catalog import DEFAULT_CATALOG
+
+    return sha256_json(DEFAULT_CATALOG)
+
+
+def build_run_provenance(*, model_sysml: str, recommended_design: Any,
+                         realization: Any, parm_text: str | None,
+                         run_id: str | None = None) -> dict[str, Any]:
+    chosen = (realization or {}).get("chosen") if isinstance(realization, dict) else None
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id or str(uuid.uuid4()),
+        "model_sha256": sha256_text(model_sysml),
+        "catalog_sha256": catalog_sha256(),
+        "recommended_design_sha256": sha256_json(recommended_design),
+        "realized_components_sha256": sha256_json(chosen),
+        "parm_sha256": sha256_text(parm_text) if parm_text is not None else None,
+    }
+
+
+def validate_run_provenance(run_json: Mapping[str, Any] | None,
+                            model_sysml: str | None = None,
+                            parm_text: str | None = None) -> tuple[bool, str]:
+    if not run_json:
+        return False, "realization_run.json is missing"
+    provenance = run_json.get(PROVENANCE_FIELD)
+    if not isinstance(provenance, dict):
+        return False, "realization_run.json has no artifact_provenance; regenerate the run"
+    if provenance.get("schema_version") != SCHEMA_VERSION or not provenance.get("run_id"):
+        return False, "artifact_provenance schema/run_id is invalid"
+    if model_sysml is not None and provenance.get("model_sha256") != sha256_text(model_sysml):
+        return False, "final_model.sysml does not belong to the realization run"
+    if provenance.get("catalog_sha256") != catalog_sha256():
+        return False, "component catalog changed since the realization run"
+    if provenance.get("recommended_design_sha256") != sha256_json(
+        run_json.get("recommended_design_inputs")
+    ):
+        return False, "recommended design fingerprint does not match realization_run.json"
+    chosen = ((run_json.get("realization") or {}).get("chosen"))
+    if provenance.get("realized_components_sha256") != sha256_json(chosen):
+        return False, "realized component fingerprint does not match realization_run.json"
+    if parm_text is not None and provenance.get("parm_sha256") != sha256_text(parm_text):
+        return False, "recommended.parm does not belong to the realization run"
+    return True, f"artifact provenance matches run_id={provenance['run_id']}"
+
+
+def validate_derived_provenance(report: Mapping[str, Any] | None,
+                                run_json: Mapping[str, Any],
+                                model_sysml: str) -> tuple[bool, str]:
+    ok, reason = validate_run_provenance(run_json, model_sysml=model_sysml)
+    if not ok:
+        return False, reason
+    if not report:
+        return False, "derived report is missing"
+    expected = run_json.get(PROVENANCE_FIELD)
+    if report.get("source_provenance") != expected:
+        return False, "derived report provenance does not match the realization run"
+    return True, f"derived report matches run_id={expected['run_id']}"
