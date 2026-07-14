@@ -1518,6 +1518,19 @@ class Orchestrator:
         """Number of `connect a.p to b.q` statements in the model text."""
         return len(re.findall(r"\bconnect\b", model_text, re.IGNORECASE))
 
+    def _verification_gap_issues(self, sysml_text: str, model_name: str) -> List[str]:
+        """Static verification-readiness audit (best-effort, no LLM).
+
+        Projects the final verification matrix's `unassigned` set from the model
+        text alone (see ``verification_audit``); any failure returns [] so the
+        audit can never break the refinement loop.
+        """
+        try:
+            from .verification_audit import verification_gap_issues
+            return verification_gap_issues(sysml_text, model_name)
+        except Exception:
+            return []
+
     def _iterative_refinement(
         self,
         model: SysMLModel,
@@ -1610,6 +1623,17 @@ class Orchestrator:
                 requirements=requirements,
             )
             rule_score = eval_result.weighted_total
+            # ── Verification-readiness audit (static matrix projection) ──────
+            # Runs the SAME logic the final verification matrix uses, with no
+            # execution results: requirements that would land `unassigned` (no
+            # tier anchors them at all — execution-independent) become refinement
+            # issues NOW, while the LLM is still in the loop. Advisory: they ride
+            # along in refinement prompts and get ONE bounded surgical anchor
+            # pass at the quality gate; they never block early exit on their own.
+            verify_gaps = self._verification_gap_issues(
+                current_sysml, current_model.name)
+            if verify_gaps and isinstance(eval_result.issues, list):
+                eval_result.issues.extend(verify_gaps)
             # How much the pass/fail verdict depends on the weighting at all —
             # sampled over the weight simplex (answers "would another weighting
             # flip the outcome?").  Defensive: test doubles may not provide it.
@@ -1709,6 +1733,56 @@ class Orchestrator:
                 sema_ok = syntax_result is None or not syntax_result.has_errors
 
                 if behavioral_ok and reachability_ok and sema_ok:
+                    # ── One bounded verification-anchor pass ──────────────
+                    # Quality is met, but the static audit predicts unassigned
+                    # matrix rows. Exactly ONE surgical pass scoped to those
+                    # issues (gates: syntax, connects preserved, requirement-def
+                    # set frozen, satisfy links may not shrink). Accepted only
+                    # if gaps actually shrink AND nothing regresses (local sim +
+                    # rule score re-checked, no LLM cost). Success or not, we
+                    # return afterwards — anchors are advisory, never a loop.
+                    if verify_gaps and self.use_surgical_refinement:
+                        print(f"  ~ Quality met, but {len(verify_gaps)} requirement(s) "
+                              f"would be UNASSIGNED in the verification matrix — "
+                              f"one surgical anchor pass", flush=True)
+                        from .surgical_refiner import attempt_surgical_refinement
+                        anchored = attempt_surgical_refinement(
+                            llm=self.llm,
+                            model_text=get_sysml_text(current_model),
+                            issues=verify_gaps,
+                            verbose=self.verbose,
+                        )
+                        if anchored is not None:
+                            anchor_model = build_lite_model(
+                                anchored.merged_text, model_name=current_model.name)
+                            anchor_sim = self._run_simulation(
+                                anchored.merged_text, current_model.name)
+                            anchor_eval = self.evaluator.evaluate(
+                                config=DesignConfiguration(
+                                    name="anchor_pass", parameters={}),
+                                model=anchor_model,
+                                dse_config=dse_best_config,
+                                syntax_result=check_syntax(anchored.merged_text),
+                                sim_result=anchor_sim,
+                                requirements=requirements,
+                            )
+                            remaining = self._verification_gap_issues(
+                                anchored.merged_text, current_model.name)
+                            regressed = (
+                                bool(anchor_sim.failed_scenarios())
+                                or anchor_eval.weighted_total < rule_score - 0.05
+                            )
+                            if not regressed and len(remaining) < len(verify_gaps):
+                                current_model = anchor_model
+                                sim_result = anchor_sim
+                                print(f"  ✓ Anchor pass accepted: verification gaps "
+                                      f"{len(verify_gaps)} → {len(remaining)}", flush=True)
+                            else:
+                                print("  ⚠ Anchor pass rejected (no gap reduction or "
+                                      "regression) — keeping the original model", flush=True)
+                        else:
+                            print("  ⚠ Anchor pass not applicable (LLM output failed "
+                                  "the surgical gates)", flush=True)
                     print(f"  ✓ Quality threshold {self.quality_threshold} reached",
                           flush=True)
                     return current_model, score, sim_result

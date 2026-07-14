@@ -265,11 +265,30 @@ def _count_connects(text: str) -> int:
     return len(re.findall(r"\bconnect\b", text, re.IGNORECASE))
 
 
+_REQ_DEF_RE = re.compile(r"\brequirement\s+def\s+([A-Za-z_]\w*)")
+
+
+def _requirement_defs(text: str) -> set:
+    return set(_REQ_DEF_RE.findall(text))
+
+
+def _count_satisfies(text: str) -> int:
+    return len(re.findall(r"\bsatisfy\b", text, re.IGNORECASE))
+
+
 def _gates_ok(base: str, merged: str) -> Tuple[bool, str]:
     if check_syntax(merged).has_errors:
         return False, "merged model fails syntax check"
     if _count_connects(merged) < _count_connects(base):
         return False, "merge would shed connect statements"
+    # Semantic-surgery gates: refinement fixes the DESIGN, never the SPEC.
+    # A surgical answer must not add or drop requirement definitions (that would
+    # rewrite the problem statement), and must not shed satisfy links (the same
+    # silent-loss failure mode the connect gate exists for).
+    if _requirement_defs(merged) != _requirement_defs(base):
+        return False, "merge would change the requirement def set (refinement must not rewrite the spec)"
+    if _count_satisfies(merged) < _count_satisfies(base):
+        return False, "merge would shed satisfy links"
     return True, ""
 
 
