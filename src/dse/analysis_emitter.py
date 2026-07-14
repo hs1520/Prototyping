@@ -21,6 +21,7 @@ from .domain_objective import (
     DESIGN_DEFAULTS, DESIGN_FIELD_ATTR, endurance_target, mass_limit, max_rated_payload,
     range_requirement, variant_design_inputs,
 )
+from .requirement_spec import ALTITUDE, RANGE, SPEED, extract_requirements
 from .physics_estimator import (
     AVIONICS_POWER_W, BASE_FRAME_KG, CELL_V, DesignInputs, ENERGY_DENSITY_WH_KG,
     ETA_DRIVE, FOM, G, RHO, ROTOR_MASS_COEF, USABLE,
@@ -280,22 +281,66 @@ def inject_endurance_analysis(
         add_metric(range_calc_def(indent="        "), range_rid,
                    "rangeM", rinv, ">=", range_tgt, "rangeMeetsReq")
 
+    # Traceability-only verification structure: quantified requirements the model's
+    # calc set CANNOT evaluate without assumptions still get an in-model requirement
+    # usage + `verification def` whose doc names the tier that carries the evidence.
+    # No `assert constraint` is emitted for these — speed needs a drag/thrust model
+    # the estimator does not expose, range needs a non-zero design cruise speed, and
+    # altitude is a geofence CONFIG bound, not a capability calc. Fabricating an
+    # assert here would invent physics; declaring the verification route does not.
+    _TRACE_TIER = {
+        SPEED: ("forward_flight tier (lumped momentum, datasheet power caps) "
+                "plus L1 param consistency (WPNAV_SPEED)"),
+        RANGE: "forward_flight tier (lumped momentum, datasheet power caps)",
+        ALTITUDE: "L1 geofence parameter consistency (FENCE_ENABLE / FENCE_ALT_MAX)",
+    }
+    trace_decls: list = []
+    trace_members: list = []
+    trace_seen: set = set()
+    for spec in extract_requirements(reqs):
+        rid = spec.req_id.replace("-", "_")
+        tier_note = _TRACE_TIER.get(spec.quantity)
+        if tier_note is None or rid.lower() in satisfied or rid in trace_seen:
+            continue
+        trace_seen.add(rid)
+        if rid not in seen:
+            trace_decls.append(
+                f"        requirement def {rid} {{ attribute target : Real = {spec.value}; }}")
+            seen.add(rid)
+        trace_decls.append(f"        requirement {rid.lower()} : {rid};")
+        trace_members.append(
+            f"        verification def {rid}_check {{\n"
+            f"            doc /* Traceability: verified at the {tier_note}. The model calc set\n"
+            f"               cannot evaluate this quantity without assumed constants, so no\n"
+            f"               assert is emitted here; execution evidence lives in the\n"
+            f"               verification matrix. */\n"
+            f"            objective {rid.lower()}_obj {{ verify {rid.lower()}; }}\n"
+            f"        }}")
+
     if design_attr_lines is not None:                 # bound design point first (refs resolve to it)
         sat = "".join(f"            satisfy {r};\n" for r in satisfied)
         members.insert(0, "        part recommendedDesign {\n" + design_attr_lines + sat + "        }")
     else:                                             # legacy path: design doesn't exist → satisfy
         members += [f"        satisfy {r};" for r in satisfied]   #   in the closure (as before)
-    core = "\n".join(defs + decls + members)
-    note = "    // --- DSE analysis closure (Automator-evaluable; analysis BINDS to recommendedDesign) ---\n"
-    # The bound (design) closure owns a `part recommendedDesign` — it MUST live inside the
-    # `part def DseDesignAnalysis` wrapper (excluded from the reachability graph) so it isn't
-    # mistaken for a system component and wired up by the connectivity refiner. Only the legacy
-    # path (no parts, just refs into the root scope) may inline into the root body.
-    if wrap or design_attr_lines is not None:
-        frag = f"\n{note}    part def DseDesignAnalysis {{\n{core}\n    }}\n"
-    else:                                             # legacy nested → straight into the root body
-        frag = f"\n        {note}{core}\n"
-    out = text[:end] + frag + text[end:]
+
+    def _compose(extra_decls: list, extra_members: list) -> str:
+        core = "\n".join(defs + decls + extra_decls + members + extra_members)
+        note = "    // --- DSE analysis closure (Automator-evaluable; analysis BINDS to recommendedDesign) ---\n"
+        # The bound (design) closure owns a `part recommendedDesign` — it MUST live inside the
+        # `part def DseDesignAnalysis` wrapper (excluded from the reachability graph) so it isn't
+        # mistaken for a system component and wired up by the connectivity refiner. Only the legacy
+        # path (no parts, just refs into the root scope) may inline into the root body.
+        if wrap or design_attr_lines is not None:
+            frag = f"\n{note}    part def DseDesignAnalysis {{\n{core}\n    }}\n"
+        else:                                         # legacy nested → straight into the root body
+            frag = f"\n        {note}{core}\n"
+        return text[:end] + frag + text[end:]
+
+    # Two-stage syntax gate: the traceability block must never regress the evaluable
+    # closure — if it trips the checker, fall back to the evaluable-only fragment.
+    out = _compose(trace_decls, trace_members)
+    if (trace_decls or trace_members) and check_syntax(out).has_errors:
+        out = _compose([], [])
     return (out, True) if not check_syntax(out).has_errors else (model_text, False)
 
 

@@ -142,7 +142,12 @@ def test_no_range_clause_or_false_satisfy_for_altitude_requirement():
     out, ok = inject_endurance_analysis(_FLAT_CRUISE, reqs, capacity_mah=18000.0)
     assert ok
     assert "rangeMeetsReq" not in out and "RangeM(" not in out   # altitude ≠ flight range
-    assert "req_cons_001" not in out                              # no false satisfy
+    assert "satisfy req_cons_001" not in out                      # no false satisfy
+    # Altitude legitimately gets a TRACEABILITY-ONLY verification def (usage +
+    # tier note, no assert) — the model declares its verification route (L1
+    # geofence) without fabricating an evaluable capability check.
+    assert "verification def REQ_CONS_001_check" in out
+    assert "altitudeWithinReq" not in out                         # still no invented assert
 
 
 @pytest.mark.skipif(not _HAS_SYSIDE, reason="syside not installed")
