@@ -164,9 +164,10 @@ def build_matrix(model, realization: Optional[dict], linker,
         scope = v.get("scope")
         if scope == "closure":
             tiers[rid].add("datasheet")
+            extra = f" — {v.get('note')}" if v.get("note") else ""
             evidence[rid].append(
                 f"datasheet closure: {v.get('family')} realized={v.get('realized_value')} "
-                f"target={v.get('target')} met={v.get('met')}")
+                f"target={v.get('target')} met={v.get('met')}{extra}")
         elif scope == "forward_flight":
             tiers[rid].add("forward_flight")
             evidence[rid].append(

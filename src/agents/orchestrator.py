@@ -840,7 +840,7 @@ class Orchestrator:
             deferred_text = ", ".join(deferred_families) if deferred_families else "none"
             if report.verdict in ("CLOSED", "CLOSED_AFTER_RESIZE"):
                 summary = (
-                    "MEET-IN-THE-MIDDLE CLOSED — realizable + endurance/mass closed; "
+                    f"MEET-IN-THE-MIDDLE CLOSED — realizable + {closure_text} closed; "
                     "speed/range evaluated separately by lumped forward-flight fidelity "
                     f"(datasheet closure families: {closure_text}; "
                     f"forward_flight families: {forward_text}; "

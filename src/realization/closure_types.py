@@ -1,8 +1,9 @@
 """Shared requirement verdict helpers for realization closure."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..dse.domain_objective import _emergent_for_family
 from ..dse.physics_estimator import estimate
@@ -10,6 +11,7 @@ from ..dse.requirement_spec import (
     ALTITUDE,
     ENDURANCE,
     MASS_MTOW,
+    PAYLOAD,
     RANGE,
     SPEED,
     ReqSpec,
@@ -18,12 +20,16 @@ from ..dse.requirement_spec import (
 from .bottom_up import RealizedMetrics
 
 
-# Datasheet realization can decide only quantities that emerge from component choice:
-# hover/endurance from motor+prop bench curves and pack capacity, and total mass from
-# component masses. Forward-flight speed/range are L1/SITL/Gazebo concerns; static
-# hover bench data cannot honestly close them. Speed/range are evaluated in a
-# separate lumped forward-flight tier; all unknown future families stay deferred.
-CLOSURE_SCOPE_FAMILIES = {"time", "mass"}
+# Datasheet realization can decide only quantities that emerge from component choice
+# with ZERO assumed constants (the closure admission rule): hover/endurance from
+# motor+prop bench curves and pack capacity, total mass from component masses, and
+# payload-carrying capacity as the hover-throttle margin at the rated delivery
+# payload (realized metrics are computed carrying it; throttle comes from bench-curve
+# interpolation). Forward-flight speed/range need an assumed drag area, so they are
+# evaluated in a separate lumped forward-flight tier; all unknown future families
+# stay deferred. Attitude/behaviour clauses inside a payload requirement are NOT
+# covered at this tier (flight-dynamics evidence).
+CLOSURE_SCOPE_FAMILIES = {"time", "mass", "payload"}
 FORWARD_FLIGHT_SCOPE_FAMILIES = {"speed", "range"}
 
 
@@ -69,6 +75,7 @@ def _family_for_spec(spec: ReqSpec) -> str:
     return {
         ENDURANCE: "time",
         MASS_MTOW: "mass",
+        PAYLOAD: "payload",
         RANGE: "range",
         SPEED: "speed",
         ALTITUDE: "altitude",
@@ -78,7 +85,7 @@ def _family_for_spec(spec: ReqSpec) -> str:
 def _actionable_spec(spec: ReqSpec) -> bool:
     if spec.quantity == ENDURANCE:
         return spec.operator == ">="
-    if spec.quantity == MASS_MTOW:
+    if spec.quantity in {MASS_MTOW, PAYLOAD}:
         return spec.operator == "<="
     if spec.quantity in {RANGE, SPEED}:
         return spec.operator == ">="
@@ -88,8 +95,24 @@ def _actionable_spec(spec: ReqSpec) -> bool:
 def _structured_targets(requirements: List[str]) -> Tuple[ReqSpec, ...]:
     return tuple(
         s for s in extract_requirements(requirements)
-        if s.quantity in {ENDURANCE, MASS_MTOW, RANGE, SPEED, ALTITUDE}
+        if s.quantity in {ENDURANCE, MASS_MTOW, PAYLOAD, RANGE, SPEED, ALTITUDE}
     )
+
+
+# "hover throttle margin of at least 30 percent" → 0.30 (fraction)
+_MARGIN_RE = re.compile(
+    r"margin of at least\s+(\d+(?:\.\d+)?)\s*(?:percent|%)", re.IGNORECASE)
+
+
+def _margin_target(requirements: List[str], req_id: str) -> Optional[float]:
+    """Explicit hover-throttle margin stated in the payload requirement, if any."""
+    rid = req_id.replace("_", "-")
+    for line in requirements or []:
+        if rid in str(line).replace("_", "-"):
+            m = _MARGIN_RE.search(str(line))
+            if m:
+                return float(m.group(1)) / 100.0
+    return None
 
 
 def requirement_verdicts(design, metrics: RealizedMetrics,
@@ -120,10 +143,34 @@ def requirement_verdicts(design, metrics: RealizedMetrics,
                 note=f"{spec.quantity} {spec.operator} is not a datasheet/forward-flight capability check",
             ))
             continue
+        note_override = ""
         if fam == "mass":
             estimator_value = est.get("total_mass_kg", 0.0)
             realized_value = metrics.total_mass_kg
             met = realized_value <= target
+        elif fam == "payload":
+            # Closure-admissible with zero assumed constants: realized metrics are
+            # computed CARRYING the rated delivery payload (payload_split), and
+            # hover throttle comes from bench-curve interpolation. The verdict is
+            # the hover-throttle margin at that load; the estimator has no
+            # throttle model, so estimator_value stays 0.0. Attitude/behaviour
+            # clauses in the same requirement are NOT covered at this tier.
+            margin_target = _margin_target(requirements, spec.req_id)
+            realized_value = max(0.0, 1.0 - metrics.hover_throttle)
+            estimator_value = 0.0
+            if margin_target is not None:
+                target = margin_target
+                met = realized_value >= margin_target
+                note_override = (
+                    f"hover-throttle margin at the rated delivery payload "
+                    f"({spec.value:g} kg aboard, bench-curve interpolation); "
+                    "attitude/behaviour clauses are not covered at the datasheet tier")
+            else:
+                target = 0.0
+                met = realized_value > 0.0
+                note_override = (
+                    f"no explicit margin stated; datasheet evidence = hovers within "
+                    f"the bench curve carrying the rated {spec.value:g} kg")
         else:
             estimator_value = _emergent_for_family(fam, est)
             ff = forward_flight.get(key)
@@ -143,7 +190,7 @@ def requirement_verdicts(design, metrics: RealizedMetrics,
             met=met,
             scope=_scope_for_family(fam),
             fidelity=getattr(ff, "fidelity", None),
-            note=getattr(ff, "note", ""),
+            note=note_override or getattr(ff, "note", ""),
         ))
     return tuple(verdicts)
 
