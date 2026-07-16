@@ -40,3 +40,29 @@ def test_unreachable_action_is_absent():
     model = _MODEL.replace("transition d first cruising if pos > 0.5 then delivering;", "")
     st = functional_behavior_status(model, _REQS)
     assert st["REQ-FUNC-011"] == BEHAVIOR_ABSENT
+
+
+def test_landing_action_does_not_satisfy_postflight_report_response():
+    model = """package D {
+        requirement def REQ_FUNC_008 {
+            doc /* Transmit a post-flight health report after landing. */
+        }
+        part def FC {
+            action def landNow { }
+            action def transmitHealthReport { }
+            state def M {
+                state Cruise;
+                state Land { entry action onLand : landNow; }
+                transition initial then Cruise;
+                transition finish first Cruise accept CmdToLand then Land;
+            }
+            satisfy requirement REQ_FUNC_008;
+        }
+    }"""
+
+    st = functional_behavior_status(
+        model,
+        ["REQ-FUNC-008: Transmit a post-flight health report after landing."],
+    )
+
+    assert st["REQ-FUNC-008"] == BEHAVIOR_ABSENT

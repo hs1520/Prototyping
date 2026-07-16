@@ -231,6 +231,69 @@ def test_matrix_does_not_treat_serial_protocol_as_postflight_report_evidence():
     assert rows[0].tiers == ()
 
 
+def test_matrix_does_not_treat_unrelated_phase_machine_as_report_evidence():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_FUNC_008 {
+                doc /* Transmit a post-flight health report upon completion of
+                the automated landing phase. */
+            }
+            part def FlightController {
+                action def transmitHealthReport { }
+                state def FlightPhaseMachine {
+                    state Cruise;
+                    state Land;
+                    transition initial then Cruise;
+                    transition finish first Cruise accept CmdToLand then Land;
+                }
+                satisfy requirement REQ_FUNC_008;
+            }
+        }""",
+        model_name="D",
+    )
+    row = build_matrix(model, None, RequirementLinker(model))[0]
+
+    assert row.status == "unassigned"
+    assert "behavioral_sim" not in row.tiers
+    assert any("response action is not produced" in item for item in row.evidence)
+
+
+def test_matrix_accepts_reachable_postflight_report_action():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_FUNC_008 {
+                doc /* Transmit a post-flight health report upon completion of
+                the automated landing phase. */
+            }
+            part def FlightController {
+                action def transmitHealthReport { }
+                state def FlightPhaseMachine {
+                    state Cruise;
+                    state LandingComplete;
+                    state ReportSent {
+                        entry action report : transmitHealthReport;
+                    }
+                    transition initial then Cruise;
+                    transition completeLanding
+                        first Cruise
+                        accept CmdToLand
+                        then LandingComplete;
+                    transition sendReport
+                        first LandingComplete
+                        accept CmdToReport
+                        then ReportSent;
+                }
+                satisfy requirement REQ_FUNC_008;
+            }
+        }""",
+        model_name="D",
+    )
+    row = build_matrix(model, None, RequirementLinker(model))[0]
+
+    assert row.status == "verified"
+    assert "behavioral_sim" in row.tiers
+
+
 def test_matrix_marks_trace_blocked_requirements():
     model = build_lite_model(
         """package D {

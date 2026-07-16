@@ -153,6 +153,10 @@ def build_matrix(model, realization: Optional[dict], linker,
         run_initialization_scenario,
     )
     from src.simulation.state_extractor import extract_state_machines
+    from src.dse.functional_behavior import (
+        BEHAVIOR_ABSENT,
+        functional_behavior_status,
+    )
 
     req_texts: Dict[str, str] = dict(getattr(linker, "_req_texts", {}) or {})
     satisfy_map: Dict[str, List[str]] = dict(getattr(linker, "_satisfy_map", {}) or {})
@@ -244,6 +248,16 @@ def build_matrix(model, realization: Optional[dict], linker,
     machines_by_owner: Dict[str, list] = {}
     for sm in state_machines:
         machines_by_owner.setdefault(sm.owner_part, []).append(sm)
+    functional_status = {
+        _norm_req_id(rid): status
+        for rid, status in functional_behavior_status(
+            model_text,
+            [
+                f"{rid.replace('_', '-')}: {req_texts.get(rid, '')}"
+                for rid in universe
+            ],
+        ).items()
+    }
 
     for rid in universe:
         # A TRACE-blocked requirement's guard assignment is the WRONG-family guard
@@ -301,6 +315,16 @@ def build_matrix(model, realization: Optional[dict], linker,
                 continue
 
         if any(k in low for k in _BEHAVIORAL_TEXT_KWS):
+            if functional_status.get(rid) == BEHAVIOR_ABSENT:
+                # A phase/state machine on the satisfying part is not evidence
+                # for a required functional response unless a reachable state
+                # actually invokes/sends that response.  Example: merely
+                # declaring `transmitHealthReport` must not verify a post-flight
+                # report requirement when no state calls it.
+                evidence[rid].append(
+                    "functional response action is not produced by any reachable state"
+                )
+                continue
             outcomes = [
                 outcome
                 for sm in owner_machines

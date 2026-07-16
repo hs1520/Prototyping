@@ -367,7 +367,14 @@ def _run_single_l2_with_timeout(bridge: SITLBridge, spec, timeout_s: int = 240) 
                 eeprom.unlink()
             except OSError:
                 pass
-        launched = bridge.launch_sitl(wait_s=45.0)
+        for attempt in range(2):
+            launched = bridge.launch_sitl(wait_s=45.0)
+            if launched:
+                break
+            bridge.stop_sitl()
+            if attempt == 0:
+                print("  ↻ SITL 启动/EKF 就绪失败，重试一次 ...", flush=True)
+                time.sleep(2.0)
         if not launched:
             return {
                 "req_id": spec.req_id,

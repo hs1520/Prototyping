@@ -36,6 +36,10 @@ _FUNC_INTENT = {
     "report":   (("health report", "status report", "post-flight", "health and status report"),
                  ("report", "healthreport", "postflight", "telemetryreport")),
 }
+# More-specific response intents must win over context words.  For example,
+# "transmit a post-flight health report after landing" requires REPORT; a
+# reachable LAND action is only the trigger/context and must not satisfy it.
+_FUNC_INTENT_PRIORITY = ("report", "release", "return", "land", "navigate")
 _REQ_ID_RE = re.compile(r"REQ[-_][A-Z]+[-_]\d+")
 _SATISFY_RE = re.compile(r"satisfy\s+(?:requirement\s+)?(\w*REQ[_-]\w+)", re.IGNORECASE)
 
@@ -71,9 +75,11 @@ def functional_behavior_status(model_text: str, requirements: List[str]) -> Dict
         if "FUNC" not in rid.upper() or is_safety_req(rid, txt):
             continue
         markers: Set[str] = set()
-        for kws, resp in _FUNC_INTENT.values():
+        for intent in _FUNC_INTENT_PRIORITY:
+            kws, resp = _FUNC_INTENT[intent]
             if any(k in txt for k in kws):
-                markers |= set(resp)
+                markers = set(resp)
+                break
         if not markers:
             continue                                       # no recognised functional intent
         hit = any(marker in p for p in produced for marker in markers)

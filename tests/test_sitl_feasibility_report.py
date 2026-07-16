@@ -1,6 +1,9 @@
 from examples.run_realization_report import retire_stale_parm
 from src.prototyping.artifact_provenance import build_run_provenance
+from types import SimpleNamespace
+
 from examples.run_sitl_feasibility import (
+    _run_single_l2_with_timeout,
     merge_parm_lines,
     parm_freshness,
     planned_l2_specs,
@@ -42,6 +45,41 @@ def test_safety_verification_status_marks_pass_and_fail_without_trace_blocks():
         [],
     )["status"] == "FAIL"
     assert safety_verification_status([], [])["status"] == "NOT_RUN"
+
+
+def test_single_l2_retries_one_transient_sitl_startup_failure():
+    class Bridge:
+        _connection_string = "tcp:127.0.0.1:5760"
+
+        def __init__(self):
+            self.launches = 0
+            self.stops = 0
+
+        def launch_sitl(self, wait_s):
+            assert wait_s == 45.0
+            self.launches += 1
+            return self.launches == 2
+
+        def stop_sitl(self):
+            self.stops += 1
+
+        def _run_single_test(self, spec, connection, mavutil_module, fresh_sitl):
+            assert connection == self._connection_string
+            assert fresh_sitl is True
+            return True, "passed after retry"
+
+    bridge = Bridge()
+    spec = SimpleNamespace(
+        req_id="REQ_SAFE_004",
+        inject=SimpleNamespace(kind="set_param"),
+    )
+
+    result = _run_single_l2_with_timeout(bridge, spec, timeout_s=10)
+
+    assert result["passed"] is True
+    assert result["message"] == "passed after retry"
+    assert bridge.launches == 2
+    assert bridge.stops == 2  # cleanup after failed attempt + final cleanup
 
 
 def test_merge_parm_lines_preserves_recommended_design_and_adds_safety_params():
