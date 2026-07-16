@@ -235,8 +235,8 @@ def test_matrix_does_not_treat_unrelated_phase_machine_as_report_evidence():
     model = build_lite_model(
         """package D {
             requirement def REQ_FUNC_008 {
-                doc /* Transmit a post-flight health report upon completion of
-                the automated landing phase. */
+                doc /* Transmit a post-flight health report within 5 seconds
+                after landing completion. */
             }
             part def FlightController {
                 action def transmitHealthReport { }
@@ -262,8 +262,8 @@ def test_matrix_accepts_reachable_postflight_report_action():
     model = build_lite_model(
         """package D {
             requirement def REQ_FUNC_008 {
-                doc /* Transmit a post-flight health report upon completion of
-                the automated landing phase. */
+                doc /* Transmit a post-flight health report within 5 seconds
+                after landing completion. */
             }
             part def FlightController {
                 action def transmitHealthReport { }

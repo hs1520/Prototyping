@@ -155,6 +155,7 @@ def build_matrix(model, realization: Optional[dict], linker,
     from src.simulation.state_extractor import extract_state_machines
     from src.dse.functional_behavior import (
         BEHAVIOR_ABSENT,
+        BEHAVIORALLY_VERIFIED,
         functional_behavior_status,
     )
 
@@ -314,17 +315,16 @@ def build_matrix(model, realization: Optional[dict], linker,
             ):
                 continue
 
-        if any(k in low for k in _BEHAVIORAL_TEXT_KWS):
-            if functional_status.get(rid) == BEHAVIOR_ABSENT:
-                # A phase/state machine on the satisfying part is not evidence
-                # for a required functional response unless a reachable state
-                # actually invokes/sends that response.  Example: merely
-                # declaring `transmitHealthReport` must not verify a post-flight
-                # report requirement when no state calls it.
-                evidence[rid].append(
-                    "functional response action is not produced by any reachable state"
-                )
-                continue
+        functional_outcome = functional_status.get(rid)
+        if functional_outcome == BEHAVIOR_ABSENT:
+            # A declared action or phase name is not evidence unless a reachable
+            # state actually produces the functional response.
+            evidence[rid].append(
+                "functional response action is not produced by any reachable state"
+            )
+            continue
+        if (functional_outcome == BEHAVIORALLY_VERIFIED
+                or any(k in low for k in _BEHAVIORAL_TEXT_KWS)):
             outcomes = [
                 outcome
                 for sm in owner_machines
