@@ -484,6 +484,24 @@ def test_postflight_report_to_gcs_does_not_claim_gcs_loss_guard():
     assert all(s.req_id != "REQ_FUNC_008" for s in linker.generate_test_specs())
 
 
+def test_postflight_report_on_communication_part_does_not_claim_serial_protocol():
+    model = _model_with_req(
+        "REQ_FUNC_008",
+        "The system shall transmit a post-flight health report to the GCS "
+        "within 5.0 seconds of landing completion.",
+        """
+        attribute encryptionKeyLength : Real = 256.0;
+        action def transmitHealthReport { }
+        """,
+        part_name="CommunicationSystem",
+    )
+    linker = RequirementLinker(model)
+
+    assert linker._lookup_catalogue("REQ_FUNC_008") is None  # noqa: SLF001
+    assert "SERIAL0_PROTOCOL" not in linker.generate_parm_file()
+    assert all(s.req_id != "REQ_FUNC_008" for s in linker.generate_test_specs())
+
+
 def test_compound_contingency_is_not_proven_by_one_fault_guard():
     model = build_lite_model(
         """package D {

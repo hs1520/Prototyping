@@ -391,6 +391,14 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         notes="CommunicationSystem → SERIAL0_PROTOCOL=2 (MAVLink v2).",
         req_text_kws=["mavlink", "protocol", "telemetry", "data link", "datalink",
                       "communication", "encrypted", "encryption", "gcs", "command link"],
+        # A configured MAVLink port proves protocol availability only.  It does
+        # not prove that a lifecycle-triggered report is produced, nor that its
+        # deadline is met.  Those requirements need an executable behaviour
+        # anchor (landing completion → report action), not SERIAL0_PROTOCOL.
+        req_text_exclude_kws=[
+            "post-flight", "post flight", "health report", "status report",
+            "after landing", "landing completion",
+        ],
     ),
 
     # ── Performance: max airspeed（attr: maxAirspeed, unit m/s → cm/s ×100）

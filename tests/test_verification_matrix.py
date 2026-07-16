@@ -206,6 +206,31 @@ def test_matrix_requires_an_l1_validation_result_before_marking_l1_verified():
     assert failed.tiers == ("l1_param_failed",) and failed.status == "failed"
 
 
+def test_matrix_does_not_treat_serial_protocol_as_postflight_report_evidence():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_FUNC_008 {
+                doc /* The system shall transmit a post-flight health report to
+                the GCS within 5.0 seconds of landing completion. */
+            }
+            part def CommunicationSystem {
+                attribute encryptionKeyLength : Real = 256.0;
+                action def transmitHealthReport { }
+                satisfy requirement REQ_FUNC_008;
+            }
+        }""",
+        model_name="D",
+    )
+    linker = RequirementLinker(model)
+    rows = build_matrix(
+        model, None, linker,
+        l1_results=[{"req_id": "REQ_FUNC_008", "passed": True}],
+    )
+
+    assert rows[0].status == "unassigned"
+    assert rows[0].tiers == ()
+
+
 def test_matrix_marks_trace_blocked_requirements():
     model = build_lite_model(
         """package D {
