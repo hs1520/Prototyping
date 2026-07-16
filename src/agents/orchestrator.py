@@ -1717,6 +1717,70 @@ class Orchestrator:
         except Exception:
             return []
 
+    def _verification_anchor_pass(
+        self,
+        current_model: SysMLModel,
+        sim_result: Any,
+        rule_score: float,
+        verify_gaps: List[str],
+        requirements: List[str],
+        dse_best_config: Optional[DesignConfiguration],
+    ) -> tuple[SysMLModel, Any, bool]:
+        """Run the one bounded verification-anchor pass on any clean exit path.
+
+        Previously this lived only inside the "quality already clean" branch.
+        When reachability was repaired by ``_sim_refinement_loop``, the method
+        returned immediately and skipped anchoring altogether.  Keeping the pass
+        in one helper makes both paths use identical syntax/simulation/score
+        gates and preserves the one-pass bound.
+        """
+        if not verify_gaps or not self.use_surgical_refinement:
+            return current_model, sim_result, False
+
+        print(f"  ~ Quality met, but {len(verify_gaps)} requirement(s) "
+              f"would be UNASSIGNED in the verification matrix — "
+              f"one surgical anchor pass", flush=True)
+        from .surgical_refiner import attempt_surgical_refinement
+        anchored = attempt_surgical_refinement(
+            llm=self.llm,
+            model_text=get_sysml_text(current_model),
+            issues=verify_gaps,
+            verbose=self.verbose,
+        )
+        if anchored is None:
+            print("  ⚠ Anchor pass not applicable (LLM output failed "
+                  "the surgical gates)", flush=True)
+            return current_model, sim_result, False
+
+        anchor_model = build_lite_model(
+            anchored.merged_text, model_name=current_model.name)
+        anchor_sim = self._run_simulation(
+            anchored.merged_text, current_model.name)
+        anchor_eval = self.evaluator.evaluate(
+            config=DesignConfiguration(name="anchor_pass", parameters={}),
+            model=anchor_model,
+            dse_config=dse_best_config,
+            syntax_result=check_syntax(anchored.merged_text),
+            sim_result=anchor_sim,
+            requirements=requirements,
+        )
+        remaining = self._verification_gap_issues(
+            anchored.merged_text, current_model.name)
+        from .verification_audit import behavioral_result_regressed
+        regressed = (
+            bool(anchor_sim.failed_scenarios())
+            or behavioral_result_regressed(sim_result, anchor_sim)
+            or anchor_eval.weighted_total < rule_score - 0.05
+        )
+        if not regressed and len(remaining) < len(verify_gaps):
+            print(f"  ✓ Anchor pass accepted: verification gaps "
+                  f"{len(verify_gaps)} → {len(remaining)}", flush=True)
+            return anchor_model, anchor_sim, True
+
+        print("  ⚠ Anchor pass rejected (no gap reduction or "
+              "regression) — keeping the original model", flush=True)
+        return current_model, sim_result, False
+
     def _iterative_refinement(
         self,
         model: SysMLModel,
@@ -1927,50 +1991,14 @@ class Orchestrator:
                     # if gaps actually shrink AND nothing regresses (local sim +
                     # rule score re-checked, no LLM cost). Success or not, we
                     # return afterwards — anchors are advisory, never a loop.
-                    if verify_gaps and self.use_surgical_refinement:
-                        print(f"  ~ Quality met, but {len(verify_gaps)} requirement(s) "
-                              f"would be UNASSIGNED in the verification matrix — "
-                              f"one surgical anchor pass", flush=True)
-                        from .surgical_refiner import attempt_surgical_refinement
-                        anchored = attempt_surgical_refinement(
-                            llm=self.llm,
-                            model_text=get_sysml_text(current_model),
-                            issues=verify_gaps,
-                            verbose=self.verbose,
-                        )
-                        if anchored is not None:
-                            anchor_model = build_lite_model(
-                                anchored.merged_text, model_name=current_model.name)
-                            anchor_sim = self._run_simulation(
-                                anchored.merged_text, current_model.name)
-                            anchor_eval = self.evaluator.evaluate(
-                                config=DesignConfiguration(
-                                    name="anchor_pass", parameters={}),
-                                model=anchor_model,
-                                dse_config=dse_best_config,
-                                syntax_result=check_syntax(anchored.merged_text),
-                                sim_result=anchor_sim,
-                                requirements=requirements,
-                            )
-                            remaining = self._verification_gap_issues(
-                                anchored.merged_text, current_model.name)
-                            from .verification_audit import behavioral_result_regressed
-                            regressed = (
-                                bool(anchor_sim.failed_scenarios())
-                                or behavioral_result_regressed(sim_result, anchor_sim)
-                                or anchor_eval.weighted_total < rule_score - 0.05
-                            )
-                            if not regressed and len(remaining) < len(verify_gaps):
-                                current_model = anchor_model
-                                sim_result = anchor_sim
-                                print(f"  ✓ Anchor pass accepted: verification gaps "
-                                      f"{len(verify_gaps)} → {len(remaining)}", flush=True)
-                            else:
-                                print("  ⚠ Anchor pass rejected (no gap reduction or "
-                                      "regression) — keeping the original model", flush=True)
-                        else:
-                            print("  ⚠ Anchor pass not applicable (LLM output failed "
-                                  "the surgical gates)", flush=True)
+                    current_model, sim_result, _ = self._verification_anchor_pass(
+                        current_model=current_model,
+                        sim_result=sim_result,
+                        rule_score=rule_score,
+                        verify_gaps=verify_gaps,
+                        requirements=requirements,
+                        dse_best_config=dse_best_config,
+                    )
                     print(f"  ✓ Quality threshold {self.quality_threshold} reached",
                           flush=True)
                     return current_model, score, sim_result
@@ -2006,11 +2034,36 @@ class Orchestrator:
                         ),
                         model=current_model,
                         dse_config=dse_best_config,
-                        syntax_result=syntax_result,
+                        syntax_result=check_syntax(_sysml_after),
                         sim_result=sim_result,
                         requirements=requirements,
                     )
                     score = eval_after.weighted_total
+                    post_fix_gaps = self._verification_gap_issues(
+                        _sysml_after, current_model.name)
+                    current_model, sim_result, anchor_accepted = (
+                        self._verification_anchor_pass(
+                            current_model=current_model,
+                            sim_result=sim_result,
+                            rule_score=score,
+                            verify_gaps=post_fix_gaps,
+                            requirements=requirements,
+                            dse_best_config=dse_best_config,
+                        )
+                    )
+                    if anchor_accepted:
+                        score = self.evaluator.evaluate(
+                            config=DesignConfiguration(
+                                name=f"iteration_{iteration}_fixed_anchor",
+                                parameters={},
+                            ),
+                            model=current_model,
+                            dse_config=dse_best_config,
+                            syntax_result=check_syntax(
+                                get_sysml_text(current_model)),
+                            sim_result=sim_result,
+                            requirements=requirements,
+                        ).weighted_total
                     return current_model, score, sim_result
 
                 # Surgical fix insufficient

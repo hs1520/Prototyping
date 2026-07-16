@@ -15,6 +15,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Dict, List, Optional
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -37,6 +39,7 @@ for _name, _attrs in [
         sys.modules[_name] = _mod
 
 from src.agents.orchestrator import Orchestrator, PrototypingState  # noqa: F401 (Orchestrator used in tests)
+from src.agents.surgical_refiner import SurgicalOutcome
 from src.agents.dse_injectors import build_dse_design_constraints
 from src.llm.interface import MockLLM
 from src.dse.design_space import DesignConfiguration
@@ -544,6 +547,59 @@ class TestSkipLLMWhenThresholdMet:
         orch._iterative_refinement(model_a, [])
 
         assert orch.cot.call_count == 1
+
+
+class TestVerificationAnchorPass:
+
+    def test_shared_anchor_helper_accepts_a_non_regressing_gap_reduction(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        orch = Orchestrator(
+            llm=MockLLM(),
+            use_surgical_refinement=True,
+            max_iterations=1,
+        )
+        orch.evaluator = FakeEvaluator([FakeEvalResult(weighted_total=0.90)])
+        before_behavior = type("Behavior", (), {
+            "sim_score": 1.0,
+            "scenario_results": [],
+            "failed_scenarios": lambda self: [],
+        })()
+        before_sim = type("Simulation", (), {
+            "behavioral_result": before_behavior,
+            "failed_scenarios": lambda self: [],
+        })()
+        after_sim = type("Simulation", (), {
+            "behavioral_result": before_behavior,
+            "failed_scenarios": lambda self: [],
+        })()
+        anchored_text = "package D { part def Anchor { } }"
+
+        monkeypatch.setattr(
+            "src.agents.surgical_refiner.attempt_surgical_refinement",
+            lambda **kwargs: SurgicalOutcome(merged_text=anchored_text),
+        )
+        monkeypatch.setattr(
+            orch, "_run_simulation",
+            lambda text, model_name: after_sim,
+        )
+        monkeypatch.setattr(
+            orch, "_verification_gap_issues",
+            lambda text, model_name: [],
+        )
+
+        model, sim, accepted = orch._verification_anchor_pass(
+            current_model=_make_model("D"),
+            sim_result=before_sim,
+            rule_score=0.90,
+            verify_gaps=["[VERIFY-GAP] REQ_SAFE_008"],
+            requirements=[],
+            dse_best_config=None,
+        )
+
+        assert accepted is True
+        assert sim is after_sim
+        assert "Anchor" in model.to_sysml_text()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
