@@ -7,6 +7,7 @@ from src.prototyping.artifact_provenance import (
 
 def _run(model="package D {}", parm="FRAME_CLASS 1\n"):
     run = {
+        "requirements": [{"id": "REQ-1", "text": "fly"}],
         "recommended_design_inputs": {"rotor_count": 4, "battery_capacity_mah": 16000},
         "realization": {"chosen": {"combo": "M", "pack": "B", "frame": "F"}},
     }
@@ -14,6 +15,7 @@ def _run(model="package D {}", parm="FRAME_CLASS 1\n"):
         model_sysml=model,
         recommended_design=run["recommended_design_inputs"],
         realization=run["realization"],
+        requirements=run["requirements"],
         parm_text=parm,
         run_id="run-1",
     )
@@ -41,6 +43,16 @@ def test_run_provenance_detects_realized_component_or_catalog_identity_change():
 
     assert not ok
     assert "component" in reason
+
+
+def test_run_provenance_detects_requirement_set_change():
+    run = _run()
+    run["requirements"][0]["text"] = "land"
+
+    ok, reason = validate_run_provenance(run)
+
+    assert not ok
+    assert "requirement-set" in reason
 
 
 def test_derived_report_must_copy_the_exact_source_provenance():

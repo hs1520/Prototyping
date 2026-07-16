@@ -422,3 +422,72 @@ class TestMultistepGeneratePipeline:
 
         assert result.success
         assert agent.llm.call_count == 1
+
+
+def test_range_floor_is_not_emitted_as_opposite_always_on_constraint():
+    from src.agents.design_agent import DesignAgent
+
+    text = """package D {
+        part def Airframe {
+            attribute maxOperationalRange : Real = 5.0;
+            attribute currentOperationalRange : Real = 0.0;
+            assert constraint operationalRangeBound {
+                currentOperationalRange <= maxOperationalRange
+            }
+        }
+    }"""
+    fixed, count = DesignAgent._fix_capability_semantics(  # noqa: SLF001
+        text,
+        ["REQ-PERF-006: The system shall achieve an operational range of at least 5 km."],
+    )
+
+    assert count >= 2
+    assert "minOperationalRange" in fixed
+    assert "currentOperationalRange <=" not in fixed
+    assert "forward-flight fidelity" in fixed
+
+
+def test_range_floor_cleanup_does_not_remove_sensor_range_constraint():
+    from src.agents.design_agent import DesignAgent
+
+    text = """package D {
+        part def PerceptionSystem {
+            attribute maxSensorRange : Real = 15.0;
+            attribute currentSensorRange : Real = 15.0;
+            assert constraint sensorRangeBound {
+                currentSensorRange <= maxSensorRange
+            }
+        }
+        part def PropulsionSystem {
+            attribute minOperationalRange : Real = 5.0;
+            attribute currentRange : Real = 0.0;
+            assert constraint operationalRangeBound {
+                currentRange >= minOperationalRange
+            }
+        }
+    }"""
+    fixed, count = DesignAgent._fix_capability_semantics(  # noqa: SLF001
+        text,
+        ["REQ-PERF-006: The system shall achieve an operational range of at least 5 km."],
+    )
+
+    assert count == 1
+    assert "currentSensorRange <= maxSensorRange" in fixed
+    assert "currentRange >= minOperationalRange" not in fixed
+
+
+def test_parachute_action_command_is_repaired_and_declared():
+    from src.agents.design_agent import DesignAgent
+
+    text = """package D {
+        action def CMD_LAND { }
+        part def SafetyMonitor {
+            action def deployParachute { send CMD_LAND() to parachuteCmd; }
+        }
+    }"""
+    fixed, count = DesignAgent._fix_safety_action_semantics(text)  # noqa: SLF001
+
+    assert count == 2
+    assert "action def CMD_PARACHUTE" in fixed
+    assert "send CMD_PARACHUTE() to parachuteCmd" in fixed
+    assert "deployParachute { send CMD_LAND" not in fixed

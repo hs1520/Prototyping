@@ -98,6 +98,9 @@ class ContentEntry:
     维度无关的参数上（如 FENCE_ALT_MAX "验证"姿态 RMS）。非空时要求需求
     文本至少命中一个关键词，否则该条目对这条需求不匹配——落入诚实的
     no-mapping，而不是错误的 L1 PASS。需求无 doc 文本时不启用该 gate。
+
+    req_text_exclude_kws：即使命中正向关键词，若需求明确描述另一个物理量
+    （例如逆风下的 ground speed），也禁止该条目宣称验证成功。
     """
     semantic_tag: str
     guard_matcher: Optional[GuardMatcher] = None
@@ -108,6 +111,7 @@ class ContentEntry:
     verify: Optional[Any] = None
     notes: str = ""
     req_text_kws: List[str] = field(default_factory=list)
+    req_text_exclude_kws: List[str] = field(default_factory=list)
 
 
 def _noop_l1() -> Dict[str, Any]:
@@ -401,6 +405,9 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         **_noop_l1(),
         notes="maxAirspeed attribute (m/s) × 100 → WPNAV_SPEED (cm/s).",
         req_text_kws=["speed", "airspeed", "velocity", "m/s"],
+        # A navigation speed setpoint does not verify wind-relative groundspeed.
+        req_text_exclude_kws=["ground speed", "groundspeed", "headwind",
+                              "tailwind"],
     ),
 
     # ── Constraint: operational radius（attr: maxOperationalRadius, unit km → m ×1000）
@@ -854,12 +861,84 @@ class RequirementLinker:
                                 getattr(guard, "attribute", "") and
                                 getattr(g, "operator", "") ==
                                 getattr(guard, "operator", "")):
-                            return sm.entry_action_for_state(tr.target or "")
+                            action = sm.entry_action_for_state(tr.target or "")
+                            if action:
+                                return action
         except Exception as exc:
             from src.utils.suppressed import record_suppressed
             record_suppressed("sitl.requirement_linker.entry_action_lookup", exc)
             pass
         return None
+
+    def _guard_response_commands(self, part_name: str, guard) -> tuple[str, set[str]]:
+        """Return entry-action usage and explicit sends for a guard target state."""
+        try:
+            from src.simulation.state_extractor import extract_state_machines
+            text = self._model.to_sysml_text() or ""
+            fallback_action = ""
+            for sm in extract_state_machines(text):
+                if sm.owner_part != part_name:
+                    continue
+                for tr in sm.fault_transitions():
+                    if not any(
+                        getattr(g, "attribute", "") == getattr(guard, "attribute", "")
+                        and getattr(g, "operator", "") == getattr(guard, "operator", "")
+                        for g in tr.guards
+                    ):
+                        continue
+                    state = next((s for s in sm.states if s.name == (tr.target or "")), None)
+                    if state is None:
+                        continue
+                    fallback_action = fallback_action or (state.entry_action or "")
+                    commands = {str(cmd).upper() for cmd, _port in state.sends}
+                    if commands:
+                        return state.entry_action or "", commands
+            return fallback_action, set()
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.guard_response", exc)
+            return "", set()
+
+    def _action_traceability_issue(
+        self, req_id: str, tag: str
+    ) -> Optional[Dict[str, str]]:
+        """Reject an explicit response command that contradicts its semantic tag."""
+        expected_commands = {
+            "BATTERY_RTB": {"CMD_RTL"},
+            "BATTERY_LAND": {"CMD_LAND"},
+            "GCS_LOSS": {"CMD_LAND", "CMD_RTL"},
+            "GCS_LOSS_LAND": {"CMD_LAND"},
+            "GCS_LOSS_RTL": {"CMD_RTL"},
+            "PARACHUTE_DEPLOY": {"CMD_PARACHUTE"},
+        }
+        expected = expected_commands.get(tag)
+        assigned = self._guard_assignment.get(req_id)
+        if not expected or not assigned:
+            return None
+        action, commands = self._guard_response_commands(
+            assigned["part"], assigned["guard"]
+        )
+        # Empty action bodies remain abstract behavior allocations.  But once a
+        # command is explicit, checking the wrong command is mandatory.
+        semantic_match = bool(commands & expected)
+        if tag == "PARACHUTE_DEPLOY":
+            semantic_match = semantic_match or any(
+                "PARACHUTE" in command or "CHUTE" in command
+                for command in commands
+            )
+        if not commands or semantic_match:
+            return None
+        return {
+            "req_id": req_id,
+            "expected_family": tag,
+            "matched_family": ",".join(sorted(commands)),
+            "matched_tag": tag,
+            "requirement_text": self._req_texts.get(req_id, ""),
+            "message": (
+                f"traceability mismatch: {tag} expects one of "
+                f"{sorted(expected)}, but action {action} sends {sorted(commands)}"
+            ),
+        }
 
     def _match_by_content(self, req_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -895,13 +974,17 @@ class RequirementLinker:
         # 不证明 "这条需求关于这个量"。有需求文本时要求文本命中条目关键词，
         # 否则 MTOW/温度/法规类需求会被首个 attr 命中的条目错误标为 L1 PASS
         # （曾发生：FENCE_ALT_MAX "验证" 姿态 RMS、WPNAV_SPEED "验证" MTOW）。
-        req_text = self._req_texts.get(req_id, "")
+        req_text = self._requirement_match_text(req_id)
         req_blob = f"{req_id} {req_text}".lower()
         for entry in _CONTENT_CATALOGUE:
             if entry.attr_matcher is None:
                 continue
             if entry.req_text_kws and req_text and not any(
                 kw in req_blob for kw in entry.req_text_kws
+            ):
+                continue
+            if entry.req_text_exclude_kws and any(
+                kw in req_blob for kw in entry.req_text_exclude_kws
             ):
                 continue
             am = entry.attr_matcher
@@ -929,6 +1012,18 @@ class RequirementLinker:
                     )
 
         return None
+
+    def _requirement_match_text(self, req_id: str) -> str:
+        """Requirement prose used for semantic matching, without method tags.
+
+        Verification annotations such as ``[V: hardware-in-the-loop]`` describe
+        how evidence will be collected.  Letting their words participate in the
+        matcher caused a waypoint CEP requirement to hit CONTROL_LOOP_RATE solely
+        because the annotation contained the word ``loop``.
+        """
+        text = self._req_texts.get(req_id, "")
+        return re.sub(r"\[(?:V|SEV)\s*:[^\]]*\]", " ", text,
+                      flags=re.IGNORECASE).strip()
 
     # ------------------------------------------------------------------
 
@@ -1053,7 +1148,7 @@ class RequirementLinker:
     def _apply_traceability_gate(
         self, req_id: str, result: Optional[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
-        """Reject semantically inconsistent SAFE mappings without breaking flow.
+        """Reject semantically inconsistent mappings without breaking flow.
 
         The linker intentionally derives tests from model behavior (guard/action
         content). A4 adds the missing cross-check: if the requirement text says
@@ -1068,22 +1163,27 @@ class RequirementLinker:
         tag = str(result.get("semantic_tag", ""))
         expected = self._requirement_family(req_id)
         matched = self._tag_family(tag)
-        if expected is None or matched is None or expected == matched:
+        detail = None
+        if expected is not None and matched is not None and expected != matched:
+            detail = {
+                "req_id": req_id,
+                "expected_family": expected,
+                "matched_family": matched,
+                "matched_tag": tag,
+                "requirement_text": self._req_texts.get(req_id, ""),
+                "message": (
+                    f"traceability mismatch: requirement text implies {expected}, "
+                    f"but guard/action mapping selected {tag} ({matched})"
+                ),
+            }
+        if detail is None:
+            detail = self._response_traceability_issue(req_id, tag)
+        if detail is None:
+            detail = self._action_traceability_issue(req_id, tag)
+        if detail is None:
             self._traceability_mismatches.pop(req_id, None)
             return result
 
-        text = self._req_texts.get(req_id, "")
-        detail = {
-            "req_id": req_id,
-            "expected_family": expected,
-            "matched_family": matched,
-            "matched_tag": tag,
-            "requirement_text": text,
-            "message": (
-                f"traceability mismatch: requirement text implies {expected}, "
-                f"but guard/action mapping selected {tag} ({matched})"
-            ),
-        }
         self._traceability_mismatches[req_id] = detail
         if self._verbose:
             print(f"  [TRACE-MISMATCH] {req_id}: {detail['message']}")
@@ -1147,50 +1247,98 @@ class RequirementLinker:
         return None
 
     def _requirement_family(self, req_id: str) -> Optional[str]:
+        families = self._requirement_families(req_id)
+        return next(iter(families)) if len(families) == 1 else None
+
+    def _requirement_families(self, req_id: str) -> set[str]:
+        """Infer fault-trigger families, excluding ordinary component mentions.
+
+        A requirement that merely uploads data to the GCS is not a GCS-loss
+        requirement. A compound contingency naming several trigger families
+        cannot be proven by exercising only one guard.
+        """
         text = self._req_texts.get(req_id, "")
         low = f"{req_id} {text}".lower()
-        if not ("safe" in req_id.lower() or any(
-            kw in low for kw in (
-                "battery", "gcs", "ground control", "sensor", "self-test",
-                "self test", "parachute", "propulsion", "payload", "abort",
-                "gripper", "communication loss", "link loss", "geofence",
-                "airspace", "boundary", "boundaries",
-            )
-        )):
-            return None
-        if any(kw in low for kw in (
+        families: set[str] = set()
+
+        def has(*terms: str) -> bool:
+            return any(re.search(
+                rf"(?<![a-z0-9_]){re.escape(term)}(?![a-z0-9_])", low
+            ) for term in terms)
+
+        if has(
             "battery", "state-of-charge", "state of charge", "soc",
             "low voltage", "charge",
-        )):
-            return "BATTERY"
-        if any(kw in low for kw in (
-            "sensor", "self-test", "self test", "prearm", "pre-arm",
-            "arming", "gps", "gnss", "imu", "magnetometer",
-        )):
-            return "SENSOR"
-        if any(kw in low for kw in (
-            "gcs", "ground control", "comm loss", "communication loss",
-            "link loss", "link-loss", "lost link", "loss of link",
-            "telemetry loss", "heartbeat",
-        )):
-            return "GCS"
-        if any(kw in low for kw in (
-            "payload", "delivery abort", "abort condition", "gripper",
-            "lock", "locked",
-        )):
-            return "PAYLOAD"
-        if any(kw in low for kw in (
+        ):
+            families.add("BATTERY")
+        sensor_entity = has("sensor", "gps", "gnss", "imu", "magnetometer")
+        sensor_fault = has(
+            "self-test", "self test", "prearm", "pre-arm", "arming",
+            "failure", "failed", "fault", "unhealthy",
+        )
+        if has("self-test", "self test", "prearm", "pre-arm") or (
+            sensor_entity and sensor_fault
+        ):
+            families.add("SENSOR")
+        gcs_entity = has(
+            "gcs", "ground control", "uplink", "communication", "comm",
+            "data link", "datalink", "telemetry", "heartbeat",
+        )
+        gcs_fault = has(
+            "loss", "lost", "absent", "interrupted", "disconnect",
+            "unavailable", "outage", "timeout", "failsafe", "fail-safe",
+        )
+        if gcs_entity and gcs_fault:
+            families.add("GCS")
+        if has(
+            "delivery abort", "delivery-abort", "abort condition", "gripper",
+            "payload lock", "lock payload", "locked payload",
+            "payload in the mechanically locked",
+            "payload-release actuator shall default",
+            "default to the mechanically locked",
+        ):
+            families.add("PAYLOAD")
+        if has(
             "geofence", "geo-fence", "fence", "airspace", "segregated airspace",
             "boundary", "boundaries", "outside designated", "deviates",
             "operational radius", "flight radius",
-        )):
-            return "GEOFENCE"
-        if any(kw in low for kw in (
-            "parachute", "propulsion", "engine", "motor failure",
-            "motor", "thrust", "critical failure",
-        )):
-            return "PARACHUTE"
-        return None
+        ):
+            families.add("GEOFENCE")
+        if has(
+            "parachute", "propulsion failure", "propulsion subsystem failure",
+            "engine failure", "motor failure", "critical propulsion",
+        ):
+            families.add("PARACHUTE")
+        return families
+
+    def _response_traceability_issue(
+        self, req_id: str, tag: str
+    ) -> Optional[Dict[str, str]]:
+        """Detect a no-response boundary mapped to a positive failsafe test."""
+        if not tag.upper().startswith("GCS_LOSS"):
+            return None
+        low = self._requirement_match_text(req_id).lower()
+        forbids_response = any(phrase in low for phrase in (
+            "without initiating", "shall not initiate", "must not initiate",
+            "shall not enter", "must not enter",
+        ))
+        bounded_below_trigger = any(phrase in low for phrase in (
+            "or less", "no more than", "less than", "before the", "until the",
+        ))
+        if not (forbids_response and bounded_below_trigger):
+            return None
+        return {
+            "req_id": req_id,
+            "expected_family": "GCS_NO_RESPONSE_BOUNDARY",
+            "matched_family": "GCS_POSITIVE_FAILSAFE",
+            "matched_tag": tag,
+            "requirement_text": self._req_texts.get(req_id, ""),
+            "message": (
+                "traceability mismatch: requirement forbids a GCS failsafe "
+                "response inside the boundary, but the selected test only proves "
+                "a positive response after link loss"
+            ),
+        }
 
     def _preferred_semantic_tags(self, req_id: str) -> List[str]:
         """Return deterministic tag preferences within a broad requirement family."""

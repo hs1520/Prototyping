@@ -35,9 +35,9 @@ def _relevant_chat(prompt):
             "satisfies": ["REQ-PERF-001", "REQ-PERF-002"],
             "variants": [
                 {"name": "endur", "design": {"battery_cells": 6, "payload_mass_kg": 0.3,
-                                             "rotor_radius_m": 0.16, "cruise_speed_mps": 16}},
+                                             "rotor_radius_m": 0.2286, "cruise_speed_mps": 16}},
                 {"name": "fast", "design": {"battery_cells": 4, "payload_mass_kg": 0.3,
-                                            "rotor_radius_m": 0.13, "cruise_speed_mps": 24}},
+                                            "rotor_radius_m": 0.1905, "cruise_speed_mps": 24}},
             ],
         })
     return json.dumps({"relevant": False})
@@ -72,6 +72,23 @@ def test_satisfies_must_reference_real_requirement_ids():
                          {"name": "b", "design": {"cruise_speed_mps": 20, "payload_mass_kg": 0.4}}],
         })
     assert Orchestrator._propose_variants(_orch(bogus), "prop", "P", _REQS) is None
+
+
+def test_unbacked_voltage_families_are_rejected_before_dse():
+    def invented(_):
+        return json.dumps({
+            "relevant": True,
+            "rationale": "invented voltage families",
+            "satisfies": ["REQ-PERF-002"],
+            "variants": [
+                {"name": "eight_s", "design": {"battery_cells": 8}},
+                {"name": "twelve_s", "design": {"battery_cells": 12}},
+            ],
+        })
+
+    assert Orchestrator._propose_variants(
+        _orch(invented), "powerSystem", "Power", _REQS
+    ) is None
 
 
 def test_no_quantified_targets_dispatches_to_generic():

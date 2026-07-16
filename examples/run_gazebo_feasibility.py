@@ -23,9 +23,12 @@ from typing import Any
 
 from src.dse.physics_estimator import DesignInputs, total_mass_kg
 from src.prototyping.artifact_provenance import validate_run_provenance
+from src.prototyping.artifact_store import (
+    atomic_write_json, atomic_write_text, ensure_open_bundle, output_dir,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "examples" / "output"
+OUT = output_dir()
 SYSML_PATH = OUT / "final_model.sysml"
 RUN_JSON = OUT / "realization_run.json"
 REPORT_JSON = OUT / "gazebo_feasibility_report.json"
@@ -450,7 +453,7 @@ def _overall_status(live: dict[str, Any] | None, req_results: list[dict[str, Any
 
 
 def _write_report(report: dict[str, Any]) -> None:
-    REPORT_JSON.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_json(REPORT_JSON, report)
     g = report.get("gazebo_result") or {}
     lines = [
         "# Gazebo Feasibility Report",
@@ -491,7 +494,7 @@ def _write_report(report: dict[str, Any]) -> None:
     ]
     for item in report.get("req_results", []):
         lines.append(f"- {item['req_id']}: {item['status']} ({item['check']}) — {item['message']}")
-    REPORT_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(REPORT_MD, "\n".join(lines) + "\n")
 
 
 def build_report(dry_run: bool = False, include_single_motor_out: bool = False) -> dict[str, Any]:
@@ -574,10 +577,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
                         help="Build the Gazebo plan/report without launching Docker/Gazebo.")
+    # One-motor-out is collected by DEFAULT since 2026-07-16 (user decision:
+    # unsuspended — a hexa surviving one motor out is a core safety claim).
+    # --skip-single-motor-out restores the previous suspended behaviour.
     parser.add_argument(
         "--include-single-motor-out",
+        dest="include_single_motor_out",
         action="store_true",
-        help="Also rerun the currently suspended one-motor-out architecture check.",
+        default=True,
+        help="Collect the one-motor-out architecture check (default: on).",
+    )
+    parser.add_argument(
+        "--skip-single-motor-out",
+        dest="include_single_motor_out",
+        action="store_false",
+        help="Suspend the one-motor-out check (pre-2026-07-16 default).",
     )
     parser.add_argument(
         "--reprocess-existing",
@@ -585,6 +599,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Recompute statuses from the existing raw report without launching Docker.",
     )
     args = parser.parse_args(argv)
+    ensure_open_bundle(OUT)
     report = (
         reprocess_existing_report()
         if args.reprocess_existing

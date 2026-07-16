@@ -336,7 +336,7 @@ class Orchestrator:
         use_surgical_refinement: bool = True,
         realization_inject: bool = False,
         estimator_calibration: bool = True,
-        phase9_hifi: Optional[str] = "both",
+        phase9_hifi: Optional[str] = None,
     ):
         self.llm = llm
         self.rag = rag_retriever
@@ -354,22 +354,29 @@ class Orchestrator:
         self.last_recommended_design = None
         self.last_pareto_designs = []
         self.last_recommended_bindings = {}
-        # Where the explored variation space came from: "llm" (proposed variants),
-        # "fallback" (deterministic ontology set injected because the LLM proposed
-        # none), or None (no variation space / not run yet). Reported, never hidden.
+        self.last_recommended_realizable = None
+        self.last_realizable_front_count = None
+        self.last_recommended_by = None
+        self.last_recommended_estimator_feasible = None
+        self.last_recommendation_status = None
+        self.last_recommendable_front_count = None
+        self.last_exploratory_design = None
+        self.last_exploratory_pareto_alternatives = []
+        self.last_constraint_counts = {}
+        self.last_search_coverage = {}
+        # Where the explored variation space came from: the mandatory deterministic
+        # catalog architecture seed, optional LLM additions, a pre-existing model
+        # space, or None (not run yet). Reported, never hidden.
         self.last_variation_proposal_source = None
         # F1: catalog-grid estimator calibration, applied ONLY around the search
         # (the injected SysML calc defs and Phase 8's estimator_value column keep
         # the documented textbook constants). Provenance recorded, never hidden.
         self.use_estimator_calibration = estimator_calibration
         self.last_estimator_calibration = None
-        # Phase 9: high-fidelity closure. Default "both" (ON): explore() auto-connects
-        # the Phase 8 recommendation to native SITL + Gazebo. When the environment
-        # lacks Docker/arducopter it reports an honest "skipped" (fast, never faked),
-        # so the ON default degrades gracefully off-rig. Set None to disable, or
-        # "sitl"/"gazebo" for a single layer. Best-effort and non-mutating like
-        # Phase 7/8 — NEVER upgrades datasheet CLOSED (SITL/Gazebo verify
-        # feasibility/dynamics, not endurance).
+        # Phase 9 is default-OFF.  A published authority requires the dedicated
+        # realization driver, which freezes the Phase 8 result and then executes
+        # Gazebo -> SITL in one locked run bundle.  Explicit modes remain a
+        # best-effort developer seam and NEVER upgrade datasheet CLOSED.
         self.phase9_hifi = phase9_hifi
         # Refinement asks the LLM for block-level replacements first (surgical:
         # untouched blocks cannot lose connects, output ~10× smaller) and only
@@ -590,6 +597,22 @@ class Orchestrator:
         requirements = generate_result["requirements"]
         system_name  = generate_result["system_name"]
 
+        # Recommendation metadata is run-scoped. Reusing an Orchestrator must never
+        # let a prior run's physical design leak into a new authority decision.
+        self.last_recommended_design = None
+        self.last_pareto_designs = []
+        self.last_recommended_bindings = {}
+        self.last_recommended_realizable = None
+        self.last_realizable_front_count = None
+        self.last_recommended_by = None
+        self.last_recommended_estimator_feasible = None
+        self.last_recommendation_status = None
+        self.last_recommendable_front_count = None
+        self.last_exploratory_design = None
+        self.last_exploratory_pareto_alternatives = []
+        self.last_constraint_counts = {}
+        self.last_search_coverage = {}
+
         # Re-initialise state for this exploration session
         self.state = PrototypingState(
             system_name=system_name,
@@ -671,6 +694,30 @@ class Orchestrator:
                 getattr(self, "last_pareto_designs", []) or [],
                 requirements,
             )
+        elif getattr(self, "last_recommendation_status", None) == "NO_RECOMMENDABLE_DESIGN":
+            from ..realization.matcher import mapping_policy
+            realization = {
+                "verdict": "NO_RECOMMENDABLE_DESIGN",
+                "chosen": None,
+                "per_requirement": [],
+                "forward_flight_ok": None,
+                "rank_preservation": {},
+                "failed_checks": [{
+                    "name": "recommendation_gate",
+                    "passed": False,
+                    "detail": (
+                        "no estimator-feasible, mapping-compliant, Phase8-closable "
+                        "Pareto member"
+                    ),
+                }],
+                "resize_note": "",
+                "realization_model_sysml": "",
+                "mapping_policy": mapping_policy(),
+                "summary": (
+                    "NO RECOMMENDABLE DESIGN — exploratory Pareto retained, but no "
+                    "candidate passed estimator feasibility + catalog mapping + Phase 8 closure"
+                ),
+            }
         if realization:
             print(f"  ✓ {realization['summary']}")
             if self.realization_inject and realization.get("realization_model_sysml"):
@@ -772,8 +819,22 @@ class Orchestrator:
                 }
                 for c in pareto_front
             ],
+            # Diagnostic estimator front, explicitly separate from the official
+            # constrained Pareto above. It can contain designs that fail mapping or
+            # Phase 8 and must never be presented as recommendations.
+            "exploratory_pareto_alternatives": list(
+                getattr(self, "last_exploratory_pareto_alternatives", []) or []
+            ),
+            "dse_constraint_counts": dict(
+                getattr(self, "last_constraint_counts", {}) or {}
+            ),
+            "dse_search_coverage": dict(
+                getattr(self, "last_search_coverage", {}) or {}
+            ),
             "recommended_by": getattr(self, "last_recommended_by", None),
             "recommended_estimator_feasible": getattr(self, "last_recommended_estimator_feasible", None),
+            "recommendation_status": getattr(self, "last_recommendation_status", None),
+            "recommendable_front_count": getattr(self, "last_recommendable_front_count", None),
             "variation_proposal_source": getattr(self, "last_variation_proposal_source", None),
             "estimator_calibration": getattr(self, "last_estimator_calibration", None),
             "dse_verification": verification_artifact,
@@ -809,6 +870,7 @@ class Orchestrator:
         """Phase 8 realization artifact. Best-effort; never breaks the pipeline."""
         try:
             from ..realization.closure import close_the_loop
+            from ..realization.matcher import mapping_policy
             from ..realization.realization_emitter import emit_realization_package
 
             report = close_the_loop(design, pareto_designs, requirements)
@@ -820,8 +882,22 @@ class Orchestrator:
                     "combo": c.rd.combo.name,
                     "pack": c.rd.pack.name,
                     "frame": c.rd.frame.name,
+                    "rotor_count": c.rd.rotor_count,
+                    "rotor_radius_m": c.rd.combo.prop_diameter_in * 0.0254 / 2.0,
+                    "battery_capacity_mah": c.rd.pack.capacity_mah,
+                    "battery_cells": c.rd.pack.cells,
+                    "pack_nominal_voltage_v": c.metrics.pack_voltage_v,
+                    "motor_curve_voltage_v": c.rd.combo.voltage_v,
+                    "voltage_ratio": c.metrics.voltage_ratio,
+                    "derated_max_thrust_per_motor_g": (
+                        c.metrics.derated_max_thrust_per_motor_g
+                    ),
+                    "integration_bundle": c.rd.integration_bundle.name,
+                    "integration_mass_g": c.rd.integration_bundle.mass_g,
+                    "integration_components": list(c.rd.integration_bundle.components),
                     "total_mass_kg": c.metrics.total_mass_kg,
                     "endurance_min": c.metrics.endurance_min,
+                    "total_hover_current_a": c.metrics.total_hover_current_a,
                     "hover_throttle": c.metrics.hover_throttle,
                     "twr": c.metrics.twr_max,
                     "cost": c.metrics.cost,
@@ -862,6 +938,7 @@ class Orchestrator:
                 "resize_note": report.resize_note,
                 "realization_model_sysml": sysml,
                 "summary": summary,
+                "mapping_policy": mapping_policy(),
                 "_report": report,
             }
         except Exception as e:
@@ -1070,17 +1147,64 @@ class Orchestrator:
         # Orchestrator must never leak the previous run's proposal source.
         self.last_variation_proposal_source = None
         text = get_sysml_text(model)
-        if admitted(parse_variation_points(text))[0]:
+        existing_points = admitted(parse_variation_points(text))[0]
+        if any("catalog architecture seed" in p.rationale.lower()
+               for p in existing_points):
             self.last_variation_proposal_source = "model-existing"
-            return model  # already declares admissible variation points
+            return model  # already carries the mandatory catalog seed
 
-        # Scan ALL connected components: requirement-driven proposal skips
-        # components that don't drive a quantified requirement, so we keep looking
-        # to find the ones that DO (e.g. propulsion for speed).  Cap kept modest —
-        # each extra point multiplies the combinatorial space (and costs one LLM
-        # call), and the search budget scales with the point count downstream.
+        # A catalog architecture is a coupled tuple (rotor count, rotor radius,
+        # battery cells), not three independently interchangeable values.  Seed that
+        # complete, evidence-backed tuple space BEFORE asking the LLM for additional
+        # variation points.  Apart from guaranteeing that catalog-realizable outer
+        # designs are searched, making this point the first/canonical declarer keeps
+        # normalize_variation_ownership() from stripping its architecture fields in
+        # favour of a partial LLM proposal.
         max_points = 6
         introduced: List[str] = []
+        catalog_seeded = False
+        seed = self._catalog_seed_variation(text, requirements)
+        if seed is not None:
+            usage, type_name, rationale, reqs, variants = seed
+            new_text, ok = introduce_variation(
+                text, usage, type_name, variants, rationale, reqs
+            )
+            if ok:
+                text = new_text
+                introduced.append(usage)
+                catalog_seeded = True
+                print("  [variation-DSE] injected mandatory evidence-backed catalog "
+                      f"architecture seed on '{usage}' ({len(variants)} architectures)")
+
+        # A model may already contain objective variation points supplied upstream.
+        # Do not generate additional LLM points in that case, but do still add the
+        # mandatory catalog architecture seed above.  This closes the old early-
+        # return hole without mutating the intent of the pre-existing space.
+        if existing_points:
+            if catalog_seeded:
+                self.last_variation_proposal_source = "model-existing+catalog-seed"
+            else:
+                from ..dse.domain_objective import objective_families
+                self.last_variation_proposal_source = (
+                    "model-existing+catalog-seed-unavailable"
+                    if objective_families(requirements) else "model-existing"
+                )
+            if introduced:
+                if not hasattr(model, "metadata") or model.metadata is None:
+                    object.__setattr__(model, "metadata", {})
+                model.metadata["last_sysml_text"] = text
+                print("  [variation-DSE] added mandatory catalog architecture seed "
+                      "beside pre-existing variation points")
+            return model
+
+        # Scan ALL remaining connected components: requirement-driven proposal
+        # skips components that don't drive a quantified requirement, so we keep
+        # looking to find the ones that DO.  The seeded host is no longer returned
+        # by connected_components(), which also gives the coupled architecture tuple
+        # one unambiguous outer-loop owner.  Cap kept modest — each extra point
+        # multiplies the combinatorial space (and costs one LLM call), and the search
+        # budget scales with the point count downstream.
+        llm_introduced: List[str] = []
         for usage, type_name in connected_components(text):
             if len(introduced) >= max_points:
                 break
@@ -1094,37 +1218,26 @@ class Orchestrator:
             if ok:
                 text = new_text
                 introduced.append(usage)
-        if introduced:
-            self.last_variation_proposal_source = "llm"
+                llm_introduced.append(usage)
 
-        # T13 guard: the LLM proposal is the ONLY source of the variation space, and
-        # it can (and did, 2/2 real runs on 2026-07-08) judge every component "not
-        # relevant" — silently dropping the whole objective-DSE + realization path to
-        # the catalog-bilevel fallback. When quantified emergent targets exist, inject
-        # ONE deterministic ontology-driven variation point instead, so the main path
-        # always has a variant space. The source is recorded and reported, not hidden.
-        if not introduced:
-            fb = self._fallback_variation(text, requirements)
-            if fb is not None:
-                usage, type_name, rationale, reqs, variants = fb
-                new_text, ok = introduce_variation(
-                    text, usage, type_name, variants, rationale, reqs
-                )
-                if ok:
-                    text = new_text
-                    introduced.append(usage)
-                    self.last_variation_proposal_source = "fallback"
-                    print("  [variation-DSE] LLM proposed no admissible variants; "
-                          f"injected deterministic ontology fallback on '{usage}'")
+        if catalog_seeded and llm_introduced:
+            self.last_variation_proposal_source = "catalog-seed+llm"
+        elif catalog_seeded:
+            self.last_variation_proposal_source = "catalog-seed"
+        elif llm_introduced:
+            # This is permitted only when no catalog seed is applicable (for example,
+            # requirements without a quantified objective family).  A quantified
+            # catalog-controlled run reports the unavailable state below instead of
+            # silently representing an LLM-only space as catalog-complete.
+            self.last_variation_proposal_source = "llm"
+        else:
+            from ..dse.domain_objective import objective_families
+            if objective_families(requirements):
+                self.last_variation_proposal_source = "catalog-seed-unavailable"
+                print("  [variation-DSE] mandatory catalog architecture seed could not "
+                      "form at least two legal, non-degenerate variants")
             else:
-                from ..dse.domain_objective import objective_families
-                if objective_families(requirements):
-                    self.last_variation_proposal_source = "fallback-unavailable"
-                    print("  [variation-DSE] LLM proposed no admissible variants and the "
-                          "deterministic fallback could not form at least two legal, "
-                          "non-degenerate variants")
-                else:
-                    self.last_variation_proposal_source = "fallback-not-required"
+                self.last_variation_proposal_source = "catalog-seed-not-required"
 
         if introduced:
             if not hasattr(model, "metadata") or model.metadata is None:
@@ -1154,6 +1267,9 @@ class Orchestrator:
             within_requirement_bounds,
         )
         from ..dse.variation_introducer import VariantSpec
+        from ..realization.matcher import (
+            catalog_design_domain, variant_design_is_catalog_admissible,
+        )
 
         targets = requirement_targets(requirements)
         perf_fams = objective_families(requirements)
@@ -1165,6 +1281,7 @@ class Orchestrator:
             for rid, fts in targets.items()
         )
         design_keys = ", ".join(k for k in DESIGN_FIELD_ATTR if k != "battery_capacity_mah")
+        catalog_domain = catalog_design_domain()
         prompt = (
             f"Component '{usage}' (type {type_name}). Quantified requirements:\n"
             f"{quant}\n\n"
@@ -1182,7 +1299,8 @@ class Orchestrator:
             "internally by the inner layer — do NOT declare battery_capacity_mah. Give 4-6 "
             "variants spanning a real trade-off (more rotors / bigger rotor radius → more "
             "lift but heavier; more battery_cells → more power but heavier). satisfies must "
-            "be a subset of the ids above."
+            "be a subset of the ids above. Catalog-controlled values MUST lie in this "
+            f"evidence-backed domain (never invent another voltage family): {catalog_domain}"
         )
         try:
             data = _chat_json(self.llm, prompt)
@@ -1204,6 +1322,8 @@ class Orchestrator:
                 # the requirements it satisfies (e.g. payload ≤ the payload-mass limit), so
                 # out-of-spec implementations never enter the variant library.
                 if not within_requirement_bounds(design, reqs, requirements):
+                    continue
+                if not variant_design_is_catalog_admissible(design):
                     continue
                 attr_lines = []
                 for field, val in design.items():
@@ -1260,15 +1380,16 @@ class Orchestrator:
             return None
 
     @staticmethod
-    def _fallback_variation(model_text: str, requirements: List[str]):
-        """Deterministic ontology-driven variation point for when the LLM proposes none.
+    def _catalog_seed_variation(model_text: str, requirements: List[str]):
+        """Mandatory deterministic catalog architecture seed for the outer loop.
 
-        Only fires when the requirements carry quantified EMERGENT targets (time
-        family) — i.e. the objective DSE has something real to optimize — and the
+        Applies when the requirements carry quantified objective families — i.e. the
+        objective DSE has something real to optimize — and the
         model has a connected component whose name matches a DESIGN_ONTOLOGY concern
         (propulsion/airframe/power). The variant set is a standard engineering
         rotor-count/radius/cells trade (more disk area → endurance ↑ but mass ↑),
-        NOT catalog-derived, so it does not pre-bias Phase 8 realization.
+        restricted to the predeclared evidence-backed catalog domain. This constrains
+        implementability and search coverage, not the objective score or the winner.
         Returns (usage, type_name, rationale, req_ids, variants) or None.
         """
         from ..dse.domain_objective import (
@@ -1303,13 +1424,17 @@ class Orchestrator:
             return None
         _, usage, type_name = best
 
-        # Standard engineering trade set (quad/hexa/octo); values are generic
-        # defaults spanning a real endurance-vs-mass trade-off.
-        designs = [
-            ("quad_fallback", {"rotor_count": 4, "rotor_radius_m": 0.19, "battery_cells": 4}),
-            ("hexa_fallback", {"rotor_count": 6, "rotor_radius_m": 0.19, "battery_cells": 6}),
-            ("octo_fallback", {"rotor_count": 8, "rotor_radius_m": 0.15, "battery_cells": 6}),
-        ]
+        # Generate the seed from compatible frame + voltage-specific
+        # motor/prop-curve + pack evidence, rather than generic architectures.
+        from ..realization.matcher import catalog_design_domain
+        designs = []
+        for arch in catalog_design_domain()["architectures"]:
+            diameter_in = arch["rotor_radius_m"] * 2.0 / 0.0254
+            name = (
+                f"catalog_r{arch['rotor_count']}_p{diameter_in:g}_"
+                f"c{arch['battery_cells']}"
+            ).replace(".", "p")
+            designs.append((name, arch))
         variants = []
         for name, design in designs:
             if not within_requirement_bounds(design, req_ids, requirements):
@@ -1322,18 +1447,24 @@ class Orchestrator:
             variants.append(VariantSpec(name=name, type_name=vtype, attrs=attrs))
         if len(variants) < 2:
             return None
-        rationale = ("deterministic ontology fallback: rotor count/radius vs mass "
-                     "endurance trade (LLM proposed no admissible variation points)")
+        rationale = ("mandatory deterministic catalog architecture seed: evidence-backed "
+                     "coupled rotor-count/radius/cell architectures")
         return usage, type_name, rationale, req_ids, variants
+
+    # Compatibility for callers outside the orchestrator that used the old private
+    # helper name.  Its semantics are now a mandatory architecture seed, not a
+    # last-resort fallback.
+    _fallback_variation = _catalog_seed_variation
 
     def _explore_variations(
         self, model: SysMLModel, requirements: List[str], seed: Optional[int],
     ) -> Tuple[DesignSpace, DesignConfiguration, List[DesignConfiguration]]:
         """Variation-DSE path: introduce variation points, explore them, resolve the
-        recommendation into the model. Falls back to the scalar DSE if none admitted."""
+        recommendation into the model. Falls back to catalog bilevel if none admitted."""
         from ..dse.variation_dse import run_variation_dse
         from ..dse.variation_parser import admitted, parse_variation_points
 
+        pre_variation_text = get_sysml_text(model)
         model = self._introduce_variations(model, requirements)
         introduced_text = get_sysml_text(model)
         # Prime the structured requirement extraction with the LLM (robust to phrasing;
@@ -1348,10 +1479,17 @@ class Orchestrator:
             pass
         realizability = None
         realization_rank = None
+        recommendability = None
+        capacity_options = None
         try:
-            from ..realization.matcher import match
+            from ..realization.matcher import catalog_capacity_options, match
             realizability = lambda di: bool(match(di, requirements))
             from ..realization.closure import close_the_loop
+
+            recommendability = lambda di: close_the_loop(
+                di, [], requirements
+            ).verdict in {"CLOSED", "CLOSED_AFTER_RESIZE"}
+            capacity_options = lambda di: catalog_capacity_options(di, requirements)
 
             def _realization_rank(di):
                 rep = close_the_loop(di, [], requirements)
@@ -1394,6 +1532,8 @@ class Orchestrator:
                 model, requirements=requirements, random_seed=seed or 0,
                 realizability=realizability,
                 realization_rank=realization_rank,
+                recommendability=recommendability,
+                capacity_options=capacity_options,
             )
         if res is None:
             print("  [variation-DSE] no admissible variation space; "
@@ -1412,11 +1552,21 @@ class Orchestrator:
                 description=(p.rationale or "")[:120],
             ))
         best_config = DesignConfiguration(
-            name="variation_recommended", parameters=dict(res.recommended_choices)
+            name=("variation_recommended" if res.recommendation_status == "RECOMMENDED"
+                  else "no_recommendable_design"),
+            parameters=dict(res.recommended_choices),
         )
         pareto_front = [
             DesignConfiguration(name=f"alt{i}", parameters=dict(s), scores=dict(o))
             for i, (s, o) in enumerate(res.pareto_front)
+        ]
+        exploratory_front = [
+            {
+                "name": f"exploratory_alt{i}",
+                "parameters": dict(state),
+                "scores": dict(objectives),
+            }
+            for i, (state, objectives) in enumerate(res.exploratory_pareto_front)
         ]
         # Record the exploration into the design space so the summary reports the
         # real Pareto-front size (not 0): the front members carry multi-objective
@@ -1434,26 +1584,35 @@ class Orchestrator:
         # Wire an Automator-evaluable analysis closure into the recommended model: the
         # endurance constraint references the CHOSEN variants' design attributes
         # (closes the bare-attribute gap). Best-effort — never break the pipeline.
-        concrete = res.concrete_model
-        try:
-            from ..dse.analysis_emitter import inject_endurance_analysis, inject_trade_study
-            injected, ok = inject_endurance_analysis(
-                concrete, requirements, capacity_mah=res.recommended_capacity_mah,
-                design=res.recommended_design)
-            if ok:
-                concrete = injected
-                print("  [variation-DSE] injected Automator-evaluable endurance analysis closure")
-            # also present the Pareto front as a SysML trade study over real alternatives
-            ts, ok_ts = inject_trade_study(
-                concrete, [d for d, _ in res.pareto_designs], requirements,
-                recommended=res.recommended_design, bindings=res.pareto_bindings)
-            if ok_ts:
-                concrete = ts
-                print(f"  [variation-DSE] injected DesignTradeStudy ({len(res.pareto_designs)} alternatives)")
-        except Exception as exc:
-            from ..utils.suppressed import record_suppressed
-            record_suppressed("orchestrator.variation_analysis_injection", exc)
-            pass
+        # A variation declaration is an exploration model, not an implemented system.
+        # If no official recommendation exists, restore the pre-DSE system for downstream
+        # refinement/simulation; otherwise variant declarations look like live, dangling
+        # part usages and create false connectivity failures. Pareto data remains in the
+        # structured result and is deliberately not injected into the authority model.
+        concrete = (
+            res.concrete_model
+            if res.recommendation_status == "RECOMMENDED"
+            else pre_variation_text
+        )
+        if res.recommendation_status == "RECOMMENDED":
+            try:
+                from ..dse.analysis_emitter import inject_endurance_analysis, inject_trade_study
+                injected, ok = inject_endurance_analysis(
+                    concrete, requirements, capacity_mah=res.recommended_capacity_mah,
+                    design=res.recommended_design)
+                if ok:
+                    concrete = injected
+                    print("  [variation-DSE] injected Automator-evaluable endurance analysis closure")
+                # also present the Pareto front as a SysML trade study over real alternatives
+                ts, ok_ts = inject_trade_study(
+                    concrete, [d for d, _ in res.pareto_designs], requirements,
+                    recommended=res.recommended_design, bindings=res.pareto_bindings)
+                if ok_ts:
+                    concrete = ts
+                    print(f"  [variation-DSE] injected DesignTradeStudy ({len(res.pareto_designs)} alternatives)")
+            except Exception as exc:
+                from ..utils.suppressed import record_suppressed
+                record_suppressed("orchestrator.variation_analysis_injection", exc)
         model.metadata["last_sysml_text"] = concrete
         # expose the recommended design for opt-in high-fidelity (Gazebo) verification downstream
         self.last_recommended_design = res.recommended_design
@@ -1463,7 +1622,31 @@ class Orchestrator:
         self.last_realizable_front_count = res.realizable_front_count
         self.last_recommended_by = res.recommended_by
         self.last_recommended_estimator_feasible = res.recommended_estimator_feasible
-        print(f"  [variation-DSE] explored {res.admitted_points} → recommended {res.recommended_choices}")
+        self.last_recommendation_status = res.recommendation_status
+        self.last_recommendable_front_count = res.recommendable_front_count
+        self.last_exploratory_design = res.exploratory_design
+        self.last_exploratory_pareto_alternatives = exploratory_front
+        self.last_constraint_counts = {
+            "evaluated": res.evaluated,
+            "estimator_feasible": res.estimator_feasible_count,
+            "catalog_mapping_compliant": res.mapping_compliant_count,
+            "phase8_closable": res.phase8_closable_count,
+            "constraint_feasible": res.constraint_feasible_count,
+            "official_pareto": len(res.pareto_front),
+            "exploratory_pareto": len(res.exploratory_pareto_front),
+        }
+        self.last_search_coverage = {
+            "mode": res.coverage_mode,
+            "evaluated": res.evaluated,
+            "search_space_size": res.search_space_size,
+        }
+        if res.recommendation_status == "RECOMMENDED":
+            print(f"  [variation-DSE] explored {res.admitted_points} → recommended {res.recommended_choices}")
+        else:
+            print(
+                f"  [variation-DSE] explored {res.admitted_points} → "
+                f"{res.recommendation_status}; exploratory best={res.exploratory_choices}"
+            )
         if res.recommended_capacity_mah is not None:
             print(f"  [variation-DSE] inner BO sized battery → {res.recommended_capacity_mah:.0f} mAh")
         if res.real_quality:
@@ -1509,7 +1692,10 @@ class Orchestrator:
                 print(f"          params: {params}")
 
         best_params = {k: v for k, v in best_config.parameters.items()}
-        print(f"  ✓ Best config applied to model: {best_params}\n")
+        if best_config.name == "no_recommendable_design":
+            print("  ⚠ No official configuration applied; Pareto results are exploratory\n")
+        else:
+            print(f"  ✓ Best config applied to model: {best_params}\n")
 
     # ------------------------------------------------------------------
 

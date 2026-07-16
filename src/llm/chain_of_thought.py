@@ -611,9 +611,10 @@ SAFETY ARCHITECTURE RULE — Two-layer pattern for priority-ordered SAFE require
   Canonical template (adapt priority count and conditions to requirements):
 
     // OWNER: SafetyMonitor
-    action def initiateBatteryRtb    {{ send CMD_RTL()  to overrideCmd; }}
-    action def initiateEmergencyLand {{ send CMD_LAND() to overrideCmd; }}
-    action def deployParachute       {{ send CMD_LAND() to parachutePort; }}
+    action def CMD_PARACHUTE {{ }}
+    action def initiateBatteryRtb    {{ send CMD_RTL()       to overrideCmd; }}
+    action def initiateEmergencyLand {{ send CMD_LAND()      to overrideCmd; }}
+    action def deployParachute       {{ send CMD_PARACHUTE() to parachutePort; }}
 
     // Layer 1 monitors — fault detection only, NO override commands
     // OWNER: SafetyMonitor
@@ -838,11 +839,14 @@ PARAMETRIC CONSTRAINT RULE (MANDATORY):
   Do NOT generate `assert constraint` for these two categories — they are NOT
   structural invariants and will always fail at system initialisation:
 
-  (a) Time-cumulative quantities: variables that start at 0 and accumulate over
-      the mission (e.g. currentFlightTime, missionDuration, flightElapsed).
+  (a) Mission-cumulative quantities: variables that start at 0 and accumulate over
+      the mission (e.g. currentFlightTime, missionDuration, flightElapsed,
+      currentOperationalRange, distanceTravelled).
       A constraint like `currentFlightTime >= minFlightTime` is meaningless as an
       invariant — at t=0 the flight has just started.  These are end-to-end
-      performance requirements verified by SITL, not instantaneous bounds.
+      performance requirements evaluated by downstream fidelity tiers
+      (datasheet closure for endurance/mass; lumped forward-flight and later
+      Gazebo calibration for speed/range), not instantaneous bounds.
 
   (b) Operational-phase-only quantities: variables that are only meaningful
       during a specific phase (e.g. currentGroundSpeed, currentForwardSpeed).
@@ -850,14 +854,15 @@ PARAMETRIC CONSTRAINT RULE (MANDATORY):
       is false on the ground and must not be asserted as an always-true invariant.
 
   For both categories, add a comment instead:
-      // REQ-PERF-NNN: verified by SITL — not an instantaneous invariant
+      // REQ-PERF-NNN: evaluated by its downstream fidelity tier — not an instantaneous invariant
 
   SUMMARY — assert constraint IS appropriate for:
     ✓  maximum bounds that must NEVER be exceeded at any time
        (currentAltitude <= maxAltitude, currentAirspeed <= maxAirspeed,
         payloadMass <= maxPayloadMass, currentWeight <= maxTakeoffWeight)
   assert constraint is NOT appropriate for:
-    ✗  minimum endurance / throughput goals (flightTime >= minFlightTime)
+    ✗  minimum endurance / throughput / range goals
+       (flightTime >= minFlightTime, currentOperationalRange >= minOperationalRange)
     ✗  minimum speed during a specific flight phase (groundSpeed >= minGroundSpeed)
 
 Output a single ```sysml code block containing ONLY the behavioral fragment (with OWNER comments).

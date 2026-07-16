@@ -40,7 +40,8 @@ def emit_realization_package(report: ClosureReport,
     combo_t = _slug(rd.combo.name)
     pack_t = _slug(rd.pack.name)
     frame_t = _slug(rd.frame.name)
-    avionics_a = AVIONICS_POWER_W / rd.combo.voltage_v
+    integration_t = _slug(rd.integration_bundle.name)
+    avionics_a = AVIONICS_POWER_W / metrics.pack_voltage_v
     asserts = []
     satisfies = []
     req_decls = []
@@ -72,12 +73,16 @@ def emit_realization_package(report: ClosureReport,
         f"        attribute propMassG : Real = {float(rd.combo.prop_mass_g)};\n"
         f"        attribute hoverCurrentA : Real = {metrics.hover_current_per_motor_a:.9f};\n"
         f"        attribute hoverThrottle : Real = {metrics.hover_throttle:.9f};\n"
-        f"        attribute maxThrustG : Real = {float(rd.combo.max_thrust_g())};\n"
+        f"        attribute curveVoltageV : Real = {float(rd.combo.voltage_v)};\n"
+        f"        attribute publishedMaxThrustG : Real = {float(rd.combo.max_thrust_g())};\n"
+        f"        attribute deratedMaxThrustG : Real = "
+        f"{metrics.derated_max_thrust_per_motor_g:.9f};\n"
         f"    }}\n"
         f"    part def {pack_t} {{\n"
         f"        doc /* source: {rd.pack.source_url} retrieved {rd.pack.retrieved} */\n"
         f"        attribute capacityMah : Real = {float(rd.pack.capacity_mah)};\n"
         f"        attribute cells : Real = {float(rd.pack.cells)};\n"
+        f"        attribute nominalVoltageV : Real = {metrics.pack_voltage_v:.9f};\n"
         f"        attribute massG : Real = {float(rd.pack.mass_g)};\n"
         f"    }}\n"
         f"    part def {frame_t} {{\n"
@@ -85,9 +90,15 @@ def emit_realization_package(report: ClosureReport,
         f"        attribute massG : Real = {float(rd.frame.mass_g)};\n"
         f"        attribute arms : Real = {float(rd.frame.arms)};\n"
         f"    }}\n"
+        f"    part def {integration_t} {{\n"
+        f"        doc /* source: {rd.integration_bundle.source_url} retrieved "
+        f"{rd.integration_bundle.retrieved}; conservative integration mass budget */\n"
+        f"        attribute massG : Real = {float(rd.integration_bundle.mass_g)};\n"
+        f"    }}\n"
         f"    part realizedPropulsion : {combo_t};\n"
         f"    part realizedPower : {pack_t};\n"
         f"    part realizedAirframe : {frame_t};\n"
+        f"    part realizedIntegration : {integration_t};\n"
         + ("\n".join(req_decls) + "\n" if req_decls else "")
         + f"    calc def RealizedEndurance {{\n"
         f"        in capacityMah : Real; in hoverCurrentA : Real; in rotorCount : Real;\n"
@@ -99,6 +110,9 @@ def emit_realization_package(report: ClosureReport,
         f"{metrics.hover_current_per_motor_a:.9f}, {float(rd.rotor_count)}, {avionics_a:.9f});\n"
         f"        attribute realizedRangeM : Real = {metrics.range_m:.9f};\n"
         f"        attribute realizedMassKg : Real = {metrics.total_mass_kg:.9f};\n"
+        f"        attribute packNominalVoltageV : Real = {metrics.pack_voltage_v:.9f};\n"
+        f"        attribute motorCurveVoltageV : Real = {float(rd.combo.voltage_v):.9f};\n"
+        f"        attribute voltageRatio : Real = {metrics.voltage_ratio:.9f};\n"
         f"        attribute realizedCruiseSpeedMps : Real = "
         f"{(metrics.range_m / (metrics.endurance_min * 60.0)) if metrics.endurance_min > 0 else 0.0:.9f};\n"
         + "\n".join(asserts) + "\n"

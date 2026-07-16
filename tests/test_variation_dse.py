@@ -90,7 +90,7 @@ def test_bilevel_inner_bo_sizes_battery_capacity():
         }
     }
 }"""
-    reqs = ["REQ-PERF-001: cruise speed at least 20 m/s", "REQ-PERF-002: endurance at least 30 minutes"]
+    reqs = ["REQ-PERF-001: cruise speed at least 20 m/s", "REQ-PERF-002: endurance at least 20 minutes"]
     res = run_variation_dse(_model(m), requirements=reqs, iterations=30, random_seed=1)
     assert res.recommended_capacity_mah is not None
     assert 3000 <= res.recommended_capacity_mah <= 22000   # inner BO chose within bounds
@@ -145,7 +145,7 @@ _REALIZABILITY_MODEL = """package Drone {
 
 def _front_for_realizability(self, iterations):
     return SimpleNamespace(members=[
-        ({"liftArch": "octo"}, {"time_sat": 1.0, "cost_efficiency": 1.0}),
+        ({"liftArch": "octo"}, {"time_sat": 0.99, "cost_efficiency": 1.0}),
         ({"liftArch": "hexa"}, {"time_sat": 1.0, "cost_efficiency": 0.90}),
     ])
 
@@ -166,6 +166,7 @@ def test_realizability_recommendation_prefers_realizable_subset(monkeypatch):
         _model(_REALIZABILITY_MODEL),
         requirements=["REQ-PERF-002: endurance at least 20 minutes."],
         realizability=lambda di: di.rotor_count == 6,
+        exhaustive_limit=0,
     )
     assert res is not None
     assert res.recommended_choices == {"liftArch": "hexa"}
@@ -174,7 +175,7 @@ def test_realizability_recommendation_prefers_realizable_subset(monkeypatch):
     assert res.recommended_realizable is True
     assert res.realizable_front_count == 1
     assert res.recommended_estimator_feasible is True
-    assert any("recommendation restricted to 1/2 estimator-feasible and realizable front members" in n
+    assert any("official Pareto rebuilt from 1 constrained-feasible design" in n
                for n in res.notes)
 
 
@@ -188,6 +189,7 @@ def test_datasheet_rank_reorders_realizable_subset(monkeypatch):
         requirements=["REQ-PERF-002: endurance at least 20 minutes."],
         realizability=lambda di: True,
         realization_rank=lambda di: 100.0 if di.rotor_count == 6 else 10.0,
+        exhaustive_limit=0,
     )
     assert res is not None
     assert res.recommended_choices == {"liftArch": "hexa"}
@@ -197,7 +199,7 @@ def test_datasheet_rank_reorders_realizable_subset(monkeypatch):
     assert res.realizable_front_count == 2
     assert res.recommended_by == "datasheet"
     assert res.recommended_estimator_feasible is True
-    assert any("datasheet realization rank" in n for n in res.notes)
+    assert any("datasheet rank inside constrained Pareto" in n for n in res.notes)
 
 
 def test_datasheet_rank_tie_uses_estimator_recommendation_not_lexicographic(monkeypatch):
@@ -210,6 +212,7 @@ def test_datasheet_rank_tie_uses_estimator_recommendation_not_lexicographic(monk
         requirements=["REQ-PERF-002: endurance at least 20 minutes."],
         realizability=lambda di: True,
         realization_rank=lambda di: 10.0,
+        exhaustive_limit=0,
     )
     assert res is not None
     assert res.recommended_choices == {"liftArch": "octo"}
@@ -227,56 +230,184 @@ def test_realizable_but_estimator_infeasible_member_does_not_bypass_gate(monkeyp
         requirements=["REQ-PERF-002: endurance at least 20 minutes."],
         realizability=lambda di: di.rotor_count == 6,
         realization_rank=lambda di: 100.0,
+        exhaustive_limit=0,
     )
     assert res is not None
-    assert res.recommended_choices == {"liftArch": "octo"}
+    assert res.recommended_choices == {}
+    assert res.recommended_design is None
     assert res.recommended_realizable is False
-    assert res.realizable_front_count == 1
-    assert res.recommended_by == "estimator-fallback"
-    assert res.recommended_estimator_feasible is True
-    assert any("no estimator-feasible front member is realizable" in n for n in res.notes)
+    # Mapping is deliberately not evaluated for estimator-infeasible designs.
+    assert res.realizable_front_count == 0
+    assert res.recommendation_status == "NO_RECOMMENDABLE_DESIGN"
+    assert res.recommended_by == "none"
+    assert res.recommended_estimator_feasible is None
+    assert res.exploratory_choices == {"liftArch": "octo"}
+    assert any("none is catalog mapping-compliant" in n for n in res.notes)
 
 
-def test_realizability_recommendation_honestly_falls_back_when_none_match(monkeypatch):
+def test_realizability_recommendation_emits_no_recommendation_when_none_match(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
         _front_for_realizability,
     )
     reqs = ["REQ-PERF-002: endurance at least 20 minutes."]
-    baseline = run_variation_dse(_model(_REALIZABILITY_MODEL), requirements=reqs)
+    baseline = run_variation_dse(
+        _model(_REALIZABILITY_MODEL), requirements=reqs, exhaustive_limit=0
+    )
     res = run_variation_dse(
         _model(_REALIZABILITY_MODEL),
         requirements=reqs,
         realizability=lambda di: False,
+        exhaustive_limit=0,
     )
     assert res is not None and baseline is not None
-    assert res.recommended_choices == baseline.recommended_choices
+    assert res.recommended_choices == {}
+    assert res.recommended_design is None
+    assert res.exploratory_choices == baseline.recommended_choices
     assert res.recommended_realizable is False
     assert res.realizable_front_count == 0
-    assert res.recommended_by is None
-    assert res.recommended_estimator_feasible is True
-    assert any("no front member realizable" in n for n in res.notes)
+    assert res.recommendation_status == "NO_RECOMMENDABLE_DESIGN"
+    assert res.recommended_by == "none"
+    assert res.recommended_estimator_feasible is None
+    assert any("none is catalog mapping-compliant" in n for n in res.notes)
 
 
-def test_datasheet_rank_honestly_falls_back_when_none_realizable(monkeypatch):
+def test_datasheet_rank_does_not_restore_unrealizable_fallback(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
         _front_for_realizability,
     )
     reqs = ["REQ-PERF-002: endurance at least 20 minutes."]
-    baseline = run_variation_dse(_model(_REALIZABILITY_MODEL), requirements=reqs)
+    baseline = run_variation_dse(
+        _model(_REALIZABILITY_MODEL), requirements=reqs, exhaustive_limit=0
+    )
     res = run_variation_dse(
         _model(_REALIZABILITY_MODEL),
         requirements=reqs,
         realizability=lambda di: False,
         realization_rank=lambda di: 1.0,
+        exhaustive_limit=0,
     )
     assert res is not None and baseline is not None
-    assert res.recommended_choices == baseline.recommended_choices
+    assert res.recommended_choices == {}
+    assert res.exploratory_choices == baseline.recommended_choices
     assert res.recommended_realizable is False
     assert res.realizable_front_count == 0
-    assert res.recommended_by == "estimator-fallback"
-    assert res.recommended_estimator_feasible is True
+    assert res.recommendation_status == "NO_RECOMMENDABLE_DESIGN"
+    assert res.recommended_by == "none"
+    assert res.recommended_estimator_feasible is None
+
+
+def test_phase8_closure_gate_can_narrow_mapping_compliant_front(monkeypatch):
+    monkeypatch.setattr(
+        "src.dse.variation_dse.MultiObjectiveMCTS.search",
+        _front_for_realizability,
+    )
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=["REQ-PERF-002: endurance at least 20 minutes."],
+        realizability=lambda di: True,
+        recommendability=lambda di: di.rotor_count == 6,
+        exhaustive_limit=0,
+    )
+    assert res is not None
+    assert res.recommended_choices == {"liftArch": "hexa"}
+    assert res.realizable_front_count == 2
+    assert res.recommendable_front_count == 1
+    assert res.recommendation_status == "RECOMMENDED"
+
+
+def test_mapping_without_phase8_closure_is_not_recommendable(monkeypatch):
+    monkeypatch.setattr(
+        "src.dse.variation_dse.MultiObjectiveMCTS.search",
+        _front_for_realizability,
+    )
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=["REQ-PERF-002: endurance at least 20 minutes."],
+        realizability=lambda di: True,
+        recommendability=lambda di: False,
+        exhaustive_limit=0,
+    )
+    assert res is not None
+    assert res.recommendation_status == "NO_RECOMMENDABLE_DESIGN"
+    assert res.recommended_choices == {}
+    assert res.realizable_front_count == 2
+    assert res.recommendable_front_count == 0
+    assert any("none closes Phase 8" in n for n in res.notes)
+
+
+def test_constraints_are_applied_before_rebuilding_official_pareto(monkeypatch):
+    """Regression for the authoritative failure: a catalog/Phase8-feasible design
+    dominated by an *infeasible* estimator winner must reappear after constraints
+    are applied to the complete evaluated set."""
+    monkeypatch.setattr(
+        "src.dse.variation_dse.objectives_from_design",
+        lambda di, *_args, **_kwargs: (
+            {"time_sat": 1.0, "cost_efficiency": 1.0}
+            if di.rotor_count == 8 else
+            {"time_sat": 1.0, "cost_efficiency": 0.8}
+        ),
+    )
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=["REQ-PERF-002: endurance at least 20 minutes."],
+        iterations=1,
+        realizability=lambda di: di.rotor_count == 6,
+        recommendability=lambda di: di.rotor_count == 6,
+    )
+
+    assert res is not None
+    assert res.coverage_mode == "exhaustive"
+    assert res.evaluated == res.search_space_size == 2
+    assert [state for state, _ in res.exploratory_pareto_front] == [
+        {"liftArch": "octo"}
+    ]
+    assert [state for state, _ in res.pareto_front] == [{"liftArch": "hexa"}]
+    assert res.recommended_choices == {"liftArch": "hexa"}
+    assert res.estimator_feasible_count == 2
+    assert res.mapping_compliant_count == 1
+    assert res.phase8_closable_count == 1
+    assert res.constraint_feasible_count == 1
+    assert any("evaluated=2 -> estimator=2 -> catalog=1 -> phase8=1" in n
+               for n in res.notes)
+
+
+def test_estimator_gate_includes_mtow_before_mapping():
+    mapping_calls = []
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=[
+            "REQ-PERF-002: endurance at least 20 minutes.",
+            "REQ-CONS-001: MTOW shall be <= 1 kg.",
+        ],
+        realizability=lambda di: mapping_calls.append(di) or True,
+        recommendability=lambda di: True,
+        iterations=1,
+    )
+
+    assert res is not None
+    assert res.estimator_feasible_count == 0
+    assert mapping_calls == []
+    assert res.pareto_front == []
+    assert res.recommendation_status == "NO_RECOMMENDABLE_DESIGN"
+    assert any("performance + MTOW gate" in n for n in res.notes)
+
+
+def test_catalog_capacity_callback_keeps_inner_sizing_on_discrete_packs():
+    capacities = [8000.0, 12000.0]
+    res = run_variation_dse(
+        _model(_REALIZABILITY_MODEL),
+        requirements=["REQ-PERF-002: endurance at least 20 minutes."],
+        realizability=lambda di: True,
+        recommendability=lambda di: True,
+        capacity_options=lambda di: capacities,
+        iterations=20,
+    )
+    assert res is not None
+    assert res.pareto_designs
+    assert all(d.battery_capacity_mah in capacities for d, _ in res.pareto_designs)
+    assert any("used real catalog pack capacities" in n for n in res.notes)
 
 
 def test_realizability_none_keeps_legacy_recommendation_metadata(monkeypatch):
@@ -288,6 +419,7 @@ def test_realizability_none_keeps_legacy_recommendation_metadata(monkeypatch):
         _model(_REALIZABILITY_MODEL),
         requirements=["REQ-PERF-002: endurance at least 20 minutes."],
         realizability=None,
+        exhaustive_limit=0,
     )
     assert res is not None
     assert res.recommended_choices == {"liftArch": "octo"}

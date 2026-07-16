@@ -292,14 +292,30 @@ def normalize_variation_ownership(model_text: str, points) -> Tuple[str, List[st
     for field, pts in field_pts.items():
         if len(pts) < 2:
             continue
-        kws = _FIELD_CONCERN.get(field, ())
-        owners = [p for p in pts
-                  if kws and any(k in (p.point_id + " " + " ".join(t for _, t in p.variants)).lower()
-                                 for k in kws)]
-        if len(owners) == 1:
-            owner, why = owners[0], f"{field} → {owners[0].point_id} concern"
+        # A catalog seed encodes a validated COUPLED architecture tuple.  Letting
+        # concern-based ownership move even one of those fields (especially cells)
+        # to an independent LLM point creates rotor/prop/voltage cross-products that
+        # the catalog never asserted.  The seed is therefore the authoritative owner
+        # of every architecture field it declares; other LLM fields retain the normal
+        # ontology-concern ownership rule.
+        seed_owners = [
+            p for p in pts
+            if "catalog architecture seed" in p.rationale.lower()
+        ]
+        if len(seed_owners) == 1:
+            owner = seed_owners[0]
+            why = f"{field} → mandatory coupled catalog architecture seed"
         else:
-            owner, why = pts[0], "first declarer (no/ambiguous concern match)"
+            kws = _FIELD_CONCERN.get(field, ())
+            owners = [p for p in pts
+                      if kws and any(
+                          k in (p.point_id + " " + " ".join(t for _, t in p.variants)).lower()
+                          for k in kws
+                      )]
+            if len(owners) == 1:
+                owner, why = owners[0], f"{field} → {owners[0].point_id} concern"
+            else:
+                owner, why = pts[0], "first declarer (no/ambiguous concern match)"
         attr = DESIGN_FIELD_ATTR[field]
         for p in pts:
             if p is owner:

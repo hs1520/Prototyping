@@ -120,9 +120,16 @@ Core rules:
 
         requirements = self._parse_requirements(cot_result.final_answer)
 
-        # Safeguard: ensure no fixed requirement was dropped or modified by the LLM.
-        # If any is missing from the unified output, re-insert it verbatim.
+        # Fixed requirements own their IDs and wording.  The LLM sometimes copies a
+        # fixed SAFE requirement but appends a severity tag, so a text-only safeguard
+        # would treat it as different and reinsert the original as a duplicate ID.
+        # Merge first, with manual requirements taking precedence, then verify that
+        # every fixed anchor survived verbatim.
+        conflict_warnings: List[str] = []
         if existing_requirements:
+            requirements, conflict_warnings = self.merge_requirements(
+                requirements, existing_requirements
+            )
             requirements = self._verify_fixed_requirements(
                 requirements, existing_requirements
             )
@@ -139,6 +146,7 @@ Core rules:
                 "thought_steps": len(cot_result.thought_steps),
                 "counts_by_category": counts,
                 "dependencies": dependencies,
+                "requirement_conflicts": conflict_warnings,
             },
         )
         self.record_result(result)
@@ -272,6 +280,10 @@ Core rules:
         def _normalize(req: str) -> str:
             m = _REQ_ID_RE.match(req.strip())
             text = m.group(4) if m else req
+            # Severity is metadata, not requirement identity.  The extraction LLM
+            # may append it even though a fixed/manual anchor was required verbatim.
+            text = re.sub(r"\s*\[SEV\s*:[^\]]+\]\s*$", "", text,
+                          flags=re.IGNORECASE)
             return re.sub(r"\s+", " ", text.lower().strip())
 
         def _next_id(category: str, used: set) -> str:

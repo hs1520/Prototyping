@@ -126,12 +126,14 @@ def test_parm_freshness_detects_design_mismatch_and_accepts_match():
 
     lines = ["BATT_CAPACITY        22000", "FRAME_CLASS          1", "# comment"]
     run = {
+        "requirements": [],
         "recommended_design_inputs": {"battery_capacity_mah": 22000.0, "rotor_count": 4},
         "realization": None,
     }
     run["artifact_provenance"] = build_run_provenance(
         model_sysml="model", recommended_design=run["recommended_design_inputs"],
-        realization=None, parm_text="\n".join(lines) + "\n", run_id="test-run",
+        realization=None, requirements=run["requirements"],
+        parm_text="\n".join(lines) + "\n", run_id="test-run",
     )
     fresh, reason = parm_freshness(lines, run, model_sysml="model")
     assert fresh is True

@@ -274,6 +274,36 @@ def test_parachute_requirement_text_tag_match_stays_executable_l2():
     assert linker.traceability_mismatches() == []
 
 
+def test_parachute_guard_with_land_command_is_traceability_blocked():
+    model = build_lite_model(
+        """package D {
+            action def CMD_LAND { }
+            requirement def REQ_SAFE_005 {
+                doc /* Critical propulsion failure shall deploy the parachute. */
+            }
+            part def SafetyMonitor {
+                attribute propulsionCriticalFailure : Boolean = false;
+                satisfy requirement REQ_SAFE_005;
+                action def deployParachute { send CMD_LAND() to parachuteCmd; }
+                state def Monitor {
+                    state nominal;
+                    state chute { entry action p : deployParachute; }
+                    transition initial then nominal;
+                    transition failure first nominal if propulsionCriticalFailure then chute;
+                }
+            }
+        }""",
+        model_name="D",
+    )
+    linker = RequirementLinker(model)
+    spec = {s.req_id: s for s in linker.generate_test_specs()}["REQ_SAFE_005"]
+
+    assert spec.tier == "TRACE"
+    assert spec.inject.kind == "skip"
+    assert "CMD_PARACHUTE" in spec.notes
+    assert "SERVO8_FUNCTION" not in linker.generate_parm_file()
+
+
 def test_bridge_report_surfaces_traceability_mismatch(tmp_path):
     model = build_lite_model(
         """package D {
@@ -402,6 +432,132 @@ def test_attr_match_requires_requirement_text_relevance():
     linker = RequirementLinker(model)
     assert linker._lookup_catalogue("REQ_CONS_003") is None  # noqa: SLF001
     assert "WPNAV_SPEED" not in linker.generate_parm_file()
+
+
+def test_verification_method_annotation_does_not_trigger_control_loop_mapping():
+    model = _model_with_req(
+        "REQ_FUNC_001",
+        "The system shall navigate to GPS waypoints with CEP below 1.0 metre. "
+        "[V: hardware-in-the-loop / field survey]",
+        "attribute controlFrequency : Real = 100.0;",
+    )
+    linker = RequirementLinker(model)
+    assert linker._lookup_catalogue("REQ_FUNC_001") is None  # noqa: SLF001
+    assert "SCHED_LOOP_RATE" not in linker.generate_parm_file()
+
+
+def test_headwind_groundspeed_is_not_verified_by_navigation_speed_setpoint():
+    model = _model_with_req(
+        "REQ_PERF_004",
+        "The system shall maintain a minimum forward ground speed of 2 m/s "
+        "in sustained headwinds of 15 m/s.",
+        "attribute minCruiseAirspeed : Real = 18.0;",
+        part_name="PropulsionSystem",
+    )
+    linker = RequirementLinker(model)
+    assert linker._lookup_catalogue("REQ_PERF_004") is None  # noqa: SLF001
+    assert "WPNAV_SPEED" not in linker.generate_parm_file()
+
+
+def test_postflight_report_to_gcs_does_not_claim_gcs_loss_guard():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_FUNC_008 {
+                doc /* The system shall transmit a post-flight health report to the GCS after landing. */
+            }
+            part def SafetyMonitor {
+                attribute commLossTime : Real = 0.0;
+                satisfy requirement REQ_FUNC_008;
+                state def Monitor {
+                    state nominal;
+                    state land;
+                    transition initial then nominal;
+                    transition lost first nominal if commLossTime > 10.0 then land;
+                }
+            }
+        }""",
+        model_name="D",
+    )
+    linker = RequirementLinker(model)
+
+    assert linker._lookup_catalogue("REQ_FUNC_008") is None  # noqa: SLF001
+    assert all(s.req_id != "REQ_FUNC_008" for s in linker.generate_test_specs())
+
+
+def test_compound_contingency_is_not_proven_by_one_fault_guard():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_FUNC_007 {
+                doc /* The system shall return to base for GCS link loss, geofence breach, or battery state-of-charge at the return threshold. */
+            }
+            part def SafetyMonitor {
+                attribute batterySoc : Real = 100.0;
+                satisfy requirement REQ_FUNC_007;
+                state def Monitor {
+                    state nominal;
+                    state rtb;
+                    transition initial then nominal;
+                    transition low first nominal if batterySoc <= 25.0 then rtb;
+                }
+            }
+        }""",
+        model_name="D",
+    )
+    linker = RequirementLinker(model)
+
+    assert linker._requirement_families("REQ_FUNC_007") == {  # noqa: SLF001
+        "BATTERY", "GCS", "GEOFENCE"
+    }
+    assert linker._lookup_catalogue("REQ_FUNC_007") is None  # noqa: SLF001
+
+
+def test_gcs_no_response_boundary_is_not_proven_by_positive_failsafe():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_SAFE_009 {
+                doc /* The system shall maintain its active flight plan without initiating a communication-loss emergency landing when the GCS uplink is interrupted for 9.9 seconds or less. */
+            }
+            part def SafetyMonitor {
+                attribute commLossTime : Real = 0.0;
+                satisfy requirement REQ_SAFE_009;
+                state def Monitor {
+                    state nominal;
+                    state land;
+                    transition initial then nominal;
+                    transition lost first nominal if commLossTime > 10.0 then land;
+                }
+            }
+        }""",
+        model_name="D",
+    )
+    linker = RequirementLinker(model)
+    spec = {s.req_id: s for s in linker.generate_test_specs()}["REQ_SAFE_009"]
+
+    assert spec.tier == "TRACE"
+    assert spec.inject.kind == "skip"
+    assert "positive response" in spec.notes
+    mismatch = linker.traceability_mismatches()[0]
+    assert mismatch["expected_family"] == "GCS_NO_RESPONSE_BOUNDARY"
+
+
+def test_nil_wind_airspeed_still_maps_to_navigation_speed_setpoint():
+    model = _model_with_req(
+        "REQ_PERF_003",
+        "The system shall achieve a maximum airspeed of at least 18 m/s "
+        "in nil-wind conditions.",
+        "attribute maxAirspeed : Real = 18.0;",
+        part_name="PropulsionSystem",
+    )
+    linker = RequirementLinker(model)
+    match = linker._lookup_catalogue("REQ_PERF_003")  # noqa: SLF001
+
+    assert match is not None
+    assert match["semantic_tag"] == "MAX_SPEED"
+    wpnav_line = next(
+        line for line in linker.generate_parm_file().splitlines()
+        if line.startswith("WPNAV_SPEED")
+    )
+    assert wpnav_line.split()[1] == "1800"
 
 
 def test_attr_match_text_gate_unlocks_the_right_entry():

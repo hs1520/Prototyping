@@ -41,8 +41,12 @@ def _runs(n_seeds=5):
 
 
 def test_front_spreads_under_binding_requirement():
-    fronts = [len(r.pareto_front) for r in _runs()]
-    assert sum(f >= 2 for f in fronts) >= 4   # ≥2-point front in ≥4/5 seeds (not collapsed)
+    runs = _runs()
+    # The exploratory estimator front retains the trade-off spread. The official
+    # front is intentionally narrower because it contains only hard-feasible designs.
+    fronts = [len(r.exploratory_pareto_front) for r in runs]
+    assert sum(f >= 2 for f in fronts) >= 4
+    assert all(r.pareto_front for r in runs)
 
 
 def test_main_architecture_choice_is_stable_across_seeds():
@@ -92,8 +96,10 @@ _ALL_INFEASIBLE = _GATE_MODEL.replace(
 def test_flags_infeasibility_when_no_design_meets_requirement():
     r = run_variation_dse(SimpleNamespace(metadata={"last_sysml_text": _ALL_INFEASIBLE}),
                           requirements=_REQS, iterations=60, random_seed=0)
-    assert r.recommended_design is not None                      # still returns a best-effort pick
-    assert any("INFEASIBLE" in n for n in r.notes)               # but flags it honestly
+    assert r.recommended_design is None                          # never upgrades best-effort
+    assert r.exploratory_design is not None                      # diagnostic pick is preserved
+    assert r.recommendation_status == "NO_RECOMMENDABLE_DESIGN"
+    assert any("NO_RECOMMENDABLE_DESIGN" in n for n in r.notes)
 
 
 # two variation points both parametrising rotor → must be deduplicated before search
@@ -145,6 +151,9 @@ _COMP_REQS = ["REQ-PERF-002: endurance at least 20 minutes at maximum rated payl
 def test_component_mass_enters_all_up_mass():
     r = run_variation_dse(SimpleNamespace(metadata={"last_sysml_text": _COMP_MODEL}),
                           requirements=_COMP_REQS, iterations=40, random_seed=0)
-    assert r.recommended_design is not None
+    # This deliberately heavy synthetic design cannot meet endurance, so it stays
+    # exploratory; the mass accounting must still be correct in the evaluated design.
+    assert r.recommended_design is None
+    assert r.exploratory_design is not None
     # all-up NON-structural mass = delivery payload (1.0 rated) + gimbal component (1.5) = 2.5
-    assert abs(r.recommended_design.payload_mass_kg - 2.5) < 1e-6
+    assert abs(r.exploratory_design.payload_mass_kg - 2.5) < 1e-6

@@ -138,6 +138,40 @@ def test_matrix_marks_executed_l2_pass_and_fail_from_results():
     assert "l2_sitl_failed" in failed.tiers and failed.status == "failed"
 
 
+def test_matrix_never_marks_an_unmet_datasheet_result_verified():
+    model = build_lite_model(_MODEL, model_name="D")
+    linker = RequirementLinker(model)
+    realization = {
+        "per_requirement": [{
+            "req_id": "REQ-PERF-002", "family": "time", "scope": "closure",
+            "target": 20.0, "realized_value": 15.0, "met": False,
+        }],
+    }
+
+    row = {r.req_id: r for r in build_matrix(model, realization, linker)}["REQ_PERF_002"]
+
+    assert row.status == "failed"
+    assert "datasheet_failed" in row.tiers
+    assert "datasheet" not in row.tiers
+
+
+def test_matrix_never_marks_an_unmet_forward_flight_result_verified():
+    model = build_lite_model(_MODEL, model_name="D")
+    linker = RequirementLinker(model)
+    realization = {
+        "per_requirement": [{
+            "req_id": "REQ-FUNC-002", "family": "range", "scope": "forward_flight",
+            "target": 10.0, "realized_value": 5.0, "met": False,
+        }],
+    }
+
+    row = {r.req_id: r for r in build_matrix(model, realization, linker)}["REQ_FUNC_002"]
+
+    assert row.status == "failed"
+    assert "forward_flight_failed" in row.tiers
+    assert "forward_flight" not in row.tiers
+
+
 def test_matrix_requires_an_l1_validation_result_before_marking_l1_verified():
     model = build_lite_model(
         """package D {

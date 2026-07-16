@@ -6,7 +6,11 @@ boundary — even for an unreachable target it stops at the cost/endurance sweet
 """
 from __future__ import annotations
 
-from src.dse.inner_sizing import CAPACITY_BOUNDS, optimize_capacity
+from src.dse.inner_sizing import (
+    CAPACITY_BOUNDS,
+    optimize_capacity,
+    optimize_discrete_capacity,
+)
 
 _QUAD = {
     "payload_mass_kg": 0.5, "battery_cells": 4,
@@ -36,3 +40,11 @@ def test_unreachable_target_stays_internal_not_pinned_to_bound():
 def test_bo_actually_searches():
     r = optimize_capacity(_QUAD, 15.0, n_init=4, n_iter=16)
     assert r["bo_evals"] == 20                 # 4 init + 16 iterations
+
+
+def test_discrete_sizing_can_only_select_an_actual_catalog_capacity():
+    capacities = [8000.0, 10000.0, 12000.0]
+    r = optimize_discrete_capacity(_QUAD, 15.0, capacities)
+    assert r["capacity_mah"] in capacities
+    assert r["bo_evals"] == len(capacities)
+    assert r["sizing_mode"] == "catalog_discrete"

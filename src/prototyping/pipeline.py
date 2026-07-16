@@ -50,7 +50,7 @@ class PrototypingPipeline:
         parse_strict: bool = False,
         verbose: bool = False,
         dse_mode: str = "variation",
-        phase9_hifi: Optional[str] = "both",
+        phase9_hifi: Optional[str] = None,
     ):
         self.llm = llm
         self.parse_strict = parse_strict
@@ -81,8 +81,10 @@ class PrototypingPipeline:
         # DSE mode at the user entry point. Orchestrator's own flag stays default
         # OFF (direct-construction contract); the pipeline opts the chosen path in.
         self.orchestrator.use_variation_dse = self._dse_flags(dse_mode)
-        # Phase 9 high-fidelity closure defaults ON ("both"); degrades to an honest
-        # skip when Docker/arducopter are absent. Pass None to disable.
+        # Phase 9 is default-OFF here.  The authoritative driver freezes a single
+        # base bundle before running Gazebo then SITL and is the only path allowed
+        # to publish ``examples/output/latest``.  This switch remains an explicit,
+        # best-effort developer seam; it never creates a published authority.
         self.orchestrator.phase9_hifi = phase9_hifi
 
     @staticmethod
@@ -370,6 +372,11 @@ class PrototypingPipeline:
             "evaluation_history": result.get("evaluation_history"),
             "best_config": result.get("best_config"),
             "pareto_alternatives": result.get("pareto_alternatives"),
+            "exploratory_pareto_alternatives": result.get(
+                "exploratory_pareto_alternatives"
+            ),
+            "dse_constraint_counts": result.get("dse_constraint_counts"),
+            "dse_search_coverage": result.get("dse_search_coverage"),
             "design_space_summary": result.get("design_space_summary"),
             "llm_usage": result.get("llm_usage"),
         }
@@ -398,6 +405,7 @@ class PrototypingPipeline:
                 "resize_note": realization.get("resize_note"),
             }
         for key in ("recommended_by", "recommended_estimator_feasible",
+                    "recommendation_status", "recommendable_front_count",
                     "variation_proposal_source", "estimator_calibration"):
             if result.get(key) is not None:
                 report[key] = result.get(key)

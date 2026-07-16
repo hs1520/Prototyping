@@ -1,6 +1,7 @@
 from src.dse.physics_estimator import DesignInputs
-from src.realization.catalog import DEFAULT_CATALOG
+from src.realization.catalog import DEFAULT_CATALOG, U7_V2_KV490_17x58_4S
 from src.realization.closure import close_the_loop
+from src.realization.matcher import match
 
 from .realization_fixtures import catalog
 
@@ -64,14 +65,53 @@ def test_default_real_catalog_4s_quad_snaps_to_endurance_pack_for_realistic_need
     assert rep.chosen.metrics.endurance_min >= 18.0
 
 
-def test_default_real_catalog_closes_feasible_octo_after_x8_collection():
-    # The traced X8 frame removes the former octo structural gap. A feasible 6S octo
-    # should now match X8 + MN3508/P15x5 6S + Tattu 6S and close honestly.
+def test_default_real_catalog_4s_hexa_has_heavy_payload_mapping_but_honest_gap():
+    # A 10Ah recommendation must not silently jump to the new 24/30Ah packs:
+    # the 10% identity boundary remains binding even though the catalog grew.
+    d = DesignInputs(1.5, 10000, 4, 6, 17 * 0.0254 / 2, 0.0)
+    reqs = [
+        "REQ-PERF-002: minimum endurance of 25 minutes with maximum rated payload",
+        "REQ-CONS-003: maximum take-off mass shall not exceed 8.0 kg",
+    ]
+    assert match(d, reqs, DEFAULT_CATALOG)
+    rep = close_the_loop(d, [], reqs, DEFAULT_CATALOG)
+    assert rep.verdict == "INFEASIBLE_REALIZATION"
+    assert rep.chosen is not None
+    assert rep.chosen.rd.combo is U7_V2_KV490_17x58_4S
+    assert rep.chosen.rd.pack.capacity_mah == 10000.0
+    assert rep.chosen.metrics.endurance_min < 25.0
+
+
+def test_default_real_catalog_closes_4s_hexa_with_integration_and_voltage_derating():
+    d = DesignInputs(1.5, 30000, 4, 6, 17 * 0.0254 / 2, 0.0)
+    reqs = [
+        "REQ-PERF-002: minimum endurance of 25 minutes with maximum rated payload",
+        "REQ-CONS-003: maximum take-off mass shall not exceed 8.0 kg",
+    ]
+    rep = close_the_loop(d, [], reqs, DEFAULT_CATALOG)
+    assert rep.verdict == "CLOSED"
+    assert rep.chosen is not None
+    assert rep.chosen.rd.combo is U7_V2_KV490_17x58_4S
+    assert "T960 TL960A" in rep.chosen.rd.frame.name
+    assert rep.chosen.rd.pack.capacity_mah == 30000.0
+    assert rep.chosen.rd.pack.nominal_voltage_v == 14.4
+    assert rep.chosen.rd.integration_bundle.mass_g == 500.0
+    assert rep.chosen.metrics.pack_voltage_v == 14.4
+    assert rep.chosen.metrics.voltage_ratio < 1.0
+    assert rep.chosen.metrics.total_mass_kg <= 8.0
+    assert rep.chosen.metrics.endurance_min >= 25.0
+
+
+def test_default_real_catalog_octo_no_longer_ignores_integration_mass():
+    # The X8 still maps structurally, but adding its explicit 600g octo
+    # integration allowance reveals that the old 25min closure was optimistic.
     d = DesignInputs(1.5, 16000, 6, 8, 15 * 0.0254 / 2, 0.0)
     rep = close_the_loop(d, [], ["REQ-PERF-002: flight endurance of at least 25 minutes."],
                          DEFAULT_CATALOG)
-    assert rep.verdict in {"CLOSED", "CLOSED_AFTER_RESIZE"}
+    assert rep.verdict == "INFEASIBLE_REALIZATION"
     assert rep.chosen is not None
     assert rep.chosen.rd.frame.arms == 8
     assert rep.chosen.rd.frame.name.startswith("Tarot X8")
-    assert rep.per_requirement and all(v.met for v in rep.per_requirement)
+    assert rep.chosen.rd.integration_bundle.mass_g == 600.0
+    assert rep.chosen.metrics.endurance_min < 25.0
+    assert rep.per_requirement and not all(v.met for v in rep.per_requirement)

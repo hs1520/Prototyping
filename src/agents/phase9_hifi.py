@@ -1,8 +1,10 @@
 """Phase 9 seam: connect the Phase 8 recommendation to the high-fidelity runners.
 
-This bridge auto-connects the meet-in-the-middle recommendation to native SITL
-feasibility and/or Gazebo dynamics (default ON at the orchestrator; degrades to an
-honest "skipped" when Docker/arducopter are absent). It is deliberately kept out of
+This bridge connects an explicitly requested recommendation to native SITL
+feasibility and/or Gazebo dynamics.  It is default-OFF: authoritative runs are
+owned by ``examples/run_realization_report.py``, which first freezes one base
+bundle and then collects every evidence layer into that same bundle.  This module
+is deliberately kept out of
 ``orchestrator`` so the launch mechanics (artifact persistence + subprocess to the
 mature standalone runners) are isolated and easy to monkeypatch in tests.
 
@@ -23,10 +25,15 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..prototyping.artifact_provenance import sha256_json, validate_run_provenance
+from ..prototyping.artifact_store import (
+    OUTPUT_DIR_ENV, atomic_write_json, atomic_write_text, output_dir,
+)
+
 # Runners are invoked as subprocesses (src must not import examples/), so the
 # module dependency direction stays clean.
 _ROOT = Path(__file__).resolve().parents[2]
-_OUTPUT_DIR = _ROOT / "examples" / "output"
+_OUTPUT_DIR = output_dir()
 _SITL_RUNNER = _ROOT / "examples" / "run_sitl_feasibility.py"
 _GAZEBO_RUNNER = _ROOT / "examples" / "run_gazebo_feasibility.py"
 
@@ -36,7 +43,10 @@ VALID_MODES = ("sitl", "gazebo", "both")
 def _layers_for(mode: str) -> List[str]:
     mode = (mode or "").strip().lower()
     if mode == "both":
-        return ["sitl", "gazebo"]
+        # Gazebo must precede SITL: the SITL runner is the sole writer of the
+        # executed verification matrix and can therefore incorporate both L3
+        # dynamics evidence and its own L1/L2 evidence in one final matrix.
+        return ["gazebo", "sitl"]
     if mode in ("sitl", "gazebo"):
         return [mode]
     return []
@@ -51,7 +61,6 @@ def _persist_recommendation(design, model_text: str, output_dir: Path) -> None:
     latest recommended design, so a fresh run whose recommendation differs from a
     previous run's leftover .parm would otherwise be rejected."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "final_model.sysml").write_text(model_text or "", encoding="utf-8")
     run_json = output_dir / "realization_run.json"
     existing: Dict[str, Any] = {}
     if run_json.exists():
@@ -59,9 +68,18 @@ def _persist_recommendation(design, model_text: str, output_dir: Path) -> None:
             existing = json.loads(run_json.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             existing = {}
+    if existing.get("artifact_provenance"):
+        ok, reason = validate_run_provenance(existing, model_sysml=model_text or "")
+        if not ok:
+            raise RuntimeError(f"refusing to mutate authoritative base bundle: {reason}")
+        expected = existing.get("recommended_design_inputs")
+        actual = dict(vars(design)) if design is not None else None
+        if sha256_json(expected) != sha256_json(actual):
+            raise RuntimeError("refusing Phase 9 design that differs from authoritative run")
+        return  # authoritative base artifacts are immutable during evidence collection
+    atomic_write_text(output_dir / "final_model.sysml", model_text or "")
     existing["recommended_design_inputs"] = dict(vars(design)) if design is not None else None
-    run_json.write_text(json.dumps(existing, indent=2, ensure_ascii=False, default=str),
-                        encoding="utf-8")
+    atomic_write_json(run_json, existing)
     if design is not None:
         try:
             from ..sitl.dse_sitl_params import design_to_sitl_parm
@@ -71,10 +89,10 @@ def _persist_recommendation(design, model_text: str, output_dir: Path) -> None:
             for key, value in (ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {}).items():
                 if key not in present:
                     lines.append(f"{key:<20} {value}")
-            (output_dir / "recommended.parm").write_text(
+            atomic_write_text(
+                output_dir / "recommended.parm",
                 "# Phase 9: recommended design SITL params; native SITL is "
                 "architecture-nondiscriminating for endurance.\n" + "\n".join(lines) + "\n",
-                encoding="utf-8",
             )
         except Exception:
             # If .parm generation fails, remove any stale one so the runner
@@ -99,14 +117,15 @@ def _env_available(layer: str) -> Optional[str]:
     return f"unknown layer {layer!r}"
 
 
-def _run_subprocess(script: Path, extra_args: List[str], timeout_s: int) -> Dict[str, Any]:
+def _run_subprocess(script: Path, extra_args: List[str], timeout_s: int,
+                    output_dir: Path) -> Dict[str, Any]:
     proc = subprocess.run(
         [sys.executable, str(script), *extra_args],
         cwd=str(_ROOT),
         capture_output=True,
         text=True,
         timeout=timeout_s,
-        env={**os.environ, "PYTHONPATH": str(_ROOT)},
+        env={**os.environ, "PYTHONPATH": str(_ROOT), OUTPUT_DIR_ENV: str(output_dir)},
     )
     return {"returncode": proc.returncode, "stdout": proc.stdout[-4000:], "stderr": proc.stderr[-2000:]}
 
@@ -129,7 +148,7 @@ def run_layer(layer: str, design, model_text: str,
 
     _persist_recommendation(design, model_text, output_dir)
     if layer == "sitl":
-        run = _run_subprocess(_SITL_RUNNER, [], timeout_s)
+        run = _run_subprocess(_SITL_RUNNER, [], timeout_s, output_dir)
         report = _read_report(output_dir / "sitl_feasibility_report.json")
         flight = (report or {}).get("flight") or {}
         safety = (report or {}).get("safety_verification") or {}
@@ -142,18 +161,18 @@ def run_layer(layer: str, design, model_text: str,
             "returncode": run["returncode"],
             "flight_passed": flight.get("passed"),
             "safety_status": safety.get("status"),
-            "report": "examples/output/sitl_feasibility_report.md",
+            "report": str(output_dir / "sitl_feasibility_report.md"),
             "redline": "native SITL verifies flight feasibility + L2 safety, not endurance",
         }
     # gazebo: exit 2 = a requirement FAILED (ran fine); "error" only when no report.
-    run = _run_subprocess(_GAZEBO_RUNNER, [], timeout_s)
+    run = _run_subprocess(_GAZEBO_RUNNER, [], timeout_s, output_dir)
     report = _read_report(output_dir / "gazebo_feasibility_report.json")
     return {
         "layer": "gazebo",
         "status": "ran" if report is not None else "error",
         "returncode": run["returncode"],
         "gazebo_status": (report or {}).get("status"),
-        "report": "examples/output/gazebo_feasibility_report.md",
+        "report": str(output_dir / "gazebo_feasibility_report.md"),
         "redline": "Gazebo verifies high-fidelity dynamics, not endurance",
     }
 

@@ -423,6 +423,25 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         if not cot_result.extracted_sysml:
             raise RuntimeError("[SysML_EXTRACTION_ERROR] 未提取到SysML v2 design.")
 
+        # Deterministic semantic cleanup applies to both initial generation and
+        # refinement.  These are requirement-operator invariants, not stylistic
+        # guesses, so do not spend another LLM call repairing them.
+        cleaned_sysml, capability_fixes = self._fix_capability_semantics(
+            cot_result.extracted_sysml, requirements
+        )
+        cleaned_sysml, action_fixes = self._fix_safety_action_semantics(cleaned_sysml)
+        if capability_fixes or action_fixes:
+            cot_result = dataclasses.replace(cot_result, extracted_sysml=cleaned_sysml)
+            generation_metadata["semantic_fixes"] = {
+                "capability": capability_fixes,
+                "safety_action": action_fixes,
+            }
+            if verbose:
+                print(
+                    f"\n  [DEBUG] Semantic consistency fixes: "
+                    f"capability={capability_fixes}, safety_action={action_fixes}"
+                )
+
         parse_label = "After Refinement" if is_refinement else "After Initial Generation"
 
         # Parse via syside native API (replaces Syside_AST_Parser)
@@ -1168,6 +1187,102 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         matches = invalid_re.findall(sysml_text)
         cleaned = invalid_re.sub("", sysml_text)
         return cleaned, len(matches)
+
+    @staticmethod
+    def _fix_capability_semantics(
+        sysml_text: str, requirements: List[str]
+    ) -> Tuple[str, int]:
+        """Repair range-floor naming and remove invalid always-on invariants.
+
+        Operational range is a mission-end capability.  When the structured
+        requirement is a lower bound, ``currentRange <= maxRange`` verifies the
+        opposite property, while ``currentRange >= minRange`` is false at
+        startup.  Keep the design target as ``min*Range`` and leave evaluation
+        to the forward-flight fidelity tier.
+        """
+        try:
+            from ..dse.requirement_spec import RANGE, extract_requirements
+            specs = extract_requirements(requirements)
+            has_floor = any(s.quantity == RANGE and s.operator == ">=" for s in specs)
+            has_ceiling = any(s.quantity == RANGE and s.operator == "<=" for s in specs)
+        except Exception:
+            return sysml_text, 0
+        if not has_floor or has_ceiling:
+            return sysml_text, 0
+
+        fixes = 0
+
+        def _rename(match: re.Match) -> str:
+            nonlocal fixes
+            fixes += 1
+            token = match.group(0)
+            return ("min" if token.startswith("max") else "Min") + token[3:]
+
+        result = re.sub(
+            r"\b(?:max|Max)(?:Operational)?Range\b",
+            _rename,
+            sysml_text,
+        )
+
+        constraint_re = re.compile(
+            r"(?ms)^(?P<indent>[ \t]*)assert\s+constraint\s+\w+\s*\{"
+            r"(?P<body>[^{}]*(?:current\w*Range|distance\w*)[^{}]*)\}\s*"
+        )
+
+        def _drop_constraint(match: re.Match) -> str:
+            nonlocal fixes
+            body = match.group("body")
+            is_mission_range = re.search(
+                r"\b(?:current(?:Operational)?Range|distanceTravelled)\b",
+                body,
+                re.IGNORECASE,
+            ) and re.search(
+                r"\b(?:min|max)(?:Operational)?Range\b",
+                body,
+                re.IGNORECASE,
+            )
+            if not is_mission_range:
+                return match.group(0)
+            fixes += 1
+            return (
+                f"{match.group('indent')}// Operational range is a mission-end "
+                "capability evaluated by forward-flight fidelity, not an invariant.\n"
+            )
+
+        return constraint_re.sub(_drop_constraint, result), fixes
+
+    @staticmethod
+    def _fix_safety_action_semantics(sysml_text: str) -> Tuple[str, int]:
+        """Prevent a parachute action from sending a flight-mode LAND command."""
+        action_re = re.compile(
+            r"(?P<head>action\s+def\s+\w*(?:parachute|chute)\w*\s*\{)"
+            r"(?P<body>[^{}]*)(?P<tail>\})",
+            re.IGNORECASE,
+        )
+        fixes = 0
+
+        def _fix_action(match: re.Match) -> str:
+            nonlocal fixes
+            body, n = re.subn(
+                r"\bsend\s+CMD_(?:LAND|RTL|AUTO|GUIDED|LOITER|POSHOLD)\s*\(\)",
+                "send CMD_PARACHUTE()",
+                match.group("body"),
+                flags=re.IGNORECASE,
+            )
+            fixes += n
+            return match.group("head") + body + match.group("tail")
+
+        result = action_re.sub(_fix_action, sysml_text)
+        if fixes and not re.search(r"\baction\s+def\s+CMD_PARACHUTE\b", result):
+            first_part = re.search(r"(?m)^[ \t]*part\s+def\s+", result)
+            if first_part:
+                result = (
+                    result[:first_part.start()]
+                    + "    action def CMD_PARACHUTE { }\n\n"
+                    + result[first_part.start():]
+                )
+                fixes += 1
+        return result, fixes
 
     # ──────────────────────────────────────────────────────────────────────
     # RAG query builders

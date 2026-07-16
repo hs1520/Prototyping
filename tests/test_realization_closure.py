@@ -4,10 +4,10 @@ from src.realization.forward_flight import G, RHO, power_at_speed
 from src.realization.forward_flight_check import max_sustainable_speed_mps
 from src.realization.matcher import match
 
-from .realization_fixtures import catalog, frame, pack
+from .realization_fixtures import catalog, combo, frame, pack
 
 
-def _design(capacity=16000, payload=1.0):
+def _design(capacity=12000, payload=1.0):
     return DesignInputs(payload, capacity, 6, 4, 18 * 0.0254 / 2, 0.0)
 
 
@@ -22,11 +22,26 @@ def test_closed_verdict():
 def test_closed_after_resize_verdict():
     cat = catalog(packs=[
         pack("small", capacity=8000, mass=900),
-        pack("big", capacity=20000, mass=2100),
+        pack("nearby", capacity=8800, mass=950),
     ])
-    rep = close_the_loop(_design(capacity=8000), [], ["REQ-PERF-002: endurance at least 40 minutes."], cat)
+    rep = close_the_loop(_design(capacity=8000), [], ["REQ-PERF-002: endurance at least 32 minutes."], cat)
     assert rep.verdict == "CLOSED_AFTER_RESIZE"
-    assert "small" in rep.resize_note and "big" in rep.resize_note
+    assert "small" in rep.resize_note and "nearby" in rep.resize_note
+
+
+def test_closure_rejects_a_component_set_with_excessive_mapping_drift():
+    cat = catalog(
+        combos=[combo(diameter=15.0)],
+        packs=[pack("wrong-voltage", capacity=16000, cells=4)],
+    )
+    rep = close_the_loop(_design(capacity=16000), [], [
+        "REQ-PERF-002: endurance at least 15 minutes."
+    ], cat)
+
+    assert rep.verdict == "INFEASIBLE_REALIZATION"
+    assert {check.name for check in rep.failed_checks} & {
+        "design_cells_match", "mapping_rotor_radius"
+    }
 
 
 def test_infeasible_verdict_has_failed_checks_or_gap():

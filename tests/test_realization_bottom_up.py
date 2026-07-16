@@ -7,7 +7,13 @@ from src.realization.bottom_up import (
     realized_metrics,
     realized_total_mass_kg,
 )
-from src.realization.catalog import BatteryPack, Frame, MotorPropCombo, MotorPropPoint
+from src.realization.catalog import (
+    BatteryPack,
+    Frame,
+    IntegrationBundle,
+    MotorPropCombo,
+    MotorPropPoint,
+)
 
 
 def _combo(price=100.0):
@@ -59,6 +65,38 @@ def test_payload_split_clamps_negative_equipment_to_zero():
 def test_realized_total_mass_is_sum_of_real_components():
     rd = _rd(_pack(12000, 1400.0))
     assert realized_total_mass_kg(rd) == pytest.approx(0.8 + 4 * 0.12 + 1.4 + 1.5 + 0.4)
+
+
+def test_realized_total_mass_includes_explicit_integration_bundle():
+    bundle = IntegrationBundle(
+        "integration budget", "engineering assumption", "2026-07-14", 500.0,
+        ("ESCs", "flight controller", "wiring"),
+    )
+    base = _rd(_pack(12000, 1400.0))
+    rd = RealizedDesign(
+        base.combo, base.pack, base.frame, base.rotor_count,
+        base.delivery_payload_kg, base.equipment_mass_kg, bundle,
+    )
+    assert realized_total_mass_kg(rd) == pytest.approx(
+        realized_total_mass_kg(base) + 0.5
+    )
+
+
+def test_lower_nominal_voltage_is_derated_instead_of_treated_as_equal_s_count():
+    lipo = _pack(12000, 1400.0)
+    li_ion = BatteryPack(
+        "synthetic 6S Li-ion", "synthetic", "synthetic",
+        12000, 6, 1400.0, 20.0, nominal_voltage_v=21.6,
+    )
+    baseline = realized_metrics(_rd(lipo))
+    derated = realized_metrics(_rd(li_ion))
+    assert derated.pack_voltage_v == 21.6
+    assert derated.voltage_ratio == pytest.approx(21.6 / 22.2)
+    assert derated.hover_current_per_motor_a > baseline.hover_current_per_motor_a
+    assert derated.hover_throttle > baseline.hover_throttle
+    assert derated.derated_max_thrust_per_motor_g < baseline.derated_max_thrust_per_motor_g
+    assert derated.endurance_min < baseline.endurance_min
+    assert "derated" in derated.notes[0]
 
 
 def test_endurance_increases_with_larger_pack_but_with_diminishing_return():

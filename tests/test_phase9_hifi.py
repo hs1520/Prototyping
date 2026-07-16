@@ -21,7 +21,7 @@ def _design():
 def test_mode_maps_to_layers():
     assert phase9._layers_for("sitl") == ["sitl"]
     assert phase9._layers_for("gazebo") == ["gazebo"]
-    assert phase9._layers_for("both") == ["sitl", "gazebo"]
+    assert phase9._layers_for("both") == ["gazebo", "sitl"]
     assert phase9._layers_for("nonsense") == []
     assert phase9._layers_for(None) == []
 
@@ -123,7 +123,7 @@ def test_phase9_rejects_unknown_mode():
     assert Orchestrator._phase9_hifi_artifact("teleport", _design(), "package D {}", []) is None
 
 
-def test_orchestrator_phase9_defaults_on_and_is_overridable():
-    assert Orchestrator(llm=object()).phase9_hifi == "both"  # default ON
+def test_orchestrator_phase9_defaults_off_and_is_overridable():
+    assert Orchestrator(llm=object()).phase9_hifi is None
     assert Orchestrator(llm=object(), phase9_hifi="sitl").phase9_hifi == "sitl"
-    assert Orchestrator(llm=object(), phase9_hifi=None).phase9_hifi is None  # disable
+    assert Orchestrator(llm=object(), phase9_hifi="both").phase9_hifi == "both"

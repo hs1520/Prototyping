@@ -8,7 +8,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, Mapping
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PROVENANCE_FIELD = "artifact_provenance"
 
 
@@ -39,13 +39,15 @@ def catalog_sha256() -> str:
 
 
 def build_run_provenance(*, model_sysml: str, recommended_design: Any,
-                         realization: Any, parm_text: str | None,
+                         realization: Any, requirements: Any,
+                         parm_text: str | None,
                          run_id: str | None = None) -> dict[str, Any]:
     chosen = (realization or {}).get("chosen") if isinstance(realization, dict) else None
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id or str(uuid.uuid4()),
         "model_sha256": sha256_text(model_sysml),
+        "requirements_sha256": sha256_json(requirements),
         "catalog_sha256": catalog_sha256(),
         "recommended_design_sha256": sha256_json(recommended_design),
         "realized_components_sha256": sha256_json(chosen),
@@ -65,6 +67,10 @@ def validate_run_provenance(run_json: Mapping[str, Any] | None,
         return False, "artifact_provenance schema/run_id is invalid"
     if model_sysml is not None and provenance.get("model_sha256") != sha256_text(model_sysml):
         return False, "final_model.sysml does not belong to the realization run"
+    if provenance.get("requirements_sha256") != sha256_json(
+        run_json.get("requirements")
+    ):
+        return False, "requirement-set fingerprint does not match realization_run.json"
     if provenance.get("catalog_sha256") != catalog_sha256():
         return False, "component catalog changed since the realization run"
     if provenance.get("recommended_design_sha256") != sha256_json(

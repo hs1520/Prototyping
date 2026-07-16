@@ -12,12 +12,15 @@ that SITL actually calibrates (endurance-vs-capacity, Spearman=1.0).
 """
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Iterable
 
 from .inner_bo import BayesianOptimizer
 from .physics_estimator import DesignInputs, endurance_min, total_mass_kg
 
-CAPACITY_BOUNDS = (3000.0, 22000.0)  # mAh, plausible multirotor pack range
+# The evidence-backed realization catalog now contains 24Ah and 30Ah 4S UAV
+# packs.  Keeping the continuous fallback capped at 22Ah would make that real
+# domain unreachable whenever discrete catalog sizing is unavailable.
+CAPACITY_BOUNDS = (3000.0, 30000.0)  # mAh, evidence-backed multirotor range
 
 
 def optimize_capacity(
@@ -51,4 +54,30 @@ def optimize_capacity(
         "endurance_min": round(endurance_min(di), 2),
         "total_mass_kg": round(total_mass_kg(di), 3),
         "bo_evals": res.n_evals,
+    }
+
+
+def optimize_discrete_capacity(
+    arch: Dict[str, float], target_endurance_min: float,
+    capacities_mah: Iterable[float], mass_weight: float = 0.05,
+) -> Dict[str, float]:
+    """Select a real catalog capacity using the same objective as continuous BO."""
+    candidates = sorted({float(x) for x in capacities_mah if float(x) > 0})
+    if not candidates:
+        raise ValueError("at least one catalog capacity is required")
+
+    def score(cap: float) -> tuple[float, float]:
+        di = DesignInputs(battery_capacity_mah=cap, **arch)
+        endurance = endurance_min(di)
+        sat = min(1.0, endurance / target_endurance_min) if target_endurance_min > 0 else 1.0
+        return sat - mass_weight * total_mass_kg(di), -cap
+
+    cap = max(candidates, key=score)
+    di = DesignInputs(battery_capacity_mah=cap, **arch)
+    return {
+        "capacity_mah": round(cap, 1),
+        "endurance_min": round(endurance_min(di), 2),
+        "total_mass_kg": round(total_mass_kg(di), 3),
+        "bo_evals": len(candidates),
+        "sizing_mode": "catalog_discrete",
     }

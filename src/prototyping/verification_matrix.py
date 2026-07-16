@@ -29,14 +29,19 @@ TIER_METHOD: Dict[str, str] = {
     "l1_param_planned": "Inspection (config consistency — planned, not executed)",
     "l1_param_failed": "Inspection (config consistency — failed)",
     "datasheet": "Analysis (manufacturer datasheet)",
+    "datasheet_failed": "Analysis (manufacturer datasheet — requirement failed)",
     "forward_flight": "Analysis (lumped momentum model)",
+    "forward_flight_failed": "Analysis (lumped momentum model — requirement failed)",
     "behavioral_sim": "Analysis (model-level simulation)",
     "gazebo_deferred": "Test (Gazebo — planned, see SITL_INTEGRATION_DESIGN S8/T9)",
     "inspection_analysis": "Inspection/Analysis (outside simulation scope)",
 }
 
 _VERIFIED_TIERS = {"l2_sitl", "gazebo", "l1_param", "datasheet", "forward_flight", "behavioral_sim"}
-_FAILED_TIERS = {"l2_sitl_failed", "l1_param_failed", "gazebo_failed"}
+_FAILED_TIERS = {
+    "l2_sitl_failed", "l1_param_failed", "gazebo_failed",
+    "datasheet_failed", "forward_flight_failed",
+}
 _PLANNED_TIERS = {"l2_sitl_planned", "l1_param_planned", "gazebo_deferred"}
 
 # Requirements that are inspection/analysis work in any real programme — the
@@ -163,13 +168,19 @@ def build_matrix(model, realization: Optional[dict], linker,
             continue
         scope = v.get("scope")
         if scope == "closure":
-            tiers[rid].add("datasheet")
+            if v.get("met") is True:
+                tiers[rid].add("datasheet")
+            elif v.get("met") is False:
+                tiers[rid].add("datasheet_failed")
             extra = f" — {v.get('note')}" if v.get("note") else ""
             evidence[rid].append(
                 f"datasheet closure: {v.get('family')} realized={v.get('realized_value')} "
                 f"target={v.get('target')} met={v.get('met')}{extra}")
         elif scope == "forward_flight":
-            tiers[rid].add("forward_flight")
+            if v.get("met") is True:
+                tiers[rid].add("forward_flight")
+            elif v.get("met") is False:
+                tiers[rid].add("forward_flight_failed")
             evidence[rid].append(
                 f"forward-flight (lumped): {v.get('family')} realized={v.get('realized_value')} "
                 f"met={v.get('met')}")

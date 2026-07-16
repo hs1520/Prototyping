@@ -112,7 +112,8 @@ def test_orchestrator_applies_calibration_only_around_the_search(monkeypatch):
     captured = {}
 
     def fake_run_variation_dse(m, requirements=None, iterations=None, random_seed=0,
-                               realizability=None, realization_rank=None):
+                               realizability=None, realization_rank=None,
+                               recommendability=None, capacity_options=None):
         captured["during"] = calibration_active()
         return VariationDSEResult(
             recommended_choices={"liftArch": "hexa"},

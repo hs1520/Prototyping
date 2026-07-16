@@ -26,13 +26,16 @@ from src.realization.closure import close_the_loop
 from src.prototyping.artifact_provenance import (
     validate_derived_provenance, validate_run_provenance,
 )
+from src.prototyping.artifact_store import (
+    atomic_write_json, atomic_write_text, ensure_open_bundle, output_dir,
+)
 from src.sitl.dse_sitl_params import FRAME_CLASS, design_to_sitl_parm
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE, SITLBridge
 from src.sitl.sitl_specs import TestContext
 from src.sysml.lite_model import build_lite_model
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "examples" / "output"
+OUT = output_dir()
 SYSML_PATH = OUT / "final_model.sysml"
 FALLBACK_SYSML_PATH = ROOT / "examples" / "drone_system_v2.sysml"
 PARM_PATH = OUT / "recommended.parm"
@@ -43,6 +46,8 @@ REPORT_JSON = OUT / "sitl_feasibility_report.json"
 REPORT_MD = OUT / "sitl_feasibility_report.md"
 STATIC_REPORT_JSON = OUT / "sitl_feasibility_static_report.json"
 STATIC_REPORT_MD = OUT / "sitl_feasibility_static_report.md"
+MATRIX_JSON = OUT / "verification_matrix.json"
+MATRIX_MD = OUT / "verification_matrix.md"
 MODEL_NAME = "AutonomousDrone"
 
 
@@ -175,7 +180,7 @@ def _prepare_bridge_inputs(model, allow_stale: bool = False) -> tuple[SITLBridge
         primary = _parm_lines_from_json()
     supplemental = bridge._linker.generate_parm_file().splitlines()  # noqa: SLF001
     lines = merge_parm_lines(primary, supplemental)
-    bridge_parm.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(bridge_parm, "\n".join(lines) + "\n")
     return bridge, source
 
 
@@ -445,7 +450,9 @@ def matrix_summary(model, bridge: SITLBridge,
                    l1_results=None, l2_results=None) -> dict | None:
     """Verification-matrix counts (best-effort): tiers make 'unmapped' interpretable."""
     try:
-        from src.prototyping.verification_matrix import build_matrix, summarize
+        from src.prototyping.verification_matrix import (
+            build_matrix, summarize, to_json, to_markdown,
+        )
 
         run_json = None
         realization = None
@@ -453,10 +460,20 @@ def matrix_summary(model, bridge: SITLBridge,
             run_json = json.loads(RUN_JSON.read_text(encoding="utf-8"))
             realization = run_json.get("realization")
         gazebo = _fresh_gazebo_report(run_json)
-        return summarize(build_matrix(
+        rows = build_matrix(
             model, realization, bridge._linker, gazebo=gazebo,  # noqa: SLF001
             l1_results=l1_results, l2_results=l2_results,
-        ))
+        )
+        # The live SITL run is the last evidence-producing tier, so it owns the
+        # final matrix artifact.  Persist rows with executed L1/L2 results instead
+        # of leaving the earlier strategy-only matrix (all SITL checks "planned").
+        matrix_payload = to_json(rows)
+        if RUN_JSON.exists():
+            run_json = json.loads(RUN_JSON.read_text(encoding="utf-8"))
+            matrix_payload["source_provenance"] = run_json.get("artifact_provenance")
+        atomic_write_json(MATRIX_JSON, matrix_payload)
+        atomic_write_text(MATRIX_MD, to_markdown(rows))
+        return summarize(rows)
     except Exception:
         return None
 
@@ -555,7 +572,7 @@ def _coverage_lines(coverage: dict) -> list[str]:
 
 
 def _write_static_report(report: dict) -> None:
-    STATIC_REPORT_JSON.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_json(STATIC_REPORT_JSON, report)
     lines = [
         "# SITL Feasibility Static Plan",
         "",
@@ -582,7 +599,7 @@ def _write_static_report(report: dict) -> None:
             f"- {r['req_id']}: inject={r['inject']}, verify={r['verify']}, "
             f"pre_takeoff_m={r['pre_takeoff_m']}{guard}"
         )
-    STATIC_REPORT_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(STATIC_REPORT_MD, "\n".join(lines) + "\n")
 
 
 def safety_verification_status(l2: list[dict], trace: list[dict]) -> dict:
@@ -695,7 +712,7 @@ def _recompute_realization_summary(data: dict) -> dict:
 
 
 def _write_reports(report: dict) -> None:
-    REPORT_JSON.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_json(REPORT_JSON, report)
     l2 = report.get("safety_l2", [])
     l2_ok = sum(1 for r in l2 if r.get("passed"))
     safety = report.get("safety_verification") or safety_verification_status(
@@ -754,7 +771,7 @@ def _write_reports(report: dict) -> None:
         suffix = f" ({r['note']})" if r.get("note") else ""
         guard = f" [guard: {r['model_guard']}]" if r.get("model_guard") else ""
         lines.append(f"- {r['req_id']}: {'PASS' if r['passed'] else 'FAIL'} — {r['message']}{suffix}{guard}")
-    REPORT_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(REPORT_MD, "\n".join(lines) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -771,6 +788,7 @@ def main(argv: list[str] | None = None) -> int:
              "run (parm_source is then marked STALE in the reports).",
     )
     args = parser.parse_args(argv)
+    ensure_open_bundle(OUT)
     model, model_source, model_source_note = _read_model()
     if args.dry_run:
         report = build_static_report(model, model_source, model_source_note,
@@ -793,6 +811,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "realization_summary": _load_realization_summary(),
     }
+    if RUN_JSON.exists():
+        try:
+            run_json = json.loads(RUN_JSON.read_text(encoding="utf-8"))
+            report["source_provenance"] = run_json.get("artifact_provenance")
+        except (OSError, ValueError):
+            report["source_provenance"] = None
     report["coverage"] = coverage_summary(bridge)
     report["traceability"] = traceability_results(bridge)
     if report["traceability"]:
