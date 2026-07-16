@@ -14,17 +14,37 @@ linkable guard/attribute or a state-machine behaviour) while the LLM is still in
 the loop.
 
 Honesty boundary: the issues only ask for MODEL anchors that the parameter linker or
-the behavioural simulator can genuinely exercise. Requirements that need hardware/HIL
-evidence (CEP, attitude RMS, RTCM corrections) will simply remain unassigned if the
-LLM cannot anchor them truthfully — the audit creates the OPPORTUNITY for evidence,
-never the evidence itself, and the surgical gates (requirement-def set frozen,
-satisfy links may not shrink) prevent the fix from rewriting the spec instead.
+the behavioural simulator can genuinely exercise. Requirements that explicitly need
+external measurement (CEP, attitude RMS, RTCM corrections) are excluded from the
+surgical issue list and remain visibly unassigned in the matrix. The surgical gates
+(requirement-def set frozen, satisfy links may not shrink) prevent a model repair from
+rewriting the spec instead.
 """
 from __future__ import annotations
 
+import re
 from typing import List, Optional
 
 _ISSUE_PREFIX = "[VERIFY-GAP]"
+_EXTERNAL_EVIDENCE_PATTERNS = (
+    re.compile(r"\bcircular\s+error\s+probable\b", re.IGNORECASE),
+    re.compile(r"\bcep\b", re.IGNORECASE),
+    re.compile(r"\brtcm\b", re.IGNORECASE),
+    re.compile(r"\bdifferential\s+gnss\b", re.IGNORECASE),
+    re.compile(r"\brtk(?:\s+bench)?\b", re.IGNORECASE),
+    re.compile(r"\battitude\b.{0,160}\brms\b", re.IGNORECASE),
+    re.compile(r"\broll\b.{0,100}\bpitch\b.{0,100}\brms\b", re.IGNORECASE),
+)
+
+
+def _requires_external_evidence(text: str) -> bool:
+    """Return True for criteria a SysML edit cannot truthfully verify.
+
+    This deliberately keys on the measured quantity, not a generic ``HIL`` tag:
+    many behavioural requirements can still gain a useful executable model
+    anchor even when HIL is their eventual acceptance method.
+    """
+    return any(pattern.search(text or "") for pattern in _EXTERNAL_EVIDENCE_PATTERNS)
 
 
 def _phase8_will_anchor(req_id: str, text: str) -> bool:
@@ -70,11 +90,37 @@ def verification_gap_issues(model_text: str, model_name: str,
         return []
     issues: List[str] = []
     for row in rows:
-        if row.status != "unassigned":
+        behavioral_failed = "behavioral_sim_failed" in row.tiers
+        if row.status != "unassigned" and not behavioral_failed:
             continue
         text = " ".join((row.text or "").split())[:220]
         if _phase8_will_anchor(row.req_id, text):
             continue
+        if not behavioral_failed and _requires_external_evidence(text):
+            # Keep the row UNASSIGNED in the verification matrix, but do not ask
+            # the surgical LLM to fabricate model evidence for a measured
+            # hardware/HIL quantity.
+            continue
+        if behavioral_failed:
+            issues.append(
+                f"{_ISSUE_PREFIX} {row.req_id} has a behavioral verification anchor, "
+                f"but its executable model-level scenario FAILS. Requirement: \"{text}\". "
+                "Repair the complete satisfying part def; do not add another declaration-only "
+                "state machine. Every declared state must be reachable, the initial/default "
+                "state must agree with its Boolean attribute, and the required transition or "
+                "entry action must actually execute under simulation."
+            )
+            continue
+        default_guidance = ""
+        low = text.lower()
+        if any(k in low for k in ("power-on", "power on", "default", "startup", "start-up")):
+            default_guidance = (
+                " For a power-on/default-state requirement, model an explicit initial state "
+                "and a consistent Boolean attribute. A single-state invariant is allowed; "
+                "if Locked/Unlocked (or any multiple states) are declared, add the real "
+                "release/re-lock transitions so no state is unreachable. Tie the default "
+                "state to an entry action or explicit initial attribute value."
+            )
         issues.append(
             f"{_ISSUE_PREFIX} {row.req_id} has no verification anchor at any tier — it "
             f"will land UNASSIGNED in the verification matrix. Requirement: \"{text}\". "
@@ -84,11 +130,24 @@ def verification_gap_issues(model_text: str, model_name: str,
             "e.g. a power-on default state or a numeric limit), OR (b) a state-machine "
             "transition whose guard implements the required behaviour so the "
             "behavioural simulator can exercise it. Do NOT invent physics calcs, do "
-            "NOT add or remove requirement defs, and do NOT fake evidence for "
-            "hardware-only criteria (CEP / attitude RMS / RTCM) — leaving those "
-            "unassigned is the honest outcome."
+            "NOT add or remove requirement defs, and do NOT fake external evidence."
+            f"{default_guidance}"
         )
     return issues[:limit]
+
+
+def behavioral_result_regressed(before_sim, after_sim) -> bool:
+    """True when a surgical anchor makes behavioral execution strictly worse."""
+    before = getattr(before_sim, "behavioral_result", None)
+    after = getattr(after_sim, "behavioral_result", None)
+    if before is None:
+        return bool(after and after.failed_scenarios())
+    if after is None:
+        return bool(before.scenario_results)
+    return (
+        after.sim_score + 1e-12 < before.sim_score
+        or len(after.failed_scenarios()) > len(before.failed_scenarios())
+    )
 
 
 def is_verify_gap_issue(issue: object) -> bool:

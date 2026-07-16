@@ -1954,8 +1954,10 @@ class Orchestrator:
                             )
                             remaining = self._verification_gap_issues(
                                 anchored.merged_text, current_model.name)
+                            from .verification_audit import behavioral_result_regressed
                             regressed = (
                                 bool(anchor_sim.failed_scenarios())
+                                or behavioral_result_regressed(sim_result, anchor_sim)
                                 or anchor_eval.weighted_total < rule_score - 0.05
                             )
                             if not regressed and len(remaining) < len(verify_gaps):

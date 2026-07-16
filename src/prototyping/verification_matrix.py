@@ -33,6 +33,7 @@ TIER_METHOD: Dict[str, str] = {
     "forward_flight": "Analysis (lumped momentum model)",
     "forward_flight_failed": "Analysis (lumped momentum model — requirement failed)",
     "behavioral_sim": "Analysis (model-level simulation)",
+    "behavioral_sim_failed": "Analysis (model-level simulation — failed)",
     "gazebo_deferred": "Test (Gazebo — planned, see SITL_INTEGRATION_DESIGN S8/T9)",
     "inspection_analysis": "Inspection/Analysis (outside simulation scope)",
 }
@@ -40,7 +41,7 @@ TIER_METHOD: Dict[str, str] = {
 _VERIFIED_TIERS = {"l2_sitl", "gazebo", "l1_param", "datasheet", "forward_flight", "behavioral_sim"}
 _FAILED_TIERS = {
     "l2_sitl_failed", "l1_param_failed", "gazebo_failed",
-    "datasheet_failed", "forward_flight_failed",
+    "datasheet_failed", "forward_flight_failed", "behavioral_sim_failed",
 }
 _PLANNED_TIERS = {"l2_sitl_planned", "l1_param_planned", "gazebo_deferred"}
 
@@ -60,6 +61,7 @@ _GAZEBO_KWS = (
 )
 
 _BEHAVIORAL_TEXT_KWS = ("phase", "sequence", "sequential", "state", "mode", "transition")
+_INITIALIZATION_KWS = ("power-on", "power on", "default", "initial", "startup", "start-up")
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,36 @@ def _result_map(results) -> Dict[str, bool]:
     return mapped
 
 
+def _guard_signature(guard) -> tuple:
+    return (
+        getattr(guard, "kind", None),
+        getattr(guard, "attribute", None),
+        getattr(guard, "operator", None),
+        getattr(guard, "threshold", None),
+        getattr(guard, "enum_type", None),
+        getattr(guard, "enum_value", None),
+    )
+
+
+def _record_behavioral_outcome(
+    rid: str,
+    outcomes: List[bool],
+    tiers: Dict[str, set],
+    evidence: Dict[str, List[str]],
+    description: str,
+) -> bool:
+    """Persist real simulator evidence; return True when an outcome existed."""
+    if not outcomes:
+        return False
+    if all(outcomes):
+        tiers[rid].add("behavioral_sim")
+        evidence[rid].append(f"{description} (PASS)")
+    else:
+        tiers[rid].add("behavioral_sim_failed")
+        evidence[rid].append(f"{description} (FAIL)")
+    return True
+
+
 def build_matrix(model, realization: Optional[dict], linker,
                  gazebo: Optional[dict] = None,
                  l1_results=None, l2_results=None) -> List[MatrixRow]:
@@ -116,6 +148,10 @@ def build_matrix(model, realization: Optional[dict], linker,
     ``realization`` is the Phase 8 dict (``realization_run.json``'s "realization"
     value) or None when the latest run produced no recommendation.
     """
+    from src.simulation.behavioral_sim import (
+        run_behavioral_simulation,
+        run_initialization_scenario,
+    )
     from src.simulation.state_extractor import extract_state_machines
 
     req_texts: Dict[str, str] = dict(getattr(linker, "_req_texts", {}) or {})
@@ -187,12 +223,28 @@ def build_matrix(model, realization: Optional[dict], linker,
         elif scope == "deferred":
             evidence[rid].append(f"Phase 8 deferred: {v.get('note') or v.get('family')}")
 
-    # 3. Behavioral-sim tier: the model declares the trigger chain (guard) or the
-    #    satisfying part owns a state machine that the text is about.
+    # 3. Behavioral-sim tier. Presence of a state machine is not evidence: the
+    #    exact simulator scenario must pass. This prevents declaration-only
+    #    anchors from turning an UNASSIGNED row into a false green.
+    model_text = model.to_sysml_text() or ""
     try:
-        sm_owners = {sm.owner_part for sm in extract_state_machines(model.to_sysml_text() or "")}
+        state_machines = extract_state_machines(model_text)
+        behavioral = run_behavioral_simulation(model_text)
     except Exception:
-        sm_owners = set()
+        state_machines = []
+        behavioral = None
+    results_by_machine: Dict[str, List[bool]] = {}
+    if behavioral is not None:
+        known_names = {sm.name for sm in state_machines}
+        for result in behavioral.scenario_results:
+            if result.state_machine in known_names:
+                results_by_machine.setdefault(result.state_machine, []).append(
+                    bool(result.passed)
+                )
+    machines_by_owner: Dict[str, list] = {}
+    for sm in state_machines:
+        machines_by_owner.setdefault(sm.owner_part, []).append(sm)
+
     for rid in universe:
         # A TRACE-blocked requirement's guard assignment is the WRONG-family guard
         # the gate rejected — it must not earn a behavioral-sim tier from it.
@@ -201,12 +253,63 @@ def build_matrix(model, realization: Optional[dict], linker,
         if assigned:
             g = assigned.get("guard")
             attr = getattr(g, "attribute", "?")
-            tiers[rid].add("behavioral_sim")
-            evidence[rid].append(f"model guard '{attr}' exercised at behavioral-sim tier")
-        elif any(p in sm_owners for p in satisfy_map.get(rid, [])) and any(
-                k in low for k in _BEHAVIORAL_TEXT_KWS):
-            tiers[rid].add("behavioral_sim")
-            evidence[rid].append("satisfying part's state machine exercised at behavioral-sim tier")
+            signature = _guard_signature(g)
+            matched_names = [
+                sm.name
+                for sm in machines_by_owner.get(assigned.get("part"), [])
+                if any(
+                    _guard_signature(sm_guard) == signature
+                    for transition in sm.transitions
+                    for sm_guard in transition.guards
+                )
+            ]
+            outcomes = [
+                outcome
+                for name in matched_names
+                for outcome in results_by_machine.get(name, [])
+            ]
+            _record_behavioral_outcome(
+                rid, outcomes, tiers, evidence,
+                f"model guard '{attr}' exercised at behavioral-sim tier",
+            )
+            continue
+
+        owners = satisfy_map.get(rid, [])
+        owner_machines = [
+            sm for owner in owners for sm in machines_by_owner.get(owner, [])
+        ]
+
+        # Default/initial-state requirements need initialization semantics, not
+        # a fabricated fault transition. Select machines whose initial-state
+        # name is actually mentioned by the requirement (e.g. Locked).
+        if any(k in low for k in _INITIALIZATION_KWS):
+            compact_low = "".join(ch for ch in low if ch.isalnum())
+            init_candidates = [
+                sm for sm in owner_machines
+                if sm.initial_state
+                and "".join(
+                    ch for ch in sm.initial_state.lower() if ch.isalnum()
+                ) in compact_low
+            ]
+            init_outcomes = [
+                run_initialization_scenario(sm).passed for sm in init_candidates
+            ]
+            if _record_behavioral_outcome(
+                rid, init_outcomes, tiers, evidence,
+                "initial/default-state invariant exercised at behavioral-sim tier",
+            ):
+                continue
+
+        if any(k in low for k in _BEHAVIORAL_TEXT_KWS):
+            outcomes = [
+                outcome
+                for sm in owner_machines
+                for outcome in results_by_machine.get(sm.name, [])
+            ]
+            _record_behavioral_outcome(
+                rid, outcomes, tiers, evidence,
+                "requirement-linked state-machine scenario exercised at behavioral-sim tier",
+            )
 
     # 4/5. Keyword rules — inspection/analysis and Gazebo-planned. Only applied when
     #    the requirement has doc text (no text → nothing to judge by).

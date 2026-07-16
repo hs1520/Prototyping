@@ -65,6 +65,12 @@ KEY CONSTRUCT RULES (same as generation):
       transition initial then nominal;
       transition <name>Fault first nominal if <condition> then fault;
   }
+  // Initialization/default-state requirements are NOT fault monitors:
+  // - declare the required initial state and a consistent Boolean attribute;
+  // - a single-state invariant may contain only `transition initial`;
+  // - if multiple states are declared, every state MUST be reachable through
+  //   real guarded/accept transitions (never add an empty Locked/Unlocked shell);
+  // - connect state entry actions to the required actuator/default response.
   Numeric guards never use `==`; enum guards use `if mode == Type::VALUE`."""
 
 

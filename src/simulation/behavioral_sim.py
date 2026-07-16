@@ -390,6 +390,98 @@ def _expected_trigger_step(guard: GuardCondition,
 # Scenario runner
 # ---------------------------------------------------------------------------
 
+def run_initialization_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
+    """Verify an initialization/default-state machine without inventing a fault.
+
+    Some requirements are invariants ("default to Locked on power-on"), not
+    fault-triggered responses.  They legitimately need no guard transition when
+    the machine has a single default state.  A multi-state declaration is not
+    allowed to hide behind that exception: every declared state must still be
+    structurally reachable from the initial state.
+    """
+    result = BehavioralScenarioResult(
+        name=sm.name,
+        state_machine=sm.name,
+        description=f"{sm.owner_part}.{sm.name}: verify initial/default state semantics",
+        passed=False,
+        tags=["initialization"],
+    )
+    state_names = {s.name for s in sm.states}
+    initial = sm.initial_state
+    if not initial:
+        result.violations.append("No initial state is declared")
+        return result
+    if initial not in state_names:
+        result.violations.append(
+            f"Initial state '{initial}' is not declared in the state machine"
+        )
+        return result
+
+    reachable = {initial}
+    changed = True
+    while changed:
+        changed = False
+        for transition in sm.transitions:
+            if transition.is_initial or not transition.source or not transition.target:
+                continue
+            if transition.source in reachable and transition.target not in reachable:
+                reachable.add(transition.target)
+                changed = True
+    unreachable = sorted(state_names - reachable)
+    if unreachable:
+        result.violations.append(
+            "Declared state(s) are unreachable from the initial state: "
+            + ", ".join(unreachable)
+        )
+
+    result.timeline.append(f"Initial state: {initial}")
+    entry = sm.entry_action_for_state(initial)
+    if entry:
+        result.fired_actions.append(entry)
+        result.timeline.append(f"Initial entry action: {entry}")
+
+    # Check conventional Boolean state mirrors such as Locked ↔ isLocked=true
+    # and Disarmed ↔ isArmed=false.  This is intentionally conservative: an
+    # unrelated Boolean attribute is ignored rather than guessed.
+    state_key = re.sub(r"[^a-z0-9]", "", initial.lower())
+    has_state_mirror = False
+    for attr, value in (sm.initial_values or {}).items():
+        if not isinstance(value, bool):
+            continue
+        attr_key = re.sub(r"[^a-z0-9]", "", str(attr).lower())
+        if not attr_key.startswith("is") or len(attr_key) <= 2:
+            continue
+        feature = attr_key[2:]
+        expected: Optional[bool] = None
+        if state_key == feature:
+            expected = True
+        elif state_key in {f"un{feature}", f"dis{feature}", f"not{feature}"}:
+            expected = False
+        if expected is None:
+            continue
+        has_state_mirror = True
+        result.timeline.append(f"Initial attribute: {attr}={value}")
+        if value is not expected:
+            result.violations.append(
+                f"Initial state '{initial}' contradicts {attr}={value}; "
+                f"expected {expected}"
+            )
+
+    # A state name alone is only a declaration, not executable or observable
+    # initialization semantics.  Require either a conventional Boolean state
+    # mirror (e.g. isLocked=true) or an entry action that performs the default
+    # response.  This keeps legitimate single-state invariants compact while
+    # rejecting empty shells such as `state Locked; transition initial ...`.
+    if not has_state_mirror and not entry:
+        result.violations.append(
+            f"Initial state '{initial}' has no observable initialization semantics; "
+            "add a consistent Boolean state attribute or an initial entry action"
+        )
+
+    result.passed = not result.violations
+    return result
+
+
 def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
     """
     Build a test sequence for *sm*, execute the state machine, and return
@@ -425,8 +517,7 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
     is_accept_machine = sm.has_accept_transitions()
 
     if not ft and not is_accept_machine:
-        result.violations.append("No fault transitions found in state machine")
-        return result
+        return run_initialization_scenario(sm)
 
     plans = _build_driver_plans(sm)
     if not plans:
@@ -447,10 +538,14 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
         inst = StateMachineInstance(sm)
         for t, variables in enumerate(plan.sequence):
             command = variables.get("__accept__") if is_accept_machine else None
-            inst.step(variables, time=float(t), command=command)
+            fired = inst.step(variables, time=float(t), command=command)
             # Fault monitors: stop when reaching a fault state (has entry action).
             # Mode/accept machines: run the full sequence.
-            if not is_mode_machine and not is_accept_machine and inst.in_fault_state():
+            # The initial/default state may itself have an entry action (e.g.
+            # power-on → Locked).  Do not mistake that pre-existing state for a
+            # newly fired fault response; only stop after this step transitioned.
+            if (fired and not is_mode_machine and not is_accept_machine
+                    and inst.in_fault_state()):
                 break
 
         events = inst.transition_log

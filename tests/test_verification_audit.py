@@ -6,7 +6,13 @@ create a first anchor.
 """
 from __future__ import annotations
 
-from src.agents.verification_audit import is_verify_gap_issue, verification_gap_issues
+from types import SimpleNamespace
+
+from src.agents.verification_audit import (
+    behavioral_result_regressed,
+    is_verify_gap_issue,
+    verification_gap_issues,
+)
 
 # One anchorless requirement (REQ_MISC_001 — nothing links it to any tier) among
 # anchored ones: a guard-linked safety requirement, a closure-family endurance
@@ -56,7 +62,38 @@ def test_audit_flags_only_the_anchorless_requirement():
     for anchored in ("REQ_SAFE_003", "REQ_CONS_002", "REQ_OPER_001", "REQ_PERF_002"):
         assert anchored not in joined
     # The issue text must carry the honesty boundary — no fabricated evidence.
-    assert "hardware-only" in joined or "honest" in joined
+    assert "external evidence" in joined
+
+
+def test_audit_excludes_external_measurement_gaps_from_surgical_llm():
+    model = """package D {
+        requirement def REQ_FUNC_001 {
+            doc /* Navigate to GPS waypoints with CEP below 1.0 metre. */
+        }
+        requirement def REQ_INTF_002 {
+            doc /* Apply RTCM differential GNSS corrections to achieve sub-metre accuracy. */
+        }
+        requirement def REQ_PERF_001 {
+            doc /* Maintain roll and pitch attitude deviations within 0.5 degree RMS. */
+        }
+        requirement def REQ_FUNC_008 {
+            doc /* Transmit a post-flight health report within 5 seconds of landing. */
+        }
+        part def Controller {
+            satisfy requirement REQ_FUNC_001;
+            satisfy requirement REQ_INTF_002;
+            satisfy requirement REQ_PERF_001;
+            satisfy requirement REQ_FUNC_008;
+        }
+    }"""
+
+    issues = verification_gap_issues(model, model_name="D")
+    joined = "\n".join(issues)
+
+    assert "REQ_FUNC_008" in joined
+    assert "REQ_FUNC_001" not in joined
+    assert "REQ_INTF_002" not in joined
+    assert "REQ_PERF_001" not in joined
 
 
 def test_audit_issue_prefix_is_recognisable():
@@ -73,3 +110,21 @@ def test_audit_is_best_effort_on_garbage_input():
     # Must never raise — the refinement loop depends on that contract.
     assert verification_gap_issues("", model_name="X") == []
     assert isinstance(verification_gap_issues("not sysml at all {{{", model_name="X"), list)
+
+
+def test_anchor_gate_rejects_a_new_behavioral_failure():
+    before_behavior = SimpleNamespace(
+        sim_score=1.0,
+        scenario_results=[SimpleNamespace(passed=True)],
+        failed_scenarios=lambda: [],
+    )
+    after_failure = SimpleNamespace(passed=False)
+    after_behavior = SimpleNamespace(
+        sim_score=0.5,
+        scenario_results=[after_failure],
+        failed_scenarios=lambda: [after_failure],
+    )
+    before = SimpleNamespace(behavioral_result=before_behavior)
+    after = SimpleNamespace(behavioral_result=after_behavior)
+
+    assert behavioral_result_regressed(before, after)
