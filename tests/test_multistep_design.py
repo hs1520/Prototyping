@@ -30,7 +30,10 @@ if "pinecone" not in sys.modules:
     pinecone_stub.Pinecone = type("Pinecone", (), {"__init__": lambda self, **kw: None})  # type: ignore[attr-defined]
 
 if "syside" not in sys.modules:
-    _stub("syside")
+    try:
+        __import__("syside")
+    except ImportError:
+        _stub("syside")
 
 from src.llm.interface import LLMResponse, Message
 from src.llm.chain_of_thought import ChainOfThoughtPrompter, CoTResult
@@ -537,6 +540,24 @@ def test_missing_part_defs_are_restored_from_structural_fragment():
     assert names == ["FlightController", "PayloadManager"]
     assert restored.count("part def FlightController") == 1
     assert restored.count("part def PayloadManager") == 1
+
+
+def test_missing_defs_are_restored_into_quoted_package_name():
+    from src.agents.design_agent import DesignAgent
+
+    assembled = "package 'Autonomous Drone' { requirement def REQ_FUNC_001 { } }"
+    parts = "part def FlightController { attribute x : Real = 1.0; }"
+    interfaces = "item def TelemetryData;"
+
+    with_parts, part_names = DesignAgent._inject_missing_part_defs(assembled, parts)
+    restored, item_names = DesignAgent._inject_missing_item_defs(
+        with_parts, interfaces
+    )
+
+    assert part_names == ["FlightController"]
+    assert item_names == ["item def TelemetryData"]
+    assert "part def FlightController" in restored
+    assert "item def TelemetryData" in restored
 
 
 def test_existing_part_defs_are_not_duplicated_during_restore():

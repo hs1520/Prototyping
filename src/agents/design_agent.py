@@ -452,9 +452,16 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         # syntax, but the initial generation must establish a usable baseline
         # before scoring, simulation, or DSE are allowed to run.
         if not is_refinement and not model.part_definitions:
+            textual_parts = re.findall(
+                r"\bpart\s+def\s+(\w+)\s*\{",
+                cot_result.extracted_sysml,
+            )
+            restored_parts = generation_metadata.get("injected_part_defs", [])
             raise RuntimeError(
                 "[STRUCTURAL_GENERATION_ERROR] Assembled model contains no "
-                "parseable part definitions."
+                "parseable part definitions "
+                f"(textual_part_defs={len(textual_parts)}, "
+                f"restored={restored_parts})."
             )
 
         parse_diagnostics = [
@@ -885,7 +892,13 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         if not missing:
             return assembled, []
 
-        package_match = re.search(r"\bpackage\s+\w+\s*\{", assembled)
+        # SysML v2 permits both ordinary and quoted package names.  Vertex often
+        # quotes human-readable names (e.g. ``package 'Drone System' {``), so
+        # both forms must be valid deterministic injection points.
+        package_match = re.search(
+            r"\bpackage\s+(?:\w+|'[^']+')\s*\{",
+            assembled,
+        )
         if not package_match:
             return assembled, []
 
@@ -1187,7 +1200,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             return assembled, []
 
         # ── 3. Find injection point: right after `package Name {` ───────────
-        pkg_open_re = re.compile(r"\bpackage\s+\w+\s*\{")
+        pkg_open_re = re.compile(r"\bpackage\s+(?:\w+|'[^']+')\s*\{")
         m_pkg = pkg_open_re.search(assembled)
         inject_pos = m_pkg.end() if m_pkg else 0
 

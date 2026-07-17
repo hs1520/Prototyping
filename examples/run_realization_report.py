@@ -44,6 +44,31 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEM = "AutonomousDrone"
 
 
+def require_authoritative_runtime() -> None:
+    """Fail before any LLM call when the Syside-backed runtime is unavailable.
+
+    ``conda run -n AI-Prototyping python`` can resolve a pyenv shim ahead of
+    the environment interpreter on some shells. Both syntax checking and the
+    structured LiteModel then degrade to permissive/empty fallbacks, which is
+    unacceptable for an authoritative run.
+    """
+    from src.simulation import syntax_checker
+    from src.sysml import lite_model
+
+    unavailable = []
+    if not getattr(syntax_checker, "_SYSIDE_OK", False):
+        unavailable.append("syntax checker")
+    if not getattr(lite_model, "_SYSIDE_OK", False):
+        unavailable.append("LiteModel extractor")
+    if unavailable:
+        raise RuntimeError(
+            "authoritative runtime blocked: Syside Python API is unavailable "
+            f"for {', '.join(unavailable)} under {sys.executable}. "
+            "Invoke the AI-Prototyping environment's Python executable "
+            "directly; do not rely on a PATH-resolved `python` shim."
+        )
+
+
 def retire_stale_parm(parm_path: str) -> bool:
     """Legacy scratch-output helper; isolated run bundles never need this path."""
     path = Path(parm_path)
@@ -203,6 +228,7 @@ def main() -> int:
     run_dir: Path | None = None
     with AuthoritativeRunLock(output_root()):
         try:
+            require_authoritative_runtime()
             _require_clean_worktree()
             staging = create_staging_bundle(output_root())
             llm = create_llm(provider="vertex")

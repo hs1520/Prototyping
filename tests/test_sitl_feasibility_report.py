@@ -2,6 +2,7 @@ import pytest
 
 from examples.run_realization_report import (
     require_authoritative_functional_closure,
+    require_authoritative_runtime,
     retire_stale_parm,
 )
 from src.prototyping.artifact_provenance import build_run_provenance
@@ -240,6 +241,17 @@ def test_authoritative_publication_accepts_closed_functional_behavior():
     }"""
 
     assert require_authoritative_functional_closure(closed) == []
+
+
+def test_authoritative_runtime_requires_syside_for_both_consumers(monkeypatch):
+    from src.simulation import syntax_checker
+    from src.sysml import lite_model
+
+    monkeypatch.setattr(syntax_checker, "_SYSIDE_OK", False)
+    monkeypatch.setattr(lite_model, "_SYSIDE_OK", False)
+
+    with pytest.raises(RuntimeError, match="Syside Python API is unavailable"):
+        require_authoritative_runtime()
 
 
 def test_coverage_summary_counts_unmapped_requirements(tmp_path):
