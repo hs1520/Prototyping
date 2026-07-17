@@ -266,7 +266,12 @@ def test_matrix_accepts_reachable_postflight_report_action():
                 after landing completion. */
             }
             part def FlightController {
+                attribute maxHealthReportLatency : Real = 5.0 [s];
+                attribute currentHealthReportLatency : Real = 0.0 [s];
                 action def transmitHealthReport { }
+                assert constraint healthReportLatencyBound {
+                    currentHealthReportLatency <= maxHealthReportLatency
+                }
                 state def FlightPhaseMachine {
                     state Cruise;
                     state LandingComplete;

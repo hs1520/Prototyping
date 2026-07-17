@@ -735,19 +735,33 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
 
 def _classify_accept_transitions(sm: StateMachineDef):
     """
-    将 accept 转移按目标状态是否有 entry action 分成两类：
-      nominal   → 目标无 entry action（正常阶段推进）
-      emergency → 目标有 entry action（应急响应）
+    将 accept 转移分成正常功能响应和应急分支。
 
-    前提：LLM prompt 约束 nominal 阶段不得有 entry action，
-    entry action 只允许出现在 emergency/fault 目标状态。
+    不能用“目标状态是否有 entry action”区分两者：正常功能状态也必须能够
+    执行动作，例如收到有效航点修改命令后更新飞行计划，或自动着陆完成后
+    发送健康报告。应急语义应由状态、转移或响应动作的名称明确表达。
     """
-    state_has_entry = {s.name: bool(s.entry_action) for s in sm.states}
+    states = {s.name: s for s in sm.states}
+    emergency_markers = (
+        "emergency", "fault", "failure", "failsafe", "critical",
+        "abort", "parachute", "hazard",
+    )
+
+    def _is_emergency(t) -> bool:
+        state = states.get(t.target or "")
+        semantic_name = " ".join(filter(None, (
+            t.name,
+            t.target,
+            state.entry_action if state else None,
+            state.entry_action_def if state else None,
+        ))).lower()
+        return any(marker in semantic_name for marker in emergency_markers)
+
     nominal, emergency = [], []
     for t in sm.transitions:
         if t.is_initial or not t.accept_trigger:
             continue
-        if state_has_entry.get(t.target or "", False):
+        if _is_emergency(t):
             emergency.append(t)
         else:
             nominal.append(t)
@@ -840,6 +854,7 @@ def _run_accept_nominal_scenario(
         inst.step(v, time=float(t), command=v["__accept__"])
 
     fired = len(inst.transition_log)
+    r.fired_actions = list(inst.fired_actions)
     r.timeline.append(f"Command sequence: {fired}/{len(cmds)} nominal transitions fired")
     for ev in inst.transition_log:
         r.timeline.append(ev.to_line())
@@ -915,6 +930,7 @@ def _run_accept_emergency_scenario(
         inst.step(v, time=float(t), command=v["__accept__"])
 
     emrg_fired = any(ev.to_state == emrg_tr.target for ev in inst.transition_log)
+    r.fired_actions = list(inst.fired_actions)
 
     if nav_cmds:
         r.timeline.append(

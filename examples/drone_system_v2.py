@@ -176,6 +176,10 @@ DRONE_REQUIREMENTS = [
     "geofence breach, or battery state-of-charge at the return threshold) that "
     "does not require immediate landing.",
 
+    "REQ-FUNC-008: The AutonomousDrone shall transmit a post-flight system "
+    "health report to the GCS within 5.0 seconds of completing an automated "
+    "landing.",
+
     # ── Performance ───────────────────────────────────────────────────────
     # v1: attitude ±0.5° RMS, no tier. Kept, tagged to the Gazebo/HIL tier.
     "REQ-PERF-001: The system shall maintain roll and pitch attitude deviations "

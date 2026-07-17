@@ -44,6 +44,7 @@ from src.agents.dse_injectors import build_dse_design_constraints
 from src.llm.interface import MockLLM
 from src.dse.design_space import DesignConfiguration
 from src.sysml.model import PartDefinition, SysMLModel
+from src.sysml.lite_model import build_lite_model
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -600,6 +601,119 @@ class TestVerificationAnchorPass:
         assert accepted is True
         assert sim is after_sim
         assert "Anchor" in model.to_sysml_text()
+
+
+class TestFunctionalClosurePass:
+
+    def test_functional_audit_failure_is_not_reported_as_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        orch = Orchestrator(llm=MockLLM())
+        monkeypatch.setattr(
+            "src.agents.verification_audit.functional_verification_gap_issues",
+            lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("audit failed")),
+        )
+
+        with pytest.raises(RuntimeError, match="refusing to mark closure"):
+            orch._functional_verification_gap_issues("package D {}", "D")
+
+    def test_targeted_closure_retries_until_all_functional_gaps_close(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        orch = Orchestrator(
+            llm=MockLLM(),
+            use_surgical_refinement=True,
+            max_iterations=1,
+        )
+        orch.evaluator = FakeEvaluator([
+            FakeEvalResult(weighted_total=0.90),
+            FakeEvalResult(weighted_total=0.91),
+        ])
+        behavior = type("Behavior", (), {
+            "sim_score": 1.0,
+            "scenario_results": [],
+            "failed_scenarios": lambda self: [],
+        })()
+        simulation = type("Simulation", (), {
+            "behavioral_result": behavior,
+            "failed_scenarios": lambda self: [],
+        })()
+        base = build_lite_model("package D { part def Original { } }", model_name="D")
+        partial = "package D { part def PartialAnchor { } }"
+        closed = "package D { part def FinalAnchor { } }"
+        repair_outputs = iter((partial, closed))
+        repair_issues = []
+
+        def fake_repair(**kwargs):
+            repair_issues.append(list(kwargs["issues"]))
+            return SurgicalOutcome(merged_text=next(repair_outputs))
+
+        def fake_gaps(text, model_name):
+            if "FinalAnchor" in text:
+                return []
+            if "PartialAnchor" in text:
+                return ["[VERIFY-GAP] REQ_FUNC_008 missing report response"]
+            return [
+                "[VERIFY-GAP] REQ_FUNC_006 missing waypoint response",
+                "[VERIFY-GAP] REQ_FUNC_008 missing report response",
+            ]
+
+        monkeypatch.setattr(
+            "src.agents.surgical_refiner.attempt_surgical_refinement", fake_repair
+        )
+        monkeypatch.setattr(orch, "_functional_verification_gap_issues", fake_gaps)
+        monkeypatch.setattr(orch, "_run_simulation", lambda *args, **kwargs: simulation)
+
+        model, score, sim = orch._functional_closure_pass(
+            base,
+            simulation,
+            0.90,
+            requirements=[],
+            dse_best_config=None,
+            max_iters=2,
+        )
+
+        assert "FinalAnchor" in model.to_sysml_text()
+        assert score == 0.91
+        assert sim is simulation
+        assert len(repair_issues) == 2
+        assert "REQ_FUNC_006" in " ".join(repair_issues[0])
+        assert "REQ_FUNC_008" in " ".join(repair_issues[0])
+        assert orch.last_functional_closure == {
+            "status": "CLOSED",
+            "initial_gap_req_ids": ["REQ_FUNC_006", "REQ_FUNC_008"],
+            "remaining_gap_req_ids": [],
+            "attempts": 2,
+            "accepted_repairs": 2,
+        }
+
+    def test_unrepaired_functional_gaps_remain_explicitly_open(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        orch = Orchestrator(llm=MockLLM(), use_surgical_refinement=True)
+        simulation = type("Simulation", (), {
+            "behavioral_result": None,
+            "failed_scenarios": lambda self: [],
+        })()
+        model = build_lite_model("package D { part def Original { } }", model_name="D")
+        monkeypatch.setattr(
+            orch,
+            "_functional_verification_gap_issues",
+            lambda text, name: ["[VERIFY-GAP] REQ_FUNC_008 missing report response"],
+        )
+        monkeypatch.setattr(
+            "src.agents.surgical_refiner.attempt_surgical_refinement",
+            lambda **kwargs: None,
+        )
+
+        returned, _, _ = orch._functional_closure_pass(
+            model, simulation, 0.90, [], None, max_iters=2
+        )
+
+        assert returned is model
+        assert orch.last_functional_closure["status"] == "OPEN"
+        assert orch.last_functional_closure["remaining_gap_req_ids"] == ["REQ_FUNC_008"]
+        assert orch.last_functional_closure["attempts"] == 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────

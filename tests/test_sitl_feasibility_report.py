@@ -1,4 +1,9 @@
-from examples.run_realization_report import retire_stale_parm
+import pytest
+
+from examples.run_realization_report import (
+    require_authoritative_functional_closure,
+    retire_stale_parm,
+)
 from src.prototyping.artifact_provenance import build_run_provenance
 from types import SimpleNamespace
 
@@ -193,6 +198,48 @@ def test_retire_stale_parm_renames_leftover_file(tmp_path):
     assert (tmp_path / "recommended.parm.stale").read_text() == "BATT_CAPACITY 15065\n"
     # nothing left to retire → False, and no crash
     assert retire_stale_parm(str(parm)) is False
+
+
+def test_authoritative_publication_blocks_model_fixable_functional_gaps():
+    broken = """package D {
+        requirement def REQ_FUNC_008 {
+            doc /* Transmit a post-flight health report within 5 seconds of landing completion. */
+        }
+        part def CommunicationSystem {
+            action def transmitHealthReport { }
+            satisfy requirement REQ_FUNC_008;
+        }
+    }"""
+
+    with pytest.raises(RuntimeError, match="REQ_FUNC_008"):
+        require_authoritative_functional_closure(broken)
+
+
+def test_authoritative_publication_accepts_closed_functional_behavior():
+    closed = """package D {
+        action def AutomatedLandingCompleted { }
+        requirement def REQ_FUNC_008 {
+            doc /* Transmit a post-flight health report within 5 seconds of landing completion. */
+        }
+        part def CommunicationSystem {
+            attribute maxHealthReportLatency : Real = 5.0 [s];
+            attribute currentHealthReportLatency : Real = 0.0 [s];
+            action def transmitHealthReport { }
+            assert constraint healthReportLatencyBound {
+                currentHealthReportLatency <= maxHealthReportLatency
+            }
+            state def PostFlightHealthReportMachine {
+                state Waiting;
+                state Sent { entry action report : transmitHealthReport; }
+                transition initial then Waiting;
+                transition transmitReportAfterLanding first Waiting
+                    accept AutomatedLandingCompleted then Sent;
+            }
+            satisfy requirement REQ_FUNC_008;
+        }
+    }"""
+
+    assert require_authoritative_functional_closure(closed) == []
 
 
 def test_coverage_summary_counts_unmapped_requirements(tmp_path):

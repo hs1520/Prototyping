@@ -368,6 +368,10 @@ class Orchestrator:
         # catalog architecture seed, optional LLM additions, a pre-existing model
         # space, or None (not run yet). Reported, never hidden.
         self.last_variation_proposal_source = None
+        # Final, model-fixable functional verification closure. Unlike the
+        # advisory general anchor pass, this is recomputed after every final
+        # refinement path and exposed to authoritative publication gates.
+        self.last_functional_closure = None
         # F1: catalog-grid estimator calibration, applied ONLY around the search
         # (the injected SysML calc defs and Phase 8's estimator_value column keep
         # the documented textbook constants). Provenance recorded, never hidden.
@@ -494,8 +498,6 @@ class Orchestrator:
         final_model, final_score, final_sim = self._iterative_refinement(
             model, requirements, dse_best_config=None
         )
-        self.state.current_model = final_model
-        print(f"  ✓ Final design score: {final_score:.3f}\n")
 
         # ── Phase 3.5: SITL-L1 refinement (only when targeting a platform) ────
         # Feed unresolved ArduPilot-parameter mappings (= model genuinely
@@ -506,7 +508,19 @@ class Orchestrator:
             final_model, final_score, final_sim = self._sitl_refinement_loop(
                 final_model, requirements, final_score, final_sim, max_iters=2
             )
-            self.state.current_model = final_model
+
+        # Terminal model mutation: runs after ordinary and optional SITL-L1
+        # refinement so no later LLM rewrite can overwrite functional closure.
+        final_model, final_score, final_sim = self._functional_closure_pass(
+            final_model,
+            final_sim,
+            final_score,
+            requirements,
+            dse_best_config=None,
+            max_iters=2,
+        )
+        self.state.current_model = final_model
+        print(f"  ✓ Final design score: {final_score:.3f}\n")
 
         # ── Phase 4: Behavioral Reachability Simulation ───────────────────────
         # Simulation already ran in Phase 3 — reuse the result, no duplicate run.
@@ -548,6 +562,7 @@ class Orchestrator:
             "iterations":         self.state.iteration,
             "evaluation_history": self.state.evaluation_history,
             "simulation_result":  final_sim,
+            "functional_closure": dict(self.last_functional_closure or {}),
             "platform_profile":   platform_profile,
             "llm_usage":          ledger.as_dict() if ledger is not None else None,
         }
@@ -660,6 +675,14 @@ class Orchestrator:
         final_model, final_score, final_sim = self._iterative_refinement(
             model, requirements, dse_best_config=best_config,
             connectivity_floor=self.use_variation_dse,
+        )
+        final_model, final_score, final_sim = self._functional_closure_pass(
+            final_model,
+            final_sim,
+            final_score,
+            requirements,
+            dse_best_config=best_config,
+            max_iters=2,
         )
         self.state.current_model = final_model
         print(f"  ✓ Final design score: {final_score:.3f}\n")
@@ -798,6 +821,7 @@ class Orchestrator:
             "iterations":         self.state.iteration,
             "evaluation_history": combined_history,
             "simulation_result":  final_sim,
+            "functional_closure": dict(self.last_functional_closure or {}),
             # ── DSE-specific fields ───────────────────────────────────────────
             "design_space_summary": design_space.get_summary(),
             "design_space_parameters": [
@@ -1716,6 +1740,164 @@ class Orchestrator:
             return verification_gap_issues(sysml_text, model_name)
         except Exception:
             return []
+
+    def _functional_verification_gap_issues(
+        self, sysml_text: str, model_name: str
+    ) -> List[str]:
+        """Functional subset of model-fixable verification gaps (fail closed)."""
+        try:
+            from .verification_audit import functional_verification_gap_issues
+            return functional_verification_gap_issues(
+                sysml_text, model_name, strict=True
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "functional verification audit failed; refusing to mark closure"
+            ) from exc
+
+    @staticmethod
+    def _gap_req_ids(issues: List[str]) -> List[str]:
+        return sorted(set(re.findall(
+            r"\bREQ[_-]FUNC[_-]\d+\b", "\n".join(map(str, issues)), re.IGNORECASE
+        )))
+
+    def _functional_closure_pass(
+        self,
+        current_model: SysMLModel,
+        sim_result: Any,
+        rule_score: float,
+        requirements: List[str],
+        dse_best_config: Optional[DesignConfiguration],
+        max_iters: int = 2,
+    ) -> tuple[SysMLModel, float, Any]:
+        """Close model-fixable FUNC gaps with dedicated, validated LLM surgery.
+
+        This pass always runs after the ordinary refinement path, including when
+        the quality loop exhausted its iteration budget. Each accepted edit must
+        strictly reduce the functional gap ID set and must not regress syntax,
+        simulation, or rule score. Remaining gaps are explicit terminal state,
+        not a silently successful generation.
+        """
+        current = current_model
+        current_sim = sim_result
+        current_score = rule_score
+        text = get_sysml_text(current)
+        model_name = getattr(current, "name", None) or (
+            self.state.system_name if self.state is not None else "System"
+        )
+        gaps = self._functional_verification_gap_issues(text, model_name)
+        initial_ids = self._gap_req_ids(gaps)
+        attempts = 0
+        accepted = 0
+
+        if not gaps:
+            self.last_functional_closure = {
+                "status": "CLOSED",
+                "initial_gap_req_ids": [],
+                "remaining_gap_req_ids": [],
+                "attempts": 0,
+                "accepted_repairs": 0,
+            }
+            return current, current_score, current_sim
+
+        print(f"\n  {'─'*62}", flush=True)
+        print(
+            f"  ▶  Functional closure  ({len(initial_ids)} gap(s), "
+            f"max {max_iters} targeted pass{'es' if max_iters != 1 else ''})",
+            flush=True,
+        )
+
+        if not self.use_surgical_refinement:
+            print("  └─ ⚠ surgical refinement disabled; functional gaps remain", flush=True)
+        else:
+            from .surgical_refiner import attempt_surgical_refinement
+            from .verification_audit import behavioral_result_regressed
+
+            for idx in range(max_iters):
+                if not gaps:
+                    break
+                attempts += 1
+                before_ids = set(self._gap_req_ids(gaps))
+                print(
+                    f"  │  Pass {idx + 1}/{max_iters}: targeted repair for "
+                    f"{', '.join(sorted(before_ids))}",
+                    flush=True,
+                )
+                repaired = attempt_surgical_refinement(
+                    llm=self.llm,
+                    model_text=get_sysml_text(current),
+                    issues=gaps,
+                    feedback=(
+                        "This is the terminal functional-closure pass. Repair the "
+                        "complete trigger -> reachable response entry action -> timing "
+                        "constraint chain for every listed FUNC requirement."
+                    ),
+                    verbose=self.verbose,
+                )
+                if repaired is None:
+                    print("  │    ⚠ no syntax-safe surgical result", flush=True)
+                    continue
+
+                candidate = build_lite_model(
+                    repaired.merged_text, model_name=model_name
+                )
+                cand_syntax = check_syntax(repaired.merged_text)
+                cand_sim = self._run_simulation(repaired.merged_text, model_name)
+                cand_eval = self.evaluator.evaluate(
+                    config=DesignConfiguration(
+                        name=f"functional_closure_{idx + 1}", parameters={}
+                    ),
+                    model=candidate,
+                    dse_config=dse_best_config,
+                    syntax_result=cand_syntax,
+                    sim_result=cand_sim,
+                    requirements=requirements,
+                )
+                remaining = self._functional_verification_gap_issues(
+                    repaired.merged_text, model_name
+                )
+                after_ids = set(self._gap_req_ids(remaining))
+                progress = after_ids < before_ids
+                regressed = (
+                    cand_syntax.has_errors
+                    or len(cand_sim.failed_scenarios())
+                    > len(current_sim.failed_scenarios())
+                    or behavioral_result_regressed(current_sim, cand_sim)
+                    or cand_eval.weighted_total < current_score - 0.05
+                )
+                if progress and not regressed:
+                    current = candidate
+                    current_sim = cand_sim
+                    current_score = cand_eval.weighted_total
+                    gaps = remaining
+                    accepted += 1
+                    print(
+                        f"  │    ✓ accepted: {len(before_ids)} -> "
+                        f"{len(after_ids)} functional gap(s)",
+                        flush=True,
+                    )
+                else:
+                    why = "regression" if regressed else "no functional-gap reduction"
+                    print(f"  │    ⚠ rejected: {why}", flush=True)
+
+        remaining_ids = self._gap_req_ids(gaps)
+        status = "CLOSED" if not remaining_ids else "OPEN"
+        self.last_functional_closure = {
+            "status": status,
+            "initial_gap_req_ids": initial_ids,
+            "remaining_gap_req_ids": remaining_ids,
+            "attempts": attempts,
+            "accepted_repairs": accepted,
+        }
+        if remaining_ids:
+            print(
+                "  └─ ✗ functional closure OPEN: " + ", ".join(remaining_ids),
+                flush=True,
+            )
+        else:
+            print("  └─ ✓ functional closure CLOSED", flush=True)
+        print(f"  {'─'*62}", flush=True)
+        return current, current_score, current_sim
 
     def _verification_anchor_pass(
         self,

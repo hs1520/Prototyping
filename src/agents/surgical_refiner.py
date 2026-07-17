@@ -71,6 +71,13 @@ KEY CONSTRUCT RULES (same as generation):
   // - if multiple states are declared, every state MUST be reachable through
   //   real guarded/accept transitions (never add an empty Locked/Unlocked shell);
   // - connect state entry actions to the required actuator/default response.
+  // Functional response requirements are NOT satisfied by an action declaration alone:
+  // - add a reachable response state whose entry action invokes the required action;
+  // - model the real incoming event/condition on the transition (for example a valid
+  //   waypoint-modification command or automated-landing-completed event);
+  // - preserve explicit qualifiers such as Valid and LandingCompleted in event names;
+  // - for `within N seconds`, add max/current latency attributes and an assert constraint
+  //   linking the runtime latency to that bound.
   Numeric guards never use `==`; enum guards use `if mode == Type::VALUE`."""
 
 

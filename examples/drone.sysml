@@ -78,6 +78,8 @@ package AutonomousDrone {
     action def CMD_TAKEOFF { }
     action def CMD_LOITER { }
     action def CMD_POSHOLD { }
+    action def ValidWaypointModificationCommand { }
+    action def AutomatedLandingCompleted { }
 
     // ==========================================
     // Requirements
@@ -89,7 +91,7 @@ package AutonomousDrone {
     requirement def REQ_FUNC_005 { doc /* The system shall release the payload when the current geographic position is within 1.0 metre of the designated delivery waypoint and no delivery-abort condition is active. */ }
     requirement def REQ_FUNC_006 { doc /* The system shall incorporate a revised waypoint sequence into the active flight plan within 1.0 second of receiving a valid waypoint-modification command from the GCS. */ }
     requirement def REQ_FUNC_007 { doc /* The system shall autonomously execute a return-to-base trajectory upon detection of any contingency condition that does not require immediate landing. */ }
-    requirement def REQ_FUNC_008 { doc /* The AutonomousDrone shall transmit a post-flight system health report to the Ground Control Station upon completion of the automated landing sequence. */ }
+    requirement def REQ_FUNC_008 { doc /* The AutonomousDrone shall transmit a post-flight system health report to the Ground Control Station within 5.0 seconds of completing the automated landing sequence. */ }
     requirement def REQ_FUNC_009 { doc /* The AutonomousDrone shall execute an automated power-on self-check of the sensors, communications, and propulsion subsystems prior to arming the propulsion system. */ }
     
     requirement def REQ_PERF_001 { doc /* The system shall maintain roll and pitch attitude deviations within ±0.5° RMS during steady cruise flight at all authorised speeds. */ }
@@ -136,6 +138,8 @@ package AutonomousDrone {
         attribute maxCepTolerance : Real = 1.0 [m];
         attribute currentCep : Real = 0.0 [m];
         attribute flightPhase : DronePhaseMode = DronePhaseMode::POWER_ON;
+        attribute maxWaypointUpdateLatency : Real = 1.0 [s];
+        attribute currentWaypointUpdateLatency : Real = 0.0 [s];
 
         satisfy requirement REQ_FUNC_001;
         satisfy requirement REQ_FUNC_006;
@@ -151,6 +155,24 @@ package AutonomousDrone {
 
         assert constraint cepBound {
             currentCep <= maxCepTolerance
+        }
+
+        assert constraint waypointUpdateLatencyBound {
+            currentWaypointUpdateLatency <= maxWaypointUpdateLatency
+        }
+
+        state def WaypointUpdateMachine {
+            state AwaitingValidWaypointModification;
+            state RevisedWaypointSequenceActive {
+                entry action updatePlan : reviseWaypointSequence;
+            }
+
+            transition initial then AwaitingValidWaypointModification;
+
+            transition incorporateValidRevision
+                first AwaitingValidWaypointModification
+                accept ValidWaypointModificationCommand
+                then RevisedWaypointSequenceActive;
         }
 
         state def FlightPhaseModeMachine {
@@ -414,6 +436,8 @@ package AutonomousDrone {
 
         attribute heartbeatRate : Real = 1.0 [Hz];
         attribute encryptionEnabled : Boolean = true;
+        attribute maxHealthReportLatency : Real = 5.0 [s];
+        attribute currentHealthReportLatency : Real = 0.0 [s];
 
         satisfy requirement REQ_FUNC_004;
         satisfy requirement REQ_FUNC_008;
@@ -423,6 +447,24 @@ package AutonomousDrone {
         action def maintainEncryptedLink { }
         action def transmitHealthReport { }
         action def performCommSelfCheck { }
+
+        assert constraint healthReportLatencyBound {
+            currentHealthReportLatency <= maxHealthReportLatency
+        }
+
+        state def PostFlightHealthReportMachine {
+            state AwaitingAutomatedLandingCompletion;
+            state PostFlightHealthReportSent {
+                entry action report : transmitHealthReport;
+            }
+
+            transition initial then AwaitingAutomatedLandingCompletion;
+
+            transition transmitReportAfterLanding
+                first AwaitingAutomatedLandingCompletion
+                accept AutomatedLandingCompleted
+                then PostFlightHealthReportSent;
+        }
     }
 
     part def PayloadMechanism {

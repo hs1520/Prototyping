@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from src.dse.functional_behavior import functional_behavior_status
 from src.dse.safety_behavior import BEHAVIOR_ABSENT, BEHAVIORALLY_VERIFIED
+from src.simulation.behavioral_sim import run_behavioral_simulation
 
 _MODEL = """package D {
     requirement def REQ_FUNC_011 { doc /* release payload at the waypoint */ }
@@ -66,3 +67,133 @@ def test_landing_action_does_not_satisfy_postflight_report_response():
     )
 
     assert st["REQ-FUNC-008"] == BEHAVIOR_ABSENT
+
+
+def test_normal_functional_entry_actions_are_not_misclassified_as_emergencies():
+    model = """package D {
+        action def ValidWaypointModificationCommand { }
+        action def AutomatedLandingCompleted { }
+        requirement def REQ_FUNC_006 {
+            doc /* Incorporate a revised waypoint sequence within 1 second of a
+            valid waypoint-modification command. */
+        }
+        requirement def REQ_FUNC_008 {
+            doc /* Transmit a post-flight health report within 5 seconds of
+            automated landing completion. */
+        }
+        part def FlightController {
+            attribute maxWaypointUpdateLatency : Real = 1.0 [s];
+            attribute currentWaypointUpdateLatency : Real = 0.0 [s];
+            action def incorporateRevisedWaypointSequence { }
+            assert constraint waypointUpdateLatencyBound {
+                currentWaypointUpdateLatency <= maxWaypointUpdateLatency
+            }
+            state def WaypointUpdateMachine {
+                state AwaitingValidWaypointModification;
+                state RevisedWaypointSequenceActive {
+                    entry action updatePlan : incorporateRevisedWaypointSequence;
+                }
+                transition initial then AwaitingValidWaypointModification;
+                transition incorporateValidRevision
+                    first AwaitingValidWaypointModification
+                    accept ValidWaypointModificationCommand
+                    then RevisedWaypointSequenceActive;
+            }
+            satisfy requirement REQ_FUNC_006;
+        }
+        part def CommunicationSystem {
+            attribute maxHealthReportLatency : Real = 5.0 [s];
+            attribute currentHealthReportLatency : Real = 0.0 [s];
+            action def transmitHealthReport { }
+            assert constraint healthReportLatencyBound {
+                currentHealthReportLatency <= maxHealthReportLatency
+            }
+            state def PostFlightHealthReportMachine {
+                state AwaitingAutomatedLandingCompletion;
+                state PostFlightHealthReportSent {
+                    entry action report : transmitHealthReport;
+                }
+                transition initial then AwaitingAutomatedLandingCompletion;
+                transition transmitReportAfterLanding
+                    first AwaitingAutomatedLandingCompletion
+                    accept AutomatedLandingCompleted
+                    then PostFlightHealthReportSent;
+            }
+            satisfy requirement REQ_FUNC_008;
+        }
+    }"""
+
+    result = run_behavioral_simulation(model, model_name="D")
+    by_machine = {r.state_machine: r for r in result.scenario_results}
+
+    waypoint = by_machine["WaypointUpdateMachine"]
+    report = by_machine["PostFlightHealthReportMachine"]
+    assert waypoint.passed, waypoint.violations
+    assert report.passed, report.violations
+    assert "updatePlan" in waypoint.fired_actions
+    assert "report" in report.fired_actions
+    assert "emergency" not in waypoint.tags
+    assert "emergency" not in report.tags
+
+    statuses = functional_behavior_status(model, [
+        "REQ-FUNC-006: Incorporate a revised waypoint sequence within 1 second "
+        "of a valid waypoint-modification command.",
+        "REQ-FUNC-008: Transmit a post-flight health report within 5 seconds "
+        "of automated landing completion.",
+    ])
+    assert statuses["REQ-FUNC-006"] == BEHAVIORALLY_VERIFIED
+    assert statuses["REQ-FUNC-008"] == BEHAVIORALLY_VERIFIED
+
+
+def test_generation_and_surgical_prompts_require_executable_functional_responses():
+    from src.agents.surgical_refiner import SURGICAL_SYSTEM_PROMPT
+    from src.llm.chain_of_thought import BEHAVIOR_TEMPLATE
+
+    for prompt in (BEHAVIOR_TEMPLATE, SURGICAL_SYSTEM_PROMPT):
+        assert "action declaration alone" in prompt.lower()
+        assert "reachable" in prompt.lower()
+        assert "landing" in prompt.lower()
+        assert "latency" in prompt.lower()
+
+
+def test_temporal_response_needs_the_real_trigger_and_timing_anchor():
+    base = """package D {
+        action def AutomatedLandingCompleted { }
+        requirement def REQ_FUNC_008 {
+            doc /* Transmit a post-flight health report within 5 seconds of
+            automated landing completion. */
+        }
+        part def CommunicationSystem {
+            attribute maxHealthReportLatency : Real = 5.0 [s];
+            attribute currentHealthReportLatency : Real = 0.0 [s];
+            action def transmitHealthReport { }
+            assert constraint healthReportLatencyBound {
+                currentHealthReportLatency <= maxHealthReportLatency
+            }
+            state def PostFlightHealthReportMachine {
+                state Waiting;
+                state ReportSent { entry action report : transmitHealthReport; }
+                transition initial then Waiting;
+                transition transmitReportAfterLanding first Waiting
+                    accept AutomatedLandingCompleted then ReportSent;
+            }
+            satisfy requirement REQ_FUNC_008;
+        }
+    }"""
+    reqs = [
+        "REQ-FUNC-008: Transmit a post-flight health report within 5 seconds "
+        "of automated landing completion."
+    ]
+
+    assert functional_behavior_status(base, reqs)["REQ-FUNC-008"] == BEHAVIORALLY_VERIFIED
+
+    wrong_trigger = base.replace("AutomatedLandingCompleted then", "GenericCommand then")
+    assert functional_behavior_status(wrong_trigger, reqs)["REQ-FUNC-008"] == BEHAVIOR_ABSENT
+
+    no_timing = base.replace(
+        "assert constraint healthReportLatencyBound {\n"
+        "                currentHealthReportLatency <= maxHealthReportLatency\n"
+        "            }",
+        "",
+    )
+    assert functional_behavior_status(no_timing, reqs)["REQ-FUNC-008"] == BEHAVIOR_ABSENT

@@ -69,8 +69,12 @@ def _phase8_will_anchor(req_id: str, text: str) -> bool:
     )
 
 
-def verification_gap_issues(model_text: str, model_name: str,
-                            limit: int = 6) -> List[str]:
+def verification_gap_issues(
+    model_text: str,
+    model_name: str,
+    limit: int = 6,
+    strict: bool = False,
+) -> List[str]:
     """Return surgical-refinement issues for requirements no verification tier anchors.
 
     Best-effort: any parsing/linker failure returns [] — the audit must never break
@@ -87,6 +91,8 @@ def verification_gap_issues(model_text: str, model_name: str,
         linker = RequirementLinker(lite)
         rows = build_matrix(lite, None, linker)
     except Exception:
+        if strict:
+            raise
         return []
     issues: List[str] = []
     for row in rows:
@@ -128,12 +134,40 @@ def verification_gap_issues(model_text: str, model_name: str,
             "state-machine guard carrying the requirement's explicit threshold/default "
             "so the parameter linker can anchor it (configuration/safety semantics, "
             "e.g. a power-on default state or a numeric limit), OR (b) a state-machine "
-            "transition whose guard implements the required behaviour so the "
-            "behavioural simulator can exercise it. Do NOT invent physics calcs, do "
+            "transition whose accept event or guard implements the real trigger and whose "
+            "reachable target-state entry action invokes the required response so the "
+            "behavioural simulator can exercise it. An action declaration alone is not an "
+            "anchor. Preserve trigger qualifiers such as valid-command and landing-completed; "
+            "when the requirement says `within N seconds`, also model max/current latency "
+            "attributes and an assert constraint carrying that bound. Do NOT invent physics calcs, do "
             "NOT add or remove requirement defs, and do NOT fake external evidence."
             f"{default_guidance}"
         )
     return issues[:limit]
+
+
+_FUNC_GAP_RE = re.compile(r"\bREQ[_-]FUNC[_-]\d+\b", re.IGNORECASE)
+
+
+def functional_verification_gap_issues(
+    model_text: str,
+    model_name: str,
+    limit: int = 100,
+    strict: bool = False,
+) -> List[str]:
+    """Model-fixable functional gaps that require a dedicated closure pass.
+
+    ``verification_gap_issues`` already excludes external-measurement and
+    downstream Phase-8 evidence. This view only selects FUNC rows, so the
+    pipeline can make executable functional semantics a terminal gate without
+    asking the LLM to fabricate HIL/field evidence.
+    """
+    return [
+        issue for issue in verification_gap_issues(
+            model_text, model_name, limit=limit, strict=strict
+        )
+        if _FUNC_GAP_RE.search(issue)
+    ]
 
 
 def behavioral_result_regressed(before_sim, after_sim) -> bool:

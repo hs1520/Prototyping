@@ -10,13 +10,15 @@ verified". Outcomes per functional requirement with a recognised intent:
                           honestly flags the gap, e.g. release/health-report logic missing).
 Requirements with no recognised functional intent are left to the base classifier.
 
-Scope (honest): checks the functional RESPONSE ACTION is reachable; it does NOT verify the
-full guard condition / timing (e.g. "within 1 m", "within 1 s") — those need scenario
-execution (behavioral_sim) and are roadmap items.
+Scope (honest): checks that the functional RESPONSE ACTION is reachable. For event-driven
+waypoint-update and post-flight-report requirements it also checks the named causal trigger
+and requires an explicit seconds-valued latency constraint. Other continuous guard semantics
+(e.g. delivery distance and abort inhibition) remain scenario-execution roadmap items.
 """
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Dict, List, Set
 
 from ..simulation.state_extractor import extract_state_machines
@@ -44,26 +46,101 @@ _REQ_ID_RE = re.compile(r"REQ[-_][A-Z]+[-_]\d+")
 _SATISFY_RE = re.compile(r"satisfy\s+(?:requirement\s+)?(\w*REQ[_-]\w+)", re.IGNORECASE)
 
 
-def _produced_responses(model_text: str) -> Set[str]:
-    """Lowercased response markers actually produced by any REACHABLE state — from its entry
-    action name and the command types it sends."""
-    out: Set[str] = set()
+@dataclass(frozen=True)
+class _ProducedResponse:
+    names: frozenset[str]
+    trigger_context: str
+
+
+def _produced_response_records(model_text: str) -> List[_ProducedResponse]:
+    """Responses produced by reachable states, with their incoming trigger context."""
+    out: List[_ProducedResponse] = []
     for sm in extract_state_machines(model_text):
         reach = reachable_states(sm)
         for s in sm.states:
             if s.name not in reach:
                 continue
+            names: Set[str] = set()
             if s.entry_action:
-                out.add(s.entry_action.lower())
+                names.add(s.entry_action.lower())
+            if s.entry_action_def:
+                names.add(s.entry_action_def.lower())
             for cmd, _port in s.sends:
-                out.add(cmd.lower())
+                names.add(cmd.lower())
+            if not names:
+                continue
+            incoming = [
+                t for t in sm.transitions
+                if not t.is_initial and t.target == s.name and t.source in reach
+            ]
+            context = " ".join(
+                str(value or "")
+                for t in incoming
+                for value in (
+                    t.name, t.source, t.target, t.accept_trigger,
+                    " ".join(g.description() for g in t.guards),
+                )
+            ).lower()
+            out.append(_ProducedResponse(frozenset(names), context))
     return out
+
+
+def _has_required_trigger(req_text: str, record: _ProducedResponse) -> bool:
+    """Reject a response action reached through an unrelated event.
+
+    This is intentionally narrow: only causal qualifiers present in the two
+    functional sequencing families are enforced. Other functional intents keep
+    their existing response-reachability semantics.
+    """
+    text = req_text.lower()
+    context = re.sub(r"[^a-z0-9]+", "", record.trigger_context)
+    if "health report" in text and any(k in text for k in ("landing", "post-flight")):
+        return "land" in context and "complet" in context
+    if "waypoint" in text and any(k in text for k in (
+        "modification command", "waypoint-modification", "revised waypoint",
+    )):
+        waypoint_event = "waypoint" in context and any(
+            k in context for k in ("modification", "revision", "revised", "update")
+        )
+        valid_qualified = "valid" not in text or "valid" in context
+        return waypoint_event and valid_qualified
+    return True
+
+
+_SECONDS_RE = re.compile(r"\bwithin\s+(\d+(?:\.\d+)?)\s*(?:seconds?|s)\b", re.IGNORECASE)
+_TIME_ATTR_RE = re.compile(
+    r"attribute\s+(\w+)\s*:\s*Real\s*=\s*(\d+(?:\.\d+)?)\s*\[s\]\s*;",
+    re.IGNORECASE,
+)
+_CONSTRAINT_RE = re.compile(r"assert\s+constraint\s+\w+\s*\{([^{}]+)\}", re.IGNORECASE)
+
+
+def _has_required_timing_anchor(model_text: str, req_text: str) -> bool:
+    """Require an explicit seconds-valued bound linked by an assert constraint."""
+    match = _SECONDS_RE.search(req_text)
+    if not match:
+        return True
+    expected = float(match.group(1))
+    low = req_text.lower()
+    family = "report" if "health report" in low else "waypoint" if "waypoint" in low else ""
+    constraints = " ".join(_CONSTRAINT_RE.findall(model_text)).lower()
+    for name, value in _TIME_ATTR_RE.findall(model_text):
+        key = name.lower()
+        if abs(float(value) - expected) > 1e-9:
+            continue
+        if family and family not in key:
+            continue
+        if not any(k in key for k in ("latency", "delay", "time")):
+            continue
+        if key in constraints:
+            return True
+    return False
 
 
 def functional_behavior_status(model_text: str, requirements: List[str]) -> Dict[str, str]:
     """{functional req_id: behaviour status} for FUNC requirements with a recognised
     actuation/sequencing intent (excludes safety reqs — those go through safety_behavior)."""
-    produced = _produced_responses(model_text)
+    produced = _produced_response_records(model_text)
     has_state_machines = bool(extract_state_machines(model_text))
     text = {m.group(0).replace("_", "-"): r for r in requirements
             for m in [_REQ_ID_RE.search(r)] if m}
@@ -82,7 +159,14 @@ def functional_behavior_status(model_text: str, requirements: List[str]) -> Dict
                 break
         if not markers:
             continue                                       # no recognised functional intent
-        hit = any(marker in p for p in produced for marker in markers)
+        response_records = [
+            record for record in produced
+            if any(marker in name for name in record.names for marker in markers)
+        ]
+        hit = (
+            any(_has_required_trigger(txt, record) for record in response_records)
+            and _has_required_timing_anchor(model_text, txt)
+        )
         if hit:
             out[rid] = BEHAVIORALLY_VERIFIED
         elif has_state_machines:

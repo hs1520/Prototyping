@@ -468,6 +468,16 @@ Behavioral requirements (FUNC and SAFE):
 Rules:
 - For every FUNC requirement: define an action def that belongs to the responsible component.
   The action def name must be a verb phrase in camelCase (e.g., navigateToWaypoint).
+- An action declaration alone is NOT a behavioural implementation. For every FUNC requirement
+  that mandates a response to an event/condition, generate a reachable functional state
+  whose `entry action` invokes that response, plus the transition that represents the real
+  trigger. Use `accept <EventDef>` for commands/events and `if <condition>` for measured
+  conditions. The accepted event name must preserve qualifiers such as Valid, LandingCompleted,
+  or PayloadReleaseConfirmed; do not replace it with a generic `CmdToAction`.
+- For quantified response time requirements, emit `// ATTR OWNER:` hints for both the maximum
+  latency and its current runtime value. The assembly must preserve these attributes and add
+  an `assert constraint` linking current latency to the maximum. Do not claim timing from the
+  response action name alone.
 - For every SAFE requirement: see SAFETY ARCHITECTURE RULE below.
   When SAFE requirements define a priority ordering (keywords: "superseding",
   "taking precedence", "unless a higher-priority response is already in progress"),
@@ -546,10 +556,11 @@ When a mode machine is needed:
      exists only as a conceptual convention — not in the model.
 
    ENTRY ACTION RULE (MANDATORY):
-   - Nominal phase states MUST NOT have entry actions.
-     Entry actions belong ONLY on emergency/fault target states (states entered when a fault fires).
-     Nominal phases are operational markers — they do not execute actions on entry.
-   - Correct: emergency target state has entry action; all nominal phases do not.
+   - A nominal phase marker normally has no entry action.
+   - Exception: when a FUNC requirement explicitly mandates an action upon entering a phase
+     or receiving an event, model that action in a dedicated reachable functional-response
+     state (preferred), or on that exact phase state when the phase entry is the trigger.
+   - Emergency/fault target states continue to use entry actions for their safety response.
 
    Template:
 
@@ -559,9 +570,9 @@ When a mode machine is needed:
      // OWNER: <PartName>
      state def <Name>ModeMachine {{
          state <Name><MODE_A>State;          // nominal — NO entry action
-         state <Name><MODE_B>State;          // nominal — NO entry action
+         state <Name><MODE_B>State;          // nominal phase marker — normally no entry action
          state <Name>EmergencyState {{
-             entry action respond : <emergencyActionDef>;   // ONLY emergency states have entry actions
+             entry action respond : <emergencyActionDef>;   // emergency response action
          }}
          transition initial then <Name><MODE_A>State;
          transition <name>ToB

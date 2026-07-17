@@ -255,7 +255,8 @@ class GuardCondition:
 @dataclass
 class StateNode:
     name: str
-    entry_action: Optional[str] = None          # name of the entry action, or None
+    entry_action: Optional[str] = None          # usage name, e.g. ``updatePlan``
+    entry_action_def: Optional[str] = None      # invoked action def, e.g. ``reviseWaypointSequence``
     sends: List[tuple] = field(default_factory=list)
     # [(cmd_type_name, port_name), ...]
     # populated when the entry action body contains `send X() to port;`
@@ -593,6 +594,27 @@ def _iter_action_body(action_usage) -> List:
     return nodes
 
 
+def _extract_action_definition_name(action_usage) -> Optional[str]:
+    """Return the user action definition invoked by an action usage.
+
+    SysML distinguishes the usage label in a state (``entry action updatePlan``)
+    from its type/implementation (``: reviseWaypointSequence``). Verification
+    must retain both: the label is useful in traces, while the definition carries
+    the actual response semantics.
+    """
+    if action_usage is None:
+        return None
+    for attr in ("action_definitions", "definitions", "types"):
+        try:
+            for defn in getattr(action_usage, attr):
+                name = getattr(defn, "name", None)
+                if name:
+                    return str(name)
+        except Exception:
+            pass
+    return None
+
+
 def _extract_send_usages(entry_action_usage) -> List[tuple]:
     """
     从一个 entry action usage 的定义体里找所有 SendActionUsage 节点。
@@ -662,12 +684,19 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
         # ── States ────────────────────────────────────────────────────────────
         for st in sd.owned_states:
             entry_name: Optional[str] = None
+            entry_def_name: Optional[str] = None
             sends: List[tuple] = []
             ea = st.entry_action
             if ea:
                 entry_name = ea.name
+                entry_def_name = _extract_action_definition_name(ea)
                 sends = _extract_send_usages(ea)
-            sm.states.append(StateNode(name=st.name, entry_action=entry_name, sends=sends))
+            sm.states.append(StateNode(
+                name=st.name,
+                entry_action=entry_name,
+                entry_action_def=entry_def_name,
+                sends=sends,
+            ))
 
         # ── Transitions ───────────────────────────────────────────────────────
         for tr in sd.owned_transitions:

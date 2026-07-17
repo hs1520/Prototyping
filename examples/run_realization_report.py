@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -50,6 +51,35 @@ def retire_stale_parm(parm_path: str) -> bool:
         return False
     os.replace(path, Path(str(path) + ".stale"))
     return True
+
+
+def require_authoritative_functional_closure(model_sysml: str) -> list[str]:
+    """Reject publication while model-fixable FUNC gaps remain."""
+    from src.agents.verification_audit import functional_verification_gap_issues
+    from src.simulation.syntax_checker import check_syntax
+
+    if not (model_sysml or "").strip():
+        raise RuntimeError("authoritative run blocked: final model is empty")
+    syntax = check_syntax(model_sysml)
+    if syntax.has_errors:
+        raise RuntimeError(
+            "authoritative run blocked: final model fails syntax/semantic validation"
+        )
+    functional_gaps = functional_verification_gap_issues(
+        model_sysml, SYSTEM, strict=True
+    )
+    ids = sorted(set(
+        match.group(0)
+        for issue in functional_gaps
+        for match in [re.search(r"REQ[_-]FUNC[_-]\d+", issue)]
+        if match
+    ))
+    if ids:
+        raise RuntimeError(
+            "authoritative run blocked: model-fixable functional verification "
+            "gaps remain after targeted closure: " + ", ".join(ids)
+        )
+    return ids
 
 
 def _parm_text(design) -> str | None:
@@ -128,6 +158,8 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
             orch, "last_recommended_estimator_feasible", None
         )
     final_sysml = res.get("model_sysml") or ""
+    # Independent final publication gate (do not trust only run metadata).
+    require_authoritative_functional_closure(final_sysml)
     parm_text = _parm_text(rec)
     out = {
         "elapsed_s": round(elapsed_s, 1),
@@ -152,6 +184,7 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
         "estimator_calibration": getattr(orch, "last_estimator_calibration", None),
         "recommended_design_inputs": vars(rec),
         "dse_verification_summary": (res.get("dse_verification") or {}).get("summary"),
+        "functional_closure": dict(res.get("functional_closure") or {}),
         "realization": realization,
     }
     out["artifact_provenance"] = build_run_provenance(
