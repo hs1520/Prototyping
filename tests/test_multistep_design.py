@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import List
 from collections import deque
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -358,6 +360,74 @@ class TestMultistepGeneratePipeline:
         assert "interfaces_fragment_length" in result.metadata
         assert "behavior_fragment_length" in result.metadata
 
+    def test_step2_retries_once_when_first_response_has_no_part_defs(
+        self, monkeypatch
+    ):
+        import src.agents.design_agent as da_module
+        from src.sysml.model import SysMLModel, PartDefinition
+
+        responses = [
+            "Architecture plan",
+            "```sysml\nitem def NotAPart;\n```",
+            _SYSML_FRAGMENT,
+            _INTERFACE_FRAGMENT,
+            _BEHAVIOR_FRAGMENT,
+            _ASSEMBLED_MODEL,
+        ]
+        agent = self._make_agent(responses, monkeypatch)
+        dummy_model = SysMLModel(name="DroneSystem", description="test")
+        dummy_model.part_definitions.append(PartDefinition(name="FlightController"))
+        monkeypatch.setattr(da_module, "build_lite_model", lambda *a, **kw: dummy_model)
+
+        result = agent.run({
+            "system_name": "DroneSystem",
+            "requirements": self._REQUIREMENTS,
+        })
+
+        assert result.success
+        assert agent.llm.call_count == 6
+        assert result.metadata["step2_part_retries"] == 1
+
+    def test_step2_fails_after_bounded_empty_structure_retry(self, monkeypatch):
+        responses = [
+            "Architecture plan",
+            "no structural model",
+            "still no structural model",
+        ]
+        agent = self._make_agent(responses, monkeypatch)
+
+        with pytest.raises(RuntimeError, match="Step 2 produced no part definitions"):
+            agent.run({
+                "system_name": "DroneSystem",
+                "requirements": self._REQUIREMENTS,
+            })
+
+        assert agent.llm.call_count == 3
+
+    def test_initial_generation_rejects_zero_parseable_parts(self, monkeypatch):
+        import src.agents.design_agent as da_module
+        from src.sysml.model import SysMLModel
+
+        responses = [
+            "Architecture plan",
+            _SYSML_FRAGMENT,
+            _INTERFACE_FRAGMENT,
+            _BEHAVIOR_FRAGMENT,
+            _ASSEMBLED_MODEL,
+        ]
+        agent = self._make_agent(responses, monkeypatch)
+        monkeypatch.setattr(
+            da_module,
+            "build_lite_model",
+            lambda *a, **kw: SysMLModel(name="DroneSystem", description="empty"),
+        )
+
+        with pytest.raises(RuntimeError, match="no parseable part definitions"):
+            agent.run({
+                "system_name": "DroneSystem",
+                "requirements": self._REQUIREMENTS,
+            })
+
     def test_behavior_step_skipped_without_func_safe_reqs(self, monkeypatch):
         """Only 4 LLM calls when no FUNC or SAFE requirements exist.
 
@@ -445,6 +515,40 @@ def test_range_floor_is_not_emitted_as_opposite_always_on_constraint():
     assert "minOperationalRange" in fixed
     assert "currentOperationalRange <=" not in fixed
     assert "forward-flight fidelity" in fixed
+
+
+def test_missing_part_defs_are_restored_from_structural_fragment():
+    from src.agents.design_agent import DesignAgent
+
+    assembled = """package DroneSystem {
+        requirement def REQ_FUNC_001 { }
+    }"""
+    parts = """part def FlightController {
+        in port commandIn : DataPort;
+        attribute controlFrequency : Real = 100.0 [Hz];
+    }
+    part def PayloadManager {
+        out port payloadStatus : DataPort;
+        attribute payloadMass : Real = 2.0 [kg];
+    }"""
+
+    restored, names = DesignAgent._inject_missing_part_defs(assembled, parts)
+
+    assert names == ["FlightController", "PayloadManager"]
+    assert restored.count("part def FlightController") == 1
+    assert restored.count("part def PayloadManager") == 1
+
+
+def test_existing_part_defs_are_not_duplicated_during_restore():
+    from src.agents.design_agent import DesignAgent
+
+    assembled = "package D { part def FlightController { } }"
+    parts = "part def FlightController { attribute x : Real = 1.0; }"
+
+    restored, names = DesignAgent._inject_missing_part_defs(assembled, parts)
+
+    assert restored == assembled
+    assert names == []
 
 
 def test_range_floor_cleanup_does_not_remove_sensor_range_constraint():

@@ -447,6 +447,16 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         # Parse via syside native API (replaces Syside_AST_Parser)
         model = build_lite_model(cot_result.extracted_sysml, model_name=system_name)
 
+        # Never advertise a structurally empty initial design as successful.
+        # Refinement can legitimately receive a degraded model while repairing
+        # syntax, but the initial generation must establish a usable baseline
+        # before scoring, simulation, or DSE are allowed to run.
+        if not is_refinement and not model.part_definitions:
+            raise RuntimeError(
+                "[STRUCTURAL_GENERATION_ERROR] Assembled model contains no "
+                "parseable part definitions."
+            )
+
         parse_diagnostics = [
             {"severity": d.severity.value if hasattr(d.severity, "value") else str(d.severity),
              "message": d.message}
@@ -592,6 +602,32 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             metadata["degraded_steps"].append(
                 "step2_parts: no SysML code block extracted, falling back to raw text"
             )
+
+        # A structural fragment without a single part definition cannot be
+        # repaired meaningfully by the later assembly/refinement stages.  Give
+        # the focused Step-2 prompt one bounded retry, then fail before spending
+        # calls on interfaces, behaviour, and assembly for an empty baseline.
+        if not re.search(r"\bpart\s+def\s+\w+\s*\{", parts_fragment):
+            metadata["step2_part_retries"] = 1
+            retry_step2 = self.cot.generate_part_definitions(
+                system_name=system_name,
+                architecture=architecture_text,
+                requirements=requirements,
+                context=ctx2,
+            )
+            retry_fragment = (
+                retry_step2.extracted_sysml or retry_step2.final_answer or ""
+            )
+            if not re.search(r"\bpart\s+def\s+\w+\s*\{", retry_fragment):
+                raise RuntimeError(
+                    "[STRUCTURAL_GENERATION_ERROR] Step 2 produced no part "
+                    "definitions after one targeted retry."
+                )
+            step2 = retry_step2
+            parts_fragment = retry_fragment
+            metadata["degraded_steps"].append(
+                "step2_parts: first response had no part defs; targeted retry accepted"
+            )
         metadata["generation_steps_completed"] = 2
         metadata["parts_fragment_length"] = len(parts_fragment)
 
@@ -701,6 +737,24 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=fixed_text)
 
+        # --- Post-assembly: restore structural part defs the LLM dropped ---
+        # Step 5 is an integration call, not an authority to delete the Step-2
+        # architecture.  Restore missing part blocks deterministically before
+        # injecting owner-scoped states/actions into those parts.
+        if parts_fragment and step5.extracted_sysml:
+            assembled_text, injected_parts = self._inject_missing_part_defs(
+                step5.extracted_sysml, parts_fragment
+            )
+            if injected_parts:
+                metadata["injected_part_defs"] = injected_parts
+                if verbose:
+                    print(
+                        f"\n  [DEBUG] Step 5 — Programmatic injection: "
+                        f"restored {len(injected_parts)} dropped part def(s): "
+                        f"{', '.join(injected_parts)}"
+                    )
+                step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
+
         # --- Post-assembly: inject any state defs the LLM dropped ---
         if behavior_fragment and step5.extracted_sysml:
             assembled_text, injected_states = self._inject_missing_state_defs(
@@ -784,6 +838,71 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 print(step5.final_answer)
 
         return step5, metadata
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Part-def preservation (Step 2 → Step 5 structural safety net)
+    # ──────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def _inject_missing_part_defs(
+        cls,
+        assembled: str,
+        parts_fragment: str,
+    ) -> Tuple[str, List[str]]:
+        """Restore any Step-2 ``part def`` blocks omitted by Step 5.
+
+        The structural fragment is the authoritative architecture produced by
+        the dedicated part-generation call.  Assembly may enrich those blocks,
+        but it must not silently delete them.  Only entirely missing named part
+        definitions are injected; existing assembled definitions are untouched.
+        """
+        if not assembled or not parts_fragment:
+            return assembled, []
+
+        part_start_re = re.compile(r"\bpart\s+def\s+(\w+)\s*\{")
+        extracted: List[Tuple[str, str]] = []
+        cursor = 0
+        while True:
+            match = part_start_re.search(parts_fragment, cursor)
+            if not match:
+                break
+            brace_pos = parts_fragment.index("{", match.start())
+            end = find_block_end(parts_fragment, brace_pos)
+            if end == -1:
+                cursor = match.end()
+                continue
+            extracted.append((match.group(1), parts_fragment[match.start():end + 1]))
+            cursor = end + 1
+
+        missing = [
+            (name, block)
+            for name, block in extracted
+            if not re.search(
+                r"\bpart\s+def\s+" + re.escape(name) + r"\b",
+                assembled,
+            )
+        ]
+        if not missing:
+            return assembled, []
+
+        package_match = re.search(r"\bpackage\s+\w+\s*\{", assembled)
+        if not package_match:
+            return assembled, []
+
+        injection = "\n    // (part defs restored from Step 2 by pipeline)\n"
+        for _, block in missing:
+            injection += "\n".join(
+                "    " + line if line.strip() else line
+                for line in block.splitlines()
+            )
+            injection += "\n\n"
+
+        result = (
+            assembled[:package_match.end()]
+            + injection
+            + assembled[package_match.end():]
+        )
+        return result, [name for name, _ in missing]
 
     # ──────────────────────────────────────────────────────────────────────
     # Programmatic state-def injection (Step 4 safety net)
