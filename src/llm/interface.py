@@ -136,6 +136,7 @@ class LLMInterface(ABC):
         "429", "rate limit", "resource_exhausted", "resource exhausted",
         "500", "502", "503", "504", "unavailable", "overloaded",
         "timeout", "timed out", "deadline", "connection",
+        "connecterror", "name resolution", "nodename nor servname",
         "temporarily", "server error", "internal error",
     )
     _RETRYABLE_STATUS = {429, 500, 502, 503, 504}

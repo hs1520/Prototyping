@@ -234,6 +234,16 @@ class TestRetryAndTimeout:
         assert LLMInterface._is_retryable(exc)
         assert not LLMInterface._is_retryable(ValueError("plain bad input"))
 
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            RuntimeError("ConnectError: [Errno 8] nodename nor servname provided"),
+            RuntimeError("temporary failure in name resolution"),
+        ],
+    )
+    def test_dns_connection_failures_are_retryable(self, exc):
+        assert LLMInterface._is_retryable(exc)
+
 
 class TestDefaultTemperature:
     def test_chat_defaults_to_low_temperature(self):
