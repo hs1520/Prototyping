@@ -197,3 +197,36 @@ def test_temporal_response_needs_the_real_trigger_and_timing_anchor():
         "",
     )
     assert functional_behavior_status(no_timing, reqs)["REQ-FUNC-008"] == BEHAVIOR_ABSENT
+
+
+def test_self_test_requires_reachable_action_from_power_on_context():
+    base = """package D {
+        action def CmdToSelfTest { }
+        requirement def REQ_FUNC_009 {
+            doc /* Execute an automated system self-test prior to arming. */
+        }
+        part def FlightController {
+            action def executeSelfTest { }
+            state def ModeMachine {
+                state PhasePowerOn;
+                state PhaseSelfTest {
+                    entry action runSelfTest : executeSelfTest;
+                }
+                transition initial then PhasePowerOn;
+                transition test first PhasePowerOn
+                    accept CmdToSelfTest then PhaseSelfTest;
+            }
+            satisfy requirement REQ_FUNC_009;
+        }
+    }"""
+    reqs = [
+        "REQ-FUNC-009: Execute an automated system self-test prior to arming."
+    ]
+
+    assert functional_behavior_status(base, reqs)["REQ-FUNC-009"] == BEHAVIORALLY_VERIFIED
+
+    no_action = base.replace(
+        "state PhaseSelfTest {\n                    entry action runSelfTest : executeSelfTest;\n                }",
+        "state PhaseSelfTest;",
+    )
+    assert functional_behavior_status(no_action, reqs)["REQ-FUNC-009"] == BEHAVIOR_ABSENT

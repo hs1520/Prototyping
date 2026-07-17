@@ -37,11 +37,15 @@ _FUNC_INTENT = {
                  ("navigate", "waypoint", "gotowaypoint", "nav")),
     "report":   (("health report", "status report", "post-flight", "health and status report"),
                  ("report", "healthreport", "postflight", "telemetryreport")),
+    "self_test": (("self-test", "self test", "self-check", "self check"),
+                  ("selftest", "selfcheck")),
 }
 # More-specific response intents must win over context words.  For example,
 # "transmit a post-flight health report after landing" requires REPORT; a
 # reachable LAND action is only the trigger/context and must not satisfy it.
-_FUNC_INTENT_PRIORITY = ("report", "release", "return", "land", "navigate")
+_FUNC_INTENT_PRIORITY = (
+    "report", "self_test", "release", "return", "land", "navigate"
+)
 _REQ_ID_RE = re.compile(r"REQ[-_][A-Z]+[-_]\d+")
 _SATISFY_RE = re.compile(r"satisfy\s+(?:requirement\s+)?(\w*REQ[_-]\w+)", re.IGNORECASE)
 
@@ -104,6 +108,11 @@ def _has_required_trigger(req_text: str, record: _ProducedResponse) -> bool:
         )
         valid_qualified = "valid" not in text or "valid" in context
         return waypoint_event and valid_qualified
+    if any(k in text for k in ("self-test", "self test", "self-check", "self check")):
+        return (
+            any(k in context for k in ("selftest", "selfcheck"))
+            and any(k in context for k in ("poweron", "startup", "start"))
+        )
     return True
 
 

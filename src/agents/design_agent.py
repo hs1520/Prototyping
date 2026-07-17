@@ -430,16 +430,26 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             cot_result.extracted_sysml, requirements
         )
         cleaned_sysml, action_fixes = self._fix_safety_action_semantics(cleaned_sysml)
-        if capability_fixes or action_fixes:
+        cleaned_sysml, self_test_fixes = self._fix_self_test_behavior_semantics(
+            cleaned_sysml, requirements
+        )
+        cleaned_sysml, ownership_fixes = self._fix_functional_satisfy_ownership(
+            cleaned_sysml, requirements
+        )
+        if capability_fixes or action_fixes or self_test_fixes or ownership_fixes:
             cot_result = dataclasses.replace(cot_result, extracted_sysml=cleaned_sysml)
             generation_metadata["semantic_fixes"] = {
                 "capability": capability_fixes,
                 "safety_action": action_fixes,
+                "self_test_behavior": self_test_fixes,
+                "functional_satisfy_ownership": ownership_fixes,
             }
             if verbose:
                 print(
                     f"\n  [DEBUG] Semantic consistency fixes: "
-                    f"capability={capability_fixes}, safety_action={action_fixes}"
+                    f"capability={capability_fixes}, safety_action={action_fixes}, "
+                    f"self_test_behavior={self_test_fixes}, "
+                    f"functional_satisfy_ownership={ownership_fixes}"
                 )
 
         parse_label = "After Refinement" if is_refinement else "After Initial Generation"
@@ -1414,6 +1424,206 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                     + result[first_part.start():]
                 )
                 fixes += 1
+        return result, fixes
+
+    @staticmethod
+    def _fix_self_test_behavior_semantics(
+        sysml_text: str,
+        requirements: List[str],
+    ) -> Tuple[str, int]:
+        """Make a generated self-test phase produce an executable response.
+
+        A bare ``state PhaseSelfTest;`` proves only that a phase name exists.
+        When a FUNC requirement explicitly mandates an automated self-test,
+        attach an entry action to that already-generated state. Existing
+        self-test actions are reused; a minimal declaration is added only when
+        the model has none.
+        """
+        if not any(
+            "func" in req.lower()
+            and any(k in req.lower() for k in (
+                "self-test", "self test", "self-check", "self check"
+            ))
+            for req in requirements
+        ):
+            return sysml_text, 0
+
+        part_start_re = re.compile(r"\bpart\s+def\s+(\w+)\s*\{")
+        state_re = re.compile(
+            r"\bstate\s+(\w*(?:SelfTest|SelfCheck)\w*)\s*;",
+            re.IGNORECASE,
+        )
+        result = sysml_text
+        cursor = 0
+        while True:
+            part_match = part_start_re.search(result, cursor)
+            if not part_match:
+                return result, 0
+            brace_pos = result.index("{", part_match.start())
+            part_end = find_block_end(result, brace_pos)
+            if part_end == -1:
+                cursor = part_match.end()
+                continue
+            block = result[part_match.start():part_end + 1]
+            state_match = state_re.search(block)
+            if not state_match:
+                cursor = part_end + 1
+                continue
+
+            action_match = re.search(
+                r"\baction\s+def\s+(\w*(?:SelfTest|SelfCheck)\w*)\b",
+                block,
+                re.IGNORECASE,
+            )
+            action_name = (
+                action_match.group(1) if action_match
+                else "performAutomatedSelfTest"
+            )
+            state_name = state_match.group(1)
+            absolute_start = part_match.start() + state_match.start()
+            absolute_end = part_match.start() + state_match.end()
+            replacement = (
+                f"state {state_name} {{\n"
+                f"                entry action runSelfTest : {action_name};\n"
+                "            }"
+            )
+            result = result[:absolute_start] + replacement + result[absolute_end:]
+            fixes = 1
+
+            if action_match is None:
+                # Re-find the owner block after the state expansion and add the
+                # declaration immediately inside it.
+                owner_match = re.search(
+                    r"\bpart\s+def\s+" + re.escape(part_match.group(1)) + r"\s*\{",
+                    result,
+                )
+                if owner_match:
+                    owner_open = result.index("{", owner_match.start())
+                    result = (
+                        result[:owner_open + 1]
+                        + f"\n        action def {action_name} {{ }}\n"
+                        + result[owner_open + 1:]
+                    )
+                    fixes += 1
+            return result, fixes
+
+    @staticmethod
+    def _fix_functional_satisfy_ownership(
+        sysml_text: str,
+        requirements: List[str],
+    ) -> Tuple[str, int]:
+        """Align sequencing FUNC satisfy links with their state-machine owner.
+
+        The integration LLM occasionally places a system-level satisfy link on
+        a monitoring part even though the dedicated executable state machine is
+        owned by another part.  The verification matrix then correctly refuses
+        to credit that unrelated owner's behavior, and a later LLM closure tends
+        to add a duplicate machine that regresses simulation.  For narrowly
+        recognisable sequencing families, relocate the existing satisfy usage to
+        the part that already owns the matching state machine.  No requirement
+        definition or behavior is invented.
+        """
+        family_patterns = (
+            (
+                ("self-test", "self test", "self-check", "self check"),
+                re.compile(
+                    r"\bstate(?:\s+def)?\s+\w*(?:SelfTest|SelfCheck)\w*\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            (
+                ("health report", "post-flight", "post flight"),
+                re.compile(
+                    r"\bstate\s+def\s+\w*(?:HealthReport|Reporting)\w*\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            (
+                ("waypoint-modification", "waypoint modification", "revised waypoint"),
+                re.compile(
+                    r"\bstate\s+def\s+\w*(?:WaypointRevision|WaypointUpdate)\w*\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        )
+
+        req_families: List[Tuple[str, re.Pattern]] = []
+        for requirement in requirements:
+            match = re.match(r"(REQ[-_]FUNC[-_]\d+)\s*:\s*(.*)", requirement)
+            if not match:
+                continue
+            req_id = match.group(1).replace("-", "_")
+            body_low = match.group(2).lower()
+            for keywords, state_pattern in family_patterns:
+                if any(keyword in body_low for keyword in keywords):
+                    req_families.append((req_id, state_pattern))
+                    break
+
+        result = sysml_text
+        fixes = 0
+        part_start_re = re.compile(r"\bpart\s+def\s+(\w+)\s*\{")
+
+        for req_id, state_pattern in req_families:
+            target_name: Optional[str] = None
+            cursor = 0
+            while True:
+                part_match = part_start_re.search(result, cursor)
+                if not part_match:
+                    break
+                brace_pos = result.index("{", part_match.start())
+                end = find_block_end(result, brace_pos)
+                if end == -1:
+                    cursor = part_match.end()
+                    continue
+                block = result[part_match.start():end + 1]
+                if state_pattern.search(block):
+                    target_name = part_match.group(1)
+                    break
+                cursor = end + 1
+
+            if target_name is None:
+                continue
+
+            satisfy_re = re.compile(
+                r"(?m)^[ \t]*satisfy\s+(?:requirement\s+)?"
+                + re.escape(req_id)
+                + r"\s*;[ \t]*\n?",
+                re.IGNORECASE,
+            )
+
+            # If the only occurrence is already in the correct block, preserve
+            # the model byte-for-byte. Otherwise relocate to keep exactly one
+            # satisfy usage, as required by the integration contract.
+            target_match = re.search(
+                r"\bpart\s+def\s+" + re.escape(target_name) + r"\s*\{",
+                result,
+            )
+            if not target_match:
+                continue
+            target_end = find_block_end(result, result.index("{", target_match.start()))
+            target_block = result[target_match.start():target_end + 1]
+            occurrences = list(satisfy_re.finditer(result))
+            if len(occurrences) == 1 and satisfy_re.search(target_block):
+                continue
+
+            result = satisfy_re.sub("", result)
+            target_match = re.search(
+                r"\bpart\s+def\s+" + re.escape(target_name) + r"\s*\{",
+                result,
+            )
+            if not target_match:
+                continue
+            brace_pos = result.index("{", target_match.start())
+            target_end = find_block_end(result, brace_pos)
+            if target_end == -1:
+                continue
+            result = (
+                result[:target_end]
+                + f"\n        satisfy requirement {req_id};\n    "
+                + result[target_end:]
+            )
+            fixes += 1
+
         return result, fixes
 
     # ──────────────────────────────────────────────────────────────────────

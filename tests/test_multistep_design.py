@@ -616,3 +616,102 @@ def test_parachute_action_command_is_repaired_and_declared():
     assert "action def CMD_PARACHUTE" in fixed
     assert "send CMD_PARACHUTE() to parachuteCmd" in fixed
     assert "deployParachute { send CMD_LAND" not in fixed
+
+
+def test_self_test_satisfy_is_relocated_to_state_machine_owner():
+    from src.agents.design_agent import DesignAgent
+
+    text = """package D {
+        requirement def REQ_FUNC_009 { }
+        part def FlightController {
+            state def ModeMachine {
+                state PhasePowerOn;
+                state PhaseSelfTest;
+                state PhaseArmed;
+                transition initial then PhasePowerOn;
+                transition test first PhasePowerOn then PhaseSelfTest;
+                transition arm first PhaseSelfTest then PhaseArmed;
+            }
+        }
+        part def SafetyMonitor {
+            satisfy requirement REQ_FUNC_009;
+        }
+    }"""
+    requirements = [
+        "REQ-FUNC-009: Execute an automated system self-check prior to arming."
+    ]
+
+    fixed, count = DesignAgent._fix_functional_satisfy_ownership(
+        text, requirements
+    )
+
+    assert count == 1
+    assert fixed.count("satisfy requirement REQ_FUNC_009;") == 1
+    flight_block = fixed[fixed.index("part def FlightController"):fixed.index("part def SafetyMonitor")]
+    assert "satisfy requirement REQ_FUNC_009;" in flight_block
+
+
+def test_bare_self_test_phase_gets_executable_entry_action():
+    from src.agents.design_agent import DesignAgent
+
+    text = """package D {
+        part def FlightController {
+            action def executeSelfTest { }
+            state def ModeMachine {
+                state PhasePowerOn;
+                state PhaseSelfTest;
+                state PhaseArmed;
+            }
+        }
+    }"""
+    requirements = [
+        "REQ-FUNC-009: Execute an automated system self-test prior to arming."
+    ]
+
+    fixed, count = DesignAgent._fix_self_test_behavior_semantics(
+        text, requirements
+    )
+
+    assert count == 1
+    assert "state PhaseSelfTest {" in fixed
+    assert "entry action runSelfTest : executeSelfTest;" in fixed
+    assert fixed.count("action def executeSelfTest") == 1
+
+
+def test_functional_satisfy_owner_fix_closes_self_check_audit_gap():
+    from src.agents.design_agent import DesignAgent
+    from src.agents.verification_audit import functional_verification_gap_issues
+
+    text = """package D {
+        action def CmdToSelfTest { }
+        action def CmdToArmed { }
+        requirement def REQ_FUNC_009 {
+            doc /* Execute an automated system self-check prior to arming. */
+        }
+        part def FlightController {
+            state def ModeMachine {
+                state PhasePowerOn;
+                state PhaseSelfTest;
+                state PhaseArmed;
+                transition initial then PhasePowerOn;
+                transition test first PhasePowerOn accept CmdToSelfTest then PhaseSelfTest;
+                transition arm first PhaseSelfTest accept CmdToArmed then PhaseArmed;
+            }
+        }
+        part def SafetyMonitor {
+            satisfy requirement REQ_FUNC_009;
+        }
+    }"""
+    requirements = [
+        "REQ-FUNC-009: Execute an automated system self-check prior to arming."
+    ]
+
+    before = functional_verification_gap_issues(text, "D", strict=True)
+    executable, _ = DesignAgent._fix_self_test_behavior_semantics(text, requirements)
+    fixed, _ = DesignAgent._fix_functional_satisfy_ownership(
+        executable, requirements
+    )
+    after = functional_verification_gap_issues(fixed, "D", strict=True)
+
+    assert any("REQ_FUNC_009" in issue for issue in before)
+    assert not after
