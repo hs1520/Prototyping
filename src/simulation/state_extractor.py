@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from ..utils.suppressed import record_suppressed
+
 try:
     import syside as _syside
     _SYSIDE_OK = True
@@ -351,8 +353,8 @@ def _extract_accept_trigger(tr) -> Optional[str]:
                 name = getattr(defn, "name", None)
                 if name:
                     return str(name)
-        except Exception:
-            pass
+        except Exception as exc:
+            record_suppressed("simulation.state_extractor.action_def_lookup", exc)
 
     return None
 
@@ -493,8 +495,8 @@ def _extract_part_attrs(part_def) -> Dict[str, Any]:
                 ref = getattr(fve, "referent", None)
                 if ref is not None and type(ref).__name__ == "EnumerationUsage":
                     result[name] = ref.name  # store as string, e.g. "POWER_ON"
-    except Exception:
-        pass
+    except Exception as exc:
+        record_suppressed("simulation.state_extractor.initial_values", exc)
     return result
 
 
@@ -520,8 +522,8 @@ def _extract_send_payload_name(sa) -> Optional[str]:
                     name = getattr(defn, "name", None)
                     if name:
                         return str(name)
-            except Exception:
-                pass
+            except Exception as exc:
+                record_suppressed("simulation.state_extractor.performed_action_name", exc)
         # FeatureReferenceExpression → referent.name
         ref = getattr(pa, "referent", None)
         if ref:
@@ -574,8 +576,8 @@ def _iter_action_body(action_usage) -> List:
             defs = [d for d in getattr(action_usage, attr)]
             if defs:
                 break
-        except Exception:
-            pass
+        except Exception as exc:
+            record_suppressed("simulation.state_extractor.action_defs_fetch", exc)
 
     nodes: List = []
     seen_ids: set = set()
@@ -588,8 +590,8 @@ def _iter_action_body(action_usage) -> List:
                     if nid not in seen_ids:
                         seen_ids.add(nid)
                         nodes.append(node)
-            except Exception:
-                pass
+            except Exception as exc:
+                record_suppressed("simulation.state_extractor.action_nodes_fetch", exc)
 
     return nodes
 
@@ -610,8 +612,8 @@ def _extract_action_definition_name(action_usage) -> Optional[str]:
                 name = getattr(defn, "name", None)
                 if name:
                     return str(name)
-        except Exception:
-            pass
+        except Exception as exc:
+            record_suppressed("simulation.state_extractor.action_def_name", exc)
     return None
 
 

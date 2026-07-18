@@ -28,6 +28,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from ..utils.suppressed import record_suppressed
+
 try:
     import syside as _syside
     _SYSIDE_OK = True
@@ -113,8 +115,8 @@ def _decode_conn_end(end_feature) -> Optional[str]:
         cf = list(getattr(rf, "chaining_features", []))
         if cf:
             return ".".join(f.name for f in cf if f.name)
-    except Exception:
-        pass
+    except Exception as exc:
+        record_suppressed("simulation.extractor.conn_end_decode", exc)
     return None
 
 
@@ -168,8 +170,8 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
                             and getattr(feat, "direction", None) is not None
                         ):
                             ports[feat.name] = _port_dir(feat.direction)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    record_suppressed("simulation.extractor.inherited_ports", exc)
             def_ports[pd.name] = ports
 
             # Collect satisfy-requirement names for this PartDefinition
@@ -183,11 +185,11 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
                             rname = getattr(feat, "name", None)
                             if rname and rname not in reqs:
                                 reqs.append(rname)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        record_suppressed("simulation.extractor.def_satisfy", exc)
             def_reqs[pd.name] = reqs
-    except Exception:
-        pass
+    except Exception as exc:
+        record_suppressed("simulation.extractor.part_defs", exc)
 
     # ── Step 2: PartUsage → PartNode + PortNode ─────────────────────────────
     # Parts declared inside an `analysis def` (e.g. the DSE trade study's alt{i}Design
@@ -239,8 +241,8 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
                 port_ids=port_ids,
                 satisfied_reqs=list(def_reqs.get(def_name, [])),
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        record_suppressed("simulation.extractor.part_usages", exc)
 
     # ── Step 3: ConnectionUsage → ConnectionEdge ────────────────────────────
     try:
@@ -259,7 +261,7 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
                 kind="connection",
                 owner=owner_name,
             ))
-    except Exception:
-        pass
+    except Exception as exc:
+        record_suppressed("simulation.extractor.connections", exc)
 
     return bg

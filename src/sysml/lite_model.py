@@ -30,6 +30,7 @@ except ImportError:
     _syside = None          # type: ignore
     _SYSIDE_OK = False
 
+from ..utils.suppressed import record_suppressed
 from .model import DiagnosticSeverity, FeatureDirection
 
 
@@ -137,8 +138,8 @@ def _port_type_name(port) -> Optional[str]:
                         return str(n)
             except Exception:
                 continue
-    except Exception:
-        pass
+    except Exception as exc:
+        record_suppressed("sysml.lite_model.port_type_name", exc)
     return None
 
 
@@ -178,8 +179,8 @@ def _resolve_port_direction(port, syside_model) -> FeatureDirection:
                     if inherited != FeatureDirection.NONE:
                         return inherited
             break  # found the right PortDefinition, no direction → give up
-    except Exception:
-        pass
+    except Exception as exc:
+        record_suppressed("sysml.lite_model.port_direction_inherit", exc)
 
     return d
 
@@ -210,8 +211,8 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                         direction=_resolve_port_direction(port, syside_model),
                         type_ref=LiteTypeRef(name=type_name) if type_name else None,
                     ))
-            except Exception:
-                pass
+            except Exception as exc:
+                record_suppressed("sysml.lite_model.parts_ports", exc)
 
             # ── Attributes ─────────────────────────────────────────────────
             attrs: List[LiteAttributeUsage] = []
@@ -235,8 +236,8 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                                 if not report.fatal and val is not None:
                                     default_val = float(val)
                                     compiler_ok = True
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                record_suppressed("sysml.lite_model.attr_compiler_eval", exc)
 
                             if not compiler_ok:
                                 # Fallback: Compiler returns FATAL for unit-bearing
@@ -247,8 +248,8 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                                 ):
                                     try:
                                         default_val = float(fve.value)
-                                    except Exception:
-                                        pass
+                                    except Exception as exc:
+                                        record_suppressed("sysml.lite_model.attr_literal_fallback", exc)
                                 elif fve_type == "OperatorExpression":
                                     try:
                                         first_op = next(iter(fve.operands))
@@ -256,11 +257,11 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                                             "LiteralRational", "LiteralInteger", "LiteralReal"
                                         ):
                                             default_val = float(first_op.value)
-                                    except Exception:
-                                        pass
+                                    except Exception as exc:
+                                        record_suppressed("sysml.lite_model.attr_operator_fallback", exc)
                     attrs.append(LiteAttributeUsage(name=attr.name, default_value=default_val))
-            except Exception:
-                pass
+            except Exception as exc:
+                record_suppressed("sysml.lite_model.parts_attributes", exc)
 
             # ── Satisfy relationships ───────────────────────────────────────
             sats: List[LiteSatisfyRel] = []
@@ -275,8 +276,8 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                             if req_name and req_name not in seen_req:
                                 seen_req.add(req_name)
                                 sats.append(LiteSatisfyRel(target=LiteTypeRef(name=req_name)))
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        record_suppressed("sysml.lite_model.parts_satisfy", exc)
 
             # ── Actions ────────────────────────────────────────────────────
             actions: List[LiteActionUsage] = []
@@ -285,8 +286,8 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                     aname = getattr(act, "name", None)
                     if aname:
                         actions.append(LiteActionUsage(name=aname))
-            except Exception:
-                pass
+            except Exception as exc:
+                record_suppressed("sysml.lite_model.parts_actions", exc)
 
             # ── Short description (doc comment) ────────────────────────────
             # pd.documentation is a collection of Documentation nodes;
@@ -298,8 +299,8 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                     if body:
                         short_desc = str(body).strip()[:200]
                         break
-            except Exception:
-                pass
+            except Exception as exc:
+                record_suppressed("sysml.lite_model.parts_doc", exc)
 
             parts.append(LitePartDef(
                 name=pd.name,
@@ -309,8 +310,8 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                 actions=actions,
                 short_description=short_desc,
             ))
-    except Exception:
-        pass
+    except Exception as exc:
+        record_suppressed("sysml.lite_model.extract_parts", exc)
 
     return parts
 
@@ -323,8 +324,8 @@ def _extract_requirements(syside_model) -> List[LiteReqDef]:
         for rd in syside_model.elements(_syside.RequirementDefinition):
             if rd.name:
                 reqs.append(LiteReqDef(name=rd.name))
-    except Exception:
-        pass
+    except Exception as exc:
+        record_suppressed("sysml.lite_model.extract_requirements", exc)
     return reqs
 
 
@@ -344,8 +345,8 @@ def _extract_diagnostics(raw_diags) -> List[LiteDiagnostic]:
             for d in category:
                 msg = getattr(d, "message", str(d))
                 result.append(LiteDiagnostic(severity=sev, message=msg))
-        except Exception:
-            pass
+        except Exception as exc:
+            record_suppressed("sysml.lite_model.diagnostics_collect", exc)
 
     _collect(getattr(raw_diags, "parser",   []), DiagnosticSeverity.ERROR)
 
@@ -363,8 +364,8 @@ def _extract_diagnostics(raw_diags) -> List[LiteDiagnostic]:
             if _stdlib_filter and _stdlib_filter(msg):
                 continue
             result.append(LiteDiagnostic(severity=DiagnosticSeverity.ERROR, message=msg))
-    except Exception:
-        pass
+    except Exception as exc:
+        record_suppressed("sysml.lite_model.diagnostics_sema", exc)
 
     _collect(getattr(raw_diags, "warnings", []), DiagnosticSeverity.WARNING)
     return result
@@ -466,8 +467,8 @@ class SysMLLiteModel:
             try:
                 self._syside_model, self._raw_diagnostics = \
                     _syside.try_load_model(sysml_source=raw_text)
-            except Exception:
-                pass
+            except Exception as exc:
+                record_suppressed("sysml.lite_model.invalidate_reparse", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -490,8 +491,8 @@ def build_lite_model(
     if _SYSIDE_OK:
         try:
             syside_model, raw_diagnostics = _syside.try_load_model(sysml_source=raw_text)
-        except Exception:
-            pass
+        except Exception as exc:
+            record_suppressed("sysml.lite_model.try_load_model", exc)
 
     return SysMLLiteModel(
         raw_text=raw_text,

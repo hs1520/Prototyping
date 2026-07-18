@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List
 
+from ..utils.suppressed import record_suppressed
+
 try:
     import syside as _syside
     _SYSIDE_OK = True
@@ -212,8 +214,8 @@ def check_syntax(sysml_text: str) -> SyntaxCheckResult:
                     "message": msg,
                     "code":    getattr(d, "code",    ""),
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            record_suppressed("simulation.syntax_checker.diag_collect", exc)
         return out
 
     parser_errs = _collect(diags.parser)

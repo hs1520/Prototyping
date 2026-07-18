@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Dict
 
+from .suppressed import record_suppressed
+
 try:
     import syside
     SYSIDE_OK = True
@@ -32,8 +34,8 @@ def extract_attr_values(text: str) -> Dict[str, float]:
                 val, report = compiler.evaluate(expr)
                 if not report.fatal and val is not None:
                     out[attr.name] = float(val)
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as exc:
+                record_suppressed("utils.syside_utils.attr_eval", exc)
+    except Exception as exc:
+        record_suppressed("utils.syside_utils.attr_load", exc)
     return out
