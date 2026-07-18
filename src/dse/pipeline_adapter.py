@@ -118,23 +118,6 @@ def _count_sensors(model) -> int:
     return max(1, n)
 
 
-def _default_objective(state: State, ctx: Ctx) -> Objectives:
-    """Grounded capability (redundancy reliability + protocol interop) vs cost."""
-    g = grounded_objectives(
-        _RED.resolve(state["arbitration"], with_fanin=True), ctx.channel_reliability
-    )
-    interop = _PROTO[state["protocol"]][2]
-    units = (
-        {"single": 1, "dual": 2, "triple": 3}[state["arbitration"]]
-        + _SENSE[state["sensing"]]
-        + (1 if state["topology"] == "centralised" else 3)
-    )
-    return {
-        "capability": 0.6 * g["reliability"] + 0.4 * interop,
-        "cost_efficiency": 1.0 - (units - 3) / 9.0,
-    }
-
-
 def run_bilevel_dse(
     model,
     requirements: Optional[List[str]] = None,

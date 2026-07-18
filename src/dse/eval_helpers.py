@@ -68,9 +68,6 @@ def _build_connection_graph(text: str):
         def edges(self) -> List[Tuple[str, str]]:
             return [(u, v) for u, vs in self._succ.items() for v in vs]
 
-        def in_degree(self, node: str) -> int:
-            return len(self._pred.get(node, set()))
-
         def weakly_connected_components(self) -> List[Set[str]]:
             visited: Set[str] = set()
             components: List[Set[str]] = []
@@ -93,30 +90,6 @@ def _build_connection_graph(text: str):
                     stack.extend(undirected.get(n, set()) - visited)
                 components.append(comp)
             return components
-
-        def simple_cycles(self) -> List[List[str]]:
-            cycles: List[List[str]] = []
-            visited: Set[str] = set()
-            path: List[str] = []
-            path_set: Set[str] = set()
-
-            def dfs(node: str) -> None:
-                visited.add(node)
-                path.append(node)
-                path_set.add(node)
-                for nb in self._succ.get(node, set()):
-                    if nb not in visited:
-                        dfs(nb)
-                    elif nb in path_set:
-                        idx = path.index(nb)
-                        cycles.append(path[idx:])
-                path.pop()
-                path_set.discard(node)
-
-            for n in list(self._succ):
-                if n not in visited:
-                    dfs(n)
-            return cycles
 
     return _PureDiGraph(edge_list)
 

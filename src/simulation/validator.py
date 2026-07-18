@@ -218,12 +218,6 @@ class SimulationValidator:
 
         return result
 
-    def validate_file(self, path: str, **kwargs) -> SimulationResult:
-        with open(path, "r", encoding="utf-8") as f:
-            text = f.read()
-        return self.validate(text, model_name=path.rsplit("/", 1)[-1], **kwargs)
-
-
 # ---------------------------------------------------------------------------
 # Scoring and recommendation helpers
 # ---------------------------------------------------------------------------

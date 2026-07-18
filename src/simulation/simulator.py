@@ -25,7 +25,7 @@ except ModuleNotFoundError:
     _HAS_NX = False
 
 from .scenarios import Scenario
-from .exec_graph import shortest_path, reachable_from, all_simple_paths
+from .exec_graph import shortest_path, all_simple_paths
 
 
 @dataclass

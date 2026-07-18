@@ -1278,58 +1278,9 @@ class DesignEvaluator:
     # Dim 7: behavioral_reachability
     # ------------------------------------------------------------------
 
-    def _score_behavioral_reachability(
-        self,
-        config: DesignConfiguration,
-        model: SysMLModel,
-        dse_config: Optional[DesignConfiguration] = None,
-    ) -> float:
-        """
-        Build a port-connection graph from the parsed SysMLModel and check
-        whether key operational scenarios have directed paths.
-
-        Returns 1.0 (N/A) when networkx is unavailable or no parts exist.
-        Falls back to 0.5 on any unexpected error so as not to penalise models
-        whose connectivity is simply not yet characterised.
-        """
-        if not _HAS_NX:
-            return 1.0
-        if not model.part_definitions:
-            return 1.0
-
-        try:
-            from src.simulation.extractor import extract_behavioral_graph
-            from src.simulation.exec_graph import build_exec_graph
-            from src.simulation.scenarios import select_scenarios, DRONE_SCENARIOS
-            from src.simulation.simulator import ScenarioSimulator
-            from src.simulation.validator import _compute_score
-
-            raw_text = _sysml_text(model)
-            if not raw_text:
-                return 1.0
-            bg = extract_behavioral_graph(raw_text)
-            if not bg.parts:
-                return 1.0
-
-            G = build_exec_graph(bg)
-            scenarios = select_scenarios(bg, predefined=DRONE_SCENARIOS)
-            if not scenarios:
-                return 1.0
-
-            sim = ScenarioSimulator(G)
-            results = sim.run_all(scenarios)
-            return _compute_score(results, [], len(bg.parts))
-
-        except Exception:
-            return 0.5
-
     # ------------------------------------------------------------------
     # Legacy compatibility shims
     # ------------------------------------------------------------------
-
-    def add_criterion(self, criterion: EvaluationCriteria) -> None:
-        """No-op shim kept for backward compatibility."""
-        self.criteria.append(criterion)
 
     def simple_score(self, config: DesignConfiguration) -> Dict[str, float]:
         """

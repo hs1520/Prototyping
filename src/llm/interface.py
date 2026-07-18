@@ -567,8 +567,6 @@ class GitHubCopilotLLM(LLMInterface):
             prefix = f"{normalized}/"
             return [model_id for model_id in model_ids if model_id.lower().startswith(prefix)]
 
-        return []
-
     def _complete_impl(
         self,
         messages: List[Message],

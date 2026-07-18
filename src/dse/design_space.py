@@ -174,14 +174,6 @@ class DesignSpace:
         """Add a design parameter to the space."""
         self.parameters.append(param)
 
-    def add_constraint(self, predicate: Callable[[Dict[str, Any]], bool]) -> None:
-        """Add a feasibility predicate over the parameters dict."""
-        self.constraints.append(predicate)
-
-    def is_feasible(self, parameters: Dict[str, Any]) -> bool:
-        """Return True if the parameters satisfy all registered constraints."""
-        return all(c(parameters) for c in self.constraints)
-
     def add_configuration(self, config: DesignConfiguration) -> None:
         """Add an evaluated configuration."""
         self.configurations.append(config)

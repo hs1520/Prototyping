@@ -18,8 +18,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..utils.syside_utils import extract_attr_values as _extract_attribute_values_via_syside
-
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -115,147 +113,9 @@ def eval_op(lhs_val: float, op: str, rhs_val: float) -> bool:
     if op == "==": return lhs_val == rhs_val
     return False
 
-# back-compat alias
-_eval_op = eval_op
-
-
-def check_constraints(
-    constraints: List[ParsedConstraint],
-    initial_values: Dict[str, Any],      # part → {attr → value}
-    guard_variables: set,                # 已被状态机 guard 使用的变量名
-) -> List[ConstraintCheckResult]:
-    """
-    评估 assert constraint 列表。
-
-    initial_values: 所有 part 的 {attr_name: numeric_value} 合并字典
-    guard_variables: behavioral_sim 已验证的变量名集合（这些的约束算 GUARD_VERIFIED）
-    """
-    results: List[ConstraintCheckResult] = []
-
-    for c in constraints:
-        expr_str = f"{c.lhs} {c.operator} {c.rhs}"
-
-        # 解析两侧的值
-        lhs_val = _try_float(c.lhs) or initial_values.get(c.lhs)
-        rhs_val = _try_float(c.rhs) or initial_values.get(c.rhs)
-
-        # 转 float
-        if lhs_val is not None:
-            try:
-                lhs_val = float(lhs_val)
-            except (TypeError, ValueError):
-                lhs_val = None
-        if rhs_val is not None:
-            try:
-                rhs_val = float(rhs_val)
-            except (TypeError, ValueError):
-                rhs_val = None
-
-        # ── GUARD_VERIFIED：LHS 是状态机 guard 变量 ──────────────────────
-        if c.lhs in guard_variables:
-            results.append(ConstraintCheckResult(
-                constraint_name=c.name,
-                owner_part=c.owner_part,
-                expression=expr_str,
-                status="GUARD_VERIFIED",
-                detail=f"'{c.lhs}' is a state machine guard variable — "
-                       f"constraint verified by behavioral simulation.",
-                lhs_value=lhs_val,
-                rhs_value=rhs_val,
-            ))
-            continue
-
-        # ── STATIC：两侧都有值，直接计算 ─────────────────────────────────
-        if lhs_val is not None and rhs_val is not None:
-            passed = _eval_op(lhs_val, c.operator, rhs_val)
-            results.append(ConstraintCheckResult(
-                constraint_name=c.name,
-                owner_part=c.owner_part,
-                expression=expr_str,
-                status="PASS" if passed else "FAIL",
-                detail=(
-                    f"Static check: {lhs_val} {c.operator} {rhs_val} = "
-                    f"{'true' if passed else 'FALSE'}"
-                ),
-                lhs_value=lhs_val,
-                rhs_value=rhs_val,
-            ))
-            continue
-
-        # ── UNCHECKED：运行时变量无法静态求值 ────────────────────────────
-        missing = []
-        if lhs_val is None:
-            missing.append(f"'{c.lhs}' has no static value (runtime variable)")
-        if rhs_val is None:
-            missing.append(f"'{c.rhs}' not found in model attributes")
-
-        results.append(ConstraintCheckResult(
-            constraint_name=c.name,
-            owner_part=c.owner_part,
-            expression=expr_str,
-            status="UNCHECKED",
-            detail=f"Requires runtime data: {'; '.join(missing)}. "
-                   f"Verify via SITL or physical simulation.",
-            lhs_value=lhs_val,
-            rhs_value=rhs_val,
-        ))
-
-    return results
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def run_constraint_checks(
-    sysml_text: str,
-    all_initial_values: Dict[str, float],
-    guard_variables: Optional[set] = None,
-) -> List[ConstraintCheckResult]:
-    """
-    完整流程：提取 → 评估。
-
-    Parameters
-    ----------
-    sysml_text         : 完整 SysML 源文本
-    all_initial_values : 所有 part 的属性初始值合并字典（{attr_name: float}）
-    guard_variables    : behavioral_sim 用到的 guard 变量名（用于标注 GUARD_VERIFIED）
-    """
-    constraints = extract_constraints(sysml_text)
-    if not constraints:
-        return []
-
-    # Syside-evaluated values supersede regex-extracted initial_values for
-    # the same attribute name: the Compiler handles multi-operand arithmetic
-    # and unit-bearing literals that the regex path cannot evaluate.
-    syside_values = _extract_attribute_values_via_syside(sysml_text)
-    merged_values = {**all_initial_values, **syside_values}
-
-    return check_constraints(
-        constraints,
-        merged_values,
-        guard_variables or set(),
-    )
-
-
-def format_constraint_report(results: List[ConstraintCheckResult]) -> str:
-    """人可读的约束检查报告。"""
-    if not results:
-        return "No assert constraints found in model."
-
-    counts = {"PASS": 0, "FAIL": 0, "GUARD_VERIFIED": 0, "UNCHECKED": 0}
-    for r in results:
-        counts[r.status] = counts.get(r.status, 0) + 1
-
-    lines = [
-        f"Parametric Constraint Check — {len(results)} constraints",
-        f"  PASS={counts['PASS']}  FAIL={counts['FAIL']}  "
-        f"GUARD_VERIFIED={counts['GUARD_VERIFIED']}  UNCHECKED={counts['UNCHECKED']}",
-        "",
-    ]
-    for r in results:
-        icon = {"PASS": "✓", "FAIL": "✗", "GUARD_VERIFIED": "✓", "UNCHECKED": "~"}.get(r.status, "?")
-        lines.append(f"  {icon} [{r.status:<14}] {r.owner_part}.{r.constraint_name}")
-        lines.append(f"       expr  : {r.expression}")
-        lines.append(f"       detail: {r.detail}")
-    return "\n".join(lines)

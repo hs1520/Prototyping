@@ -368,24 +368,6 @@ def _build_test_sequence(sm: StateMachineDef) -> List[Dict[str, Any]]:
     return plans[0].sequence if plans else []
 
 
-def _expected_trigger_step(guard: GuardCondition,
-                            start: float, step: float) -> int:
-    """Compute the step at which the guard is expected to first fire."""
-    if step == 0:
-        return _N_STEPS
-    th = guard.threshold
-    if guard.operator in ("<", "<="):
-        # step is negative
-        if step >= 0:
-            return _N_STEPS
-        # start + step*t < th  →  t > (start - th) / abs(step)
-        return max(1, int((start - th) / abs(step)) + 1)
-    else:
-        if step <= 0:
-            return _N_STEPS
-        return max(1, int((th - start) / step) + 1)
-
-
 # ---------------------------------------------------------------------------
 # Scenario runner
 # ---------------------------------------------------------------------------

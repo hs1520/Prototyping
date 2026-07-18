@@ -47,7 +47,6 @@ Changelog vs original:
     - ItemUsage class for "item :>> shape : Cylinder { ... }" constructs
     - SpatialPartUsage subclass of PartUsage carrying coordinateFrame + is_sub_spatial
     - SysMLModel.metadata_definitions list for metadata def support
-    - SysMLModel.get_all_definitions() convenience iterator
 """
 
 from __future__ import annotations
@@ -141,13 +140,6 @@ class SourcePoint:
 class SourceSpan:
     start: SourcePoint = field(default_factory=SourcePoint)
     end: SourcePoint = field(default_factory=SourcePoint)
-
-    def is_empty(self) -> bool:
-        return (
-            self.start.line == 0 and self.start.character == 0 and
-            self.end.line == 0 and self.end.character == 0
-        )
-
 
 @dataclass
 class ElementRef:
@@ -392,10 +384,6 @@ class Element:
     source_uri: str = ""
     source_span: Optional[SourceSpan] = None
 
-    def add_metadata(self, key: str, value: Any) -> None:
-        self.metadata[key] = value
-
-
 @dataclass
 class NamedElement(Element):
     name: str = ""
@@ -416,12 +404,6 @@ class NamedElement(Element):
         if not self.name:
             self.name = f"Unnamed_{self.__class__.__name__}_{self.id[:8]}"
 
-    def add_doc(self, text: str) -> None:
-        if text:
-            self.documentation.append(Documentation(body=text))
-            if not self.short_description:
-                self.short_description = text
-
     def _visibility_prefix(self) -> str:
         """Return 'private ', 'protected ', or '' for use in __str__ output."""
         if self.visibility == VisibilityKind.PRIVATE:
@@ -436,9 +418,6 @@ class Namespace(NamedElement):
     owned_elements: List[Element] = field(default_factory=list)
     imports: List["Import"] = field(default_factory=list)
 
-    def add_owned_element(self, element: Element) -> None:
-        self.owned_elements.append(element)
-
     def add_import(self, imp: "Import") -> None:
         self.imports.append(imp)
 
@@ -447,20 +426,6 @@ class Namespace(NamedElement):
 class Type(NamedElement):
     generalizations: List["Generalization"] = field(default_factory=list)
     specializations: List["Specialization"] = field(default_factory=list)
-
-    def add_generalization(self, target: ElementRef) -> None:
-        self.generalizations.append(Generalization(source=self.to_ref(), target=target))
-
-    def add_specialization(
-        self,
-        target: ElementRef,
-        kind: str = "specialization",
-        value: Optional[str] = None,
-    ) -> None:
-        self.specializations.append(
-            Specialization(source=self.to_ref(), target=target,
-                           specialization_kind=kind, value=value)
-        )
 
     def to_ref(self) -> ElementRef:
         return ElementRef(
@@ -1155,21 +1120,6 @@ class PartUsage(Usage):
     constraints: List[str] = field(default_factory=list)
     doc: str = ""
 
-    def add_nested_attribute(self, a: "AttributeUsage") -> None:
-        self.nested_attributes.append(a)
-
-    def add_nested_part(self, p: "PartUsage") -> None:
-        self.nested_parts.append(p)
-
-    def add_nested_action(self, a: "ActionUsage") -> None:
-        self.nested_actions.append(a)
-
-    def add_nested_connection(self, c: "ConnectionUsage") -> None:
-        self.nested_connections.append(c)
-
-    def add_nested_analysis(self, a: "AnalysisUsage") -> None:
-        self.nested_analyses.append(a)
-
     def __str__(self) -> str:
         vis = self._visibility_prefix()
         type_str = f" : {self.part_ref.display()}" if self.part_ref else ""
@@ -1259,12 +1209,6 @@ class SpatialPartUsage(PartUsage):
     # documentation string
     doc: str = ""
 
-    def add_item(self, item: ItemUsage) -> None:
-        self.items.append(item)
-
-    def add_sub_part(self, part: "SpatialPartUsage") -> None:
-        self.sub_parts.append(part)
-
     def __str__(self) -> str:
         vis = self._visibility_prefix()
         type_str = f" : {self.part_ref.display()}" if self.part_ref else ""
@@ -1328,29 +1272,8 @@ class PartDefinition(Definition):
     def add_port(self, port: PortUsage) -> None:
         self.ports.append(port)
 
-    def add_attribute(self, attr: AttributeUsage) -> None:
-        self.attributes.append(attr)
-
-    def add_part(self, part: PartUsage) -> None:
-        self.parts.append(part)
-
-    def add_action(self, action: ActionUsage) -> None:
-        self.actions.append(action)
-
-    def add_connection(self, conn: "ConnectionUsage") -> None:
-        self.connection_usages.append(conn)
-
-    def add_nested_definition(self, definition: Definition) -> None:
-        self.nested_definitions.append(definition)
-
     def add_satisfy(self, relation: SatisfyRelationship) -> None:
         self.satisfy_relationships.append(relation)
-
-    def add_refine(self, relation: RefineRelationship) -> None:
-        self.refine_relationships.append(relation)
-
-    def add_item(self, item: ItemUsage) -> None:
-        self.items.append(item)
 
     def __str__(self) -> str:
         prefix = ""
@@ -1592,76 +1515,16 @@ class SysMLModel(Element):
 
     # ---- add helpers --------------------------------------------------------
 
-    def add_package(self, package: Package) -> None:
-        self.packages.append(package)
-
     def add_requirement_definition(self, req: RequirementDefinition) -> None:
         self.requirement_definitions.append(req)
 
     def add_part_definition(self, part: PartDefinition) -> None:
         self.part_definitions.append(part)
 
-    def add_item_definition(self, item: ItemDefinition) -> None:
-        self.item_definitions.append(item)
-
-    def add_port_definition(self, port: PortDefinition) -> None:
-        self.port_definitions.append(port)
-
-    def add_interface_definition(self, interface: InterfaceDefinition) -> None:
-        self.interface_definitions.append(interface)
-
-    def add_action_definition(self, action: ActionDefinition) -> None:
-        self.action_definitions.append(action)
-
-    def add_analysis_definition(self, analysis: AnalysisDefinition) -> None:
-        self.analysis_definitions.append(analysis)
-
-    def add_attribute_definition(self, attr: AttributeDefinition) -> None:
-        self.attribute_definitions.append(attr)
-
-    def add_constraint_definition(self, c: ConstraintDefinition) -> None:
-        self.constraint_definitions.append(c)
-
-    def add_connection_definition(self, c: ConnectionDefinition) -> None:
-        self.connection_definitions.append(c)
-
-    def add_metadata_definition(self, m: MetadataDefinition) -> None:
-        self.metadata_definitions.append(m)
-
     def add_top_level_usage(self, usage: Usage) -> None:
         self.top_level_usages.append(usage)
 
-    def add_relationship(self, relationship: Relationship) -> None:
-        self.top_level_relationships.append(relationship)
-
-    def add_diagnostic(self, diagnostic: Diagnostic) -> None:
-        self.diagnostics.append(diagnostic)
-
-    def add_mapping_note(self, note: str) -> None:
-        if note:
-            self.mapping_notes.append(note)
-
     # ---- query helpers ------------------------------------------------------
-
-    def get_all_definitions(self) -> Iterator[Definition]:
-        """Yield every Definition in the model regardless of kind."""
-        yield from self.requirement_definitions
-        yield from self.part_definitions
-        yield from self.item_definitions
-        yield from self.port_definitions
-        yield from self.interface_definitions
-        yield from self.action_definitions
-        yield from self.analysis_definitions
-        yield from self.attribute_definitions
-        yield from self.constraint_definitions
-        yield from self.connection_definitions
-        yield from self.metadata_definitions
-
-    def get_definition_by_name(self, name: str) -> Optional[Definition]:
-        for d in self.get_all_definitions():
-            if d.name == name:
-                return d
-        return None
 
     # ---- text generation ----------------------------------------------------
 
