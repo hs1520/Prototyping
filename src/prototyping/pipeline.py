@@ -369,6 +369,9 @@ class PrototypingPipeline:
             "final_score": result.get("final_score"),
             "iterations": result.get("iterations"),
             "requirements_count": len(result.get("requirements") or []),
+            "requirement_semantic_analysis": result.get(
+                "requirement_semantic_analysis"
+            ),
             "evaluation_history": result.get("evaluation_history"),
             "best_config": result.get("best_config"),
             "pareto_alternatives": result.get("pareto_alternatives"),

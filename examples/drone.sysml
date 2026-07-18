@@ -85,7 +85,7 @@ package AutonomousDrone {
     // Requirements
     // ==========================================
     requirement def REQ_FUNC_001 { doc /* The system shall autonomously navigate to designated GPS waypoints with a circular error probable (CEP) of less than 1.0 metre. */ }
-    requirement def REQ_FUNC_002 { doc /* The system shall detect potential collision threats within a 15-metre sensor range and initiate an avoidance manoeuvre before the separation distance falls below 5 metres. */ }
+    requirement def REQ_FUNC_002 { doc /* When approaching a stationary collision threat directly ahead within the forward sensor field of view at a closing speed no greater than 1.5 m/s, the system shall execute an avoidance manoeuvre following threat detection no later than 15 metres, maintaining an airframe-to-obstacle separation of at least 5 metres. */ }
     requirement def REQ_FUNC_003 { doc /* The system shall transport payloads with a gross mass of up to 2.5 kg without degradation of flight stability or navigation accuracy. */ }
     requirement def REQ_FUNC_004 { doc /* The system shall maintain a continuously encrypted bidirectional data link with the GCS for telemetry upload and mission command download throughout the operational flight envelope. */ }
     requirement def REQ_FUNC_005 { doc /* The system shall release the payload when the current geographic position is within 1.0 metre of the designated delivery waypoint and no delivery-abort condition is active. */ }

@@ -372,6 +372,10 @@ class Orchestrator:
         # advisory general anchor pass, this is recomputed after every final
         # refinement path and exposed to authoritative publication gates.
         self.last_functional_closure = None
+        # Stimulus/envelope/response/oracle contracts from requirement intake.
+        # High-fidelity runners consume these instead of reinterpreting prose
+        # with unrelated hard-coded thresholds.
+        self.last_requirement_semantic_analysis = None
         # F1: catalog-grid estimator calibration, applied ONLY around the search
         # (the injected SysML calc defs and Phase 8's estimator_value column keep
         # the documented textbook constants). Provenance recorded, never hidden.
@@ -563,6 +567,9 @@ class Orchestrator:
             "evaluation_history": self.state.evaluation_history,
             "simulation_result":  final_sim,
             "functional_closure": dict(self.last_functional_closure or {}),
+            "requirement_semantic_analysis": dict(
+                self.last_requirement_semantic_analysis or {}
+            ),
             "platform_profile":   platform_profile,
             "llm_usage":          ledger.as_dict() if ledger is not None else None,
         }
@@ -1027,6 +1034,9 @@ class Orchestrator:
 
         # Validate unified set
         validation = self.requirements_agent.validate_requirements(requirements)
+        self.last_requirement_semantic_analysis = validation.get(
+            "requirement_semantic_analysis"
+        )
 
         if validation["issues"]:
             for issue in validation["issues"][:5]:

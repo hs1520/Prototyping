@@ -230,6 +230,7 @@ def test_wind_effects_working_point_is_lumped_and_explicit():
         _lidar_scan_min,
         _obstacle_requirement_met,
         _obstacle_world_text,
+        _vehicle_spawn_heading_deg,
         _wind_force_scale,
         _wind_world_text,
     )
@@ -241,13 +242,24 @@ def test_wind_effects_working_point_is_lumped_and_explicit():
     world = _wind_world_text("<sdf><world name='iris_runway'></world></sdf>", scale)
     assert "gz::sim::systems::WindEffects" in world
     assert f"{scale:.9f}" in world
-    obstacle = _obstacle_world_text("<sdf><world name='iris_runway'></world></sdf>")
+    stock = (
+        "<sdf><world name='iris_runway'><include>"
+        "<uri>model://iris_with_gimbal</uri>"
+        "<pose degrees='true'>0 0 0.195 0 0 90</pose>"
+        "</include></world></sdf>"
+    )
+    assert _vehicle_spawn_heading_deg(stock) == 90.0
+    obstacle = _obstacle_world_text(stock)
     assert 'model name="gazebo_test_obstacle"' in obstacle
-    assert "<size>6 2 20</size>" in obstacle
+    assert '<pose degrees="true">0.000 25.000 10 0 0 90.000</pose>' in obstacle
+    assert "<size>2 6 20</size>" in obstacle
     assert _lidar_scan_min([float("inf")] * 61) == 15.0
     assert _lidar_scan_min([float("inf"), 7.2, 5.4]) == 5.4
-    assert _obstacle_requirement_met(True, True, 5.0, True, 5.0)
-    assert not _obstacle_requirement_met(True, True, 4.999, True, 5.0)
+    assert _obstacle_requirement_met(True, True, True, 6.0, 5.0, 5.0, 5.0)
+    assert not _obstacle_requirement_met(True, True, True, 6.0, 5.0, 4.999, 5.0)
+    # "initiate before 5 m" does not imply a minimum-clearance invariant.
+    assert _obstacle_requirement_met(True, True, True, 6.0, 5.0, 3.0, None)
+    assert not _obstacle_requirement_met(True, True, True, 4.9, 5.0, 4.9, None)
 
 
 def test_payload_model_uses_requested_mass_and_physical_inertia(tmp_path):

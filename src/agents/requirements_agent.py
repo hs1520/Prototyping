@@ -135,6 +135,8 @@ Core rules:
             )
         dependencies = self._parse_dependencies(cot_result.final_answer)
         counts = self._count_by_category(requirements)
+        from ..prototyping.requirement_contracts import analyse_requirements
+        semantic_analysis = analyse_requirements(requirements)
 
         result = AgentResult(
             agent_name=self.name,
@@ -147,6 +149,7 @@ Core rules:
                 "counts_by_category": counts,
                 "dependencies": dependencies,
                 "requirement_conflicts": conflict_warnings,
+                "requirement_semantic_analysis": semantic_analysis,
             },
         )
         self.record_result(result)
@@ -246,12 +249,27 @@ Core rules:
                 "behaviors for this cyber-physical system."
             )
 
+        # Manual stakeholder requirements remain authoritative, so an incomplete
+        # high-fidelity contract is advisory here. Downstream verification treats
+        # these gaps fail-closed instead of inventing scenario constants.
+        from ..prototyping.requirement_contracts import analyse_requirements
+        semantic_analysis = analyse_requirements(requirements)
+        warnings.extend(
+            f"Incomplete verification contract — {gap}"
+            for gap in semantic_analysis["semantic_gaps"]
+        )
+        warnings.extend(
+            f"Verification semantics — {note}"
+            for note in semantic_analysis["semantic_notes"]
+        )
+
         return {
             "valid": len(issues) == 0,
             "issues": issues,
             "warnings": warnings,
             "total_requirements": len(requirements),
             "counts_by_category": counts_by_category,
+            "requirement_semantic_analysis": semantic_analysis,
         }
 
     def merge_requirements(

@@ -92,6 +92,12 @@ Output rules (STRICT — do not deviate):
 - Each requirement must contain "shall" and at least one verifiable criterion
   (numeric value with unit, explicit threshold, or clear boolean trigger condition).
   Exception: REQ-OPER-001 is verified by the completeness of its phase list, not a numeric threshold.
+- For stimulus-response requirements, state the trigger, measurable response, response deadline or
+  threshold, and the operational envelope needed to reproduce verification. Do not write an
+  unbounded response requirement whose feasibility changes with speed, load, geometry, or environment.
+- For obstacle/collision requirements, include the maximum closing speed and relevant sensor
+  field-of-view/approach geometry. Distinguish "initiate avoidance before X m" from "maintain at
+  least X m clearance": never let the first wording imply the second acceptance criterion.
 - Aim for completeness: typically 3–6 requirements per category, adjusted to the system's complexity.
   OPER is always 0 or 1 requirement — never more.
 

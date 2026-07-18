@@ -147,9 +147,11 @@ DRONE_REQUIREMENTS = [
     "waypoints with a circular error probable (CEP) of less than 1.0 metre. "
     "[V: hardware-in-the-loop / field survey]",
 
-    "REQ-FUNC-002: The system shall detect potential collision threats within a "
-    "15-metre sensor range and initiate an avoidance manoeuvre before the "
-    "separation distance falls below 5 metres.",
+    "REQ-FUNC-002: When approaching a stationary collision threat directly ahead "
+    "within the forward sensor field of view at a closing speed no greater than "
+    "1.5 m/s, the system shall execute an avoidance manoeuvre following threat "
+    "detection no later than 15 metres, maintaining an airframe-to-obstacle "
+    "separation of at least 5 metres.",
 
     # v1 CHANGE: "without degradation of flight stability or navigation accuracy"
     # was unfalsifiable → replaced with measurable hover-margin + attitude bound.

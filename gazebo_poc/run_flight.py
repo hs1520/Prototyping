@@ -199,14 +199,35 @@ def _prepare_wind_world(out: Path, force_scale: float) -> Path:
     return path
 
 
-def _obstacle_world_text(stock_world: str, obstacle_y_m: float = 25.0) -> str:
+def _vehicle_spawn_heading_deg(stock_world: str) -> float:
+    """Read the airframe's world yaw so the obstacle follows its body +X axis."""
+    match = re.search(
+        r"<include>\s*<uri>model://iris_with_gimbal</uri>\s*"
+        r"<pose\s+degrees=[\"']true[\"']>\s*"
+        r"[-+\d.eE]+\s+[-+\d.eE]+\s+[-+\d.eE]+\s+"
+        r"[-+\d.eE]+\s+[-+\d.eE]+\s+([-+\d.eE]+)\s*</pose>",
+        stock_world,
+        re.IGNORECASE,
+    )
+    if not match:
+        raise ValueError("iris_with_gimbal spawn pose/yaw not found in Gazebo world")
+    return float(match.group(1))
+
+
+def _obstacle_world_text(stock_world: str, obstacle_distance_m: float = 25.0) -> str:
+    import math
+
+    heading_deg = _vehicle_spawn_heading_deg(stock_world)
+    heading_rad = math.radians(heading_deg)
+    obstacle_x_m = obstacle_distance_m * math.cos(heading_rad)
+    obstacle_y_m = obstacle_distance_m * math.sin(heading_rad)
     block = f"""
     <model name="gazebo_test_obstacle">
-      <static>true</static><pose>0 {obstacle_y_m:.3f} 10 0 0 0</pose>
+      <static>true</static><pose degrees="true">{obstacle_x_m:.3f} {obstacle_y_m:.3f} 10 0 0 {heading_deg:.3f}</pose>
       <link name="wall"><collision name="collision"><geometry>
-        <box><size>6 2 20</size></box>
+        <box><size>2 6 20</size></box>
       </geometry></collision><visual name="visual"><geometry>
-        <box><size>6 2 20</size></box>
+        <box><size>2 6 20</size></box>
       </geometry></visual></link>
     </model>
 """
@@ -215,12 +236,12 @@ def _obstacle_world_text(stock_world: str, obstacle_y_m: float = 25.0) -> str:
     return stock_world.replace("</world>", block + "  </world>", 1)
 
 
-def _prepare_obstacle_world(out: Path, obstacle_y_m: float = 25.0) -> Path:
+def _prepare_obstacle_world(out: Path, obstacle_distance_m: float = 25.0) -> Path:
     stock = _sh("docker", "run", "--rm", "--entrypoint", "cat", _IMG, _WORLD_PATH)
     if stock.returncode != 0:
         raise RuntimeError(f"cannot read stock Gazebo world: {stock.stderr.strip()}")
     path = out / "iris_runway_obstacle.sdf"
-    path.write_text(_obstacle_world_text(stock.stdout, obstacle_y_m))
+    path.write_text(_obstacle_world_text(stock.stdout, obstacle_distance_m))
     return path
 
 
@@ -306,19 +327,42 @@ def _lidar_scan_min(ranges, max_range_m: float = 15.0) -> float:
     return min(finite) if finite else max_range_m
 
 
-def _obstacle_requirement_met(lidar_available: bool, detected: bool,
-                              min_distance_m: float,
-                              response_observed: bool,
-                              required_separation_m: float) -> bool:
+def _obstacle_requirement_met(
+    lidar_available: bool,
+    detection_timely: bool,
+    response_observed: bool,
+    response_onset_distance_m: float | None,
+    response_threshold_m: float | None,
+    min_distance_m: float,
+    required_separation_m: float | None,
+) -> bool:
+    """Evaluate only criteria present in the requirement contract.
+
+    In particular, an "initiate before X" requirement is not silently upgraded
+    into "never cross X".  Minimum separation is checked only when the contract
+    explicitly contains that invariant.
+    """
+    response_timely = (
+        response_onset_distance_m is not None
+        and (
+            response_threshold_m is None
+            or response_onset_distance_m >= response_threshold_m
+        )
+    )
+    clearance_met = (
+        required_separation_m is None
+        or min_distance_m >= required_separation_m
+    )
     return bool(
         lidar_available
-        and detected
-        and min_distance_m >= required_separation_m
+        and detection_timely
         and response_observed
+        and response_timely
+        and clearance_met
     )
 
 
-def _start_lidar_observer():
+def _start_lidar_observer(max_range_m: float = 15.0):
     """Stream the generated Gazebo lidar and expose its latest minimum range."""
     latest = {"distance_m": None, "updated_at": None, "sample_count": 0}
     proc = subprocess.Popen(
@@ -344,7 +388,7 @@ def _start_lidar_observer():
             elif ranges:
                 # Gazebo reports +inf when no return is inside sensor range.
                 # That is healthy "clear to max range", not missing data.
-                latest["distance_m"] = _lidar_scan_min(ranges)
+                latest["distance_m"] = _lidar_scan_min(ranges, max_range_m)
                 latest["updated_at"] = time.monotonic()
                 latest["sample_count"] += 1
                 ranges = []
@@ -373,7 +417,10 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
          payload_release=False, payload_mass_kg=0.0,
          positional_release=False, positional_tolerance_m=1.0,
          parachute_deploy=False, parachute_max_delay_s=0.5,
-         obstacle_avoidance=False, obstacle_min_separation_m=5.0) -> int:
+         obstacle_avoidance=False, obstacle_detection_range_m=15.0,
+         obstacle_response_threshold_m=5.0,
+         obstacle_min_separation_m=None,
+         obstacle_approach_speed_mps=1.5) -> int:
     LAST_RESULT.clear()
     out = Path("gazebo_poc/generated")
     tdir = Path("gazebo_poc/templates")
@@ -414,7 +461,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             max_rotor_rad_s=mult, fail_rotor=fail_rotor,
             enable_wind=wind_mps > 0, payload_release=payload_release,
             parachute_deploy=parachute_deploy,
-            forward_lidar=obstacle_avoidance)
+            forward_lidar=obstacle_avoidance,
+            forward_lidar_range_m=obstacle_detection_range_m)
         print(f"[gen] {rotor_count}-rotor mass={mass_kg}kg inertia={tuple(round(x,4) for x in inertia)} "
               f"area={area:.6f} max_rotor={mult:.0f}rad/s FRAME_CLASS={frame_class}"
               f"{' [calibrated]' if calibrate else ''}"
@@ -476,10 +524,16 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         parachute_servo=parachute_servo,
     ))
     if obstacle_avoidance:
+        avoidance_margin = (
+            float(obstacle_min_separation_m) + 1.0
+            if obstacle_min_separation_m is not None
+            else float(obstacle_response_threshold_m or 2.0)
+        )
         with parm.open("a") as f:
             f.write(
-                "PRX1_TYPE 2\nAVOID_ENABLE 2\nAVOID_DIST_MAX 15\n"
-                f"AVOID_MARGIN {float(obstacle_min_separation_m + 1.0):.2f}\n"
+                "PRX1_TYPE 2\nAVOID_ENABLE 2\n"
+                f"AVOID_DIST_MAX {float(obstacle_detection_range_m):.2f}\n"
+                f"AVOID_MARGIN {avoidance_margin:.2f}\n"
                 "AVOID_BEHAVE 1\nAVOID_ALT_MIN 0\n"
             )
     if wind_scale is not None:
@@ -748,7 +802,18 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             )
 
         if obstacle_avoidance:
-            lidar_proc, lidar = _start_lidar_observer()
+            sensor_range = float(obstacle_detection_range_m)
+            approach_speed = float(obstacle_approach_speed_mps)
+            max_distance_cm = max(20, int(sensor_range * 100))
+            effective_response_threshold = (
+                float(obstacle_response_threshold_m)
+                if obstacle_response_threshold_m is not None
+                else (
+                    float(obstacle_min_separation_m)
+                    if obstacle_min_separation_m is not None else None
+                )
+            )
+            lidar_proc, lidar = _start_lidar_observer(sensor_range)
             lidar_deadline = time.monotonic() + 6.0
             while lidar.get("distance_m") is None and time.monotonic() < lidar_deadline:
                 time.sleep(0.1)
@@ -756,15 +821,15 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             m.set_mode("GUIDED")
             wait(lambda h: h.custom_mode == GUIDED, 6, "GUIDED for obstacle test")
             # Prime AP_Proximity before asking the vehicle to move. Gazebo's
-            # no-return scan is a valid 15 m clear reading, not "No Data".
+            # no-return scan is a valid max-range clear reading, not "No Data".
             warmup_end = time.monotonic() + 3.0
             while time.monotonic() < warmup_end:
-                distance = float(lidar.get("distance_m") or 15.0)
+                distance = float(lidar.get("distance_m") or sensor_range)
                 m.mav.distance_sensor_send(
                     int(time.monotonic() * 1000) & 0xFFFFFFFF,
                     20,
-                    1500,
-                    max(20, min(1500, int(distance * 100))),
+                    max_distance_cm,
+                    max(20, min(max_distance_cm, int(distance * 100))),
                     0,
                     0,
                     0,
@@ -783,10 +848,14 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 )
                 time.sleep(0.1)
             min_distance = float("inf")
-            detected = False
+            first_detection_distance = None
+            detection_timely = False
             response_observed = False
+            response_onset_distance = None
             final_speed = None
             last_hud = None
+            peak_pre_detection_speed = 0.0
+            stopped_samples = 0
             obstacle_end = time.monotonic() + 25.0
             while time.monotonic() < obstacle_end:
                 hud = m.recv_match(type="VFR_HUD", blocking=False)
@@ -800,12 +869,11 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 if distance is not None and age < 1.0:
                     distance = float(distance)
                     min_distance = min(min_distance, distance)
-                    detected = detected or distance < 14.9
                     m.mav.distance_sensor_send(
                         int(time.monotonic() * 1000) & 0xFFFFFFFF,
                         20,
-                        1500,
-                        max(20, min(1500, int(distance * 100))),
+                        max_distance_cm,
+                        max(20, min(max_distance_cm, int(distance * 100))),
                         0,
                         0,
                         0,  # MAV_SENSOR_ROTATION_NONE: body-forward
@@ -813,21 +881,50 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     )
                     if last_hud is not None:
                         final_speed = float(last_hud.groundspeed)
-                        if distance < 14.9 and final_speed < 0.5:
-                            response_observed = True
-                    if distance < obstacle_min_separation_m:
+                    has_return = distance < sensor_range - 0.02
+                    if not has_return and final_speed is not None:
+                        peak_pre_detection_speed = max(
+                            peak_pre_detection_speed, final_speed
+                        )
+                    if has_return and first_detection_distance is None:
+                        first_detection_distance = distance
+                        tolerance = max(0.25, sensor_range * 0.03)
+                        detection_timely = distance >= sensor_range - tolerance
+                    if (
+                        first_detection_distance is not None
+                        and final_speed is not None
+                        and peak_pre_detection_speed >= approach_speed * 0.8
+                        and final_speed <= peak_pre_detection_speed * 0.8
+                    ):
+                        if response_onset_distance is None:
+                            response_onset_distance = distance
+                        response_observed = True
+                        stopped_samples = stopped_samples + 1 if final_speed < 0.25 else 0
+                    else:
+                        stopped_samples = 0
+                    clearance_breached = (
+                        obstacle_min_separation_m is not None
+                        and distance < float(obstacle_min_separation_m)
+                    )
+                    response_late = (
+                        effective_response_threshold is not None
+                        and distance < effective_response_threshold
+                        and response_onset_distance is None
+                    )
+                    if clearance_breached or response_late or stopped_samples >= 10:
                         break
-                # World obstacle is +Y; ArduPilotPlugin maps that to NED -Y.
-                # GUIDED velocity control is intentional: unlike ALT_HOLD RC,
-                # the pilot cannot override proximity avoidance in this path.
+                # The lidar boresight, MAVLink sensor orientation, velocity command,
+                # and wall normal are all body-forward (+X). BODY_NED prevents a
+                # future world-frame edit from silently recreating the old side-flight
+                # scenario in which the wall entered the ±30° lidar only at ~3 m.
                 m.mav.set_position_target_local_ned_send(
                     int(time.monotonic() * 1000) & 0xFFFFFFFF,
                     m.target_system,
                     m.target_component,
-                    1,      # MAV_FRAME_LOCAL_NED
+                    8,      # MAV_FRAME_BODY_NED
                     4039,   # velocity only; ignore pos/accel/yaw
                     0, 0, 0,
-                    0, -1.5, 0,
+                    approach_speed, 0, 0,
                     0, 0, 0,
                     0, 0,
                 )
@@ -848,19 +945,33 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             lidar_available = int(lidar.get("sample_count") or 0) > 0
             obstacle_met = _obstacle_requirement_met(
                 lidar_available,
-                detected,
-                min_distance,
+                detection_timely,
                 response_observed,
+                response_onset_distance,
+                effective_response_threshold,
+                min_distance,
                 obstacle_min_separation_m,
             )
             LAST_RESULT.update({
                 "obstacle_lidar_available": lidar_available,
                 "obstacle_lidar_samples": int(lidar.get("sample_count") or 0),
-                "obstacle_detected_within_15m": detected,
+                "obstacle_detected_within_range": first_detection_distance is not None,
+                # Legacy compatibility key; new reports use the range-agnostic name.
+                "obstacle_detected_within_15m": first_detection_distance is not None,
+                "obstacle_detection_range_requirement_m": sensor_range,
+                "obstacle_first_detection_distance_m": first_detection_distance,
+                "obstacle_detection_timely": detection_timely,
                 "obstacle_min_distance_m": None if min_distance == float("inf") else min_distance,
                 "obstacle_final_groundspeed_mps": final_speed,
                 "obstacle_response_observed": response_observed,
+                "obstacle_response_onset_distance_m": response_onset_distance,
+                "obstacle_response_threshold_m": effective_response_threshold,
                 "obstacle_min_separation_requirement_m": obstacle_min_separation_m,
+                "obstacle_approach_speed_mps": approach_speed,
+                "obstacle_scenario_alignment": (
+                    "wall normal derived from airframe spawn yaw; "
+                    "body-forward lidar and BODY_NED +X velocity"
+                ),
                 "obstacle_avoidance_met": obstacle_met,
                 "obstacle_fidelity": (
                     "Gazebo gpu_lidar -> MAVLink DISTANCE_SENSOR -> ArduPilot proximity avoidance"
@@ -886,7 +997,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 failure_kind=None if stable else "GAZEBO_MODEL_UNCALIBRATED",
             )
             print(
-                f"[obstacle] lidar={lidar_available} detected={detected} "
+                f"[obstacle] lidar={lidar_available} detection={first_detection_distance}m "
+                f"timely={detection_timely} response_at={response_onset_distance}m "
                 f"min_distance={LAST_RESULT['obstacle_min_distance_m']}m "
                 f"final_speed={final_speed}m/s response={response_observed} met={obstacle_met}",
                 flush=True,

@@ -139,7 +139,7 @@ _FORWARD_LIDAR = """      <sensor name="forward_lidar" type="gpu_lidar">
           <samples>61</samples><resolution>1</resolution>
           <min_angle>-0.523599</min_angle><max_angle>0.523599</max_angle>
         </horizontal></scan>
-        <range><min>0.2</min><max>15.0</max><resolution>0.01</resolution></range>
+        <range><min>0.2</min><max>{range_m:.3f}</max><resolution>0.01</resolution></range>
         </lidar>
       </sensor>
 """
@@ -169,7 +169,8 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
                             fail_rotor: int = None, enable_wind: bool = False,
                             payload_release: bool = False,
                             parachute_deploy: bool = False,
-                            forward_lidar: bool = False):
+                            forward_lidar: bool = False,
+                            forward_lidar_range_m: float = 15.0):
     """Write parametric standoffs + gimbal SDFs for an N-rotor airframe. ``max_rotor_rad_s`` is the
     full-throttle rotor speed (ArduPilotPlugin multiplier) — lower it (real-motor calibration) to
     get a realistic thrust-to-weight. ``fail_rotor`` (index) sets that rotor's LiftDrag area to 0
@@ -193,7 +194,10 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
     if forward_lidar:
         head = head.replace(
             "    </link>",
-            _FORWARD_LIDAR.format(nose_x=1.6 * rotor_radius_m) + "    </link>",
+            _FORWARD_LIDAR.format(
+                nose_x=1.6 * rotor_radius_m,
+                range_m=float(forward_lidar_range_m),
+            ) + "    </link>",
             1,
         )
     head = head.replace(

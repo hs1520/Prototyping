@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from src.dse.physics_estimator import DesignInputs, total_mass_kg
+from src.prototyping.requirement_contracts import obstacle_avoidance_contract
 from src.prototyping.artifact_provenance import validate_run_provenance
 from src.prototyping.artifact_store import (
     atomic_write_json, atomic_write_text, ensure_open_bundle, output_dir,
@@ -106,6 +107,17 @@ def _planned_gazebo_reqs(requirements: list[str]) -> list[dict[str, Any]]:
                 item["max_error_m"] = _number_after(
                     r"within\s+(\d+(?:\.\d+)?)\s*(?:metres?|meters?)", low
                 )
+            elif check == "obstacle_avoidance":
+                contract = obstacle_avoidance_contract(req)
+                if contract is not None:
+                    item["verification_contract"] = contract.to_dict()
+                    item["contract_ready"] = contract.contract_ready
+                    item["detection_range_m"] = contract.detection_range_m
+                    item["response_threshold_m"] = contract.response_threshold_m
+                    item["minimum_separation_m"] = contract.minimum_separation_m
+                    item["max_closing_speed_mps"] = contract.max_closing_speed_mps
+                    item["scenario_geometry"] = contract.geometry
+                    item["semantic_gaps"] = list(contract.semantic_gaps)
             planned.append(item)
     return planned
 
@@ -240,7 +252,12 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         })
 
     obstacle_req = _planned_check(planned, "obstacle_avoidance")
-    if obstacle_req and result.get("hover_stable"):
+    if obstacle_req and not obstacle_req.get("contract_ready"):
+        result["obstacle_contract_ready"] = False
+        result["obstacle_contract_gaps"] = list(
+            obstacle_req.get("semantic_gaps") or []
+        )
+    elif obstacle_req and result.get("hover_stable"):
         rc_obstacle = run_flight.main(
             mass_kg=mass,
             rotor_radius=rotor_radius,
@@ -250,7 +267,10 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
             max_thrust_g=max_thrust_g,
             hover_throttle=hover_throttle,
             obstacle_avoidance=True,
-            obstacle_min_separation_m=5.0,
+            obstacle_detection_range_m=float(obstacle_req["detection_range_m"]),
+            obstacle_response_threshold_m=obstacle_req.get("response_threshold_m"),
+            obstacle_min_separation_m=obstacle_req.get("minimum_separation_m"),
+            obstacle_approach_speed_mps=float(obstacle_req["max_closing_speed_mps"]),
         )
         obstacle_result = dict(run_flight.LAST_RESULT)
         result["obstacle_req"] = obstacle_req["req_id"]
@@ -396,7 +416,12 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
     if gazebo and obstacle_req and gazebo.get("obstacle_req"):
         rid = str(obstacle_req["req_id"])
         lidar = bool(gazebo.get("obstacle_lidar_available"))
-        detected = bool(gazebo.get("obstacle_detected_within_15m"))
+        detected = bool(
+            gazebo.get("obstacle_detected_within_range")
+            if "obstacle_detected_within_range" in gazebo
+            else gazebo.get("obstacle_detected_within_15m")
+        )
+        timely = bool(gazebo.get("obstacle_detection_timely"))
         met = bool(gazebo.get("obstacle_avoidance_met"))
         covered.add(rid)
         results.append({
@@ -405,10 +430,14 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             "status": "PASS" if met else "FAIL" if lidar else "INCONCLUSIVE",
             "message": (
                 "Gazebo gpu_lidar -> MAVLink DISTANCE_SENSOR -> ArduPilot proximity avoidance: "
-                f"lidar={lidar}, detected_within_15m={detected}, "
+                f"lidar={lidar}, detected={detected}, "
+                f"first_detection={gazebo.get('obstacle_first_detection_distance_m')} m, "
+                f"detection_timely={timely}, "
+                f"response_onset={gazebo.get('obstacle_response_onset_distance_m')} m, "
                 f"minimum_separation={gazebo.get('obstacle_min_distance_m')} m, "
                 f"final_groundspeed={gazebo.get('obstacle_final_groundspeed_mps')} m/s, "
-                f"response_observed={gazebo.get('obstacle_response_observed')}"
+                f"response_observed={gazebo.get('obstacle_response_observed')}, "
+                f"scenario_alignment={gazebo.get('obstacle_scenario_alignment')}"
             ),
         })
 
@@ -422,6 +451,21 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                 "message": (
                     "one-motor-out architecture decision is intentionally suspended; "
                     "rerun with --include-single-motor-out to collect it"
+                ),
+            })
+            continue
+        if (
+            item.get("check") == "obstacle_avoidance"
+            and "contract_ready" in item
+            and not item.get("contract_ready")
+        ):
+            results.append({
+                **item,
+                "status": "INCONCLUSIVE",
+                "message": (
+                    "obstacle verification contract is incomplete; refusing to invent "
+                    "a scenario envelope or oracle: "
+                    + "; ".join(item.get("semantic_gaps") or [])
                 ),
             })
             continue

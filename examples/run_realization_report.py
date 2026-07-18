@@ -107,6 +107,20 @@ def require_authoritative_functional_closure(model_sysml: str) -> list[str]:
     return ids
 
 
+def require_authoritative_requirement_contracts(requirements: list[str]) -> dict:
+    """Reject publication when a high-fidelity requirement lacks an oracle."""
+    from src.prototyping.requirement_contracts import analyse_requirements
+
+    analysis = analyse_requirements(requirements)
+    gaps = list(analysis.get("semantic_gaps") or [])
+    if gaps:
+        raise RuntimeError(
+            "authoritative publication blocked by incomplete verification contracts: "
+            + "; ".join(gaps)
+        )
+    return analysis
+
+
 def _parm_text(design) -> str | None:
     if design is None:
         return None
@@ -185,12 +199,15 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
     final_sysml = res.get("model_sysml") or ""
     # Independent final publication gate (do not trust only run metadata).
     require_authoritative_functional_closure(final_sysml)
+    requirements = list(res.get("requirements") or [])
+    requirement_analysis = require_authoritative_requirement_contracts(requirements)
     parm_text = _parm_text(rec)
     out = {
         "elapsed_s": round(elapsed_s, 1),
         "system_name": SYSTEM,
         # Persist the exact extracted requirement set, not merely its count.
-        "requirements": list(res.get("requirements") or []),
+        "requirements": requirements,
+        "requirement_semantic_analysis": requirement_analysis,
         "final_score": res.get("final_score"),
         "best_config": res.get("best_config"),
         "pareto_alternatives": res.get("pareto_alternatives"),
