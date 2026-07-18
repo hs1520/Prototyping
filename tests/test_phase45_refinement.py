@@ -11,15 +11,10 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 from types import ModuleType
 from typing import Any, Dict, List, Optional
 
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 # Stub external dependencies (same pattern as other test files)
 for _name, _attrs in [

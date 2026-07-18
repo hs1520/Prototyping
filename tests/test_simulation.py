@@ -9,11 +9,8 @@ or from an activated AI-prototyping environment:
     pytest tests/test_simulation.py -v
 """
 
-import sys
 import os
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.simulation.validator import SimulationValidator, SimulationResult
 from src.simulation.extractor import extract_behavioral_graph

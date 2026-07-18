@@ -12,10 +12,7 @@ the test works even when optional deps like python-dotenv are absent.
 
 from __future__ import annotations
 
-import os
 import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import src.simulation.levenshtein_fixer as _mod
 from src.simulation.levenshtein_fixer import (

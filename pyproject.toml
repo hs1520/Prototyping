@@ -1,0 +1,17 @@
+# Minimal packaging so `pip install -e .` makes `src.*` importable from
+# anywhere (tests, examples, notebooks) without per-file sys.path hacks.
+# Runtime dependencies are managed in requirements.txt, not here.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prototyping"
+version = "0.1.0"
+description = "AI-assisted rapid prototyping for MBSE: SysML v2 generation, bilevel DSE, multi-fidelity verification"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["src", "src.*"]

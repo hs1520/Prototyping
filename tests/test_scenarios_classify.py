@@ -14,9 +14,6 @@ Run with:
 from __future__ import annotations
 
 import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.simulation.extractor import BehavioralGraph, PartNode, PortNode
 from src.simulation.scenarios import _classify_node, auto_detect_scenarios
