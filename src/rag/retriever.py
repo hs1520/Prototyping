@@ -107,7 +107,10 @@ class RAGRetriever:
         self.pinecone = pinecone_wrapper or PineconeWrapper(
             default_namespace=namespace or "SysML-V2-Release"
         )
-        default_release_root = Path(__file__).resolve().parent / "SysML-v2-release-src"
+        # Corpus lives outside the package tree: <repo>/data/SysML-v2-release-src
+        default_release_root = (
+            Path(__file__).resolve().parents[2] / "data" / "SysML-v2-release-src"
+        )
         self.official_release_root = (
             Path(official_release_root).expanduser().resolve()
             if official_release_root
