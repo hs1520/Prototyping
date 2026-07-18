@@ -318,114 +318,99 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         self.cot = ChainOfThoughtPrompter(llm)
         self.cot.system_prompt = self.SYSTEM_PROMPT
 
-    def run(self, task: Dict[str, Any]) -> AgentResult:
+    def _run_refinement(
+        self,
+        existing_model,
+        feedback: str,
+        refinement_issues: List[str],
+        skip_rag: bool,
+        verbose: bool,
+    ):
+        """Refinement mode: repair an existing model from evaluator feedback.
+
+        Prefers the original LLM-generated SysML text stored at parse time —
+        falling back to to_sysml_text() would give the LLM a reconstructed
+        (potentially degraded) version rather than the actual last good
+        output.  Returns the CoT refinement result.
         """
-        Generate a SysML v2 design from requirements.
-
-        Expected task keys:
-        - system_name: str
-        - requirements: List[str]
-        - context: str (optional additional context)
-        - existing_model: SysMLModel (optional, for refinement)
-        - refinement_feedback: str (optional feedback for refinement)
-        - refinement_issues: List[str] (optional structured issues for refinement)
-        """
-        system_name = task.get("system_name", "UnnamedSystem")
-        requirements = task.get("requirements", [])
-        context = task.get("context", "")
-        existing_model = task.get("existing_model")
-        feedback = task.get("refinement_feedback", "")
-        refinement_issues = task.get("refinement_issues", [])
-        verbose = task.get("verbose", False)
-
-        is_refinement = bool(existing_model and feedback)
-        skip_rag = task.get("skip_rag", False)
-
-        if is_refinement:
+        if skip_rag:
             # Syntax-fix calls skip RAG entirely — the corpus has no useful examples
             # for "fix undefined feature reference" errors, and the generic fallback
             # query ("SysML v2 refine design improve quality") adds noise.
-            if skip_rag:
-                rag_context = ""
-                if verbose:
-                    print(f"\n  [DEBUG] Refinement RAG skipped (skip_rag=True)")
-            else:
-                refinement_rag_query = self._build_refinement_query(refinement_issues)
-                rag_context = self.get_augmented_context(
-                    refinement_rag_query,
-                    include_official_sysml=True,
-                    allowed_extensions=(".sysml",),
-                )
-                if verbose:
-                    print(f"\n  [DEBUG] Refinement RAG query: {refinement_rag_query!r}")
-
+            rag_context = ""
             if verbose:
-                print(f"\n  {'─'*60}")
-                print(f"  [DEBUG] Refinement Mode — Input feedback")
-                print(f"  {'─'*60}")
-                print(feedback)
-                print(f"\n  [DEBUG] Existing model before refinement:")
-                _print_sysml_model_debug(existing_model, label="Before Refinement")
-
-            # Prefer the original LLM-generated SysML text stored at parse time.
-            # Falling back to to_sysml_text() would give the LLM a reconstructed
-            # (potentially degraded) version rather than the actual last good output.
-            source_text = (
-                (getattr(existing_model, "metadata", None) or {}).get("last_sysml_text")
-                or existing_model.to_sysml_text()
-            )
-            source_label = (
-                "original LLM text"
-                if (getattr(existing_model, "metadata", None) or {}).get("last_sysml_text")
-                else "to_sysml_text() fallback"
-            )
-            if verbose:
-                print(f"  [DEBUG] Refinement source: {source_label}")
-
-            # Prepend RAG context to the feedback so the LLM sees relevant examples
-            # before being asked to fix the issues.
-            augmented_feedback = (
-                f"{rag_context}\n\n---\n\n{feedback}" if rag_context else feedback
-            )
-
-            original_system_prompt = self.cot.system_prompt
-            self.cot.system_prompt = self.REFINEMENT_SYSTEM_PROMPT
-            try:
-                cot_result = self.cot.refine_design(
-                    model_text=source_text,
-                    feedback=augmented_feedback,
-                    issues=refinement_issues or [feedback],
-                )
-            finally:
-                self.cot.system_prompt = original_system_prompt
-
-            if verbose:
-                print(f"\n  {'─'*60}")
-                print(f"  [DEBUG] Refined SysML (LLM output, before parsing)")
-                print(f"  {'─'*60}")
-                if cot_result.extracted_sysml:
-                    print(cot_result.extracted_sysml)
-                else:
-                    print("  ⚠ No ```sysml block extracted — raw answer:")
-                    print(cot_result.final_answer)
-
-            generation_metadata = {}
+                print(f"\n  [DEBUG] Refinement RAG skipped (skip_rag=True)")
         else:
-            # Generation mode — multi-step pipeline
-            cot_result, generation_metadata = self._multistep_generate(
-                system_name=system_name,
-                requirements=requirements,
-                context=context,
-                verbose=verbose,
-                platform_profile=task.get("platform_profile"),
+            refinement_rag_query = self._build_refinement_query(refinement_issues)
+            rag_context = self.get_augmented_context(
+                refinement_rag_query,
+                include_official_sysml=True,
+                allowed_extensions=(".sysml",),
             )
+            if verbose:
+                print(f"\n  [DEBUG] Refinement RAG query: {refinement_rag_query!r}")
 
-        if not cot_result.extracted_sysml:
-            raise RuntimeError("[SysML_EXTRACTION_ERROR] 未提取到SysML v2 design.")
+        if verbose:
+            print(f"\n  {'─'*60}")
+            print(f"  [DEBUG] Refinement Mode — Input feedback")
+            print(f"  {'─'*60}")
+            print(feedback)
+            print(f"\n  [DEBUG] Existing model before refinement:")
+            _print_sysml_model_debug(existing_model, label="Before Refinement")
 
-        # Deterministic semantic cleanup applies to both initial generation and
-        # refinement.  These are requirement-operator invariants, not stylistic
-        # guesses, so do not spend another LLM call repairing them.
+        source_text = (
+            (getattr(existing_model, "metadata", None) or {}).get("last_sysml_text")
+            or existing_model.to_sysml_text()
+        )
+        source_label = (
+            "original LLM text"
+            if (getattr(existing_model, "metadata", None) or {}).get("last_sysml_text")
+            else "to_sysml_text() fallback"
+        )
+        if verbose:
+            print(f"  [DEBUG] Refinement source: {source_label}")
+
+        # Prepend RAG context to the feedback so the LLM sees relevant examples
+        # before being asked to fix the issues.
+        augmented_feedback = (
+            f"{rag_context}\n\n---\n\n{feedback}" if rag_context else feedback
+        )
+
+        original_system_prompt = self.cot.system_prompt
+        self.cot.system_prompt = self.REFINEMENT_SYSTEM_PROMPT
+        try:
+            cot_result = self.cot.refine_design(
+                model_text=source_text,
+                feedback=augmented_feedback,
+                issues=refinement_issues or [feedback],
+            )
+        finally:
+            self.cot.system_prompt = original_system_prompt
+
+        if verbose:
+            print(f"\n  {'─'*60}")
+            print(f"  [DEBUG] Refined SysML (LLM output, before parsing)")
+            print(f"  {'─'*60}")
+            if cot_result.extracted_sysml:
+                print(cot_result.extracted_sysml)
+            else:
+                print("  ⚠ No ```sysml block extracted — raw answer:")
+                print(cot_result.final_answer)
+        return cot_result
+
+    def _apply_semantic_fixes(
+        self,
+        cot_result,
+        requirements: List[str],
+        generation_metadata: Dict[str, Any],
+        verbose: bool,
+    ):
+        """Deterministic semantic cleanup for both generation and refinement.
+
+        These are requirement-operator invariants, not stylistic guesses, so
+        no LLM call is spent repairing them.  Mutates *generation_metadata*
+        in place and returns the (possibly replaced) CoT result.
+        """
         cleaned_sysml, capability_fixes = self._fix_capability_semantics(
             cot_result.extracted_sysml, requirements
         )
@@ -451,6 +436,55 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                     f"self_test_behavior={self_test_fixes}, "
                     f"functional_satisfy_ownership={ownership_fixes}"
                 )
+        return cot_result
+
+    def run(self, task: Dict[str, Any]) -> AgentResult:
+        """
+        Generate a SysML v2 design from requirements.
+
+        Expected task keys:
+        - system_name: str
+        - requirements: List[str]
+        - context: str (optional additional context)
+        - existing_model: SysMLModel (optional, for refinement)
+        - refinement_feedback: str (optional feedback for refinement)
+        - refinement_issues: List[str] (optional structured issues for refinement)
+        """
+        system_name = task.get("system_name", "UnnamedSystem")
+        requirements = task.get("requirements", [])
+        context = task.get("context", "")
+        existing_model = task.get("existing_model")
+        feedback = task.get("refinement_feedback", "")
+        refinement_issues = task.get("refinement_issues", [])
+        verbose = task.get("verbose", False)
+
+        is_refinement = bool(existing_model and feedback)
+        skip_rag = task.get("skip_rag", False)
+
+        if is_refinement:
+            cot_result = self._run_refinement(
+                existing_model, feedback, refinement_issues, skip_rag, verbose
+            )
+            generation_metadata = {}
+        else:
+            # Generation mode — multi-step pipeline
+            cot_result, generation_metadata = self._multistep_generate(
+                system_name=system_name,
+                requirements=requirements,
+                context=context,
+                verbose=verbose,
+                platform_profile=task.get("platform_profile"),
+            )
+
+        if not cot_result.extracted_sysml:
+            raise RuntimeError("[SysML_EXTRACTION_ERROR] 未提取到SysML v2 design.")
+
+        # Deterministic semantic cleanup applies to both initial generation and
+        # refinement.  These are requirement-operator invariants, not stylistic
+        # guesses, so do not spend another LLM call repairing them.
+        cot_result = self._apply_semantic_fixes(
+            cot_result, requirements, generation_metadata, verbose
+        )
 
         parse_label = "After Refinement" if is_refinement else "After Initial Generation"
 
@@ -512,6 +546,336 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
 
     _BEHAVIORAL_CATEGORIES = {"FUNC", "SAFE", "OPER"}
 
+    def _step1_architecture(
+        self,
+        system_name: str,
+        requirements: List[str],
+        context: str,
+        metadata: Dict[str, Any],
+        verbose: bool,
+    ):
+        """Step 1: architecture decomposition (plain structured text).
+
+        RAG is intentionally skipped: the corpus is exclusively `.sysml`
+        grammar examples and RAGRetriever wraps every retrieved snippet in
+        ```sysml fences, which (1) is the wrong knowledge type for
+        decomposition planning — we want domain subsystem patterns, not SysML
+        syntax; (2) primes the LLM to emit code blocks against this step's
+        "plain text only" instruction; and (3) wastes tokens — Steps 2-4
+        retrieve targeted SysML examples for their own tasks.  The fence-strip
+        guard below is retained as defence-in-depth.
+        Returns ``(step1_result, architecture_text)``.
+        """
+        if verbose:
+            print(f"\n  [DEBUG] Step 1 — RAG skipped (corpus is SysML-only, "
+                  f"would prime LLM to emit code blocks)")
+        step1 = self.cot.decompose_architecture(
+            system_name=system_name,
+            requirements=requirements,
+            context=context,   # caller-supplied context only, no RAG
+        )
+        architecture_text = step1.final_answer
+        metadata["step1_rag_skipped"] = True
+
+        # Guard: Step 1 must produce plain text only — no SysML.
+        # If the LLM appended a ```sysml (or generic ```) code block, strip
+        # everything from the first fence onward.  The structured component
+        # list always precedes any code block, so this keeps the useful part.
+        _fence_pos = architecture_text.find("```")
+        if _fence_pos != -1:
+            architecture_text = architecture_text[:_fence_pos].rstrip()
+            metadata["degraded_steps"].append(
+                "step1_architecture: SysML code block found and stripped"
+            )
+            if verbose:
+                print(
+                    f"\n  [DEBUG] Step 1 — Stripped trailing SysML code block "
+                    f"(kept {len(architecture_text)} chars of plain-text plan)"
+                )
+
+        metadata["generation_steps_completed"] = 1
+        metadata["architecture_length"] = len(architecture_text)
+
+        if verbose:
+            print(f"\n  {'─'*60}")
+            print(f"  [DEBUG] Step 1 — Architecture Decomposition")
+            print(f"  {'─'*60}")
+            print(architecture_text)
+        return step1, architecture_text
+
+    def _step2_parts(
+        self,
+        system_name: str,
+        architecture_text: str,
+        requirements: List[str],
+        step_context,
+        metadata: Dict[str, Any],
+        verbose: bool,
+    ):
+        """Step 2: part definitions (structural fragment) with one bounded
+        retry — a structural fragment without a single part definition cannot
+        be repaired meaningfully by the later assembly/refinement stages, so
+        fail before spending calls on interfaces, behaviour, and assembly.
+        Returns ``(step2_result, parts_fragment)``.
+        """
+        ctx2 = step_context("parts")
+        step2 = self.cot.generate_part_definitions(
+            system_name=system_name,
+            architecture=architecture_text,
+            requirements=requirements,
+            context=ctx2,
+        )
+        if step2.extracted_sysml:
+            parts_fragment = step2.extracted_sysml
+        else:
+            parts_fragment = step2.final_answer
+            metadata["degraded_steps"].append(
+                "step2_parts: no SysML code block extracted, falling back to raw text"
+            )
+
+        if not re.search(r"\bpart\s+def\s+\w+\s*\{", parts_fragment):
+            metadata["step2_part_retries"] = 1
+            retry_step2 = self.cot.generate_part_definitions(
+                system_name=system_name,
+                architecture=architecture_text,
+                requirements=requirements,
+                context=ctx2,
+            )
+            retry_fragment = (
+                retry_step2.extracted_sysml or retry_step2.final_answer or ""
+            )
+            if not re.search(r"\bpart\s+def\s+\w+\s*\{", retry_fragment):
+                raise RuntimeError(
+                    "[STRUCTURAL_GENERATION_ERROR] Step 2 produced no part "
+                    "definitions after one targeted retry."
+                )
+            step2 = retry_step2
+            parts_fragment = retry_fragment
+            metadata["degraded_steps"].append(
+                "step2_parts: first response had no part defs; targeted retry accepted"
+            )
+        metadata["generation_steps_completed"] = 2
+        metadata["parts_fragment_length"] = len(parts_fragment)
+
+        if verbose:
+            print(f"\n  {'─'*60}")
+            print(f"  [DEBUG] Step 2 — Part Definitions (SysML fragment)")
+            print(f"  {'─'*60}")
+            print(parts_fragment)
+        return step2, parts_fragment
+
+    def _step3_interfaces(
+        self,
+        system_name: str,
+        architecture_text: str,
+        parts_fragment: str,
+        requirements: List[str],
+        step_context,
+        metadata: Dict[str, Any],
+        verbose: bool,
+    ):
+        """Step 3: interface & flow definitions (item def / typed port def).
+        Returns ``(step3_result, interfaces_fragment)``; the fragment is empty
+        when no code block was extracted (degraded, not fatal)."""
+        intf_reqs = [r for r in requirements if "-INTF-" in r]
+        ctx3 = step_context("interfaces")
+        step3 = self.cot.generate_interfaces_and_flows(
+            system_name=system_name,
+            architecture=architecture_text,
+            parts_fragment=parts_fragment,
+            intf_requirements=intf_reqs,
+            context=ctx3,
+        )
+        if step3.extracted_sysml:
+            interfaces_fragment = step3.extracted_sysml
+        else:
+            interfaces_fragment = ""
+            metadata["degraded_steps"].append(
+                "step3_interfaces: no SysML code block extracted, skipping"
+            )
+        metadata["generation_steps_completed"] = 3
+        metadata["interfaces_fragment_length"] = len(interfaces_fragment)
+
+        if verbose:
+            print(f"\n  {'─'*60}")
+            print(f"  [DEBUG] Step 3 — Interface & Flow Definitions (SysML fragment)")
+            print(f"  {'─'*60}")
+            if interfaces_fragment:
+                print(interfaces_fragment)
+            else:
+                print("  (skipped — no code block extracted)")
+        return step3, interfaces_fragment
+
+    def _step4_behavior(
+        self,
+        system_name: str,
+        architecture_text: str,
+        parts_fragment: str,
+        requirements: List[str],
+        platform_profile,
+        step_context,
+        metadata: Dict[str, Any],
+        verbose: bool,
+    ):
+        """Step 4: behavioral model — runs only when FUNC/SAFE/OPER
+        requirements exist (the RAG call is skipped entirely otherwise).
+        Returns ``(step4_result_or_None, behavior_fragment)``."""
+        behavioral_reqs = [
+            r for r in requirements
+            if any(f"-{cat}-" in r for cat in self._BEHAVIORAL_CATEGORIES)
+        ]
+        if not behavioral_reqs:
+            metadata["generation_steps_completed"] = 4
+            metadata["behavior_fragment_length"] = 0
+
+            if verbose:
+                print(f"\n  [DEBUG] Step 4 — Behavioral Model: skipped "
+                      f"(no FUNC/SAFE requirements)")
+            return None, ""
+
+        ctx4 = step_context("behavior")
+        step4 = self.cot.generate_behavior(
+            system_name=system_name,
+            architecture=architecture_text,
+            behavioral_requirements=behavioral_reqs,
+            parts_fragment=parts_fragment,
+            context=ctx4,
+            platform_profile=platform_profile,
+        )
+        if step4.extracted_sysml:
+            behavior_fragment = step4.extracted_sysml
+        else:
+            behavior_fragment = step4.final_answer
+            metadata["degraded_steps"].append(
+                "step4_behavior: no SysML code block extracted, falling back to raw text"
+            )
+        metadata["generation_steps_completed"] = 4
+        metadata["behavior_fragment_length"] = len(behavior_fragment)
+
+        if verbose:
+            print(f"\n  {'─'*60}")
+            print(f"  [DEBUG] Step 4 — Behavioral Model (SysML fragment)")
+            print(f"  {'─'*60}")
+            print(behavior_fragment)
+        return step4, behavior_fragment
+
+    def _postprocess_assembly(
+        self,
+        step5,
+        parts_fragment: str,
+        interfaces_fragment: str,
+        behavior_fragment: str,
+        metadata: Dict[str, Any],
+        verbose: bool,
+    ):
+        """Post-assembly deterministic repair chain.
+
+        Step 5 is an integration call, not an authority to delete the earlier
+        fragments: restore dropped part/state/item defs programmatically, fix
+        `doc = "...";` syntax, strip invalid requirement attribute lines,
+        normalise `connect a::b` to dot notation, and flag suspicious
+        connects.  Returns the (possibly replaced) step5 result.
+        """
+        # --- fix invalid `doc = "string";` → `doc /* string */` ---
+        if step5.extracted_sysml:
+            fixed_text, n_doc_fixed = self._fix_doc_syntax(step5.extracted_sysml)
+            if n_doc_fixed:
+                metadata["fixed_doc_syntax"] = n_doc_fixed
+                if verbose:
+                    print(
+                        f"\n  [DEBUG] Step 5 — Fixed {n_doc_fixed} invalid "
+                        f"`doc = \"...\";` → `doc /* ... */` occurrence(s)"
+                    )
+                step5 = dataclasses.replace(step5, extracted_sysml=fixed_text)
+
+        # --- restore structural part defs the LLM dropped ---
+        if parts_fragment and step5.extracted_sysml:
+            assembled_text, injected_parts = self._inject_missing_part_defs(
+                step5.extracted_sysml, parts_fragment
+            )
+            if injected_parts:
+                metadata["injected_part_defs"] = injected_parts
+                if verbose:
+                    print(
+                        f"\n  [DEBUG] Step 5 — Programmatic injection: "
+                        f"restored {len(injected_parts)} dropped part def(s): "
+                        f"{', '.join(injected_parts)}"
+                    )
+                step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
+
+        # --- inject any state defs the LLM dropped ---
+        if behavior_fragment and step5.extracted_sysml:
+            assembled_text, injected_states = self._inject_missing_state_defs(
+                step5.extracted_sysml, behavior_fragment
+            )
+            if injected_states:
+                metadata["injected_state_defs"] = injected_states
+                if verbose:
+                    print(
+                        f"\n  [DEBUG] Step 5 — Programmatic injection: "
+                        f"restored {len(injected_states)} dropped state def(s): "
+                        f"{', '.join(injected_states)}"
+                    )
+                step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
+
+        # --- inject any item defs / typed port defs the LLM dropped ---
+        if interfaces_fragment and step5.extracted_sysml:
+            assembled_text, injected_items = self._inject_missing_item_defs(
+                step5.extracted_sysml, interfaces_fragment
+            )
+            if injected_items:
+                metadata["injected_item_defs"] = injected_items
+                if verbose:
+                    print(
+                        f"\n  [DEBUG] Step 5 — Programmatic injection: "
+                        f"restored {len(injected_items)} dropped item/port def(s): "
+                        f"{', '.join(injected_items)}"
+                    )
+                step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
+
+        # --- strip invalid `requirement <name> : <Type> = "...";` lines ---
+        if step5.extracted_sysml:
+            cleaned_text, n_stripped = self._strip_invalid_requirement_attrs(
+                step5.extracted_sysml
+            )
+            if n_stripped:
+                metadata["stripped_invalid_req_attrs"] = n_stripped
+                if verbose:
+                    print(
+                        f"\n  [DEBUG] Step 5 — Stripped {n_stripped} invalid "
+                        f"`requirement <name> : <Type> = \"...\";` line(s)"
+                    )
+                step5 = dataclasses.replace(step5, extracted_sysml=cleaned_text)
+
+        # --- normalise `connect a::b to c::d;` → `connect a.b to c.d;` ---
+        # SysML v2 connect uses dot notation only.  Despite the prompt explicitly
+        # teaching `.`, LLMs occasionally emit `::` (treating it as a generic
+        # member-access operator).  Normalising here keeps every downstream
+        # consumer (evaluator, RAG, refinement prompt) on the canonical form.
+        if step5.extracted_sysml:
+            normalised, n_normalised = self._normalise_connect_syntax(
+                step5.extracted_sysml
+            )
+            if n_normalised:
+                metadata["normalised_connect_syntax"] = n_normalised
+                if verbose:
+                    print(
+                        f"\n  [DEBUG] Step 5 — Normalised {n_normalised} non-canonical "
+                        f"`connect a::b to c::d;` → `connect a.b to c.d;`"
+                    )
+                step5 = dataclasses.replace(step5, extracted_sysml=normalised)
+
+        # --- connect semantic validation ---
+        if step5.extracted_sysml:
+            suspicious = self._validate_connections(step5.extracted_sysml)
+            if suspicious:
+                metadata["suspicious_connections"] = suspicious
+                if verbose:
+                    print(f"\n  [DEBUG] ⚠ Suspicious connect statements ({len(suspicious)}):")
+                    for s in suspicious:
+                        print(f"      {s['source_port']} → {s['target_port']}: {s['warning']}")
+        return step5
+
     def _multistep_generate(
         self,
         system_name: str,
@@ -552,176 +916,28 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             parts = [p for p in (context, rag) if p]
             return "\n\n".join(parts)
 
-        # --- Step 1: Architecture Decomposition (RAG intentionally skipped) ---
-        # Rationale: the RAG corpus is exclusively `.sysml` grammar examples,
-        # and `RAGRetriever` wraps every retrieved snippet in ```sysml fences
-        # before prepending it to the prompt.  That directly contradicts this
-        # step's "plain structured text only — no SysML" instruction:
-        #
-        #   1. The retrieval is the wrong knowledge type for decomposition
-        #      planning (we want domain subsystem patterns, not SysML syntax).
-        #   2. The fenced examples prime the LLM to emit ```sysml code blocks,
-        #      which then have to be fence-stripped post-hoc.
-        #   3. The token cost is wasted — Step 2/3/4 already retrieve targeted
-        #      SysML examples for their respective generation tasks.
-        #
-        # Domain decomposition draws on the LLM's pretrained knowledge of
-        # cyber-physical system architecture instead.  The fence-strip guard
-        # below is retained as defence-in-depth.
-        if verbose:
-            print(f"\n  [DEBUG] Step 1 — RAG skipped (corpus is SysML-only, "
-                  f"would prime LLM to emit code blocks)")
-        step1 = self.cot.decompose_architecture(
-            system_name=system_name,
-            requirements=requirements,
-            context=context,   # caller-supplied context only, no RAG
+        # --- Step 1: Architecture Decomposition ---
+        step1, architecture_text = self._step1_architecture(
+            system_name, requirements, context, metadata, verbose
         )
-        architecture_text = step1.final_answer
-        metadata["step1_rag_skipped"] = True
-
-        # Guard: Step 1 must produce plain text only — no SysML.
-        # If the LLM appended a ```sysml (or generic ```) code block, strip
-        # everything from the first fence onward.  The structured component
-        # list always precedes any code block, so this keeps the useful part.
-        _fence_pos = architecture_text.find("```")
-        if _fence_pos != -1:
-            architecture_text = architecture_text[:_fence_pos].rstrip()
-            metadata["degraded_steps"].append(
-                "step1_architecture: SysML code block found and stripped"
-            )
-            if verbose:
-                print(
-                    f"\n  [DEBUG] Step 1 — Stripped trailing SysML code block "
-                    f"(kept {len(architecture_text)} chars of plain-text plan)"
-                )
-
-        metadata["generation_steps_completed"] = 1
-        metadata["architecture_length"] = len(architecture_text)
-
-        if verbose:
-            print(f"\n  {'─'*60}")
-            print(f"  [DEBUG] Step 1 — Architecture Decomposition")
-            print(f"  {'─'*60}")
-            print(architecture_text)
 
         # --- Step 2: Part Definitions (structural fragment) ---
-        ctx2 = _step_context("parts")
-        step2 = self.cot.generate_part_definitions(
-            system_name=system_name,
-            architecture=architecture_text,
-            requirements=requirements,
-            context=ctx2,
+        step2, parts_fragment = self._step2_parts(
+            system_name, architecture_text, requirements, _step_context,
+            metadata, verbose,
         )
-        if step2.extracted_sysml:
-            parts_fragment = step2.extracted_sysml
-        else:
-            parts_fragment = step2.final_answer
-            metadata["degraded_steps"].append(
-                "step2_parts: no SysML code block extracted, falling back to raw text"
-            )
-
-        # A structural fragment without a single part definition cannot be
-        # repaired meaningfully by the later assembly/refinement stages.  Give
-        # the focused Step-2 prompt one bounded retry, then fail before spending
-        # calls on interfaces, behaviour, and assembly for an empty baseline.
-        if not re.search(r"\bpart\s+def\s+\w+\s*\{", parts_fragment):
-            metadata["step2_part_retries"] = 1
-            retry_step2 = self.cot.generate_part_definitions(
-                system_name=system_name,
-                architecture=architecture_text,
-                requirements=requirements,
-                context=ctx2,
-            )
-            retry_fragment = (
-                retry_step2.extracted_sysml or retry_step2.final_answer or ""
-            )
-            if not re.search(r"\bpart\s+def\s+\w+\s*\{", retry_fragment):
-                raise RuntimeError(
-                    "[STRUCTURAL_GENERATION_ERROR] Step 2 produced no part "
-                    "definitions after one targeted retry."
-                )
-            step2 = retry_step2
-            parts_fragment = retry_fragment
-            metadata["degraded_steps"].append(
-                "step2_parts: first response had no part defs; targeted retry accepted"
-            )
-        metadata["generation_steps_completed"] = 2
-        metadata["parts_fragment_length"] = len(parts_fragment)
-
-        if verbose:
-            print(f"\n  {'─'*60}")
-            print(f"  [DEBUG] Step 2 — Part Definitions (SysML fragment)")
-            print(f"  {'─'*60}")
-            print(parts_fragment)
 
         # --- Step 3: Interface & Flow Definitions (item def / typed port def) ---
-        intf_reqs = [r for r in requirements if "-INTF-" in r]
-        ctx3 = _step_context("interfaces")
-        step3 = self.cot.generate_interfaces_and_flows(
-            system_name=system_name,
-            architecture=architecture_text,
-            parts_fragment=parts_fragment,
-            intf_requirements=intf_reqs,
-            context=ctx3,
+        step3, interfaces_fragment = self._step3_interfaces(
+            system_name, architecture_text, parts_fragment, requirements,
+            _step_context, metadata, verbose,
         )
-        if step3.extracted_sysml:
-            interfaces_fragment = step3.extracted_sysml
-        else:
-            interfaces_fragment = ""
-            metadata["degraded_steps"].append(
-                "step3_interfaces: no SysML code block extracted, skipping"
-            )
-        metadata["generation_steps_completed"] = 3
-        metadata["interfaces_fragment_length"] = len(interfaces_fragment)
-
-        if verbose:
-            print(f"\n  {'─'*60}")
-            print(f"  [DEBUG] Step 3 — Interface & Flow Definitions (SysML fragment)")
-            print(f"  {'─'*60}")
-            if interfaces_fragment:
-                print(interfaces_fragment)
-            else:
-                print("  (skipped — no code block extracted)")
 
         # --- Step 4: Behavioral Model (only if FUNC or SAFE requirements exist) ---
-        behavioral_reqs = [
-            r for r in requirements
-            if any(f"-{cat}-" in r for cat in self._BEHAVIORAL_CATEGORIES)
-        ]
-        if behavioral_reqs:
-            ctx4 = _step_context("behavior")
-            step4 = self.cot.generate_behavior(
-                system_name=system_name,
-                architecture=architecture_text,
-                behavioral_requirements=behavioral_reqs,
-                parts_fragment=parts_fragment,
-                context=ctx4,
-                platform_profile=platform_profile,
-            )
-            if step4.extracted_sysml:
-                behavior_fragment = step4.extracted_sysml
-            else:
-                behavior_fragment = step4.final_answer
-                metadata["degraded_steps"].append(
-                    "step4_behavior: no SysML code block extracted, falling back to raw text"
-                )
-            metadata["generation_steps_completed"] = 4
-            metadata["behavior_fragment_length"] = len(behavior_fragment)
-
-            if verbose:
-                print(f"\n  {'─'*60}")
-                print(f"  [DEBUG] Step 4 — Behavioral Model (SysML fragment)")
-                print(f"  {'─'*60}")
-                print(behavior_fragment)
-        else:
-            behavior_fragment = ""
-            step4 = None
-            metadata["generation_steps_completed"] = 4
-            metadata["behavior_fragment_length"] = 0
-
-            if verbose:
-                print(f"\n  [DEBUG] Step 4 — Behavioral Model: skipped "
-                      f"(no FUNC/SAFE requirements)")
+        step4, behavior_fragment = self._step4_behavior(
+            system_name, architecture_text, parts_fragment, requirements,
+            platform_profile, _step_context, metadata, verbose,
+        )
 
         # --- Step 5: Integration / Assembly ---
         # No separate RAG call for assembly — the prompt focuses on wiring together
@@ -742,107 +958,11 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             + len(step5.thought_steps)
         )
 
-        # --- Post-assembly: fix invalid `doc = "string";` → `doc /* string */` ---
-        if step5.extracted_sysml:
-            fixed_text, n_doc_fixed = self._fix_doc_syntax(step5.extracted_sysml)
-            if n_doc_fixed:
-                metadata["fixed_doc_syntax"] = n_doc_fixed
-                if verbose:
-                    print(
-                        f"\n  [DEBUG] Step 5 — Fixed {n_doc_fixed} invalid "
-                        f"`doc = \"...\";` → `doc /* ... */` occurrence(s)"
-                    )
-                step5 = dataclasses.replace(step5, extracted_sysml=fixed_text)
-
-        # --- Post-assembly: restore structural part defs the LLM dropped ---
-        # Step 5 is an integration call, not an authority to delete the Step-2
-        # architecture.  Restore missing part blocks deterministically before
-        # injecting owner-scoped states/actions into those parts.
-        if parts_fragment and step5.extracted_sysml:
-            assembled_text, injected_parts = self._inject_missing_part_defs(
-                step5.extracted_sysml, parts_fragment
-            )
-            if injected_parts:
-                metadata["injected_part_defs"] = injected_parts
-                if verbose:
-                    print(
-                        f"\n  [DEBUG] Step 5 — Programmatic injection: "
-                        f"restored {len(injected_parts)} dropped part def(s): "
-                        f"{', '.join(injected_parts)}"
-                    )
-                step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
-
-        # --- Post-assembly: inject any state defs the LLM dropped ---
-        if behavior_fragment and step5.extracted_sysml:
-            assembled_text, injected_states = self._inject_missing_state_defs(
-                step5.extracted_sysml, behavior_fragment
-            )
-            if injected_states:
-                metadata["injected_state_defs"] = injected_states
-                if verbose:
-                    print(
-                        f"\n  [DEBUG] Step 5 — Programmatic injection: "
-                        f"restored {len(injected_states)} dropped state def(s): "
-                        f"{', '.join(injected_states)}"
-                    )
-                step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
-
-        # --- Post-assembly: inject any item defs / typed port defs the LLM dropped ---
-        if interfaces_fragment and step5.extracted_sysml:
-            assembled_text, injected_items = self._inject_missing_item_defs(
-                step5.extracted_sysml, interfaces_fragment
-            )
-            if injected_items:
-                metadata["injected_item_defs"] = injected_items
-                if verbose:
-                    print(
-                        f"\n  [DEBUG] Step 5 — Programmatic injection: "
-                        f"restored {len(injected_items)} dropped item/port def(s): "
-                        f"{', '.join(injected_items)}"
-                    )
-                step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
-
-        # --- Post-assembly: strip invalid `requirement <name> : <Type> = "...";` lines ---
-        if step5.extracted_sysml:
-            cleaned_text, n_stripped = self._strip_invalid_requirement_attrs(
-                step5.extracted_sysml
-            )
-            if n_stripped:
-                metadata["stripped_invalid_req_attrs"] = n_stripped
-                if verbose:
-                    print(
-                        f"\n  [DEBUG] Step 5 — Stripped {n_stripped} invalid "
-                        f"`requirement <name> : <Type> = \"...\";` line(s)"
-                    )
-                step5 = dataclasses.replace(step5, extracted_sysml=cleaned_text)
-
-        # --- Post-assembly: normalise `connect a::b to c::d;` → `connect a.b to c.d;` ---
-        # SysML v2 connect uses dot notation only.  Despite the prompt explicitly
-        # teaching `.`, LLMs occasionally emit `::` (treating it as a generic
-        # member-access operator).  Normalising here keeps every downstream
-        # consumer (evaluator, RAG, refinement prompt) on the canonical form.
-        if step5.extracted_sysml:
-            normalised, n_normalised = self._normalise_connect_syntax(
-                step5.extracted_sysml
-            )
-            if n_normalised:
-                metadata["normalised_connect_syntax"] = n_normalised
-                if verbose:
-                    print(
-                        f"\n  [DEBUG] Step 5 — Normalised {n_normalised} non-canonical "
-                        f"`connect a::b to c::d;` → `connect a.b to c.d;`"
-                    )
-                step5 = dataclasses.replace(step5, extracted_sysml=normalised)
-
-        # --- Post-assembly: connect semantic validation ---
-        if step5.extracted_sysml:
-            suspicious = self._validate_connections(step5.extracted_sysml)
-            if suspicious:
-                metadata["suspicious_connections"] = suspicious
-                if verbose:
-                    print(f"\n  [DEBUG] ⚠ Suspicious connect statements ({len(suspicious)}):")
-                    for s in suspicious:
-                        print(f"      {s['source_port']} → {s['target_port']}: {s['warning']}")
+        # --- Post-assembly: deterministic repair chain ---
+        step5 = self._postprocess_assembly(
+            step5, parts_fragment, interfaces_fragment, behavior_fragment,
+            metadata, verbose,
+        )
 
         if verbose:
             print(f"\n  {'─'*60}")
