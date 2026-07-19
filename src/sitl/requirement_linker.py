@@ -92,10 +92,35 @@ class RequirementLinker:
         model: SysMLLiteModel,
         llm: Optional[Any] = None,
         verbose: bool = False,
+        contract_bundle: Optional[Any] = None,
+        semantic_trace_report: Optional[Any] = None,
     ) -> None:
         self._model = model
         self._llm = llm
         self._verbose = verbose
+        from src.prototyping.contract_types import contract_bundle_from_dict
+        self._contract_bundle = contract_bundle_from_dict(contract_bundle)
+        self._contracts = self._contract_bundle.by_req_id()
+        if semantic_trace_report is None and self._contracts:
+            from src.prototyping.semantic_trace import build_semantic_trace
+            semantic_trace_report = build_semantic_trace(
+                model.to_sysml_text() or "", self._contract_bundle,
+                model_name=getattr(model, "name", "model"),
+            )
+        self._contract_trace_findings: Dict[str, List[Any]] = {}
+        if semantic_trace_report is not None:
+            traces = getattr(semantic_trace_report, "traces", ())
+            if isinstance(semantic_trace_report, dict):
+                traces = semantic_trace_report.get("traces", ())
+            for trace in traces:
+                if isinstance(trace, dict):
+                    req_id = trace.get("req_id", "")
+                    findings = trace.get("findings", ())
+                else:
+                    req_id = getattr(trace, "req_id", "")
+                    findings = getattr(trace, "findings", ())
+                if req_id and findings:
+                    self._contract_trace_findings[req_id] = list(findings)
         # req_id → part_name
         self._satisfy_map: Dict[str, List[str]] = self._build_satisfy_map()
         # part_name → List[GuardCondition]
@@ -772,6 +797,23 @@ class RequirementLinker:
         parachute test under that requirement ID. Surface a deterministic
         traceability mismatch instead.
         """
+        contract_issue = self._contract_traceability_issue(req_id)
+        if contract_issue is not None:
+            self._traceability_mismatches[req_id] = contract_issue
+            return {
+                "semantic_tag": "TRACEABILITY_MISMATCH:CONTRACT_TRACE",
+                "threshold_slot": None,
+                "ardu_params": {},
+                "_resolved_guard_val": None,
+                "_resolved_attr_val": None,
+                "_traceability_mismatch": contract_issue,
+                "sitl_test": {
+                    "tier": "TRACE",
+                    "inject": InjectSpec(kind="skip", notes=contract_issue["message"]),
+                    "verify": VerifySpec(kind="skip", notes=contract_issue["message"]),
+                    "notes": contract_issue["message"],
+                },
+            }
         if result is None:
             self._traceability_mismatches.pop(req_id, None)
             return None
@@ -816,6 +858,32 @@ class RequirementLinker:
                 "verify": VerifySpec(kind="skip", notes=detail["message"]),
                 "notes": detail["message"],
             },
+        }
+
+    def _contract_traceability_issue(self, req_id: str) -> Optional[Dict[str, str]]:
+        """Expose contract-first trace faults before a model-derived test is emitted."""
+        findings = self._contract_trace_findings.get(req_id, ())
+        if not findings:
+            return None
+        first = findings[0]
+        if isinstance(first, dict):
+            code = str(first.get("finding_code", "SEMANTIC_TRACE_FAILED"))
+            expected = first.get("expected", {})
+            observed = first.get("observed", {})
+        else:
+            code = str(getattr(first, "finding_code", "SEMANTIC_TRACE_FAILED"))
+            expected = getattr(first, "expected", {})
+            observed = getattr(first, "observed", {})
+        return {
+            "req_id": req_id,
+            "expected_family": "CONTRACT_TRACE",
+            "matched_family": "MODEL_TRACE",
+            "matched_tag": code,
+            "requirement_text": self._req_texts.get(req_id, ""),
+            "message": (
+                f"contract-first trace blocked test generation: {code}; "
+                f"expected={dict(expected)!r}; observed={dict(observed)!r}"
+            ),
         }
 
     def traceability_mismatches(self) -> List[Dict[str, str]]:
@@ -873,6 +941,23 @@ class RequirementLinker:
         requirement. A compound contingency naming several trigger families
         cannot be proven by exercising only one guard.
         """
+        contract = self._contracts.get(req_id)
+        if contract is not None and contract.obligations:
+            families = {
+                {
+                    "battery_state_of_charge": "BATTERY",
+                    "sensor_self_test_failure": "SENSOR",
+                    "gcs_link_absent": "GCS",
+                    "delivery_abort_condition": "PAYLOAD",
+                    "delivery_waypoint_proximity": "PAYLOAD",
+                    "delivery_coordinate_condition_satisfied": "PAYLOAD",
+                    "critical_propulsion_failure": "PARACHUTE",
+                }.get(obligation.trigger.concept)
+                for obligation in contract.obligations
+                if obligation.trigger is not None
+            }
+            return {family for family in families if family}
+
         text = self._req_texts.get(req_id, "")
         low = f"{req_id} {text}".lower()
         families: set[str] = set()
@@ -958,6 +1043,26 @@ class RequirementLinker:
 
     def _preferred_semantic_tags(self, req_id: str) -> List[str]:
         """Return deterministic tag preferences within a broad requirement family."""
+        contract = self._contracts.get(req_id)
+        if contract is not None and contract.obligations:
+            preferences: list[str] = []
+            for obligation in contract.obligations:
+                trigger = obligation.trigger.concept if obligation.trigger else ""
+                response = obligation.response.concept if obligation.response else ""
+                tag = {
+                    ("battery_state_of_charge", "return_to_base"): "BATTERY_RTB",
+                    ("battery_state_of_charge", "controlled_landing"): "BATTERY_LAND",
+                    ("gcs_link_absent", "controlled_landing"): "GCS_LOSS_LAND",
+                    ("gcs_link_absent", "return_to_base"): "GCS_LOSS_RTL",
+                    ("sensor_self_test_failure", "prevent_arming"): "SENSOR_ARMING_INHIBIT",
+                    ("sensor_self_test_failure", "alert_gcs"): "SENSOR_GROUND_ALERT",
+                    ("critical_propulsion_failure", "deploy_parachute"): "PARACHUTE_DEPLOY",
+                    ("delivery_abort_condition", "lock_payload"): "PAYLOAD_ABORT_LOCK",
+                }.get((trigger, response))
+                if tag and tag not in preferences:
+                    preferences.append(tag)
+            if preferences:
+                return preferences
         text = self._req_texts.get(req_id, "")
         low = f"{req_id} {text}".lower()
         family = self._requirement_family(req_id)

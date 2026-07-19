@@ -136,7 +136,10 @@ Core rules:
         dependencies = self._parse_dependencies(cot_result.final_answer)
         counts = self._count_by_category(requirements)
         from ..prototyping.requirement_contracts import analyse_requirements
-        semantic_analysis = analyse_requirements(requirements)
+        semantic_analysis = analyse_requirements(
+            requirements,
+            generalized=bool(task.get("generalized_contracts", False)),
+        )
 
         result = AgentResult(
             agent_name=self.name,
@@ -155,7 +158,12 @@ Core rules:
         self.record_result(result)
         return result
 
-    def validate_requirements(self, requirements: List[str]) -> Dict[str, Any]:
+    def validate_requirements(
+        self,
+        requirements: List[str],
+        *,
+        generalized_contracts: bool = False,
+    ) -> Dict[str, Any]:
         """
         Validate a list of requirements for format correctness, completeness, and design-readiness.
 
@@ -253,7 +261,9 @@ Core rules:
         # high-fidelity contract is advisory here. Downstream verification treats
         # these gaps fail-closed instead of inventing scenario constants.
         from ..prototyping.requirement_contracts import analyse_requirements
-        semantic_analysis = analyse_requirements(requirements)
+        semantic_analysis = analyse_requirements(
+            requirements, generalized=generalized_contracts
+        )
         warnings.extend(
             f"Incomplete verification contract — {gap}"
             for gap in semantic_analysis["semantic_gaps"]

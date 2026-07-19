@@ -294,10 +294,7 @@ def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
     that the validator catches them as failing scenarios.
     """
     # ── Classify all parts ───────────────────────────────────────────────────
-    classified: Dict[str, List[str]] = {}
-    for pname, pnode in bg.parts.items():
-        cls = _classify_node(pnode, bg)
-        classified.setdefault(cls, []).append(pname)
+    classified = classify_parts_by_role(bg)
 
     controllers = classified.get("controller", [])
     sensors     = classified.get("sensor", [])
@@ -306,22 +303,6 @@ def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
     power       = classified.get("power", [])
     actuators   = classified.get("actuator", [])
     structures  = classified.get("structure", [])
-    others      = classified.get("other", [])
-
-    # ── Hub-fallback: promote highest-degree "other" part to controller ───────
-    # Only fires when there are NO recognised controllers at all — prevents
-    # inflating an already-adequate controller list with mystery parts.
-    # "other" means: no ports (or direction=none) AND no keyword match.
-    # Among these, the most-connected part is the best controller proxy.
-    if others and not controllers:
-        degrees = _part_degrees(bg)
-        others_by_degree = sorted(others, key=lambda p: degrees.get(p, 0), reverse=True)
-        top_hub = others_by_degree[0]
-        if degrees.get(top_hub, 0) > 0:
-            # Only promote if it actually has connections (real hub behaviour).
-            # Truly isolated parts (degree 0) are not valid controller candidates.
-            controllers = [top_hub]
-            others = others_by_degree[1:]
 
     # ── Scenario cross-products ──────────────────────────────────────────────
     scenarios: List[Scenario] = []
@@ -416,6 +397,31 @@ def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
                  other, hub, tags=["generic", "unclassified"])
 
     return scenarios
+
+
+def classify_parts_by_role(bg: BehavioralGraph) -> Dict[str, List[str]]:
+    """Return deterministic semantic-role assignments for one model graph.
+
+    This public helper is shared by adaptive internal scenarios and the fixed
+    cross-configuration post-hoc suite so role resolution cannot silently use
+    two different classification implementations.
+    """
+    classified: Dict[str, List[str]] = {}
+    for pname, pnode in bg.parts.items():
+        role = _classify_node(pnode, bg)
+        classified.setdefault(role, []).append(pname)
+    for names in classified.values():
+        names.sort()
+
+    others = classified.get("other", [])
+    if others and not classified.get("controller"):
+        degrees = _part_degrees(bg)
+        ranked = sorted(others, key=lambda p: (-degrees.get(p, 0), p))
+        top_hub = ranked[0]
+        if degrees.get(top_hub, 0) > 0:
+            classified["controller"] = [top_hub]
+            classified["other"] = ranked[1:]
+    return classified
 
 
 def select_scenarios(bg: BehavioralGraph,

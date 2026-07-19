@@ -158,12 +158,17 @@ def test_build_run_report_is_json_serialisable():
         "final_score": 0.9,
         "iterations": 2,
         "requirements": ["REQ-1", "REQ-2"],
+        "requirement_input": {
+            "mode": "frozen", "frozen": True, "requirement_set_digest": "abc"
+        },
         "evaluation_history": [{"iteration": 1, "score": 0.9}],
         "best_config": {"redundancy_level": "dual"},
         "llm_usage": {"calls": 3, "total_tokens": 100},
     })
     assert report["system_name"] == "T"
     assert report["requirements_count"] == 2
+    assert report["requirements"] == ["REQ-1", "REQ-2"]
+    assert report["requirement_input"]["mode"] == "frozen"
     json.dumps(report)  # must not raise
 
 

@@ -304,7 +304,7 @@ def main():
     result = pipeline.generate_system(
         system_name="AutonomousDrone",
         description=DRONE_DESCRIPTION,
-        additional_requirements=DRONE_REQUIREMENTS,
+        frozen_requirements=DRONE_REQUIREMENTS,
         platform_profile=ARDUPILOT_COPTER_PROFILE,
         sitl=True,
         sitl_output_dir="sitl_output",

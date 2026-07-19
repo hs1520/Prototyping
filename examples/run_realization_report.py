@@ -33,6 +33,7 @@ from src.prototyping.artifact_store import (
 )
 from src.prototyping.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
+from src.prototyping.robustness import RobustnessOptions
 from src.sitl.dse_sitl_params import design_to_sitl_parm
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
@@ -207,6 +208,8 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
         "system_name": SYSTEM,
         # Persist the exact extracted requirement set, not merely its count.
         "requirements": requirements,
+        "requirement_input": dict(res.get("requirement_input") or {}),
+        "approved_contract_input": res.get("approved_contract_input"),
         "requirement_semantic_analysis": requirement_analysis,
         "final_score": res.get("final_score"),
         "best_config": res.get("best_config"),
@@ -229,6 +232,13 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
         "functional_closure": dict(res.get("functional_closure") or {}),
         "realization": realization,
     }
+    for key in (
+        "requirement_contracts", "safety_pattern_bindings",
+        "semantic_trace_report", "failure_diagnostics",
+        "repair_decisions", "robustness_metrics", "robustness_options",
+    ):
+        if res.get(key) is not None:
+            out[key] = res.get(key)
     out["artifact_provenance"] = build_run_provenance(
         model_sysml=final_sysml,
         recommended_design=out["recommended_design_inputs"],
@@ -258,11 +268,12 @@ def main() -> int:
                 verbose=False,
                 dse_mode="variation",
                 phase9_hifi=None,
+                robustness_options=RobustnessOptions.b2(),
             )
             gen = pipe.orchestrator.generate(
                 system_name=SYSTEM,
                 system_description=DRONE_DESCRIPTION,
-                additional_requirements=DRONE_REQUIREMENTS,
+                frozen_requirements=DRONE_REQUIREMENTS,
             )
             res = pipe.orchestrator.explore(gen, mcts_iterations=20)
             base, final_sysml, parm_text = _build_base_artifacts(
@@ -275,6 +286,15 @@ def main() -> int:
             atomic_write_json(run_dir / "realization_run.json", base)
             atomic_write_text(run_dir / "final_model.sysml", final_sysml)
             atomic_write_text(run_dir / "recommended.parm", parm_text)
+            for artifact_name, result_key in (
+                ("requirement_contracts.json", "requirement_contracts"),
+                ("safety_pattern_bindings.json", "safety_pattern_bindings"),
+                ("semantic_trace_report.json", "semantic_trace_report"),
+                ("failure_diagnostics.json", "failure_diagnostics"),
+                ("repair_decisions.json", "repair_decisions"),
+                ("robustness_metrics.json", "robustness_metrics"),
+            ):
+                atomic_write_json(run_dir / artifact_name, base.get(result_key, {}))
             # Canonical snapshot contains the report plus exact model/requirement
             # references.  It is sufficient to recover the run without another LLM call.
             atomic_write_json(run_dir / "canonical_run.json", {

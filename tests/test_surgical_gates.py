@@ -60,3 +60,32 @@ def test_adding_anchors_and_satisfy_links_is_allowed():
     )
     ok, why = _gates_ok(_BASE, merged)
     assert ok, why
+
+
+def test_rewording_requirement_source_is_rejected():
+    merged = _BASE.replace("First requirement.", "Weakened requirement.")
+    ok, why = _gates_ok(_BASE, merged)
+    assert not ok and "source text" in why
+
+
+def test_replacing_satisfy_identity_at_same_count_is_rejected():
+    merged = _BASE.replace(
+        "satisfy requirement REQ_B;", "satisfy requirement REQ_A;"
+    )
+    ok, why = _gates_ok(_BASE, merged)
+    assert not ok and "satisfy" in why
+
+
+def test_replacing_connect_identity_at_same_count_is_rejected():
+    base = """package D {
+        port def SignalPort;
+        part def Source { out port signalOut : SignalPort; }
+        part def Sink { in port signalIn : SignalPort; }
+        part sourceA : Source;
+        part sourceB : Source;
+        part sink : Sink;
+        connect sourceA.signalOut to sink.signalIn;
+    }"""
+    merged = base.replace("sourceA.signalOut", "sourceB.signalOut")
+    ok, why = _gates_ok(base, merged)
+    assert not ok and "connect" in why

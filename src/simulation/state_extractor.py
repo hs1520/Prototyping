@@ -153,13 +153,15 @@ class GuardCondition:
         e.g. batteryCharge < 15.0
     kind == 'bool_true'  : attribute (boolean flag must be True)
         e.g. sensorSelfTestFailed
+    kind == 'bool_false' : attribute (boolean flag must be False)
+        e.g. not deliveryAbortConditionActive
     kind == 'compound'   : compound_op over operands
         e.g. channelAFailed and channelBFailed
     kind == 'enum_eq'    : attribute == EnumType::Value  (Layer 2)
         e.g. flightMode == DroneMode::SELF_TEST
     """
-    kind: str                                         # 'comparison' | 'bool_true' | 'compound' | 'enum_eq'
-    attribute: str = ""                               # LHS variable name (comparison / bool_true / enum_eq)
+    kind: str                                         # comparison | bool_true | bool_false | compound | enum_eq
+    attribute: str = ""                               # LHS variable name (comparison / bool / enum_eq)
     operator: str = ""                                # '<' '<=' '>' '>=' (comparison only)
     threshold: float = 0.0                            # effective RHS constant (comparison only)
     compound_op: str = ""                             # 'and' | 'or' (compound only)
@@ -178,6 +180,8 @@ class GuardCondition:
             return f"{self.attribute} {self.operator} {self.threshold}"
         if self.kind == "bool_true":
             return f"{self.attribute} == true"
+        if self.kind == "bool_false":
+            return f"{self.attribute} == false"
         if self.kind == "enum_eq":
             return f"{self.attribute} == {self.enum_type}::{self.enum_value}"
         if self.kind == "compound":
@@ -187,7 +191,7 @@ class GuardCondition:
 
     def involved_attributes(self) -> List[str]:
         """Return all attribute names referenced by this guard (lhs + rhs)."""
-        if self.kind == "bool_true":
+        if self.kind in {"bool_true", "bool_false"}:
             return [self.attribute] if self.attribute else []
         if self.kind == "enum_eq":
             return [self.attribute] if self.attribute else []
@@ -240,6 +244,8 @@ class GuardCondition:
             return False
         if self.kind == "bool_true":
             return bool(env.get(self.attribute, False))
+        if self.kind == "bool_false":
+            return not bool(env.get(self.attribute, False))
         if self.kind == "enum_eq":
             # Compare current string value of the mode attribute against the target enum value.
             current = env.get(self.attribute)
@@ -402,6 +408,17 @@ def _extract_guard(expr) -> Optional[GuardCondition]:
                     )
             return None
 
+        # Unary Boolean negation: ``not deliveryAbortConditionActive``.
+        # Syside represents this as OperatorExpression("not", [FeatureRef]).
+        if op == "not" and len(args) == 1:
+            operand = args[0]
+            if type(operand).__name__ == "FeatureReferenceExpression":
+                ref = operand.referent
+                attr = ref.name if ref else None
+                if attr:
+                    return GuardCondition(kind="bool_false", attribute=attr)
+            return None
+
         # Numeric comparison: <  <=  >  >=  ==
         if op in ("<", "<=", ">", ">=", "==", "!=") and len(args) == 2:
             lhs, rhs = args[0], args[1]
@@ -412,9 +429,16 @@ def _extract_guard(expr) -> Optional[GuardCondition]:
                 if type(lhs).__name__ == "FeatureReferenceExpression":
                     ref = lhs.referent
                     attr_name = ref.name if ref else None
-                if attr_name and op == "==" and bool(rhs.value):
-                    return GuardCondition(kind="bool_true", attribute=attr_name)
-                # `== false` / `!= true` — skip (handled as no-fault by Layer1)
+                if attr_name and op == "==":
+                    return GuardCondition(
+                        kind="bool_true" if bool(rhs.value) else "bool_false",
+                        attribute=attr_name,
+                    )
+                if attr_name and op == "!=":
+                    return GuardCondition(
+                        kind="bool_false" if bool(rhs.value) else "bool_true",
+                        attribute=attr_name,
+                    )
                 return None
 
             # ── Enum equality: `attr == EnumType::Value`  (Layer 2) ─────────────

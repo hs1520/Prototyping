@@ -148,17 +148,19 @@ def parm_freshness(primary_lines: list[str], run_json: dict | None,
 def _prepare_bridge_inputs(model, allow_stale: bool = False) -> tuple[SITLBridge, str]:
     WORK.mkdir(parents=True, exist_ok=True)
     bridge_parm = WORK / f"{MODEL_NAME}.parm"
+    run_json = json.loads(RUN_JSON.read_text(encoding="utf-8")) if RUN_JSON.exists() else None
     bridge = SITLBridge(
         model=model,
         output_dir=str(WORK),
         platform_profile=ARDUPILOT_COPTER_PROFILE,
         fdm_backend="native",
         verbose=False,
+        contract_bundle=(run_json or {}).get("requirement_contracts"),
+        semantic_trace_report=(run_json or {}).get("semantic_trace_report"),
     )
     source = "examples/output/recommended.parm + requirement_linker safety params"
     if PARM_PATH.exists():
         primary = PARM_PATH.read_text(encoding="utf-8").splitlines()
-        run_json = json.loads(RUN_JSON.read_text(encoding="utf-8")) if RUN_JSON.exists() else None
         fresh, reason = parm_freshness(primary, run_json)
         if not fresh and not allow_stale:
             raise SystemExit(

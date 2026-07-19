@@ -24,8 +24,8 @@ Tier-1 外科式 LLM 修复：把整个 SysML 模型传给 LLM 之前，先把�
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Set, Tuple
 
 from .levenshtein_fixer import SysMLVocab, build_vocab
 

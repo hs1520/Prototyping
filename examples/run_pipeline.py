@@ -34,7 +34,7 @@ if __name__ == "__main__":
 
     # Split generate / explore so we capture BOTH the pre-DSE model and the post-DSE model.
     gen = pipe.orchestrator.generate(system_name=SYSTEM, system_description=DESC,
-                                     additional_requirements=DRONE_REQUIREMENTS)
+                                     frozen_requirements=DRONE_REQUIREMENTS)
     initial_sysml = gen["model_sysml"]                          # after generate, BEFORE DSE
     res = pipe.orchestrator.explore(gen, mcts_iterations=20)    # DSE + refinement + verification
     final_sysml = res["model_sysml"]                            # AFTER DSE

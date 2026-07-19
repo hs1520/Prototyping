@@ -144,6 +144,8 @@ class SITLBridge:
         platform_profile: Optional[dict] = None,
         verbose: bool = False,
         fdm_backend: str = "native",
+        contract_bundle: Optional[Any] = None,
+        semantic_trace_report: Optional[Any] = None,
     ) -> None:
         """
         llm             : 可选 LLMInterface，启用语义标签分类。
@@ -162,7 +164,13 @@ class SITLBridge:
         self._connection_string = connection_string
         self._arducopter_bin = arducopter_bin
         self._platform_profile = platform_profile or {}
-        self._linker = RequirementLinker(model, llm=llm, verbose=verbose)
+        self._linker = RequirementLinker(
+            model,
+            llm=llm,
+            verbose=verbose,
+            contract_bundle=contract_bundle,
+            semantic_trace_report=semantic_trace_report,
+        )
         self._output_dir.mkdir(parents=True, exist_ok=True)
         self._sitl_proc: Optional[subprocess.Popen] = None
         if fdm_backend not in ("native", "gazebo"):

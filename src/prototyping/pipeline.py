@@ -7,15 +7,16 @@ framework, combining all components into a unified workflow.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from ..agents.orchestrator import Orchestrator
 from ..llm.interface import LLMInterface
 from ..rag.pinecone_wrapper import PineconeWrapper
 from ..rag.retriever import RAGRetriever
 from ..sysml.model import SysMLModel
-from ..sysml.lite_model import SysMLLiteModel, build_lite_model
+from ..sysml.lite_model import SysMLLiteModel
 from ..utils.suppressed import suppressed_summary
+from .robustness import RobustnessOptions
 
 _SysMLModelTypes = (SysMLModel, SysMLLiteModel)
 
@@ -51,6 +52,7 @@ class PrototypingPipeline:
         verbose: bool = False,
         dse_mode: str = "variation",
         phase9_hifi: Optional[str] = None,
+        robustness_options: Optional[RobustnessOptions] = None,
     ):
         self.llm = llm
         self.parse_strict = parse_strict
@@ -77,6 +79,7 @@ class PrototypingPipeline:
             quality_threshold=quality_threshold,
             max_iterations=max_iterations,
             verbose=verbose,
+            robustness_options=robustness_options,
         )
         # DSE mode at the user entry point. Orchestrator's own flag stays default
         # OFF (direct-construction contract); the pipeline opts the chosen path in.
@@ -122,6 +125,8 @@ class PrototypingPipeline:
         sitl_host: str = "127.0.0.1",
         sitl_port: int = 5760,
         sitl_fdm_backend: str = "native",
+        frozen_requirements: Optional[Any] = None,
+        approved_contract_bundle: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generate a validated SysML v2 model without Design Space Exploration.
@@ -159,6 +164,8 @@ class PrototypingPipeline:
             additional_requirements=additional_requirements,
             parse_strict=(parse_strict if parse_strict is not None else self.parse_strict),
             platform_profile=platform_profile,
+            frozen_requirements=frozen_requirements,
+            approved_contract_bundle=approved_contract_bundle,
         )
 
         if sitl:
@@ -220,6 +227,8 @@ class PrototypingPipeline:
             platform_profile=platform_profile,
             verbose=True,
             fdm_backend=fdm_backend,
+            contract_bundle=result.get("requirement_contracts"),
+            semantic_trace_report=result.get("semantic_trace_report"),
         )
 
         # ── L1：生成 .parm + 静态验证 ────────────────────────────────
@@ -326,6 +335,8 @@ class PrototypingPipeline:
         additional_requirements: Optional[List[str]] = None,
         mcts_iterations: int = 50,
         parse_strict: Optional[bool] = None,
+        frozen_requirements: Optional[Any] = None,
+        approved_contract_bundle: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Run the complete AI-assisted prototyping pipeline.
@@ -351,6 +362,8 @@ class PrototypingPipeline:
             additional_requirements=additional_requirements,
             mcts_iterations=mcts_iterations,
             parse_strict=(parse_strict if parse_strict is not None else self.parse_strict),
+            frozen_requirements=frozen_requirements,
+            approved_contract_bundle=approved_contract_bundle,
         )
         self.save_run_report(result)
         return result
@@ -369,6 +382,9 @@ class PrototypingPipeline:
             "final_score": result.get("final_score"),
             "iterations": result.get("iterations"),
             "requirements_count": len(result.get("requirements") or []),
+            "requirements": list(result.get("requirements") or []),
+            "requirement_input": result.get("requirement_input"),
+            "approved_contract_input": result.get("approved_contract_input"),
             "requirement_semantic_analysis": result.get(
                 "requirement_semantic_analysis"
             ),
@@ -382,7 +398,15 @@ class PrototypingPipeline:
             "dse_search_coverage": result.get("dse_search_coverage"),
             "design_space_summary": result.get("design_space_summary"),
             "llm_usage": result.get("llm_usage"),
+            "robustness_options": result.get("robustness_options"),
         }
+        for key in (
+            "requirement_contracts", "safety_pattern_bindings",
+            "semantic_trace_report", "failure_diagnostics",
+            "repair_decisions", "robustness_metrics",
+        ):
+            if result.get(key) is not None:
+                report[key] = result.get(key)
         suppressed = suppressed_summary()
         if suppressed:
             report["suppressed"] = suppressed
@@ -467,4 +491,3 @@ class PrototypingPipeline:
         except Exception as e:
             print(f"  ⚠ run report not saved ({e})")
             return None
-

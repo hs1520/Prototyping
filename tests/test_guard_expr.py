@@ -157,6 +157,54 @@ def test_end_to_end_variable_rhs():
            f"violations={rtb[0].violations}")
 
 
+def test_compound_guard_preserves_unary_not_semantics():
+    text = """package T {
+        part def PayloadManager {
+            attribute waypointDistance : Real = 10.0;
+            attribute deliveryAbortConditionActive : Boolean = false;
+            state def ReleaseMachine {
+                state locked;
+                state released;
+                transition initial then locked;
+                transition release first locked
+                    if waypointDistance <= 1.0 and not deliveryAbortConditionActive
+                    then released;
+            }
+        }
+    }"""
+    guard = extract_state_machines(text)[0].fault_transitions()[0].guards[0]
+
+    assert guard.kind == "compound"
+    assert {item.kind for item in guard.operands} == {"comparison", "bool_false"}
+    assert guard.eval({
+        "waypointDistance": 0.5,
+        "deliveryAbortConditionActive": False,
+    }) is True
+    assert guard.eval({
+        "waypointDistance": 0.5,
+        "deliveryAbortConditionActive": True,
+    }) is False
+
+
+def test_boolean_equality_false_is_extracted_as_bool_false():
+    text = """package T {
+        part def Controller {
+            attribute sensorSelfTestFailed : Boolean = true;
+            state def RecoveryMachine {
+                state inhibited;
+                state ready;
+                transition initial then inhibited;
+                transition recover first inhibited
+                    if sensorSelfTestFailed == false then ready;
+            }
+        }
+    }"""
+    guard = extract_state_machines(text)[0].fault_transitions()[0].guards[0]
+
+    assert guard.kind == "bool_false"
+    assert guard.attribute == "sensorSelfTestFailed"
+
+
 if __name__ == "__main__":
     test_expr_nodes()
     test_guard_eval()

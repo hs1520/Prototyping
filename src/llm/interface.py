@@ -296,6 +296,7 @@ class GeminiLLM(LLMInterface):
         use_test_key: Optional[bool] = None,
         enable_langsmith: bool = True,
         timeout_seconds: Optional[float] = None,
+        seed: Optional[int] = None,
     ):
         try:
             from google import genai
@@ -305,6 +306,7 @@ class GeminiLLM(LLMInterface):
             ) from e
 
         self.model = model
+        self.seed = seed
         self.langsmith_enabled = False
         self.timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
@@ -362,6 +364,9 @@ class GeminiLLM(LLMInterface):
             "temperature": temperature,
             "max_output_tokens": max_tokens,
         }
+        seed = getattr(self, "seed", None)
+        if seed is not None:
+            config["seed"] = seed
         if system_instruction:
             config["system_instruction"] = system_instruction
 
@@ -392,6 +397,7 @@ class GeminiLLM(LLMInterface):
             "thoughts_token_count": thoughts_token_count,
             "langsmith_enabled": self.langsmith_enabled,
             "candidate_count": len(getattr(response, "candidates", None) or []),
+            "seed": seed,
         }
 
         return LLMResponse(
@@ -619,6 +625,7 @@ class VertexLLM(LLMInterface):
         api_key: Optional[str] = None,
         enable_langsmith: bool = True,
         timeout_seconds: Optional[float] = None,
+        seed: Optional[int] = None,
     ):
         try:
             from google import genai
@@ -628,6 +635,7 @@ class VertexLLM(LLMInterface):
             ) from e
 
         self.model = model
+        self.seed = seed
         self.langsmith_enabled = False
         self.timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
@@ -687,6 +695,9 @@ class VertexLLM(LLMInterface):
             "temperature": temperature,
             "max_output_tokens": max_tokens,
         }
+        seed = getattr(self, "seed", None)
+        if seed is not None:
+            config["seed"] = seed
         if system_instruction:
             config["system_instruction"] = system_instruction
 
@@ -715,6 +726,7 @@ class VertexLLM(LLMInterface):
             metadata={
                 "provider": "vertex",
                 "langsmith_enabled": self.langsmith_enabled,
+                "seed": seed,
             },
         )
 

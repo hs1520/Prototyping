@@ -296,6 +296,7 @@ Architecture plan:
 
 Requirements (structural focus — PERF and INTF):
 {requirements}
+{semantic_guidance}
 {context_block}
 Rules:
 - One part def per component listed in the architecture plan.
@@ -375,6 +376,8 @@ Structural fragment (for reference — ports already exist, do NOT repeat them):
 
 Interface requirements (INTF):
 {intf_requirements}
+{semantic_guidance}
+{context_block}
 
 Rules:
 - For every unique type of data/signal exchanged between components, define one `item def`.
@@ -442,6 +445,10 @@ PLATFORM PROFILE — {platform} (MANDATORY — overrides default naming):
 
   Rule: `accept CMD_X` in SysML maps directly to ArduPilot SET_MODE X
   (remove the CMD_ prefix).  This enables automated SITL verification.
+  This vocabulary applies ONLY to mode-machine `accept` transitions. It does
+  not replace a requirement-specific actuator action such as parachute deploy
+  or payload lock; those use their platform binding and must not be rewritten
+  as the generic emergency mode.
 
   Correct example:
       transition toRTL
@@ -471,6 +478,7 @@ Structural fragment (for reference — do not repeat):
 Behavioral requirements (FUNC and SAFE):
 {behavioral_requirements}
 {platform_profile_block}
+{contract_pattern_guidance}
 Rules:
 - For every FUNC requirement: define an action def that belongs to the responsible component.
   The action def name must be a verb phrase in camelCase (e.g., navigateToWaypoint).
@@ -901,6 +909,7 @@ Behavioral fragment (each element is annotated with // OWNER: <PartName>):
 
 All requirements (every REQ ID must appear in exactly one satisfy statement):
 {requirements}
+{semantic_guidance}
 
 Assembly rules:
 1. Wrap everything in: package {package_name} {{ ... }}
@@ -1208,6 +1217,7 @@ class ChainOfThoughtPrompter:
         architecture: str,
         requirements: List[str],
         context: str = "",
+        semantic_guidance: str = "",
     ) -> CoTResult:
         """Step 2: Generate structural SysML fragment (part def / port / attribute)."""
         req_text = "\n".join(f"  {r}" for r in requirements)
@@ -1220,6 +1230,7 @@ class ChainOfThoughtPrompter:
             system_name=system_name,
             architecture=architecture,
             requirements=req_text,
+            semantic_guidance=semantic_guidance,
             context_block=context_block,
         )
         messages = [
@@ -1237,6 +1248,7 @@ class ChainOfThoughtPrompter:
         parts_fragment: str,
         context: str = "",
         platform_profile: Optional[Dict[str, Any]] = None,
+        contract_pattern_guidance: str = "",
     ) -> CoTResult:
         """Step 3: Generate behavioral SysML fragment (action def / state def)."""
         req_text = "\n".join(f"  {r}" for r in behavioral_requirements)
@@ -1247,6 +1259,7 @@ class ChainOfThoughtPrompter:
             parts_fragment=parts_fragment,
             behavioral_requirements=req_text,
             platform_profile_block=profile_block,
+            contract_pattern_guidance=contract_pattern_guidance,
         )
         messages = [
             Message(role="system", content=self.system_prompt),
@@ -1262,14 +1275,22 @@ class ChainOfThoughtPrompter:
         parts_fragment: str,
         intf_requirements: List[str],
         context: str = "",
+        semantic_guidance: str = "",
     ) -> CoTResult:
         """Step 3: Generate interface & flow fragment (item def / typed port def)."""
         req_text = "\n".join(f"  {r}" for r in intf_requirements) if intf_requirements else "  (none)"
+        context_block = (
+            f"\nRelevant domain context:\n{context}\n"
+            if context and context.strip()
+            else ""
+        )
         prompt = INTERFACE_FLOW_TEMPLATE.format(
             system_name=system_name,
             architecture=architecture,
             parts_fragment=parts_fragment,
             intf_requirements=req_text,
+            semantic_guidance=semantic_guidance,
+            context_block=context_block,
         )
         messages = [
             Message(role="system", content=self.system_prompt),
@@ -1285,6 +1306,7 @@ class ChainOfThoughtPrompter:
         interfaces_fragment: str,
         behavior_fragment: str,
         requirements: List[str],
+        semantic_guidance: str = "",
     ) -> CoTResult:
         """Step 5: Assemble complete SysML package with connections and satisfy links."""
         req_text = "\n".join(f"  {r}" for r in requirements)
@@ -1295,6 +1317,7 @@ class ChainOfThoughtPrompter:
             interfaces_fragment=interfaces_fragment if interfaces_fragment else "(none — use generic port types)",
             behavior_fragment=behavior_fragment,
             requirements=req_text,
+            semantic_guidance=semantic_guidance,
             package_name=package_name,
         )
         messages = [

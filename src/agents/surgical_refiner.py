@@ -289,19 +289,61 @@ def _count_satisfies(text: str) -> int:
     return len(re.findall(r"\bsatisfy\b", text, re.IGNORECASE))
 
 
+def _requirement_identities(text: str) -> Dict[str, str]:
+    """Exact requirement-definition bodies keyed by definition name."""
+    result: Dict[str, str] = {}
+    for match in _REQ_DEF_RE.finditer(text):
+        brace = text.find("{", match.end())
+        if brace == -1:
+            continue
+        end = find_block_end(text, brace)
+        if end != -1:
+            result[match.group(1)] = text[match.start():end + 1].strip()
+    return result
+
+
+def _connect_identities(text: str) -> set[str]:
+    return {
+        _normalise(match.group(0)).lower()
+        for match in re.finditer(r"\bconnect\s+[^;]+;", text, re.IGNORECASE)
+    }
+
+
+def _satisfy_identities(text: str) -> set[tuple[str, str]]:
+    """Canonical ``(owning definition, requirement)`` satisfy identities."""
+    identities: set[tuple[str, str]] = set()
+    for match in _DEF_HEADER_RE.finditer(text):
+        brace = text.find("{", match.end())
+        if brace == -1:
+            continue
+        end = find_block_end(text, brace)
+        if end == -1:
+            continue
+        owner = f"{match.group(1)}:{match.group(2)}"
+        for satisfy in re.finditer(
+            r"\bsatisfy\s+(?:requirement\s+)?([A-Za-z_]\w*)\s*;",
+            text[brace + 1:end],
+            re.IGNORECASE,
+        ):
+            identities.add((owner, satisfy.group(1)))
+    return identities
+
+
 def _gates_ok(base: str, merged: str) -> Tuple[bool, str]:
     if check_syntax(merged).has_errors:
         return False, "merged model fails syntax check"
-    if _count_connects(merged) < _count_connects(base):
-        return False, "merge would shed connect statements"
+    missing_connects = _connect_identities(base) - _connect_identities(merged)
+    if missing_connects:
+        return False, "merge would change or shed existing connect identities"
     # Semantic-surgery gates: refinement fixes the DESIGN, never the SPEC.
     # A surgical answer must not add or drop requirement definitions (that would
     # rewrite the problem statement), and must not shed satisfy links (the same
     # silent-loss failure mode the connect gate exists for).
-    if _requirement_defs(merged) != _requirement_defs(base):
-        return False, "merge would change the requirement def set (refinement must not rewrite the spec)"
-    if _count_satisfies(merged) < _count_satisfies(base):
-        return False, "merge would shed satisfy links"
+    if _requirement_identities(merged) != _requirement_identities(base):
+        return False, "merge would change requirement definitions/source text"
+    missing_satisfies = _satisfy_identities(base) - _satisfy_identities(merged)
+    if missing_satisfies:
+        return False, "merge would change or shed existing satisfy identities"
     return True, ""
 
 

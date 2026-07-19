@@ -13,6 +13,7 @@ from src.llm.interface import (
     Message,
     MockLLM,
     TokenLedger,
+    VertexLLM,
     _split_gemini_messages,
 )
 from src.llm.chain_of_thought import ChainOfThoughtPrompter, CoTResult
@@ -398,6 +399,51 @@ class TestGeminiLLM:
         assert len(contents) == 1
         assert contents[0]["role"] == "user"
         assert contents[0]["parts"][0]["text"] == "hello"
+
+    def test_generation_seed_is_forwarded_in_sdk_config(self):
+        captured_kwargs = {}
+
+        class FakeModels:
+            def generate_content(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                return SimpleNamespace(
+                    text="ok", usage_metadata=None, candidates=[],
+                    model_version="gemini-test",
+                )
+
+        gemini = GeminiLLM.__new__(GeminiLLM)
+        gemini.model = "gemini-test"
+        gemini.seed = 1234
+        gemini.langsmith_enabled = False
+        gemini.client = SimpleNamespace(models=FakeModels())
+
+        response = gemini.complete([Message(role="user", content="hello")])
+
+        assert captured_kwargs["config"]["seed"] == 1234
+        assert response.metadata["seed"] == 1234
+
+
+class TestVertexLLM:
+    def test_generation_seed_is_forwarded_in_sdk_config(self):
+        captured_kwargs = {}
+
+        class FakeModels:
+            def generate_content(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                return SimpleNamespace(
+                    text="ok", usage_metadata=None, model_version="vertex-test"
+                )
+
+        vertex = VertexLLM.__new__(VertexLLM)
+        vertex.model = "vertex-test"
+        vertex.seed = 4321
+        vertex.langsmith_enabled = False
+        vertex.client = SimpleNamespace(models=FakeModels())
+
+        response = vertex.complete([Message(role="user", content="hello")])
+
+        assert captured_kwargs["config"]["seed"] == 4321
+        assert response.metadata["seed"] == 4321
 
 
 class TestGitHubCopilotLLMListModels:

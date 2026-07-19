@@ -182,6 +182,9 @@ class StateMachineInstance:
         if guard.kind == "bool_true":
             return bool(variables.get(guard.attribute, False))
 
+        if guard.kind == "bool_false":
+            return not bool(variables.get(guard.attribute, False))
+
         if guard.kind == "enum_eq":
             env: Dict[str, Any] = {**(self.sm.initial_values or {}), **variables}
             current = env.get(guard.attribute)
