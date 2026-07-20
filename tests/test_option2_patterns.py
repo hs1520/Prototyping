@@ -116,3 +116,15 @@ def test_official_canonical_platform_commands_match_the_checker(
     assert binding is not None
     assert canonical_command in binding.canonical_commands
     assert command_matches(binding, canonical_command)
+
+
+def test_platform_bindings_stay_compatible_with_the_sitl_catalogue():
+    """Guard against silent drift between bindings and the SITL catalogue.
+
+    Every SITL-tier binding must reference a semantic tag the ArduPilot
+    catalogue actually implements; otherwise a repaired/passing model would
+    map to an oracle that can never execute.
+    """
+    from src.prototyping.platform_semantics import validate_catalogue_bindings
+
+    assert validate_catalogue_bindings() == []

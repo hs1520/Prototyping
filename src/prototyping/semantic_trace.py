@@ -314,11 +314,16 @@ def _trace_locked_default(
         f"{matched[0].name}:{matched[1].name}" if matched else None,
         PASS if matched else FAIL, observed,
     ))
+    oracle_ok = bool(
+        binding is not None
+        and binding.observation_concept
+        == obligation.verification_intent.observation_concept
+    )
     trace.links.append(TraceLink(
         contract.req_id, obligation.obligation_id, "initial_state_to_oracle",
         obligation.verification_intent.observation_concept,
         binding.observation_concept if binding and matched else None,
-        PASS if matched and binding else FAIL,
+        PASS if matched and oracle_ok else FAIL,
         (binding.semantic_tag,) if binding else (),
     ))
     if not matched:
@@ -326,6 +331,18 @@ def _trace_locked_default(
             contract.req_id, obligation.obligation_id, "INVARIANT_NOT_REPRESENTED",
             {"initial_state": "payload_locked"},
             {"initial_states": observed}, tuple(owners),
+        ))
+    elif not oracle_ok:
+        trace.findings.append(_diag(
+            contract.req_id, obligation.obligation_id, "ORACLE_SEMANTIC_MISMATCH",
+            {"observation_concept": obligation.verification_intent.observation_concept},
+            {
+                "binding_observation_concept": (
+                    binding.observation_concept if binding else None
+                ),
+                "binding": binding.semantic_tag if binding else None,
+            },
+            tuple(owners),
         ))
 
 
@@ -457,13 +474,31 @@ def _trace_locked_during_abort(
             tuple(sm.name for sm, _transition in unguarded_edges),
         ))
     binding = platform_binding("lock_payload")
+    invariant_ok = bool(safe_initial) and not unguarded_edges
+    oracle_ok = bool(
+        binding is not None
+        and binding.observation_concept
+        == obligation.verification_intent.observation_concept
+    )
     trace.links.append(TraceLink(
         contract.req_id, obligation.obligation_id, "invariant_to_oracle",
         obligation.verification_intent.observation_concept,
         binding.observation_concept if binding else None,
-        PASS if safe_initial and not unguarded_edges and binding else FAIL,
+        PASS if invariant_ok and oracle_ok else FAIL,
         (binding.semantic_tag,) if binding else (),
     ))
+    if invariant_ok and not oracle_ok:
+        trace.findings.append(_diag(
+            contract.req_id, obligation.obligation_id, "ORACLE_SEMANTIC_MISMATCH",
+            {"observation_concept": obligation.verification_intent.observation_concept},
+            {
+                "binding_observation_concept": (
+                    binding.observation_concept if binding else None
+                ),
+                "binding": binding.semantic_tag if binding else None,
+            },
+            tuple(owners),
+        ))
 
 
 def _guard_requires_false(guard: Any, variable: str) -> bool:
@@ -590,11 +625,41 @@ def _trigger_threshold_matches(
     return match, tuple(observations)
 
 
+def _guard_requires_abort_inactive(guard: Any) -> bool:
+    """True when this guard can only pass while the abort flag is false.
+
+    An ``or`` branch that omits the abort condition is not sufficient: the
+    other branch could authorise the response while an abort is active.
+    """
+    kind = getattr(guard, "kind", "")
+    if kind == "compound":
+        operands = tuple(getattr(guard, "operands", ()))
+        if getattr(guard, "compound_op", "") == "or":
+            return bool(operands) and all(
+                _guard_requires_abort_inactive(item) for item in operands
+            )
+        return any(_guard_requires_abort_inactive(item) for item in operands)
+    return (
+        kind == "bool_false"
+        and "abort" in normalize_symbol(getattr(guard, "attribute", ""))
+    )
+
+
 def _trigger_qualifiers_match(
     model_text: str, obligation: RequirementObligation, transition: Any
 ) -> bool:
     trigger = obligation.trigger
     if trigger is None or not trigger.qualifiers:
+        return True
+    if "delivery_abort_inactive" not in trigger.qualifiers:
+        return True
+    # Structured guards are authoritative and independent of transition naming;
+    # the textual scan below only recovers guard forms the extractor cannot
+    # parse, and that fallback still requires a named transition statement.
+    if any(
+        _guard_requires_abort_inactive(guard)
+        for guard in getattr(transition, "guards", ())
+    ):
         return True
     transition_name = getattr(transition, "name", None)
     if not transition_name:
@@ -605,13 +670,11 @@ def _trigger_qualifiers_match(
         re.IGNORECASE | re.DOTALL,
     )
     body = match.group("body").lower() if match else ""
-    if "delivery_abort_inactive" in trigger.qualifiers:
-        return bool(re.search(
-            r"\bnot\s+\w*(?:delivery)?\w*abort\w*|"
-            r"\w*(?:delivery)?\w*abort\w*\s*==\s*false",
-            body,
-        ))
-    return True
+    return bool(re.search(
+        r"\bnot\s+\w*(?:delivery)?\w*abort\w*|"
+        r"\w*(?:delivery)?\w*abort\w*\s*==\s*false",
+        body,
+    ))
 
 
 def _trace_obligation(
@@ -773,15 +836,27 @@ def _trace_obligation(
                 (chosen_sm.name,),
             ))
 
+    oracle_ok = binding is None or (
+        binding.observation_concept
+        == obligation.verification_intent.observation_concept
+    )
     trace.links.append(TraceLink(
         contract.req_id, obligation.obligation_id, "action_to_oracle",
         obligation.verification_intent.observation_concept,
         binding.observation_concept if binding else obligation.verification_intent.observation_concept,
-        PASS if binding is None or (
-            binding.observation_concept == obligation.verification_intent.observation_concept
-        ) else FAIL,
+        PASS if oracle_ok else FAIL,
         (binding.semantic_tag,) if binding else (),
     ))
+    if not oracle_ok:
+        trace.findings.append(_diag(
+            contract.req_id, obligation.obligation_id, "ORACLE_SEMANTIC_MISMATCH",
+            {"observation_concept": obligation.verification_intent.observation_concept},
+            {
+                "binding_observation_concept": binding.observation_concept,
+                "binding": binding.semantic_tag,
+            },
+            (chosen_sm.name,),
+        ))
 
 
 def build_semantic_trace(

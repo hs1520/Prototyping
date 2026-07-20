@@ -232,13 +232,14 @@ def test_timed_payload_actuation_has_contract_first_trace_without_sitl_invention
     assert not trace.findings
 
 
-def _abort_lock_trace(release_guard: str):
+def _abort_lock_trace(release_guard: str, bundle=None):
     requirement = (
         "REQ-SAFE-006: The system shall maintain the payload in the "
         "mechanically locked state whenever a delivery-abort condition is "
         "active, regardless of geographic proximity to the delivery waypoint."
     )
-    bundle = build_contract_bundle([requirement])
+    if bundle is None:
+        bundle = build_contract_bundle([requirement])
     model = f"""package D {{
         requirement def REQ_SAFE_006 {{ doc /* abort retains payload */ }}
         part def PayloadSystem {{
@@ -274,9 +275,11 @@ def test_abort_lock_invariant_rejects_release_edge_without_abort_inhibition():
     trace = _abort_lock_trace("accept DeliveryWaypointReached")
 
     assert trace.conformance == FAIL
-    assert "GUARD_SEMANTIC_MISMATCH" in {
-        item.finding_code for item in trace.findings
-    }
+    codes = {item.finding_code for item in trace.findings}
+    assert "GUARD_SEMANTIC_MISMATCH" in codes
+    # The oracle link fails as a consequence of the invariant failure; that
+    # must not be double-reported as a second, independent oracle finding.
+    assert "ORACLE_SEMANTIC_MISMATCH" not in codes
 
 
 def test_abort_lock_invariant_rejects_or_guard_that_can_bypass_abort_inhibition():
@@ -294,6 +297,131 @@ def test_abort_lock_invariant_accepts_conjunctive_release_authorisation():
     trace = _abort_lock_trace(
         "if releaseAuthorized and not deliveryAbortConditionActive"
     )
+
+    assert trace.conformance == PASS
+    assert not trace.findings
+
+
+def _with_observation(bundle, observation_concept: str):
+    """Return a copy of a one-contract bundle with a divergent oracle concept."""
+    from dataclasses import replace
+
+    contract = bundle.contracts[0]
+    obligation = contract.obligations[0]
+    patched = replace(
+        obligation,
+        verification_intent=replace(
+            obligation.verification_intent,
+            observation_concept=observation_concept,
+        ),
+    )
+    return replace(
+        bundle, contracts=(replace(contract, obligations=(patched,)),)
+    )
+
+
+def test_oracle_observation_mismatch_is_a_semantic_finding():
+    bundle = _with_observation(
+        build_contract_bundle([
+            "REQ-SAFE-005: Critical propulsion failure shall deploy the "
+            "parachute within 0.5 seconds."
+        ]),
+        "chute_light_observed",
+    )
+
+    trace = build_semantic_trace(_model(), bundle, model_name="D").traces[0]
+
+    assert trace.conformance == FAIL
+    assert "ORACLE_SEMANTIC_MISMATCH" in {
+        item.finding_code for item in trace.findings
+    }
+    oracle = next(
+        link for link in trace.links if link.link_kind == "action_to_oracle"
+    )
+    assert oracle.status == FAIL
+
+
+def test_locked_default_oracle_mismatch_is_a_semantic_finding():
+    bundle = _with_observation(
+        build_contract_bundle([
+            "REQ-SAFE-008: The payload-release actuator shall default to the "
+            "mechanically locked state upon power-on."
+        ]),
+        "gripper_led_observed",
+    )
+    model = """package D {
+        requirement def REQ_SAFE_008 { doc /* locked by default */ }
+        part def PayloadMechanism {
+            satisfy requirement REQ_SAFE_008;
+            state def PayloadState {
+                state mechanicallyLocked;
+                state released;
+                transition initial then mechanicallyLocked;
+            }
+        }
+    }"""
+
+    trace = build_semantic_trace(model, bundle, model_name="D").traces[0]
+
+    assert trace.conformance == FAIL
+    codes = {item.finding_code for item in trace.findings}
+    assert "ORACLE_SEMANTIC_MISMATCH" in codes
+    assert "INVARIANT_NOT_REPRESENTED" not in codes
+    initial = next(
+        link for link in trace.links
+        if link.link_kind == "owner_to_initial_safe_state"
+    )
+    assert initial.status == PASS
+
+
+def test_abort_lock_oracle_mismatch_is_reported_without_invariant_findings():
+    requirement = (
+        "REQ-SAFE-006: The system shall maintain the payload in the "
+        "mechanically locked state whenever a delivery-abort condition is "
+        "active, regardless of geographic proximity to the delivery waypoint."
+    )
+    bundle = _with_observation(
+        build_contract_bundle([requirement]), "lock_led_observed"
+    )
+
+    trace = _abort_lock_trace("if not deliveryAbortConditionActive", bundle=bundle)
+
+    assert trace.conformance == FAIL
+    codes = {item.finding_code for item in trace.findings}
+    assert codes == {"ORACLE_SEMANTIC_MISMATCH"}
+    oracle = next(
+        link for link in trace.links if link.link_kind == "invariant_to_oracle"
+    )
+    assert oracle.status == FAIL
+
+
+def test_unnamed_transition_with_structured_abort_guard_passes_qualifiers():
+    bundle = build_contract_bundle([
+        "REQ-FUNC-005: The system shall release the payload when the current "
+        "geographic position is within 1.0 metre of the designated delivery "
+        "waypoint and no delivery-abort condition is active."
+    ])
+    model = """package D {
+        action def CMD_GRIPPER_RELEASE { }
+        requirement def REQ_FUNC_005 { doc /* qualified release */ }
+        part def PayloadMechanism {
+            out port releaseCmd : DataPort;
+            attribute waypointDistance : Real = 5.0 [m];
+            attribute deliveryAbortConditionActive : Boolean = false;
+            satisfy requirement REQ_FUNC_005;
+            action def releasePayload { send CMD_GRIPPER_RELEASE() to releaseCmd; }
+            state def ReleaseBehavior {
+                state holding;
+                state released { entry action release : releasePayload; }
+                transition initial then holding;
+                transition first holding
+                    if waypointDistance <= 1.0 and not deliveryAbortConditionActive
+                    then released;
+            }
+        }
+    }"""
+
+    trace = build_semantic_trace(model, bundle, model_name="D").traces[0]
 
     assert trace.conformance == PASS
     assert not trace.findings

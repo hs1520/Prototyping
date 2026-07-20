@@ -116,6 +116,36 @@ def test_semantic_repair_budget_stops_before_a_third_llm_attempt():
     assert len(orchestrator.last_semantic_repair_attempts) == 2
 
 
+def test_b1_semantic_fault_freezes_refinement_without_llm_calls():
+    """B1 detects semantic faults but may not repair them; while such a fault
+    is open, the whole refinement step is frozen — including general quality
+    refinement — so an unauthorised whole-model rewrite cannot silently mutate
+    the semantics under evaluation.  The ablation interpretation of this
+    freeze is documented in OPTION2_IMPLEMENTATION_DESIGN.md."""
+    orchestrator = Orchestrator(
+        _NoCallLLM(), robustness_options=RobustnessOptions.b1()
+    )
+    model = build_lite_model(_MODEL, model_name="D")
+
+    candidate = orchestrator._generate_refinement_candidate(
+        model,
+        _MODEL,
+        SimpleNamespace(
+            issues=[
+                "[SEMANTIC-TRACE] REQ_SAFE_005 ACTION_PLATFORM_BINDING_MISMATCH",
+                "Low connectivity: add connects between parts",
+            ],
+            recommendations=[],
+        ),
+        "general refinement feedback",
+        [_REQ],
+    )
+
+    assert candidate is None
+    assert orchestrator.last_semantic_repair_attempts == []
+    assert orchestrator.last_semantic_repair_blocks == []
+
+
 def test_empty_semantic_repair_packet_blocks_before_llm(monkeypatch):
     orchestrator = Orchestrator(
         _NoCallLLM(), robustness_options=RobustnessOptions.b2(),
