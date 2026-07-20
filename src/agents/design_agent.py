@@ -2096,9 +2096,12 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         """
         Ensure each requirement is linked to the best-matching component.
 
-        Returns a list of requirement IDs that could not be matched to any component
-        (score == 0 after scanning all parts). These are NOT force-assigned to a
-        fallback part — callers should surface them as warnings.
+        Returns requirement IDs that remain untraced. ``SysMLLiteModel`` keeps
+        the emitted SysML text as its source of truth, so missing links are never
+        fabricated in its extracted in-memory cache; they must be repaired by a
+        subsequent text-producing refinement. The legacy mutable ``SysMLModel``
+        path may still add a strongly matched relationship because it serializes
+        that relationship back into the model text.
         """
         if not requirements or not model.part_definitions:
             return []
@@ -2174,6 +2177,14 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 # Either no match, or only a weak coincidental overlap.
                 # Record as untraced; the refinement loop will surface this so
                 # the LLM can add an explicit satisfy link in the right part.
+                untraced.append(req_id)
+                continue
+
+            if isinstance(model, SysMLLiteModel):
+                # LitePartDef intentionally has no mutating add_satisfy API.
+                # Updating only its extracted cache would make the evaluator see
+                # a relationship absent from model.to_sysml_text(), creating
+                # false traceability that disappears in post-hoc evaluation.
                 untraced.append(req_id)
                 continue
 

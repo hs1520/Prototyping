@@ -15,6 +15,7 @@ from ..llm.chain_of_thought import ChainOfThoughtPrompter
 from ..llm.interface import LLMInterface
 from ..rag.retriever import RAGRetriever
 from ..sysml.model import RequirementDefinition, SysMLModel
+from ..sysml.lite_model import SysMLLiteModel
 
 
 _VALID_CATEGORIES = {"FUNC", "PERF", "SAFE", "INTF", "CONS", "OPER"}
@@ -367,6 +368,12 @@ Core rules:
         self, requirements: List[str], model: SysMLModel
     ) -> None:
         """Add extracted requirements to a SysML model, skipping already-present IDs."""
+        if isinstance(model, SysMLLiteModel):
+            # The Lite model serializes its immutable source text, not this
+            # extracted cache. Adding definitions only in memory would hide a
+            # missing requirement from evaluation while leaving the final SysML
+            # unchanged. The generation/refinement path must emit the real block.
+            return
         existing_ids = {r.name for r in model.requirement_definitions}
         for i, req_text in enumerate(requirements):
             id_match = re.match(r"(REQ-\w+-\d+|REQ-\d+):\s*(.*)", req_text)

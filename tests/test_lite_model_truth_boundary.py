@@ -1,0 +1,43 @@
+"""Lite-model caches must never claim edits absent from emitted SysML text."""
+from __future__ import annotations
+
+from src.agents.design_agent import DesignAgent
+from src.agents.requirements_agent import RequirementsAgent
+from src.sysml.lite_model import build_lite_model
+
+
+_REQ = (
+    "REQ-SAFE-001: The system shall initiate return to base when the battery "
+    "state of charge reaches 25 percent."
+)
+
+
+def test_lite_traceability_keeps_missing_satisfy_visible_for_refinement():
+    text = """package D {
+        requirement def REQ_SAFE_001 { doc /* battery return requirement */ }
+        part def BatteryReturnController {
+            attribute batteryStateOfCharge : Real = 100.0;
+            action def initiateReturnToBase { }
+        }
+    }"""
+    model = build_lite_model(text, model_name="D")
+
+    untraced = DesignAgent._apply_requirement_traceability(
+        object.__new__(DesignAgent), model, [_REQ]
+    )
+
+    assert untraced == ["REQ_SAFE_001"]
+    assert model.part_definitions[0].satisfy_relationships == []
+    assert model.to_sysml_text() == text
+
+
+def test_lite_requirement_cache_does_not_fabricate_missing_definition():
+    text = "package D { part def BatteryReturnController { } }"
+    model = build_lite_model(text, model_name="D")
+
+    RequirementsAgent.create_sysml_requirements(
+        object.__new__(RequirementsAgent), [_REQ], model
+    )
+
+    assert model.requirement_definitions == []
+    assert "REQ_SAFE_001" not in model.to_sysml_text()
