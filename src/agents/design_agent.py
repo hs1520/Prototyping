@@ -26,6 +26,27 @@ from ..sysml.lite_model import SysMLLiteModel, build_lite_model
 from ..utils.sysml_text_utils import find_block_end
 
 
+class StructuralGenerationError(RuntimeError):
+    """Initial generation failed, while retaining the rejected model evidence."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        original_model_text: str,
+        candidate_model_text: str,
+        diagnostics: List[Dict[str, str]],
+        generation_metadata: Dict[str, Any],
+        parser_metadata: Dict[str, Any],
+    ) -> None:
+        super().__init__(message)
+        self.original_model_text = original_model_text
+        self.candidate_model_text = candidate_model_text
+        self.diagnostics = diagnostics
+        self.generation_metadata = generation_metadata
+        self.parser_metadata = parser_metadata
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Debug utility — prints a human-readable summary of a SysMLModel
 # ─────────────────────────────────────────────────────────────────────────────
@@ -496,21 +517,121 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         model = build_lite_model(cot_result.extracted_sysml, model_name=system_name)
 
         # Never advertise a structurally empty initial design as successful.
-        # Refinement can legitimately receive a degraded model while repairing
-        # syntax, but the initial generation must establish a usable baseline
-        # before scoring, simulation, or DSE are allowed to run.
+        # A single syntax-only repair is part of the common generation pipeline
+        # (identical for B0/B1/B2), rather than a B2 semantic intervention.
         if not is_refinement and not model.part_definitions:
+            parser_metadata = {
+                key: value
+                for key, value in dict(
+                    getattr(model, "metadata", None) or {}
+                ).items()
+                if key != "last_sysml_text"
+            }
             textual_parts = re.findall(
                 r"\bpart\s+def\s+(\w+)\s*\{",
                 cot_result.extracted_sysml,
             )
             restored_parts = generation_metadata.get("injected_part_defs", [])
-            raise RuntimeError(
-                "[STRUCTURAL_GENERATION_ERROR] Assembled model contains no "
-                "parseable part definitions "
-                f"(textual_part_defs={len(textual_parts)}, "
-                f"restored={restored_parts})."
+            original_model_text = cot_result.extracted_sysml
+            initial_diagnostics = [
+                {
+                    "severity": (
+                        d.severity.value
+                        if hasattr(d.severity, "value") else str(d.severity)
+                    ),
+                    "message": d.message,
+                }
+                for d in model.diagnostics
+            ]
+
+            if parser_metadata.get("syside_available") is False:
+                raise StructuralGenerationError(
+                    "[SYSIDE_UNAVAILABLE] Initial model validation requires the "
+                    "Syside parser; activate the project environment before running.",
+                    original_model_text=original_model_text,
+                    candidate_model_text=original_model_text,
+                    diagnostics=initial_diagnostics,
+                    generation_metadata=dict(generation_metadata),
+                    parser_metadata=parser_metadata,
+                )
+
+            issue_lines = [
+                "The assembled model contains textual part definitions, but Syside "
+                "recovered none. Repair syntax only and preserve every requirement, "
+                "part, behavior, threshold, satisfy link, and connection. Return one "
+                "complete SysML v2 package.",
+            ]
+            issue_lines.extend(
+                f"{item['severity']}: {item['message']}"
+                for item in initial_diagnostics[:12]
             )
+            parse_error = parser_metadata.get("syside_parse_error")
+            if parse_error:
+                issue_lines.append(f"parser exception: {parse_error}")
+            repair_feedback = "\n".join(issue_lines)
+            repaired_result = self._run_refinement(
+                model,
+                repair_feedback,
+                issue_lines,
+                skip_rag=True,
+                verbose=verbose,
+            )
+            if repaired_result.extracted_sysml:
+                repaired_result = self._apply_semantic_fixes(
+                    repaired_result, requirements, generation_metadata, verbose
+                )
+                repaired_model = build_lite_model(
+                    repaired_result.extracted_sysml, model_name=system_name
+                )
+            else:
+                repaired_model = None
+
+            repaired_diagnostics = [
+                {
+                    "severity": (
+                        d.severity.value
+                        if hasattr(d.severity, "value") else str(d.severity)
+                    ),
+                    "message": d.message,
+                }
+                for d in (repaired_model.diagnostics if repaired_model else [])
+            ]
+            generation_metadata["initial_parse_repair"] = {
+                "attempted": True,
+                "successful": bool(
+                    repaired_model and repaired_model.part_definitions
+                ),
+                "initial_textual_part_defs": len(textual_parts),
+                "initial_diagnostics": initial_diagnostics,
+                "repair_diagnostics": repaired_diagnostics,
+            }
+            if repaired_model and repaired_model.part_definitions:
+                cot_result = repaired_result
+                model = repaired_model
+            else:
+                candidate_text = (
+                    repaired_result.extracted_sysml
+                    if repaired_result.extracted_sysml else original_model_text
+                )
+                candidate_parser_metadata = {
+                    key: value
+                    for key, value in dict(
+                        getattr(repaired_model, "metadata", None)
+                        or parser_metadata
+                    ).items()
+                    if key != "last_sysml_text"
+                }
+                raise StructuralGenerationError(
+                    "[STRUCTURAL_GENERATION_ERROR] Assembled model contains no "
+                    "parseable part definitions after one syntax-only repair "
+                    f"(textual_part_defs={len(textual_parts)}, "
+                    f"restored={restored_parts}).",
+                    original_model_text=original_model_text,
+                    candidate_model_text=candidate_text,
+                    diagnostics=repaired_diagnostics or initial_diagnostics,
+                    generation_metadata=dict(generation_metadata),
+                    parser_metadata=candidate_parser_metadata,
+                )
 
         parse_diagnostics = [
             {"severity": d.severity.value if hasattr(d.severity, "value") else str(d.severity),

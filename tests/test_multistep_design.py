@@ -467,6 +467,42 @@ class TestMultistepGeneratePipeline:
                 "requirements": self._REQUIREMENTS,
             })
 
+        # Five generation calls plus one bounded common syntax-repair call.
+        assert agent.llm.call_count == 6
+
+    def test_initial_parse_failure_gets_one_uniform_syntax_repair(
+        self, monkeypatch
+    ):
+        import src.agents.design_agent as da_module
+        from src.sysml.model import SysMLModel, PartDefinition
+
+        responses = [
+            "Architecture plan",
+            _SYSML_FRAGMENT,
+            _INTERFACE_FRAGMENT,
+            _BEHAVIOR_FRAGMENT,
+            _ASSEMBLED_MODEL,
+            _ASSEMBLED_MODEL,
+        ]
+        agent = self._make_agent(responses, monkeypatch)
+        empty = SysMLModel(name="DroneSystem", description="unparseable")
+        repaired = SysMLModel(name="DroneSystem", description="repaired")
+        repaired.part_definitions.append(PartDefinition(name="FlightController"))
+        parsed = iter((empty, repaired))
+        monkeypatch.setattr(
+            da_module, "build_lite_model", lambda *a, **kw: next(parsed)
+        )
+
+        result = agent.run({
+            "system_name": "DroneSystem",
+            "requirements": self._REQUIREMENTS,
+        })
+
+        assert result.success
+        assert agent.llm.call_count == 6
+        assert result.metadata["initial_parse_repair"]["attempted"] is True
+        assert result.metadata["initial_parse_repair"]["successful"] is True
+
     def test_behavior_step_skipped_without_func_safe_reqs(self, monkeypatch):
         """Only 4 LLM calls when no FUNC or SAFE requirements exist.
 

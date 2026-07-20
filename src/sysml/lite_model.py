@@ -391,10 +391,20 @@ class SysMLLiteModel:
         syside_model: Any,
         raw_diagnostics: Any,
         name: str = "GeneratedModel",
+        parse_error: Optional[str] = None,
     ) -> None:
         self.name: str = name
         self.description: str = ""
-        self.metadata: Dict[str, Any] = {"last_sysml_text": raw_text}
+        self.metadata: Dict[str, Any] = {
+            "last_sysml_text": raw_text,
+            "syside_available": _SYSIDE_OK,
+            "syside_version": (
+                str(getattr(_syside, "__version__", "unknown"))
+                if _SYSIDE_OK else None
+            ),
+            "syside_model_loaded": syside_model is not None,
+            "syside_parse_error": parse_error,
+        }
         self._syside_model = syside_model
         self._raw_diagnostics = raw_diagnostics
 
@@ -487,11 +497,13 @@ def build_lite_model(
     """
     syside_model = None
     raw_diagnostics: list = []
+    parse_error: Optional[str] = None
 
     if _SYSIDE_OK:
         try:
             syside_model, raw_diagnostics = _syside.try_load_model(sysml_source=raw_text)
         except Exception as exc:
+            parse_error = f"{type(exc).__name__}: {exc}"
             record_suppressed("sysml.lite_model.try_load_model", exc)
 
     return SysMLLiteModel(
@@ -499,4 +511,5 @@ def build_lite_model(
         syside_model=syside_model,
         raw_diagnostics=raw_diagnostics,
         name=model_name,
+        parse_error=parse_error,
     )

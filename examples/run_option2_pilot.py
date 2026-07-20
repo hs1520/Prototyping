@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -60,6 +61,44 @@ def _git_metadata() -> dict[str, Any]:
     }
 
 
+def _runtime_metadata() -> dict[str, Any]:
+    """Verify that the parser needed by every experimental arm is operational."""
+    metadata: dict[str, Any] = {
+        "python_executable": sys.executable,
+        "python_version": platform.python_version(),
+        "syside_available": False,
+        "syside_version": None,
+        "syside_probe_part_count": 0,
+        "error": None,
+    }
+    try:
+        import syside
+
+        metadata["syside_available"] = True
+        metadata["syside_version"] = str(
+            getattr(syside, "__version__", "unknown")
+        )
+        probe, diagnostics = syside.try_load_model(
+            sysml_source="package RuntimeProbe { part def ProbePart { } }"
+        )
+        parts = list(probe.elements(syside.PartDefinition))
+        metadata["syside_probe_part_count"] = len(parts)
+        parser_errors = list(getattr(diagnostics, "parser", ()) or ())
+        if len(parts) != 1 or parser_errors:
+            metadata["error"] = (
+                "Syside probe did not recover exactly one part definition "
+                f"(parts={len(parts)}, parser_errors={len(parser_errors)})"
+            )
+    except Exception as exc:
+        metadata["error"] = f"{type(exc).__name__}: {exc}"
+    metadata["ready"] = bool(
+        metadata["syside_available"]
+        and metadata["syside_probe_part_count"] == 1
+        and not metadata["error"]
+    )
+    return metadata
+
+
 def _pilot_id() -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{stamp}-{uuid.uuid4().hex[:8]}"
@@ -78,6 +117,7 @@ def _run_one(
     generation_seed: int,
     controlled_experiment: bool,
     git_metadata: dict[str, Any],
+    runtime_metadata: dict[str, Any],
 ) -> dict[str, Any]:
     run_dir = batch_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -110,6 +150,7 @@ def _run_one(
         "requirement_set_digest": frozen["requirement_set_digest"],
         "requirement_count": len(frozen["requirements"]),
         "git": git_metadata,
+        "runtime": runtime_metadata,
     }
     atomic_write_json(run_dir / "pilot_metadata.json", metadata)
     atomic_write_json(run_dir / "frozen_requirements.json", frozen)
@@ -209,6 +250,27 @@ def _run_one(
             "error_type": exc.__class__.__name__,
             "error": str(exc),
         })
+        failure_artifacts: dict[str, str] = {}
+        original_model = getattr(exc, "original_model_text", None)
+        candidate_model = getattr(exc, "candidate_model_text", None)
+        diagnostics = getattr(exc, "diagnostics", None)
+        generation_metadata = getattr(exc, "generation_metadata", None)
+        parser_metadata = getattr(exc, "parser_metadata", None)
+        if original_model:
+            atomic_write_text(run_dir / "failed_original_model.sysml", original_model)
+            failure_artifacts["original_model"] = "failed_original_model.sysml"
+        if candidate_model:
+            atomic_write_text(run_dir / "failed_candidate_model.sysml", candidate_model)
+            failure_artifacts["candidate_model"] = "failed_candidate_model.sysml"
+        if diagnostics is not None or generation_metadata is not None:
+            atomic_write_json(run_dir / "failure_diagnostics.json", {
+                "diagnostics": diagnostics or [],
+                "generation_metadata": generation_metadata or {},
+                "parser_metadata": parser_metadata or {},
+            })
+            failure_artifacts["diagnostics"] = "failure_diagnostics.json"
+        if failure_artifacts:
+            metadata["failure_artifacts"] = failure_artifacts
         atomic_write_json(run_dir / "pilot_metadata.json", metadata)
         atomic_write_text(run_dir / "failure_traceback.txt", traceback.format_exc())
         print(
@@ -299,6 +361,13 @@ def main(argv: list[str] | None = None) -> int:
             "--experiment requires a clean committed worktree so every run "
             "has reproducible source provenance"
         )
+    runtime_metadata = _runtime_metadata()
+    if not runtime_metadata["ready"]:
+        parser.error(
+            "Syside runtime preflight failed before any LLM calls: "
+            f"{runtime_metadata.get('error') or 'parser probe failed'}; "
+            f"python={runtime_metadata['python_executable']}"
+        )
     batch_id = _pilot_id()
     batch_dir = args.output_root.expanduser().resolve() / batch_id
     batch_dir.mkdir(parents=True, exist_ok=False)
@@ -316,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
         "mcts_seed_base": args.mcts_seed_base,
         "llm_seed_base": args.llm_seed_base,
         "git": git_metadata,
+        "runtime": runtime_metadata,
         "status": "RUNNING",
     })
     print(f"Pilot batch: {batch_dir}", flush=True)
@@ -348,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
             generation_seed=generation_seed,
             controlled_experiment=args.experiment,
             git_metadata=git_metadata,
+            runtime_metadata=runtime_metadata,
         )
         for name, repetition, run_name, mcts_seed, generation_seed in jobs
     ]
@@ -366,6 +437,7 @@ def main(argv: list[str] | None = None) -> int:
         "mcts_seed_base": args.mcts_seed_base,
         "llm_seed_base": args.llm_seed_base,
         "git": git_metadata,
+        "runtime": runtime_metadata,
         "status": "COMPLETED" if completed == len(results) else "PARTIAL_FAILURE",
         "completed_count": completed,
         "failed_count": len(results) - completed,

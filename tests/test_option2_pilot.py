@@ -36,6 +36,19 @@ def test_multi_repetition_pilot_pairs_mcts_seeds_across_configurations(
         "_git_metadata",
         lambda: {"commit": "abc", "worktree_dirty": False, "worktree_status": []},
     )
+    monkeypatch.setattr(
+        pilot,
+        "_runtime_metadata",
+        lambda: {
+            "ready": True,
+            "python_executable": "/test/python",
+            "python_version": "3.12.0",
+            "syside_available": True,
+            "syside_version": "test",
+            "syside_probe_part_count": 1,
+            "error": None,
+        },
+    )
 
     result = main([
         "--repetitions", "3",
@@ -84,3 +97,30 @@ def test_controlled_experiment_rejects_a_dirty_worktree(monkeypatch, capsys):
 
     assert exc_info.value.code == 2
     assert "clean committed worktree" in capsys.readouterr().err
+
+
+def test_pilot_rejects_broken_syside_before_llm_calls(monkeypatch, capsys):
+    monkeypatch.setattr(
+        pilot,
+        "_git_metadata",
+        lambda: {"commit": "abc", "worktree_dirty": False, "worktree_status": []},
+    )
+    monkeypatch.setattr(
+        pilot,
+        "_runtime_metadata",
+        lambda: {
+            "ready": False,
+            "python_executable": "/wrong/python",
+            "syside_available": False,
+            "syside_probe_part_count": 0,
+            "error": "ModuleNotFoundError: No module named 'syside'",
+        },
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--config", "B0"])
+
+    assert exc_info.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "Syside runtime preflight failed before any LLM calls" in stderr
+    assert "/wrong/python" in stderr
