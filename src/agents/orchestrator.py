@@ -2496,17 +2496,81 @@ class Orchestrator:
         repair_packet: Dict[str, Any] = {}
         repair_packet_provenance: Dict[str, Any] = {}
         if semantic_repair:
+            from ..prototyping.failure_routing import (
+                MODEL_SEMANTIC_FAULT,
+                classify_failure,
+            )
             from ..prototyping.repair_packet import build_scoped_repair_packet
 
-            _semantic_issues, trace_report = self._semantic_trace_issues(
+            current_semantic_issues, trace_report = self._semantic_trace_issues(
                 current_sysml, current_model.name
             )
             repair_packet = build_scoped_repair_packet(
                 self.last_contract_bundle,
                 trace_report,
                 self.last_pattern_bindings,
-                issues=eval_result.issues,
+                issues=current_semantic_issues,
             )
+            route_decisions = []
+            if repair_packet and trace_report is not None:
+                target_ids = set((repair_packet.get("scope") or {}).get(
+                    "req_ids", ()
+                ))
+                contracts_by_req = {
+                    contract.req_id: contract
+                    for contract in self.last_contract_bundle.contracts
+                }
+                traces_by_req = {
+                    trace.req_id: trace for trace in trace_report.traces
+                }
+                for req_id in sorted(target_ids):
+                    contract = contracts_by_req.get(req_id)
+                    trace = traces_by_req.get(req_id)
+                    if contract is None or trace is None:
+                        continue
+                    route_decisions.append(classify_failure(
+                        req_id,
+                        contract_status=contract.completeness,
+                        diagnostics=tuple(trace.findings),
+                    ))
+            routes_authorise_repair = bool(route_decisions) and all(
+                decision.failure_class == MODEL_SEMANTIC_FAULT
+                and decision.repair_authorised
+                and decision.route == "bounded_surgical_repair"
+                for decision in route_decisions
+            )
+            if not (
+                self.robustness_options.failure_routing
+                and routes_authorise_repair
+                and repair_packet
+            ):
+                self.last_semantic_repair_attempts.append({
+                    "attempt": len(self.last_semantic_repair_attempts) + 1,
+                    "before_diagnostic_ids": sorted(
+                        self._semantic_diagnostic_ids(
+                            current_sysml, current_model.name
+                        )
+                    ),
+                    "after_diagnostic_ids": [],
+                    "removed_diagnostic_ids": [],
+                    "new_diagnostic_ids": [],
+                    "syntax_passed": None,
+                    "simulation_regressions": [],
+                    "score_preserved": None,
+                    "accepted": False,
+                    "llm_invoked": False,
+                    "reason": "repair_not_authorised_or_packet_empty",
+                    "repair_route_decisions": [
+                        decision.to_dict() for decision in route_decisions
+                    ],
+                })
+                print(
+                    "  ⚠ Option 2 semantic repair blocked before the LLM: "
+                    "no non-empty scoped packet authorised by current "
+                    "RouteDecision evidence",
+                    flush=True,
+                )
+                return None
             if repair_packet:
                 scope = repair_packet.get("scope", {})
                 repair_packet_provenance = {
@@ -2530,6 +2594,9 @@ class Orchestrator:
                     "repair_packet_platform_binding_count": len(
                         repair_packet.get("platform_bindings", ())
                     ),
+                    "repair_route_decisions": [
+                        decision.to_dict() for decision in route_decisions
+                    ],
                 }
 
         if self.use_surgical_refinement:
@@ -2580,6 +2647,7 @@ class Orchestrator:
                     "simulation_regressions": [],
                     "score_preserved": None,
                     "accepted": False,
+                    "llm_invoked": True,
                     "reason": "surgical_generation_or_preservation_gates_failed",
                     **repair_packet_provenance,
                 })

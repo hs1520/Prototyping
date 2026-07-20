@@ -8,6 +8,7 @@ experimental evidence.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -24,8 +25,14 @@ from src.prototyping.artifact_store import atomic_write_json, atomic_write_text
 from src.prototyping.pipeline import PrototypingPipeline
 from src.prototyping.posthoc_evaluation import build_uniform_posthoc_evaluation
 from src.prototyping.provider_factory import create_llm
-from src.prototyping.requirement_inputs import build_frozen_requirement_set
+from src.prototyping.contract_types import INCOMPLETE, READY, UNSUPPORTED
+from src.prototyping.requirement_inputs import (
+    build_frozen_requirement_set,
+    normalise_requirement_id,
+    resolve_frozen_requirement_set,
+)
 from src.prototyping.robustness import RobustnessOptions
+from src.prototyping.robustness_gold import validate_gold_dataset
 
 sys.path.insert(0, os.path.dirname(__file__))
 from drone_system_v2 import DRONE_DESCRIPTION, DRONE_REQUIREMENTS  # noqa: E402
@@ -104,6 +111,117 @@ def _pilot_id() -> str:
     return f"{stamp}-{uuid.uuid4().hex[:8]}"
 
 
+def _read_json_artifact(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.expanduser().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read {label} artifact {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} artifact must contain a JSON object")
+    return value
+
+
+def _artifact_digest(value: dict[str, Any]) -> str:
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _validate_experiment_inputs(
+    frozen: dict[str, Any], gold: dict[str, Any]
+) -> dict[str, Any]:
+    """Bind one reviewed source-first gold file to one frozen 10+5 input.
+
+    Gold is an experiment-control/evaluation artifact.  Its reviewed contracts
+    are deliberately not returned to the generation pipeline.
+    """
+    errors = validate_gold_dataset(gold, require_complete=True)
+    if errors:
+        raise ValueError("invalid/incomplete gold dataset: " + "; ".join(errors))
+    if gold.get("review_mode") != "SOURCE_FIRST":
+        raise ValueError("controlled experiment requires SOURCE_FIRST gold")
+
+    requirements, canonical = resolve_frozen_requirement_set(frozen)
+    records = {
+        normalise_requirement_id(text): text for text in requirements
+    }
+    selected_ids = [
+        normalise_requirement_id(item)
+        for item in gold.get("selected_requirement_ids", ())
+    ]
+    frozen_ids = [normalise_requirement_id(text) for text in requirements]
+    if selected_ids != frozen_ids:
+        raise ValueError(
+            "gold selected_requirement_ids must exactly match frozen "
+            "requirements and order"
+        )
+    selected_payload = json.dumps(
+        [
+            (req_id, canonical["source_digests"][req_id])
+            for req_id in selected_ids
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    selected_fingerprint = hashlib.sha256(
+        selected_payload.encode("utf-8")
+    ).hexdigest()
+    if gold.get("selected_source_fingerprint") != selected_fingerprint:
+        raise ValueError(
+            "gold selected_source_fingerprint differs from frozen input"
+        )
+
+    counts = {READY: 0, INCOMPLETE: 0, UNSUPPORTED: 0}
+    rows = list(gold.get("requirements", ()))
+    for row in rows:
+        req_id = normalise_requirement_id(str(row.get("req_id", "")))
+        source_text = records.get(req_id)
+        if source_text is None or row.get("source_text") != source_text:
+            raise ValueError(f"{req_id}: gold source text differs from frozen input")
+        expected_digest = canonical["source_digests"].get(req_id)
+        if row.get("source_digest") != expected_digest:
+            raise ValueError(f"{req_id}: gold source digest differs from frozen input")
+        reviewed_contract = row.get("reviewed_contract") or {}
+        if reviewed_contract.get("req_id") != req_id:
+            raise ValueError(f"{req_id}: reviewed contract id differs from gold row")
+        if reviewed_contract.get("source_text") != source_text:
+            raise ValueError(
+                f"{req_id}: reviewed contract source differs from frozen input"
+            )
+        if reviewed_contract.get("source_digest") != expected_digest:
+            raise ValueError(
+                f"{req_id}: reviewed contract digest differs from frozen input"
+            )
+        status = reviewed_contract.get("completeness")
+        if status in counts:
+            counts[status] += 1
+
+    coverage_limit_count = counts[INCOMPLETE] + counts[UNSUPPORTED]
+    if not (
+        len(rows) == 15
+        and 8 <= counts[READY] <= 10
+        and 3 <= coverage_limit_count <= 5
+    ):
+        raise ValueError(
+            "controlled experiment requires the reviewed 15-item source set "
+            "with 8-10 READY and 3-5 INCOMPLETE/UNSUPPORTED requirements; "
+            f"observed {counts}"
+        )
+    return {
+        "gate": "APPROVED_FROZEN_REQUIREMENTS_AND_SOURCE_FIRST_GOLD",
+        "frozen_requirement_set_digest": canonical["requirement_set_digest"],
+        "frozen_artifact_digest": _artifact_digest(frozen),
+        "gold_artifact_digest": _artifact_digest(gold),
+        "gold_schema_version": gold.get("schema_version"),
+        "gold_reviewer": gold.get("reviewer"),
+        "gold_reviewed_at": gold.get("reviewed_at"),
+        "selected_requirement_ids": selected_ids,
+        "reviewed_contract_counts": counts,
+        "gold_used_as_pipeline_input": False,
+    }
+
+
 def _run_one(
     configuration: str,
     batch_dir: Path,
@@ -118,16 +236,13 @@ def _run_one(
     controlled_experiment: bool,
     git_metadata: dict[str, Any],
     runtime_metadata: dict[str, Any],
+    frozen: dict[str, Any],
+    experiment_approval: dict[str, Any] | None,
 ) -> dict[str, Any]:
     run_dir = batch_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=False)
     run_id = f"{batch_id}/{run_name}"
     options = CONFIGURATIONS[configuration]()
-    frozen = build_frozen_requirement_set(
-        DRONE_REQUIREMENTS,
-        name="option2-controlled-requirements",
-        source="examples.drone_system_v2.DRONE_REQUIREMENTS",
-    )
     started_at = _utc_now()
     metadata: dict[str, Any] = {
         "artifact_type": "OPTION2_PILOT_RUN",
@@ -151,6 +266,7 @@ def _run_one(
         "requirement_count": len(frozen["requirements"]),
         "git": git_metadata,
         "runtime": runtime_metadata,
+        "experiment_input_approval": experiment_approval,
     }
     atomic_write_json(run_dir / "pilot_metadata.json", metadata)
     atomic_write_json(run_dir / "frozen_requirements.json", frozen)
@@ -334,6 +450,19 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument(
+        "--requirements-artifact", type=Path,
+        help=(
+            "validated FROZEN_REQUIREMENT_SET JSON; mandatory with --experiment"
+        ),
+    )
+    parser.add_argument(
+        "--gold", type=Path,
+        help=(
+            "completed SOURCE_FIRST reviewed-gold JSON used only for experiment "
+            "admission and post-hoc evaluation; mandatory with --experiment"
+        ),
+    )
     args = parser.parse_args(argv)
     if (
         args.max_iterations < 1
@@ -368,6 +497,29 @@ def main(argv: list[str] | None = None) -> int:
             f"{runtime_metadata.get('error') or 'parser probe failed'}; "
             f"python={runtime_metadata['python_executable']}"
         )
+    if args.experiment and (args.requirements_artifact is None or args.gold is None):
+        parser.error(
+            "--experiment requires --requirements-artifact and --gold so the "
+            "reviewed 10+5 source set is frozen before any LLM calls"
+        )
+    try:
+        if args.requirements_artifact is not None:
+            supplied_frozen = _read_json_artifact(
+                args.requirements_artifact, label="requirements"
+            )
+            _requirements, frozen = resolve_frozen_requirement_set(supplied_frozen)
+        else:
+            frozen = build_frozen_requirement_set(
+                DRONE_REQUIREMENTS,
+                name="option2-pilot-requirements",
+                source="examples.drone_system_v2.DRONE_REQUIREMENTS",
+            )
+        experiment_approval = None
+        if args.experiment:
+            gold = _read_json_artifact(args.gold, label="gold")
+            experiment_approval = _validate_experiment_inputs(frozen, gold)
+    except ValueError as exc:
+        parser.error(str(exc))
     batch_id = _pilot_id()
     batch_dir = args.output_root.expanduser().resolve() / batch_id
     batch_dir.mkdir(parents=True, exist_ok=False)
@@ -386,6 +538,7 @@ def main(argv: list[str] | None = None) -> int:
         "llm_seed_base": args.llm_seed_base,
         "git": git_metadata,
         "runtime": runtime_metadata,
+        "experiment_input_approval": experiment_approval,
         "status": "RUNNING",
     })
     print(f"Pilot batch: {batch_dir}", flush=True)
@@ -419,6 +572,8 @@ def main(argv: list[str] | None = None) -> int:
             controlled_experiment=args.experiment,
             git_metadata=git_metadata,
             runtime_metadata=runtime_metadata,
+            frozen=frozen,
+            experiment_approval=experiment_approval,
         )
         for name, repetition, run_name, mcts_seed, generation_seed in jobs
     ]
@@ -438,6 +593,7 @@ def main(argv: list[str] | None = None) -> int:
         "llm_seed_base": args.llm_seed_base,
         "git": git_metadata,
         "runtime": runtime_metadata,
+        "experiment_input_approval": experiment_approval,
         "status": "COMPLETED" if completed == len(results) else "PARTIAL_FAILURE",
         "completed_count": completed,
         "failed_count": len(results) - completed,

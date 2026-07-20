@@ -6,6 +6,8 @@ rejected locally, and the orchestrator falls back to the legacy full rewrite.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import List, Optional
 
 from src.agents.surgical_refiner import (
@@ -46,6 +48,32 @@ class _ScriptedLLM:
     def chat(self, prompt, system_prompt="", **kw):
         self.calls += 1
         return self._responses[min(self.calls - 1, len(self._responses) - 1)]
+
+
+def _repair_packet(*, affected=("FlightController",)):
+    packet = {
+        "artifact_type": "SCOPED_SEMANTIC_REPAIR_PACKET",
+        "schema_version": "1.0",
+        "scope": {
+            "req_ids": ["REQ_SAFE_001"],
+            "affected_elements": list(affected),
+        },
+        "contracts": [{"req_id": "REQ_SAFE_001"}],
+        "traces": [{
+            "req_id": "REQ_SAFE_001",
+            "links": [],
+            "findings": [{"affected_elements": list(affected)}],
+        }],
+        "platform_bindings": [],
+        "pattern_constraints": [],
+    }
+    canonical = json.dumps(
+        packet, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    packet["packet_digest"] = hashlib.sha256(
+        canonical.encode("utf-8")
+    ).hexdigest()
+    return packet
 
 
 # ── extraction ───────────────────────────────────────────────────────────────
@@ -153,6 +181,55 @@ class TestAttemptSurgicalRefinement:
     def test_no_issues_short_circuits_without_llm_call(self):
         llm = _ScriptedLLM(["anything"])
         assert attempt_surgical_refinement(llm, _BASE, []) is None
+        assert llm.calls == 0
+
+    def test_scoped_packet_allows_only_the_resolved_owner_block(self):
+        llm = _ScriptedLLM([
+            "```sysml\npart def FlightController {\n"
+            "    in port sensorIn : SensorPort;\n"
+            "    out port cmdOut : CommandPort;\n"
+            "    attribute loopRate : Real = 200.0;\n}\n```"
+        ])
+
+        out = attempt_surgical_refinement(
+            llm, _BASE, self._ISSUES, repair_packet=_repair_packet()
+        )
+
+        assert out is not None
+        assert out.replaced == ["FlightController"]
+
+    def test_scoped_packet_rejects_an_unrelated_existing_block(self):
+        llm = _ScriptedLLM([
+            "```sysml\npart def Imu {\n"
+            "    out port dataOut : SensorPort;\n"
+            "    attribute unrelated : Real = 1.0;\n}\n```"
+        ])
+
+        out = attempt_surgical_refinement(
+            llm, _BASE, self._ISSUES, repair_packet=_repair_packet()
+        )
+
+        assert out is None
+
+    def test_scoped_packet_rejects_arbitrary_new_definition(self):
+        llm = _ScriptedLLM([
+            "```sysml\npart def UnrelatedSubsystem { }\n```"
+        ])
+
+        out = attempt_surgical_refinement(
+            llm, _BASE, self._ISSUES, repair_packet=_repair_packet()
+        )
+
+        assert out is None
+
+    def test_invalid_packet_is_rejected_before_an_llm_call(self):
+        llm = _ScriptedLLM(["anything"])
+        packet = _repair_packet()
+        packet["scope"]["affected_elements"] = ["Imu"]
+
+        assert attempt_surgical_refinement(
+            llm, _BASE, self._ISSUES, repair_packet=packet
+        ) is None
         assert llm.calls == 0
 
     def test_escalation_recovers_from_bad_low_temp_answer(self):
