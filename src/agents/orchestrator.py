@@ -2493,21 +2493,79 @@ class Orchestrator:
             )
             return None
 
+        repair_packet: Dict[str, Any] = {}
+        repair_packet_provenance: Dict[str, Any] = {}
+        if semantic_repair:
+            from ..prototyping.repair_packet import build_scoped_repair_packet
+
+            _semantic_issues, trace_report = self._semantic_trace_issues(
+                current_sysml, current_model.name
+            )
+            repair_packet = build_scoped_repair_packet(
+                self.last_contract_bundle,
+                trace_report,
+                self.last_pattern_bindings,
+                issues=eval_result.issues,
+            )
+            if repair_packet:
+                scope = repair_packet.get("scope", {})
+                repair_packet_provenance = {
+                    "repair_packet_schema_version": repair_packet.get(
+                        "schema_version"
+                    ),
+                    "repair_packet_digest": repair_packet.get("packet_digest"),
+                    "repair_packet_req_ids": list(scope.get("req_ids", ())),
+                    "repair_packet_affected_elements": list(
+                        scope.get("affected_elements", ())
+                    ),
+                    "repair_packet_contract_count": len(
+                        repair_packet.get("contracts", ())
+                    ),
+                    "repair_packet_trace_count": len(
+                        repair_packet.get("traces", ())
+                    ),
+                    "repair_packet_pattern_count": len(
+                        repair_packet.get("pattern_constraints", ())
+                    ),
+                    "repair_packet_platform_binding_count": len(
+                        repair_packet.get("platform_bindings", ())
+                    ),
+                }
+
         if self.use_surgical_refinement:
             from .surgical_refiner import attempt_surgical_refinement
+            surgical_issues = (
+                [
+                    str(issue) for issue in eval_result.issues
+                    if str(issue).startswith("[SEMANTIC-TRACE]")
+                ]
+                if semantic_repair
+                else eval_result.issues + eval_result.recommendations
+            )
+            surgical_feedback = (
+                "Repair only the semantic-trace failures in the scoped repair "
+                "packet. Do not address unrelated evaluator recommendations."
+                if semantic_repair else refinement_feedback
+            )
             surgical = attempt_surgical_refinement(
                 llm=self.llm,
                 model_text=current_sysml,
-                issues=eval_result.issues + eval_result.recommendations,
-                feedback=refinement_feedback,
+                issues=surgical_issues,
+                feedback=surgical_feedback,
                 verbose=self.verbose,
+                repair_packet=repair_packet or None,
             )
             if surgical is not None:
                 print(f"  ✓ Surgical refinement: {surgical.summary()}",
                       flush=True)
-                return build_lite_model(
+                candidate = build_lite_model(
                     surgical.merged_text, model_name=current_model.name
                 )
+                if repair_packet_provenance:
+                    candidate.metadata[
+                        "semantic_repair_packet_provenance"
+                    ] = repair_packet_provenance
+                return candidate
             if semantic_repair:
                 before = sorted(self._semantic_diagnostic_ids(
                     current_sysml, current_model.name
@@ -2523,6 +2581,7 @@ class Orchestrator:
                     "score_preserved": None,
                     "accepted": False,
                     "reason": "surgical_generation_or_preservation_gates_failed",
+                    **repair_packet_provenance,
                 })
                 print(
                     "  ⚠ Option 2 semantic surgery failed its gates — whole-model "
@@ -2595,6 +2654,11 @@ class Orchestrator:
                     "score_preserved": None,
                     "accepted": False,
                     "reason": "pending",
+                    **dict(
+                        (getattr(candidate, "metadata", None) or {}).get(
+                            "semantic_repair_packet_provenance", {}
+                        )
+                    ),
                 }
             if new_diagnostics or (
                 before_diagnostics and not after_diagnostics < before_diagnostics

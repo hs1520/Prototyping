@@ -134,17 +134,26 @@ def test_b2_semantic_surgery_records_an_accepted_diagnostic_reduction(monkeypatc
     bundle = build_contract_bundle([_REQ])
     orchestrator.last_contract_bundle = bundle
     orchestrator.last_pattern_bindings = select_patterns(bundle)
+    captured = {}
+
+    def _fake_surgery(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(merged_text=fixed, summary=lambda: "fixed")
+
     monkeypatch.setattr(
         "src.agents.surgical_refiner.attempt_surgical_refinement",
-        lambda **kwargs: SimpleNamespace(merged_text=fixed, summary=lambda: "fixed"),
+        _fake_surgery,
     )
 
     candidate = orchestrator._generate_refinement_candidate(
         build_lite_model(broken, model_name="D"),
         broken,
         SimpleNamespace(
-            issues=["[SEMANTIC-TRACE] REQ_SAFE_005 command mismatch"],
-            recommendations=[],
+            issues=[
+                "[SEMANTIC-TRACE] REQ_SAFE_005 command mismatch",
+                "unrelated structural recommendation",
+            ],
+            recommendations=["add an unrelated cosmetic annotation"],
         ),
         "repair the command only",
         [_REQ],
@@ -169,7 +178,22 @@ def test_b2_semantic_surgery_records_an_accepted_diagnostic_reduction(monkeypatc
     )
 
     assert accepted is candidate
-    assert orchestrator.last_semantic_repair_attempts == [{
+    assert captured["issues"] == [
+        "[SEMANTIC-TRACE] REQ_SAFE_005 command mismatch"
+    ]
+    assert "unrelated structural recommendation" not in captured["feedback"]
+    assert "cosmetic annotation" not in captured["feedback"]
+    assert captured["repair_packet"]["scope"]["req_ids"] == ["REQ_SAFE_005"]
+    assert captured["repair_packet"]["contracts"][0]["source_text"] == _REQ
+    attempt = orchestrator.last_semantic_repair_attempts[0]
+    assert {
+        key: attempt[key]
+        for key in (
+            "attempt", "before_diagnostic_ids", "after_diagnostic_ids",
+            "removed_diagnostic_ids", "new_diagnostic_ids", "syntax_passed",
+            "simulation_regressions", "score_preserved", "accepted", "reason",
+        )
+    } == {
         "attempt": 1,
         "before_diagnostic_ids": [
             "REQ_SAFE_005:REQ_SAFE_005.O1:ACTION_PLATFORM_BINDING_MISMATCH"
@@ -184,7 +208,12 @@ def test_b2_semantic_surgery_records_an_accepted_diagnostic_reduction(monkeypatc
         "score_preserved": True,
         "accepted": True,
         "reason": "accepted_all_preservation_gates",
-    }]
+    }
+    assert attempt["repair_packet_req_ids"] == ["REQ_SAFE_005"]
+    assert len(attempt["repair_packet_digest"]) == 64
+    assert attempt["repair_packet_contract_count"] == 1
+    assert attempt["repair_packet_trace_count"] == 1
+    assert attempt["repair_packet_platform_binding_count"] == 1
 
 
 def test_frozen_requirement_input_skips_llm_extraction_and_builds_contracts():

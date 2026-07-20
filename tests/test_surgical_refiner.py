@@ -187,6 +187,25 @@ class TestPromptShape:
         assert "FlightController loop rate wrong" in prompt
         assert "Likely affected elements: FlightController" in prompt
 
+    def test_prompt_serializes_scoped_repair_packet_as_authoritative_data(self):
+        prompt = build_surgical_prompt(
+            _BASE,
+            ["[SEMANTIC-TRACE] REQ_SAFE_001 command mismatch"],
+            repair_packet={
+                "artifact_type": "SCOPED_SEMANTIC_REPAIR_PACKET",
+                "scope": {"req_ids": ["REQ_SAFE_001"]},
+                "contracts": [{
+                    "req_id": "REQ_SAFE_001",
+                    "source_text": "auto-land on low battery",
+                }],
+            },
+        )
+
+        assert "SCOPED REPAIR PACKET" in prompt
+        assert '"req_ids": [' in prompt
+        assert '"REQ_SAFE_001"' in prompt
+        assert "auto-land on low battery" in prompt
+
 
 # ── orchestrator integration ─────────────────────────────────────────────────
 
