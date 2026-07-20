@@ -2293,12 +2293,19 @@ class Orchestrator:
                 )
                 after_ids = set(self._gap_req_ids(remaining))
                 progress = after_ids < before_ids
+                # A FUNC-anchor surgery must not trade functional-gap closure
+                # for new contract/pattern semantic faults (no-op under B0,
+                # where the trace issue set is empty by construction).
+                semantic_regressed = self._semantic_regressed(
+                    full_text, repaired.merged_text, model_name
+                )
                 regressed = (
                     cand_syntax.has_errors
                     or len(cand_sim.failed_scenarios())
                     > len(current_sim.failed_scenarios())
                     or behavioral_result_regressed(current_sim, cand_sim)
                     or cand_eval.weighted_total < current_score - 0.05
+                    or semantic_regressed
                 )
                 if progress and not regressed:
                     current = candidate
@@ -2313,7 +2320,11 @@ class Orchestrator:
                         flush=True,
                     )
                 else:
-                    why = "regression" if regressed else "no functional-gap reduction"
+                    why = (
+                        "semantic-trace regression" if semantic_regressed
+                        else "regression" if regressed
+                        else "no functional-gap reduction"
+                    )
                     context_record["status"] = "REJECTED"
                     context_record["post_merge_reason"] = why
                     print(f"  │    ⚠ rejected: {why}", flush=True)
@@ -2420,10 +2431,16 @@ class Orchestrator:
         remaining = self._verification_gap_issues(
             anchored.merged_text, current_model.name)
         from .verification_audit import behavioral_result_regressed
+        # Anchoring must not introduce new contract/pattern semantic faults
+        # (no-op under B0, where the trace issue set is empty by construction).
+        semantic_regressed = self._semantic_regressed(
+            full_text, anchored.merged_text, current_model.name
+        )
         regressed = (
             bool(anchor_sim.failed_scenarios())
             or behavioral_result_regressed(sim_result, anchor_sim)
             or anchor_eval.weighted_total < rule_score - 0.05
+            or semantic_regressed
         )
         if not regressed and len(remaining) < len(verify_gaps):
             attempt_record["status"] = "ACCEPTED"
@@ -2433,7 +2450,9 @@ class Orchestrator:
 
         attempt_record["status"] = "REJECTED"
         attempt_record["post_merge_reason"] = (
-            "regression" if regressed else "no_verification_gap_reduction"
+            "semantic_trace_regression" if semantic_regressed
+            else "regression" if regressed
+            else "no_verification_gap_reduction"
         )
         print("  ⚠ Anchor pass rejected (no gap reduction or "
               "regression) — keeping the original model", flush=True)
@@ -3255,9 +3274,14 @@ class Orchestrator:
                     return best_model, best_score, best_sim_result or sim_result
 
                 sim_issues = self._format_sim_issues(sim_result, requirements=requirements)
+                failing_count = len(sim_result.failed_scenarios())
+                escalation_reason = (
+                    f"{failing_count} scenario(s) still failing"
+                    if failing_count
+                    else "behavioral/semantic gates still unmet"
+                )
                 print(
-                    f"  ⚠ Surgical fix insufficient "
-                    f"({len(sim_result.failed_scenarios())} scenario(s) still failing) "
+                    f"  ⚠ Surgical fix insufficient ({escalation_reason}) "
                     f"— escalating to LLM refinement ({remaining} iteration(s) remaining)",
                     flush=True,
                 )

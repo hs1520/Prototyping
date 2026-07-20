@@ -1272,6 +1272,7 @@ class DesignEvaluator:
             syside_attr_map=getattr(self, "_syside_attr_map", {}),
             n_state_defs=self._syside_count("StateDefinition"),
             syside_model=getattr(self, "_syside_model", None),
+            syntax_result=getattr(self, "_cached_syntax_result", None),
         )
 
     # ------------------------------------------------------------------

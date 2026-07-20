@@ -146,6 +146,108 @@ def test_b1_semantic_fault_freezes_refinement_without_llm_calls():
     assert orchestrator.last_semantic_repair_blocks == []
 
 
+_LOCKED_DEFAULT_REQ = (
+    "REQ-SAFE-008: The payload-release actuator shall default to the "
+    "mechanically locked state upon power-on."
+)
+
+_LOCKED_DEFAULT_MODEL = """package D {
+    requirement def REQ_SAFE_008 { doc /* locked by default */ }
+    part def PayloadMechanism {
+        satisfy requirement REQ_SAFE_008;
+        state def PayloadState {
+            state mechanicallyLocked;
+            state released;
+            transition initial then mechanicallyLocked;
+        }
+    }
+}"""
+
+
+def _run_closure_pass(monkeypatch, merged_text):
+    """Drive one functional-closure pass with a stubbed surgical candidate."""
+    import src.agents.surgical_refiner as surgical_refiner
+    import src.agents.verification_audit as verification_audit
+
+    orchestrator = Orchestrator(
+        _NoCallLLM(), robustness_options=RobustnessOptions.b2()
+    )
+    orchestrator.last_contract_bundle = build_contract_bundle(
+        [_LOCKED_DEFAULT_REQ]
+    )
+    orchestrator.last_pattern_bindings = ()
+
+    gap = "[VERIFY-GAP] REQ_FUNC_005 has no behavioral verification anchor"
+    calls = {"n": 0}
+
+    def fake_gaps(_text, _name):
+        calls["n"] += 1
+        return [gap] if calls["n"] == 1 else []
+
+    monkeypatch.setattr(
+        orchestrator, "_functional_verification_gap_issues", fake_gaps
+    )
+    monkeypatch.setattr(
+        surgical_refiner, "build_dependency_closed_context",
+        lambda *args, **kwargs: SimpleNamespace(to_dict=lambda: {"stub": True}),
+    )
+    monkeypatch.setattr(
+        surgical_refiner, "attempt_surgical_refinement",
+        lambda **kwargs: SimpleNamespace(merged_text=merged_text),
+    )
+    monkeypatch.setattr(
+        verification_audit, "behavioral_result_regressed",
+        lambda _before, _after: False,
+    )
+    sim_stub = SimpleNamespace(failed_scenarios=lambda: [])
+    monkeypatch.setattr(
+        orchestrator, "_run_simulation", lambda _text, _name: sim_stub
+    )
+    orchestrator.evaluator = SimpleNamespace(
+        evaluate=lambda **kwargs: SimpleNamespace(weighted_total=0.9)
+    )
+
+    model = build_lite_model(_LOCKED_DEFAULT_MODEL, model_name="D")
+    result_model, _score, _sim = orchestrator._functional_closure_pass(
+        model, sim_stub, 0.9, [_LOCKED_DEFAULT_REQ], None, max_iters=1
+    )
+    return orchestrator, model, result_model
+
+
+def test_functional_closure_rejects_semantic_trace_regression(monkeypatch):
+    """A closure candidate that fixes FUNC gaps by destroying a safety
+    invariant representation (the exact failure observed in pilot
+    20260720T152651Z-bc878883) must be rejected, not accepted."""
+    broken = _LOCKED_DEFAULT_MODEL.replace(
+        "transition initial then mechanicallyLocked;",
+        "transition initial then released;",
+    )
+
+    orchestrator, model, result_model = _run_closure_pass(monkeypatch, broken)
+
+    closure = orchestrator.last_functional_closure
+    assert result_model is model
+    assert closure["status"] == "OPEN"
+    assert closure["accepted_repairs"] == 0
+    assert closure["repair_contexts"][-1]["post_merge_reason"] == (
+        "semantic-trace regression"
+    )
+
+
+def test_functional_closure_accepts_semantically_neutral_candidate(monkeypatch):
+    neutral = _LOCKED_DEFAULT_MODEL.replace(
+        "state released;",
+        "state released;\n            state holding;",
+    )
+
+    orchestrator, model, result_model = _run_closure_pass(monkeypatch, neutral)
+
+    closure = orchestrator.last_functional_closure
+    assert result_model is not model
+    assert closure["status"] == "CLOSED"
+    assert closure["accepted_repairs"] == 1
+
+
 def test_empty_semantic_repair_packet_blocks_before_llm(monkeypatch):
     orchestrator = Orchestrator(
         _NoCallLLM(), robustness_options=RobustnessOptions.b2(),

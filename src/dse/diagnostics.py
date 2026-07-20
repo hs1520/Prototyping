@@ -35,6 +35,7 @@ def diagnose(
     syside_attr_map: Optional[Dict[str, float]] = None,
     n_state_defs: Optional[int] = None,
     syside_model: Optional[Any] = None,
+    syntax_result: Optional[Any] = None,
 ) -> Tuple[List[str], List[str]]:
     """Produce actionable issue + recommendation strings for *model*."""
     issues: List[str] = []
@@ -160,20 +161,44 @@ def diagnose(
         )
 
     # ── Syside diagnostic errors ─────────────────────────────────────────
-    diag_errors = [
-        d for d in model.diagnostics
-        if d.severity == DiagnosticSeverity.ERROR
-    ]
-    if diag_errors:
-        sample = "; ".join(d.message for d in diag_errors[:3])
-        issues.append(
-            f"Syside parse/semantic errors ({len(diag_errors)}): {sample}"
-            f"{'...' if len(diag_errors) > 3 else ''}"
+    # Prefer the fresh syntax-gate result for the current model text.  The
+    # model object may still carry parse diagnostics from a superseded build
+    # (for example from before deterministic guard-attribute injection), and
+    # reporting those alongside a clean syntax gate injects a contradictory
+    # "fix compilation errors" instruction into refinement prompts.
+    if syntax_result is not None:
+        fresh_errors = (
+            list(getattr(syntax_result, "parser_errors", ()) or ())
+            + list(getattr(syntax_result, "sema_errors", ()) or ())
         )
-        recs.append(
-            "Fix compilation errors before refining the design — invalid SysML "
-            "will be silently ignored by downstream tooling."
-        )
+        if fresh_errors:
+            sample = "; ".join(
+                str(item.get("message", item)) if isinstance(item, dict) else str(item)
+                for item in fresh_errors[:3]
+            )
+            issues.append(
+                f"Syside parse/semantic errors ({len(fresh_errors)}): {sample}"
+                f"{'...' if len(fresh_errors) > 3 else ''}"
+            )
+            recs.append(
+                "Fix compilation errors before refining the design — invalid SysML "
+                "will be silently ignored by downstream tooling."
+            )
+    else:
+        diag_errors = [
+            d for d in model.diagnostics
+            if d.severity == DiagnosticSeverity.ERROR
+        ]
+        if diag_errors:
+            sample = "; ".join(d.message for d in diag_errors[:3])
+            issues.append(
+                f"Syside parse/semantic errors ({len(diag_errors)}): {sample}"
+                f"{'...' if len(diag_errors) > 3 else ''}"
+            )
+            recs.append(
+                "Fix compilation errors before refining the design — invalid SysML "
+                "will be silently ignored by downstream tooling."
+            )
 
     # ── Connect type mismatches ──────────────────────────────────────────
     port_type_map = _build_port_type_map(model)
