@@ -141,10 +141,53 @@ def test_empty_semantic_repair_packet_blocks_before_llm(monkeypatch):
     )
 
     assert candidate is None
+    assert orchestrator.last_semantic_repair_attempts == []
+    blocked = orchestrator.last_semantic_repair_blocks[0]
+    assert blocked["accepted"] is False
+    assert blocked["llm_invoked"] is False
+    assert blocked["reason"] == "repair_not_authorised_or_packet_empty"
+
+
+def test_failed_semantic_surgery_records_structured_rejection_audit(monkeypatch):
+    orchestrator = Orchestrator(
+        _NoCallLLM(), robustness_options=RobustnessOptions.b2(),
+        use_surgical_refinement=True,
+    )
+    bundle = build_contract_bundle([_REQ])
+    orchestrator.last_contract_bundle = bundle
+    orchestrator.last_pattern_bindings = select_patterns(bundle)
+
+    def _rejecting_surgery(**kwargs):
+        audit = kwargs["audit"]
+        audit.packet_provided = True
+        audit.packet_validated = True
+        audit.scope_resolved = True
+        audit.llm_invoked = True
+        audit.reject("replacement_out_of_scope:part:Unrelated")
+        return None
+
+    monkeypatch.setattr(
+        "src.agents.surgical_refiner.attempt_surgical_refinement",
+        _rejecting_surgery,
+    )
+
+    candidate = orchestrator._generate_refinement_candidate(
+        build_lite_model(_MODEL, model_name="D"),
+        _MODEL,
+        SimpleNamespace(
+            issues=["[SEMANTIC-TRACE] REQ_SAFE_005 mismatch"],
+            recommendations=[],
+        ),
+        "repair only the mismatch",
+        [_REQ],
+    )
+
+    assert candidate is None
     attempt = orchestrator.last_semantic_repair_attempts[0]
-    assert attempt["accepted"] is False
-    assert attempt["llm_invoked"] is False
-    assert attempt["reason"] == "repair_not_authorised_or_packet_empty"
+    assert attempt["llm_invoked"] is True
+    assert attempt["surgical_audit"]["rejection_reasons"] == [
+        "replacement_out_of_scope:part:Unrelated"
+    ]
 
 
 def test_b2_semantic_surgery_records_an_accepted_diagnostic_reduction(monkeypatch):

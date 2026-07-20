@@ -388,6 +388,7 @@ class Orchestrator:
         self.last_semantic_trace_report = None
         self.last_failure_route_report = None
         self.last_semantic_repair_attempts: List[Dict[str, Any]] = []
+        self.last_semantic_repair_blocks: List[Dict[str, Any]] = []
         # F1: catalog-grid estimator calibration, applied ONLY around the search
         # (the injected SysML calc defs and Phase 8's estimator_value column keep
         # the documented textbook constants). Provenance recorded, never hidden.
@@ -485,6 +486,7 @@ class Orchestrator:
         from ..utils.suppressed import reset_suppressed
         reset_suppressed()
         self.last_semantic_repair_attempts = []
+        self.last_semantic_repair_blocks = []
         self.last_requirement_input = {}
         self.last_approved_contract_provenance = None
 
@@ -1374,6 +1376,9 @@ class Orchestrator:
             routes["semantic_repair_attempts"] = list(
                 self.last_semantic_repair_attempts
             )
+            routes["semantic_repair_blocks"] = list(
+                self.last_semantic_repair_blocks
+            )
         metrics = {
             "schema_version": "1.0",
             **provenance,
@@ -1393,6 +1398,9 @@ class Orchestrator:
             "failure_route_counts": routes["counts"] if routes else {},
             "semantic_repair_attempt_count": len(
                 self.last_semantic_repair_attempts
+            ),
+            "semantic_repair_block_count": len(
+                self.last_semantic_repair_blocks
             ),
             "semantic_repair_success_count": sum(
                 bool(item.get("accepted"))
@@ -2544,8 +2552,8 @@ class Orchestrator:
                 and routes_authorise_repair
                 and repair_packet
             ):
-                self.last_semantic_repair_attempts.append({
-                    "attempt": len(self.last_semantic_repair_attempts) + 1,
+                self.last_semantic_repair_blocks.append({
+                    "block_event": len(self.last_semantic_repair_blocks) + 1,
                     "before_diagnostic_ids": sorted(
                         self._semantic_diagnostic_ids(
                             current_sysml, current_model.name
@@ -2600,7 +2608,10 @@ class Orchestrator:
                 }
 
         if self.use_surgical_refinement:
-            from .surgical_refiner import attempt_surgical_refinement
+            from .surgical_refiner import (
+                SurgicalAudit,
+                attempt_surgical_refinement,
+            )
             surgical_issues = (
                 [
                     str(issue) for issue in eval_result.issues
@@ -2614,6 +2625,7 @@ class Orchestrator:
                 "packet. Do not address unrelated evaluator recommendations."
                 if semantic_repair else refinement_feedback
             )
+            surgical_audit = SurgicalAudit()
             surgical = attempt_surgical_refinement(
                 llm=self.llm,
                 model_text=current_sysml,
@@ -2621,7 +2633,12 @@ class Orchestrator:
                 feedback=surgical_feedback,
                 verbose=self.verbose,
                 repair_packet=repair_packet or None,
+                audit=surgical_audit,
             )
+            if semantic_repair:
+                repair_packet_provenance[
+                    "surgical_audit"
+                ] = surgical_audit.to_dict()
             if surgical is not None:
                 print(f"  ✓ Surgical refinement: {surgical.summary()}",
                       flush=True)
@@ -2721,6 +2738,7 @@ class Orchestrator:
                     "simulation_regressions": [],
                     "score_preserved": None,
                     "accepted": False,
+                    "llm_invoked": True,
                     "reason": "pending",
                     **dict(
                         (getattr(candidate, "metadata", None) or {}).get(

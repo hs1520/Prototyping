@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "allow descriptive aggregation without complete balanced B0/B1/B2 "
-            "repetitions and paired MCTS seeds"
+            "repetitions, paired seeds, and formal experiment provenance"
         ),
     )
     parser.add_argument(
@@ -82,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
         require_frozen_inputs=not args.allow_unfrozen_inputs,
         require_complete_design=not args.allow_incomplete_design,
         require_uniform_posthoc=not args.allow_legacy_measurement,
+        require_experiment_provenance=not args.allow_incomplete_design,
     )
     rendered = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
     if args.output:

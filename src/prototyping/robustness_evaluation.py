@@ -13,7 +13,7 @@ from itertools import combinations
 from typing import Any, Iterable, Mapping
 
 
-EVALUATION_SCHEMA_VERSION = "1.4"
+EVALUATION_SCHEMA_VERSION = "1.5"
 
 
 def _posthoc(run: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -402,9 +402,17 @@ def evaluate_run_against_gold(
         item for item in intervention_routes.values()
         if item.get("repair_authorised")
     ]
-    attempts = list(
+    attempt_records = list(
         (run.get("repair_decisions") or {}).get("semantic_repair_attempts", ())
     )
+    attempts = [
+        item for item in attempt_records if item.get("llm_invoked") is not False
+    ]
+    blocked = list(
+        (run.get("repair_decisions") or {}).get("semantic_repair_blocks", ())
+    ) + [
+        item for item in attempt_records if item.get("llm_invoked") is False
+    ]
     accepted_attempts = [item for item in attempts if item.get("accepted")]
     preserved_attempts = [item for item in attempts if _attempt_preserved(item)]
     return {
@@ -454,6 +462,7 @@ def evaluate_run_against_gold(
             len(unsafe) / len(authorised) if authorised else 0.0
         ),
         "repair_attempt_count": len(attempts),
+        "repair_blocked_before_llm_count": len(blocked),
         "repair_success": (
             len(accepted_attempts) / len(attempts) if attempts else None
         ),
@@ -461,8 +470,10 @@ def evaluate_run_against_gold(
             len(preserved_attempts) / len(attempts) if attempts else None
         ),
         "repair_metric_note": (
-            "Metrics are null when no recorded semantic repair attempts exist; "
-            "terminal PASS is never back-interpreted as repair success."
+            "Repair success uses only records where an LLM repair was invoked; "
+            "routing/packet blocks are reported separately. Metrics are null "
+            "when no invoked semantic repair attempts exist; terminal PASS is "
+            "never back-interpreted as repair success."
         ),
     }
 
@@ -481,6 +492,7 @@ def _configuration_summary(runs: list[Mapping[str, Any]]) -> dict[str, Any]:
         diagnostics.extend(artifact)
     intervention_decisions = []
     intervention_attempts = []
+    intervention_blocks = []
     for run in runs:
         options = run.get("robustness_options")
         # Older B1 bundles accidentally emitted terminal classifications even
@@ -492,10 +504,19 @@ def _configuration_summary(runs: list[Mapping[str, Any]]) -> dict[str, Any]:
         intervention_decisions.extend(
             (run.get("repair_decisions") or {}).get("decisions", ())
         )
+        records = list((run.get("repair_decisions") or {}).get(
+            "semantic_repair_attempts", ()
+        ))
         intervention_attempts.extend(
+            item for item in records if item.get("llm_invoked") is not False
+        )
+        intervention_blocks.extend(
             (run.get("repair_decisions") or {}).get(
-                "semantic_repair_attempts", ()
+                "semantic_repair_blocks", ()
             )
+        )
+        intervention_blocks.extend(
+            item for item in records if item.get("llm_invoked") is False
         )
     measurement_decisions = []
     for run in runs:
@@ -567,6 +588,7 @@ def _configuration_summary(runs: list[Mapping[str, Any]]) -> dict[str, Any]:
             for item in intervention_decisions
         ),
         "repair_attempt_count": len(intervention_attempts),
+        "repair_blocked_before_llm_count": len(intervention_blocks),
         "repair_accepted_count": sum(
             bool(item.get("accepted")) for item in intervention_attempts
         ),
@@ -622,6 +644,7 @@ def evaluate_configurations(
     require_frozen_inputs: bool = True,
     require_complete_design: bool = False,
     require_uniform_posthoc: bool = False,
+    require_experiment_provenance: bool = False,
 ) -> dict[str, Any]:
     """Aggregate B0/B1/B2 reports from an identical reviewed requirement set."""
     allowed = {"B0", "B1", "B2"}
@@ -699,6 +722,9 @@ def evaluate_configurations(
     balanced_repetitions = (
         complete_configurations and len(set(run_counts.values())) == 1
     )
+    minimum_repetitions_met = bool(
+        complete_configurations and min(run_counts.values()) >= 3
+    )
     repetition_maps: dict[str, dict[int, int | None]] = {}
     generation_seed_maps: dict[str, dict[int, int | None]] = {}
     generation_seed_controls: set[str] = set()
@@ -751,6 +777,7 @@ def evaluate_configurations(
     design_complete = bool(
         complete_configurations
         and balanced_repetitions
+        and minimum_repetitions_met
         and paired_repetitions
         and paired_mcts_seeds
         and paired_generation_seeds
@@ -758,8 +785,73 @@ def evaluate_configurations(
     if require_complete_design and not design_complete:
         raise ValueError(
             "controlled B0/B1/B2 evaluation requires every configuration, "
-            "equal repetition counts, unique paired repetition ids, and the "
-            "same recorded LLM and MCTS seeds within each repetition"
+            "at least three equal repetition counts, unique paired repetition "
+            "ids, and the same recorded LLM and MCTS seeds within each repetition"
+        )
+
+    def _recorded(run: Mapping[str, Any], key: str) -> Any:
+        metadata = run.get("pilot_metadata") or {}
+        return run.get(key, metadata.get(key))
+
+    formal_flags_valid = bool(all_runs) and all(
+        _recorded(run, "controlled_experiment") is True
+        and _recorded(run, "pilot_only") is False
+        for run in all_runs
+    )
+    clean_git_valid = bool(all_runs) and all(
+        isinstance(_recorded(run, "git"), Mapping)
+        and _recorded(run, "git").get("worktree_dirty") is False
+        and not _recorded(run, "git").get("worktree_status")
+        for run in all_runs
+    )
+    runtime_preflight_valid = bool(all_runs) and all(
+        isinstance(_recorded(run, "runtime"), Mapping)
+        and _recorded(run, "runtime").get("ready") is True
+        for run in all_runs
+    )
+    commits = {
+        str(_recorded(run, "git").get("commit"))
+        for run in all_runs
+        if isinstance(_recorded(run, "git"), Mapping)
+        and _recorded(run, "git").get("commit")
+    }
+    approval_signatures = set()
+    approvals_valid = bool(all_runs)
+    for run in all_runs:
+        approval = _recorded(run, "experiment_input_approval")
+        input_digest = (run.get("requirement_input") or {}).get(
+            "requirement_set_digest"
+        )
+        valid = bool(
+            isinstance(approval, Mapping)
+            and approval.get("gate")
+            == "APPROVED_FROZEN_REQUIREMENTS_AND_SOURCE_FIRST_GOLD"
+            and approval.get("gold_used_as_pipeline_input") is False
+            and approval.get("gold_reviewer")
+            and approval.get("gold_reviewed_at")
+            and approval.get("frozen_requirement_set_digest") == input_digest
+            and approval.get("frozen_artifact_digest")
+            and approval.get("gold_artifact_digest")
+        )
+        approvals_valid = approvals_valid and valid
+        if valid:
+            approval_signatures.add(json.dumps(
+                approval, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"),
+            ))
+    experiment_provenance_verified = bool(
+        formal_flags_valid
+        and clean_git_valid
+        and runtime_preflight_valid
+        and len(commits) == 1
+        and approvals_valid
+        and len(approval_signatures) == 1
+    )
+    if require_experiment_provenance and not experiment_provenance_verified:
+        raise ValueError(
+            "controlled comparison requires formal --experiment provenance: "
+            "non-Pilot flags, one clean committed source revision, successful "
+            "runtime preflight, and one identical approved frozen/gold gate"
         )
     measurement_stack_signatures = {
         (
@@ -875,6 +967,7 @@ def evaluate_configurations(
             "required": require_complete_design,
             "complete_configurations": complete_configurations,
             "balanced_repetitions": balanced_repetitions,
+            "minimum_repetitions_met": minimum_repetitions_met,
             "repetitions_recorded": repetitions_recorded,
             "paired_repetitions": paired_repetitions,
             "paired_mcts_seeds": paired_mcts_seeds,
@@ -882,6 +975,17 @@ def evaluate_configurations(
             "generation_seed_controls": sorted(generation_seed_controls),
             "run_counts": run_counts,
             "valid": design_complete,
+        },
+        "experiment_provenance_control": {
+            "required": require_experiment_provenance,
+            "formal_run_flags_valid": formal_flags_valid,
+            "clean_git_valid": clean_git_valid,
+            "runtime_preflight_valid": runtime_preflight_valid,
+            "single_commit": len(commits) == 1,
+            "commits": sorted(commits),
+            "approved_input_gate_valid": approvals_valid,
+            "single_approval": len(approval_signatures) == 1,
+            "verified": experiment_provenance_verified,
         },
         "posthoc_measurement_control": {
             "required": require_uniform_posthoc,
@@ -903,7 +1007,10 @@ def evaluate_configurations(
             ),
         },
         "controlled_comparison_valid": bool(
-            controlled_inputs and design_complete and posthoc_control_verified
+            controlled_inputs
+            and design_complete
+            and posthoc_control_verified
+            and experiment_provenance_verified
         ),
         "configurations": summaries,
         "claim_boundary": (

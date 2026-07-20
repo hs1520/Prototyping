@@ -116,6 +116,34 @@ class SurgicalOutcome:
         return "; ".join(parts) or "no-op"
 
 
+@dataclass
+class SurgicalAudit:
+    """Machine-readable account of a surgical call and local rejection gates."""
+    packet_provided: bool = False
+    packet_validated: bool = False
+    scope_resolved: bool = False
+    llm_invoked: bool = False
+    response_count: int = 0
+    rejection_reasons: List[str] = field(default_factory=list)
+    final_status: str = "NOT_STARTED"
+
+    def reject(self, reason: str) -> None:
+        if reason not in self.rejection_reasons:
+            self.rejection_reasons.append(reason)
+        self.final_status = "REJECTED"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "packet_provided": self.packet_provided,
+            "packet_validated": self.packet_validated,
+            "scope_resolved": self.scope_resolved,
+            "llm_invoked": self.llm_invoked,
+            "response_count": self.response_count,
+            "rejection_reasons": list(self.rejection_reasons),
+            "final_status": self.final_status,
+        }
+
+
 def build_surgical_prompt(
     model_text: str,
     issues: List[str],
@@ -256,6 +284,7 @@ def merge_blocks(
     allowed_replacements: Optional[set[Tuple[str, str]]] = None,
     allowed_additions: Optional[set[Tuple[str, str]]] = None,
     allow_statements: bool = True,
+    rejection_notes: Optional[List[str]] = None,
 ) -> Optional[SurgicalOutcome]:
     """Merge LLM elements into *base* by exact block replacement / append.
 
@@ -276,22 +305,34 @@ def merge_blocks(
                     allowed_replacements is not None
                     and key not in allowed_replacements
                 ):
+                    if rejection_notes is not None:
+                        rejection_notes.append(
+                            f"replacement_out_of_scope:{key[0]}:{key[1]}"
+                        )
                     return None
                 start, end = span
                 text = text[:start] + el + text[end:]
                 out.replaced.append(key[1])
             else:
                 if allowed_additions is not None and key not in allowed_additions:
+                    if rejection_notes is not None:
+                        rejection_notes.append(
+                            f"addition_out_of_scope:{key[0]}:{key[1]}"
+                        )
                     return None
                 new_blocks.append(el)
                 out.added.append(key[1])
         elif el.endswith(";"):
             if not allow_statements:
+                if rejection_notes is not None:
+                    rejection_notes.append("package_statement_out_of_scope")
                 return None
             if _normalise(el) not in {_normalise(s) for s in re.findall(r"[^\n;{}]+;", text)}:
                 new_statements.append(el)
         else:
             out.notes.append(f"unrecognised element skipped: {el[:60]!r}")
+            if rejection_notes is not None:
+                rejection_notes.append("unrecognised_top_level_element")
 
     if new_blocks or new_statements:
         closing = text.rfind("}")
@@ -304,6 +345,8 @@ def merge_blocks(
         out.statements_added = len(new_statements)
 
     if text == base:
+        if rejection_notes is not None:
+            rejection_notes.append("merge_noop")
         return None  # nothing changed — not a usable refinement
     out.merged_text = text
     return out
@@ -496,21 +539,34 @@ def attempt_surgical_refinement(
     feedback: str = "",
     verbose: bool = False,
     repair_packet: Optional[Mapping[str, Any]] = None,
+    audit: Optional[SurgicalAudit] = None,
 ) -> Optional[SurgicalOutcome]:
     """One surgical refinement attempt; None means "fall back to full rewrite".
 
     Uses temperature escalation when the provider supports it: a low-temperature
     answer that fails to parse/merge/validate is retried warmer before giving up.
     """
-    if not model_text.strip() or not issues:
+    audit = audit if audit is not None else SurgicalAudit()
+    audit.packet_provided = repair_packet is not None
+    if not model_text.strip():
+        audit.reject("empty_model")
+        return None
+    if not issues:
+        audit.reject("empty_issue_set")
         return None
     scope_policy = None
     if repair_packet is not None:
+        audit.packet_validated = _packet_digest_valid(repair_packet)
         scope_policy = _repair_scope_policy(model_text, repair_packet)
         if scope_policy is None:
+            audit.reject(
+                "repair_packet_scope_unresolved"
+                if audit.packet_validated else "repair_packet_invalid"
+            )
             if verbose:
                 print("  [surgical] rejected: invalid or unresolved repair scope")
             return None
+        audit.scope_resolved = True
     prompt = build_surgical_prompt(
         model_text, issues, feedback, repair_packet=repair_packet
     )
@@ -521,25 +577,37 @@ def attempt_surgical_refinement(
             return cache[content]
         outcome: Optional[SurgicalOutcome] = None
         elements = extract_sysml_blocks(content)
-        if elements:
+        audit.response_count += 1
+        if not elements:
+            audit.reject("response_has_no_sysml_elements")
+        else:
+            merge_rejections: List[str] = []
             merged = merge_blocks(
                 model_text,
                 elements,
                 allowed_replacements=(scope_policy[0] if scope_policy else None),
                 allowed_additions=(scope_policy[1] if scope_policy else None),
                 allow_statements=scope_policy is None,
+                rejection_notes=merge_rejections,
             )
             if merged is not None:
                 ok, why = _gates_ok(model_text, merged.merged_text)
                 if ok:
                     outcome = merged
+                    audit.final_status = "ACCEPTED"
                 elif verbose:
                     print(f"  [surgical] rejected: {why}")
+                if not ok:
+                    audit.reject(f"preservation_gate_failed:{why}")
+            else:
+                for reason in merge_rejections or ["merge_rejected"]:
+                    audit.reject(reason)
         cache[content] = outcome
         return outcome
 
     escalate = getattr(llm, "chat_with_escalation", None)
     if callable(escalate):
+        audit.llm_invoked = True
         content, ok = escalate(
             prompt,
             system_prompt=SURGICAL_SYSTEM_PROMPT,
@@ -547,4 +615,5 @@ def attempt_surgical_refinement(
             temperatures=(0.2, 0.6),
         )
         return _try(content) if ok else None
+    audit.llm_invoked = True
     return _try(str(llm.chat(prompt, system_prompt=SURGICAL_SYSTEM_PROMPT)))

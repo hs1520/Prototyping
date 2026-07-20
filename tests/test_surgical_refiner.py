@@ -11,6 +11,7 @@ import json
 from typing import List, Optional
 
 from src.agents.surgical_refiner import (
+    SurgicalAudit,
     SurgicalOutcome,
     attempt_surgical_refinement,
     build_surgical_prompt,
@@ -205,11 +206,17 @@ class TestAttemptSurgicalRefinement:
             "    attribute unrelated : Real = 1.0;\n}\n```"
         ])
 
+        audit = SurgicalAudit()
         out = attempt_surgical_refinement(
-            llm, _BASE, self._ISSUES, repair_packet=_repair_packet()
+            llm, _BASE, self._ISSUES, repair_packet=_repair_packet(), audit=audit
         )
 
         assert out is None
+        assert audit.llm_invoked is True
+        assert audit.final_status == "REJECTED"
+        assert audit.rejection_reasons == [
+            "replacement_out_of_scope:part:Imu"
+        ]
 
     def test_scoped_packet_rejects_arbitrary_new_definition(self):
         llm = _ScriptedLLM([
@@ -226,11 +233,15 @@ class TestAttemptSurgicalRefinement:
         llm = _ScriptedLLM(["anything"])
         packet = _repair_packet()
         packet["scope"]["affected_elements"] = ["Imu"]
+        audit = SurgicalAudit()
 
         assert attempt_surgical_refinement(
-            llm, _BASE, self._ISSUES, repair_packet=packet
+            llm, _BASE, self._ISSUES, repair_packet=packet, audit=audit
         ) is None
         assert llm.calls == 0
+        assert audit.packet_validated is False
+        assert audit.llm_invoked is False
+        assert audit.rejection_reasons == ["repair_packet_invalid"]
 
     def test_escalation_recovers_from_bad_low_temp_answer(self):
         from src.llm.interface import LLMInterface, LLMResponse, Message

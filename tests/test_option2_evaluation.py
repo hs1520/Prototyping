@@ -65,6 +65,30 @@ def _run(status: str, route: str):
     }
 
 
+def _mark_formal_experiment(run):
+    digest = run["requirement_input"]["requirement_set_digest"]
+    run.update(
+        controlled_experiment=True,
+        pilot_only=False,
+        git={
+            "commit": "formal-commit",
+            "worktree_dirty": False,
+            "worktree_status": [],
+        },
+        runtime={"ready": True},
+        experiment_input_approval={
+            "gate": "APPROVED_FROZEN_REQUIREMENTS_AND_SOURCE_FIRST_GOLD",
+            "frozen_requirement_set_digest": digest,
+            "frozen_artifact_digest": "frozen-digest",
+            "gold_artifact_digest": "gold-digest",
+            "gold_reviewer": "Supervisor",
+            "gold_reviewed_at": "2026-07-20T12:00:00Z",
+            "gold_used_as_pipeline_input": False,
+        },
+    )
+    return run
+
+
 def test_aggregation_reports_raw_counts_and_cross_repetition_agreement():
     report = evaluate_configurations({
         "B2": [_run("PASS", "NO_FAILURE"), _run("PASS", "NO_FAILURE")]
@@ -107,6 +131,30 @@ def test_aggregation_reports_repair_success_and_strict_preservation():
     assert summary["regression_preservation"] == 0.5
 
 
+def test_pre_llm_blocks_do_not_pollute_repair_success_denominator():
+    run = _run("FAIL", "MODEL_SEMANTIC_FAULT")
+    run["robustness_options"] = {"failure_routing": True}
+    run["repair_decisions"]["semantic_repair_attempts"] = [{
+        "accepted": True,
+        "llm_invoked": True,
+        "new_diagnostic_ids": [],
+        "simulation_regressions": [],
+        "syntax_passed": True,
+        "score_preserved": True,
+    }]
+    run["repair_decisions"]["semantic_repair_blocks"] = [{
+        "accepted": False,
+        "llm_invoked": False,
+        "reason": "repair_not_authorised_or_packet_empty",
+    }]
+
+    summary = evaluate_configurations({"B2": [run]})["configurations"]["B2"]
+
+    assert summary["repair_attempt_count"] == 1
+    assert summary["repair_blocked_before_llm_count"] == 1
+    assert summary["repair_success"] == 1.0
+
+
 def test_unknown_configuration_is_rejected():
     with pytest.raises(ValueError, match="unknown"):
         evaluate_configurations({"B3": []})
@@ -124,7 +172,7 @@ def test_complete_design_records_paired_repetitions_and_mcts_seeds():
     groups = {}
     for configuration in ("B0", "B1", "B2"):
         runs = []
-        for repetition, seed in ((1, 20), (2, 21)):
+        for repetition, seed in ((1, 20), (2, 21), (3, 22)):
             run = _run("PASS", "NO_FAILURE")
             run.update(
                 configuration=configuration,
@@ -144,15 +192,34 @@ def test_complete_design_records_paired_repetitions_and_mcts_seeds():
         "required": True,
         "complete_configurations": True,
         "balanced_repetitions": True,
+        "minimum_repetitions_met": True,
         "repetitions_recorded": True,
         "paired_repetitions": True,
         "paired_mcts_seeds": True,
         "paired_generation_seeds": True,
         "generation_seed_controls": ["PROVIDER_BEST_EFFORT"],
-        "run_counts": {"B0": 2, "B1": 2, "B2": 2},
+        "run_counts": {"B0": 3, "B1": 3, "B2": 3},
         "valid": True,
     }
     assert report["controlled_comparison_valid"] is False
+
+
+def test_complete_design_requires_at_least_three_repetitions():
+    groups = {}
+    for configuration in ("B0", "B1", "B2"):
+        groups[configuration] = []
+        for repetition in (1, 2):
+            run = _run("PASS", "NO_FAILURE")
+            run.update(
+                configuration=configuration,
+                repetition=repetition,
+                mcts_seed=19 + repetition,
+                generation_seed=1019 + repetition,
+            )
+            groups[configuration].append(run)
+
+    with pytest.raises(ValueError, match="at least three"):
+        evaluate_configurations(groups, require_complete_design=True)
 
 
 def test_complete_design_with_uniform_posthoc_is_valid_controlled_comparison():
@@ -164,26 +231,56 @@ def test_complete_design_with_uniform_posthoc_is_valid_controlled_comparison():
     )
     groups = {}
     for configuration in ("B0", "B1", "B2"):
-        run = _run("PASS", "NO_FAILURE")
-        run.update(
-            configuration=configuration,
-            repetition=1,
-            mcts_seed=20,
-            generation_seed=1020,
-            generation_seed_control="PROVIDER_BEST_EFFORT",
-            posthoc_evaluation=deepcopy(posthoc),
-            posthoc_model_digest_verified=True,
-        )
-        groups[configuration] = [run]
+        runs = []
+        for repetition in (1, 2, 3):
+            run = _mark_formal_experiment(_run("PASS", "NO_FAILURE"))
+            run.update(
+                configuration=configuration,
+                repetition=repetition,
+                mcts_seed=19 + repetition,
+                generation_seed=1019 + repetition,
+                generation_seed_control="PROVIDER_BEST_EFFORT",
+                posthoc_evaluation=deepcopy(posthoc),
+                posthoc_model_digest_verified=True,
+            )
+            runs.append(run)
+        groups[configuration] = runs
 
     report = evaluate_configurations(
         groups,
         require_complete_design=True,
         require_uniform_posthoc=True,
+        require_experiment_provenance=True,
     )
 
     assert report["controlled_comparison_valid"] is True
     assert report["posthoc_measurement_control"]["verified"] is True
+    assert report["experiment_provenance_control"]["verified"] is True
+
+
+def test_strict_controlled_evaluation_rejects_pilot_provenance():
+    groups = {}
+    for configuration in ("B0", "B1", "B2"):
+        runs = []
+        for repetition in (1, 2, 3):
+            run = _run("PASS", "NO_FAILURE")
+            run.update(
+                configuration=configuration,
+                repetition=repetition,
+                mcts_seed=19 + repetition,
+                generation_seed=1019 + repetition,
+                controlled_experiment=False,
+                pilot_only=True,
+            )
+            runs.append(run)
+        groups[configuration] = runs
+
+    with pytest.raises(ValueError, match="formal --experiment provenance"):
+        evaluate_configurations(
+            groups,
+            require_complete_design=True,
+            require_experiment_provenance=True,
+        )
 
 
 def test_strict_measurement_rejects_different_posthoc_stack_versions():
