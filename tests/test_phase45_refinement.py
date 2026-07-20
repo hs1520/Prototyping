@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -576,6 +576,12 @@ class TestVerificationAnchorPass:
             lambda **kwargs: SurgicalOutcome(merged_text=anchored_text),
         )
         monkeypatch.setattr(
+            "src.agents.surgical_refiner.build_dependency_closed_context",
+            lambda *args, **kwargs: SimpleNamespace(
+                to_dict=lambda: {"mode": "TEST_DEPENDENCY_SLICE"}
+            ),
+        )
+        monkeypatch.setattr(
             orch, "_run_simulation",
             lambda text, model_name: after_sim,
         )
@@ -656,6 +662,12 @@ class TestFunctionalClosurePass:
         monkeypatch.setattr(
             "src.agents.surgical_refiner.attempt_surgical_refinement", fake_repair
         )
+        monkeypatch.setattr(
+            "src.agents.surgical_refiner.build_dependency_closed_context",
+            lambda *args, **kwargs: SimpleNamespace(
+                to_dict=lambda: {"mode": "TEST_DEPENDENCY_SLICE"}
+            ),
+        )
         monkeypatch.setattr(orch, "_functional_verification_gap_issues", fake_gaps)
         monkeypatch.setattr(orch, "_run_simulation", lambda *args, **kwargs: simulation)
 
@@ -674,13 +686,16 @@ class TestFunctionalClosurePass:
         assert len(repair_issues) == 2
         assert "REQ_FUNC_006" in " ".join(repair_issues[0])
         assert "REQ_FUNC_008" in " ".join(repair_issues[0])
-        assert orch.last_functional_closure == {
-            "status": "CLOSED",
-            "initial_gap_req_ids": ["REQ_FUNC_006", "REQ_FUNC_008"],
-            "remaining_gap_req_ids": [],
-            "attempts": 2,
-            "accepted_repairs": 2,
-        }
+        closure = orch.last_functional_closure
+        assert closure["status"] == "CLOSED"
+        assert closure["initial_gap_req_ids"] == ["REQ_FUNC_006", "REQ_FUNC_008"]
+        assert closure["remaining_gap_req_ids"] == []
+        assert closure["attempts"] == 2
+        assert closure["accepted_repairs"] == 2
+        assert [item["status"] for item in closure["repair_contexts"]] == [
+            "ACCEPTED",
+            "ACCEPTED",
+        ]
 
     def test_unrepaired_functional_gaps_remain_explicitly_open(
         self, monkeypatch: pytest.MonkeyPatch
@@ -699,6 +714,12 @@ class TestFunctionalClosurePass:
         monkeypatch.setattr(
             "src.agents.surgical_refiner.attempt_surgical_refinement",
             lambda **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "src.agents.surgical_refiner.build_dependency_closed_context",
+            lambda *args, **kwargs: SimpleNamespace(
+                to_dict=lambda: {"mode": "TEST_DEPENDENCY_SLICE"}
+            ),
         )
 
         returned, _, _ = orch._functional_closure_pass(

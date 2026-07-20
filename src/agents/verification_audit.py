@@ -23,7 +23,9 @@ rewriting the spec instead.
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from typing import Iterable, List, Optional
+
+from ..prototyping.contract_types import normalise_req_id
 
 _ISSUE_PREFIX = "[VERIFY-GAP]"
 _EXTERNAL_EVIDENCE_PATTERNS = (
@@ -74,6 +76,7 @@ def verification_gap_issues(
     model_name: str,
     limit: int = 6,
     strict: bool = False,
+    allowed_req_ids: Optional[Iterable[str]] = None,
 ) -> List[str]:
     """Return surgical-refinement issues for requirements no verification tier anchors.
 
@@ -94,8 +97,14 @@ def verification_gap_issues(
         if strict:
             raise
         return []
+    allowed = (
+        {normalise_req_id(str(req_id)) for req_id in allowed_req_ids}
+        if allowed_req_ids is not None else None
+    )
     issues: List[str] = []
     for row in rows:
+        if allowed is not None and normalise_req_id(row.req_id) not in allowed:
+            continue
         behavioral_failed = "behavioral_sim_failed" in row.tiers
         if row.status != "unassigned" and not behavioral_failed:
             continue
@@ -154,6 +163,7 @@ def functional_verification_gap_issues(
     model_name: str,
     limit: int = 100,
     strict: bool = False,
+    allowed_req_ids: Optional[Iterable[str]] = None,
 ) -> List[str]:
     """Model-fixable functional gaps that require a dedicated closure pass.
 
@@ -164,7 +174,8 @@ def functional_verification_gap_issues(
     """
     return [
         issue for issue in verification_gap_issues(
-            model_text, model_name, limit=limit, strict=strict
+            model_text, model_name, limit=limit, strict=strict,
+            allowed_req_ids=allowed_req_ids,
         )
         if _FUNC_GAP_RE.search(issue)
     ]

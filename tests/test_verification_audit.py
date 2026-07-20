@@ -96,6 +96,31 @@ def test_audit_excludes_external_measurement_gaps_from_surgical_llm():
     assert "REQ_PERF_001" not in joined
 
 
+def test_audit_excludes_model_requirements_outside_admitted_input_scope():
+    model = """package D {
+        requirement def REQ_FUNC_006 {
+            doc /* Update a valid waypoint command within 1 second. */
+        }
+        requirement def REQ_FUNC_008 {
+            doc /* Transmit a health report within 5 seconds of landing. */
+        }
+        part def Controller {
+            satisfy requirement REQ_FUNC_006;
+            satisfy requirement REQ_FUNC_008;
+        }
+    }"""
+
+    issues = verification_gap_issues(
+        model,
+        model_name="D",
+        allowed_req_ids={"REQ_FUNC_006"},
+    )
+
+    joined = "\n".join(issues)
+    assert "REQ_FUNC_006" in joined
+    assert "REQ_FUNC_008" not in joined
+
+
 def test_audit_issue_prefix_is_recognisable():
     issues = verification_gap_issues(_MODEL, model_name="D")
     assert all(is_verify_gap_issue(i) for i in issues)

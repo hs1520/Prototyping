@@ -373,6 +373,7 @@ class Orchestrator:
         # advisory general anchor pass, this is recomputed after every final
         # refinement path and exposed to authoritative publication gates.
         self.last_functional_closure = None
+        self.last_verification_anchor_attempts: List[Dict[str, Any]] = []
         # Stimulus/envelope/response/oracle contracts from requirement intake.
         # High-fidelity runners consume these instead of reinterpreting prose
         # with unrelated hard-coded thresholds.
@@ -487,6 +488,7 @@ class Orchestrator:
         reset_suppressed()
         self.last_semantic_repair_attempts = []
         self.last_semantic_repair_blocks = []
+        self.last_verification_anchor_attempts = []
         self.last_requirement_input = {}
         self.last_approved_contract_provenance = None
 
@@ -612,6 +614,9 @@ class Orchestrator:
             "evaluation_history": self.state.evaluation_history,
             "simulation_result":  final_sim,
             "functional_closure": dict(self.last_functional_closure or {}),
+            "verification_anchor_attempts": list(
+                self.last_verification_anchor_attempts
+            ),
             "requirement_semantic_analysis": dict(
                 self.last_requirement_semantic_analysis or {}
             ),
@@ -915,6 +920,9 @@ class Orchestrator:
             "evaluation_history": combined_history,
             "simulation_result":  final_sim,
             "functional_closure": dict(self.last_functional_closure or {}),
+            "verification_anchor_attempts": list(
+                self.last_verification_anchor_attempts
+            ),
             # ── DSE-specific fields ───────────────────────────────────────────
             "design_space_summary": design_space.get_summary(),
             "design_space_parameters": [
@@ -2068,9 +2076,22 @@ class Orchestrator:
         """
         try:
             from .verification_audit import verification_gap_issues
-            return verification_gap_issues(sysml_text, model_name)
+            return verification_gap_issues(
+                sysml_text,
+                model_name,
+                allowed_req_ids=self._active_requirement_ids(),
+            )
         except Exception:
             return []
+
+    def _active_requirement_ids(self) -> Optional[set[str]]:
+        """IDs admitted by Phase 1/frozen input; None only before input exists."""
+        source_digests = (self.last_requirement_input or {}).get(
+            "source_digests"
+        )
+        if not isinstance(source_digests, Mapping):
+            return None
+        return {str(req_id) for req_id in source_digests}
 
     def _functional_verification_gap_issues(
         self, sysml_text: str, model_name: str
@@ -2079,7 +2100,8 @@ class Orchestrator:
         try:
             from .verification_audit import functional_verification_gap_issues
             return functional_verification_gap_issues(
-                sysml_text, model_name, strict=True
+                sysml_text, model_name, strict=True,
+                allowed_req_ids=self._active_requirement_ids(),
             )
         except Exception as exc:
             raise RuntimeError(
@@ -2166,6 +2188,7 @@ class Orchestrator:
         initial_ids = self._gap_req_ids(gaps)
         attempts = 0
         accepted = 0
+        repair_contexts: List[Dict[str, Any]] = []
 
         if not gaps:
             self.last_functional_closure = {
@@ -2174,6 +2197,7 @@ class Orchestrator:
                 "remaining_gap_req_ids": [],
                 "attempts": 0,
                 "accepted_repairs": 0,
+                "repair_contexts": [],
             }
             return current, current_score, current_sim
 
@@ -2187,7 +2211,11 @@ class Orchestrator:
         if not self.use_surgical_refinement:
             print("  └─ ⚠ surgical refinement disabled; functional gaps remain", flush=True)
         else:
-            from .surgical_refiner import attempt_surgical_refinement
+            from .surgical_refiner import (
+                SurgicalAudit,
+                attempt_surgical_refinement,
+                build_dependency_closed_context,
+            )
             from .verification_audit import behavioral_result_regressed
 
             for idx in range(max_iters):
@@ -2200,9 +2228,30 @@ class Orchestrator:
                     f"{', '.join(sorted(before_ids))}",
                     flush=True,
                 )
+                full_text = get_sysml_text(current)
+                context = build_dependency_closed_context(
+                    full_text,
+                    gaps,
+                    allowed_req_ids=self._active_requirement_ids(),
+                )
+                if context is None:
+                    repair_contexts.append({
+                        "pass": idx + 1,
+                        "status": "BLOCKED",
+                        "reason": "dependency_closed_context_unresolved",
+                        "target_req_ids": sorted(before_ids),
+                        "llm_invoked": False,
+                    })
+                    print(
+                        "  │    ⚠ dependency-closed owner context unresolved; "
+                        "LLM not called",
+                        flush=True,
+                    )
+                    continue
+                surgical_audit = SurgicalAudit()
                 repaired = attempt_surgical_refinement(
                     llm=self.llm,
-                    model_text=get_sysml_text(current),
+                    model_text=full_text,
                     issues=gaps,
                     feedback=(
                         "This is the terminal functional-closure pass. Repair the "
@@ -2210,7 +2259,16 @@ class Orchestrator:
                         "constraint chain for every listed FUNC requirement."
                     ),
                     verbose=self.verbose,
+                    audit=surgical_audit,
+                    context_slice=context,
                 )
+                context_record = {
+                    "pass": idx + 1,
+                    "context": context.to_dict(),
+                    "surgical_audit": surgical_audit.to_dict(),
+                    "status": "CANDIDATE" if repaired is not None else "REJECTED",
+                }
+                repair_contexts.append(context_record)
                 if repaired is None:
                     print("  │    ⚠ no syntax-safe surgical result", flush=True)
                     continue
@@ -2248,6 +2306,7 @@ class Orchestrator:
                     current_score = cand_eval.weighted_total
                     gaps = remaining
                     accepted += 1
+                    context_record["status"] = "ACCEPTED"
                     print(
                         f"  │    ✓ accepted: {len(before_ids)} -> "
                         f"{len(after_ids)} functional gap(s)",
@@ -2255,6 +2314,8 @@ class Orchestrator:
                     )
                 else:
                     why = "regression" if regressed else "no functional-gap reduction"
+                    context_record["status"] = "REJECTED"
+                    context_record["post_merge_reason"] = why
                     print(f"  │    ⚠ rejected: {why}", flush=True)
 
         remaining_ids = self._gap_req_ids(gaps)
@@ -2265,6 +2326,7 @@ class Orchestrator:
             "remaining_gap_req_ids": remaining_ids,
             "attempts": attempts,
             "accepted_repairs": accepted,
+            "repair_contexts": repair_contexts,
         }
         if remaining_ids:
             print(
@@ -2299,13 +2361,45 @@ class Orchestrator:
         print(f"  ~ Quality met, but {len(verify_gaps)} requirement(s) "
               f"would be UNASSIGNED in the verification matrix — "
               f"one surgical anchor pass", flush=True)
-        from .surgical_refiner import attempt_surgical_refinement
+        from .surgical_refiner import (
+            SurgicalAudit,
+            attempt_surgical_refinement,
+            build_dependency_closed_context,
+        )
+        full_text = get_sysml_text(current_model)
+        context = build_dependency_closed_context(
+            full_text,
+            verify_gaps,
+            allowed_req_ids=self._active_requirement_ids(),
+        )
+        if context is None:
+            self.last_verification_anchor_attempts.append({
+                "status": "BLOCKED",
+                "reason": "dependency_closed_context_unresolved",
+                "target_req_ids": self._gap_req_ids(verify_gaps),
+                "llm_invoked": False,
+            })
+            print(
+                "  ⚠ Anchor pass blocked: dependency-closed owner context "
+                "could not be resolved",
+                flush=True,
+            )
+            return current_model, sim_result, False
+        surgical_audit = SurgicalAudit()
         anchored = attempt_surgical_refinement(
             llm=self.llm,
-            model_text=get_sysml_text(current_model),
+            model_text=full_text,
             issues=verify_gaps,
             verbose=self.verbose,
+            audit=surgical_audit,
+            context_slice=context,
         )
+        attempt_record = {
+            "status": "CANDIDATE" if anchored is not None else "REJECTED",
+            "context": context.to_dict(),
+            "surgical_audit": surgical_audit.to_dict(),
+        }
+        self.last_verification_anchor_attempts.append(attempt_record)
         if anchored is None:
             print("  ⚠ Anchor pass not applicable (LLM output failed "
                   "the surgical gates)", flush=True)
@@ -2332,10 +2426,15 @@ class Orchestrator:
             or anchor_eval.weighted_total < rule_score - 0.05
         )
         if not regressed and len(remaining) < len(verify_gaps):
+            attempt_record["status"] = "ACCEPTED"
             print(f"  ✓ Anchor pass accepted: verification gaps "
                   f"{len(verify_gaps)} → {len(remaining)}", flush=True)
             return anchor_model, anchor_sim, True
 
+        attempt_record["status"] = "REJECTED"
+        attempt_record["post_merge_reason"] = (
+            "regression" if regressed else "no_verification_gap_reduction"
+        )
         print("  ⚠ Anchor pass rejected (no gap reduction or "
               "regression) — keeping the original model", flush=True)
         return current_model, sim_result, False
@@ -2503,6 +2602,7 @@ class Orchestrator:
 
         repair_packet: Dict[str, Any] = {}
         repair_packet_provenance: Dict[str, Any] = {}
+        repair_context = None
         if semantic_repair:
             from ..prototyping.failure_routing import (
                 MODEL_SEMANTIC_FAULT,
@@ -2579,6 +2679,40 @@ class Orchestrator:
                     flush=True,
                 )
                 return None
+            from .surgical_refiner import build_dependency_closed_context
+            repair_context = build_dependency_closed_context(
+                current_sysml,
+                current_semantic_issues,
+                repair_packet=repair_packet,
+                allowed_req_ids=self._active_requirement_ids(),
+            )
+            if repair_context is None:
+                self.last_semantic_repair_blocks.append({
+                    "block_event": len(self.last_semantic_repair_blocks) + 1,
+                    "before_diagnostic_ids": sorted(
+                        self._semantic_diagnostic_ids(
+                            current_sysml, current_model.name
+                        )
+                    ),
+                    "after_diagnostic_ids": [],
+                    "removed_diagnostic_ids": [],
+                    "new_diagnostic_ids": [],
+                    "syntax_passed": None,
+                    "simulation_regressions": [],
+                    "score_preserved": None,
+                    "accepted": False,
+                    "llm_invoked": False,
+                    "reason": "dependency_closed_context_unresolved",
+                    "repair_route_decisions": [
+                        decision.to_dict() for decision in route_decisions
+                    ],
+                })
+                print(
+                    "  ⚠ Option 2 semantic repair blocked before the LLM: "
+                    "dependency-closed owner context could not be resolved",
+                    flush=True,
+                )
+                return None
             if repair_packet:
                 scope = repair_packet.get("scope", {})
                 repair_packet_provenance = {
@@ -2605,6 +2739,7 @@ class Orchestrator:
                     "repair_route_decisions": [
                         decision.to_dict() for decision in route_decisions
                     ],
+                    "repair_context": repair_context.to_dict(),
                 }
 
         if self.use_surgical_refinement:
@@ -2634,6 +2769,7 @@ class Orchestrator:
                 verbose=self.verbose,
                 repair_packet=repair_packet or None,
                 audit=surgical_audit,
+                context_slice=(repair_context if semantic_repair else None),
             )
             if semantic_repair:
                 repair_packet_provenance[

@@ -126,6 +126,12 @@ class SurgicalAudit:
     response_count: int = 0
     rejection_reasons: List[str] = field(default_factory=list)
     final_status: str = "NOT_STARTED"
+    context_mode: str = "FULL_MODEL"
+    context_digest: Optional[str] = None
+    context_line_count: int = 0
+    full_model_line_count: int = 0
+    included_definition_keys: List[str] = field(default_factory=list)
+    target_req_ids: List[str] = field(default_factory=list)
 
     def reject(self, reason: str) -> None:
         if reason not in self.rejection_reasons:
@@ -141,6 +147,48 @@ class SurgicalAudit:
             "response_count": self.response_count,
             "rejection_reasons": list(self.rejection_reasons),
             "final_status": self.final_status,
+            "context_mode": self.context_mode,
+            "context_digest": self.context_digest,
+            "context_line_count": self.context_line_count,
+            "full_model_line_count": self.full_model_line_count,
+            "included_definition_keys": list(self.included_definition_keys),
+            "target_req_ids": list(self.target_req_ids),
+        }
+
+
+@dataclass(frozen=True)
+class RepairContextSlice:
+    """Dependency-closed prompt context; the full model remains local."""
+    text: str
+    target_req_ids: Tuple[str, ...]
+    included_definition_keys: Tuple[Tuple[str, str], ...]
+    allowed_replacements: frozenset[Tuple[str, str]]
+    allowed_additions: frozenset[Tuple[str, str]] = frozenset()
+    statement_count: int = 0
+    context_digest: str = ""
+    full_model_digest: str = ""
+    context_line_count: int = 0
+    full_model_line_count: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "mode": "DEPENDENCY_CLOSED_SLICE",
+            "target_req_ids": list(self.target_req_ids),
+            "included_definition_keys": [
+                f"{kind}:{name}" for kind, name in self.included_definition_keys
+            ],
+            "allowed_replacements": [
+                f"{kind}:{name}"
+                for kind, name in sorted(self.allowed_replacements)
+            ],
+            "allowed_additions": [
+                f"{kind}:{name}" for kind, name in sorted(self.allowed_additions)
+            ],
+            "statement_count": self.statement_count,
+            "context_digest": self.context_digest,
+            "full_model_digest": self.full_model_digest,
+            "context_line_count": self.context_line_count,
+            "full_model_line_count": self.full_model_line_count,
         }
 
 
@@ -149,13 +197,21 @@ def build_surgical_prompt(
     issues: List[str],
     feedback: str = "",
     repair_packet: Optional[Mapping[str, Any]] = None,
+    context_text: Optional[str] = None,
 ) -> str:
     """User prompt: the full model (read-only context) + the issues to fix."""
     numbered = "\n".join(f"{i}. {iss}" for i, iss in enumerate(issues, 1))
     hint = ", ".join(_affected_names(model_text, issues)) or "(infer from the issues)"
+    display_text = context_text if context_text is not None else model_text
+    context_label = (
+        "CURRENT MODEL DEPENDENCY SLICE (read-only; this is intentionally not "
+        "the complete model — return only authorised changed blocks):"
+        if context_text is not None else
+        "CURRENT MODEL (read-only context — return only the blocks you change):"
+    )
     sections = [
-        "CURRENT MODEL (read-only context — return only the blocks you change):",
-        f"```sysml\n{model_text}\n```",
+        context_label,
+        f"```sysml\n{display_text}\n```",
         f"ISSUES TO FIX:\n{numbered}",
     ]
     if repair_packet:
@@ -455,6 +511,204 @@ def _repair_scope_policy(
     return allowed_replacements, allowed_additions
 
 
+def _issue_req_ids(issues: List[str]) -> set[str]:
+    return {
+        match.upper().replace("-", "_")
+        for issue in issues
+        for match in re.findall(
+            r"\bREQ(?:[_-][A-Z0-9]+){2,}\b", str(issue), re.IGNORECASE
+        )
+    }
+
+
+def build_dependency_closed_context(
+    model_text: str,
+    issues: List[str],
+    *,
+    repair_packet: Optional[Mapping[str, Any]] = None,
+    allowed_req_ids: Optional[set[str]] = None,
+) -> Optional[RepairContextSlice]:
+    """Build the minimum deterministic model slice needed for one repair.
+
+    The slice contains target requirement definitions, complete owning blocks,
+    definitions referenced by those owners (two-hop closure), and only related
+    package usages/connects. It is prompt context, never the merge target.
+    """
+    target_req_ids = _issue_req_ids(issues)
+    packet_req_ids: set[str] = set()
+    if repair_packet is not None:
+        packet_req_ids = {
+            str(item).upper().replace("-", "_")
+            for item in (repair_packet.get("scope") or {}).get("req_ids", ())
+        }
+        target_req_ids.update(packet_req_ids)
+    if allowed_req_ids is not None:
+        normalized_allowed = {
+            str(item).upper().replace("-", "_") for item in allowed_req_ids
+        }
+        # A signed/scoped packet is one atomic authorization unit.  Silently
+        # trimming a contaminated packet would leave its digest and local edit
+        # policy authorizing more than the prompt slice shows, so fail closed.
+        if packet_req_ids - normalized_allowed:
+            return None
+        target_req_ids &= normalized_allowed
+    if not target_req_ids:
+        return None
+
+    elements = _package_body_elements(model_text)
+    definitions: list[tuple[Tuple[str, str], str]] = []
+    statements: list[str] = []
+    for element in elements:
+        key = _def_key(element)
+        if key is None:
+            statements.append(element)
+        else:
+            definitions.append((key, element))
+
+    affected_tokens = (
+        _scope_tokens(repair_packet) if repair_packet is not None else set()
+    )
+    issue_blob = " ".join(str(issue) for issue in issues)
+    affected_tokens.update(
+        match.group(2)
+        for match in _DEF_HEADER_RE.finditer(model_text)
+        if match.group(1).lower() != "requirement"
+        and re.search(rf"\b{re.escape(match.group(2))}\b", issue_blob)
+    )
+    # Requirement identifiers select owners only through their explicit
+    # ``satisfy`` relation above.  Treating every requirement name mentioned in
+    # the raw issue list as an affected element would re-admit an out-of-scope
+    # model requirement after the frozen-ID filter had removed it.
+    affected_tokens = {
+        token
+        for token in affected_tokens
+        if not re.fullmatch(
+            r"REQ(?:[_-][A-Z0-9]+){2,}", str(token), re.IGNORECASE
+        )
+    }
+    normalized_affected = {
+        _normalise(item).lower() for item in affected_tokens if item
+    }
+
+    primary: dict[Tuple[str, str], str] = {}
+    requirement_defs: dict[Tuple[str, str], str] = {}
+    for key, element in definitions:
+        normalized_element = _normalise(element).lower()
+        if key[0] == "requirement":
+            if key[1].upper().replace("-", "_") in target_req_ids:
+                requirement_defs[key] = element
+            continue
+        owns_target = any(
+            re.search(
+                rf"\bsatisfy(?:requirement)?{re.escape(req_id.lower())};",
+                normalized_element,
+            )
+            for req_id in target_req_ids
+        )
+        symbols = {
+            _normalise(item).lower()
+            for item in re.findall(r"\b[A-Za-z_]\w*\b", element)
+        }
+        affected = (
+            _normalise(key[1]).lower() in normalized_affected
+            or any(token in symbols for token in normalized_affected)
+        )
+        if owns_target or affected:
+            primary[key] = element
+    if not primary:
+        return None
+
+    included: dict[Tuple[str, str], str] = {
+        **requirement_defs,
+        **primary,
+    }
+    by_normalized_name = {
+        _normalise(key[1]).lower(): (key, element)
+        for key, element in definitions
+    }
+    frontier = list(primary.values())
+    for _depth in range(2):
+        referenced = {
+            _normalise(item).lower()
+            for element in frontier
+            for item in re.findall(r"\b[A-Za-z_]\w*\b", element)
+        }
+        new_frontier: list[str] = []
+        for symbol in sorted(referenced):
+            candidate = by_normalized_name.get(symbol)
+            if candidate is None:
+                continue
+            key, element = candidate
+            if key in included:
+                continue
+            if key[0] == "requirement":
+                # Never leak model-invented/unselected requirements into repair.
+                continue
+            included[key] = element
+            new_frontier.append(element)
+        frontier = new_frontier
+        if not frontier:
+            break
+
+    primary_part_names = {
+        key[1] for key in primary if key[0] == "part"
+    }
+    included_statements: list[str] = []
+    usage_names: set[str] = set()
+    for statement in statements:
+        usage = re.match(
+            r"^\s*part\s+([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)\s*;",
+            statement,
+        )
+        if usage and usage.group(2) in primary_part_names:
+            included_statements.append(statement)
+            usage_names.add(usage.group(1))
+        elif re.match(r"^\s*(?:private\s+)?import\b", statement):
+            included_statements.append(statement)
+    for statement in statements:
+        if not re.match(r"^\s*connect\b", statement):
+            continue
+        endpoint_usages = set(
+            re.findall(r"\b([A-Za-z_]\w*)\.[A-Za-z_]\w*\b", statement)
+        )
+        # A dangling peer would make the prompt slice misleading and pulling
+        # that peer's whole definition would quickly recreate the full model.
+        # Keep a connect only when every endpoint is already in the selected
+        # owner scope.
+        if endpoint_usages and endpoint_usages <= usage_names:
+            included_statements.append(statement)
+
+    package_match = re.search(r"\bpackage\s+([A-Za-z_]\w*)", model_text)
+    package_name = (
+        f"{package_match.group(1)}_RepairContext"
+        if package_match else "RepairContext"
+    )
+    ordered_definitions = [
+        (key, element) for key, element in definitions if key in included
+    ]
+    body_items = [element for _key, element in ordered_definitions]
+    body_items.extend(dict.fromkeys(included_statements))
+    indented = "\n\n".join(
+        "    " + item.replace("\n", "\n    ") for item in body_items
+    )
+    context_text = f"package {package_name} {{\n{indented}\n}}"
+    context_digest = hashlib.sha256(context_text.encode("utf-8")).hexdigest()
+    full_digest = hashlib.sha256(model_text.encode("utf-8")).hexdigest()
+    return RepairContextSlice(
+        text=context_text,
+        target_req_ids=tuple(sorted(target_req_ids)),
+        included_definition_keys=tuple(
+            key for key, _element in ordered_definitions
+        ),
+        allowed_replacements=frozenset(primary),
+        statement_count=len(dict.fromkeys(included_statements)),
+        context_digest=context_digest,
+        full_model_digest=full_digest,
+        context_line_count=len(context_text.splitlines()),
+        full_model_line_count=len(model_text.splitlines()),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Gated attempt (the orchestrator entry point)
 # ---------------------------------------------------------------------------
@@ -540,6 +794,7 @@ def attempt_surgical_refinement(
     verbose: bool = False,
     repair_packet: Optional[Mapping[str, Any]] = None,
     audit: Optional[SurgicalAudit] = None,
+    context_slice: Optional[RepairContextSlice] = None,
 ) -> Optional[SurgicalOutcome]:
     """One surgical refinement attempt; None means "fall back to full rewrite".
 
@@ -548,6 +803,26 @@ def attempt_surgical_refinement(
     """
     audit = audit if audit is not None else SurgicalAudit()
     audit.packet_provided = repair_packet is not None
+    audit.full_model_line_count = len(model_text.splitlines())
+    if context_slice is not None:
+        if context_slice.full_model_digest != hashlib.sha256(
+            model_text.encode("utf-8")
+        ).hexdigest():
+            audit.reject("repair_context_full_model_digest_mismatch")
+            return None
+        if not _issue_req_ids(issues) <= set(context_slice.target_req_ids):
+            audit.reject("repair_context_issue_scope_mismatch")
+            return None
+        audit.context_mode = "DEPENDENCY_CLOSED_SLICE"
+        audit.context_digest = context_slice.context_digest
+        audit.context_line_count = context_slice.context_line_count
+        audit.included_definition_keys = [
+            f"{kind}:{name}"
+            for kind, name in context_slice.included_definition_keys
+        ]
+        audit.target_req_ids = list(context_slice.target_req_ids)
+    else:
+        audit.context_line_count = audit.full_model_line_count
     if not model_text.strip():
         audit.reject("empty_model")
         return None
@@ -567,8 +842,21 @@ def attempt_surgical_refinement(
                 print("  [surgical] rejected: invalid or unresolved repair scope")
             return None
         audit.scope_resolved = True
+    elif context_slice is not None:
+        if not context_slice.allowed_replacements:
+            audit.reject("repair_context_has_no_authorised_owner")
+            return None
+        scope_policy = (
+            set(context_slice.allowed_replacements),
+            set(context_slice.allowed_additions),
+        )
+        audit.scope_resolved = True
     prompt = build_surgical_prompt(
-        model_text, issues, feedback, repair_packet=repair_packet
+        model_text,
+        issues,
+        feedback,
+        repair_packet=repair_packet,
+        context_text=(context_slice.text if context_slice is not None else None),
     )
     cache: Dict[str, Optional[SurgicalOutcome]] = {}
 

@@ -14,6 +14,7 @@ from src.agents.surgical_refiner import (
     SurgicalAudit,
     SurgicalOutcome,
     attempt_surgical_refinement,
+    build_dependency_closed_context,
     build_surgical_prompt,
     extract_sysml_blocks,
     merge_blocks,
@@ -38,6 +39,37 @@ _BASE = """package DroneSystem {
     connect imu.dataOut to fc.sensorIn;
 }"""
 
+_CONTEXT_MODEL = """package DroneSystem {
+    private import ScalarValues::*;
+    requirement def REQ_FUNC_006 {
+        doc /* incorporate a valid waypoint update within 1 second */
+    }
+    requirement def REQ_FUNC_008 {
+        doc /* send a health report after landing within 5 seconds */
+    }
+    action def CmdModifyWaypoint { }
+    action def CmdLandingCompleted { }
+    port def DataPort;
+    part def FlightController {
+        in port commandIn : DataPort;
+        satisfy requirement REQ_FUNC_006;
+        action def reviseWaypointSequence { }
+        state def WaypointManager {
+            state nominal;
+            state revised { entry action revise : reviseWaypointSequence; }
+            transition initial then nominal;
+            transition update first nominal accept CmdModifyWaypoint then revised;
+        }
+    }
+    part def CommunicationSystem {
+        satisfy requirement REQ_FUNC_008;
+        action def transmitHealthReport { }
+    }
+    part fc : FlightController;
+    part comms : CommunicationSystem;
+    connect comms.dataOut to fc.commandIn;
+}"""
+
 
 class _ScriptedLLM:
     """Duck-typed LLM returning scripted responses per temperature step."""
@@ -45,9 +77,11 @@ class _ScriptedLLM:
     def __init__(self, responses: List[str]):
         self._responses = list(responses)
         self.calls = 0
+        self.last_prompt = ""
 
     def chat(self, prompt, system_prompt="", **kw):
         self.calls += 1
+        self.last_prompt = prompt
         return self._responses[min(self.calls - 1, len(self._responses) - 1)]
 
 
@@ -242,6 +276,94 @@ class TestAttemptSurgicalRefinement:
         assert audit.packet_validated is False
         assert audit.llm_invoked is False
         assert audit.rejection_reasons == ["repair_packet_invalid"]
+
+    def test_dependency_slice_hides_unselected_requirements_and_components(self):
+        issues = [
+            "[VERIFY-GAP] REQ_FUNC_006 missing waypoint timing anchor",
+            "[VERIFY-GAP] REQ_FUNC_008 missing report timing anchor",
+        ]
+
+        context = build_dependency_closed_context(
+            _CONTEXT_MODEL,
+            issues,
+            allowed_req_ids={"REQ_FUNC_006"},
+        )
+
+        assert context is not None
+        assert context.target_req_ids == ("REQ_FUNC_006",)
+        assert "part def FlightController" in context.text
+        assert "action def CmdModifyWaypoint" in context.text
+        assert "REQ_FUNC_008" not in context.text
+        assert "part def CommunicationSystem" not in context.text
+        assert context.context_line_count < context.full_model_line_count
+
+    def test_dependency_slice_enforces_owner_scope_without_a_packet(self):
+        issues = ["[VERIFY-GAP] REQ_FUNC_006 missing waypoint timing anchor"]
+        context = build_dependency_closed_context(
+            _CONTEXT_MODEL,
+            issues,
+            allowed_req_ids={"REQ_FUNC_006"},
+        )
+        llm = _ScriptedLLM([
+            "```sysml\npart def CommunicationSystem { "
+            "action def unrelated { } }\n```"
+        ])
+        audit = SurgicalAudit()
+
+        outcome = attempt_surgical_refinement(
+            llm,
+            _CONTEXT_MODEL,
+            issues,
+            context_slice=context,
+            audit=audit,
+        )
+
+        assert outcome is None
+        assert audit.context_mode == "DEPENDENCY_CLOSED_SLICE"
+        assert audit.rejection_reasons == [
+            "replacement_out_of_scope:part:CommunicationSystem"
+        ]
+        assert "REQ_FUNC_008" not in llm.last_prompt
+        assert "part def CommunicationSystem" not in llm.last_prompt
+
+    def test_context_issue_scope_mismatch_blocks_before_llm(self):
+        context = build_dependency_closed_context(
+            _CONTEXT_MODEL,
+            ["[VERIFY-GAP] REQ_FUNC_006 missing waypoint timing anchor"],
+            allowed_req_ids={"REQ_FUNC_006"},
+        )
+        llm = _ScriptedLLM(["anything"])
+        audit = SurgicalAudit()
+
+        outcome = attempt_surgical_refinement(
+            llm,
+            _CONTEXT_MODEL,
+            [
+                "[VERIFY-GAP] REQ_FUNC_006 missing waypoint timing anchor",
+                "[VERIFY-GAP] REQ_FUNC_008 out-of-scope issue",
+            ],
+            context_slice=context,
+            audit=audit,
+        )
+
+        assert outcome is None
+        assert llm.calls == 0
+        assert audit.rejection_reasons == [
+            "repair_context_issue_scope_mismatch"
+        ]
+
+    def test_packet_with_out_of_scope_requirement_is_not_silently_trimmed(self):
+        packet = _repair_packet()
+        packet["scope"]["req_ids"] = ["REQ_SAFE_001", "REQ_SAFE_999"]
+
+        context = build_dependency_closed_context(
+            _BASE,
+            ["[SEMANTIC-TRACE] REQ_SAFE_001 missing response"],
+            repair_packet=packet,
+            allowed_req_ids={"REQ_SAFE_001"},
+        )
+
+        assert context is None
 
     def test_escalation_recovers_from_bad_low_temp_answer(self):
         from src.llm.interface import LLMInterface, LLMResponse, Message
