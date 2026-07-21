@@ -44,11 +44,30 @@ class RevisedExperimentArm(str, Enum):
 
     @property
     def implemented(self) -> bool:
+        """The arm's intervention is wired and runnable end-to-end.
+
+        R2-BBAG became runnable once the SysML A/G profile, extractor, and bounded
+        compositional checker landed (Increment 2). Runnability is distinct from
+        :attr:`evaluation_ready`.
+        """
+        return self in {
+            self.CURRENT, self.BLACKBOARD_CONTEXT, self.SEMANTIC_ASSURANCE
+        }
+
+    @property
+    def evaluation_ready(self) -> bool:
+        """The arm can be scored and pooled into the controlled comparison.
+
+        R0/R1 rest on deterministic coordination/context metrics. R2-BBAG runs its
+        A/G intervention and emits the trace, but its accuracy/F1 needs the
+        independent human gold evaluator (Increment 4, design §13/§15); until that
+        exists R2 is runnable-but-not-poolable and must not be scored against gold.
+        """
         return self in {self.CURRENT, self.BLACKBOARD_CONTEXT}
 
     @property
     def uses_blackboard(self) -> bool:
-        return self is self.BLACKBOARD_CONTEXT
+        return self in {self.BLACKBOARD_CONTEXT, self.SEMANTIC_ASSURANCE}
 
 
 def revised_arm_metadata(arm: RevisedExperimentArm) -> dict[str, object]:
@@ -56,6 +75,7 @@ def revised_arm_metadata(arm: RevisedExperimentArm) -> dict[str, object]:
         "experiment_namespace": REVISED_EXPERIMENT_NAMESPACE,
         "configuration": arm.value,
         "implemented": arm.implemented,
+        "evaluation_ready": arm.evaluation_ready,
         "blackboard_context_intervention": arm is RevisedExperimentArm.BLACKBOARD_CONTEXT,
         "semantic_assurance_intervention": arm is RevisedExperimentArm.SEMANTIC_ASSURANCE,
         "global_long_session_diagnostic": (

@@ -637,7 +637,7 @@ class Orchestrator:
         robustness_artifacts = self._build_robustness_artifacts(
             final_sysml, system_name
         )
-        collaboration_artifacts = self._build_collaboration_artifacts()
+        collaboration_artifacts = self._build_collaboration_artifacts(final_sysml)
         return {
             "system_name":        system_name,
             "requirements":       requirements,
@@ -826,10 +826,9 @@ class Orchestrator:
         requirements = generate_result["requirements"]
         system_name  = generate_result["system_name"]
 
-        from ..prototyping.experiment_arms import RevisedExperimentArm
         if (
-            self.revised_experiment_arm
-            is RevisedExperimentArm.BLACKBOARD_CONTEXT
+            self.revised_experiment_arm is not None
+            and self.revised_experiment_arm.uses_blackboard
             and self.blackboard is None
         ):
             raise ValueError(
@@ -949,7 +948,7 @@ class Orchestrator:
         robustness_artifacts = self._build_robustness_artifacts(
             final_sysml, system_name
         )
-        collaboration_artifacts = self._build_collaboration_artifacts()
+        collaboration_artifacts = self._build_collaboration_artifacts(final_sysml)
         # Merge evaluation histories: generate phase first, then explore phase.
         # **generate_result would overwrite with generate-only history if we
         # relied on dict spreading alone, so we concatenate explicitly.
@@ -1402,9 +1401,8 @@ class Orchestrator:
         This is the R1-BBCTX intervention.  The envelope is derived only from
         run-time source/model records; evaluator gold has no API into it.
         """
-        from ..prototyping.experiment_arms import RevisedExperimentArm
-
-        if self.revised_experiment_arm is not RevisedExperimentArm.BLACKBOARD_CONTEXT:
+        arm = self.revised_experiment_arm
+        if arm is None or not arm.uses_blackboard:
             self.blackboard = None
             self.context_builder = None
             self.task_sessions = None
@@ -1585,10 +1583,15 @@ class Orchestrator:
             committed.revision, committed.model_digest
         )
 
-    def _build_collaboration_artifacts(self) -> Dict[str, Any]:
+    def _build_collaboration_artifacts(
+        self, model_text: Optional[str] = None
+    ) -> Dict[str, Any]:
         if self.revised_experiment_arm is None:
             return {}
-        from ..prototyping.experiment_arms import revised_arm_metadata
+        from ..prototyping.experiment_arms import (
+            RevisedExperimentArm,
+            revised_arm_metadata,
+        )
 
         result: Dict[str, Any] = {
             "revised_experiment": revised_arm_metadata(
@@ -1603,7 +1606,46 @@ class Orchestrator:
                     include_messages=True
                 ),
             }
+            if (
+                self.revised_experiment_arm
+                is RevisedExperimentArm.SEMANTIC_ASSURANCE
+                and model_text is not None
+            ):
+                result["ag_contract_graph"] = self._build_ag_trace(model_text)
         return result
+
+    def _build_ag_trace(self, model_text: str) -> Dict[str, Any]:
+        """R2-BBAG A/G intervention: extract and check the bounded A/G graph from
+        the committed model and publish the diagnostics as a typed ANALYSIS record.
+
+        The committed SysML model is the sole authority (§6.2): the graph is read
+        out of the model, never supplied from JSON, so a model that carries no A/G
+        contracts yields an honest INCOMPLETE trace rather than fabricated content.
+        This is intervention evidence, not gold-scored accuracy — the derived view
+        records ``evaluation_ready=False`` until the independent evaluator lands.
+        """
+        from ..prototyping.ag_contracts import check_ag_graph
+        from ..prototyping.ag_extractor import extract_ag_graph
+        from ..prototyping.blackboard import RecordType
+
+        revision = self.blackboard.current_revision
+        digest = self.blackboard.current_model.model_digest
+        graph = extract_ag_graph(model_text, revision=revision, model_digest=digest)
+        report = check_ag_graph(graph)
+        self.blackboard.publish(
+            RecordType.ANALYSIS,
+            "analysis.ag_trace",
+            "AGChecker",
+            {
+                "verdict": report.verdict,
+                "system_completeness": report.system_completeness,
+                "component_completeness": dict(report.component_completeness),
+                "diagnostic_codes": [d.code for d in report.diagnostics],
+                "checker_version": report.checker_version,
+                "evaluation_ready": False,
+            },
+        )
+        return report.to_dict()
 
     def _build_robustness_artifacts(
         self, model_text: str, model_name: str

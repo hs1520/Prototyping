@@ -53,14 +53,24 @@ def test_legacy_and_revised_experiment_namespaces_cannot_be_confused():
 
 
 def test_unimplemented_revised_arm_and_mixed_legacy_intervention_fail_closed():
+    # R1-LONG is still reserved-but-not-implemented and must fail closed.
     with pytest.raises(NotImplementedError):
-        Orchestrator(_NoCallLLM(), revised_experiment_arm="R2-BBAG")
+        Orchestrator(_NoCallLLM(), revised_experiment_arm="R1-LONG")
     with pytest.raises(ValueError, match="cannot be mixed"):
         Orchestrator(
             _NoCallLLM(),
             robustness_options=RobustnessOptions.b1(),
             revised_experiment_arm="R1-BBCTX",
         )
+
+
+def test_r2_arm_is_runnable_but_not_evaluation_ready():
+    # R2-BBAG runs its A/G intervention (Increment 2) but is not gold-poolable
+    # until the independent evaluator lands (§13/§15).
+    assert RevisedExperimentArm.SEMANTIC_ASSURANCE.implemented is True
+    assert RevisedExperimentArm.SEMANTIC_ASSURANCE.evaluation_ready is False
+    orch = Orchestrator(_NoCallLLM(), revised_experiment_arm="R2-BBAG")
+    assert orch.revised_experiment_arm is RevisedExperimentArm.SEMANTIC_ASSURANCE
 
 
 def test_blackboard_is_revision_bound_and_sysml_is_the_only_commit_authority():
@@ -276,3 +286,69 @@ def test_r1_rejects_and_closes_the_task_when_design_agent_raises():
     assert snapshot["tasks"][0]["status"] == "REJECTED"
     sessions = orchestrator.task_sessions.snapshot()["sessions"]
     assert sessions[0]["status"] == "REJECTED"
+
+
+# --- R2-BBAG A/G wiring (Increment 2, step 1: orchestrator integration) -------
+
+_MINI_AG = """package MiniAG {
+    requirement def SysC {
+        attribute start : Boolean;
+        attribute done : Boolean;
+        attribute maxLatency : Real = 0.5;
+        assume constraint env_start { start }
+        require constraint g_done { done }
+    }
+    requirement def CompC {
+        attribute start : Boolean;
+        attribute done : Boolean;
+        attribute latencyBudget : Real = 0.3;
+        assume constraint env_start { start }
+        require constraint g_done { done }
+    }
+    dependency decomposeC from SysC to CompC;
+}"""
+
+
+def _r2_orchestrator_with_committed_model(model_text, arm="R2-BBAG"):
+    orch = Orchestrator(_NoCallLLM(), revised_experiment_arm=arm)
+    orch.blackboard = Blackboard("MiniAG")
+    orch.context_builder = ContextBuilder(orch.blackboard)
+    orch.task_sessions = TaskSessionRegistry()
+    orch.blackboard.commit_model(
+        model_text, base_revision=orch.blackboard.current_revision, producer="test"
+    )
+    return orch
+
+
+def test_r2_wiring_extracts_checks_and_publishes_ag_trace():
+    orch = _r2_orchestrator_with_committed_model(_MINI_AG)
+    arts = orch._build_collaboration_artifacts(_MINI_AG)
+
+    graph = arts["ag_contract_graph"]
+    assert graph["verdict"] == "PASS"
+    assert graph["source_model_revision"] == orch.blackboard.current_revision
+    assert graph["source_model_digest"] == orch.blackboard.current_model.model_digest
+    assert arts["revised_experiment"]["evaluation_ready"] is False
+
+    # a typed ANALYSIS record was published to the blackboard at current revision
+    ag = [r for r in orch.blackboard.snapshot()["records"]
+          if r["topic"] == "analysis.ag_trace"]
+    assert len(ag) == 1
+    assert ag[0]["record_type"] == "ANALYSIS"
+    assert ag[0]["payload"]["verdict"] == "PASS"
+    assert ag[0]["payload"]["evaluation_ready"] is False
+    assert ag[0]["model_revision"] == orch.blackboard.current_revision
+
+
+def test_r2_wiring_is_honest_when_model_has_no_ag_contracts():
+    # The committed model is the sole authority: a model without A/G contracts
+    # yields an INCOMPLETE trace, never a fabricated PASS (§6.2).
+    orch = _r2_orchestrator_with_committed_model(_MODEL)
+    graph = orch._build_collaboration_artifacts(_MODEL)["ag_contract_graph"]
+    assert graph["verdict"] == "INCOMPLETE"
+
+
+def test_r1_arm_does_not_emit_an_ag_trace():
+    orch = _r2_orchestrator_with_committed_model(_MINI_AG, arm="R1-BBCTX")
+    arts = orch._build_collaboration_artifacts(_MINI_AG)
+    assert "ag_contract_graph" not in arts
