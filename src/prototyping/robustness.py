@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from .experiment_arms import LEGACY_EXPERIMENT_NAMESPACE
+
 
 @dataclass(frozen=True)
 class RobustnessOptions:
@@ -35,5 +37,21 @@ class RobustnessOptions:
     def enabled(self) -> bool:
         return any(asdict(self).values())
 
+    def legacy_configuration(self) -> str:
+        if self == self.b0():
+            return "B0"
+        if self == self.b1():
+            return "B1"
+        if self == self.b2():
+            return "B2"
+        return "CUSTOM"
+
     def as_dict(self) -> dict[str, bool]:
         return asdict(self)
+
+    def as_metadata(self) -> dict[str, object]:
+        return {
+            "experiment_namespace": LEGACY_EXPERIMENT_NAMESPACE,
+            "configuration": self.legacy_configuration(),
+            "options": self.as_dict(),
+        }

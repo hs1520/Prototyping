@@ -53,6 +53,9 @@ class PrototypingPipeline:
         dse_mode: str = "variation",
         phase9_hifi: Optional[str] = None,
         robustness_options: Optional[RobustnessOptions] = None,
+        revised_experiment_arm: Optional[Any] = None,
+        task_session_max_turns: int = 12,
+        task_session_max_tokens: int = 150000,
     ):
         self.llm = llm
         self.parse_strict = parse_strict
@@ -80,6 +83,9 @@ class PrototypingPipeline:
             max_iterations=max_iterations,
             verbose=verbose,
             robustness_options=robustness_options,
+            revised_experiment_arm=revised_experiment_arm,
+            task_session_max_turns=task_session_max_turns,
+            task_session_max_tokens=task_session_max_tokens,
         )
         # DSE mode at the user entry point. Orchestrator's own flag stays default
         # OFF (direct-construction contract); the pipeline opts the chosen path in.
@@ -400,6 +406,14 @@ class PrototypingPipeline:
             "llm_usage": result.get("llm_usage"),
             "robustness_options": result.get("robustness_options"),
         }
+        revised = result.get("revised_experiment")
+        if revised:
+            report["experiment_namespace"] = revised.get(
+                "experiment_namespace"
+            )
+            report["configuration"] = revised.get("configuration")
+            report["revised_experiment"] = revised
+            report["collaboration"] = result.get("collaboration")
         for key in (
             "requirement_contracts", "safety_pattern_bindings",
             "semantic_trace_report", "failure_diagnostics",

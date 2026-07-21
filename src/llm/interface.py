@@ -151,6 +151,62 @@ class LLMInterface(ABC):
             self.__dict__["_ledger"] = led
         return led
 
+    def add_call_observer(self, observer: Callable[[Dict[str, Any]], None]) -> int:
+        """Register an application-owned transcript observer.
+
+        Observers receive completed provider calls and are deliberately local
+        to this LLM instance.  The caller must remove the observer when its
+        bounded Agent task closes so transcripts cannot cross task/role scope.
+        """
+        observers = self.__dict__.setdefault("_call_observers", {})
+        sequence = int(self.__dict__.get("_call_observer_sequence", 0)) + 1
+        self.__dict__["_call_observer_sequence"] = sequence
+        observers[sequence] = observer
+        return sequence
+
+    def remove_call_observer(self, observer_id: int) -> None:
+        self.__dict__.setdefault("_call_observers", {}).pop(
+            int(observer_id), None
+        )
+
+    @property
+    def call_observer_errors(self) -> Tuple[str, ...]:
+        return tuple(self.__dict__.get("_call_observer_errors", ()))
+
+    def _notify_call_observers(
+        self,
+        *,
+        messages: List[Message],
+        response: LLMResponse,
+        temperature: float,
+        max_tokens: int,
+        retries: int,
+    ) -> None:
+        event = {
+            "messages": [message.to_dict() for message in messages],
+            "response": {
+                "role": "assistant",
+                "content": response.content,
+                "model": response.model,
+                "prompt_tokens": int(response.prompt_tokens or 0),
+                "completion_tokens": int(response.completion_tokens or 0),
+            },
+            "temperature": temperature,
+            "max_tokens": int(max_tokens),
+            "retries": int(retries),
+        }
+        errors = self.__dict__.setdefault("_call_observer_errors", [])
+        for observer in tuple(
+            self.__dict__.setdefault("_call_observers", {}).values()
+        ):
+            try:
+                observer(event)
+            except Exception as exc:
+                # Transcript bookkeeping must not turn a completed provider
+                # call into a provider retry.  The task session records its own
+                # terminal state and the orchestrator rejects it before commit.
+                errors.append(f"{type(exc).__name__}: {exc}")
+
     def complete(
         self,
         messages: List[Message],
@@ -168,6 +224,13 @@ class LLMInterface(ABC):
                     messages, temperature=resolved_temp, max_tokens=max_tokens
                 )
                 self.ledger.record(response, time.monotonic() - start, retries)
+                self._notify_call_observers(
+                    messages=messages,
+                    response=response,
+                    temperature=resolved_temp,
+                    max_tokens=max_tokens,
+                    retries=retries,
+                )
                 return response
             except Exception as exc:
                 if not delays or not self._is_retryable(exc):

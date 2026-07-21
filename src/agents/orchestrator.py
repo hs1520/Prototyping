@@ -338,6 +338,9 @@ class Orchestrator:
         estimator_calibration: bool = True,
         phase9_hifi: Optional[str] = None,
         robustness_options: Optional[Any] = None,
+        revised_experiment_arm: Optional[Any] = None,
+        task_session_max_turns: int = 12,
+        task_session_max_tokens: int = 150000,
     ):
         self.llm = llm
         self.rag = rag_retriever
@@ -380,10 +383,39 @@ class Orchestrator:
         self.last_requirement_semantic_analysis = None
         self.last_requirement_input: Dict[str, Any] = {}
         self.last_approved_contract_provenance: Optional[Dict[str, Any]] = None
+        from ..prototyping.experiment_arms import RevisedExperimentArm
+        self.revised_experiment_arm = (
+            RevisedExperimentArm.parse(revised_experiment_arm)
+            if revised_experiment_arm is not None else None
+        )
+        if (
+            self.revised_experiment_arm is not None
+            and not self.revised_experiment_arm.implemented
+        ):
+            raise NotImplementedError(
+                f"revised experiment arm {self.revised_experiment_arm.value} "
+                "is reserved but not implemented"
+            )
         if robustness_options is None:
             from ..prototyping.robustness import RobustnessOptions
             robustness_options = RobustnessOptions.b0()
         self.robustness_options = robustness_options
+        if (
+            self.revised_experiment_arm is not None
+            and self.robustness_options.enabled()
+        ):
+            raise ValueError(
+                "legacy B1/B2 robustness interventions cannot be mixed with "
+                "a BLACKBOARD_AG_V1 experiment arm"
+            )
+        self.blackboard = None
+        self.context_builder = None
+        self.task_sessions = None
+        self._active_design_handoff = None
+        self.task_session_max_turns = int(task_session_max_turns)
+        self.task_session_max_tokens = int(task_session_max_tokens)
+        if self.task_session_max_turns <= 0 or self.task_session_max_tokens <= 0:
+            raise ValueError("task-session turn/token budgets must be positive")
         self.last_contract_bundle = None
         self.last_pattern_bindings = ()
         self.last_semantic_trace_report = None
@@ -527,6 +559,7 @@ class Orchestrator:
                 approved_contract_bundle, requirements
             )
         self.state.requirements = requirements
+        self._prepare_design_handoff(system_name, requirements)
         print()
 
         # ── Phase 2: Initial Design Generation ───────────────────────────────
@@ -600,9 +633,11 @@ class Orchestrator:
         print(f"{'='*60}\n")
 
         final_sysml = get_sysml_text(final_model)
+        self._commit_terminal_model(final_sysml, producer="Orchestrator.generate")
         robustness_artifacts = self._build_robustness_artifacts(
             final_sysml, system_name
         )
+        collaboration_artifacts = self._build_collaboration_artifacts()
         return {
             "system_name":        system_name,
             "requirements":       requirements,
@@ -626,6 +661,7 @@ class Orchestrator:
                 if self.last_approved_contract_provenance else None
             ),
             **robustness_artifacts,
+            **collaboration_artifacts,
             "robustness_options": self.robustness_options.as_dict(),
             "platform_profile":   platform_profile,
             "llm_usage":          ledger.as_dict() if ledger is not None else None,
@@ -790,6 +826,17 @@ class Orchestrator:
         requirements = generate_result["requirements"]
         system_name  = generate_result["system_name"]
 
+        from ..prototyping.experiment_arms import RevisedExperimentArm
+        if (
+            self.revised_experiment_arm
+            is RevisedExperimentArm.BLACKBOARD_CONTEXT
+            and self.blackboard is None
+        ):
+            raise ValueError(
+                "R1-BBCTX explore() must continue on the Orchestrator that "
+                "created the revisioned generate() workspace"
+            )
+
         self._reset_exploration_state(system_name, requirements, model)
 
         print(f"\n{'='*60}")
@@ -895,12 +942,14 @@ class Orchestrator:
         ledger = getattr(self.llm, "ledger", None)
 
         final_sysml = get_sysml_text(final_model)
+        self._commit_terminal_model(final_sysml, producer="Orchestrator.explore")
         # DSE and refinement may change behavior after generate().  Rebuild all
         # Option 2 evidence against the terminal model instead of returning the
         # stale generate-phase trace inherited through ``**generate_result``.
         robustness_artifacts = self._build_robustness_artifacts(
             final_sysml, system_name
         )
+        collaboration_artifacts = self._build_collaboration_artifacts()
         # Merge evaluation histories: generate phase first, then explore phase.
         # **generate_result would overwrite with generate-only history if we
         # relied on dict spreading alone, so we concatenate explicitly.
@@ -912,6 +961,7 @@ class Orchestrator:
             # ── Fields inherited / updated from generate() ────────────────────
             **generate_result,
             **robustness_artifacts,
+            **collaboration_artifacts,
             "model":              final_model,
             "model_sysml":        final_sysml,
             "model_summary":      final_model.get_summary(),
@@ -1275,7 +1325,61 @@ class Orchestrator:
             task["contract_bundle"] = self.last_contract_bundle
         if self.robustness_options.safety_pattern_guidance:
             task["pattern_bindings"] = self.last_pattern_bindings
-        result = self.design_agent.run(task)
+        handoff = self._active_design_handoff
+        if handoff is not None:
+            task["context"] = handoff["envelope"].render_for_prompt()
+        observer_id = None
+        add_observer = getattr(self.llm, "add_call_observer", None)
+        remove_observer = getattr(self.llm, "remove_call_observer", None)
+        if handoff is not None and callable(add_observer):
+            session = handoff["session"]
+            handoff["observer_error_count_before"] = len(
+                getattr(self.llm, "call_observer_errors", ())
+            )
+
+            def archive_call(event: Mapping[str, Any]) -> None:
+                handoff["captured_llm_calls"] += 1
+                for message in event.get("messages", ()):
+                    session.append(
+                        str(message.get("role", "user")),
+                        str(message.get("content", "")),
+                    )
+                response = event.get("response", {})
+                prompt_tokens = int(response.get("prompt_tokens", 0) or 0)
+                completion_tokens = int(
+                    response.get("completion_tokens", 0) or 0
+                )
+                if prompt_tokens + completion_tokens == 0:
+                    prompt_chars = sum(
+                        len(str(item.get("content", "")))
+                        for item in event.get("messages", ())
+                    )
+                    prompt_tokens = max(1, prompt_chars // 4)
+                    completion_tokens = max(
+                        1, len(str(response.get("content", ""))) // 4
+                    )
+                session.append(
+                    "assistant",
+                    str(response.get("content", "")),
+                    token_count=prompt_tokens + completion_tokens,
+                )
+
+            observer_id = add_observer(archive_call)
+        try:
+            result = self.design_agent.run(task)
+        except Exception as exc:
+            self._reject_design_handoff(
+                f"{type(exc).__name__}: {exc}", producer="DesignAgent"
+            )
+            raise
+        finally:
+            if observer_id is not None and callable(remove_observer):
+                remove_observer(observer_id)
+        if handoff is not None and observer_id is not None:
+            before = int(handoff.get("observer_error_count_before", 0))
+            handoff["observer_errors"] = list(
+                getattr(self.llm, "call_observer_errors", ())[before:]
+            )
         if result.success and isinstance(result.output, _SysMLModelTypes):
             model = result.output
         else:
@@ -1287,15 +1391,229 @@ class Orchestrator:
                   f"{', '.join(untraced)}")
 
         self.requirements_agent.create_sysml_requirements(requirements, model)
+        self._finalize_design_handoff(result, model)
         return model
+
+    def _prepare_design_handoff(
+        self, system_name: str, requirements: List[str]
+    ) -> None:
+        """Create the first typed RequirementsAgent -> DesignAgent handoff.
+
+        This is the R1-BBCTX intervention.  The envelope is derived only from
+        run-time source/model records; evaluator gold has no API into it.
+        """
+        from ..prototyping.experiment_arms import RevisedExperimentArm
+
+        if self.revised_experiment_arm is not RevisedExperimentArm.BLACKBOARD_CONTEXT:
+            self.blackboard = None
+            self.context_builder = None
+            self.task_sessions = None
+            self._active_design_handoff = None
+            return
+
+        from ..prototyping.blackboard import Blackboard, RecordType, TaskStatus
+        from ..prototyping.context_builder import ContextBuilder
+        from ..prototyping.task_session import TaskSessionRegistry
+
+        self.blackboard = Blackboard(system_name)
+        self.context_builder = ContextBuilder(self.blackboard)
+        self.task_sessions = TaskSessionRegistry()
+        source_record = self.blackboard.publish(
+            RecordType.SOURCE,
+            "requirements.authoritative",
+            "RequirementsAgent",
+            {
+                "requirements": list(requirements),
+                "requirement_input_mode": self.last_requirement_input.get("mode"),
+                "requirement_set_digest": self.last_requirement_input.get(
+                    "requirement_set_digest"
+                ),
+                "gold_access": False,
+            },
+        )
+        design_task = self.blackboard.create_task(
+            "INITIAL_MODEL_GENERATION",
+            "DesignAgent",
+            required_topics=("requirements.authoritative",),
+        )
+        self.blackboard.transition_task(design_task.task_id, TaskStatus.ACTIVE)
+        envelope = self.context_builder.build_design_context(
+            task_id=design_task.task_id,
+            system_name=system_name,
+            source_record_ids=(source_record.record_id,),
+        )
+        session = self.task_sessions.open(
+            task_id=design_task.task_id,
+            agent_role="DesignAgent",
+            base_model_revision=design_task.base_model_revision,
+            base_model_digest=design_task.base_model_digest,
+            context_envelope_id=envelope.envelope_id,
+            max_turns=self.task_session_max_turns,
+            max_tokens=self.task_session_max_tokens,
+        )
+        self._active_design_handoff = {
+            "task": design_task,
+            "envelope": envelope,
+            "session": session,
+            "captured_llm_calls": 0,
+        }
+
+    def _finalize_design_handoff(self, result: Any, model: SysMLModel) -> None:
+        handoff = self._active_design_handoff
+        if handoff is None:
+            return
+        from ..prototyping.blackboard import RecordType, TaskStatus, text_digest
+        from ..prototyping.task_session import SessionStatus
+
+        task = handoff["task"]
+        session = handoff["session"]
+        model_text = get_sysml_text(model)
+        session.assert_current(
+            self.blackboard.current_revision,
+            self.blackboard.current_model.model_digest,
+        )
+        reasoning = str(getattr(result, "reasoning", "") or "")
+        observer_errors = list(handoff.get("observer_errors", ()))
+        if observer_errors or session.status is not SessionStatus.OPEN:
+            detail = "; ".join(observer_errors) or session.status.value
+            self._reject_design_handoff(
+                f"incomplete DesignAgent transcript: {detail}",
+                producer="Orchestrator",
+            )
+            raise RuntimeError(
+                "R1-BBCTX rejected the DesignAgent result because its bounded "
+                f"transcript was incomplete: {detail}"
+            )
+        if handoff.get("captured_llm_calls", 0) == 0:
+            envelope_text = handoff["envelope"].render_for_prompt()
+            try:
+                session.append(
+                    "user",
+                    envelope_text,
+                    token_count=max(1, len(envelope_text) // 4),
+                )
+                session.append(
+                    "assistant",
+                    reasoning or "DesignAgent returned a model candidate.",
+                    token_count=max(1, len(reasoning) // 4) if reasoning else 1,
+                )
+            except Exception as exc:
+                self._reject_design_handoff(
+                    f"{type(exc).__name__}: {exc}", producer="Orchestrator"
+                )
+                raise
+        success = bool(getattr(result, "success", False))
+        result_record = self.blackboard.publish(
+            RecordType.RESULT,
+            "agent.design.result",
+            "DesignAgent",
+            {
+                "success": success,
+                "reasoning": reasoning,
+                "model_digest": text_digest(model_text),
+            },
+            task_id=task.task_id,
+            session_id=session.session_id,
+        )
+        task_status = TaskStatus.COMPLETED if success else TaskStatus.REJECTED
+        session_status = SessionStatus.COMPLETED if success else SessionStatus.REJECTED
+        self.blackboard.transition_task(
+            task.task_id,
+            task_status,
+            producer="DesignAgent",
+            result_record_ids=(result_record.record_id,),
+        )
+        session.close(session_status, output_record_ids=(result_record.record_id,))
+        committed = self.blackboard.commit_model(
+            model_text,
+            base_revision=task.base_model_revision,
+            producer="DesignAgent" if success else "OrchestratorFallback",
+            task_id=task.task_id if success else None,
+            session_id=session.session_id,
+        )
+        self.task_sessions.stale_after_commit(
+            committed.revision, committed.model_digest
+        )
+        self._active_design_handoff = None
+
+    def _reject_design_handoff(self, reason: str, *, producer: str) -> None:
+        handoff = self._active_design_handoff
+        if handoff is None:
+            return
+        from ..prototyping.blackboard import RecordType, TaskStatus
+        from ..prototyping.task_session import SessionStatus
+
+        task = handoff["task"]
+        session = handoff["session"]
+        record = self.blackboard.publish(
+            RecordType.RESULT,
+            "agent.design.rejected",
+            producer,
+            {"success": False, "reason": str(reason)},
+            task_id=task.task_id,
+            session_id=session.session_id,
+        )
+        if task.status is TaskStatus.ACTIVE:
+            self.blackboard.transition_task(
+                task.task_id,
+                TaskStatus.REJECTED,
+                producer=producer,
+                result_record_ids=(record.record_id,),
+            )
+        if session.status is SessionStatus.OPEN:
+            session.close(
+                SessionStatus.REJECTED,
+                output_record_ids=(record.record_id,),
+            )
+        elif record.record_id not in session.output_record_ids:
+            session.output_record_ids.append(record.record_id)
+        self._active_design_handoff = None
+
+    def _commit_terminal_model(self, model_text: str, *, producer: str) -> None:
+        if self.blackboard is None:
+            return
+        from ..prototyping.blackboard import text_digest
+
+        if self.blackboard.current_model.model_digest == text_digest(model_text):
+            return
+        committed = self.blackboard.commit_model(
+            model_text,
+            base_revision=self.blackboard.current_revision,
+            producer=producer,
+        )
+        self.task_sessions.stale_after_commit(
+            committed.revision, committed.model_digest
+        )
+
+    def _build_collaboration_artifacts(self) -> Dict[str, Any]:
+        if self.revised_experiment_arm is None:
+            return {}
+        from ..prototyping.experiment_arms import revised_arm_metadata
+
+        result: Dict[str, Any] = {
+            "revised_experiment": revised_arm_metadata(
+                self.revised_experiment_arm
+            )
+        }
+        if self.blackboard is not None:
+            result["collaboration"] = {
+                "blackboard": self.blackboard.snapshot(),
+                "contexts": self.context_builder.snapshot(),
+                "task_sessions": self.task_sessions.snapshot(
+                    include_messages=True
+                ),
+            }
+        return result
 
     def _build_robustness_artifacts(
         self, model_text: str, model_name: str
     ) -> Dict[str, Any]:
         """Build intervention evidence enabled by the active ablation only.
 
-        Uniform comparison is intentionally owned by ``posthoc_evaluation``;
-        this method records what the generation arm actually used or applied.
+        This method records what the generation arm actually used or applied.
+        The legacy uniform post-hoc comparison was removed with the external
+        contract experiment scaffolding; the revised study supplies its own
+        evaluator (Increment 4).
         """
         if not self.robustness_options.enabled() or self.last_contract_bundle is None:
             self.last_semantic_trace_report = None

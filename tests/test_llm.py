@@ -83,6 +83,33 @@ class TestMockLLM:
         assert isinstance(response, str)
         assert len(response) > 0
 
+    def test_call_observer_archives_exact_messages_and_can_be_removed(self):
+        llm = MockLLM()
+        events = []
+        observer_id = llm.add_call_observer(events.append)
+        llm.chat("hello", system_prompt="system")
+        assert len(events) == 1
+        assert events[0]["messages"] == [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "hello"},
+        ]
+        assert events[0]["response"]["role"] == "assistant"
+        llm.remove_call_observer(observer_id)
+        llm.chat("not archived")
+        assert len(events) == 1
+
+    def test_call_observer_failure_does_not_retry_provider_call(self):
+        llm = MockLLM()
+
+        def fail(_event):
+            raise RuntimeError("archive failed")
+
+        llm.add_call_observer(fail)
+        response = llm.chat("one provider call")
+        assert response
+        assert llm._call_count == 1
+        assert llm.call_observer_errors == ("RuntimeError: archive failed",)
+
 
 class TestChainOfThoughtPrompter:
     @pytest.fixture

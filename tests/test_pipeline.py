@@ -172,6 +172,26 @@ def test_build_run_report_is_json_serialisable():
     json.dumps(report)  # must not raise
 
 
+def test_build_run_report_preserves_revised_collaboration_provenance():
+    revised = {
+        "experiment_namespace": "BLACKBOARD_AG_V1",
+        "configuration": "R1-BBCTX",
+    }
+    collaboration = {
+        "blackboard": {"current_model": {"revision": 2}},
+        "contexts": {"envelopes": []},
+        "task_sessions": {"sessions": []},
+    }
+    report = orchestration_module.PrototypingPipeline.build_run_report({
+        "requirements": [],
+        "revised_experiment": revised,
+        "collaboration": collaboration,
+    })
+    assert report["experiment_namespace"] == "BLACKBOARD_AG_V1"
+    assert report["configuration"] == "R1-BBCTX"
+    assert report["collaboration"] == collaboration
+
+
 def test_build_run_report_includes_sitl_traceability():
     report = orchestration_module.PrototypingPipeline.build_run_report({
         "system_name": "T",
