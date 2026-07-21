@@ -98,9 +98,17 @@ class RequirementLinker:
         self._model = model
         self._llm = llm
         self._verbose = verbose
-        from src.prototyping.contract_types import contract_bundle_from_dict
-        self._contract_bundle = contract_bundle_from_dict(contract_bundle)
-        self._contracts = self._contract_bundle.by_req_id()
+        # Legacy external-contract inputs are optional. The R0-CURRENT path
+        # (e.g. verification_audit's RequirementLinker(lite)) passes no bundle, so
+        # the contract_types/semantic_trace imports below are skipped entirely and
+        # the linker stays decoupled from the Layer-2 contract layer on that path.
+        if contract_bundle is not None:
+            from src.prototyping.contract_types import contract_bundle_from_dict
+            self._contract_bundle = contract_bundle_from_dict(contract_bundle)
+            self._contracts = self._contract_bundle.by_req_id()
+        else:
+            self._contract_bundle = None
+            self._contracts = {}
         if semantic_trace_report is None and self._contracts:
             from src.prototyping.semantic_trace import build_semantic_trace
             semantic_trace_report = build_semantic_trace(

@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from typing import Iterable, List, Optional
 
-from ..prototyping.contract_types import normalise_req_id
+from ..utils.req_id import normalise_req_id
 
 _ISSUE_PREFIX = "[VERIFY-GAP]"
 _EXTERNAL_EVIDENCE_PATTERNS = (

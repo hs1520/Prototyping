@@ -11,6 +11,11 @@ import hashlib
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Mapping, Optional
 
+# normalise_req_id now lives in a neutral utility so non-legacy verification/SITL
+# code need not import this contract module. Re-exported here for the remaining
+# legacy importers until Layer-2 excision.
+from ..utils.req_id import normalise_req_id
+
 
 CONTRACT_SCHEMA_VERSION = "2.0"
 CONTRACT_LIBRARY_VERSION = "option2-mvp-1"
@@ -138,10 +143,6 @@ class ContractBundle:
             extraction_mode=self.extraction_mode,
             diagnostics=self.diagnostics,
         )
-
-
-def normalise_req_id(value: str) -> str:
-    return (value or "").upper().replace("-", "_")
 
 
 def contract_bundle_from_dict(value: Mapping[str, Any] | ContractBundle | None) -> ContractBundle:
