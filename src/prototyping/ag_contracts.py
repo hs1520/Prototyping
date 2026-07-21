@@ -164,6 +164,8 @@ class AGReport:
     discharge: Dict[str, str]
     revision: Optional[int]
     model_digest: Optional[str]
+    allocations: Tuple[Dict[str, str], ...] = ()
+    discharge_edges: Tuple[Dict[str, Any], ...] = ()
     checker_version: str = AG_CHECKER_VERSION
 
     def errors(self) -> Tuple[AGDiagnostic, ...]:
@@ -172,7 +174,10 @@ class AGReport:
     def to_dict(self) -> Dict[str, Any]:
         # Shape of the derived, read-only ``ag_contract_graph.json`` audit view
         # (§14): every derived report cites the source model revision and digest
-        # and the checker version, and can be regenerated deterministically.
+        # and the checker version, and can be regenerated deterministically. The
+        # ``graph`` block carries the predicted structure so the independent
+        # post-hoc evaluator can score it against gold without re-running the
+        # checker (§13 separation).
         return {
             "artifact_role": "POSTHOC_A_G_TRACE",
             "checker_version": self.checker_version,
@@ -183,6 +188,10 @@ class AGReport:
             "component_completeness": dict(self.component_completeness),
             "timing": dict(self.timing),
             "discharge": dict(self.discharge),
+            "graph": {
+                "allocations": [dict(a) for a in self.allocations],
+                "discharge_edges": [dict(e) for e in self.discharge_edges],
+            },
             "diagnostics": [d.as_dict() for d in self.diagnostics],
         }
 
@@ -265,16 +274,24 @@ def _check_discharge(
     """
     diags: List[AGDiagnostic] = []
     discharge: Dict[str, str] = {}
+    discharge_edges: List[Dict[str, Any]] = []
 
+    # available_by[concept] = "environment" (system/env-declared) or the producing
+    # component, so each emitted discharge edge records what discharged it.
     available: set = set()
+    available_by: Dict[str, str] = {}
     if graph.system:
         for a in graph.system.assumptions:
             if a.kind == "boolean":
-                available.add(_norm(a.concept, aliases))
+                c = _norm(a.concept, aliases)
+                available.add(c)
+                available_by.setdefault(c, "environment")
     for comp in graph.components:
         for a in comp.assumptions:
             if a.is_environment and a.kind == "boolean":
-                available.add(_norm(a.concept, aliases))
+                c = _norm(a.concept, aliases)
+                available.add(c)
+                available_by.setdefault(c, "environment")
 
     activated: set = set()
     changed = True
@@ -291,7 +308,9 @@ def _check_discharge(
             if needed <= available:
                 activated.add(comp.name)
                 for concept in comp.boolean_guarantee_concepts():
-                    available.add(_norm(concept, aliases))
+                    c = _norm(concept, aliases)
+                    available.add(c)
+                    available_by.setdefault(c, comp.name)
                 changed = True
 
     # Distinguish a genuine cycle from a cascade behind an upstream gap (§16, §17).
@@ -325,41 +344,41 @@ def _check_discharge(
             stack.extend(dep.get(node, ()))
         return False
 
-    inactive = [c for c in graph.components if c.name not in activated]
-    for comp in inactive:
+    # One discharge edge per Boolean assumption, recording status and source.
+    for comp in graph.components:
         prov = {"element_id": comp.element_id,
                 "span": comp.span.as_dict() if comp.span else None}
         for a in comp.assumptions:
-            if a.kind != "boolean" or a.is_environment:
-                continue
-            concept = _norm(a.concept, aliases)
-            if concept in available:
-                continue
-            prod = producer.get(concept)
-            circular = prod is not None and _reaches(prod, comp.name)
-            code = CODE_CIRCULAR_ASSUMPTION if circular else CODE_ASSUMPTION_UNDISCHARGED
-            discharge[f"{comp.name}.{a.concept}"] = (
-                "circular" if circular else "undischarged"
-            )
-            diags.append(AGDiagnostic(
-                code,
-                (f"{comp.name} assumption '{a.concept}' is part of a circular "
-                 f"assumption chain (no acyclic upstream guarantee)" if circular else
-                 f"{comp.name} assumption '{a.concept}' is neither an environment "
-                 f"assumption nor discharged by an upstream guarantee"),
-                contract=comp.name, subject=a.concept, provenance=prov,
-            ))
-
-    for comp in graph.components:
-        for a in comp.assumptions:
             if a.kind != "boolean":
                 continue
-            key = f"{comp.name}.{a.concept}"
-            if key in discharge:
-                continue
-            discharge[key] = "environment" if a.is_environment else "discharged"
+            concept = _norm(a.concept, aliases)
+            if a.is_environment:
+                status, by = "environment", "environment"
+            elif concept in available:
+                by = available_by.get(concept, "environment")
+                status = "environment" if by == "environment" else "discharged"
+            else:
+                prod = producer.get(concept)
+                circular = prod is not None and _reaches(prod, comp.name)
+                status = "circular" if circular else "undischarged"
+                by = None
+                code = (CODE_CIRCULAR_ASSUMPTION if circular
+                        else CODE_ASSUMPTION_UNDISCHARGED)
+                diags.append(AGDiagnostic(
+                    code,
+                    (f"{comp.name} assumption '{a.concept}' is part of a circular "
+                     f"assumption chain (no acyclic upstream guarantee)" if circular
+                     else f"{comp.name} assumption '{a.concept}' is neither an "
+                     f"environment assumption nor discharged by an upstream guarantee"),
+                    contract=comp.name, subject=a.concept, provenance=prov,
+                ))
+            discharge[f"{comp.name}.{a.concept}"] = status
+            discharge_edges.append({
+                "component": comp.name, "assumption": a.concept,
+                "status": status, "by": by,
+            })
 
-    return discharge, diags
+    return discharge, discharge_edges, diags
 
 
 def _check_timing(graph: AGGraph) -> Tuple[Dict[str, Any], List[AGDiagnostic]]:
@@ -453,8 +472,17 @@ def check_ag_graph(
         component_completeness[comp.name] = state
         diagnostics.extend(comp_diags)
 
-    discharge, dis_diags = _check_discharge(graph, alias_map)
+    discharge, discharge_edges, dis_diags = _check_discharge(graph, alias_map)
     diagnostics.extend(dis_diags)
+
+    # Predicted guarantee allocation: each decomposed component owns the Boolean
+    # guarantee concepts it publishes (§6.1 allocated_to), for gold F1 scoring.
+    allocated = {e.dst for e in graph.edges if e.kind == "decomposes"}
+    allocations = [
+        {"owner": comp.name, "guarantee": concept}
+        for comp in graph.components if comp.name in allocated
+        for concept in comp.boolean_guarantee_concepts()
+    ]
 
     timing, timing_diags = _check_timing(graph)
     diagnostics.extend(timing_diags)
@@ -482,4 +510,6 @@ def check_ag_graph(
         discharge=discharge,
         revision=graph.revision,
         model_digest=graph.model_digest,
+        allocations=tuple(allocations),
+        discharge_edges=tuple(discharge_edges),
     )

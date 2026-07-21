@@ -58,10 +58,12 @@ class RevisedExperimentArm(str, Enum):
     def evaluation_ready(self) -> bool:
         """The arm can be scored and pooled into the controlled comparison.
 
-        R0/R1 rest on deterministic coordination/context metrics. R2-BBAG runs its
-        A/G intervention and emits the trace, but its accuracy/F1 needs the
-        independent human gold evaluator (Increment 4, design §13/§15); until that
-        exists R2 is runnable-but-not-poolable and must not be scored against gold.
+        R0/R1 rest on deterministic coordination/context metrics. The independent
+        A/G gold evaluator (``ag_evaluation.py``) now exists, but pooling R2-BBAG
+        accuracy/F1 additionally requires A/G-aware generation (so predictions
+        actually carry contracts rather than an empty INCOMPLETE trace) and frozen
+        human gold. Until both are in place R2 stays runnable-but-not-poolable, so
+        it is deliberately excluded here and must not be scored against gold.
         """
         return self in {self.CURRENT, self.BLACKBOARD_CONTEXT}
 
