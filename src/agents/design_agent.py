@@ -478,6 +478,13 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         feedback = task.get("refinement_feedback", "")
         refinement_issues = task.get("refinement_issues", [])
         verbose = task.get("verbose", False)
+        # Legacy external-contract guidance inputs. The R0-CURRENT baseline never
+        # sets these (the orchestrator supplies them only under the B1/B2
+        # robustness options), so every downstream `if contract_bundle:` block —
+        # and its function-local safety_patterns/contract_types import — is skipped
+        # on the baseline path. This agent is therefore already decoupled from the
+        # legacy contract layer for R0; the gated blocks are removed wholesale with
+        # the Layer-2 excision after the R2-BBAG checker lands.
         contract_bundle = task.get("contract_bundle")
         pattern_bindings = tuple(task.get("pattern_bindings") or ())
 
