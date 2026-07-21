@@ -136,11 +136,15 @@ Core rules:
             )
         dependencies = self._parse_dependencies(cot_result.final_answer)
         counts = self._count_by_category(requirements)
-        from ..prototyping.requirement_contracts import analyse_requirements
-        semantic_analysis = analyse_requirements(
-            requirements,
-            generalized=bool(task.get("generalized_contracts", False)),
-        )
+        # Contract semantic analysis is a legacy external-contract primitive.
+        # The baseline (R0-CURRENT) requirements pass no longer invokes it; it
+        # runs only when contract features are explicitly requested via
+        # ``generalized_contracts``. This keeps the default pipeline free of the
+        # legacy contract layer so it can be excised with the R2-BBAG migration.
+        semantic_analysis = None
+        if task.get("generalized_contracts"):
+            from ..prototyping.requirement_contracts import analyse_requirements
+            semantic_analysis = analyse_requirements(requirements, generalized=True)
 
         result = AgentResult(
             agent_name=self.name,
@@ -260,19 +264,24 @@ Core rules:
 
         # Manual stakeholder requirements remain authoritative, so an incomplete
         # high-fidelity contract is advisory here. Downstream verification treats
-        # these gaps fail-closed instead of inventing scenario constants.
-        from ..prototyping.requirement_contracts import analyse_requirements
-        semantic_analysis = analyse_requirements(
-            requirements, generalized=generalized_contracts
-        )
-        warnings.extend(
-            f"Incomplete verification contract — {gap}"
-            for gap in semantic_analysis["semantic_gaps"]
-        )
-        warnings.extend(
-            f"Verification semantics — {note}"
-            for note in semantic_analysis["semantic_notes"]
-        )
+        # these gaps fail-closed instead of inventing scenario constants. The
+        # legacy contract analysis (and its advisory warnings) runs only when
+        # contract features are requested; the baseline validation pass stays
+        # decoupled from the external-contract primitive.
+        semantic_analysis = None
+        if generalized_contracts:
+            from ..prototyping.requirement_contracts import analyse_requirements
+            semantic_analysis = analyse_requirements(
+                requirements, generalized=generalized_contracts
+            )
+            warnings.extend(
+                f"Incomplete verification contract — {gap}"
+                for gap in semantic_analysis["semantic_gaps"]
+            )
+            warnings.extend(
+                f"Verification semantics — {note}"
+                for note in semantic_analysis["semantic_notes"]
+            )
 
         return {
             "valid": len(issues) == 0,
