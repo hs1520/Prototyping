@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "artifact_role": "INTERVENTION_REPAIR_DECISIONS",
+  "producing_stage": "R2_DEPENDENCY_CLOSED_REPAIR",
+  "measurement_boundary": "INTERVENTION",
+  "decisions": []
+}

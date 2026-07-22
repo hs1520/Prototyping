@@ -1,0 +1,110 @@
+[
+  {
+    "seed": 0,
+    "arm": "R0-CURRENT",
+    "ok": true,
+    "elapsed_s": 220.1,
+    "final_score": 0.9119,
+    "calls": 8,
+    "total_tokens": 26430,
+    "ag_verdict": null,
+    "pattern_verdict": null,
+    "coord_ok": false
+  },
+  {
+    "seed": 0,
+    "arm": "R1-BBCTX",
+    "ok": true,
+    "elapsed_s": 143.8,
+    "final_score": 0.9548,
+    "calls": 5,
+    "total_tokens": 25939,
+    "ag_verdict": null,
+    "pattern_verdict": null,
+    "coord_ok": true
+  },
+  {
+    "seed": 0,
+    "arm": "R2-BBAG",
+    "ok": true,
+    "elapsed_s": 166.3,
+    "final_score": 0.9548,
+    "calls": 5,
+    "total_tokens": 25936,
+    "ag_verdict": "PASS",
+    "pattern_verdict": "PASS",
+    "coord_ok": true
+  },
+  {
+    "seed": 1,
+    "arm": "R0-CURRENT",
+    "ok": true,
+    "elapsed_s": 184.5,
+    "final_score": 0.9691,
+    "calls": 5,
+    "total_tokens": 23987,
+    "ag_verdict": null,
+    "pattern_verdict": null,
+    "coord_ok": false
+  },
+  {
+    "seed": 1,
+    "arm": "R1-BBCTX",
+    "ok": true,
+    "elapsed_s": 230.7,
+    "final_score": 0.9485,
+    "calls": 8,
+    "total_tokens": 28427,
+    "ag_verdict": null,
+    "pattern_verdict": null,
+    "coord_ok": true
+  },
+  {
+    "seed": 1,
+    "arm": "R2-BBAG",
+    "ok": true,
+    "elapsed_s": 140.5,
+    "final_score": 0.9691,
+    "calls": 5,
+    "total_tokens": 24689,
+    "ag_verdict": "PASS",
+    "pattern_verdict": "PASS",
+    "coord_ok": true
+  },
+  {
+    "seed": 2,
+    "arm": "R0-CURRENT",
+    "ok": true,
+    "elapsed_s": 190.3,
+    "final_score": 0.9691,
+    "calls": 5,
+    "total_tokens": 23684,
+    "ag_verdict": null,
+    "pattern_verdict": null,
+    "coord_ok": false
+  },
+  {
+    "seed": 2,
+    "arm": "R1-BBCTX",
+    "ok": true,
+    "elapsed_s": 155.8,
+    "final_score": 0.9325,
+    "calls": 5,
+    "total_tokens": 25380,
+    "ag_verdict": null,
+    "pattern_verdict": null,
+    "coord_ok": true
+  },
+  {
+    "seed": 2,
+    "arm": "R2-BBAG",
+    "ok": true,
+    "elapsed_s": 192.8,
+    "final_score": 0.9455,
+    "calls": 5,
+    "total_tokens": 25744,
+    "ag_verdict": "PASS",
+    "pattern_verdict": "PASS",
+    "coord_ok": true
+  }
+]

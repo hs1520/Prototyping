@@ -1,0 +1,142 @@
+{
+  "artifact_role": "RUNTIME_A_G_PREDICTION",
+  "evidence_role": "INTERVENTION_RUNTIME_CHECK",
+  "producing_stage": "R2_COMPOSITIONAL_TRACE",
+  "measurement_boundary": "INTERVENTION",
+  "experiment_namespace": "BLACKBOARD_AG_V1",
+  "configuration": "R2-BBAG",
+  "checker_version": "ag-mvp-1",
+  "source_model_revision": 2,
+  "source_model_digest": "6e3d09bf9a5350013f99fc1b4165fa4c7dffd4c847a588dcd7df3c505791dc21",
+  "verdict": "PASS",
+  "system_completeness": "READY",
+  "component_completeness": {
+    "PropulsionMonitorContract": "READY",
+    "SafetyMonitorContract": "READY",
+    "RecoverySystemContract": "READY"
+  },
+  "timing": {
+    "component_budgets": {
+      "PropulsionMonitorContract": 0.05,
+      "SafetyMonitorContract": 0.1,
+      "RecoverySystemContract": 0.35
+    },
+    "sum": 0.5,
+    "system_deadline": 0.5,
+    "ok": true
+  },
+  "discharge": {
+    "PropulsionMonitorContract.failureSensingAvailable": "environment",
+    "SafetyMonitorContract.airborne": "environment",
+    "SafetyMonitorContract.criticalFailureEvent": "discharged",
+    "RecoverySystemContract.parachuteCommand": "discharged",
+    "RecoverySystemContract.actuatorPower": "environment"
+  },
+  "graph": {
+    "allocations": [
+      {
+        "owner": "propulsionMonitor",
+        "contract": "PropulsionMonitorContract",
+        "guarantee": "criticalFailureEvent"
+      },
+      {
+        "owner": "safetyMonitor",
+        "contract": "SafetyMonitorContract",
+        "guarantee": "parachuteCommand"
+      },
+      {
+        "owner": "recoverySystem",
+        "contract": "RecoverySystemContract",
+        "guarantee": "parachuteDeployed"
+      }
+    ],
+    "discharge_edges": [
+      {
+        "component": "PropulsionMonitorContract",
+        "assumption": "failureSensingAvailable",
+        "status": "environment",
+        "by": "environment"
+      },
+      {
+        "component": "SafetyMonitorContract",
+        "assumption": "airborne",
+        "status": "environment",
+        "by": "environment"
+      },
+      {
+        "component": "SafetyMonitorContract",
+        "assumption": "criticalFailureEvent",
+        "status": "discharged",
+        "by": "PropulsionMonitorContract"
+      },
+      {
+        "component": "RecoverySystemContract",
+        "assumption": "parachuteCommand",
+        "status": "discharged",
+        "by": "SafetyMonitorContract"
+      },
+      {
+        "component": "RecoverySystemContract",
+        "assumption": "actuatorPower",
+        "status": "environment",
+        "by": "environment"
+      }
+    ],
+    "realization_links": [
+      {
+        "contract": "PropulsionMonitorContract",
+        "owner": "propulsionMonitor",
+        "behavior": "PropulsionMonitorBehavior",
+        "initial_state": "monitoring",
+        "reachable_states": [
+          "failureDetected",
+          "monitoring"
+        ],
+        "trigger_ok": true,
+        "response_actions": [
+          "setCriticalFailureEvent"
+        ],
+        "status": "PASS"
+      },
+      {
+        "contract": "SafetyMonitorContract",
+        "owner": "safetyMonitor",
+        "behavior": "SafetyMonitorBehavior",
+        "initial_state": "monitoring",
+        "reachable_states": [
+          "emergencyCommanded",
+          "monitoring"
+        ],
+        "trigger_ok": true,
+        "response_actions": [
+          "setParachuteCommand"
+        ],
+        "status": "PASS"
+      },
+      {
+        "contract": "RecoverySystemContract",
+        "owner": "recoverySystem",
+        "behavior": "RecoverySystemBehavior",
+        "initial_state": "stowed",
+        "reachable_states": [
+          "deployed",
+          "stowed"
+        ],
+        "trigger_ok": true,
+        "response_actions": [
+          "setParachuteDeployed"
+        ],
+        "status": "PASS"
+      }
+    ],
+    "observation_links": [
+      {
+        "contract": "SystemParachuteContract",
+        "verification": "ParachuteDeploymentVerification",
+        "status": "PASS"
+      }
+    ]
+  },
+  "source_requirement": "REQ_SAFE_005",
+  "diagnostics": []
+}
