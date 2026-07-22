@@ -1,0 +1,68 @@
+{
+  "artifact_role": "EVALUATOR_GOLD",
+  "experiment_namespace": "BLACKBOARD_AG_V1",
+  "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
+  "chain_id": "REQ_SAFE_008",
+  "source_requirement": "REQ_SAFE_008",
+  "source_text": "REQ-SAFE-008: The payload release mechanism shall remain locked at power-on and shall unlock only upon receipt of an authorised release command.",
+  "source_digest": "b3e48df6ce05d718615385ddedc6fd32e660f422e9a288df9ec6d7be98ed4904",
+  "reviewer": null,
+  "reviewed_date": null,
+  "review_protocol": {
+    "blind_to_runtime_verdict": false,
+    "independent_human_review": false
+  },
+  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the reviewed decomposition, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
+  "system": {
+    "contract": "SystemPayloadLockContract",
+    "assumptions": [
+      "powerOnDefault",
+      "authorisedReleaseCommand"
+    ],
+    "guarantee_observation": "payloadReleased",
+    "deadline_s": null,
+    "_review": "confirm system assumptions, observation, and deadline"
+  },
+  "allocations": [
+    {
+      "owner": "releaseAuthority",
+      "contract": "ReleaseAuthorityContract",
+      "guarantee": "releaseAuthorised",
+      "_review": "confirm the responsible owner"
+    },
+    {
+      "owner": "payloadLockActuator",
+      "contract": "PayloadLockActuatorContract",
+      "guarantee": "payloadReleased",
+      "_review": "confirm the responsible owner"
+    }
+  ],
+  "discharge_edges": [
+    {
+      "component": "ReleaseAuthorityContract",
+      "assumption": "powerOnDefault",
+      "by": "environment",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "ReleaseAuthorityContract",
+      "assumption": "authorisedReleaseCommand",
+      "by": "environment",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "PayloadLockActuatorContract",
+      "assumption": "releaseAuthorised",
+      "by": "ReleaseAuthorityContract",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "PayloadLockActuatorContract",
+      "assumption": "actuatorPower",
+      "by": "environment",
+      "_review": "confirm the discharging source"
+    }
+  ],
+  "failure_class": "NO_FAILURE",
+  "_failure_class_review": "confirm the expected blind failure class"
+}

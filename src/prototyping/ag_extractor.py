@@ -65,6 +65,7 @@ _VERIFY_REQ_RE = re.compile(
     r"\bverify\s+requirement\s+\w+\s*:\s*(\w+)\s*;"
 )
 _SOURCE_REQ_RE = re.compile(r"bounded\s+A/G\s+system\s+contract\s+for\s+(REQ[_-]\w+)", re.I)
+_SAFETY_PATTERN_RE = re.compile(r"safety_pattern\s*=\s*(\w+)", re.I)
 _CMP_RE = re.compile(r"^(\w+)\s*(<=|>=|==|<|>)\s*([A-Za-z_][\w]*|-?[\d.]+)$")
 _IDENT_RE = re.compile(r"^(\w+)$")
 
@@ -136,6 +137,7 @@ def _parse_contract(name: str, block: str, span: Span) -> Contract:
             break
 
     source = _SOURCE_REQ_RE.search(block)
+    pattern = _SAFETY_PATTERN_RE.search(block)
 
     return Contract(
         name=name,
@@ -148,6 +150,7 @@ def _parse_contract(name: str, block: str, span: Span) -> Contract:
         element_id=name,
         span=span,
         source_requirement=source.group(1).upper().replace("-", "_") if source else None,
+        declared_pattern=pattern.group(1).upper() if pattern else None,
     )
 
 
@@ -360,6 +363,7 @@ def extract_ag_graph(
                 observation=obs, element_id=contract.element_id, span=contract.span,
                 owners=tuple(owners.get(name, ())),
                 source_requirement=contract.source_requirement,
+                declared_pattern=contract.declared_pattern,
             )
         else:
             components.append(Contract(

@@ -29,6 +29,11 @@ class FailureRoute(str, Enum):
     PARTIAL_OR_UNASSIGNED = "PARTIAL_OR_UNASSIGNED"
 
 
+_TIMED_FAILSAFE = "TRIGGERED_TIMED_FAILSAFE_RESPONSE"
+_STARTUP_INHIBIT = "STARTUP_INHIBIT"
+_LOCKED_UNTIL_RELEASE = "LOCKED_UNTIL_AUTHORISED_RELEASE"
+
+
 @dataclass(frozen=True)
 class PatternCase:
     contract: str
@@ -38,6 +43,7 @@ class PatternCase:
     entry_action_present: bool
     timing_criterion_present: bool
     invariant_preserved: bool
+    default_safe_present: bool = True
 
     @property
     def status(self) -> str:
@@ -47,12 +53,21 @@ class PatternCase:
             self.entry_action_present,
             self.invariant_preserved,
         ))
-        # A triggered timed failsafe additionally requires a timing criterion; a
-        # startup inhibit is a Boolean invariant (failed self-test ↛ armed) with
-        # no timing obligation.
-        if self.pattern == "STARTUP_INHIBIT":
-            return "PASS" if core else "FAIL"
-        return "PASS" if core and self.timing_criterion_present else "FAIL"
+        if not core:
+            return "FAIL"
+        # A triggered timed failsafe additionally requires a timing criterion.
+        if self.pattern == _TIMED_FAILSAFE:
+            return "PASS" if self.timing_criterion_present else "FAIL"
+        # A locked-until-authorised-release chain is a Boolean invariant with an
+        # extra obligation the others do not carry: the power-on default state
+        # must be the safe (locked) state, distinct from the guarded release
+        # state — a model that powers on already released fails here even though
+        # it satisfies the untimed core.
+        if self.pattern == _LOCKED_UNTIL_RELEASE:
+            return "PASS" if self.default_safe_present else "FAIL"
+        # STARTUP_INHIBIT (and any other untimed Boolean invariant): the failed
+        # self-test ↛ armed invariant has no timing obligation.
+        return "PASS"
 
 
 def check_safety_pattern_conformance(
@@ -60,10 +75,16 @@ def check_safety_pattern_conformance(
 ) -> Dict[str, Any]:
     """Check the bounded safety-pattern topology for the selected chain.
 
-    The pattern is inferred per component from the emitted topology: a component
-    carrying a timing budget conforms to ``TRIGGERED_TIMED_FAILSAFE_RESPONSE``;
-    one without a budget conforms to the ``STARTUP_INHIBIT`` Boolean invariant.
+    The chain declares its reviewed safety pattern in the committed model (the
+    ``safety_pattern=`` annotation on the system contract, the sole authority);
+    that declaration is used because three patterns — one timed, two untimed —
+    cannot be told apart by topology alone. For models that predate the
+    declaration the pattern falls back to structural inference (a timing budget ⇒
+    ``TRIGGERED_TIMED_FAILSAFE_RESPONSE``; otherwise ``STARTUP_INHIBIT``).
     """
+    declared = None
+    if graph.system is not None:
+        declared = getattr(graph.system, "declared_pattern", None)
     by_contract = {
         item["contract"]: item for item in report.realization_links
     }
@@ -72,11 +93,19 @@ def check_safety_pattern_conformance(
         realization = by_contract.get(component.name, {})
         reachable = list(realization.get("reachable_states") or ())
         actions = list(realization.get("response_actions") or ())
+        response_states = list(realization.get("response_states") or ())
+        initial_state = realization.get("initial_state")
         timed = component.timing_budget is not None
+        pattern = declared or (_TIMED_FAILSAFE if timed else _STARTUP_INHIBIT)
+        # Default-safe: the power-on (initial) state is present and is not one of
+        # the guarded response states — the locked default is genuinely distinct
+        # from the released state it guards.
+        default_safe_present = bool(initial_state) and (
+            initial_state not in response_states
+        )
         case = PatternCase(
             contract=component.name,
-            pattern=("TRIGGERED_TIMED_FAILSAFE_RESPONSE" if timed
-                     else "STARTUP_INHIBIT"),
+            pattern=pattern,
             trigger_present=bool(realization.get("trigger_ok")),
             reachable_response=len(reachable) >= 2,
             entry_action_present=bool(actions),
@@ -86,6 +115,7 @@ def check_safety_pattern_conformance(
             invariant_preserved=(
                 bool(realization.get("trigger_ok")) and bool(actions)
             ),
+            default_safe_present=default_safe_present,
         )
         cases.append({**asdict(case), "status": case.status})
     verdict = "PASS" if cases and all(c["status"] == "PASS" for c in cases) else "FAIL"

@@ -66,10 +66,14 @@ def emit_ag_package(spec: AGChainSpec) -> str:
     """Render one reviewed A/G chain as a valid SysML v2 package."""
     out: list[str] = [f"package {spec.package} {{"]
 
-    # System contract.
+    # System contract. The doc annotation carries the immutable source-requirement
+    # provenance and the reviewed safety_pattern, so the committed model (the sole
+    # authority) declares which bounded pattern the conformance checker must apply
+    # — three untimed patterns cannot be told apart by topology alone.
     out.append(f"    requirement def {spec.system_contract} {{")
     out.append(
-        f"        doc /* bounded A/G system contract for {spec.source_requirement} */"
+        f"        doc /* bounded A/G system contract for {spec.source_requirement}"
+        f"; safety_pattern={spec.pattern} */"
     )
     for concept in _dedup([*spec.system_assumptions, spec.observation]):
         out.append(f"        attribute {concept} : Boolean;")

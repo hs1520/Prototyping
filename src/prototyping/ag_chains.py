@@ -1,10 +1,13 @@
 """Reviewed bounded A/G chain library (Stage 2 decomposition, design §7).
 
 Each entry is a human-reviewed A/G decomposition for one selected requirement
-chain. Two chains are encoded: REQ_SAFE_005 (critical propulsion failure →
-parachute deployment, a timed failsafe) and REQ_SAFE_004 (power-on self-test →
-arming inhibit, a Boolean startup-inhibit invariant). Adding a chain is a reviewed
-activity (candidate doc §2); the emitter renders it into the model deterministically.
+chain. Three chains are encoded, each a distinct bounded safety pattern:
+REQ_SAFE_005 (critical propulsion failure → parachute deployment, a timed
+failsafe), REQ_SAFE_004 (power-on self-test → arming inhibit, a Boolean
+startup-inhibit invariant), and REQ_SAFE_008 (payload stays locked at power-on,
+unlocks only on an authorised release — a locked-until-authorised-release
+invariant). Adding a chain is a reviewed activity (candidate doc §2); the emitter
+renders it into the model deterministically.
 """
 from __future__ import annotations
 
@@ -118,7 +121,60 @@ REQ_SAFE_004_CHAIN = AGChainSpec(
     ),
 )
 
-_CHAIN_LIBRARY: Tuple[AGChainSpec, ...] = (REQ_SAFE_005_CHAIN, REQ_SAFE_004_CHAIN)
+# REQ_SAFE_008 — payload release stays locked at power-on and unlocks only on an
+# authorised release command. A Boolean invariant like REQ_SAFE_004, but a third
+# distinct safety pattern: LockedUntilAuthorisedRelease. Its defining obligation
+# is default-safe — the power-on (initial) state is the *locked* state, and the
+# released state is reachable only through the authorised-release trigger. No
+# timing budget (it is an ordering/guard invariant, not a deadline).
+REQ_SAFE_008_CHAIN = AGChainSpec(
+    source_requirement="REQ_SAFE_008",
+    package="REQ_SAFE_008_AG",
+    system_contract="SystemPayloadLockContract",
+    system_assumptions=("powerOnDefault", "authorisedReleaseCommand"),
+    observation="payloadReleased",
+    deadline=None,
+    verification="PayloadLockVerification",
+    pattern="LOCKED_UNTIL_AUTHORISED_RELEASE",
+    components=(
+        AGComponentSpec(
+            name="ReleaseAuthorityContract",
+            owner_def="ReleaseAuthority",
+            owner_usage="releaseAuthority",
+            guarantee="releaseAuthorised",
+            behavior="ReleaseAuthorityBehavior",
+            trigger_signal="AuthorisedReleaseCommandSignal",
+            initial_state="awaitingAuthorisation",
+            response_state="authorisationGranted",
+            response_action="setReleaseAuthorised",
+            assumptions=(
+                AGAssumptionSpec("powerOnDefault", environment=True),
+                AGAssumptionSpec("authorisedReleaseCommand"),
+            ),
+        ),
+        AGComponentSpec(
+            name="PayloadLockActuatorContract",
+            owner_def="PayloadLockActuator",
+            owner_usage="payloadLockActuator",
+            guarantee="payloadReleased",
+            behavior="PayloadLockBehavior",
+            trigger_signal="ReleaseAuthorisedSignal",
+            initial_state="locked",  # the power-on safe default
+            response_state="released",
+            response_action="setPayloadReleased",
+            assumptions=(
+                AGAssumptionSpec("releaseAuthorised"),
+                AGAssumptionSpec("actuatorPower", environment=True),
+            ),
+        ),
+    ),
+)
+
+_CHAIN_LIBRARY: Tuple[AGChainSpec, ...] = (
+    REQ_SAFE_005_CHAIN,
+    REQ_SAFE_004_CHAIN,
+    REQ_SAFE_008_CHAIN,
+)
 
 _REQ_ID_RE = re.compile(r"^\s*(REQ[-_][A-Za-z]+[-_]\d+)")
 

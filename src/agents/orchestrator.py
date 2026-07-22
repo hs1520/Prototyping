@@ -1744,7 +1744,7 @@ class Orchestrator:
                 routed_diags.append(AGDiagnostic(
                     "PATTERN_NONCONFORMANT",
                     f"{case.get('contract')} does not conform to the selected "
-                    "triggered timed-failsafe topology",
+                    f"{case.get('pattern')} safety-pattern topology",
                     contract=case.get("contract"),
                 ))
         failures = route_failure_diagnostics(

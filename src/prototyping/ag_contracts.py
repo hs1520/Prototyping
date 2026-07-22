@@ -129,6 +129,7 @@ class Contract:
     span: Optional[Span] = None
     owners: Tuple[str, ...] = ()
     source_requirement: Optional[str] = None
+    declared_pattern: Optional[str] = None  # reviewed safety pattern (system only)
 
     def boolean_guarantee_concepts(self) -> Tuple[str, ...]:
         return tuple(g.concept for g in self.guarantees if g.kind == "boolean")
@@ -623,6 +624,7 @@ def _check_realization(
             "reachable_states": sorted(reachable),
             "trigger_ok": trigger_ok,
             "response_actions": [action for _state, action in action_matches],
+            "response_states": [state for state, _action in action_matches],
             "status": "PASS" if trigger_ok and action_matches and used_transitions else "FAIL",
         })
     return links, diags
