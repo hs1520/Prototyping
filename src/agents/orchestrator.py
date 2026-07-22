@@ -633,6 +633,7 @@ class Orchestrator:
         print(f"{'='*60}\n")
 
         final_sysml = get_sysml_text(final_model)
+        final_sysml = self._apply_ag_contract_layer(final_sysml, requirements)
         self._commit_terminal_model(final_sysml, producer="Orchestrator.generate")
         robustness_artifacts = self._build_robustness_artifacts(
             final_sysml, system_name
@@ -941,6 +942,7 @@ class Orchestrator:
         ledger = getattr(self.llm, "ledger", None)
 
         final_sysml = get_sysml_text(final_model)
+        final_sysml = self._apply_ag_contract_layer(final_sysml, requirements)
         self._commit_terminal_model(final_sysml, producer="Orchestrator.explore")
         # DSE and refinement may change behavior after generate().  Rebuild all
         # Option 2 evidence against the terminal model instead of returning the
@@ -1613,6 +1615,41 @@ class Orchestrator:
             ):
                 result["ag_contract_graph"] = self._build_ag_trace(model_text)
         return result
+
+    def _apply_ag_contract_layer(
+        self, model_text: str, requirements: List[str]
+    ) -> str:
+        """Merge the reviewed bounded A/G contract layer into the model (R2 only).
+
+        A/G-aware generation (Stage 2-3, §12): under `R2-BBAG`, the reviewed
+        decomposition for each selected requirement chain is emitted as valid SysML
+        and merged so the committed model carries the contracts. R0/R1 models must
+        never carry them (R1 is coordination-only). Best-effort and syntax-gated:
+        if the merge does not parse, the base model is kept unchanged.
+        """
+        from ..prototyping.experiment_arms import RevisedExperimentArm
+
+        if self.revised_experiment_arm is not RevisedExperimentArm.SEMANTIC_ASSURANCE:
+            return model_text
+        try:
+            from ..prototyping.ag_chains import select_ag_chains
+            from ..prototyping.ag_emitter import merge_ag_contracts
+
+            specs = select_ag_chains(requirements)
+            if not specs:
+                return model_text
+            merged = merge_ag_contracts(model_text, specs)
+            if check_syntax(merged).has_errors:
+                print("  ⚠ A/G contract layer failed the syntax gate — skipped")
+                return model_text
+            print(
+                f"  [R2-BBAG] merged A/G contract layer for {len(specs)} "
+                f"reviewed chain(s)"
+            )
+            return merged
+        except Exception as exc:  # never break the pipeline
+            print(f"  ⚠ A/G contract layer skipped ({exc})")
+            return model_text
 
     def _build_ag_trace(self, model_text: str) -> Dict[str, Any]:
         """R2-BBAG A/G intervention: extract and check the bounded A/G graph from
