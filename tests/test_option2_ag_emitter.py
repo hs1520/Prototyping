@@ -81,3 +81,79 @@ def test_r1_and_r0_never_apply_the_ag_contract_layer():
     assert r1._apply_ag_contract_layer(_BASE_MODEL, _REQS) == _BASE_MODEL
     r0 = Orchestrator(_NoCallLLM())  # no revised arm
     assert r0._apply_ag_contract_layer(_BASE_MODEL, _REQS) == _BASE_MODEL
+
+
+# --- End-to-end R2-BBAG orchestrator seam (the sequence generate() runs) -------
+# MockLLM cannot synthesise valid multi-step SysML, so a full mock-driven
+# generate() is not viable; this drives the real R2 integration methods that
+# generate() calls (prepare -> finalize handoff -> A/G layer -> commit ->
+# collaboration artifacts) with a realistic committed model, deterministically.
+
+def test_r2_end_to_end_orchestrator_seam_produces_full_evidence_chain():
+    from types import SimpleNamespace
+
+    from src.prototyping.requirement_inputs import build_frozen_requirement_set
+    from src.sysml.lite_model import build_lite_model
+    from src.utils.sysml_text_utils import get_sysml_text
+
+    reqs = [
+        "REQ-SAFE-005: The system shall deploy the parachute within 0.5 seconds "
+        "of a critical propulsion failure. [SEV:Catastrophic]",
+        "REQ-FUNC-001: The system shall detect obstacles within 15 m.",
+    ]
+    artifact = build_frozen_requirement_set(reqs, name="r2-e2e", source="test")
+
+    orch = Orchestrator(_NoCallLLM(), revised_experiment_arm="R2-BBAG")
+    orch.last_requirement_input = {
+        "mode": "frozen",
+        "requirement_set_digest": artifact.get("requirement_set_digest"),
+    }
+
+    # Phase 2 seam: real blackboard/context/session handoff, then a committed model.
+    orch._prepare_design_handoff("DeliveryUAV", reqs)
+    design_model = build_lite_model(
+        "package DeliveryUAV {\n"
+        "    requirement def REQ_SAFE_005 { doc /* parachute */ }\n"
+        "    part def SafetyMonitor { satisfy requirement REQ_SAFE_005; }\n"
+        "    part def RecoverySystem {}\n"
+        "}",
+        model_name="DeliveryUAV",
+    )
+    orch._finalize_design_handoff(
+        SimpleNamespace(success=True, reasoning="generated", metadata={}),
+        design_model,
+    )
+
+    # generate()/explore() tail seam.
+    final_sysml = get_sysml_text(design_model)
+    final_sysml = orch._apply_ag_contract_layer(final_sysml, reqs)
+    orch._commit_terminal_model(final_sysml, producer="smoke")
+    artifacts = orch._build_collaboration_artifacts(final_sysml)
+
+    # A/G layer merged into the committed authority model.
+    assert "requirement def SystemParachuteContract" in final_sysml
+    assert orch.blackboard.current_model.model_text == final_sysml
+
+    # Non-empty PASS A/G trace attached to the run artifacts.
+    graph = artifacts["ag_contract_graph"]
+    assert graph["verdict"] == "PASS"
+    assert len(graph["graph"]["allocations"]) == 3
+    assert graph["source_model_revision"] == orch.blackboard.current_revision
+
+    # Honest experiment metadata: runnable R2, not gold-poolable.
+    assert artifacts["revised_experiment"]["configuration"] == "R2-BBAG"
+    assert artifacts["revised_experiment"]["evaluation_ready"] is False
+
+    # The full typed record chain is on the board: source -> design result ->
+    # model revisions -> A/G analysis, all under the SysML authority.
+    records = artifacts["collaboration"]["blackboard"]["records"]
+    topics = {r["topic"] for r in records}
+    assert "requirements.authoritative" in topics
+    assert "agent.design.result" in topics
+    assert "analysis.ag_trace" in topics
+    ag_rec = next(r for r in records if r["topic"] == "analysis.ag_trace")
+    assert ag_rec["record_type"] == "ANALYSIS"
+    assert ag_rec["payload"]["verdict"] == "PASS"
+    assert ag_rec["model_revision"] == orch.blackboard.current_revision
+    sessions = artifacts["collaboration"]["task_sessions"]["sessions"]
+    assert sessions[0]["status"] == "COMPLETED"

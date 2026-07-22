@@ -1601,6 +1601,14 @@ class Orchestrator:
             )
         }
         if self.blackboard is not None:
+            # Publish the A/G trace first so the collaboration snapshot below
+            # includes its typed ANALYSIS record.
+            if (
+                self.revised_experiment_arm
+                is RevisedExperimentArm.SEMANTIC_ASSURANCE
+                and model_text is not None
+            ):
+                result["ag_contract_graph"] = self._build_ag_trace(model_text)
             result["collaboration"] = {
                 "blackboard": self.blackboard.snapshot(),
                 "contexts": self.context_builder.snapshot(),
@@ -1608,12 +1616,6 @@ class Orchestrator:
                     include_messages=True
                 ),
             }
-            if (
-                self.revised_experiment_arm
-                is RevisedExperimentArm.SEMANTIC_ASSURANCE
-                and model_text is not None
-            ):
-                result["ag_contract_graph"] = self._build_ag_trace(model_text)
         return result
 
     def _apply_ag_contract_layer(

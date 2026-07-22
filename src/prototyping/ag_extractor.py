@@ -146,7 +146,12 @@ def extract_ag_graph(
         if end == -1:
             continue
         block = text[brace + 1:end]
-        raw[name] = _parse_contract(name, block, Span(brace + 1, end))
+        contract = _parse_contract(name, block, Span(brace + 1, end))
+        # Only a requirement def that declares assume/require constraints is an A/G
+        # contract (§6.2). Ordinary stakeholder requirement defs imported into the
+        # model carry no A/G semantics and must not pollute the graph.
+        if contract.assumptions or contract.guarantees:
+            raw[name] = contract
 
     edges: List[AGEdge] = []
     for m in _DEP_RE.finditer(text):
