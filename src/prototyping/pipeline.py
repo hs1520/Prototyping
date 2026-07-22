@@ -399,7 +399,13 @@ class PrototypingPipeline:
             )
             report["configuration"] = revised.get("configuration")
             report["revised_experiment"] = revised
-            report["collaboration"] = result.get("collaboration")
+            collaboration = result.get("collaboration")
+            report["collaboration"] = collaboration
+            if collaboration:
+                from .run_metrics import compute_coordination_metrics
+                report["coordination_metrics"] = compute_coordination_metrics(
+                    collaboration, llm_usage=result.get("llm_usage")
+                )
             if result.get("ag_contract_graph") is not None:
                 report["ag_contract_graph"] = result.get("ag_contract_graph")
         suppressed = suppressed_summary()
