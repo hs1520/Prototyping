@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Iterable, Mapping, Optional
@@ -34,6 +35,10 @@ class StaleRevisionError(BlackboardError):
 
 
 class InvalidTaskTransition(BlackboardError):
+    pass
+
+
+class ProtectedModelElementError(BlackboardError):
     pass
 
 
@@ -139,6 +144,110 @@ class Blackboard:
         ]
         self._records: list[BlackboardRecord] = []
         self._tasks: dict[str, BlackboardTask] = {}
+        self._protected_requirement_defs: dict[str, str] = {}
+        self._check_and_extend_protection(initial_text)
+
+    @staticmethod
+    def _requirement_identities(model_text: str) -> dict[str, str]:
+        """Exact requirement-definition bodies, including thresholds and units."""
+        from ..utils.sysml_text_utils import find_block_end
+
+        result: dict[str, str] = {}
+        pattern = re.compile(r"\brequirement\s+def\s+([A-Za-z_]\w*)")
+        for match in pattern.finditer(model_text or ""):
+            brace = (model_text or "").find("{", match.end())
+            if brace == -1:
+                continue
+            end = find_block_end(model_text, brace)
+            if end != -1:
+                result[match.group(1)] = model_text[match.start():end + 1].strip()
+        return result
+
+    @staticmethod
+    def _element_index(model_text: str) -> list[dict[str, Any]]:
+        """Deterministic current-revision definition index for scoped queries."""
+        from ..utils.sysml_text_utils import find_block_end
+
+        index: list[dict[str, Any]] = []
+        pattern = re.compile(
+            r"\b(part|requirement|state|action|verification|constraint|port|item)"
+            r"\s+def\s+([A-Za-z_]\w*)"
+        )
+        for match in pattern.finditer(model_text or ""):
+            brace = (model_text or "").find("{", match.end())
+            semi = (model_text or "").find(";", match.end())
+            if brace != -1 and (semi == -1 or brace < semi):
+                end = find_block_end(model_text, brace)
+                if end == -1:
+                    continue
+                end += 1
+            elif semi != -1:
+                end = semi + 1
+            else:
+                continue
+            source = model_text[match.start():end]
+            index.append({
+                "element_id": match.group(2),
+                "kind": f"{match.group(1)} def",
+                "span": {"start": match.start(), "end": end},
+                "source_digest": text_digest(source),
+            })
+        return index
+
+    def _check_and_extend_protection(self, model_text: str) -> None:
+        identities = self._requirement_identities(model_text)
+        changed = {
+            name for name, original in self._protected_requirement_defs.items()
+            if identities.get(name) != original
+        }
+        if changed:
+            raise ProtectedModelElementError(
+                "commit would change or remove protected requirement/contract "
+                "definitions: " + ", ".join(sorted(changed))
+            )
+        # Once a stakeholder requirement or approved A/G requirement definition
+        # appears in a committed revision it becomes immutable. Exact block
+        # identity protects source text, comparators, thresholds, units, assume/
+        # require constraints, and acceptance criteria together.
+        for name, body in identities.items():
+            self._protected_requirement_defs.setdefault(name, body)
+
+    @staticmethod
+    def _normalise_source_text(value: str) -> str:
+        return " ".join(str(value).split())
+
+    def _validate_authoritative_sources(self, model_text: str) -> None:
+        """Require exact stakeholder text inside the committed requirement def."""
+        identities = self._requirement_identities(model_text)
+        for record in self._records:
+            if (
+                record.record_type is not RecordType.SOURCE
+                or record.topic != "requirements.authoritative"
+            ):
+                continue
+            for raw in record.payload.get("requirements", ()):
+                match = re.match(
+                    r"\s*(REQ[-_][A-Za-z0-9]+[-_]\d+)\s*:\s*(.*)",
+                    str(raw), re.DOTALL,
+                )
+                if not match:
+                    raise ProtectedModelElementError(
+                        f"authoritative requirement has no supported ID: {raw!r}"
+                    )
+                req_id = match.group(1).upper().replace("-", "_")
+                block = identities.get(req_id)
+                if block is None:
+                    raise ProtectedModelElementError(
+                        f"committed model is missing authoritative {req_id}"
+                    )
+                doc = re.search(r"\bdoc\s*/\*(.*?)\*/", block, re.DOTALL)
+                expected = self._normalise_source_text(match.group(2))
+                actual = self._normalise_source_text(doc.group(1) if doc else "")
+                if actual != expected:
+                    raise ProtectedModelElementError(
+                        f"committed {req_id} source text differs from the "
+                        "authoritative Blackboard publication"
+                    )
 
     @property
     def current_model(self) -> ModelRevision:
@@ -262,6 +371,7 @@ class Blackboard:
         model_text: str,
         *,
         base_revision: int,
+        base_digest: str,
         producer: str,
         task_id: Optional[str] = None,
         session_id: Optional[str] = None,
@@ -271,7 +381,14 @@ class Blackboard:
                 f"patch base revision {base_revision} is stale; "
                 f"current={self.current_revision}"
             )
+        if str(base_digest) != self.current_model.model_digest:
+            raise StaleRevisionError(
+                "patch base digest does not match the committed model at "
+                f"revision {self.current_revision}"
+            )
         text = str(model_text)
+        self._validate_authoritative_sources(text)
+        self._check_and_extend_protection(text)
         revision = ModelRevision(
             revision=self.current_revision + 1,
             model_text=text,
@@ -325,6 +442,13 @@ class Blackboard:
             "semantic_authority": "COMMITTED_SYSML_MODEL",
             "current_model": self.current_model.audit_dict(),
             "model_revisions": [item.audit_dict() for item in self._revisions],
+            "model_element_index": self._element_index(
+                self.current_model.model_text
+            ),
+            "protected_requirement_digests": {
+                name: text_digest(body)
+                for name, body in sorted(self._protected_requirement_defs.items())
+            },
             "tasks": [self._tasks[key].to_dict() for key in sorted(self._tasks)],
             "records": [item.to_dict() for item in self._records],
         }

@@ -79,7 +79,7 @@ def revised_arm_metadata(arm: RevisedExperimentArm) -> dict[str, object]:
         "configuration": arm.value,
         "implemented": arm.implemented,
         "evaluation_ready": arm.evaluation_ready,
-        "blackboard_context_intervention": arm is RevisedExperimentArm.BLACKBOARD_CONTEXT,
+        "blackboard_context_intervention": arm.uses_blackboard,
         "semantic_assurance_intervention": arm is RevisedExperimentArm.SEMANTIC_ASSURANCE,
         "global_long_session_diagnostic": (
             arm is RevisedExperimentArm.LONG_SESSION_DIAGNOSTIC

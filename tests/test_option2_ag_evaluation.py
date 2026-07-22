@@ -25,11 +25,19 @@ from tests.test_option2_ag_checker import REQ_SAFE_005_SYSML
 # pipeline verdict, NOT copied from the prediction).
 REQ_SAFE_005_GOLD = {
     "artifact_role": GOLD_ROLE,
+    "experiment_namespace": "BLACKBOARD_AG_V1",
+    "status": "FROZEN",
+    "reviewer": "independent-reviewer",
+    "reviewed_date": "2026-07-22",
+    "review_protocol": {
+        "blind_to_runtime_verdict": True,
+        "independent_human_review": True,
+    },
     "chain_id": "REQ_SAFE_005",
     "allocations": [
-        {"owner": "PropulsionMonitorContract", "guarantee": "criticalFailureEvent"},
-        {"owner": "SafetyMonitorContract", "guarantee": "parachuteCommand"},
-        {"owner": "RecoverySystemContract", "guarantee": "parachuteDeployed"},
+        {"owner": "propulsionMonitor", "guarantee": "criticalFailureEvent"},
+        {"owner": "safetyMonitor", "guarantee": "parachuteCommand"},
+        {"owner": "recoverySystem", "guarantee": "parachuteDeployed"},
     ],
     "discharge_edges": [
         {"component": "PropulsionMonitorContract", "assumption": "failureSensingAvailable", "by": "environment"},
@@ -62,7 +70,7 @@ def test_wrong_discharge_source_is_penalised():
     # assumption is undischarged, so gold's discharge edge is a false negative and
     # the downstream command edge shifts too.
     broken = REQ_SAFE_005_SYSML.replace(
-        "require constraint g_event { criticalFailureEvent }", ""
+        "require constraint g_criticalFailureEvent { criticalFailureEvent }", ""
     )
     result = evaluate_ag_against_gold(_prediction(broken), REQ_SAFE_005_GOLD)
     assert result["assumption_discharge"]["recall"] < 1.0
@@ -102,7 +110,7 @@ def test_evaluator_never_imports_the_runtime_checker():
     assert "ag_contracts" not in imports
     assert "extract_ag_graph" not in imports
     assert "check_ag_graph" not in imports
-    assert PREDICTION_ROLE == "POSTHOC_A_G_TRACE"
+    assert PREDICTION_ROLE == "RUNTIME_A_G_PREDICTION"
     assert GOLD_ROLE == "EVALUATOR_GOLD"
 
 

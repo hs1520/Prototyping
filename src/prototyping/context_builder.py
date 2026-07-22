@@ -28,6 +28,9 @@ class ContextEnvelope:
     omitted_items: tuple[str, ...] = ()
     token_budget: int = 12000
     truncated: bool = False
+    estimated_tokens: int = 0
+    context_item_provenance: tuple[Mapping[str, Any], ...] = ()
+    record_context: tuple[Mapping[str, Any], ...] = ()
     envelope_digest: str = ""
 
     def to_dict(self, *, include_content: bool = False) -> dict[str, Any]:
@@ -41,6 +44,10 @@ class ContextEnvelope:
         requirements = "\n".join(f"- {item}" for item in self.source_requirements)
         protected = ", ".join(self.protected_elements) or "(none declared)"
         model_section = self.model_context or "(no committed model yet)"
+        typed_records = json.dumps(
+            list(self.record_context), ensure_ascii=False, sort_keys=True, indent=2,
+            default=str,
+        )
         return (
             "BLACKBOARD CONTEXT ENVELOPE (revision-pinned; not evaluator gold)\n"
             f"task_id: {self.task_id}\n"
@@ -52,6 +59,8 @@ class ContextEnvelope:
             f"protected_elements: {protected}\n"
             "source_requirements:\n"
             f"{requirements or '- (none)'}\n"
+            "typed_blackboard_records:\n"
+            f"{typed_records}\n"
             "relevant_model_context:\n"
             f"```sysml\n{model_section}\n```\n"
             f"context_envelope_digest: {self.envelope_digest}"
@@ -91,6 +100,7 @@ class ContextBuilder:
         omitted_items: Iterable[str] = (),
         token_budget: int = 12000,
         truncated: bool = False,
+        allow_deterministic_truncation: bool = False,
     ) -> ContextEnvelope:
         if int(token_budget) <= 0:
             raise ValueError("ContextEnvelope token_budget must be positive")
@@ -152,6 +162,31 @@ class ContextBuilder:
         self._sequence += 1
         envelope_id = f"context-{self._sequence:06d}"
         content = current.model_text if model_context is None else str(model_context)
+        provenance = tuple(
+            {
+                "kind": "blackboard_record",
+                "record_id": record.record_id,
+                "topic": record.topic,
+                "record_type": record.record_type.value,
+                "payload_digest": record.payload_digest,
+                "model_revision": record.model_revision,
+                "model_digest": record.model_digest,
+            }
+            for record in referenced_records
+        ) + ({
+            "kind": "committed_sysml_slice",
+            "model_revision": current.revision,
+            "model_digest": current.model_digest,
+            "content_digest": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        },)
+        record_context = tuple({
+            "record_id": record.record_id,
+            "record_type": record.record_type.value,
+            "topic": record.topic,
+            "producer": record.producer,
+            "payload": dict(record.payload),
+            "payload_digest": record.payload_digest,
+        } for record in referenced_records)
         base = {
             "envelope_id": envelope_id,
             "task_id": task_id,
@@ -170,15 +205,43 @@ class ContextBuilder:
             "omitted_items": omitted_values,
             "token_budget": int(token_budget),
             "truncated": bool(truncated),
+            "estimated_tokens": 0,
+            "context_item_provenance": provenance,
+            "record_context": record_context,
         }
         envelope = ContextEnvelope(**base, envelope_digest=self._digest(base))
         estimated_tokens = max(1, len(envelope.render_for_prompt()) // 4)
         if estimated_tokens > envelope.token_budget:
-            raise ValueError(
-                "ContextEnvelope exceeds its token budget "
-                f"({estimated_tokens}>{envelope.token_budget}); build a "
-                "deterministically truncated envelope with omitted_items"
-            )
+            if allow_deterministic_truncation and content:
+                # Required typed records and source requirements have priority.
+                # Only the tail of the model slice is omitted, deterministically.
+                overflow_chars = (estimated_tokens - envelope.token_budget) * 4
+                keep = max(0, len(content) - overflow_chars - 256)
+                omitted_values = omitted_values + ("model_context:tail",)
+                base.update({
+                    "model_context": content[:keep],
+                    "omitted_items": omitted_values,
+                    "truncated": True,
+                    "context_item_provenance": provenance + ({
+                        "kind": "truncation",
+                        "policy": "REQUIRED_RECORDS_THEN_MODEL_PREFIX",
+                        "omitted": "model_context:tail",
+                    },),
+                })
+                envelope = ContextEnvelope(
+                    **base, envelope_digest=self._digest(base)
+                )
+                estimated_tokens = max(
+                    1, len(envelope.render_for_prompt()) // 4
+                )
+            if estimated_tokens > envelope.token_budget:
+                raise ValueError(
+                    "ContextEnvelope exceeds its token budget "
+                    f"({estimated_tokens}>{envelope.token_budget}); build a "
+                    "deterministically truncated envelope with omitted_items"
+                )
+        base["estimated_tokens"] = estimated_tokens
+        envelope = ContextEnvelope(**base, envelope_digest=self._digest(base))
         self._envelopes.append(envelope)
         self.board.publish(
             RecordType.HISTORY,

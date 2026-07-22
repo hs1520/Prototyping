@@ -24,7 +24,12 @@ class _NoCallLLM:
         raise AssertionError("LLM should not be called")
 
 
-_BASE_MODEL = "package Drone {\n    part def SafetyMonitor {}\n}"
+_BASE_MODEL = (
+    "package Drone {\n"
+    "    requirement def REQ_SAFE_005 { doc /* The system shall deploy the "
+    "parachute within 0.5 s. */ }\n"
+    "    part def SafetyMonitor {}\n}"
+)
 _REQS = ["REQ-SAFE-005: The system shall deploy the parachute within 0.5 s."]
 
 
@@ -35,7 +40,7 @@ def test_emitted_chain_passes_the_syside_gate():
 
 
 def test_emitted_chain_round_trips_to_a_checker_pass():
-    sysml = emit_ag_package(REQ_SAFE_005_CHAIN)
+    sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
     report = check_ag_graph(extract_ag_graph(sysml, revision=1))
     assert report.verdict == "PASS", [d.code for d in report.diagnostics]
     assert report.timing["sum"] == 0.5
@@ -68,7 +73,10 @@ def test_r2_orchestrator_merges_ag_layer_and_emits_non_empty_pass_trace():
     orch.context_builder = ContextBuilder(orch.blackboard)
     orch.task_sessions = TaskSessionRegistry()
     orch.blackboard.commit_model(
-        merged, base_revision=orch.blackboard.current_revision, producer="test"
+        merged,
+        base_revision=orch.blackboard.current_revision,
+        base_digest=orch.blackboard.current_model.model_digest,
+        producer="test",
     )
     graph = orch._build_collaboration_artifacts(merged)["ag_contract_graph"]
     assert graph["verdict"] == "PASS"
@@ -113,7 +121,11 @@ def test_r2_end_to_end_orchestrator_seam_produces_full_evidence_chain():
     orch._prepare_design_handoff("DeliveryUAV", reqs)
     design_model = build_lite_model(
         "package DeliveryUAV {\n"
-        "    requirement def REQ_SAFE_005 { doc /* parachute */ }\n"
+        "    requirement def REQ_SAFE_005 { doc /* The system shall deploy the "
+        "parachute within 0.5 seconds of a critical propulsion failure. "
+        "[SEV:Catastrophic] */ }\n"
+        "    requirement def REQ_FUNC_001 { doc /* The system shall detect "
+        "obstacles within 15 m. */ }\n"
         "    part def SafetyMonitor { satisfy requirement REQ_SAFE_005; }\n"
         "    part def RecoverySystem {}\n"
         "}",

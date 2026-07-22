@@ -408,6 +408,13 @@ class PrototypingPipeline:
                 )
             if result.get("ag_contract_graph") is not None:
                 report["ag_contract_graph"] = result.get("ag_contract_graph")
+            for artifact in (
+                "pattern_conformance_report",
+                "failure_diagnostics",
+                "repair_decisions",
+            ):
+                if result.get(artifact) is not None:
+                    report[artifact] = result.get(artifact)
         suppressed = suppressed_summary()
         if suppressed:
             report["suppressed"] = suppressed

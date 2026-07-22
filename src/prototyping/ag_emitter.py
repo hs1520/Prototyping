@@ -26,7 +26,14 @@ class AGAssumptionSpec:
 @dataclass(frozen=True)
 class AGComponentSpec:
     name: str                       # component requirement-def name
+    owner_def: str                  # responsible component type
+    owner_usage: str                # concrete satisfying part usage
     guarantee: str                  # Boolean concept the component publishes
+    behavior: str                   # realizing state definition
+    trigger_signal: str             # accepted event/signal
+    initial_state: str
+    response_state: str
+    response_action: str
     assumptions: Tuple[AGAssumptionSpec, ...] = ()
     latency_budget: Optional[float] = None
 
@@ -40,6 +47,7 @@ class AGChainSpec:
     observation: str                # observed system-level Boolean concept
     deadline: Optional[float]       # system deadline (maxLatency), seconds
     components: Tuple[AGComponentSpec, ...]
+    verification: str = "ParachuteDeploymentVerification"
 
 
 def _fmt(value: float) -> str:
@@ -62,7 +70,9 @@ def emit_ag_package(spec: AGChainSpec) -> str:
     for concept in _dedup([*spec.system_assumptions, spec.observation]):
         out.append(f"        attribute {concept} : Boolean;")
     if spec.deadline is not None:
-        out.append(f"        attribute maxLatency : Real = {_fmt(spec.deadline)};")
+        out.append(
+            f"        attribute maxLatency : Real = {_fmt(spec.deadline)} [SI::s];"
+        )
     for concept in spec.system_assumptions:
         out.append(f"        assume constraint a_{concept} {{ {concept} }}")
     out.append(f"        require constraint g_observed {{ {spec.observation} }}")
@@ -76,7 +86,8 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             out.append(f"        attribute {concept} : Boolean;")
         if comp.latency_budget is not None:
             out.append(
-                f"        attribute latencyBudget : Real = {_fmt(comp.latency_budget)};"
+                f"        attribute latencyBudget : Real = "
+                f"{_fmt(comp.latency_budget)} [SI::s];"
             )
         for assumption in comp.assumptions:
             prefix = "env_" if assumption.environment else "a_"
@@ -89,12 +100,69 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         )
         out.append("    }")
 
+    # Explicit component owners and legal satisfaction relationships. Ownership
+    # is never inferred from the name of a contract definition.
+    for comp in spec.components:
+        out.append(f"    part def {comp.owner_def};")
+        out.append(f"    part {comp.owner_usage} : {comp.owner_def};")
+        usage = comp.name[0].lower() + comp.name[1:]
+        out.append(
+            f"    satisfy requirement {usage} : {comp.name} by {comp.owner_usage};"
+        )
+
+    # Reachable trigger -> response-state -> entry-action realizations.
+    for comp in spec.components:
+        out.append(f"    attribute def {comp.trigger_signal};")
+        out.append(f"    state def {comp.behavior} {{")
+        out.append(f"        entry; then {comp.initial_state};")
+        out.append(f"        state {comp.initial_state};")
+        out.append(
+            f"        transition on{comp.trigger_signal} "
+            f"first {comp.initial_state} accept {comp.trigger_signal} "
+            f"then {comp.response_state};"
+        )
+        out.append(
+            f"        state {comp.response_state} "
+            f"{{ entry action {comp.response_action}; }}"
+        )
+        out.append("    }")
+
     # Decomposition edges (unique names → no namespace-shadowing warning).
     for comp in spec.components:
         out.append(
             f"    dependency decompose{comp.name} "
             f"from {spec.system_contract} to {comp.name};"
         )
+        out.append(
+            f"    dependency realize{comp.name} "
+            f"from {comp.name} to {comp.behavior};"
+        )
+
+    producers = {comp.guarantee: comp.name for comp in spec.components}
+    system_environment = set(spec.system_assumptions)
+    for comp in spec.components:
+        for assumption in comp.assumptions:
+            if assumption.environment or assumption.concept in system_environment:
+                continue
+            producer = producers.get(assumption.concept)
+            if producer is not None:
+                subject = assumption.concept[0].upper() + assumption.concept[1:]
+                out.append(
+                    f"    dependency discharge{subject} "
+                    f"from {producer} to {comp.name};"
+                )
+
+    out.append(f"    verification def {spec.verification} {{")
+    out.append("        objective deploymentObservation {")
+    out.append(
+        f"            verify requirement observedContract : {spec.system_contract};"
+    )
+    out.append("        }")
+    out.append("    }")
+    out.append(
+        f"    dependency observe{spec.system_contract} "
+        f"from {spec.system_contract} to {spec.verification};"
+    )
     out.append("}")
     return "\n".join(out)
 

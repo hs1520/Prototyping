@@ -1403,6 +1403,15 @@ class Orchestrator:
                 "success": success,
                 "reasoning": reasoning,
                 "model_digest": text_digest(model_text),
+                "input_model_revision": task.base_model_revision,
+                "input_model_digest": task.base_model_digest,
+                "context_envelope_id": handoff["envelope"].envelope_id,
+                "context_envelope_digest": handoff["envelope"].envelope_digest,
+                "transcript_digest": session.transcript_digest,
+                "included_record_ids": list(
+                    handoff["envelope"].included_record_ids
+                ),
+                "accepted_status": "ACCEPTED" if success else "REJECTED",
             },
             task_id=task.task_id,
             session_id=session.session_id,
@@ -1419,6 +1428,7 @@ class Orchestrator:
         committed = self.blackboard.commit_model(
             model_text,
             base_revision=task.base_model_revision,
+            base_digest=task.base_model_digest,
             producer="DesignAgent" if success else "OrchestratorFallback",
             task_id=task.task_id if success else None,
             session_id=session.session_id,
@@ -1471,6 +1481,7 @@ class Orchestrator:
         committed = self.blackboard.commit_model(
             model_text,
             base_revision=self.blackboard.current_revision,
+            base_digest=self.blackboard.current_model.model_digest,
             producer=producer,
         )
         self.task_sessions.stale_after_commit(
@@ -1500,7 +1511,18 @@ class Orchestrator:
                 is RevisedExperimentArm.SEMANTIC_ASSURANCE
                 and model_text is not None
             ):
-                result["ag_contract_graph"] = self._build_ag_trace(model_text)
+                assurance = self._build_ag_trace(model_text)
+                result.update(assurance)
+                result["revised_experiment"].update({
+                    "runtime_assurance_status": (
+                        "PASS"
+                        if assurance["ag_contract_graph"]["verdict"] == "PASS"
+                        and assurance["pattern_conformance_report"]["verdict"] == "PASS"
+                        else "FAILED_OR_INCOMPLETE"
+                    ),
+                    "formal_ag_proof": False,
+                    "physical_verification": False,
+                })
             result["collaboration"] = {
                 "blackboard": self.blackboard.snapshot(),
                 "contexts": self.context_builder.snapshot(),
@@ -1518,8 +1540,8 @@ class Orchestrator:
         A/G-aware generation (Stage 2-3, §12): under `R2-BBAG`, the reviewed
         decomposition for each selected requirement chain is emitted as valid SysML
         and merged so the committed model carries the contracts. R0/R1 models must
-        never carry them (R1 is coordination-only). Best-effort and syntax-gated:
-        if the merge does not parse, the base model is kept unchanged.
+        never carry them (R1 is coordination-only). R2 is fail-closed: a missing
+        selected chain or failed syntax gate aborts rather than silently running R1.
         """
         from ..prototyping.experiment_arms import RevisedExperimentArm
 
@@ -1531,19 +1553,28 @@ class Orchestrator:
 
             specs = select_ag_chains(requirements)
             if not specs:
-                return model_text
+                raise ValueError(
+                    "R2-BBAG MVP requires the reviewed REQ_SAFE_005 chain"
+                )
+            for spec in specs:
+                if not re.search(
+                    rf"\brequirement\s+def\s+{re.escape(spec.source_requirement)}\b",
+                    model_text,
+                ):
+                    raise ValueError(
+                        f"committed base model is missing authoritative "
+                        f"{spec.source_requirement}; A/G emission cannot invent it"
+                    )
             merged = merge_ag_contracts(model_text, specs)
             if check_syntax(merged).has_errors:
-                print("  ⚠ A/G contract layer failed the syntax gate — skipped")
-                return model_text
+                raise RuntimeError("R2-BBAG A/G contract layer failed the syntax gate")
             print(
                 f"  [R2-BBAG] merged A/G contract layer for {len(specs)} "
                 f"reviewed chain(s)"
             )
             return merged
-        except Exception as exc:  # never break the pipeline
-            print(f"  ⚠ A/G contract layer skipped ({exc})")
-            return model_text
+        except Exception as exc:
+            raise RuntimeError(f"R2-BBAG failed closed: {exc}") from exc
 
     def _build_ag_trace(self, model_text: str) -> Dict[str, Any]:
         """R2-BBAG A/G intervention: extract and check the bounded A/G graph from
@@ -1555,15 +1586,25 @@ class Orchestrator:
         This is intervention evidence, not gold-scored accuracy — the derived view
         records ``evaluation_ready=False`` until the independent evaluator lands.
         """
-        from ..prototyping.ag_contracts import check_ag_graph
+        from ..prototyping.ag_assurance import (
+            check_safety_pattern_conformance,
+            route_failure_diagnostics,
+        )
+        from ..prototyping.ag_contracts import AGDiagnostic, check_ag_graph
         from ..prototyping.ag_extractor import extract_ag_graph
         from ..prototyping.blackboard import RecordType
 
         revision = self.blackboard.current_revision
         digest = self.blackboard.current_model.model_digest
+        from ..prototyping.blackboard import text_digest
+        if text_digest(model_text) != digest:
+            raise ValueError(
+                "A/G extraction input does not match the committed Blackboard "
+                "model revision/digest"
+            )
         graph = extract_ag_graph(model_text, revision=revision, model_digest=digest)
         report = check_ag_graph(graph)
-        self.blackboard.publish(
+        analysis_record = self.blackboard.publish(
             RecordType.ANALYSIS,
             "analysis.ag_trace",
             "AGChecker",
@@ -1572,11 +1613,79 @@ class Orchestrator:
                 "system_completeness": report.system_completeness,
                 "component_completeness": dict(report.component_completeness),
                 "diagnostic_codes": [d.code for d in report.diagnostics],
+                "diagnostics": [d.as_dict() for d in report.diagnostics],
                 "checker_version": report.checker_version,
                 "evaluation_ready": False,
             },
         )
-        return report.to_dict()
+        pattern = check_safety_pattern_conformance(graph, report)
+        self.blackboard.publish(
+            RecordType.ANALYSIS,
+            "analysis.pattern_conformance",
+            "SafetyPatternChecker",
+            pattern,
+        )
+        routed_diags = list(report.diagnostics)
+        for case in pattern.get("cases", ()):
+            if case.get("status") == "FAIL":
+                routed_diags.append(AGDiagnostic(
+                    "PATTERN_NONCONFORMANT",
+                    f"{case.get('contract')} does not conform to the selected "
+                    "triggered timed-failsafe topology",
+                    contract=case.get("contract"),
+                ))
+        failures = route_failure_diagnostics(
+            routed_diags,
+            source_requirement=report.source_requirement,
+            realization_links=report.realization_links,
+        )
+        failures.update({
+            "source_model_revision": revision,
+            "source_model_digest": digest,
+            "analysis_record_id": analysis_record.record_id,
+        })
+        for failure in failures["failures"]:
+            failure_record = self.blackboard.publish(
+                RecordType.ANALYSIS,
+                "diagnostic.failure",
+                "AGFailureRouter",
+                failure,
+            )
+            if failure.get("repair_authorized"):
+                repair_task = self.blackboard.create_task(
+                    "A_G_SURGICAL_REPAIR",
+                    "RepairAgent",
+                    required_topics=("analysis.ag_trace", "diagnostic.failure"),
+                )
+                self.blackboard.publish(
+                    RecordType.CONTROL,
+                    "repair.routed",
+                    "AGFailureRouter",
+                    {
+                        "failure_id": failure.get("failure_id"),
+                        "failure_record_id": failure_record.record_id,
+                        "analysis_record_id": analysis_record.record_id,
+                        "repair_task_id": repair_task.task_id,
+                        "whole_model_fallback_allowed": False,
+                    },
+                    task_id=repair_task.task_id,
+                )
+        repair_decisions = [
+            dict(item.payload)
+            for item in self.blackboard.records(topic="repair.decision")
+        ]
+        return {
+            "ag_contract_graph": report.to_dict(),
+            "pattern_conformance_report": pattern,
+            "failure_diagnostics": failures,
+            "repair_decisions": {
+                "schema_version": "1.0",
+                "artifact_role": "INTERVENTION_REPAIR_DECISIONS",
+                "producing_stage": "R2_DEPENDENCY_CLOSED_REPAIR",
+                "measurement_boundary": "INTERVENTION",
+                "decisions": repair_decisions,
+            },
+        }
 
     def _explore_bilevel(
         self,

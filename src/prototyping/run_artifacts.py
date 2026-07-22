@@ -4,9 +4,8 @@ A revised run keeps its collaboration/A-G evidence as in-memory snapshots inside
 the result dict; this serialises the producible subset of the §14 audit views to
 a directory. The SysML model stays authoritative — these are read-only views.
 
-Only artifacts the current implementation produces are written. The
-pattern-conformance, failure-diagnostics, and repair-decision reports belong to
-Increment 3 and are not emitted yet.
+Increment-3 pattern, failure-routing, and repair-decision reports remain
+separate from the post-hoc evaluator boundary.
 """
 from __future__ import annotations
 
@@ -35,10 +34,15 @@ def write_revised_run_artifacts(
     Requires a `revised_experiment` result (a `BLACKBOARD_AG_V1` arm). Raises if
     the run carries no collaboration block.
     """
-    if not run_result.get("revised_experiment"):
+    experiment = run_result.get("revised_experiment") or {}
+    if (
+        experiment.get("experiment_namespace") != "BLACKBOARD_AG_V1"
+        or experiment.get("configuration")
+        not in {"R0-CURRENT", "R1-BBCTX", "R2-BBAG"}
+    ):
         raise ValueError(
             "write_revised_run_artifacts requires a BLACKBOARD_AG_V1 run "
-            "(no revised_experiment block found)"
+            "with an R0-CURRENT/R1-BBCTX/R2-BBAG configuration"
         )
     collaboration = run_result.get("collaboration") or {}
     if not collaboration:
@@ -82,7 +86,16 @@ def write_revised_run_artifacts(
 
     # Transcripts are present only when the session snapshot included messages.
     transcripts = [
-        {"session_id": s.get("session_id"), "messages": s.get("messages")}
+        {
+            "session_id": s.get("session_id"),
+            "task_id": s.get("task_id"),
+            "agent_role": s.get("agent_role"),
+            "base_model_revision": s.get("base_model_revision"),
+            "base_model_digest": s.get("base_model_digest"),
+            "context_envelope_ids": s.get("context_envelope_ids"),
+            "transcript_digest": s.get("transcript_digest"),
+            "messages": s.get("messages"),
+        }
         for s in sessions if s.get("messages") is not None
     ]
     if transcripts:
@@ -95,6 +108,17 @@ def write_revised_run_artifacts(
         p = out / "ag_contract_graph.json"
         _write_json(p, ag_graph)
         record("ag_contract_graph", p)
+
+    for key, filename in (
+        ("pattern_conformance_report", "pattern_conformance_report.json"),
+        ("failure_diagnostics", "failure_diagnostics.json"),
+        ("repair_decisions", "repair_decisions.json"),
+    ):
+        payload = run_result.get(key)
+        if payload is not None:
+            p = out / filename
+            _write_json(p, payload)
+            record(key, p)
 
     metrics = compute_coordination_metrics(
         collaboration, llm_usage=run_result.get("llm_usage")

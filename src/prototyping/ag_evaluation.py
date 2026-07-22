@@ -22,8 +22,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
-PREDICTION_ROLE = "POSTHOC_A_G_TRACE"
+PREDICTION_ROLE = "RUNTIME_A_G_PREDICTION"
 GOLD_ROLE = "EVALUATOR_GOLD"
+REVISED_NAMESPACE = "BLACKBOARD_AG_V1"
+R2_CONFIGURATION = "R2-BBAG"
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,28 @@ def evaluate_ag_against_gold(
             f"gold artifact_role must be {GOLD_ROLE!r}; evaluator gold is "
             "evaluator-only and must never be a pipeline artifact"
         )
+    if (
+        prediction.get("experiment_namespace") != REVISED_NAMESPACE
+        or prediction.get("configuration") != R2_CONFIGURATION
+    ):
+        raise ValueError(
+            "prediction must be a BLACKBOARD_AG_V1:R2-BBAG artifact; legacy "
+            "and revised evaluators/results cannot be mixed"
+        )
+    if gold.get("experiment_namespace") != REVISED_NAMESPACE:
+        raise ValueError("gold must be scoped to BLACKBOARD_AG_V1")
+    if gold.get("status") != "FROZEN":
+        raise ValueError("accuracy/F1 requires supervisor-reviewed FROZEN gold")
+    review = gold.get("review_protocol") or {}
+    if (
+        not gold.get("reviewer")
+        or not gold.get("reviewed_date")
+        or review.get("blind_to_runtime_verdict") is not True
+        or review.get("independent_human_review") is not True
+    ):
+        raise ValueError(
+            "accuracy/F1 requires documented independent blind human review"
+        )
     alias_map = {
         str(k).strip().lower(): str(v).strip().lower()
         for k, v in (aliases or {}).items()
@@ -138,12 +162,22 @@ def evaluate_ag_against_gold(
     )
 
     result: Dict[str, Any] = {
+        "artifact_role": "POSTHOC_HUMAN_GOLD_EVALUATION",
+        "producing_stage": "POSTHOC_EVALUATION",
+        "measurement_boundary": "EVALUATOR_ONLY",
         "chain_id": gold.get("chain_id"),
         "checker_version": prediction.get("checker_version"),
         "source_model_revision": prediction.get("source_model_revision"),
         "source_model_digest": prediction.get("source_model_digest"),
         "evaluated_against": "independent_human_gold",
         "self_scored": False,
+        "experiment_namespace": REVISED_NAMESPACE,
+        "configuration": R2_CONFIGURATION,
+        "pooling_permitted": False,
+        "pooling_note": (
+            "R2-BBAG remains evaluation_ready=false until the controlled "
+            "configuration/gold freeze gate is explicitly lifted"
+        ),
         "guarantee_allocation": allocation.as_dict(),
         "assumption_discharge": discharge.as_dict(),
     }

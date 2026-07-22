@@ -8,6 +8,7 @@ from src.agents.orchestrator import Orchestrator
 from src.prototyping.blackboard import (
     Blackboard,
     RecordType,
+    ProtectedModelElementError,
     StaleRevisionError,
     TaskStatus,
 )
@@ -32,7 +33,7 @@ class _NoCallLLM:
 
 _REQ = "REQ-SAFE-005: Critical propulsion failure shall deploy a parachute."
 _MODEL = """package Drone {
-    requirement def REQ_SAFE_005 { doc /* deploy parachute */ }
+    requirement def REQ_SAFE_005 { doc /* Critical propulsion failure shall deploy a parachute. */ }
     part def SafetyMonitor {
         satisfy requirement REQ_SAFE_005;
         attribute propulsionCriticalFailure : Boolean = false;
@@ -44,6 +45,9 @@ def test_legacy_and_revised_experiment_namespaces_cannot_be_confused():
     assert LEGACY_EXPERIMENT_NAMESPACE != REVISED_EXPERIMENT_NAMESPACE
     assert RevisedExperimentArm.parse("R1") is RevisedExperimentArm.BLACKBOARD_CONTEXT
     assert RevisedExperimentArm.parse("R1-LONG") is RevisedExperimentArm.LONG_SESSION_DIAGNOSTIC
+    for legacy_label in ("B0", "B1", "B2"):
+        with pytest.raises(ValueError, match="unknown revised experiment arm"):
+            RevisedExperimentArm.parse(legacy_label)
 
 
 def test_unimplemented_revised_arm_fails_closed():
@@ -70,11 +74,35 @@ def test_blackboard_is_revision_bound_and_sysml_is_the_only_commit_authority():
         {"requirements": [_REQ]},
     )
     assert source.model_revision == 0
-    committed = board.commit_model(_MODEL, base_revision=0, producer="DesignAgent")
+    committed = board.commit_model(
+        _MODEL, base_revision=0, base_digest=board.current_model.model_digest,
+        producer="DesignAgent"
+    )
     assert committed.revision == 1
     assert board.snapshot()["semantic_authority"] == "COMMITTED_SYSML_MODEL"
+    assert any(
+        item["element_id"] == "REQ_SAFE_005"
+        for item in board.snapshot()["model_element_index"]
+    )
     with pytest.raises(StaleRevisionError):
-        board.commit_model(_MODEL, base_revision=0, producer="StaleAgent")
+        board.commit_model(
+            _MODEL, base_revision=0, base_digest=board.current_model.model_digest,
+            producer="StaleAgent"
+        )
+    with pytest.raises(StaleRevisionError, match="base digest"):
+        board.commit_model(
+            _MODEL,
+            base_revision=board.current_revision,
+            base_digest="not-the-current-digest",
+            producer="StaleDigestAgent",
+        )
+    with pytest.raises(ProtectedModelElementError):
+        board.commit_model(
+            _MODEL.replace("deploy a parachute", "deploy a parachute within 9 seconds"),
+            base_revision=board.current_revision,
+            base_digest=board.current_model.model_digest,
+            producer="ThresholdWeakener",
+        )
     with pytest.raises(StaleRevisionError):
         board.publish(
             RecordType.ANALYSIS,
@@ -107,6 +135,9 @@ def test_context_builder_is_role_checked_revision_pinned_and_has_no_gold_input()
     )
     assert envelope.model_revision == 0
     assert envelope.model_digest == board.current_model.model_digest
+    assert envelope.estimated_tokens > 0
+    assert envelope.record_context[0]["record_id"] == source.record_id
+    assert envelope.context_item_provenance[0]["payload_digest"] == source.payload_digest
     assert "not evaluator gold" in envelope.render_for_prompt()
     assert "gold" not in ContextBuilder.build.__code__.co_varnames
     raw_task = board.create_task("RAW_SOURCE", "DesignAgent")
@@ -128,6 +159,18 @@ def test_context_builder_is_role_checked_revision_pinned_and_has_no_gold_input()
             model_context="x" * 1000,
             token_budget=10,
         )
+    truncated_task = board.create_task("TRUNCATED_CONTEXT", "DesignAgent")
+    truncated = builder.build(
+        task_id=truncated_task.task_id,
+        agent_role="DesignAgent",
+        objective="bounded model view",
+        allowed_operation="READ_ONLY",
+        model_context="x" * 4000,
+        token_budget=300,
+        allow_deterministic_truncation=True,
+    )
+    assert truncated.truncated is True
+    assert "model_context:tail" in truncated.omitted_items
     with pytest.raises(ValueError, match="does not match"):
         builder.build(
             task_id=task.task_id,
@@ -159,7 +202,10 @@ def test_context_builder_is_role_checked_revision_pinned_and_has_no_gold_input()
             system_name="Drone",
             source_record_ids=(gold.record_id,),
         )
-    board.commit_model(_MODEL, base_revision=0, producer="DesignAgent")
+    board.commit_model(
+        _MODEL, base_revision=0, base_digest=board.current_model.model_digest,
+        producer="DesignAgent"
+    )
     with pytest.raises(ValueError, match="stale task"):
         builder.build_design_context(
             task_id=task.task_id,
@@ -208,7 +254,10 @@ def test_model_commit_stales_other_open_sessions():
         base_model_digest=board.current_model.model_digest,
         context_envelope_id="context-2",
     )
-    committed = board.commit_model(_MODEL, base_revision=0, producer="DesignAgent")
+    committed = board.commit_model(
+        _MODEL, base_revision=0, base_digest=board.current_model.model_digest,
+        producer="DesignAgent"
+    )
     stale = registry.stale_after_commit(
         committed.revision, committed.model_digest
     )
@@ -256,6 +305,13 @@ def test_r1_handoff_is_recorded_and_commits_the_agent_model():
     assert collaboration["task_sessions"]["sessions"][0]["status"] == "COMPLETED"
     assert collaboration["task_sessions"]["sessions"][0]["agent_role"] == "DesignAgent"
     assert collaboration["contexts"]["envelopes"][0]["source_requirements"] == (_REQ,)
+    result_record = next(
+        item for item in collaboration["blackboard"]["records"]
+        if item["topic"] == "agent.design.result"
+    )
+    assert result_record["payload"]["context_envelope_digest"]
+    assert result_record["payload"]["transcript_digest"]
+    assert result_record["payload"]["accepted_status"] == "ACCEPTED"
 
 
 def test_r1_rejects_and_closes_the_task_when_design_agent_raises():
@@ -278,23 +334,13 @@ def test_r1_rejects_and_closes_the_task_when_design_agent_raises():
 
 # --- R2-BBAG A/G wiring (Increment 2, step 1: orchestrator integration) -------
 
-_MINI_AG = """package MiniAG {
-    requirement def SysC {
-        attribute start : Boolean;
-        attribute done : Boolean;
-        attribute maxLatency : Real = 0.5;
-        assume constraint env_start { start }
-        require constraint g_done { done }
-    }
-    requirement def CompC {
-        attribute start : Boolean;
-        attribute done : Boolean;
-        attribute latencyBudget : Real = 0.3;
-        assume constraint env_start { start }
-        require constraint g_done { done }
-    }
-    dependency decomposeC from SysC to CompC;
-}"""
+from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+from src.prototyping.ag_emitter import emit_ag_package
+
+_MINI_AG = (
+    "package Source { requirement def REQ_SAFE_005 { doc /* source */ } }\n"
+    + emit_ag_package(REQ_SAFE_005_CHAIN)
+)
 
 
 def _r2_orchestrator_with_committed_model(model_text, arm="R2-BBAG"):
@@ -303,7 +349,10 @@ def _r2_orchestrator_with_committed_model(model_text, arm="R2-BBAG"):
     orch.context_builder = ContextBuilder(orch.blackboard)
     orch.task_sessions = TaskSessionRegistry()
     orch.blackboard.commit_model(
-        model_text, base_revision=orch.blackboard.current_revision, producer="test"
+        model_text,
+        base_revision=orch.blackboard.current_revision,
+        base_digest=orch.blackboard.current_model.model_digest,
+        producer="test",
     )
     return orch
 
@@ -326,6 +375,8 @@ def test_r2_wiring_extracts_checks_and_publishes_ag_trace():
     assert ag[0]["payload"]["verdict"] == "PASS"
     assert ag[0]["payload"]["evaluation_ready"] is False
     assert ag[0]["model_revision"] == orch.blackboard.current_revision
+    with pytest.raises(ValueError, match="does not match the committed"):
+        orch._build_collaboration_artifacts(_MINI_AG + "\n// uncommitted")
 
 
 def test_r2_wiring_is_honest_when_model_has_no_ag_contracts():

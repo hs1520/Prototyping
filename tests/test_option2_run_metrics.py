@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from src.agents.orchestrator import Orchestrator
 from src.prototyping.blackboard import Blackboard
 from src.prototyping.context_builder import ContextBuilder
+from src.prototyping.pipeline import PrototypingPipeline
 from src.prototyping.run_artifacts import write_revised_run_artifacts
 from src.prototyping.run_metrics import compute_coordination_metrics
 from src.prototyping.task_session import TaskSessionRegistry
@@ -31,7 +32,9 @@ def _r2_run_result():
     orch.last_requirement_input = {"mode": "frozen", "requirement_set_digest": "d"}
     orch._prepare_design_handoff("DeliveryUAV", _REQS)
     model = build_lite_model(
-        "package DeliveryUAV { part def SafetyMonitor {} }", model_name="DeliveryUAV"
+        "package DeliveryUAV { requirement def REQ_SAFE_005 { doc /* deploy the "
+        "parachute within 0.5 s of a critical propulsion failure. */ } "
+        "part def SafetyMonitor {} }", model_name="DeliveryUAV"
     )
     orch._finalize_design_handoff(
         SimpleNamespace(success=True, reasoning="generated", metadata={}), model
@@ -60,19 +63,25 @@ def test_coordination_metrics_are_computed_from_run_artifacts():
     # invariants hold: no stale-revision use, no cross-role contamination
     assert m["stale_revision_use"]["count"] == 0
     assert m["cross_role_contamination"]["count"] == 0
+    assert m["source_threshold_unit_preservation"]["value"] == 1.0
     assert m["cost"]["llm_calls"] == 3
     assert m["mvp_caveats"]
 
 
 def test_write_revised_run_artifacts_serialises_the_producible_views(tmp_path):
     result = _r2_run_result()
+    report = PrototypingPipeline.build_run_report(result)
+    assert report["pattern_conformance_report"]["verdict"] == "PASS"
+    assert report["failure_diagnostics"]["failures"] == []
+    assert report["repair_decisions"]["decisions"] == []
     written = write_revised_run_artifacts(result, tmp_path)
 
     # the producible §14 subset is on disk
     for name in (
         "shared_model_final", "blackboard_snapshot", "model_revision_log",
         "blackboard_event_log", "context_envelopes", "task_sessions",
-        "ag_contract_graph", "coordination_metrics",
+        "ag_contract_graph", "pattern_conformance_report",
+        "failure_diagnostics", "repair_decisions", "coordination_metrics",
     ):
         assert name in written
         assert (tmp_path / written[name].split("/")[-1]).exists()
@@ -80,6 +89,12 @@ def test_write_revised_run_artifacts_serialises_the_producible_views(tmp_path):
     # the A/G graph and metrics round-trip as valid JSON
     ag = json.loads((tmp_path / "ag_contract_graph.json").read_text())
     assert ag["verdict"] == "PASS"
+    pattern = json.loads(
+        (tmp_path / "pattern_conformance_report.json").read_text()
+    )
+    assert pattern["verdict"] == "PASS"
+    failures = json.loads((tmp_path / "failure_diagnostics.json").read_text())
+    assert failures["failures"] == []
     metrics = json.loads((tmp_path / "coordination_metrics.json").read_text())
     assert metrics["counts"]["sessions"] == 1
     # the event log is one JSON object per line
@@ -91,6 +106,14 @@ def test_writer_rejects_a_non_revised_run():
     import pytest
     with pytest.raises(ValueError, match="requires a BLACKBOARD_AG_V1 run"):
         write_revised_run_artifacts({"model_sysml": "x"}, "/tmp/nope")
+    with pytest.raises(ValueError, match="requires a BLACKBOARD_AG_V1 run"):
+        write_revised_run_artifacts({
+            "revised_experiment": {
+                "experiment_namespace": "LEGACY_EXTERNAL_CONTRACT_V1",
+                "configuration": "B2",
+            },
+            "collaboration": {"blackboard": {}},
+        }, "/tmp/nope")
 
 
 def test_metrics_flag_stale_and_contamination_when_present():

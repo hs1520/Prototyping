@@ -24,51 +24,16 @@ from src.prototyping.ag_contracts import (
     CODE_DECOMPOSITION_INSUFFICIENT,
 )
 from src.prototyping.ag_extractor import extract_ag_graph
+from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+from src.prototyping.ag_emitter import emit_ag_package
 from src.simulation.syntax_checker import check_syntax
 
 
 # REQ_SAFE_005 — critical propulsion failure → parachute deployment (design §7).
-REQ_SAFE_005_SYSML = """package ParachuteAG {
-    requirement def SystemParachuteContract {
-        attribute airborne : Boolean;
-        attribute criticalPropulsionFailure : Boolean;
-        attribute parachuteDeployed : Boolean;
-        attribute deploymentLatency : Real;
-        attribute maxLatency : Real = 0.5;
-        assume constraint env_airborne { airborne }
-        assume constraint trig_failure { criticalPropulsionFailure }
-        require constraint g_latency { deploymentLatency <= maxLatency }
-        require constraint g_observed { parachuteDeployed }
-    }
-    requirement def PropulsionMonitorContract {
-        attribute failureSensingAvailable : Boolean;
-        attribute criticalFailureEvent : Boolean;
-        attribute latencyBudget : Real = 0.05;
-        assume constraint env_sensing { failureSensingAvailable }
-        require constraint g_event { criticalFailureEvent }
-    }
-    requirement def SafetyMonitorContract {
-        attribute airborne : Boolean;
-        attribute criticalFailureEvent : Boolean;
-        attribute parachuteCommand : Boolean;
-        attribute latencyBudget : Real = 0.10;
-        assume constraint a_airborne { airborne }
-        assume constraint a_event { criticalFailureEvent }
-        require constraint g_command { parachuteCommand }
-    }
-    requirement def RecoverySystemContract {
-        attribute parachuteCommand : Boolean;
-        attribute actuatorPower : Boolean;
-        attribute parachuteDeployed : Boolean;
-        attribute latencyBudget : Real = 0.35;
-        assume constraint a_command { parachuteCommand }
-        assume constraint env_power { actuatorPower }
-        require constraint g_deployed { parachuteDeployed }
-    }
-    dependency decomposeProp from SystemParachuteContract to PropulsionMonitorContract;
-    dependency decomposeSafety from SystemParachuteContract to SafetyMonitorContract;
-    dependency decomposeRecovery from SystemParachuteContract to RecoverySystemContract;
-}"""
+REQ_SAFE_005_SYSML = (
+    "package Source { requirement def REQ_SAFE_005 { doc /* source */ } }\n"
+    + emit_ag_package(REQ_SAFE_005_CHAIN)
+)
 
 
 def _codes(report):
@@ -106,18 +71,15 @@ def test_req_safe_005_chain_extracts_and_passes():
 def test_exactly_one_owner_per_component_guarantee():
     # §16: every component guarantee has exactly one responsible owner.
     graph = extract_ag_graph(REQ_SAFE_005_SYSML)
-    owners = {c.name: 0 for c in graph.components}
-    for e in graph.edges:
-        if e.kind == "decomposes":
-            owners[e.dst] += 1
-    assert set(owners.values()) == {1}
+    owners = {c.name: c.owners for c in graph.components}
+    assert all(len(value) == 1 for value in owners.values())
     assert CODE_GUARANTEE_NO_OWNER not in _codes(check_ag_graph(graph))
 
 
 def test_additive_timing_budget_exceeded_is_detected():
     over = REQ_SAFE_005_SYSML.replace(
-        "attribute latencyBudget : Real = 0.35;",
-        "attribute latencyBudget : Real = 0.40;",
+        "attribute latencyBudget : Real = 0.35 [SI::s];",
+        "attribute latencyBudget : Real = 0.40 [SI::s];",
     )
     report = check_ag_graph(extract_ag_graph(over))
     assert report.verdict == "FAIL"
@@ -128,7 +90,7 @@ def test_additive_timing_budget_exceeded_is_detected():
 def test_undischarged_assumption_is_localised_and_not_mislabelled_circular():
     # Remove the upstream guarantee that produces criticalFailureEvent.
     broken = REQ_SAFE_005_SYSML.replace(
-        "require constraint g_event { criticalFailureEvent }", ""
+        "require constraint g_criticalFailureEvent { criticalFailureEvent }", ""
     )
     report = check_ag_graph(extract_ag_graph(broken))
     assert report.verdict == "FAIL"
@@ -141,7 +103,7 @@ def test_undischarged_assumption_is_localised_and_not_mislabelled_circular():
 
 def test_missing_decomposition_owner_is_flagged():
     orphaned = REQ_SAFE_005_SYSML.replace(
-        "    dependency decomposeRecovery from SystemParachuteContract to RecoverySystemContract;\n",
+        "    satisfy requirement recoverySystemContract : RecoverySystemContract by recoverySystem;\n",
         "",
     )
     report = check_ag_graph(extract_ag_graph(orphaned))
@@ -209,7 +171,7 @@ def test_report_cites_source_revision_digest_and_is_regenerable():
     assert d["source_model_revision"] == 42
     assert d["source_model_digest"] == "deadbeef"
     assert d["checker_version"] == report.checker_version
-    assert d["artifact_role"] == "POSTHOC_A_G_TRACE"
+    assert d["artifact_role"] == "RUNTIME_A_G_PREDICTION"
     # deterministic: same input → identical derived view
     assert check_ag_graph(extract_ag_graph(REQ_SAFE_005_SYSML, revision=42,
                                            model_digest="deadbeef")).to_dict() == d

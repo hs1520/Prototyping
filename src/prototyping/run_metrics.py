@@ -46,6 +46,7 @@ def compute_coordination_metrics(
     revisions: List[dict] = list(board.get("model_revisions") or [])
     records: List[dict] = list(board.get("records") or [])
     tasks: List[dict] = list(board.get("tasks") or [])
+    protected = dict(board.get("protected_requirement_digests") or {})
 
     committed = {
         (int(r.get("revision")), r.get("model_digest")) for r in revisions
@@ -119,6 +120,16 @@ def compute_coordination_metrics(
             "sessions": len(sessions),
             "model_revisions": len(revisions),
             "migrated_handoffs": len(handoff_tasks),
+            "protected_requirement_contract_defs": len(protected),
+        },
+        "source_threshold_unit_preservation": {
+            "preserved": len(protected),
+            "total": len(protected),
+            "value": _ratio(len(protected), len(protected)),
+            "note": (
+                "enforced by exact committed requirement/contract block identity; "
+                "covers source text, comparators, thresholds, units, and constraints"
+            ),
         },
         "context_revision_consistency": {
             "consistent": env_consistent,

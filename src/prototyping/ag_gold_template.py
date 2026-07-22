@@ -50,7 +50,8 @@ def build_gold_draft(
 
     allocations = [
         {
-            "owner": comp.name,
+            "owner": comp.owner_usage,
+            "contract": comp.name,
             "guarantee": comp.guarantee,
             "_review": "confirm the responsible owner",
         }
@@ -73,6 +74,7 @@ def build_gold_draft(
 
     return {
         "artifact_role": GOLD_ROLE,
+        "experiment_namespace": "BLACKBOARD_AG_V1",
         "status": GOLD_STATUS_DRAFT,
         "chain_id": normalise_req_id(spec.source_requirement),
         "source_requirement": spec.source_requirement,
@@ -80,6 +82,10 @@ def build_gold_draft(
         "source_digest": _digest(source_text),
         "reviewer": None,
         "reviewed_date": None,
+        "review_protocol": {
+            "blind_to_runtime_verdict": False,
+            "independent_human_review": False,
+        },
         "review_instructions": (
             "Label blind to any pipeline verdict (design §13). Confirm or edit each "
             "field from the source requirement and the reviewed decomposition, drop "

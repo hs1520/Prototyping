@@ -1,5 +1,6 @@
 {
   "artifact_role": "EVALUATOR_GOLD",
+  "experiment_namespace": "BLACKBOARD_AG_V1",
   "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
   "chain_id": "REQ_SAFE_005",
   "source_requirement": "REQ_SAFE_005",
@@ -7,6 +8,10 @@
   "source_digest": "d98469c950cc8d656ebd7d3b18595c62d4ede57c0717842e747dd39ff0ecf2d8",
   "reviewer": null,
   "reviewed_date": null,
+  "review_protocol": {
+    "blind_to_runtime_verdict": false,
+    "independent_human_review": false
+  },
   "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the reviewed decomposition, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
   "system": {
     "contract": "SystemParachuteContract",
@@ -20,17 +25,20 @@
   },
   "allocations": [
     {
-      "owner": "PropulsionMonitorContract",
+      "owner": "propulsionMonitor",
+      "contract": "PropulsionMonitorContract",
       "guarantee": "criticalFailureEvent",
       "_review": "confirm the responsible owner"
     },
     {
-      "owner": "SafetyMonitorContract",
+      "owner": "safetyMonitor",
+      "contract": "SafetyMonitorContract",
       "guarantee": "parachuteCommand",
       "_review": "confirm the responsible owner"
     },
     {
-      "owner": "RecoverySystemContract",
+      "owner": "recoverySystem",
+      "contract": "RecoverySystemContract",
       "guarantee": "parachuteDeployed",
       "_review": "confirm the responsible owner"
     }

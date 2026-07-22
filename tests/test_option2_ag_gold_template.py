@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
 from src.prototyping.ag_contracts import check_ag_graph
 from src.prototyping.ag_evaluation import GOLD_ROLE, evaluate_ag_against_gold
@@ -44,18 +46,16 @@ def test_draft_cites_the_canonical_source_digest():
     assert _draft()["source_digest"].startswith("d98469c950cc8d65")
 
 
-def test_draft_is_consistent_with_the_pipeline_prediction():
-    # emit the reviewed chain, run the checker, and score its prediction against the
-    # independently-built draft — a faithful pipeline agrees perfectly.
+def test_draft_cannot_be_scored_before_independent_blind_freeze():
     prediction = check_ag_graph(
-        extract_ag_graph(emit_ag_package(REQ_SAFE_005_CHAIN), revision=1)
+        extract_ag_graph(
+            "package Source { requirement def REQ_SAFE_005; }\n"
+            + emit_ag_package(REQ_SAFE_005_CHAIN),
+            revision=1,
+        )
     ).to_dict()
-    result = evaluate_ag_against_gold(prediction, _draft())
-    assert result["guarantee_allocation"]["f1"] == 1.0
-    assert result["assumption_discharge"]["f1"] == 1.0
-    assert result["assumption_discharge"]["tp"] == 5
-    # the checker prediction carries no failure_class, so the evaluator omits it
-    assert "failure_class_match" not in result
+    with pytest.raises(ValueError, match="FROZEN gold"):
+        evaluate_ag_against_gold(prediction, _draft())
 
 
 def test_generator_never_imports_the_runtime_checker():

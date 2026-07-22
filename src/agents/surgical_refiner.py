@@ -424,14 +424,26 @@ def _packet_digest_valid(packet: Mapping[str, Any]) -> bool:
 
 
 def _package_body_elements(model_text: str) -> List[str]:
-    package = re.search(r"\bpackage\s+[A-Za-z_]\w*\s*\{", model_text)
-    if package is None:
+    packages = list(re.finditer(
+        r"\bpackage\s+(?:[A-Za-z_]\w*|'[^']+')\s*\{", model_text
+    ))
+    if not packages:
         return _split_top_level(model_text)
-    brace = model_text.find("{", package.start())
-    end = find_block_end(model_text, brace)
-    if end == -1:
-        return []
-    return _split_top_level(model_text[brace + 1:end])
+    elements: List[str] = []
+    occupied_until = -1
+    for package in packages:
+        # Ignore nested package matches: their content is already part of the
+        # enclosing package element. Revised Option 2 appends a second top-level
+        # A/G package, which must not be silently excluded from repair slicing.
+        if package.start() < occupied_until:
+            continue
+        brace = model_text.find("{", package.start())
+        end = find_block_end(model_text, brace)
+        if end == -1:
+            return []
+        elements.extend(_split_top_level(model_text[brace + 1:end]))
+        occupied_until = end + 1
+    return elements
 
 
 def _scope_tokens(packet: Mapping[str, Any]) -> set[str]:
