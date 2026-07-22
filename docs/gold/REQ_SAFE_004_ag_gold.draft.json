@@ -1,0 +1,68 @@
+{
+  "artifact_role": "EVALUATOR_GOLD",
+  "experiment_namespace": "BLACKBOARD_AG_V1",
+  "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
+  "chain_id": "REQ_SAFE_004",
+  "source_requirement": "REQ_SAFE_004",
+  "source_text": "REQ-SAFE-004: The system shall not transition to the armed or airborne state if any onboard sensor reports a failure during the power-on self-test sequence.",
+  "source_digest": "db9549a4c12825fa0b0be267a1d15929269be41b3f13a5fe024c5ec016109ccc",
+  "reviewer": null,
+  "reviewed_date": null,
+  "review_protocol": {
+    "blind_to_runtime_verdict": false,
+    "independent_human_review": false
+  },
+  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the reviewed decomposition, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
+  "system": {
+    "contract": "SystemArmingInhibitContract",
+    "assumptions": [
+      "powerOnSelfTest",
+      "sensorFailureReported"
+    ],
+    "guarantee_observation": "armingPrevented",
+    "deadline_s": null,
+    "_review": "confirm system assumptions, observation, and deadline"
+  },
+  "allocations": [
+    {
+      "owner": "selfTestMonitor",
+      "contract": "SelfTestMonitorContract",
+      "guarantee": "sensorFailureDetected",
+      "_review": "confirm the responsible owner"
+    },
+    {
+      "owner": "armingAuthority",
+      "contract": "ArmingAuthorityContract",
+      "guarantee": "armingPrevented",
+      "_review": "confirm the responsible owner"
+    }
+  ],
+  "discharge_edges": [
+    {
+      "component": "SelfTestMonitorContract",
+      "assumption": "powerOnSelfTest",
+      "by": "environment",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "SelfTestMonitorContract",
+      "assumption": "sensorFailureReported",
+      "by": "environment",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "ArmingAuthorityContract",
+      "assumption": "powerOnSelfTest",
+      "by": "environment",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "ArmingAuthorityContract",
+      "assumption": "sensorFailureDetected",
+      "by": "SelfTestMonitorContract",
+      "_review": "confirm the discharging source"
+    }
+  ],
+  "failure_class": "NO_FAILURE",
+  "_failure_class_review": "confirm the expected blind failure class"
+}

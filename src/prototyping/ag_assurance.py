@@ -41,19 +41,29 @@ class PatternCase:
 
     @property
     def status(self) -> str:
-        return "PASS" if all((
+        core = all((
             self.trigger_present,
             self.reachable_response,
             self.entry_action_present,
-            self.timing_criterion_present,
             self.invariant_preserved,
-        )) else "FAIL"
+        ))
+        # A triggered timed failsafe additionally requires a timing criterion; a
+        # startup inhibit is a Boolean invariant (failed self-test ↛ armed) with
+        # no timing obligation.
+        if self.pattern == "STARTUP_INHIBIT":
+            return "PASS" if core else "FAIL"
+        return "PASS" if core and self.timing_criterion_present else "FAIL"
 
 
 def check_safety_pattern_conformance(
     graph: AGGraph, report: AGReport
 ) -> Dict[str, Any]:
-    """Check the bounded triggered timed-failsafe topology for REQ_SAFE_005."""
+    """Check the bounded safety-pattern topology for the selected chain.
+
+    The pattern is inferred per component from the emitted topology: a component
+    carrying a timing budget conforms to ``TRIGGERED_TIMED_FAILSAFE_RESPONSE``;
+    one without a budget conforms to the ``STARTUP_INHIBIT`` Boolean invariant.
+    """
     by_contract = {
         item["contract"]: item for item in report.realization_links
     }
@@ -62,13 +72,15 @@ def check_safety_pattern_conformance(
         realization = by_contract.get(component.name, {})
         reachable = list(realization.get("reachable_states") or ())
         actions = list(realization.get("response_actions") or ())
+        timed = component.timing_budget is not None
         case = PatternCase(
             contract=component.name,
-            pattern="TRIGGERED_TIMED_FAILSAFE_RESPONSE",
+            pattern=("TRIGGERED_TIMED_FAILSAFE_RESPONSE" if timed
+                     else "STARTUP_INHIBIT"),
             trigger_present=bool(realization.get("trigger_ok")),
             reachable_response=len(reachable) >= 2,
             entry_action_present=bool(actions),
-            timing_criterion_present=(component.timing_budget is not None),
+            timing_criterion_present=timed,
             # In the bounded profile the invariant is that no response PASS is
             # possible without a reachable trigger and response entry action.
             invariant_preserved=(

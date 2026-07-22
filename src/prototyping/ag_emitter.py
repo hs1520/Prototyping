@@ -48,6 +48,10 @@ class AGChainSpec:
     deadline: Optional[float]       # system deadline (maxLatency), seconds
     components: Tuple[AGComponentSpec, ...]
     verification: str = "ParachuteDeploymentVerification"
+    # Reviewed safety-pattern kind for this chain (documentation/provenance). The
+    # conformance checker independently infers the pattern from the emitted
+    # topology (a timing budget ⇒ timed failsafe; none ⇒ startup-inhibit invariant).
+    pattern: str = "TRIGGERED_TIMED_FAILSAFE_RESPONSE"
 
 
 def _fmt(value: float) -> str:

@@ -1,9 +1,10 @@
 """Reviewed bounded A/G chain library (Stage 2 decomposition, design §7).
 
 Each entry is a human-reviewed A/G decomposition for one selected requirement
-chain. The primary case is REQ_SAFE_005 (critical propulsion failure → parachute
-deployment). Adding a chain is a reviewed activity (candidate doc §2); the
-emitter renders it into the model deterministically.
+chain. Two chains are encoded: REQ_SAFE_005 (critical propulsion failure →
+parachute deployment, a timed failsafe) and REQ_SAFE_004 (power-on self-test →
+arming inhibit, a Boolean startup-inhibit invariant). Adding a chain is a reviewed
+activity (candidate doc §2); the emitter renders it into the model deterministically.
 """
 from __future__ import annotations
 
@@ -70,7 +71,54 @@ REQ_SAFE_005_CHAIN = AGChainSpec(
     ),
 )
 
-_CHAIN_LIBRARY: Tuple[AGChainSpec, ...] = (REQ_SAFE_005_CHAIN,)
+# REQ_SAFE_004 — startup self-test → arming inhibit. A Boolean *invariant*
+# (failed self-test ↛ armed), not a timed chain: no latency budgets, and the
+# StartupInhibit pattern carries no timing obligation. Second reviewed chain,
+# exercising a structurally different property KIND + safety pattern.
+REQ_SAFE_004_CHAIN = AGChainSpec(
+    source_requirement="REQ_SAFE_004",
+    package="REQ_SAFE_004_AG",
+    system_contract="SystemArmingInhibitContract",
+    system_assumptions=("powerOnSelfTest", "sensorFailureReported"),
+    observation="armingPrevented",
+    deadline=None,
+    verification="ArmingInhibitVerification",
+    pattern="STARTUP_INHIBIT",
+    components=(
+        AGComponentSpec(
+            name="SelfTestMonitorContract",
+            owner_def="SelfTestMonitor",
+            owner_usage="selfTestMonitor",
+            guarantee="sensorFailureDetected",
+            behavior="SelfTestMonitorBehavior",
+            trigger_signal="SensorFailureReportedSignal",
+            initial_state="selfTestRunning",
+            response_state="failureLatched",
+            response_action="setSensorFailureDetected",
+            assumptions=(
+                AGAssumptionSpec("powerOnSelfTest", environment=True),
+                AGAssumptionSpec("sensorFailureReported"),
+            ),
+        ),
+        AGComponentSpec(
+            name="ArmingAuthorityContract",
+            owner_def="ArmingAuthority",
+            owner_usage="armingAuthority",
+            guarantee="armingPrevented",
+            behavior="ArmingAuthorityBehavior",
+            trigger_signal="SensorFailureDetectedSignal",
+            initial_state="preArm",
+            response_state="armingInhibited",
+            response_action="setArmingPrevented",
+            assumptions=(
+                AGAssumptionSpec("powerOnSelfTest", environment=True),
+                AGAssumptionSpec("sensorFailureDetected"),
+            ),
+        ),
+    ),
+)
+
+_CHAIN_LIBRARY: Tuple[AGChainSpec, ...] = (REQ_SAFE_005_CHAIN, REQ_SAFE_004_CHAIN)
 
 _REQ_ID_RE = re.compile(r"^\s*(REQ[-_][A-Za-z]+[-_]\d+)")
 
