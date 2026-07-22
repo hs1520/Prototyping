@@ -1,93 +1,85 @@
-"""Run the revised R0/R1/R2 ablation on one frozen requirement set (Increment 4).
+"""Run the frozen revised Option 2 descriptive pilot.
 
-Thin driver: for each arm it runs the pipeline's generate() on the SAME frozen
-requirements, writes the derived artifacts (§14) for the blackboard arms, and
-computes the coordination metrics (§13 Group A). It needs a real provider — the
-MockLLM cannot synthesise multi-step SysML — so it is not a CI test; a human runs
-it with ``--provider``.
-
-R2-BBAG stays runnable-but-not-poolable: accuracy/F1 against gold is deliberately
-NOT computed here (that requires supervisor-frozen human gold, §18-Q7).
-
-Usage:
-    PYTHONPATH=. python examples/run_revised_experiment.py \
-        --provider vertex --out examples/output/revised_experiment
+This command performs external paid generation only when the caller passes the
+explicit authorization flag. It creates a new output directory and refuses to
+overwrite previous evidence.
 """
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
+import subprocess
 
 from src.prototyping.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
+from src.prototyping.revised_pilot import RevisedPilotConfig, run_revised_pilot
 from src.prototyping.run_artifacts import write_revised_run_artifacts
 
-# One digest-checked frozen requirement set is shared across the three arms.
-FROZEN_REQUIREMENTS = [
+
+FROZEN_REQUIREMENTS = (
     "REQ-SAFE-005: The system shall deploy the ballistic recovery parachute "
     "within 0.5 seconds of detecting a critical propulsion subsystem failure "
     "during flight, taking precedence over all other safety responses.",
     "REQ-FUNC-002: The system shall detect a stationary obstacle directly ahead "
     "within the forward sensor field of view and maintain at least 5 metres of "
     "separation while avoiding it.",
-]
-
-SYSTEM = "DeliveryUAV"
-DESCRIPTION = (
-    "An autonomous delivery UAV with ballistic parachute recovery and forward "
-    "obstacle avoidance."
 )
 
-ARMS = ("R0-CURRENT", "R1-BBCTX", "R2-BBAG")
 
-
-def _run_arm(arm: str, llm, out: Path) -> dict:
-    pipe = PrototypingPipeline(
-        llm=llm, max_iterations=3, verbose=False,
-        revised_experiment_arm=arm,
+def _git_revision() -> str:
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
     )
-    result = pipe.orchestrator.generate(
-        system_name=SYSTEM,
-        system_description=DESCRIPTION,
-        frozen_requirements=list(FROZEN_REQUIREMENTS),
+    if status.stdout.strip():
+        raise RuntimeError(
+            "controlled pilot requires a clean worktree so code_revision is complete"
+        )
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
     )
-    report = pipe.build_run_report(result)
-    arm_dir = out / arm
-    arm_dir.mkdir(parents=True, exist_ok=True)
-    (arm_dir / "run_report.json").write_text(
-        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    written = {}
-    if result.get("revised_experiment") and result.get("collaboration"):
-        written = write_revised_run_artifacts(result, arm_dir)
-    print(f"  [{arm}] score={report.get('final_score')} "
-          f"artifacts={len(written)} -> {arm_dir}")
-    return report
+    return completed.stdout.strip()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--provider", default="vertex")
-    parser.add_argument("--out", default="examples/output/revised_experiment")
+    parser.add_argument("--provider", required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--seeds", nargs=3, type=int, default=(0, 1, 2))
+    parser.add_argument("--max-iterations", type=int, default=1)
+    parser.add_argument(
+        "--confirm-external-experiment",
+        action="store_true",
+        help="Confirm that this current invocation is authorised to call a provider.",
+    )
     args = parser.parse_args()
 
-    out = Path(args.out)
-    llm = create_llm(args.provider)
-    print(f"Revised R0/R1/R2 ablation on {len(FROZEN_REQUIREMENTS)} frozen "
-          f"requirements (provider={args.provider})")
-    summary = {arm: _run_arm(arm, llm, out) for arm in ARMS}
-    (out / "summary.json").write_text(
-        json.dumps(
-            {arm: {"final_score": r.get("final_score"),
-                   "configuration": r.get("configuration")}
-             for arm, r in summary.items()},
-            indent=2, ensure_ascii=False,
-        ) + "\n",
-        encoding="utf-8",
+    config = RevisedPilotConfig(
+        provider=args.provider,
+        model=args.model,
+        seeds=tuple(args.seeds),
+        max_iterations=args.max_iterations,
+        code_revision=_git_revision(),
+        requirements=FROZEN_REQUIREMENTS,
     )
-    print(f"Wrote {out}/summary.json — note: R2-BBAG F1 needs frozen human gold "
-          "(evaluation_ready is False).")
+    manifest = run_revised_pilot(
+        config,
+        Path(args.out),
+        external_execution_authorized=args.confirm_external_experiment,
+        llm_factory=create_llm,
+        pipeline_factory=PrototypingPipeline,
+        artifact_writer=write_revised_run_artifacts,
+    )
+    print(
+        f"Pilot {manifest['status']}: {manifest['completed_run_count']}/"
+        f"{manifest['run_count']} runs; manifest={Path(args.out) / 'pilot_manifest.json'}"
+    )
 
 
 if __name__ == "__main__":
