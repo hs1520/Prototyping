@@ -10,8 +10,9 @@ Honesty notes carried in the output:
   model-dependent turn). Here they read 1.0 / 0; R0-CURRENT has no blackboard and
   therefore no mechanism to enforce or even measure them — that asymmetry is the
   point of the comparison, not a claim that R1 "scored higher on a shared scale".
-- handoff-based metrics have a denominator of one migrated handoff in the MVP
-  (§13 caveat) and are reported as illustrative, never as pipeline-wide rates.
+- handoff-based metrics have a denominator of two migrated handoffs in the MVP
+  (RequirementsAgent→DesignAgent, DesignAgent→VerificationAgent) — a bounded
+  subset, still reported as illustrative rather than a pipeline-wide rate (§13).
 - ``irrelevant_context_ratio`` needs a per-task dependency oracle and is not
   computed here; envelope truncation is reported instead.
 """
@@ -166,7 +167,9 @@ def compute_coordination_metrics(
         "envelope_truncation": {"truncated": truncated, "total": len(envelopes)},
         "cost": cost,
         "mvp_caveats": [
-            "handoff/role metrics have a denominator of one migrated handoff (§13)",
+            "handoff/role metrics have a denominator of two migrated handoffs "
+            "(Requirements->Design, Design->Verification); a bounded subset, not "
+            "a pipeline-wide rate (§13)",
             "irrelevant_context_ratio needs a dependency oracle and is not computed",
             "invariant metrics read 1.0/0 because R1 enforces them; R0 has no "
             "blackboard mechanism to enforce or measure them",

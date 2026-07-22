@@ -1479,6 +1479,107 @@ class Orchestrator:
             session.output_record_ids.append(record.record_id)
         self._active_design_handoff = None
 
+    def _run_verification_handoff(self) -> Optional[Dict[str, Any]]:
+        """Second board-mediated handoff: DesignAgent -> VerificationAgent (§15).
+
+        The VerificationAgent knowledge source consumes the committed model the
+        DesignAgent produced (as the relevant requirement-def context) plus the
+        authoritative requirements, and publishes a typed per-requirement
+        verification plan. Deterministic (no LLM, no gold); its purpose is to make
+        the §13 coordination metrics' handoff/role denominators greater than one —
+        two migrated handoffs instead of the illustrative single one.
+
+        The authoritative requirements are re-affirmed at the terminal revision so
+        the envelope references a current-revision SOURCE record (the design-time
+        source record is pinned to an earlier revision and would read as stale).
+        """
+        if (
+            self.blackboard is None
+            or self.context_builder is None
+            or self.task_sessions is None
+        ):
+            return None
+        from ..prototyping.blackboard import RecordType, TaskStatus
+        from ..prototyping.task_session import SessionStatus
+        from ..prototyping.verification_planning import plan_verification
+
+        source = None
+        for record in self.blackboard.records(topic="requirements.authoritative"):
+            source = record
+        if source is None:
+            return None
+        reaffirmed = self.blackboard.publish(
+            RecordType.SOURCE,
+            "requirements.authoritative",
+            "RequirementsAgent",
+            {
+                "requirements": list(source.payload.get("requirements", ())),
+                "requirement_input_mode": source.payload.get(
+                    "requirement_input_mode"
+                ),
+                "requirement_set_digest": source.payload.get(
+                    "requirement_set_digest"
+                ),
+                "gold_access": False,
+                "reaffirmed_for": "verification_planning",
+            },
+        )
+        task = self.blackboard.create_task(
+            "VERIFICATION_PLANNING",
+            "VerificationAgent",
+            required_topics=("requirements.authoritative",),
+        )
+        self.blackboard.transition_task(task.task_id, TaskStatus.ACTIVE)
+        envelope = self.context_builder.build_verification_context(
+            task_id=task.task_id,
+            source_record_ids=(reaffirmed.record_id,),
+        )
+        session = self.task_sessions.open(
+            task_id=task.task_id,
+            agent_role="VerificationAgent",
+            base_model_revision=task.base_model_revision,
+            base_model_digest=task.base_model_digest,
+            context_envelope_id=envelope.envelope_id,
+            max_turns=self.task_session_max_turns,
+            max_tokens=self.task_session_max_tokens,
+        )
+        plan = plan_verification(envelope.model_context)
+        envelope_text = envelope.render_for_prompt()
+        session.append(
+            "user", envelope_text, token_count=max(1, len(envelope_text) // 4)
+        )
+        summary = (
+            f"Planned verification for {plan['planned']} requirement(s); "
+            f"tiers {plan['tier_histogram']}."
+        )
+        session.append("assistant", summary, token_count=max(1, len(summary) // 4))
+        result_record = self.blackboard.publish(
+            RecordType.RESULT,
+            "agent.verification.result",
+            "VerificationAgent",
+            {
+                "success": True,
+                "context_envelope_id": envelope.envelope_id,
+                "context_envelope_digest": envelope.envelope_digest,
+                "transcript_digest": session.transcript_digest,
+                "included_record_ids": list(envelope.included_record_ids),
+                "verification_plan": plan,
+                "accepted_status": "ACCEPTED",
+            },
+            task_id=task.task_id,
+            session_id=session.session_id,
+        )
+        self.blackboard.transition_task(
+            task.task_id,
+            TaskStatus.COMPLETED,
+            producer="VerificationAgent",
+            result_record_ids=(result_record.record_id,),
+        )
+        session.close(
+            SessionStatus.COMPLETED, output_record_ids=(result_record.record_id,)
+        )
+        return plan
+
     def _commit_terminal_model(self, model_text: str, *, producer: str) -> None:
         if self.blackboard is None:
             return
@@ -1531,6 +1632,13 @@ class Orchestrator:
                     "formal_ag_proof": False,
                     "physical_verification": False,
                 })
+            # Second board-mediated handoff (DesignAgent -> VerificationAgent),
+            # published before the snapshot so it is captured. Runs for every
+            # blackboard arm (R1 and R2), giving the §13 handoff/role metrics a
+            # denominator greater than one.
+            verification_plan = self._run_verification_handoff()
+            if verification_plan is not None:
+                result["verification_plan"] = verification_plan
             result["collaboration"] = {
                 "blackboard": self.blackboard.snapshot(),
                 "contexts": self.context_builder.snapshot(),

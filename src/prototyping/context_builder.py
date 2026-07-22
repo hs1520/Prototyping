@@ -289,6 +289,53 @@ class ContextBuilder:
             token_budget=token_budget,
         )
 
+    def build_verification_context(
+        self,
+        *,
+        task_id: str,
+        source_record_ids: Iterable[str],
+        token_budget: int = 12000,
+    ) -> ContextEnvelope:
+        """Context for the second handoff (DesignAgent -> VerificationAgent).
+
+        The relevant model context is only the committed stakeholder requirement
+        defs (the model design produced, sliced to what verification plans), so the
+        envelope stays small and every requirement is present. The authoritative
+        requirements are reproduced from a current-revision SOURCE record.
+        """
+        from .verification_planning import requirement_def_slice
+
+        source_ids = tuple(str(item) for item in source_record_ids)
+        requirements: list[str] = []
+        for record_id in source_ids:
+            record = self.board.record(record_id)
+            if (
+                record.topic.lower().startswith("gold.")
+                or str(record.payload.get("artifact_role", "")).upper()
+                == "EVALUATOR_GOLD"
+            ):
+                raise ValueError("evaluator gold cannot enter a ContextEnvelope")
+            if record.topic != "requirements.authoritative":
+                raise ValueError(
+                    "verification requirements must come from the authoritative "
+                    "typed source publication"
+                )
+            requirements.extend(
+                str(item) for item in record.payload.get("requirements", ())
+            )
+        model_slice = requirement_def_slice(self.board.current_model.model_text)
+        return self.build(
+            task_id=task_id,
+            agent_role="VerificationAgent",
+            objective="Plan an IADT verification method for each committed requirement",
+            allowed_operation="PRODUCE_VERIFICATION_PLAN",
+            source_requirements=requirements,
+            model_context=model_slice,
+            protected_elements=("requirement_ids", "requirement_source_text"),
+            included_record_ids=source_ids,
+            token_budget=token_budget,
+        )
+
     def build_repair_context(
         self,
         *,

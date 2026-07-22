@@ -412,6 +412,7 @@ class PrototypingPipeline:
                 "pattern_conformance_report",
                 "failure_diagnostics",
                 "repair_decisions",
+                "verification_plan",
             ):
                 if result.get(artifact) is not None:
                     report[artifact] = result.get(artifact)

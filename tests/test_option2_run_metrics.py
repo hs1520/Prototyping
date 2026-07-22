@@ -56,11 +56,13 @@ def test_coordination_metrics_are_computed_from_run_artifacts():
     )
     assert m["artifact_role"] == "R1_COORDINATION_METRICS"
     assert m["semantic_authority"] == "COMMITTED_SYSML_MODEL"
-    # one revision-pinned envelope, one completed session
+    # two migrated handoffs now (Requirements->Design, Design->Verification), each
+    # revision-pinned; the metric denominator is no longer an illustrative single.
     assert m["context_revision_consistency"]["value"] == 1.0
+    assert m["counts"]["migrated_handoffs"] == 2
     assert m["cross_agent_handoff_completeness"]["value"] == 1.0
-    assert m["cross_agent_handoff_completeness"]["illustrative_single_handoff"] is True
-    # invariants hold: no stale-revision use, no cross-role contamination
+    assert m["cross_agent_handoff_completeness"]["illustrative_single_handoff"] is False
+    # invariants hold across both roles: no stale-revision use, no contamination
     assert m["stale_revision_use"]["count"] == 0
     assert m["cross_role_contamination"]["count"] == 0
     assert m["source_threshold_unit_preservation"]["value"] == 1.0
@@ -96,7 +98,8 @@ def test_write_revised_run_artifacts_serialises_the_producible_views(tmp_path):
     failures = json.loads((tmp_path / "failure_diagnostics.json").read_text())
     assert failures["failures"] == []
     metrics = json.loads((tmp_path / "coordination_metrics.json").read_text())
-    assert metrics["counts"]["sessions"] == 1
+    # two sessions: the DesignAgent handoff and the VerificationAgent handoff
+    assert metrics["counts"]["sessions"] == 2
     # the event log is one JSON object per line
     log_lines = (tmp_path / "blackboard_event_log.jsonl").read_text().splitlines()
     assert all(json.loads(line)["topic"] for line in log_lines)
