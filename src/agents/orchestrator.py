@@ -337,7 +337,6 @@ class Orchestrator:
         realization_inject: bool = False,
         estimator_calibration: bool = True,
         phase9_hifi: Optional[str] = None,
-        robustness_options: Optional[Any] = None,
         revised_experiment_arm: Optional[Any] = None,
         task_session_max_turns: int = 12,
         task_session_max_tokens: int = 150000,
@@ -382,7 +381,6 @@ class Orchestrator:
         # with unrelated hard-coded thresholds.
         self.last_requirement_semantic_analysis = None
         self.last_requirement_input: Dict[str, Any] = {}
-        self.last_approved_contract_provenance: Optional[Dict[str, Any]] = None
         from ..prototyping.experiment_arms import RevisedExperimentArm
         self.revised_experiment_arm = (
             RevisedExperimentArm.parse(revised_experiment_arm)
@@ -396,18 +394,6 @@ class Orchestrator:
                 f"revised experiment arm {self.revised_experiment_arm.value} "
                 "is reserved but not implemented"
             )
-        if robustness_options is None:
-            from ..prototyping.robustness import RobustnessOptions
-            robustness_options = RobustnessOptions.b0()
-        self.robustness_options = robustness_options
-        if (
-            self.revised_experiment_arm is not None
-            and self.robustness_options.enabled()
-        ):
-            raise ValueError(
-                "legacy B1/B2 robustness interventions cannot be mixed with "
-                "a BLACKBOARD_AG_V1 experiment arm"
-            )
         self.blackboard = None
         self.context_builder = None
         self.task_sessions = None
@@ -416,12 +402,6 @@ class Orchestrator:
         self.task_session_max_tokens = int(task_session_max_tokens)
         if self.task_session_max_turns <= 0 or self.task_session_max_tokens <= 0:
             raise ValueError("task-session turn/token budgets must be positive")
-        self.last_contract_bundle = None
-        self.last_pattern_bindings = ()
-        self.last_semantic_trace_report = None
-        self.last_failure_route_report = None
-        self.last_semantic_repair_attempts: List[Dict[str, Any]] = []
-        self.last_semantic_repair_blocks: List[Dict[str, Any]] = []
         # F1: catalog-grid estimator calibration, applied ONLY around the search
         # (the injected SysML calc defs and Phase 8's estimator_value column keep
         # the documented textbook constants). Provenance recorded, never hidden.
@@ -459,7 +439,6 @@ class Orchestrator:
         mcts_patience: Optional[int] = 15,
         parse_strict: Optional[bool] = None,
         frozen_requirements: Optional[Any] = None,
-        approved_contract_bundle: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Full pipeline: generate a validated model then run DSE (MCTS).
@@ -471,7 +450,6 @@ class Orchestrator:
             additional_requirements=additional_requirements,
             parse_strict=parse_strict,
             frozen_requirements=frozen_requirements,
-            approved_contract_bundle=approved_contract_bundle,
         )
         return self.explore(
             generate_result=gen_result,
@@ -492,7 +470,6 @@ class Orchestrator:
         parse_strict: Optional[bool] = None,
         platform_profile: Optional[Dict[str, Any]] = None,
         frozen_requirements: Optional[Any] = None,
-        approved_contract_bundle: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generate a validated SysML v2 model without Design Space Exploration.
@@ -518,11 +495,8 @@ class Orchestrator:
         """
         from ..utils.suppressed import reset_suppressed
         reset_suppressed()
-        self.last_semantic_repair_attempts = []
-        self.last_semantic_repair_blocks = []
         self.last_verification_anchor_attempts = []
         self.last_requirement_input = {}
-        self.last_approved_contract_provenance = None
 
         self.state = PrototypingState(
             system_name=system_name,
@@ -545,19 +519,10 @@ class Orchestrator:
             requirements = self._use_frozen_requirements(frozen_requirements)
             print(f"  ✓ Loaded {len(requirements)} frozen requirements")
         else:
-            if approved_contract_bundle is not None:
-                raise ValueError(
-                    "approved_contract_bundle requires frozen_requirements so its "
-                    "source authority cannot drift"
-                )
             requirements = self._extract_requirements(
                 system_name, system_description, additional_requirements or []
             )
             print(f"  ✓ Extracted {len(requirements)} requirements")
-        if approved_contract_bundle is not None:
-            self._apply_approved_contract_bundle(
-                approved_contract_bundle, requirements
-            )
         self.state.requirements = requirements
         self._prepare_design_handoff(system_name, requirements)
         print()
@@ -635,9 +600,6 @@ class Orchestrator:
         final_sysml = get_sysml_text(final_model)
         final_sysml = self._apply_ag_contract_layer(final_sysml, requirements)
         self._commit_terminal_model(final_sysml, producer="Orchestrator.generate")
-        robustness_artifacts = self._build_robustness_artifacts(
-            final_sysml, system_name
-        )
         collaboration_artifacts = self._build_collaboration_artifacts(final_sysml)
         return {
             "system_name":        system_name,
@@ -657,13 +619,7 @@ class Orchestrator:
                 self.last_requirement_semantic_analysis or {}
             ),
             "requirement_input": dict(self.last_requirement_input or {}),
-            "approved_contract_input": (
-                dict(self.last_approved_contract_provenance)
-                if self.last_approved_contract_provenance else None
-            ),
-            **robustness_artifacts,
             **collaboration_artifacts,
-            "robustness_options": self.robustness_options.as_dict(),
             "platform_profile":   platform_profile,
             "llm_usage":          ledger.as_dict() if ledger is not None else None,
         }
@@ -944,12 +900,6 @@ class Orchestrator:
         final_sysml = get_sysml_text(final_model)
         final_sysml = self._apply_ag_contract_layer(final_sysml, requirements)
         self._commit_terminal_model(final_sysml, producer="Orchestrator.explore")
-        # DSE and refinement may change behavior after generate().  Rebuild all
-        # Option 2 evidence against the terminal model instead of returning the
-        # stale generate-phase trace inherited through ``**generate_result``.
-        robustness_artifacts = self._build_robustness_artifacts(
-            final_sysml, system_name
-        )
         collaboration_artifacts = self._build_collaboration_artifacts(final_sysml)
         # Merge evaluation histories: generate phase first, then explore phase.
         # **generate_result would overwrite with generate-only history if we
@@ -961,7 +911,6 @@ class Orchestrator:
         return {
             # ── Fields inherited / updated from generate() ────────────────────
             **generate_result,
-            **robustness_artifacts,
             **collaboration_artifacts,
             "model":              final_model,
             "model_sysml":        final_sysml,
@@ -1168,7 +1117,6 @@ class Orchestrator:
             # Seed existing_requirements with manually provided ones so the LLM
             # is aware of them and avoids generating near-duplicates from the start.
             "existing_requirements": additional,
-            "generalized_contracts": self.robustness_options.enabled(),
         })
 
         if not result.success and not result.output:
@@ -1179,22 +1127,10 @@ class Orchestrator:
         requirements = result.output if result.output else list(additional)
 
         # Validate unified set
-        validation = self.requirements_agent.validate_requirements(
-            requirements,
-            generalized_contracts=self.robustness_options.enabled(),
-        )
+        validation = self.requirements_agent.validate_requirements(requirements)
         self.last_requirement_semantic_analysis = validation.get(
             "requirement_semantic_analysis"
         )
-        self.last_contract_bundle = None
-        self.last_pattern_bindings = ()
-        if self.robustness_options.enabled():
-            from ..prototyping.contract_types import contract_bundle_from_dict
-            from ..prototyping.safety_patterns import select_patterns
-            self.last_contract_bundle = contract_bundle_from_dict(
-                (self.last_requirement_semantic_analysis or {}).get("contract_bundle")
-            )
-            self.last_pattern_bindings = select_patterns(self.last_contract_bundle)
 
         from ..prototyping.requirement_inputs import build_frozen_requirement_set
         try:
@@ -1248,15 +1184,10 @@ class Orchestrator:
 
     def _use_frozen_requirements(self, frozen: Any) -> List[str]:
         """Load an immutable requirement artifact without an LLM extraction call."""
-        from ..prototyping.contract_types import contract_bundle_from_dict
         from ..prototyping.requirement_inputs import resolve_frozen_requirement_set
-        from ..prototyping.safety_patterns import select_patterns
 
         requirements, artifact = resolve_frozen_requirement_set(frozen)
-        validation = self.requirements_agent.validate_requirements(
-            requirements,
-            generalized_contracts=self.robustness_options.enabled(),
-        )
+        validation = self.requirements_agent.validate_requirements(requirements)
         if validation["issues"]:
             raise ValueError(
                 "frozen requirements failed deterministic validation: "
@@ -1265,47 +1196,12 @@ class Orchestrator:
         self.last_requirement_semantic_analysis = validation.get(
             "requirement_semantic_analysis"
         )
-        self.last_contract_bundle = None
-        self.last_pattern_bindings = ()
-        if self.robustness_options.enabled():
-            self.last_contract_bundle = contract_bundle_from_dict(
-                (self.last_requirement_semantic_analysis or {}).get("contract_bundle")
-            )
-            self.last_pattern_bindings = select_patterns(self.last_contract_bundle)
         self.last_requirement_input = {
             **artifact,
             "mode": "frozen",
             "frozen": True,
         }
         return requirements
-
-    def _apply_approved_contract_bundle(
-        self,
-        approved: Mapping[str, Any],
-        requirements: List[str],
-    ) -> None:
-        """Install human-approved contracts; evaluation gold is rejected."""
-        if not self.robustness_options.enabled():
-            raise ValueError(
-                "approved_contract_bundle requires B1/B2 robustness features"
-            )
-        from ..prototyping.requirement_contracts import contract_summary
-        from ..prototyping.requirement_inputs import (
-            validate_approved_contract_bundle,
-        )
-        from ..prototyping.safety_patterns import select_patterns
-
-        bundle, provenance = validate_approved_contract_bundle(
-            approved, requirements
-        )
-        analysis = dict(self.last_requirement_semantic_analysis or {})
-        analysis["contract_bundle"] = bundle.to_dict()
-        analysis["contract_summary"] = contract_summary(bundle)
-        analysis["contract_source"] = "approved_contract_bundle"
-        self.last_requirement_semantic_analysis = analysis
-        self.last_contract_bundle = bundle
-        self.last_pattern_bindings = select_patterns(bundle)
-        self.last_approved_contract_provenance = provenance
 
     def _generate_initial_design(
         self,
@@ -1322,10 +1218,6 @@ class Orchestrator:
             "verbose": self.verbose,
             "platform_profile": platform_profile,
         }
-        if self.robustness_options.contract_guidance:
-            task["contract_bundle"] = self.last_contract_bundle
-        if self.robustness_options.safety_pattern_guidance:
-            task["pattern_bindings"] = self.last_pattern_bindings
         handoff = self._active_design_handoff
         if handoff is not None:
             task["context"] = handoff["envelope"].render_for_prompt()
@@ -1685,148 +1577,6 @@ class Orchestrator:
             },
         )
         return report.to_dict()
-
-    def _build_robustness_artifacts(
-        self, model_text: str, model_name: str
-    ) -> Dict[str, Any]:
-        """Build intervention evidence enabled by the active ablation only.
-
-        This method records what the generation arm actually used or applied.
-        The legacy uniform post-hoc comparison was removed with the external
-        contract experiment scaffolding; the revised study supplies its own
-        evaluator (Increment 4).
-        """
-        if not self.robustness_options.enabled() or self.last_contract_bundle is None:
-            self.last_semantic_trace_report = None
-            self.last_failure_route_report = None
-            return {}
-
-        from ..prototyping.failure_routing import classify_failure, route_report
-        from ..prototyping.platform_semantics import PLATFORM_BINDING_VERSION
-        from ..prototyping.safety_patterns import (
-            PATTERN_LIBRARY_VERSION,
-            bindings_to_dict,
-        )
-        from ..prototyping.semantic_trace import build_semantic_trace
-
-        trace_report = build_semantic_trace(
-            model_text,
-            self.last_contract_bundle,
-            pattern_bindings=(
-                self.last_pattern_bindings
-                if self.robustness_options.safety_pattern_audit else ()
-            ),
-            model_name=model_name,
-        )
-        trace_by_req = {trace.req_id: trace for trace in trace_report.traces}
-        routes = None
-        if self.robustness_options.failure_routing:
-            decisions = []
-            for contract in self.last_contract_bundle.contracts:
-                trace = trace_by_req.get(contract.req_id)
-                decisions.append(classify_failure(
-                    contract.req_id,
-                    contract_status=contract.completeness,
-                    diagnostics=tuple(trace.findings) if trace else (),
-                ))
-            routes = route_report(decisions)
-        trace_dict = trace_report.to_dict()
-        links = [
-            link for trace in trace_dict["traces"] for link in trace["links"]
-        ]
-        diagnostics = [
-            item for trace in trace_dict["traces"] for item in trace["findings"]
-        ]
-        source_digests = {
-            contract.req_id: contract.source_digest
-            for contract in self.last_contract_bundle.contracts
-        }
-        provenance = {
-            "artifact_role": "PIPELINE_INTERVENTION",
-            "measurement_only": False,
-            "artifact_schema_version": "1.0",
-            "contract_library_version": self.last_contract_bundle.library_version,
-            "pattern_library_version": PATTERN_LIBRARY_VERSION,
-            "platform_binding_version": PLATFORM_BINDING_VERSION,
-            "requirement_source_digests": source_digests,
-            "requirement_input_mode": self.last_requirement_input.get("mode"),
-            "requirement_set_digest": self.last_requirement_input.get(
-                "requirement_set_digest"
-            ),
-            "approved_contract_protocol": (
-                (self.last_approved_contract_provenance or {}).get(
-                    "protocol_version"
-                )
-            ),
-            "model_digest": trace_report.model_digest,
-            "producing_stage": "terminal_semantic_assurance",
-        }
-        contract_artifact = self.last_contract_bundle.to_dict()
-        contract_artifact.update(provenance)
-        binding_artifact = None
-        if (
-            self.robustness_options.safety_pattern_guidance
-            or self.robustness_options.safety_pattern_audit
-        ):
-            binding_artifact = bindings_to_dict(self.last_pattern_bindings)
-            binding_artifact.update(provenance)
-        trace_dict.update(provenance)
-        diagnostics_artifact = {
-            **provenance,
-            "diagnostics": diagnostics,
-        }
-        if routes is not None:
-            routes.update(provenance)
-            routes["authorised_surgical_repair_enabled"] = bool(
-                self.robustness_options.authorised_surgical_repair
-            )
-            routes["semantic_repair_attempts"] = list(
-                self.last_semantic_repair_attempts
-            )
-            routes["semantic_repair_blocks"] = list(
-                self.last_semantic_repair_blocks
-            )
-        metrics = {
-            "schema_version": "1.0",
-            **provenance,
-            "configuration": self.robustness_options.as_dict(),
-            "contract_counts": dict(
-                (self.last_requirement_semantic_analysis or {})
-                .get("contract_summary", {})
-                .get("counts", {})
-            ),
-            "pattern_bindings": (
-                len(self.last_pattern_bindings)
-                if binding_artifact is not None else 0
-            ),
-            "trace_links_total": len(links),
-            "trace_links_passed": sum(link["status"] == "PASS" for link in links),
-            "semantic_trace_counts": trace_dict["counts"],
-            "failure_route_counts": routes["counts"] if routes else {},
-            "semantic_repair_attempt_count": len(
-                self.last_semantic_repair_attempts
-            ),
-            "semantic_repair_block_count": len(
-                self.last_semantic_repair_blocks
-            ),
-            "semantic_repair_success_count": sum(
-                bool(item.get("accepted"))
-                for item in self.last_semantic_repair_attempts
-            ),
-        }
-        self.last_semantic_trace_report = trace_report
-        self.last_failure_route_report = routes
-        artifacts = {
-            "requirement_contracts": contract_artifact,
-            "semantic_trace_report": trace_dict,
-            "failure_diagnostics": diagnostics_artifact,
-            "robustness_metrics": metrics,
-        }
-        if binding_artifact is not None:
-            artifacts["safety_pattern_bindings"] = binding_artifact
-        if routes is not None:
-            artifacts["repair_decisions"] = routes
-        return artifacts
 
     def _explore_bilevel(
         self,
@@ -2507,52 +2257,6 @@ class Orchestrator:
                 "functional verification audit failed; refusing to mark closure"
             ) from exc
 
-    def _semantic_trace_issues(
-        self, model_text: str, model_name: str
-    ) -> tuple[List[str], Any]:
-        """Return contract-first model-fault issues and their structured report."""
-        if (
-            not self.robustness_options.contract_first_trace
-            or self.last_contract_bundle is None
-        ):
-            return [], None
-        from ..prototyping.semantic_trace import build_semantic_trace
-        report = build_semantic_trace(
-            model_text,
-            self.last_contract_bundle,
-            pattern_bindings=(
-                self.last_pattern_bindings
-                if self.robustness_options.safety_pattern_audit else ()
-            ),
-            model_name=model_name,
-        )
-        issues = []
-        for finding in report.diagnostics():
-            affected = ", ".join(finding.affected_elements) or "infer affected owner"
-            issues.append(
-                f"[SEMANTIC-TRACE] {finding.req_id} {finding.finding_code}: "
-                f"expected={dict(finding.expected)!r}; "
-                f"observed={dict(finding.observed)!r}; "
-                f"affected={affected}. Preserve the immutable requirement, "
-                "contract threshold, platform binding, and verification oracle."
-            )
-        return issues, report
-
-    def _semantic_diagnostic_ids(
-        self, model_text: str, model_name: str
-    ) -> set[str]:
-        _issues, report = self._semantic_trace_issues(model_text, model_name)
-        if report is None:
-            return set()
-        return {item.diagnostic_id for item in report.diagnostics()}
-
-    def _semantic_regressed(
-        self, before_text: str, after_text: str, model_name: str
-    ) -> bool:
-        before = self._semantic_diagnostic_ids(before_text, model_name)
-        after = self._semantic_diagnostic_ids(after_text, model_name)
-        return bool(after - before)
-
     @staticmethod
     def _gap_req_ids(issues: List[str]) -> List[str]:
         return sorted(set(re.findall(
@@ -2692,19 +2396,12 @@ class Orchestrator:
                 )
                 after_ids = set(self._gap_req_ids(remaining))
                 progress = after_ids < before_ids
-                # A FUNC-anchor surgery must not trade functional-gap closure
-                # for new contract/pattern semantic faults (no-op under B0,
-                # where the trace issue set is empty by construction).
-                semantic_regressed = self._semantic_regressed(
-                    full_text, repaired.merged_text, model_name
-                )
                 regressed = (
                     cand_syntax.has_errors
                     or len(cand_sim.failed_scenarios())
                     > len(current_sim.failed_scenarios())
                     or behavioral_result_regressed(current_sim, cand_sim)
                     or cand_eval.weighted_total < current_score - 0.05
-                    or semantic_regressed
                 )
                 if progress and not regressed:
                     current = candidate
@@ -2720,8 +2417,7 @@ class Orchestrator:
                     )
                 else:
                     why = (
-                        "semantic-trace regression" if semantic_regressed
-                        else "regression" if regressed
+                        "regression" if regressed
                         else "no functional-gap reduction"
                     )
                     context_record["status"] = "REJECTED"
@@ -2830,16 +2526,10 @@ class Orchestrator:
         remaining = self._verification_gap_issues(
             anchored.merged_text, current_model.name)
         from .verification_audit import behavioral_result_regressed
-        # Anchoring must not introduce new contract/pattern semantic faults
-        # (no-op under B0, where the trace issue set is empty by construction).
-        semantic_regressed = self._semantic_regressed(
-            full_text, anchored.merged_text, current_model.name
-        )
         regressed = (
             bool(anchor_sim.failed_scenarios())
             or behavioral_result_regressed(sim_result, anchor_sim)
             or anchor_eval.weighted_total < rule_score - 0.05
-            or semantic_regressed
         )
         if not regressed and len(remaining) < len(verify_gaps):
             attempt_record["status"] = "ACCEPTED"
@@ -2849,8 +2539,7 @@ class Orchestrator:
 
         attempt_record["status"] = "REJECTED"
         attempt_record["post_merge_reason"] = (
-            "semantic_trace_regression" if semantic_regressed
-            else "regression" if regressed
+            "regression" if regressed
             else "no_verification_gap_reduction"
         )
         print("  ⚠ Anchor pass rejected (no gap reduction or "
@@ -2936,11 +2625,6 @@ class Orchestrator:
         sim_result = self._run_simulation(_sysml_after, current_model.name)
         if sim_result.failed_scenarios():
             return False, current_model, score, sim_result
-        semantic_issues, _trace = self._semantic_trace_issues(
-            _sysml_after, current_model.name
-        )
-        if semantic_issues:
-            return False, current_model, score, sim_result
 
         print(f"  └─ Simulation fully resolved ✓", flush=True)
         # Re-evaluate with the fixed sim so the returned score
@@ -2997,237 +2681,24 @@ class Orchestrator:
         untouched components (prevention, not the after-the-fact rejection
         the full rewrite needs).  Falls back to the legacy whole-model
         rewrite on any failure.  Returns the candidate model or None."""
-        semantic_repair = any(
-            str(issue).startswith("[SEMANTIC-TRACE]")
-            for issue in eval_result.issues
-        )
-        if semantic_repair and not (
-            self.robustness_options.authorised_surgical_repair
-            and self.use_surgical_refinement
-        ):
-            print(
-                "  ⚠ Semantic trace fault is not authorised for repair under the "
-                "active robustness configuration",
-                flush=True,
-            )
-            return None
-        if semantic_repair and len(self.last_semantic_repair_attempts) >= 2:
-            print(
-                "  ⚠ Option 2 semantic repair budget exhausted (maximum two attempts)",
-                flush=True,
-            )
-            return None
-
-        repair_packet: Dict[str, Any] = {}
-        repair_packet_provenance: Dict[str, Any] = {}
-        repair_context = None
-        if semantic_repair:
-            from ..prototyping.failure_routing import (
-                MODEL_SEMANTIC_FAULT,
-                classify_failure,
-            )
-            from ..prototyping.repair_packet import build_scoped_repair_packet
-
-            current_semantic_issues, trace_report = self._semantic_trace_issues(
-                current_sysml, current_model.name
-            )
-            repair_packet = build_scoped_repair_packet(
-                self.last_contract_bundle,
-                trace_report,
-                self.last_pattern_bindings,
-                issues=current_semantic_issues,
-            )
-            route_decisions = []
-            if repair_packet and trace_report is not None:
-                target_ids = set((repair_packet.get("scope") or {}).get(
-                    "req_ids", ()
-                ))
-                contracts_by_req = {
-                    contract.req_id: contract
-                    for contract in self.last_contract_bundle.contracts
-                }
-                traces_by_req = {
-                    trace.req_id: trace for trace in trace_report.traces
-                }
-                for req_id in sorted(target_ids):
-                    contract = contracts_by_req.get(req_id)
-                    trace = traces_by_req.get(req_id)
-                    if contract is None or trace is None:
-                        continue
-                    route_decisions.append(classify_failure(
-                        req_id,
-                        contract_status=contract.completeness,
-                        diagnostics=tuple(trace.findings),
-                    ))
-            routes_authorise_repair = bool(route_decisions) and all(
-                decision.failure_class == MODEL_SEMANTIC_FAULT
-                and decision.repair_authorised
-                and decision.route == "bounded_surgical_repair"
-                for decision in route_decisions
-            )
-            if not (
-                self.robustness_options.failure_routing
-                and routes_authorise_repair
-                and repair_packet
-            ):
-                self.last_semantic_repair_blocks.append({
-                    "block_event": len(self.last_semantic_repair_blocks) + 1,
-                    "before_diagnostic_ids": sorted(
-                        self._semantic_diagnostic_ids(
-                            current_sysml, current_model.name
-                        )
-                    ),
-                    "after_diagnostic_ids": [],
-                    "removed_diagnostic_ids": [],
-                    "new_diagnostic_ids": [],
-                    "syntax_passed": None,
-                    "simulation_regressions": [],
-                    "score_preserved": None,
-                    "accepted": False,
-                    "llm_invoked": False,
-                    "reason": "repair_not_authorised_or_packet_empty",
-                    "repair_route_decisions": [
-                        decision.to_dict() for decision in route_decisions
-                    ],
-                })
-                print(
-                    "  ⚠ Option 2 semantic repair blocked before the LLM: "
-                    "no non-empty scoped packet authorised by current "
-                    "RouteDecision evidence",
-                    flush=True,
-                )
-                return None
-            from .surgical_refiner import build_dependency_closed_context
-            repair_context = build_dependency_closed_context(
-                current_sysml,
-                current_semantic_issues,
-                repair_packet=repair_packet,
-                allowed_req_ids=self._active_requirement_ids(),
-            )
-            if repair_context is None:
-                self.last_semantic_repair_blocks.append({
-                    "block_event": len(self.last_semantic_repair_blocks) + 1,
-                    "before_diagnostic_ids": sorted(
-                        self._semantic_diagnostic_ids(
-                            current_sysml, current_model.name
-                        )
-                    ),
-                    "after_diagnostic_ids": [],
-                    "removed_diagnostic_ids": [],
-                    "new_diagnostic_ids": [],
-                    "syntax_passed": None,
-                    "simulation_regressions": [],
-                    "score_preserved": None,
-                    "accepted": False,
-                    "llm_invoked": False,
-                    "reason": "dependency_closed_context_unresolved",
-                    "repair_route_decisions": [
-                        decision.to_dict() for decision in route_decisions
-                    ],
-                })
-                print(
-                    "  ⚠ Option 2 semantic repair blocked before the LLM: "
-                    "dependency-closed owner context could not be resolved",
-                    flush=True,
-                )
-                return None
-            if repair_packet:
-                scope = repair_packet.get("scope", {})
-                repair_packet_provenance = {
-                    "repair_packet_schema_version": repair_packet.get(
-                        "schema_version"
-                    ),
-                    "repair_packet_digest": repair_packet.get("packet_digest"),
-                    "repair_packet_req_ids": list(scope.get("req_ids", ())),
-                    "repair_packet_affected_elements": list(
-                        scope.get("affected_elements", ())
-                    ),
-                    "repair_packet_contract_count": len(
-                        repair_packet.get("contracts", ())
-                    ),
-                    "repair_packet_trace_count": len(
-                        repair_packet.get("traces", ())
-                    ),
-                    "repair_packet_pattern_count": len(
-                        repair_packet.get("pattern_constraints", ())
-                    ),
-                    "repair_packet_platform_binding_count": len(
-                        repair_packet.get("platform_bindings", ())
-                    ),
-                    "repair_route_decisions": [
-                        decision.to_dict() for decision in route_decisions
-                    ],
-                    "repair_context": repair_context.to_dict(),
-                }
-
         if self.use_surgical_refinement:
             from .surgical_refiner import (
                 SurgicalAudit,
                 attempt_surgical_refinement,
             )
-            surgical_issues = (
-                [
-                    str(issue) for issue in eval_result.issues
-                    if str(issue).startswith("[SEMANTIC-TRACE]")
-                ]
-                if semantic_repair
-                else eval_result.issues + eval_result.recommendations
-            )
-            surgical_feedback = (
-                "Repair only the semantic-trace failures in the scoped repair "
-                "packet. Do not address unrelated evaluator recommendations."
-                if semantic_repair else refinement_feedback
-            )
-            surgical_audit = SurgicalAudit()
             surgical = attempt_surgical_refinement(
                 llm=self.llm,
                 model_text=current_sysml,
-                issues=surgical_issues,
-                feedback=surgical_feedback,
+                issues=eval_result.issues + eval_result.recommendations,
+                feedback=refinement_feedback,
                 verbose=self.verbose,
-                repair_packet=repair_packet or None,
-                audit=surgical_audit,
-                context_slice=(repair_context if semantic_repair else None),
+                audit=SurgicalAudit(),
             )
-            if semantic_repair:
-                repair_packet_provenance[
-                    "surgical_audit"
-                ] = surgical_audit.to_dict()
             if surgical is not None:
-                print(f"  ✓ Surgical refinement: {surgical.summary()}",
-                      flush=True)
-                candidate = build_lite_model(
+                print(f"  ✓ Surgical refinement: {surgical.summary()}", flush=True)
+                return build_lite_model(
                     surgical.merged_text, model_name=current_model.name
                 )
-                if repair_packet_provenance:
-                    candidate.metadata[
-                        "semantic_repair_packet_provenance"
-                    ] = repair_packet_provenance
-                return candidate
-            if semantic_repair:
-                before = sorted(self._semantic_diagnostic_ids(
-                    current_sysml, current_model.name
-                ))
-                self.last_semantic_repair_attempts.append({
-                    "attempt": len(self.last_semantic_repair_attempts) + 1,
-                    "before_diagnostic_ids": before,
-                    "after_diagnostic_ids": before,
-                    "removed_diagnostic_ids": [],
-                    "new_diagnostic_ids": [],
-                    "syntax_passed": False,
-                    "simulation_regressions": [],
-                    "score_preserved": None,
-                    "accepted": False,
-                    "llm_invoked": True,
-                    "reason": "surgical_generation_or_preservation_gates_failed",
-                    **repair_packet_provenance,
-                })
-                print(
-                    "  ⚠ Option 2 semantic surgery failed its gates — whole-model "
-                    "fallback is forbidden",
-                    flush=True,
-                )
-                return None
             print("  ⚠ Surgical refinement not applicable — "
                   "falling back to full rewrite", flush=True)
 
@@ -3268,76 +2739,8 @@ class Orchestrator:
         Returns the accepted candidate (after the simulation inner loop) or
         None when rejected."""
         cand_sysml = get_sysml_text(candidate)
-        before_diagnostics: set[str] = set()
-        after_diagnostics: set[str] = set()
-        semantic_attempt: Dict[str, Any] | None = None
-        if self.robustness_options.contract_first_trace:
-            before_diagnostics = self._semantic_diagnostic_ids(
-                current_sysml, candidate.name
-            )
-            after_diagnostics = self._semantic_diagnostic_ids(
-                cand_sysml, candidate.name
-            )
-            new_diagnostics = after_diagnostics - before_diagnostics
-            if before_diagnostics:
-                semantic_attempt = {
-                    "attempt": len(self.last_semantic_repair_attempts) + 1,
-                    "before_diagnostic_ids": sorted(before_diagnostics),
-                    "after_diagnostic_ids": sorted(after_diagnostics),
-                    "removed_diagnostic_ids": sorted(
-                        before_diagnostics - after_diagnostics
-                    ),
-                    "new_diagnostic_ids": sorted(new_diagnostics),
-                    "syntax_passed": None,
-                    "simulation_regressions": [],
-                    "score_preserved": None,
-                    "accepted": False,
-                    "llm_invoked": True,
-                    "reason": "pending",
-                    **dict(
-                        (getattr(candidate, "metadata", None) or {}).get(
-                            "semantic_repair_packet_provenance", {}
-                        )
-                    ),
-                }
-            if new_diagnostics or (
-                before_diagnostics and not after_diagnostics < before_diagnostics
-            ):
-                added = sorted(after_diagnostics - before_diagnostics)
-                reason = (
-                    f"new diagnostics: {', '.join(added)}" if added
-                    else "target semantic diagnostics were not reduced"
-                )
-                print(f"  ⚠ Semantic repair rejected ({reason})", flush=True)
-                if semantic_attempt is not None:
-                    semantic_attempt["reason"] = "semantic_diagnostics_not_reduced"
-                    self.last_semantic_repair_attempts.append(semantic_attempt)
-                return None
         cand_syntax = check_syntax(cand_sysml)
-        if semantic_attempt is not None:
-            semantic_attempt["syntax_passed"] = not cand_syntax.has_errors
-            if cand_syntax.has_errors:
-                semantic_attempt["reason"] = "syntax_regression"
-                self.last_semantic_repair_attempts.append(semantic_attempt)
-                print("  ⚠ Semantic repair rejected (syntax regression)", flush=True)
-                return None
         cand_sim = self._run_simulation(cand_sysml, candidate.name)
-        if semantic_attempt is not None:
-            current_sim = self._run_simulation(current_sysml, candidate.name)
-            before_passed = {
-                item.name for item in current_sim.passed_scenarios()
-            }
-            after_passed = {item.name for item in cand_sim.passed_scenarios()}
-            regressions = sorted(before_passed - after_passed)
-            semantic_attempt["simulation_regressions"] = regressions
-            if regressions:
-                semantic_attempt["reason"] = "behavioral_simulation_regression"
-                self.last_semantic_repair_attempts.append(semantic_attempt)
-                print(
-                    "  ⚠ Semantic repair rejected (previously passing behavioral "
-                    "scenarios regressed)", flush=True,
-                )
-                return None
         candidate_eval = self.evaluator.evaluate(
             config=DesignConfiguration(name="candidate", parameters={}),
             model=candidate,
@@ -3358,14 +2761,7 @@ class Orchestrator:
                     f"rejected to preserve resolved variation wiring",
                     flush=True,
                 )
-                if semantic_attempt is not None:
-                    semantic_attempt["reason"] = "connectivity_regression"
-                    self.last_semantic_repair_attempts.append(semantic_attempt)
                 return None
-        if semantic_attempt is not None:
-            semantic_attempt["score_preserved"] = (
-                candidate_eval.weighted_total >= rule_score - 0.05
-            )
         if candidate_eval.weighted_total >= rule_score - 0.05:
             print(
                 f"  ✓ Refinement accepted  "
@@ -3373,13 +2769,6 @@ class Orchestrator:
                 f"({delta_str})",
                 flush=True,
             )
-            if semantic_attempt is not None:
-                semantic_attempt["accepted"] = True
-                semantic_attempt["reason"] = "accepted_all_preservation_gates"
-                self.last_semantic_repair_attempts.append(semantic_attempt)
-                # Do not run the general simulation-repair loop after a bounded
-                # semantic surgery: that loop may perform unrelated mutations.
-                return candidate
             # ── Simulation inner loop ── re-run simulation on the accepted
             # candidate and attempt up to MAX_SIM_INNER_ITERS targeted fixes
             # before handing the model back to the outer loop.
@@ -3390,9 +2779,6 @@ class Orchestrator:
             f"keeping current model",
             flush=True,
         )
-        if semantic_attempt is not None:
-            semantic_attempt["reason"] = "score_regression"
-            self.last_semantic_repair_attempts.append(semantic_attempt)
         return None
 
     def _attempt_refinement(
@@ -3541,11 +2927,6 @@ class Orchestrator:
                 current_sysml, current_model.name)
             if verify_gaps and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(verify_gaps)
-            semantic_issues, semantic_trace_report = self._semantic_trace_issues(
-                current_sysml, current_model.name
-            )
-            if semantic_issues and isinstance(eval_result.issues, list):
-                eval_result.issues.extend(semantic_issues)
             # How much the pass/fail verdict depends on the weighting at all —
             # sampled over the weight simplex (answers "would another weighting
             # flip the outcome?").  Defensive: test doubles may not provide it.
@@ -3569,10 +2950,6 @@ class Orchestrator:
                 "sim_total": len(sim_result.scenario_results),
                 "weights_used": getattr(eval_result, "weights_used", {}),
                 "verdict_robustness": verdict_rob,
-                "semantic_trace_diagnostics": (
-                    len(semantic_trace_report.diagnostics())
-                    if semantic_trace_report is not None else 0
-                ),
             })
             if verdict_rob is not None:
                 print(f"  Verdict robustness over the weight simplex: "
@@ -3613,8 +2990,7 @@ class Orchestrator:
                     sim_result, syntax_result, requirements
                 )
 
-                semantic_ok = not semantic_issues
-                if behavioral_ok and reachability_ok and sema_ok and semantic_ok:
+                if behavioral_ok and reachability_ok and sema_ok:
                     # ── One bounded verification-anchor pass ──────────────
                     # Quality is met, but the static audit predicts unassigned
                     # matrix rows. Exactly ONE surgical pass scoped to those
@@ -3640,7 +3016,6 @@ class Orchestrator:
                     "behavioral" if not behavioral_ok else "",
                     "reachability" if not reachability_ok else "",
                     "sema" if not sema_ok else "",
-                    "semantic trace" if not semantic_ok else "",
                 ]))
                 print(
                     f"  ~ Quality threshold met (score={score:.3f}) "

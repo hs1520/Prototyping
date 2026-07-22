@@ -360,45 +360,6 @@ class TestMultistepGeneratePipeline:
         assert "interfaces_fragment_length" in result.metadata
         assert "behavior_fragment_length" in result.metadata
 
-    def test_option2_guidance_is_scoped_across_generation_steps(self, monkeypatch):
-        import src.agents.design_agent as da_module
-        from src.prototyping.requirement_contracts import build_contract_bundle
-        from src.prototyping.safety_patterns import select_patterns
-        from src.sysml.model import SysMLModel, PartDefinition
-
-        requirement = (
-            "REQ-SAFE-005: During flight, critical propulsion failure shall "
-            "deploy the parachute within 0.5 seconds."
-        )
-        bundle = build_contract_bundle([requirement])
-        responses = [
-            "Architecture plan", _SYSML_FRAGMENT, _INTERFACE_FRAGMENT,
-            _BEHAVIOR_FRAGMENT, _ASSEMBLED_MODEL,
-        ]
-        agent = self._make_agent(responses, monkeypatch)
-        dummy_model = SysMLModel(name="DroneSystem", description="test")
-        dummy_model.part_definitions.append(PartDefinition(name="FlightController"))
-        monkeypatch.setattr(da_module, "build_lite_model", lambda *a, **kw: dummy_model)
-
-        result = agent.run({
-            "system_name": "DroneSystem",
-            "requirements": [requirement],
-            "contract_bundle": bundle,
-            "pattern_bindings": select_patterns(bundle),
-        })
-
-        prompts = [messages[-1].content for messages in agent.llm.messages]
-        assert "TYPED CONTRACT GUIDANCE" not in prompts[0]
-        assert "TYPED CONTRACT GUIDANCE — PARTS" in prompts[1]
-        assert "Apply TimedEmergencyActuation" not in prompts[1]
-        assert "TYPED CONTRACT GUIDANCE — INTERFACES" in prompts[2]
-        assert "observation_concept=parachute_deployed" in prompts[2]
-        assert "Apply TimedEmergencyActuation" in prompts[3]
-        assert "TYPED CONTRACT GUIDANCE — ASSEMBLY" in prompts[4]
-        assert set(result.metadata["semantic_guidance_by_step"]) == {
-            "parts", "interfaces", "behavior", "assembly",
-        }
-
     def test_step2_retries_once_when_first_response_has_no_part_defs(
         self, monkeypatch
     ):
@@ -539,41 +500,6 @@ class TestMultistepGeneratePipeline:
         assert result.success
         assert agent.llm.call_count == 4
         assert result.metadata["behavior_fragment_length"] == 0
-
-    def test_ready_timed_actuation_contract_enables_behavior_for_perf_requirement(
-        self, monkeypatch
-    ):
-        import src.agents.design_agent as da_module
-        from src.prototyping.requirement_contracts import build_contract_bundle
-        from src.sysml.model import SysMLModel, PartDefinition
-
-        requirement = (
-            "REQ-PERF-005: The mechanical payload release actuation shall "
-            "complete within 2.0 seconds from the moment the delivery coordinate "
-            "condition is satisfied."
-        )
-        bundle = build_contract_bundle([requirement])
-        responses = [
-            "Architecture plan", _SYSML_FRAGMENT, _INTERFACE_FRAGMENT,
-            _BEHAVIOR_FRAGMENT, _ASSEMBLED_MODEL,
-        ]
-        agent = self._make_agent(responses, monkeypatch)
-        dummy_model = SysMLModel(name="DroneSystem", description="test")
-        dummy_model.part_definitions.append(PartDefinition(name="PayloadManager"))
-        monkeypatch.setattr(da_module, "build_lite_model", lambda *a, **kw: dummy_model)
-
-        result = agent.run({
-            "system_name": "DroneSystem",
-            "requirements": [requirement],
-            "contract_bundle": bundle,
-        })
-
-        assert agent.llm.call_count == 5
-        behavior_prompt = agent.llm.messages[3][-1].content
-        assert "REQ-PERF-005" in behavior_prompt
-        assert "timed_actuation" not in behavior_prompt  # engineering guidance, not internal type leakage
-        assert "response=release_payload" in behavior_prompt
-        assert result.metadata["behavior_fragment_length"] > 0
 
     def test_refinement_mode_still_uses_single_step(self, monkeypatch):
         """Refinement mode must not go through the multi-step pipeline."""

@@ -478,15 +478,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         feedback = task.get("refinement_feedback", "")
         refinement_issues = task.get("refinement_issues", [])
         verbose = task.get("verbose", False)
-        # Legacy external-contract guidance inputs. The R0-CURRENT baseline never
-        # sets these (the orchestrator supplies them only under the B1/B2
-        # robustness options), so every downstream `if contract_bundle:` block —
-        # and its function-local safety_patterns/contract_types import — is skipped
-        # on the baseline path. This agent is therefore already decoupled from the
-        # legacy contract layer for R0; the gated blocks are removed wholesale with
-        # the Layer-2 excision after the R2-BBAG checker lands.
-        contract_bundle = task.get("contract_bundle")
-        pattern_bindings = tuple(task.get("pattern_bindings") or ())
 
         is_refinement = bool(existing_model and feedback)
         skip_rag = task.get("skip_rag", False)
@@ -504,8 +495,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 context=context,
                 verbose=verbose,
                 platform_profile=task.get("platform_profile"),
-                contract_bundle=contract_bundle,
-                pattern_bindings=pattern_bindings,
             )
 
         if not cot_result.extracted_sysml:
@@ -743,7 +732,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         step_context,
         metadata: Dict[str, Any],
         verbose: bool,
-        contract_bundle=None,
     ):
         """Step 2: part definitions (structural fragment) with one bounded
         retry — a structural fragment without a single part definition cannot
@@ -753,12 +741,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         """
         ctx2 = step_context("parts")
         semantic_guidance = ""
-        if contract_bundle:
-            from ..prototyping.safety_patterns import render_step_guidance
-            semantic_guidance = render_step_guidance(
-                contract_bundle, (), step="parts",
-                req_ids=[item.split(":", 1)[0] for item in requirements],
-            )
         step2 = self.cot.generate_part_definitions(
             system_name=system_name,
             architecture=architecture_text,
@@ -819,7 +801,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         step_context,
         metadata: Dict[str, Any],
         verbose: bool,
-        contract_bundle=None,
     ):
         """Step 3: interface & flow definitions (item def / typed port def).
         Returns ``(step3_result, interfaces_fragment)``; the fragment is empty
@@ -827,12 +808,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         intf_reqs = [r for r in requirements if "-INTF-" in r]
         ctx3 = step_context("interfaces")
         semantic_guidance = ""
-        if contract_bundle:
-            from ..prototyping.safety_patterns import render_step_guidance
-            semantic_guidance = render_step_guidance(
-                contract_bundle, (), step="interfaces",
-                req_ids=[item.split(":", 1)[0] for item in requirements],
-            )
         step3 = self.cot.generate_interfaces_and_flows(
             system_name=system_name,
             architecture=architecture_text,
@@ -875,8 +850,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         step_context,
         metadata: Dict[str, Any],
         verbose: bool,
-        contract_bundle=None,
-        pattern_bindings=(),
     ):
         """Step 4: behavioral model — runs only when FUNC/SAFE/OPER
         requirements exist (the RAG call is skipped entirely otherwise).
@@ -885,29 +858,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             r for r in requirements
             if any(f"-{cat}-" in r for cat in self._BEHAVIORAL_CATEGORIES)
         ]
-        # A typed contract may identify a behavioral obligation outside the
-        # ID-category heuristic (notably PERF timed actuation).  Add only those
-        # explicitly READY obligations; do not turn arbitrary PERF prose into
-        # state machines.
-        if contract_bundle:
-            from ..prototyping.contract_types import READY, contract_bundle_from_dict
-            typed_bundle = contract_bundle_from_dict(contract_bundle)
-            behavioral_contract_ids = {
-                contract.req_id
-                for contract in typed_bundle.contracts
-                if contract.completeness == READY
-                and any(
-                    obligation.kind in {
-                        "triggered_response", "timed_response",
-                        "timed_actuation", "state_invariant",
-                    }
-                    for obligation in contract.obligations
-                )
-            }
-            for requirement in requirements:
-                req_id = requirement.split(":", 1)[0].upper().replace("-", "_")
-                if req_id in behavioral_contract_ids and requirement not in behavioral_reqs:
-                    behavioral_reqs.append(requirement)
         if not behavioral_reqs:
             metadata["generation_steps_completed"] = 4
             metadata["behavior_fragment_length"] = 0
@@ -919,12 +869,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
 
         ctx4 = step_context("behavior")
         contract_pattern_guidance = ""
-        if contract_bundle:
-            from ..prototyping.safety_patterns import render_step_guidance
-            req_ids = [r.split(":", 1)[0] for r in behavioral_reqs]
-            contract_pattern_guidance = render_step_guidance(
-                contract_bundle, pattern_bindings, step="behavior", req_ids=req_ids
-            )
         step4 = self.cot.generate_behavior(
             system_name=system_name,
             architecture=architecture_text,
@@ -943,18 +887,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             )
         metadata["generation_steps_completed"] = 4
         metadata["behavior_fragment_length"] = len(behavior_fragment)
-        if contract_pattern_guidance:
-            metadata.setdefault("semantic_guidance_by_step", {})[
-                "behavior"
-            ] = contract_pattern_guidance
-            metadata["contract_pattern_guidance"] = contract_pattern_guidance
-            metadata["pattern_bindings_used"] = [
-                getattr(binding, "pattern_id", str(binding))
-                for binding in pattern_bindings
-                if getattr(binding, "req_id", "") in {
-                    req_id.upper().replace("-", "_") for req_id in req_ids
-                }
-            ]
 
         if verbose:
             print(f"\n  {'─'*60}")
@@ -1087,8 +1019,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         context: str = "",
         verbose: bool = False,
         platform_profile=None,
-        contract_bundle=None,
-        pattern_bindings=(),
     ) -> Tuple[Any, Dict[str, Any]]:
         """
         4-step generation pipeline:
@@ -1130,32 +1060,25 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         # --- Step 2: Part Definitions (structural fragment) ---
         step2, parts_fragment = self._step2_parts(
             system_name, architecture_text, requirements, _step_context,
-            metadata, verbose, contract_bundle,
+            metadata, verbose,
         )
 
         # --- Step 3: Interface & Flow Definitions (item def / typed port def) ---
         step3, interfaces_fragment = self._step3_interfaces(
             system_name, architecture_text, parts_fragment, requirements,
-            _step_context, metadata, verbose, contract_bundle,
+            _step_context, metadata, verbose,
         )
 
         # --- Step 4: Behavioral Model (only if FUNC or SAFE requirements exist) ---
         step4, behavior_fragment = self._step4_behavior(
             system_name, architecture_text, parts_fragment, requirements,
             platform_profile, _step_context, metadata, verbose,
-            contract_bundle, pattern_bindings,
         )
 
         # --- Step 5: Integration / Assembly ---
         # No separate RAG call for assembly — the prompt focuses on wiring together
         # the fragments already produced, not on new SysML constructs.
         assembly_guidance = ""
-        if contract_bundle:
-            from ..prototyping.safety_patterns import render_step_guidance
-            assembly_guidance = render_step_guidance(
-                contract_bundle, (), step="assembly",
-                req_ids=[item.split(":", 1)[0] for item in requirements],
-            )
         step5 = self.cot.assemble_model(
             system_name=system_name,
             parts_fragment=parts_fragment,

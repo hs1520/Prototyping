@@ -1,10 +1,7 @@
 """Requirement-ID normalisation — a neutral utility with no contract-layer deps.
 
-Relocated out of the legacy ``prototyping.contract_types`` module so that
-verification and SITL code can normalise requirement identifiers without
-importing the external-contract layer (scheduled for Layer-2 excision after the
-R2-BBAG checker lands). ``contract_types`` re-exports this function for backward
-compatibility with the remaining legacy importers.
+Relocated here during the Layer-2 excision so that verification and SITL code can
+normalise requirement identifiers without the removed external-contract modules.
 """
 from __future__ import annotations
 

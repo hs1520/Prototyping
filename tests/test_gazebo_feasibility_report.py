@@ -32,32 +32,6 @@ def test_numeric_wind_and_actuation_targets_are_preserved():
     assert by_check["timed_actuation"]["max_delay_s"] == 2.0
 
 
-def test_obstacle_planner_consumes_requirement_contract_not_hardcoded_constants():
-    planned = rgf._planned_gazebo_reqs([
-        "REQ-FUNC-042: When approaching a stationary obstacle directly ahead within "
-        "the forward sensor field of view at a closing speed no greater than 2.25 m/s, "
-        "the system shall detect it no later than 18 metres and execute avoidance that "
-        "maintains separation of at least 6 metres."
-    ])
-
-    item = planned[0]
-    assert item["contract_ready"] is True
-    assert item["detection_range_m"] == 18.0
-    assert item["max_closing_speed_mps"] == 2.25
-    assert item["minimum_separation_m"] == 6.0
-    assert item["scenario_geometry"] == "forward_sensor_axis"
-
-
-def test_incomplete_obstacle_contract_is_fail_closed():
-    planned = rgf._planned_gazebo_reqs([
-        "REQ-FUNC-002: The system shall detect obstacles within a 15-metre sensor "
-        "range and initiate avoidance before separation falls below 5 metres."
-    ])
-
-    assert planned[0]["contract_ready"] is False
-    result = rgf._req_results({"return_code": 0}, planned)[0]
-    assert result["status"] == "INCONCLUSIVE"
-    assert "refusing to invent" in result["message"]
 
 
 def test_req_results_upgrade_only_the_implemented_gazebo_check():

@@ -17,7 +17,6 @@ from src.prototyping.experiment_arms import (
     REVISED_EXPERIMENT_NAMESPACE,
     RevisedExperimentArm,
 )
-from src.prototyping.robustness import RobustnessOptions
 from src.prototyping.task_session import (
     SessionError,
     SessionStatus,
@@ -43,25 +42,14 @@ _MODEL = """package Drone {
 
 def test_legacy_and_revised_experiment_namespaces_cannot_be_confused():
     assert LEGACY_EXPERIMENT_NAMESPACE != REVISED_EXPERIMENT_NAMESPACE
-    assert RobustnessOptions.b2().as_metadata()["configuration"] == "B2"
-    assert (
-        RobustnessOptions.b2().as_metadata()["experiment_namespace"]
-        == LEGACY_EXPERIMENT_NAMESPACE
-    )
     assert RevisedExperimentArm.parse("R1") is RevisedExperimentArm.BLACKBOARD_CONTEXT
     assert RevisedExperimentArm.parse("R1-LONG") is RevisedExperimentArm.LONG_SESSION_DIAGNOSTIC
 
 
-def test_unimplemented_revised_arm_and_mixed_legacy_intervention_fail_closed():
+def test_unimplemented_revised_arm_fails_closed():
     # R1-LONG is still reserved-but-not-implemented and must fail closed.
     with pytest.raises(NotImplementedError):
         Orchestrator(_NoCallLLM(), revised_experiment_arm="R1-LONG")
-    with pytest.raises(ValueError, match="cannot be mixed"):
-        Orchestrator(
-            _NoCallLLM(),
-            robustness_options=RobustnessOptions.b1(),
-            revised_experiment_arm="R1-BBCTX",
-        )
 
 
 def test_r2_arm_is_runnable_but_not_evaluation_ready():

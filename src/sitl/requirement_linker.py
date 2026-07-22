@@ -92,43 +92,13 @@ class RequirementLinker:
         model: SysMLLiteModel,
         llm: Optional[Any] = None,
         verbose: bool = False,
-        contract_bundle: Optional[Any] = None,
-        semantic_trace_report: Optional[Any] = None,
     ) -> None:
         self._model = model
         self._llm = llm
         self._verbose = verbose
-        # Legacy external-contract inputs are optional. The R0-CURRENT path
-        # (e.g. verification_audit's RequirementLinker(lite)) passes no bundle, so
-        # the contract_types/semantic_trace imports below are skipped entirely and
-        # the linker stays decoupled from the Layer-2 contract layer on that path.
-        if contract_bundle is not None:
-            from src.prototyping.contract_types import contract_bundle_from_dict
-            self._contract_bundle = contract_bundle_from_dict(contract_bundle)
-            self._contracts = self._contract_bundle.by_req_id()
-        else:
-            self._contract_bundle = None
-            self._contracts = {}
-        if semantic_trace_report is None and self._contracts:
-            from src.prototyping.semantic_trace import build_semantic_trace
-            semantic_trace_report = build_semantic_trace(
-                model.to_sysml_text() or "", self._contract_bundle,
-                model_name=getattr(model, "name", "model"),
-            )
+        self._contract_bundle = None
+        self._contracts: Dict[str, Any] = {}
         self._contract_trace_findings: Dict[str, List[Any]] = {}
-        if semantic_trace_report is not None:
-            traces = getattr(semantic_trace_report, "traces", ())
-            if isinstance(semantic_trace_report, dict):
-                traces = semantic_trace_report.get("traces", ())
-            for trace in traces:
-                if isinstance(trace, dict):
-                    req_id = trace.get("req_id", "")
-                    findings = trace.get("findings", ())
-                else:
-                    req_id = getattr(trace, "req_id", "")
-                    findings = getattr(trace, "findings", ())
-                if req_id and findings:
-                    self._contract_trace_findings[req_id] = list(findings)
         # req_id → part_name
         self._satisfy_map: Dict[str, List[str]] = self._build_satisfy_map()
         # part_name → List[GuardCondition]

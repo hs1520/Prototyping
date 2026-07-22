@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any
 
 from src.dse.physics_estimator import DesignInputs, total_mass_kg
-from src.prototyping.requirement_contracts import obstacle_avoidance_contract
 from src.prototyping.artifact_provenance import validate_run_provenance
 from src.prototyping.artifact_store import (
     atomic_write_json, atomic_write_text, ensure_open_bundle, output_dir,
@@ -107,17 +106,6 @@ def _planned_gazebo_reqs(requirements: list[str]) -> list[dict[str, Any]]:
                 item["max_error_m"] = _number_after(
                     r"within\s+(\d+(?:\.\d+)?)\s*(?:metres?|meters?)", low
                 )
-            elif check == "obstacle_avoidance":
-                contract = obstacle_avoidance_contract(req)
-                if contract is not None:
-                    item["verification_contract"] = contract.to_dict()
-                    item["contract_ready"] = contract.contract_ready
-                    item["detection_range_m"] = contract.detection_range_m
-                    item["response_threshold_m"] = contract.response_threshold_m
-                    item["minimum_separation_m"] = contract.minimum_separation_m
-                    item["max_closing_speed_mps"] = contract.max_closing_speed_mps
-                    item["scenario_geometry"] = contract.geometry
-                    item["semantic_gaps"] = list(contract.semantic_gaps)
             planned.append(item)
     return planned
 
@@ -251,33 +239,10 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
             "implied_ct": rpm.ct_implied,
         })
 
-    obstacle_req = _planned_check(planned, "obstacle_avoidance")
-    if obstacle_req and not obstacle_req.get("contract_ready"):
-        result["obstacle_contract_ready"] = False
-        result["obstacle_contract_gaps"] = list(
-            obstacle_req.get("semantic_gaps") or []
-        )
-    elif obstacle_req and result.get("hover_stable"):
-        rc_obstacle = run_flight.main(
-            mass_kg=mass,
-            rotor_radius=rotor_radius,
-            capacity_mah=capacity,
-            rotor_count=rotor_count,
-            calibrate=True,
-            max_thrust_g=max_thrust_g,
-            hover_throttle=hover_throttle,
-            obstacle_avoidance=True,
-            obstacle_detection_range_m=float(obstacle_req["detection_range_m"]),
-            obstacle_response_threshold_m=obstacle_req.get("response_threshold_m"),
-            obstacle_min_separation_m=obstacle_req.get("minimum_separation_m"),
-            obstacle_approach_speed_mps=float(obstacle_req["max_closing_speed_mps"]),
-        )
-        obstacle_result = dict(run_flight.LAST_RESULT)
-        result["obstacle_req"] = obstacle_req["req_id"]
-        result["obstacle_return_code"] = rc_obstacle
-        for key, value in obstacle_result.items():
-            if key.startswith("obstacle_"):
-                result[key] = value
+    # The obstacle-avoidance live sub-check was driven by the external-contract
+    # geometry layer, which was retired with the Layer-2 excision; the planner
+    # still records the requirement, and its status is judged from live evidence
+    # in _req_results.
 
     rid = _single_motor_req(planned) if include_single_motor_out else None
     if rid and result.get("hover_stable"):

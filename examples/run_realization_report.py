@@ -33,7 +33,6 @@ from src.prototyping.artifact_store import (
 )
 from src.prototyping.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
-from src.prototyping.robustness import RobustnessOptions
 from src.sitl.dse_sitl_params import design_to_sitl_parm
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
@@ -106,20 +105,6 @@ def require_authoritative_functional_closure(model_sysml: str) -> list[str]:
             "gaps remain after targeted closure: " + ", ".join(ids)
         )
     return ids
-
-
-def require_authoritative_requirement_contracts(requirements: list[str]) -> dict:
-    """Reject publication when a high-fidelity requirement lacks an oracle."""
-    from src.prototyping.requirement_contracts import analyse_requirements
-
-    analysis = analyse_requirements(requirements)
-    gaps = list(analysis.get("semantic_gaps") or [])
-    if gaps:
-        raise RuntimeError(
-            "authoritative publication blocked by incomplete verification contracts: "
-            + "; ".join(gaps)
-        )
-    return analysis
 
 
 def _parm_text(design) -> str | None:
@@ -201,7 +186,6 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
     # Independent final publication gate (do not trust only run metadata).
     require_authoritative_functional_closure(final_sysml)
     requirements = list(res.get("requirements") or [])
-    requirement_analysis = require_authoritative_requirement_contracts(requirements)
     parm_text = _parm_text(rec)
     out = {
         "elapsed_s": round(elapsed_s, 1),
@@ -209,8 +193,6 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
         # Persist the exact extracted requirement set, not merely its count.
         "requirements": requirements,
         "requirement_input": dict(res.get("requirement_input") or {}),
-        "approved_contract_input": res.get("approved_contract_input"),
-        "requirement_semantic_analysis": requirement_analysis,
         "final_score": res.get("final_score"),
         "best_config": res.get("best_config"),
         "pareto_alternatives": res.get("pareto_alternatives"),
@@ -232,13 +214,6 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
         "functional_closure": dict(res.get("functional_closure") or {}),
         "realization": realization,
     }
-    for key in (
-        "requirement_contracts", "safety_pattern_bindings",
-        "semantic_trace_report", "failure_diagnostics",
-        "repair_decisions", "robustness_metrics", "robustness_options",
-    ):
-        if res.get(key) is not None:
-            out[key] = res.get(key)
     out["artifact_provenance"] = build_run_provenance(
         model_sysml=final_sysml,
         recommended_design=out["recommended_design_inputs"],
@@ -268,7 +243,6 @@ def main() -> int:
                 verbose=False,
                 dse_mode="variation",
                 phase9_hifi=None,
-                robustness_options=RobustnessOptions.b2(),
             )
             gen = pipe.orchestrator.generate(
                 system_name=SYSTEM,
@@ -286,15 +260,6 @@ def main() -> int:
             atomic_write_json(run_dir / "realization_run.json", base)
             atomic_write_text(run_dir / "final_model.sysml", final_sysml)
             atomic_write_text(run_dir / "recommended.parm", parm_text)
-            for artifact_name, result_key in (
-                ("requirement_contracts.json", "requirement_contracts"),
-                ("safety_pattern_bindings.json", "safety_pattern_bindings"),
-                ("semantic_trace_report.json", "semantic_trace_report"),
-                ("failure_diagnostics.json", "failure_diagnostics"),
-                ("repair_decisions.json", "repair_decisions"),
-                ("robustness_metrics.json", "robustness_metrics"),
-            ):
-                atomic_write_json(run_dir / artifact_name, base.get(result_key, {}))
             # Canonical snapshot contains the report plus exact model/requirement
             # references.  It is sufficient to recover the run without another LLM call.
             atomic_write_json(run_dir / "canonical_run.json", {

@@ -155,8 +155,6 @@ def _prepare_bridge_inputs(model, allow_stale: bool = False) -> tuple[SITLBridge
         platform_profile=ARDUPILOT_COPTER_PROFILE,
         fdm_backend="native",
         verbose=False,
-        contract_bundle=(run_json or {}).get("requirement_contracts"),
-        semantic_trace_report=(run_json or {}).get("semantic_trace_report"),
     )
     source = "examples/output/recommended.parm + requirement_linker safety params"
     if PARM_PATH.exists():
