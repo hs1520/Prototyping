@@ -601,6 +601,10 @@ class Orchestrator:
         final_sysml = self._apply_ag_contract_layer(final_sysml, requirements)
         self._commit_terminal_model(final_sysml, producer="Orchestrator.generate")
         collaboration_artifacts = self._build_collaboration_artifacts(final_sysml)
+        final_sysml = collaboration_artifacts.pop(
+            "_terminal_model_sysml", final_sysml
+        )
+        final_model.metadata["last_sysml_text"] = final_sysml
         return {
             "system_name":        system_name,
             "requirements":       requirements,
@@ -901,6 +905,10 @@ class Orchestrator:
         final_sysml = self._apply_ag_contract_layer(final_sysml, requirements)
         self._commit_terminal_model(final_sysml, producer="Orchestrator.explore")
         collaboration_artifacts = self._build_collaboration_artifacts(final_sysml)
+        final_sysml = collaboration_artifacts.pop(
+            "_terminal_model_sysml", final_sysml
+        )
+        final_model.metadata["last_sysml_text"] = final_sysml
         # Merge evaluation histories: generate phase first, then explore phase.
         # **generate_result would overwrite with generate-only history if we
         # relied on dict spreading alone, so we concatenate explicitly.
@@ -1587,89 +1595,226 @@ class Orchestrator:
         records ``evaluation_ready=False`` until the independent evaluator lands.
         """
         from ..prototyping.ag_assurance import (
+            FailureRoute,
             check_safety_pattern_conformance,
             route_failure_diagnostics,
         )
         from ..prototyping.ag_contracts import AGDiagnostic, check_ag_graph
         from ..prototyping.ag_extractor import extract_ag_graph
-        from ..prototyping.blackboard import RecordType
+        from ..prototyping.ag_repair import attempt_dependency_closed_ag_repair
+        from ..prototyping.blackboard import RecordType, TaskStatus
 
-        revision = self.blackboard.current_revision
-        digest = self.blackboard.current_model.model_digest
         from ..prototyping.blackboard import text_digest
-        if text_digest(model_text) != digest:
+        if text_digest(model_text) != self.blackboard.current_model.model_digest:
             raise ValueError(
                 "A/G extraction input does not match the committed Blackboard "
                 "model revision/digest"
             )
-        graph = extract_ag_graph(model_text, revision=revision, model_digest=digest)
-        report = check_ag_graph(graph)
-        analysis_record = self.blackboard.publish(
-            RecordType.ANALYSIS,
-            "analysis.ag_trace",
-            "AGChecker",
-            {
-                "verdict": report.verdict,
-                "system_completeness": report.system_completeness,
-                "component_completeness": dict(report.component_completeness),
-                "diagnostic_codes": [d.code for d in report.diagnostics],
-                "diagnostics": [d.as_dict() for d in report.diagnostics],
-                "checker_version": report.checker_version,
-                "evaluation_ready": False,
-            },
-        )
-        pattern = check_safety_pattern_conformance(graph, report)
-        self.blackboard.publish(
-            RecordType.ANALYSIS,
-            "analysis.pattern_conformance",
-            "SafetyPatternChecker",
-            pattern,
-        )
-        routed_diags = list(report.diagnostics)
-        for case in pattern.get("cases", ()):
-            if case.get("status") == "FAIL":
-                routed_diags.append(AGDiagnostic(
-                    "PATTERN_NONCONFORMANT",
-                    f"{case.get('contract')} does not conform to the selected "
-                    "triggered timed-failsafe topology",
-                    contract=case.get("contract"),
-                ))
-        failures = route_failure_diagnostics(
-            routed_diags,
-            source_requirement=report.source_requirement,
-            realization_links=report.realization_links,
-        )
-        failures.update({
-            "source_model_revision": revision,
-            "source_model_digest": digest,
-            "analysis_record_id": analysis_record.record_id,
-        })
-        for failure in failures["failures"]:
-            failure_record = self.blackboard.publish(
-                RecordType.ANALYSIS,
-                "diagnostic.failure",
-                "AGFailureRouter",
-                failure,
+        maximum_repair_attempts = 1
+        repair_attempts = 0
+        analysis_round = 0
+        analysis_history: list[dict[str, Any]] = []
+
+        while True:
+            revision = self.blackboard.current_revision
+            digest = self.blackboard.current_model.model_digest
+            current_text = self.blackboard.current_model.model_text
+            graph = extract_ag_graph(
+                current_text, revision=revision, model_digest=digest
             )
-            if failure.get("repair_authorized"):
-                repair_task = self.blackboard.create_task(
-                    "A_G_SURGICAL_REPAIR",
-                    "RepairAgent",
-                    required_topics=("analysis.ag_trace", "diagnostic.failure"),
+            report = check_ag_graph(graph)
+            analysis_record = self.blackboard.publish(
+                RecordType.ANALYSIS,
+                "analysis.ag_trace",
+                "AGChecker",
+                {
+                    "analysis_round": analysis_round,
+                    "verdict": report.verdict,
+                    "system_completeness": report.system_completeness,
+                    "component_completeness": dict(report.component_completeness),
+                    "diagnostic_codes": [d.code for d in report.diagnostics],
+                    "diagnostics": [d.as_dict() for d in report.diagnostics],
+                    "checker_version": report.checker_version,
+                    "evaluation_ready": False,
+                },
+            )
+            pattern = check_safety_pattern_conformance(graph, report)
+            pattern["analysis_round"] = analysis_round
+            self.blackboard.publish(
+                RecordType.ANALYSIS,
+                "analysis.pattern_conformance",
+                "SafetyPatternChecker",
+                pattern,
+            )
+            routed_diags = list(report.diagnostics)
+            for case in pattern.get("cases", ()):
+                if case.get("status") == "FAIL":
+                    routed_diags.append(AGDiagnostic(
+                        "PATTERN_NONCONFORMANT",
+                        f"{case.get('contract')} does not conform to the selected "
+                        "triggered timed-failsafe topology",
+                        contract=case.get("contract"),
+                    ))
+            failures = route_failure_diagnostics(
+                routed_diags,
+                source_requirement=report.source_requirement,
+                realization_links=report.realization_links,
+            )
+            failures.update({
+                "source_model_revision": revision,
+                "source_model_digest": digest,
+                "analysis_record_id": analysis_record.record_id,
+                "analysis_round": analysis_round,
+            })
+            repair_candidate = None
+            for failure in failures["failures"]:
+                failure["failure_id"] = (
+                    f"{analysis_record.record_id}:{failure['failure_id']}"
                 )
-                self.blackboard.publish(
-                    RecordType.CONTROL,
-                    "repair.routed",
+                failure["analysis_round"] = analysis_round
+                failure_record = self.blackboard.publish(
+                    RecordType.ANALYSIS,
+                    "diagnostic.failure",
                     "AGFailureRouter",
-                    {
-                        "failure_id": failure.get("failure_id"),
-                        "failure_record_id": failure_record.record_id,
-                        "analysis_record_id": analysis_record.record_id,
-                        "repair_task_id": repair_task.task_id,
-                        "whole_model_fallback_allowed": False,
-                    },
-                    task_id=repair_task.task_id,
+                    failure,
                 )
+                if failure.get("repair_authorized"):
+                    if repair_attempts >= maximum_repair_attempts:
+                        blocked_task = self.blackboard.create_task(
+                            "A_G_SURGICAL_REPAIR",
+                            "RepairAgent",
+                            required_topics=(
+                                "analysis.ag_trace", "diagnostic.failure"
+                            ),
+                        )
+                        blocked = self.blackboard.publish(
+                            RecordType.RESULT,
+                            "repair.decision",
+                            "AGRepairController",
+                            {
+                                "failure_id": failure["failure_id"],
+                                "status": "BLOCKED",
+                                "reason": "automatic_repair_budget_exhausted",
+                                "base_model_revision": revision,
+                                "base_model_digest": digest,
+                                "committed_model_revision": None,
+                                "target_diagnostic_removed": False,
+                                "regression_free": False,
+                                "whole_model_fallback_used": False,
+                                "producing_stage": "R2_DEPENDENCY_CLOSED_REPAIR",
+                                "measurement_boundary": "INTERVENTION",
+                            },
+                            task_id=blocked_task.task_id,
+                        )
+                        self.blackboard.transition_task(
+                            blocked_task.task_id,
+                            TaskStatus.BLOCKED,
+                            producer="AGRepairController",
+                            result_record_ids=(blocked.record_id,),
+                        )
+                    elif repair_candidate is None:
+                        repair_task = self.blackboard.create_task(
+                            "A_G_SURGICAL_REPAIR",
+                            "RepairAgent",
+                            required_topics=(
+                                "analysis.ag_trace", "diagnostic.failure"
+                            ),
+                        )
+                        self.blackboard.publish(
+                            RecordType.CONTROL,
+                            "repair.routed",
+                            "AGFailureRouter",
+                            {
+                                "failure_id": failure.get("failure_id"),
+                                "failure_record_id": failure_record.record_id,
+                                "analysis_record_id": analysis_record.record_id,
+                                "repair_task_id": repair_task.task_id,
+                                "whole_model_fallback_allowed": False,
+                            },
+                            task_id=repair_task.task_id,
+                        )
+                        repair_candidate = (
+                            failure_record.record_id,
+                            analysis_record.record_id,
+                            repair_task.task_id,
+                        )
+                    else:
+                        self.blackboard.publish(
+                            RecordType.CONTROL,
+                            "repair.coalesced",
+                            "AGRepairController",
+                            {
+                                "failure_id": failure["failure_id"],
+                                "failure_record_id": failure_record.record_id,
+                                "primary_repair_task_id": repair_candidate[2],
+                                "reason": "same_revision_model_semantic_fault",
+                            },
+                            task_id=repair_candidate[2],
+                        )
+                elif (
+                    failure.get("route")
+                    == FailureRoute.UPSTREAM_INTEGRATION_REPAIR.value
+                ):
+                    blocked_task = self.blackboard.create_task(
+                        "A_G_UPSTREAM_INTEGRATION_REPAIR",
+                        "ArchitectureAgent",
+                        required_topics=("analysis.ag_trace", "diagnostic.failure"),
+                    )
+                    blocked = self.blackboard.publish(
+                        RecordType.RESULT,
+                        "repair.decision",
+                        "AGRepairController",
+                        {
+                            "failure_id": failure["failure_id"],
+                            "status": "BLOCKED",
+                            "reason": (
+                                "bounded_mvp_has_no_authorised_upstream_"
+                                "decomposition_repair"
+                            ),
+                            "base_model_revision": revision,
+                            "base_model_digest": digest,
+                            "committed_model_revision": None,
+                            "target_diagnostic_removed": False,
+                            "regression_free": False,
+                            "whole_model_fallback_used": False,
+                            "producing_stage": "R2_FAILURE_ROUTING",
+                            "measurement_boundary": "INTERVENTION",
+                        },
+                        task_id=blocked_task.task_id,
+                    )
+                    self.blackboard.transition_task(
+                        blocked_task.task_id,
+                        TaskStatus.BLOCKED,
+                        producer="AGRepairController",
+                        result_record_ids=(blocked.record_id,),
+                    )
+
+            analysis_history.append({
+                "analysis_round": analysis_round,
+                "source_model_revision": revision,
+                "source_model_digest": digest,
+                "verdict": report.verdict,
+                "pattern_verdict": pattern["verdict"],
+                "failure_ids": [
+                    item["failure_id"] for item in failures["failures"]
+                ],
+            })
+            if repair_candidate is None:
+                break
+            decision = attempt_dependency_closed_ag_repair(
+                llm=self.llm,
+                board=self.blackboard,
+                context_builder=self.context_builder,
+                sessions=self.task_sessions,
+                failure_record_id=repair_candidate[0],
+                analysis_record_id=repair_candidate[1],
+            )
+            repair_attempts += 1
+            if decision.status != "ACCEPTED":
+                break
+            analysis_round += 1
+
+        failures["analysis_history"] = analysis_history
         repair_decisions = [
             dict(item.payload)
             for item in self.blackboard.records(topic="repair.decision")
@@ -1685,6 +1830,7 @@ class Orchestrator:
                 "measurement_boundary": "INTERVENTION",
                 "decisions": repair_decisions,
             },
+            "_terminal_model_sysml": self.blackboard.current_model.model_text,
         }
 
     def _explore_bilevel(

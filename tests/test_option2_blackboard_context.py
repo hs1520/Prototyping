@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.agents.orchestrator import Orchestrator
+from src.agents.surgical_refiner import _find_def_span
 from src.prototyping.blackboard import (
     Blackboard,
     RecordType,
@@ -343,8 +344,10 @@ _MINI_AG = (
 )
 
 
-def _r2_orchestrator_with_committed_model(model_text, arm="R2-BBAG"):
-    orch = Orchestrator(_NoCallLLM(), revised_experiment_arm=arm)
+def _r2_orchestrator_with_committed_model(
+    model_text, arm="R2-BBAG", llm=None
+):
+    orch = Orchestrator(llm or _NoCallLLM(), revised_experiment_arm=arm)
     orch.blackboard = Blackboard("MiniAG")
     orch.context_builder = ContextBuilder(orch.blackboard)
     orch.task_sessions = TaskSessionRegistry()
@@ -385,6 +388,93 @@ def test_r2_wiring_is_honest_when_model_has_no_ag_contracts():
     orch = _r2_orchestrator_with_committed_model(_MODEL)
     graph = orch._build_collaboration_artifacts(_MODEL)["ag_contract_graph"]
     assert graph["verdict"] == "INCOMPLETE"
+
+
+class _OneShotRepairLLM:
+    def __init__(self, response):
+        self.response = response
+        self.calls = 0
+
+    def chat(self, *_args, **_kwargs):
+        self.calls += 1
+        return self.response
+
+
+def test_r2_controller_executes_one_routed_repair_and_rechecks_terminal_revision():
+    broken = _MINI_AG.replace(
+        "state deployed { entry action setParachuteDeployed; }",
+        "state deployed { }",
+    )
+    span = _find_def_span(_MINI_AG, "state", "RecoverySystemBehavior")
+    assert span is not None
+    fixed_behavior = _MINI_AG[span[0]:span[1]]
+    llm = _OneShotRepairLLM(f"```sysml\n{fixed_behavior}\n```")
+    orch = _r2_orchestrator_with_committed_model(broken, llm=llm)
+
+    arts = orch._build_collaboration_artifacts(broken)
+
+    assert llm.calls == 1
+    assert orch.blackboard.current_revision == 2
+    assert arts["_terminal_model_sysml"] == orch.blackboard.current_model.model_text
+    assert arts["ag_contract_graph"]["verdict"] == "PASS"
+    assert arts["pattern_conformance_report"]["verdict"] == "PASS"
+    assert len(arts["failure_diagnostics"]["analysis_history"]) == 2
+    assert any(
+        item["status"] == "ACCEPTED"
+        for item in arts["repair_decisions"]["decisions"]
+    )
+    sessions = orch.task_sessions.snapshot(include_messages=True)["sessions"]
+    assert sessions[-1]["status"] == "COMPLETED"
+    assert sessions[-1]["messages"]
+
+
+def test_r2_controller_records_rejected_repair_without_changing_revision():
+    broken = _MINI_AG.replace(
+        "state deployed { entry action setParachuteDeployed; }",
+        "state deployed { }",
+    )
+    llm = _OneShotRepairLLM("```sysml\nstate def Unrelated { }\n```")
+    orch = _r2_orchestrator_with_committed_model(broken, llm=llm)
+
+    arts = orch._build_collaboration_artifacts(broken)
+
+    assert llm.calls == 1
+    assert orch.blackboard.current_revision == 1
+    assert arts["ag_contract_graph"]["verdict"] != "PASS"
+    assert any(
+        item["status"] == "REJECTED"
+        for item in arts["repair_decisions"]["decisions"]
+    )
+    tasks = orch.blackboard.snapshot()["tasks"]
+    assert any(
+        item["kind"] == "A_G_SURGICAL_REPAIR"
+        and item["status"] == "REJECTED"
+        for item in tasks
+    )
+
+
+def test_r2_controller_blocks_unsupported_upstream_decomposition_repair():
+    broken = _MINI_AG.replace(
+        "    dependency dischargeParachuteCommand from SafetyMonitorContract to RecoverySystemContract;\n",
+        "",
+    )
+    orch = _r2_orchestrator_with_committed_model(broken)
+
+    arts = orch._build_collaboration_artifacts(broken)
+
+    assert arts["ag_contract_graph"]["verdict"] != "PASS"
+    blocked = [
+        item for item in arts["repair_decisions"]["decisions"]
+        if item["status"] == "BLOCKED"
+        and "upstream_decomposition_repair" in item["reason"]
+    ]
+    assert blocked
+    tasks = orch.blackboard.snapshot()["tasks"]
+    assert any(
+        item["kind"] == "A_G_UPSTREAM_INTEGRATION_REPAIR"
+        and item["status"] == "BLOCKED"
+        for item in tasks
+    )
 
 
 def test_r1_arm_does_not_emit_an_ag_trace():

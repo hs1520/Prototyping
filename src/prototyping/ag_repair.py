@@ -34,6 +34,30 @@ class AGRepairDecision:
         return dict(self.__dict__)
 
 
+def _publish_decision(
+    board: Blackboard,
+    decision: AGRepairDecision,
+    *,
+    task_id: str | None = None,
+    session_id: str | None = None,
+    details: dict[str, Any] | None = None,
+):
+    payload = {
+        **decision.to_dict(),
+        "producing_stage": "R2_DEPENDENCY_CLOSED_REPAIR",
+        "measurement_boundary": "INTERVENTION",
+        **(details or {}),
+    }
+    return board.publish(
+        RecordType.RESULT,
+        "repair.decision",
+        "AGRepairGate",
+        payload,
+        task_id=task_id,
+        session_id=session_id,
+    )
+
+
 class _CapturingChat:
     """Archive the exact surgical-repair chat turn without provider sessions."""
     def __init__(self, llm: Any, session: Any):
@@ -102,19 +126,6 @@ def attempt_dependency_closed_ag_repair(
         + " ".join(str(x) for x in failure.get("affected_elements", ()))
         + f": {failure.get('message') or failure.get('diagnostic_code')}"
     )
-    context_slice = build_dependency_closed_context(
-        board.current_model.model_text,
-        [issue],
-        allowed_req_ids={source_requirement},
-    )
-    if context_slice is None:
-        return AGRepairDecision(
-            str(failure.get("failure_id")), "BLOCKED",
-            "dependency_closed_context_unresolved",
-            board.current_revision, board.current_model.model_digest,
-            None, False, False,
-        )
-
     routed = next((
         item for item in reversed(board.records(topic="repair.routed"))
         if item.payload.get("failure_record_id") == failure_record_id
@@ -127,6 +138,30 @@ def attempt_dependency_closed_ag_repair(
             required_topics=("analysis.ag_trace", "diagnostic.failure"),
         )
     )
+    context_slice = build_dependency_closed_context(
+        board.current_model.model_text,
+        [issue],
+        allowed_req_ids={source_requirement},
+    )
+    if context_slice is None:
+        decision = AGRepairDecision(
+            str(failure.get("failure_id")), "BLOCKED",
+            "dependency_closed_context_unresolved",
+            board.current_revision, board.current_model.model_digest,
+            None, False, False,
+        )
+        result = _publish_decision(
+            board,
+            decision,
+            task_id=task.task_id,
+        )
+        board.transition_task(
+            task.task_id,
+            TaskStatus.BLOCKED,
+            producer="AGRepairController",
+            result_record_ids=(result.record_id,),
+        )
+        return decision
     board.transition_task(task.task_id, TaskStatus.ACTIVE)
     envelope = context_builder.build(
         task_id=task.task_id,
@@ -158,25 +193,73 @@ def attempt_dependency_closed_ag_repair(
     before = check_ag_graph(before_graph)
     before_ids = {(d.code, d.contract, d.subject) for d in before.errors()}
     audit = SurgicalAudit()
-    outcome = attempt_surgical_refinement(
-        _CapturingChat(llm, session),
-        board.current_model.model_text,
-        [issue],
-        feedback=(
-            "Repair only the routed behavior realization. Requirement definitions, "
-            "contract constraints, thresholds, units, satisfy/dependency links, and "
-            "unrelated elements are immutable. No whole-model fallback is allowed."
-        ),
-        audit=audit,
-        context_slice=context_slice,
-    )
+    try:
+        outcome = attempt_surgical_refinement(
+            _CapturingChat(llm, session),
+            board.current_model.model_text,
+            [issue],
+            feedback=(
+                "Repair only the routed behavior realization. Requirement definitions, "
+                "contract constraints, thresholds, units, satisfy/dependency links, and "
+                "unrelated elements are immutable. No whole-model fallback is allowed."
+            ),
+            audit=audit,
+            context_slice=context_slice,
+        )
+    except Exception as exc:
+        decision = AGRepairDecision(
+            str(failure.get("failure_id")), "REJECTED",
+            f"repair_execution_failed:{type(exc).__name__}",
+            task.base_model_revision, task.base_model_digest,
+            None, False, False,
+        )
+        result = _publish_decision(
+            board,
+            decision,
+            task_id=task.task_id,
+            session_id=session.session_id,
+            details={
+                "context_envelope_digest": envelope.envelope_digest,
+                "transcript_digest": session.transcript_digest,
+            },
+        )
+        board.transition_task(
+            task.task_id,
+            TaskStatus.REJECTED,
+            producer="RepairAgent",
+            result_record_ids=(result.record_id,),
+        )
+        session.close(
+            SessionStatus.REJECTED,
+            output_record_ids=(result.record_id,),
+        )
+        return decision
     if outcome is None:
-        board.transition_task(task.task_id, TaskStatus.REJECTED, producer="RepairAgent")
-        session.close(SessionStatus.REJECTED)
-        return AGRepairDecision(
+        decision = AGRepairDecision(
             str(failure.get("failure_id")), "REJECTED", "surgical_merge_rejected",
             task.base_model_revision, task.base_model_digest, None, False, False,
         )
+        result = _publish_decision(
+            board,
+            decision,
+            task_id=task.task_id,
+            session_id=session.session_id,
+            details={
+                "context_envelope_digest": envelope.envelope_digest,
+                "transcript_digest": session.transcript_digest,
+            },
+        )
+        board.transition_task(
+            task.task_id,
+            TaskStatus.REJECTED,
+            producer="RepairAgent",
+            result_record_ids=(result.record_id,),
+        )
+        session.close(
+            SessionStatus.REJECTED,
+            output_record_ids=(result.record_id,),
+        )
+        return decision
 
     after_graph = extract_ag_graph(outcome.merged_text)
     after = check_ag_graph(after_graph)
@@ -199,14 +282,33 @@ def attempt_dependency_closed_ag_repair(
     )
     pattern = check_safety_pattern_conformance(after_graph, after)
     if not target_removed or not regression_free or pattern["verdict"] != "PASS":
-        board.transition_task(task.task_id, TaskStatus.REJECTED, producer="AGRepairGate")
-        session.close(SessionStatus.REJECTED)
-        return AGRepairDecision(
+        decision = AGRepairDecision(
             str(failure.get("failure_id")), "REJECTED",
             "target_not_removed_or_regression",
             task.base_model_revision, task.base_model_digest, None,
             target_removed, regression_free,
         )
+        result = _publish_decision(
+            board,
+            decision,
+            task_id=task.task_id,
+            session_id=session.session_id,
+            details={
+                "context_envelope_digest": envelope.envelope_digest,
+                "transcript_digest": session.transcript_digest,
+            },
+        )
+        board.transition_task(
+            task.task_id,
+            TaskStatus.REJECTED,
+            producer="AGRepairGate",
+            result_record_ids=(result.record_id,),
+        )
+        session.close(
+            SessionStatus.REJECTED,
+            output_record_ids=(result.record_id,),
+        )
+        return decision
 
     session.assert_current(
         board.current_revision, board.current_model.model_digest
@@ -219,29 +321,28 @@ def attempt_dependency_closed_ag_repair(
         task_id=task.task_id,
         session_id=session.session_id,
     )
-    session.close(SessionStatus.COMPLETED)
-    result = board.publish(
-        RecordType.RESULT, "repair.decision", "AGRepairGate",
-        {
-            "failure_id": failure.get("failure_id"),
-            "status": "ACCEPTED",
-            "target_diagnostic_removed": True,
-            "regression_free": True,
-            "whole_model_fallback_used": False,
-            "producing_stage": "R2_DEPENDENCY_CLOSED_REPAIR",
-            "measurement_boundary": "INTERVENTION",
-            "context_envelope_digest": envelope.envelope_digest,
-            "transcript_digest": session.transcript_digest,
-        },
-        task_id=task.task_id,
-        session_id=session.session_id,
-    )
-    board.transition_task(
-        task.task_id, TaskStatus.COMPLETED, producer="AGRepairGate",
-        result_record_ids=(result.record_id,),
-    )
-    return AGRepairDecision(
+    decision = AGRepairDecision(
         str(failure.get("failure_id")), "ACCEPTED", "all_gates_passed",
         task.base_model_revision, task.base_model_digest, committed.revision,
         True, True,
     )
+    result = _publish_decision(
+        board,
+        decision,
+        task_id=task.task_id,
+        session_id=session.session_id,
+        details={
+            "context_envelope_digest": envelope.envelope_digest,
+            "transcript_digest": session.transcript_digest,
+        },
+    )
+    session.close(
+        SessionStatus.COMPLETED,
+        output_record_ids=(result.record_id,),
+    )
+    sessions.stale_after_commit(committed.revision, committed.model_digest)
+    board.transition_task(
+        task.task_id, TaskStatus.COMPLETED, producer="AGRepairGate",
+        result_record_ids=(result.record_id,),
+    )
+    return decision
