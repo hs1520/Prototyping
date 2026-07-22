@@ -1,0 +1,72 @@
+{
+  "artifact_role": "EVALUATOR_GOLD",
+  "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
+  "chain_id": "REQ_SAFE_005",
+  "source_requirement": "REQ_SAFE_005",
+  "source_text": "REQ-SAFE-005: The system shall deploy the ballistic recovery parachute within 0.5 seconds of detecting a critical propulsion subsystem failure during flight, taking precedence over all other safety responses.",
+  "source_digest": "d98469c950cc8d656ebd7d3b18595c62d4ede57c0717842e747dd39ff0ecf2d8",
+  "reviewer": null,
+  "reviewed_date": null,
+  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the reviewed decomposition, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
+  "system": {
+    "contract": "SystemParachuteContract",
+    "assumptions": [
+      "airborne",
+      "criticalPropulsionFailure"
+    ],
+    "guarantee_observation": "parachuteDeployed",
+    "deadline_s": 0.5,
+    "_review": "confirm system assumptions, observation, and deadline"
+  },
+  "allocations": [
+    {
+      "owner": "PropulsionMonitorContract",
+      "guarantee": "criticalFailureEvent",
+      "_review": "confirm the responsible owner"
+    },
+    {
+      "owner": "SafetyMonitorContract",
+      "guarantee": "parachuteCommand",
+      "_review": "confirm the responsible owner"
+    },
+    {
+      "owner": "RecoverySystemContract",
+      "guarantee": "parachuteDeployed",
+      "_review": "confirm the responsible owner"
+    }
+  ],
+  "discharge_edges": [
+    {
+      "component": "PropulsionMonitorContract",
+      "assumption": "failureSensingAvailable",
+      "by": "environment",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "SafetyMonitorContract",
+      "assumption": "airborne",
+      "by": "environment",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "SafetyMonitorContract",
+      "assumption": "criticalFailureEvent",
+      "by": "PropulsionMonitorContract",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "RecoverySystemContract",
+      "assumption": "parachuteCommand",
+      "by": "SafetyMonitorContract",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "RecoverySystemContract",
+      "assumption": "actuatorPower",
+      "by": "environment",
+      "_review": "confirm the discharging source"
+    }
+  ],
+  "failure_class": "NO_FAILURE",
+  "_failure_class_review": "confirm the expected blind failure class"
+}
