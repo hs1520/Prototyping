@@ -176,13 +176,92 @@ def _parse_behavior(name: str, block: str, span: Span) -> BehaviorRealization:
     )
 
 
+_PACKAGE_RE = re.compile(r"\bpackage\s+(\w+)\s*\{")
+# The emitter stamps this exact marker on every A/G system contract (see
+# ``ag_emitter.emit_ag_package``); it is the reliable signal that a top-level
+# package carries a reviewed A/G chain rather than base model content.
+_AG_PACKAGE_MARKER = "bounded A/G system contract for"
+
+
+def _top_level_packages(text: str) -> List[Tuple[str, int, int]]:
+    """Return (name, start, end_exclusive) for each top-level package block."""
+    result: List[Tuple[str, int, int]] = []
+    consumed_to = 0
+    for m in _PACKAGE_RE.finditer(text):
+        if m.start() < consumed_to:  # nested inside an already-consumed package
+            continue
+        brace = text.index("{", m.start())
+        end = find_block_end(text, brace)
+        if end == -1:
+            continue
+        result.append((m.group(1), m.start(), end + 1))
+        consumed_to = end + 1
+    return result
+
+
+def extract_ag_graphs(
+    sysml_text: str,
+    *,
+    revision: Optional[int] = None,
+    model_digest: Optional[str] = None,
+) -> List[AGGraph]:
+    """Extract one bounded A/G graph per reviewed chain in the committed model.
+
+    A model may carry several independent A/G chains (one reviewed decomposition
+    per selected requirement — the drone system co-selects REQ_SAFE_004 and
+    REQ_SAFE_005). Each chain is emitted as its own top-level package with a
+    single system contract, so each is a self-contained A/G decomposition that
+    must be checked independently: pooling two system contracts into one graph
+    would make the decomposition root ambiguous (``system=None``).
+
+    With zero or one A/G package this returns exactly ``[extract_ag_graph(...)]``
+    — byte-identical to the single-chain path. With two or more, the base model
+    (which carries the immutable source ``requirement def`` provenance) is paired
+    with each A/G package in turn so every per-chain graph both resolves its
+    system contract uniquely and keeps its source-requirement provenance. Every
+    per-chain graph reports the committed model's revision/digest, not the slice's.
+    """
+    text = sysml_text or ""
+    digest = model_digest if model_digest is not None else text_digest(text)
+    ag_spans = [
+        (start, end)
+        for (_name, start, end) in _top_level_packages(text)
+        if _AG_PACKAGE_MARKER in text[start:end]
+    ]
+    if len(ag_spans) <= 1:
+        return [extract_ag_graph(text, revision=revision, model_digest=digest)]
+
+    # Base model = everything that is not an A/G package (source requirement defs
+    # live here); it is prepended to each A/G package so provenance resolves.
+    others_parts: List[str] = []
+    cursor = 0
+    for start, end in sorted(ag_spans):
+        others_parts.append(text[cursor:start])
+        cursor = end
+    others_parts.append(text[cursor:])
+    base = "".join(others_parts).rstrip()
+
+    graphs: List[AGGraph] = []
+    for start, end in sorted(ag_spans):
+        slice_text = base + "\n\n" + text[start:end] + "\n"
+        graphs.append(
+            extract_ag_graph(slice_text, revision=revision, model_digest=digest)
+        )
+    return graphs
+
+
 def extract_ag_graph(
     sysml_text: str,
     *,
     revision: Optional[int] = None,
     model_digest: Optional[str] = None,
 ) -> AGGraph:
-    """Parse committed SysML v2 text into a bounded A/G graph (§6.2)."""
+    """Parse committed SysML v2 text into a bounded A/G graph (§6.2).
+
+    This resolves a single system contract. For a model that may carry more than
+    one reviewed chain, use :func:`extract_ag_graphs`, which returns one graph
+    per chain and degrades to ``[this]`` when only one chain is present.
+    """
     text = sysml_text or ""
     digest = model_digest if model_digest is not None else text_digest(text)
     parse_diags: List[AGDiagnostic] = []

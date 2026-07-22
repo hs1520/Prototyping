@@ -1594,22 +1594,29 @@ class Orchestrator:
         This is intervention evidence, not gold-scored accuracy — the derived view
         records ``evaluation_ready=False`` until the independent evaluator lands.
         """
-        from ..prototyping.ag_assurance import (
-            FailureRoute,
-            check_safety_pattern_conformance,
-            route_failure_diagnostics,
+        from ..prototyping.ag_extractor import (
+            extract_ag_graph,
+            extract_ag_graphs,
         )
-        from ..prototyping.ag_contracts import AGDiagnostic, check_ag_graph
-        from ..prototyping.ag_extractor import extract_ag_graph
         from ..prototyping.ag_repair import attempt_dependency_closed_ag_repair
-        from ..prototyping.blackboard import RecordType, TaskStatus
-
         from ..prototyping.blackboard import text_digest
+
         if text_digest(model_text) != self.blackboard.current_model.model_digest:
             raise ValueError(
                 "A/G extraction input does not match the committed Blackboard "
                 "model revision/digest"
             )
+        graphs = extract_ag_graphs(
+            self.blackboard.current_model.model_text,
+            revision=self.blackboard.current_revision,
+            model_digest=self.blackboard.current_model.model_digest,
+        )
+        if len(graphs) > 1:
+            # Several reviewed chains co-exist (e.g. the drone co-selects
+            # REQ_SAFE_004 and REQ_SAFE_005): each is an independent A/G
+            # decomposition and must be checked on its own graph.
+            return self._build_multichain_ag_trace(graphs)
+
         maximum_repair_attempts = 1
         repair_attempts = 0
         analysis_round = 0
@@ -1622,173 +1629,15 @@ class Orchestrator:
             graph = extract_ag_graph(
                 current_text, revision=revision, model_digest=digest
             )
-            report = check_ag_graph(graph)
-            analysis_record = self.blackboard.publish(
-                RecordType.ANALYSIS,
-                "analysis.ag_trace",
-                "AGChecker",
-                {
-                    "analysis_round": analysis_round,
-                    "verdict": report.verdict,
-                    "system_completeness": report.system_completeness,
-                    "component_completeness": dict(report.component_completeness),
-                    "diagnostic_codes": [d.code for d in report.diagnostics],
-                    "diagnostics": [d.as_dict() for d in report.diagnostics],
-                    "checker_version": report.checker_version,
-                    "evaluation_ready": False,
-                },
-            )
-            pattern = check_safety_pattern_conformance(graph, report)
-            pattern["analysis_round"] = analysis_round
-            self.blackboard.publish(
-                RecordType.ANALYSIS,
-                "analysis.pattern_conformance",
-                "SafetyPatternChecker",
-                pattern,
-            )
-            routed_diags = list(report.diagnostics)
-            for case in pattern.get("cases", ()):
-                if case.get("status") == "FAIL":
-                    routed_diags.append(AGDiagnostic(
-                        "PATTERN_NONCONFORMANT",
-                        f"{case.get('contract')} does not conform to the selected "
-                        "triggered timed-failsafe topology",
-                        contract=case.get("contract"),
-                    ))
-            failures = route_failure_diagnostics(
-                routed_diags,
-                source_requirement=report.source_requirement,
-                realization_links=report.realization_links,
-            )
-            failures.update({
-                "source_model_revision": revision,
-                "source_model_digest": digest,
-                "analysis_record_id": analysis_record.record_id,
-                "analysis_round": analysis_round,
-            })
-            repair_candidate = None
-            for failure in failures["failures"]:
-                failure["failure_id"] = (
-                    f"{analysis_record.record_id}:{failure['failure_id']}"
+            report, pattern, failures, analysis_record, repair_candidate = (
+                self._run_ag_analysis_round(
+                    graph,
+                    analysis_round=analysis_round,
+                    repair_attempts=repair_attempts,
+                    maximum_repair_attempts=maximum_repair_attempts,
+                    allow_repair=True,
                 )
-                failure["analysis_round"] = analysis_round
-                failure_record = self.blackboard.publish(
-                    RecordType.ANALYSIS,
-                    "diagnostic.failure",
-                    "AGFailureRouter",
-                    failure,
-                )
-                if failure.get("repair_authorized"):
-                    if repair_attempts >= maximum_repair_attempts:
-                        blocked_task = self.blackboard.create_task(
-                            "A_G_SURGICAL_REPAIR",
-                            "RepairAgent",
-                            required_topics=(
-                                "analysis.ag_trace", "diagnostic.failure"
-                            ),
-                        )
-                        blocked = self.blackboard.publish(
-                            RecordType.RESULT,
-                            "repair.decision",
-                            "AGRepairController",
-                            {
-                                "failure_id": failure["failure_id"],
-                                "status": "BLOCKED",
-                                "reason": "automatic_repair_budget_exhausted",
-                                "base_model_revision": revision,
-                                "base_model_digest": digest,
-                                "committed_model_revision": None,
-                                "target_diagnostic_removed": False,
-                                "regression_free": False,
-                                "whole_model_fallback_used": False,
-                                "producing_stage": "R2_DEPENDENCY_CLOSED_REPAIR",
-                                "measurement_boundary": "INTERVENTION",
-                            },
-                            task_id=blocked_task.task_id,
-                        )
-                        self.blackboard.transition_task(
-                            blocked_task.task_id,
-                            TaskStatus.BLOCKED,
-                            producer="AGRepairController",
-                            result_record_ids=(blocked.record_id,),
-                        )
-                    elif repair_candidate is None:
-                        repair_task = self.blackboard.create_task(
-                            "A_G_SURGICAL_REPAIR",
-                            "RepairAgent",
-                            required_topics=(
-                                "analysis.ag_trace", "diagnostic.failure"
-                            ),
-                        )
-                        self.blackboard.publish(
-                            RecordType.CONTROL,
-                            "repair.routed",
-                            "AGFailureRouter",
-                            {
-                                "failure_id": failure.get("failure_id"),
-                                "failure_record_id": failure_record.record_id,
-                                "analysis_record_id": analysis_record.record_id,
-                                "repair_task_id": repair_task.task_id,
-                                "whole_model_fallback_allowed": False,
-                            },
-                            task_id=repair_task.task_id,
-                        )
-                        repair_candidate = (
-                            failure_record.record_id,
-                            analysis_record.record_id,
-                            repair_task.task_id,
-                        )
-                    else:
-                        self.blackboard.publish(
-                            RecordType.CONTROL,
-                            "repair.coalesced",
-                            "AGRepairController",
-                            {
-                                "failure_id": failure["failure_id"],
-                                "failure_record_id": failure_record.record_id,
-                                "primary_repair_task_id": repair_candidate[2],
-                                "reason": "same_revision_model_semantic_fault",
-                            },
-                            task_id=repair_candidate[2],
-                        )
-                elif (
-                    failure.get("route")
-                    == FailureRoute.UPSTREAM_INTEGRATION_REPAIR.value
-                ):
-                    blocked_task = self.blackboard.create_task(
-                        "A_G_UPSTREAM_INTEGRATION_REPAIR",
-                        "ArchitectureAgent",
-                        required_topics=("analysis.ag_trace", "diagnostic.failure"),
-                    )
-                    blocked = self.blackboard.publish(
-                        RecordType.RESULT,
-                        "repair.decision",
-                        "AGRepairController",
-                        {
-                            "failure_id": failure["failure_id"],
-                            "status": "BLOCKED",
-                            "reason": (
-                                "bounded_mvp_has_no_authorised_upstream_"
-                                "decomposition_repair"
-                            ),
-                            "base_model_revision": revision,
-                            "base_model_digest": digest,
-                            "committed_model_revision": None,
-                            "target_diagnostic_removed": False,
-                            "regression_free": False,
-                            "whole_model_fallback_used": False,
-                            "producing_stage": "R2_FAILURE_ROUTING",
-                            "measurement_boundary": "INTERVENTION",
-                        },
-                        task_id=blocked_task.task_id,
-                    )
-                    self.blackboard.transition_task(
-                        blocked_task.task_id,
-                        TaskStatus.BLOCKED,
-                        producer="AGRepairController",
-                        result_record_ids=(blocked.record_id,),
-                    )
-
+            )
             analysis_history.append({
                 "analysis_round": analysis_round,
                 "source_model_revision": revision,
@@ -1823,6 +1672,320 @@ class Orchestrator:
             "ag_contract_graph": report.to_dict(),
             "pattern_conformance_report": pattern,
             "failure_diagnostics": failures,
+            "repair_decisions": {
+                "schema_version": "1.0",
+                "artifact_role": "INTERVENTION_REPAIR_DECISIONS",
+                "producing_stage": "R2_DEPENDENCY_CLOSED_REPAIR",
+                "measurement_boundary": "INTERVENTION",
+                "decisions": repair_decisions,
+            },
+            "_terminal_model_sysml": self.blackboard.current_model.model_text,
+        }
+
+    def _run_ag_analysis_round(
+        self,
+        graph,
+        *,
+        analysis_round: int,
+        repair_attempts: int,
+        maximum_repair_attempts: int,
+        allow_repair: bool,
+    ):
+        """Run one A/G analysis round for a single chain graph.
+
+        Checks the graph, publishes the typed ``analysis.ag_trace`` and
+        ``analysis.pattern_conformance`` records, routes every diagnostic to a
+        typed failure, and dispatches repair/blocked tasks. Returns
+        ``(report, pattern, failures, analysis_record, repair_candidate)``.
+
+        ``allow_repair`` gates the one authorised dependency-closed surgical
+        repair: True for a single-chain run, False when several chains co-exist —
+        there an authorised model-semantic fault is routed to a BLOCKED task
+        rather than repaired, because whole-model repair across independent
+        chains is out of the bounded MVP scope (§17).
+        """
+        from ..prototyping.ag_assurance import (
+            FailureRoute,
+            check_safety_pattern_conformance,
+            route_failure_diagnostics,
+        )
+        from ..prototyping.ag_contracts import AGDiagnostic, check_ag_graph
+        from ..prototyping.blackboard import RecordType, TaskStatus
+
+        revision = graph.revision
+        digest = graph.model_digest
+        report = check_ag_graph(graph)
+        analysis_record = self.blackboard.publish(
+            RecordType.ANALYSIS,
+            "analysis.ag_trace",
+            "AGChecker",
+            {
+                "analysis_round": analysis_round,
+                "verdict": report.verdict,
+                "system_completeness": report.system_completeness,
+                "component_completeness": dict(report.component_completeness),
+                "diagnostic_codes": [d.code for d in report.diagnostics],
+                "diagnostics": [d.as_dict() for d in report.diagnostics],
+                "checker_version": report.checker_version,
+                "evaluation_ready": False,
+            },
+        )
+        pattern = check_safety_pattern_conformance(graph, report)
+        pattern["analysis_round"] = analysis_round
+        self.blackboard.publish(
+            RecordType.ANALYSIS,
+            "analysis.pattern_conformance",
+            "SafetyPatternChecker",
+            pattern,
+        )
+        routed_diags = list(report.diagnostics)
+        for case in pattern.get("cases", ()):
+            if case.get("status") == "FAIL":
+                routed_diags.append(AGDiagnostic(
+                    "PATTERN_NONCONFORMANT",
+                    f"{case.get('contract')} does not conform to the selected "
+                    "triggered timed-failsafe topology",
+                    contract=case.get("contract"),
+                ))
+        failures = route_failure_diagnostics(
+            routed_diags,
+            source_requirement=report.source_requirement,
+            realization_links=report.realization_links,
+        )
+        failures.update({
+            "source_model_revision": revision,
+            "source_model_digest": digest,
+            "analysis_record_id": analysis_record.record_id,
+            "analysis_round": analysis_round,
+        })
+        repair_candidate = None
+        for failure in failures["failures"]:
+            failure["failure_id"] = (
+                f"{analysis_record.record_id}:{failure['failure_id']}"
+            )
+            failure["analysis_round"] = analysis_round
+            failure_record = self.blackboard.publish(
+                RecordType.ANALYSIS,
+                "diagnostic.failure",
+                "AGFailureRouter",
+                failure,
+            )
+            if failure.get("repair_authorized"):
+                if not allow_repair or repair_attempts >= maximum_repair_attempts:
+                    blocked_task = self.blackboard.create_task(
+                        "A_G_SURGICAL_REPAIR",
+                        "RepairAgent",
+                        required_topics=(
+                            "analysis.ag_trace", "diagnostic.failure"
+                        ),
+                    )
+                    blocked = self.blackboard.publish(
+                        RecordType.RESULT,
+                        "repair.decision",
+                        "AGRepairController",
+                        {
+                            "failure_id": failure["failure_id"],
+                            "status": "BLOCKED",
+                            "reason": (
+                                "automatic_repair_budget_exhausted"
+                                if allow_repair
+                                else "multi_chain_auto_repair_out_of_scope"
+                            ),
+                            "base_model_revision": revision,
+                            "base_model_digest": digest,
+                            "committed_model_revision": None,
+                            "target_diagnostic_removed": False,
+                            "regression_free": False,
+                            "whole_model_fallback_used": False,
+                            "producing_stage": "R2_DEPENDENCY_CLOSED_REPAIR",
+                            "measurement_boundary": "INTERVENTION",
+                        },
+                        task_id=blocked_task.task_id,
+                    )
+                    self.blackboard.transition_task(
+                        blocked_task.task_id,
+                        TaskStatus.BLOCKED,
+                        producer="AGRepairController",
+                        result_record_ids=(blocked.record_id,),
+                    )
+                elif repair_candidate is None:
+                    repair_task = self.blackboard.create_task(
+                        "A_G_SURGICAL_REPAIR",
+                        "RepairAgent",
+                        required_topics=(
+                            "analysis.ag_trace", "diagnostic.failure"
+                        ),
+                    )
+                    self.blackboard.publish(
+                        RecordType.CONTROL,
+                        "repair.routed",
+                        "AGFailureRouter",
+                        {
+                            "failure_id": failure.get("failure_id"),
+                            "failure_record_id": failure_record.record_id,
+                            "analysis_record_id": analysis_record.record_id,
+                            "repair_task_id": repair_task.task_id,
+                            "whole_model_fallback_allowed": False,
+                        },
+                        task_id=repair_task.task_id,
+                    )
+                    repair_candidate = (
+                        failure_record.record_id,
+                        analysis_record.record_id,
+                        repair_task.task_id,
+                    )
+                else:
+                    self.blackboard.publish(
+                        RecordType.CONTROL,
+                        "repair.coalesced",
+                        "AGRepairController",
+                        {
+                            "failure_id": failure["failure_id"],
+                            "failure_record_id": failure_record.record_id,
+                            "primary_repair_task_id": repair_candidate[2],
+                            "reason": "same_revision_model_semantic_fault",
+                        },
+                        task_id=repair_candidate[2],
+                    )
+            elif (
+                failure.get("route")
+                == FailureRoute.UPSTREAM_INTEGRATION_REPAIR.value
+            ):
+                blocked_task = self.blackboard.create_task(
+                    "A_G_UPSTREAM_INTEGRATION_REPAIR",
+                    "ArchitectureAgent",
+                    required_topics=("analysis.ag_trace", "diagnostic.failure"),
+                )
+                blocked = self.blackboard.publish(
+                    RecordType.RESULT,
+                    "repair.decision",
+                    "AGRepairController",
+                    {
+                        "failure_id": failure["failure_id"],
+                        "status": "BLOCKED",
+                        "reason": (
+                            "bounded_mvp_has_no_authorised_upstream_"
+                            "decomposition_repair"
+                        ),
+                        "base_model_revision": revision,
+                        "base_model_digest": digest,
+                        "committed_model_revision": None,
+                        "target_diagnostic_removed": False,
+                        "regression_free": False,
+                        "whole_model_fallback_used": False,
+                        "producing_stage": "R2_FAILURE_ROUTING",
+                        "measurement_boundary": "INTERVENTION",
+                    },
+                    task_id=blocked_task.task_id,
+                )
+                self.blackboard.transition_task(
+                    blocked_task.task_id,
+                    TaskStatus.BLOCKED,
+                    producer="AGRepairController",
+                    result_record_ids=(blocked.record_id,),
+                )
+        return report, pattern, failures, analysis_record, repair_candidate
+
+    def _build_multichain_ag_trace(self, graphs) -> Dict[str, Any]:
+        """Aggregate independent per-chain A/G traces (several reviewed chains).
+
+        Each chain is checked on its own graph and publishes its own typed
+        ``analysis.ag_trace`` record — one assurance case per source requirement.
+        The run-level verdict is the conjunction: PASS only when every chain is
+        PASS. Automatic surgical repair is disabled (a single-chain capability),
+        so an authorised model-semantic fault in any chain is routed to a BLOCKED
+        task, keeping the aggregate honest.
+        """
+        severity = {"PASS": 0, "INCOMPLETE": 1, "FAIL": 2}
+        chains: list[dict[str, Any]] = []
+        pattern_cases: list[dict[str, Any]] = []
+        pattern_per_chain: list[dict[str, Any]] = []
+        all_failures: list[dict[str, Any]] = []
+        analysis_history: list[dict[str, Any]] = []
+        aggregate_verdict = "PASS"
+        pattern_verdict = "PASS"
+        checker_version: Optional[str] = None
+
+        for graph in graphs:
+            report, pattern, failures, _record, _candidate = (
+                self._run_ag_analysis_round(
+                    graph,
+                    analysis_round=0,
+                    repair_attempts=0,
+                    maximum_repair_attempts=1,
+                    allow_repair=False,
+                )
+            )
+            checker_version = report.checker_version
+            chains.append(report.to_dict())
+            pattern_cases.extend(pattern.get("cases", ()))
+            pattern_per_chain.append({
+                "source_requirement": report.source_requirement,
+                "verdict": pattern["verdict"],
+                "cases": list(pattern.get("cases", ())),
+            })
+            all_failures.extend(failures["failures"])
+            analysis_history.append({
+                "analysis_round": 0,
+                "source_requirement": report.source_requirement,
+                "source_model_revision": graph.revision,
+                "source_model_digest": graph.model_digest,
+                "verdict": report.verdict,
+                "pattern_verdict": pattern["verdict"],
+                "failure_ids": [
+                    item["failure_id"] for item in failures["failures"]
+                ],
+            })
+            if severity[report.verdict] > severity[aggregate_verdict]:
+                aggregate_verdict = report.verdict
+            if pattern["verdict"] != "PASS":
+                pattern_verdict = "FAIL"
+
+        revision = self.blackboard.current_revision
+        digest = self.blackboard.current_model.model_digest
+        repair_decisions = [
+            dict(item.payload)
+            for item in self.blackboard.records(topic="repair.decision")
+        ]
+        return {
+            "ag_contract_graph": {
+                "artifact_role": "RUNTIME_A_G_PREDICTION",
+                "producing_stage": "R2_COMPOSITIONAL_TRACE",
+                "measurement_boundary": "INTERVENTION",
+                "experiment_namespace": "BLACKBOARD_AG_V1",
+                "configuration": "R2-BBAG",
+                "checker_version": checker_version,
+                "source_model_revision": revision,
+                "source_model_digest": digest,
+                "verdict": aggregate_verdict,
+                "multi_chain": True,
+                "chain_count": len(chains),
+                "source_requirements": [
+                    c.get("source_requirement") for c in chains
+                ],
+                "chains": chains,
+            },
+            "pattern_conformance_report": {
+                "schema_version": "1.0",
+                "artifact_role": "INTERVENTION_PATTERN_CONFORMANCE",
+                "producing_stage": "R2_PATTERN_CONFORMANCE",
+                "measurement_boundary": "INTERVENTION",
+                "multi_chain": True,
+                "verdict": pattern_verdict,
+                "cases": pattern_cases,
+                "per_chain": pattern_per_chain,
+            },
+            "failure_diagnostics": {
+                "schema_version": "1.0",
+                "artifact_role": "INTERVENTION_FAILURE_ROUTING",
+                "producing_stage": "R2_FAILURE_ROUTING",
+                "measurement_boundary": "INTERVENTION",
+                "multi_chain": True,
+                "failures": all_failures,
+                "analysis_history": analysis_history,
+                "source_model_revision": revision,
+                "source_model_digest": digest,
+            },
             "repair_decisions": {
                 "schema_version": "1.0",
                 "artifact_role": "INTERVENTION_REPAIR_DECISIONS",

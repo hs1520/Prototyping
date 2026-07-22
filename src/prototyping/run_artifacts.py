@@ -108,6 +108,14 @@ def write_revised_run_artifacts(
         p = out / "ag_contract_graph.json"
         _write_json(p, ag_graph)
         record("ag_contract_graph", p)
+        # A multi-chain run aggregates several independent A/G decompositions;
+        # also emit each chain's own graph so the post-hoc evaluator can score it
+        # against that requirement's gold (one assurance case per requirement).
+        for chain in ag_graph.get("chains", ()) or ():
+            req = chain.get("source_requirement") or "UNKNOWN"
+            cp = out / f"ag_contract_graph.{req}.json"
+            _write_json(cp, chain)
+            record(f"ag_contract_graph.{req}", cp)
 
     for key, filename in (
         ("pattern_conformance_report", "pattern_conformance_report.json"),
