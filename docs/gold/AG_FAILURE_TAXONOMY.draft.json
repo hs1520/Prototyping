@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.0",
+  "artifact_role": "FAILURE_TAXONOMY",
+  "experiment_namespace": "BLACKBOARD_AG_V1",
+  "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
+  "taxonomy_version": "ag-failures-1.0-candidate",
+  "classes": [
+    "NO_FAILURE",
+    "CONTRACT_INCOMPLETENESS",
+    "INTEGRATION_DECOMPOSITION_GAP",
+    "MODEL_SEMANTIC_FAULT",
+    "ARCHITECTURE_DESIGN_ISSUE",
+    "VERIFIER_LIMITATION"
+  ],
+  "class_definitions": {
+    "NO_FAILURE": {
+      "definition": "The reviewed candidate model represents the selected source obligation and frozen architecture boundary without an observable failure in this run/chain pair.",
+      "include_when": [
+        "all source and frozen-boundary obligations visible in the packet are represented",
+        "no more specific failure class below is supported"
+      ],
+      "exclude_when": [
+        "required evidence is absent rather than affirmative",
+        "any contract, decomposition, realization, architecture, or observation fault is visible"
+      ],
+      "_review": "confirm that absence of visible failure is not treated as formal proof or physical verification"
+    },
+    "CONTRACT_INCOMPLETENESS": {
+      "definition": "The candidate contract omits or leaves ambiguous a required source obligation, assumption, guarantee, provenance binding, or safety-topology declaration.",
+      "include_when": [
+        "a source obligation has no corresponding contract semantics",
+        "the contract is too incomplete to assess a component realization"
+      ],
+      "exclude_when": [
+        "the contract is complete but its behavior realization is missing or wrong",
+        "the approved decomposition is represented but incompatible or over budget"
+      ],
+      "_review": "confirm separation from model realization and architecture design failures"
+    },
+    "INTEGRATION_DECOMPOSITION_GAP": {
+      "definition": "The selected component contracts do not form a closed approved decomposition because ownership, discharge, or required dependency edges are missing or inconsistent.",
+      "include_when": [
+        "a guarantee has no unique approved owner",
+        "a non-environment assumption has no valid upstream discharge",
+        "the system obligation is not completely decomposed across the approved components"
+      ],
+      "exclude_when": [
+        "the decomposition is closed but a component behavior does not realize it",
+        "the decomposition is closed but its timing or compatibility is inadequate"
+      ],
+      "_review": "confirm that the frozen architecture boundary, not runtime output, defines the approved decomposition"
+    },
+    "MODEL_SEMANTIC_FAULT": {
+      "definition": "The contract/decomposition intent is present, but the candidate SysML behavior does not realize it through the required reachable trigger, transition, state, action, or observation path.",
+      "include_when": [
+        "a required response is unreachable",
+        "a required trigger, guard, entry action, reset, relock, or realization link is absent or wrong"
+      ],
+      "exclude_when": [
+        "the contract itself omits the obligation",
+        "the model is internally realized but the architecture budget or compatibility is inadequate"
+      ],
+      "_review": "confirm that this class concerns committed SysML semantics, not checker implementation"
+    },
+    "ARCHITECTURE_DESIGN_ISSUE": {
+      "definition": "The candidate accurately represents its selected architecture, but that architecture violates an approved unit, compatibility, timing-budget, or composition constraint.",
+      "include_when": [
+        "exact-unit comparison is incompatible",
+        "required timing segments are absent or their additive budget exceeds the deadline",
+        "component guarantees and assumptions are semantically incompatible"
+      ],
+      "exclude_when": [
+        "the architecture is adequate but the model fails to realize it",
+        "the evidence is insufficient to distinguish a design issue"
+      ],
+      "_review": "confirm that this class does not authorize automatic semantic repair or design-space decisions"
+    },
+    "VERIFIER_LIMITATION": {
+      "definition": "The allowed blind review material lacks an observation or other evidence needed to decide one of the substantive classes without inspecting forbidden runtime verdicts or diagnostics.",
+      "include_when": [
+        "the required observation point is absent",
+        "the packet is structurally valid but insufficient for a defensible substantive label"
+      ],
+      "exclude_when": [
+        "a more specific source, contract, decomposition, realization, or architecture failure is directly visible"
+      ],
+      "_review": "confirm this is the sole inconclusive class and is not used to hide a visible model fault"
+    }
+  },
+  "adjudication": {
+    "unit_of_analysis": "ONE_ARCHIVED_RUN_CHAIN_PAIR",
+    "primary_label_count": 1,
+    "multi_fault_rule": "Choose the most upstream root cause directly supported by the allowed blind material: CONTRACT_INCOMPLETENESS before INTEGRATION_DECOMPOSITION_GAP before ARCHITECTURE_DESIGN_ISSUE or MODEL_SEMANTIC_FAULT. Use VERIFIER_LIMITATION only when the material cannot support a substantive class; use NO_FAILURE only when no fault is visible.",
+    "inconclusive_class": "VERIFIER_LIMITATION",
+    "_review": "confirm class precedence, especially the relative treatment of architecture and realization faults, before the first label is authored"
+  },
+  "reviewer": null,
+  "reviewed_date": null,
+  "review_protocol": {
+    "independent_human_review": false
+  },
+  "review_instructions": "This is an AI-assisted candidate taxonomy, not evaluator authority. Independently confirm or edit every definition, inclusion/exclusion rule, and adjudication rule without viewing runtime classifications; remove all _review markers; set a named reviewer and ISO date; set independent_human_review=true; change status to FROZEN; then compute artifact_digest with evaluation_readiness.artifact_digest.",
+  "artifact_digest": null
+}

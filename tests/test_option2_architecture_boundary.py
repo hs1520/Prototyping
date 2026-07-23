@@ -7,9 +7,17 @@ artifact that the evaluator gold cites by digest.
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 
-from src.prototyping.ag_chains import REQ_SAFE_008_CHAIN
+import pytest
+
+from src.prototyping.ag_chains import (
+    REQ_SAFE_004_CHAIN,
+    REQ_SAFE_005_CHAIN,
+    REQ_SAFE_008_CHAIN,
+)
+from src.prototyping.ag_gold_template import build_gold_draft
 from src.prototyping.architecture_boundary import (
     architecture_boundary_digest,
     build_architecture_boundary_draft,
@@ -54,16 +62,74 @@ def test_draft_carries_full_provenance_and_allocations_from_the_spec():
     assert draft["requirement_set_digest"] == "a" * 64
     # component ids + interfaces + owner->guarantee allocations are pre-filled
     assert {c["component_id"] for c in draft["components"]} == {
-        "ReleaseAuthorityContract", "PayloadLockActuatorContract",
+        "ReleaseCommandGatewayContract", "PayloadLockMechanismContract",
     }
     assert {(a["owner"], a["guarantee"]) for a in draft["allocations"]} == {
-        ("releaseAuthority", "releaseAuthorised"),
-        ("payloadLockActuator", "payloadReleased"),
+        ("releaseCommandGateway", "authorisedReleaseCommandReceived"),
+        ("payloadLockMechanism", "payloadLocked"),
     }
     releaser = next(
-        c for c in draft["components"] if c["component_id"] == "ReleaseAuthorityContract"
+        c for c in draft["components"]
+        if c["component_id"] == "ReleaseCommandGatewayContract"
     )
-    assert releaser["interfaces"]["produces"] == ["releaseAuthorised"]
+    assert releaser["interfaces"]["produces"] == [
+        "authorisedReleaseCommandReceived"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("spec", "path"),
+    [
+        (
+            REQ_SAFE_004_CHAIN,
+            "docs/gold/REQ_SAFE_004_architecture_boundary.draft.json",
+        ),
+        (
+            REQ_SAFE_005_CHAIN,
+            "docs/gold/REQ_SAFE_005_architecture_boundary.draft.json",
+        ),
+        (
+            REQ_SAFE_008_CHAIN,
+            "docs/gold/REQ_SAFE_008_architecture_boundary.draft.json",
+        ),
+    ],
+)
+def test_committed_boundary_drafts_match_the_student_candidate(spec, path):
+    committed = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert committed == build_architecture_boundary_draft(spec)
+    assert committed["status"] == "DRAFT_FOR_SUPERVISOR_REVIEW"
+    assert committed["review_protocol"]["independent_architecture_review"] is False
+    assert committed["artifact_digest"] is None
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [REQ_SAFE_004_CHAIN, REQ_SAFE_005_CHAIN, REQ_SAFE_008_CHAIN],
+)
+def test_gold_candidate_binds_the_reviewed_boundary_and_exact_allocations(spec):
+    """In-memory freeze shape only; no repository artifact is frozen here."""
+    boundary = _freeze(
+        build_architecture_boundary_draft(
+            spec, requirement_set_digest="a" * 64
+        )
+    )
+    gold = build_gold_draft(
+        spec,
+        source_text=f"{spec.source_requirement}: test-only source",
+        requirement_set_digest="a" * 64,
+        architecture_boundary_digest=boundary["artifact_digest"],
+    )
+    assert gold["status"] == "DRAFT_FOR_SUPERVISOR_REVIEW"
+    assert gold["architecture_boundary_digest"] == boundary["artifact_digest"]
+    boundary_allocations = {
+        (item["owner"], item["contract"], item["guarantee"])
+        for item in boundary["allocations"]
+    }
+    gold_allocations = {
+        (item["owner"], item["contract"], item["guarantee"])
+        for item in gold["allocations"]
+    }
+    assert gold_allocations == boundary_allocations
 
 
 def test_validator_flags_an_unfrozen_draft():

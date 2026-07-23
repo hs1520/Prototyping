@@ -4,8 +4,18 @@ import json
 
 import pytest
 
-from src.prototyping.experiment_arms import RevisedExperimentArm, revised_arm_metadata
-from src.prototyping.revised_pilot import RevisedPilotConfig, run_revised_pilot
+from src.prototyping.experiment_arms import (
+    RevisedExperimentArm,
+    R2_DETERMINISTIC_GENERATION_MODE,
+    R2_DETERMINISTIC_INTERVENTION_VERSION,
+    revised_arm_metadata,
+)
+from src.prototyping.ag_contracts import AG_CHECKER_VERSION
+from src.prototyping.revised_pilot import (
+    RevisedPilotConfig,
+    _contains_evaluator_only_material,
+    run_revised_pilot,
+)
 
 
 _REQS = (
@@ -63,7 +73,7 @@ class _FakePipeline:
         }
         if self.arm == "R2-BBAG":
             result["ag_contract_graph"] = {
-                "checker_version": "ag-mvp-1",
+                "checker_version": AG_CHECKER_VERSION,
                 "verdict": "PASS",
             }
         return result
@@ -92,6 +102,11 @@ def test_config_freezes_exact_three_seed_three_arm_protocol():
     assert manifest["selected_r2_run_ids"] == [
         "seed-0:R2-BBAG", "seed-1:R2-BBAG", "seed-2:R2-BBAG",
     ]
+    assert manifest["r2_generation_mode"] == R2_DETERMINISTIC_GENERATION_MODE
+    assert (
+        manifest["r2_intervention_version"]
+        == R2_DETERMINISTIC_INTERVENTION_VERSION
+    )
     assert len(manifest["configuration_digest"]) == 64
 
     with pytest.raises(ValueError, match="three distinct seeds"):
@@ -100,6 +115,8 @@ def test_config_freezes_exact_three_seed_three_arm_protocol():
         _config(arms=("R0-CURRENT", "R2-BBAG", "R1-BBCTX"))
     with pytest.raises(ValueError, match="absent from the frozen requirement set"):
         _config(selected_ag_chain_ids=("REQ_SAFE_008",))
+    with pytest.raises(ValueError, match="separate configuration/version"):
+        _config(r2_generation_mode="LLM_AUTHORED")
 
 
 def test_external_execution_requires_explicit_authorization(tmp_path):
@@ -113,6 +130,25 @@ def test_external_execution_requires_explicit_authorization(tmp_path):
             artifact_writer=lambda *_args: {},
         )
     assert not (tmp_path / "unauthorised").exists()
+
+
+def test_pilot_rejects_nested_evaluator_material_and_role_variants():
+    assert _contains_evaluator_only_material(
+        {"payload": {"humanGold": {"chain": "REQ_SAFE_005"}}}
+    )
+    assert _contains_evaluator_only_material(
+        {
+            "payload": {
+                "artifact_role": "POSTHOC_HUMAN_GOLD_EVALUATION",
+            }
+        }
+    )
+    assert _contains_evaluator_only_material(
+        {"payload": {"artifact_role": "FAILURE_TAXONOMY"}}
+    )
+    assert not _contains_evaluator_only_material(
+        {"payload": {"runtime_ag_verdict": "PASS"}}
+    )
 
 
 def test_complete_pilot_archives_nine_isolated_runs_and_descriptive_summary(tmp_path):
@@ -163,6 +199,12 @@ def test_complete_pilot_archives_nine_isolated_runs_and_descriptive_summary(tmp_
     assert on_disk["configuration_digest"] == manifest["configuration_digest"]
     r2 = [row for row in manifest["runs"] if row["configuration"] == "R2-BBAG"]
     assert r2 and all(row["evaluation_ready"] is False for row in r2)
+    assert all(
+        row["r2_generation_mode"] == R2_DETERMINISTIC_GENERATION_MODE
+        and row["r2_intervention_version"]
+        == R2_DETERMINISTIC_INTERVENTION_VERSION
+        for row in r2
+    )
 
 
 def test_failed_run_makes_pilot_incomplete_and_existing_output_is_not_overwritten(

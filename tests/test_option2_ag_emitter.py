@@ -1,6 +1,6 @@
 """A/G-aware generation (Stage 2-3) — emitter, chain library, R2 integration.
 
-The reviewed decomposition renders to valid SysML that round-trips to a checker
+The selected decomposition candidate renders to valid SysML and round-trips to a checker
 PASS, and under R2-BBAG the orchestrator merges it so the committed model carries
 the contracts and the A/G trace is non-empty. R0/R1 models never carry them.
 """
@@ -43,9 +43,99 @@ def test_emitted_chain_round_trips_to_a_checker_pass():
     sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
     report = check_ag_graph(extract_ag_graph(sysml, revision=1))
     assert report.verdict == "PASS", [d.code for d in report.diagnostics]
-    assert report.timing["sum"] == 0.5
+    assert report.timing["sum"] == 0.45
     assert report.timing["ok"] is True
     assert len(report.allocations) == 3
+    prediction = report.to_dict()["graph"]
+    assert prediction["timing"]["origin"] == "criticalPropulsionFailureDetected"
+    assert prediction["priority"]["arbitration_topology"][
+        "parachute_transition_reachable"
+    ] is True
+
+    unguarded = sysml.replace(
+        "if criticalPropulsionFailureDetected then parachuteDeploymentSelected",
+        "then parachuteDeploymentSelected",
+    )
+    unguarded_prediction = check_ag_graph(
+        extract_ag_graph(unguarded, revision=1)
+    ).to_dict()["graph"]
+    assert unguarded_prediction["priority"]["arbitration_topology"][
+        "parachute_transition_reachable"
+    ] is False
+
+
+def test_runtime_checker_fails_closed_when_priority_semantics_are_removed():
+    sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
+    without_priority = sysml.replace(
+        "requirement def SafetyResponsePriorityContract",
+        "requirement def RemovedPriorityContract",
+    )
+    report = check_ag_graph(extract_ag_graph(without_priority, revision=1))
+    assert report.verdict == "FAIL"
+    assert "PRIORITY_TOPOLOGY_MISSING" in {
+        diagnostic.code for diagnostic in report.diagnostics
+    }
+
+    missing_selection_action = sysml.replace(
+        "state parachuteDeploymentSelected "
+        "{ entry action issueParachuteDeploymentCommand; }",
+        "state parachuteDeploymentSelected;",
+    )
+    report = check_ag_graph(
+        extract_ag_graph(missing_selection_action, revision=1)
+    )
+    assert report.verdict == "FAIL"
+    assert "PRIORITY_TOPOLOGY_INCOMPLETE" in {
+        diagnostic.code for diagnostic in report.diagnostics
+    }
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "expected_code"),
+    [
+        (
+            "state def SafetyResponseArbitration",
+            "state def RemovedSafetyResponseArbitration",
+            "PRIORITY_TOPOLOGY_MISSING",
+        ),
+        (
+            "if not criticalPropulsionFailureDetected then "
+            "CONTROLLED_BATTERY_LANDING;",
+            "then CONTROLLED_BATTERY_LANDING;",
+            "PRIORITY_TOPOLOGY_INCOMPLETE",
+        ),
+        (
+            "transition selectParachute first awaitingResponse "
+            "accept CriticalPropulsionFailureDetectedSignal "
+            "if criticalPropulsionFailureDetected "
+            "then parachuteDeploymentSelected;",
+            "",
+            "PRIORITY_TOPOLOGY_INCOMPLETE",
+        ),
+        (
+            "state deployed { entry action setParachuteDeployed; }",
+            "state deployed;",
+            "PRIORITY_TOPOLOGY_INCOMPLETE",
+        ),
+        (
+            "dependency observeSystemParachuteContract "
+            "from SystemParachuteContract "
+            "to ParachuteDeploymentVerification;",
+            "",
+            "PRIORITY_TOPOLOGY_INCOMPLETE",
+        ),
+    ],
+)
+def test_safe005_checker_rejects_each_missing_priority_topology_fact(
+    before, after, expected_code
+):
+    sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
+    assert before in sysml
+    report = check_ag_graph(
+        extract_ag_graph(sysml.replace(before, after), revision=1)
+    )
+    assert report.verdict == "FAIL"
+    assert expected_code in {diagnostic.code for diagnostic in report.diagnostics}
 
 
 def test_merge_preserves_the_base_model_and_stays_valid():

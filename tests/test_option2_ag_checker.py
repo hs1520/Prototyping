@@ -53,19 +53,25 @@ def test_req_safe_005_chain_extracts_and_passes():
     assert graph.system.name == "SystemParachuteContract"
     assert graph.system.observation == "parachuteDeployed"
     assert {c.name for c in graph.components} == {
-        "PropulsionMonitorContract", "SafetyMonitorContract", "RecoverySystemContract"
+        "SafetyResponseArbiterContract",
+        "RecoveryPowerSupplyContract",
+        "RecoverySystemContract",
     }
 
     report = check_ag_graph(graph)
     assert report.verdict == "PASS", _codes(report)
     assert report.system_completeness == READY
     assert set(report.component_completeness.values()) == {READY}
-    # additive timing: 0.05 + 0.10 + 0.35 == 0.5 == deadline
-    assert report.timing["sum"] == 0.5
+    # Detection is the boundary event; 0.10 + 0.35 = 0.45 <= 0.50 s.
+    assert report.timing["sum"] == 0.45
     assert report.timing["ok"] is True
     # every non-environment assumption is discharged; environment ones are marked
-    assert report.discharge["SafetyMonitorContract.criticalFailureEvent"] == "discharged"
-    assert report.discharge["RecoverySystemContract.actuatorPower"] == "environment"
+    assert report.discharge[
+        "RecoverySystemContract.parachuteDeploymentCommand"
+    ] == "discharged"
+    assert report.discharge[
+        "RecoverySystemContract.recoveryActuationPowerAvailable"
+    ] == "discharged"
 
 
 def test_exactly_one_owner_per_component_guarantee():
@@ -79,7 +85,7 @@ def test_exactly_one_owner_per_component_guarantee():
 def test_additive_timing_budget_exceeded_is_detected():
     over = REQ_SAFE_005_SYSML.replace(
         "attribute latencyBudget : Real = 0.35 [SI::s];",
-        "attribute latencyBudget : Real = 0.40 [SI::s];",
+        "attribute latencyBudget : Real = 0.45 [SI::s];",
     )
     report = check_ag_graph(extract_ag_graph(over))
     assert report.verdict == "FAIL"
@@ -88,17 +94,20 @@ def test_additive_timing_budget_exceeded_is_detected():
 
 
 def test_undischarged_assumption_is_localised_and_not_mislabelled_circular():
-    # Remove the upstream guarantee that produces criticalFailureEvent.
+    # Remove the internal power guarantee required by RecoverySystem.
     broken = REQ_SAFE_005_SYSML.replace(
-        "require constraint g_criticalFailureEvent { criticalFailureEvent }", ""
+        "require constraint g_recoveryActuationPowerAvailable "
+        "{ recoveryActuationPowerAvailable }", ""
     )
     report = check_ag_graph(extract_ag_graph(broken))
     assert report.verdict == "FAIL"
     assert CODE_ASSUMPTION_UNDISCHARGED in _codes(report)
     # A cascade behind an upstream gap must not be reported as a cycle (§16).
     assert CODE_CIRCULAR_ASSUMPTION not in _codes(report)
-    assert report.discharge["SafetyMonitorContract.criticalFailureEvent"] == "undischarged"
-    assert report.component_completeness["PropulsionMonitorContract"] == INCOMPLETE
+    assert report.discharge[
+        "RecoverySystemContract.recoveryActuationPowerAvailable"
+    ] == "undischarged"
+    assert report.component_completeness["RecoveryPowerSupplyContract"] == INCOMPLETE
 
 
 def test_missing_decomposition_owner_is_flagged():

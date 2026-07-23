@@ -1,4 +1,4 @@
-"""Independently reviewed architecture boundary for the bounded A/G chains.
+"""Architecture-boundary draft builder and frozen-artifact validator.
 
 Freeze-review finding (round 1, P1): guarantee ownership cannot be derived from the
 stakeholder requirement text alone, because the component decomposition
@@ -73,7 +73,8 @@ def build_architecture_boundary_draft(
     """A review-ready DRAFT architecture boundary for one chain.
 
     Component ids, interfaces (consumes/produces/trigger), and owner→guarantee
-    allocations are pre-filled from the reviewed decomposition so the reviewer
+    allocations are pre-filled from the student-approved decomposition candidate
+    so the reviewer
     confirms rather than transcribes; each component's *responsibility* is left for
     the reviewer to state as a design decision (not from the stakeholder text).
     """
@@ -158,7 +159,10 @@ def validate_frozen_boundary(boundary: Mapping[str, Any]) -> List[str]:
         problems.append("reviewer must be set to the reviewing supervisor")
     if not _valid_iso_date(boundary.get("reviewed_date")):
         problems.append("reviewed_date must be ISO YYYY-MM-DD")
-    review = boundary.get("review_protocol") or {}
+    review = boundary.get("review_protocol")
+    if not isinstance(review, Mapping):
+        problems.append("review_protocol must be an object")
+        review = {}
     if review.get("independent_architecture_review") is not True:
         problems.append("review_protocol.independent_architecture_review must be true")
     components = boundary.get("components")

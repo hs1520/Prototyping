@@ -1,5 +1,5 @@
 {
-  "schema_version": "2.0",
+  "schema_version": "3.0",
   "artifact_role": "EVALUATOR_GOLD",
   "experiment_namespace": "BLACKBOARD_AG_V1",
   "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
@@ -16,55 +16,111 @@
     "blind_to_runtime_verdict": false,
     "independent_human_review": false
   },
-  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the reviewed decomposition, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
+  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the student-approved decomposition candidate, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
   "system": {
     "contract": "SystemPayloadLockContract",
-    "assumptions": [
-      "powerOnDefault",
-      "authorisedReleaseCommand"
-    ],
-    "guarantee_observation": "payloadReleased",
-    "deadline_s": null,
-    "_review": "confirm system assumptions, observation, and deadline"
+    "assumptions": [],
+    "guarantee_observation": "payloadLocked",
+    "_review": "confirm system assumptions and observation"
   },
   "allocations": [
     {
-      "owner": "releaseAuthority",
-      "contract": "ReleaseAuthorityContract",
-      "guarantee": "releaseAuthorised",
+      "owner": "releaseCommandGateway",
+      "contract": "ReleaseCommandGatewayContract",
+      "guarantee": "authorisedReleaseCommandReceived",
       "_review": "confirm the responsible owner"
     },
     {
-      "owner": "payloadLockActuator",
-      "contract": "PayloadLockActuatorContract",
-      "guarantee": "payloadReleased",
+      "owner": "payloadLockMechanism",
+      "contract": "PayloadLockMechanismContract",
+      "guarantee": "payloadLocked",
       "_review": "confirm the responsible owner"
     }
   ],
   "discharge_edges": [
     {
-      "component": "ReleaseAuthorityContract",
-      "assumption": "powerOnDefault",
+      "component": "ReleaseCommandGatewayContract",
+      "assumption": "receivedReleaseCommand",
       "by": "environment",
       "_review": "confirm the discharging source"
     },
     {
-      "component": "ReleaseAuthorityContract",
-      "assumption": "authorisedReleaseCommand",
+      "component": "ReleaseCommandGatewayContract",
+      "assumption": "authorisationDataValid",
       "by": "environment",
       "_review": "confirm the discharging source"
     },
     {
-      "component": "PayloadLockActuatorContract",
-      "assumption": "releaseAuthorised",
-      "by": "ReleaseAuthorityContract",
+      "component": "PayloadLockMechanismContract",
+      "assumption": "powerOnEvent",
+      "by": "environment",
       "_review": "confirm the discharging source"
     },
     {
-      "component": "PayloadLockActuatorContract",
-      "assumption": "actuatorPower",
+      "component": "PayloadLockMechanismContract",
+      "assumption": "powerLostEvent",
       "by": "environment",
       "_review": "confirm the discharging source"
+    },
+    {
+      "component": "PayloadLockMechanismContract",
+      "assumption": "authorisedReleaseCommandReceived",
+      "by": "ReleaseCommandGatewayContract",
+      "_review": "confirm the discharging source"
+    }
+  ],
+  "selected_model_elements": [
+    "powerOnInitialisation",
+    "payloadLocked",
+    "payloadUnlocked",
+    "authorisedReleaseCommandReceived",
+    "actuatorPowerAvailable"
+  ],
+  "invariants": [
+    {
+      "invariant_id": "SAFE008_POWER_ON_LOCKED",
+      "scope": "SystemPayloadLockContract",
+      "trigger_or_antecedent_ast": {
+        "node": "Identifier",
+        "name": "powerOnInitialisation"
+      },
+      "required_consequent_ast": {
+        "node": "Identifier",
+        "name": "payloadLocked"
+      },
+      "source_kind": "STAKEHOLDER",
+      "source_id": "REQ_SAFE_008"
+    },
+    {
+      "invariant_id": "SAFE008_UNLOCK_AUTHORISED",
+      "scope": "SystemPayloadLockContract",
+      "trigger_or_antecedent_ast": {
+        "node": "Identifier",
+        "name": "payloadUnlocked"
+      },
+      "required_consequent_ast": {
+        "node": "Identifier",
+        "name": "authorisedReleaseCommandReceived"
+      },
+      "source_kind": "STAKEHOLDER",
+      "source_id": "REQ_SAFE_008"
+    },
+    {
+      "invariant_id": "SAFE008_DEENERGISE_TO_LOCK",
+      "scope": "SystemPayloadLockContract",
+      "trigger_or_antecedent_ast": {
+        "node": "Not",
+        "expr": {
+          "node": "Identifier",
+          "name": "actuatorPowerAvailable"
+        }
+      },
+      "required_consequent_ast": {
+        "node": "Identifier",
+        "name": "payloadLocked"
+      },
+      "source_kind": "STUDENT_DERIVED_DESIGN_CONSTRAINT",
+      "source_id": "SAFE008_DEENERGISE_TO_LOCK_V1"
     }
   ]
 }

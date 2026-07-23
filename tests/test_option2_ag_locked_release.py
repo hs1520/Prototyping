@@ -1,4 +1,4 @@
-"""Third reviewed A/G chain: REQ_SAFE_008 payload locked-until-authorised-release.
+"""Third student-approved candidate: REQ_SAFE_008 locked-until-authorised-release.
 
 Exercises a third bounded safety pattern, LOCKED_UNTIL_AUTHORISED_RELEASE, whose
 defining obligation is *default-safe*: the power-on (initial) state must be the
@@ -53,7 +53,7 @@ def test_locked_release_chain_is_valid_sysml_and_passes_the_ag_trace():
     # a guard/ordering invariant, not a timed chain: no timing composition
     assert report.timing["ok"] is None
     assert len(report.allocations) == 2
-    assert len(report.discharge_edges) == 4
+    assert len(report.discharge_edges) == 5
 
 
 def test_pattern_is_taken_from_the_declared_model_annotation():
@@ -137,6 +137,135 @@ def test_locked_release_pattern_needs_real_topology_not_a_label():
         realization_links=report.realization_links,
     )
     assert len(routes["failures"]) >= 1
+
+
+def test_locked_release_checks_actions_authorisation_and_power_loss_relock():
+    mutations = (
+        (
+            "state lockedUnpowered { entry action setPayloadLocked; }",
+            "state lockedUnpowered { entry action setPayloadUnlocked; }",
+        ),
+        (
+            "accept AuthorisedReleaseCommandReceivedSignal "
+            "then unlockedPowered;",
+            "accept ReceivedReleaseCommandSignal then unlockedPowered;",
+        ),
+        (
+            "accept PowerLostSignal then lockedUnpowered;",
+            "accept PowerOnSignal then lockedUnpowered;",
+        ),
+    )
+    for before, after in mutations:
+        broken = _model().replace(before, after)
+        graph = extract_ag_graph(broken, revision=1)
+        report = check_ag_graph(graph)
+        pattern = check_safety_pattern_conformance(
+            graph, report
+        )
+        assert report.verdict == "FAIL"
+        assert "PATTERN_TOPOLOGY_INCOMPLETE" in {
+            diagnostic.code for diagnostic in report.diagnostics
+        }
+        assert pattern["verdict"] == "FAIL"
+        mechanism = next(
+            case for case in pattern["cases"]
+            if case["contract"] == "PayloadLockMechanismContract"
+        )
+        assert mechanism["default_safe_present"] is False
+
+
+def test_authorisation_history_is_guarded_and_cleared_per_transaction():
+    mutations = (
+        (
+            "if authorisationDataValid then authorisationGranted;",
+            "then authorisationGranted;",
+        ),
+        (
+            "transition clearOnPowerLoss first authorisationGranted "
+            "accept PowerLostSignal then awaitingAuthorisation;",
+            "",
+        ),
+        (
+            "transition clearOnNewPowerCycle first authorisationGranted "
+            "accept PowerOnSignal then awaitingAuthorisation;",
+            "",
+        ),
+    )
+    for before, after in mutations:
+        broken = _model().replace(before, after)
+        graph = extract_ag_graph(broken, revision=1)
+        pattern = check_safety_pattern_conformance(
+            graph, check_ag_graph(graph)
+        )
+        gateway = next(
+            case for case in pattern["cases"]
+            if case["contract"] == "ReleaseCommandGatewayContract"
+        )
+        assert gateway["invariant_preserved"] is False
+        assert pattern["verdict"] == "FAIL"
+
+
+def test_locked_release_checker_rejects_extra_unauthorised_unlock_transition():
+    approved = (
+        "transition authorisedUnlock first lockedPowered "
+        "accept AuthorisedReleaseCommandReceivedSignal then unlockedPowered;"
+    )
+    broken = _model().replace(
+        approved,
+        approved
+        + "\n        transition unauthorisedUnlock first lockedPowered "
+        "accept ReceivedReleaseCommandSignal then unlockedPowered;",
+    )
+    report = check_ag_graph(extract_ag_graph(broken, revision=1))
+    assert report.verdict == "FAIL"
+    assert "PATTERN_TOPOLOGY_INCOMPLETE" in {
+        diagnostic.code for diagnostic in report.diagnostics
+    }
+
+
+def test_locked_release_checker_requires_states_and_deenergise_invariant():
+    missing_state = _model().replace(
+        "state lockedPowered { entry action maintainPayloadLocked; }",
+        "state powered { entry action maintainPayloadLocked; }",
+    )
+    report = check_ag_graph(extract_ag_graph(missing_state, revision=1))
+    assert report.verdict == "FAIL"
+    assert "PATTERN_TOPOLOGY_INCOMPLETE" in {
+        diagnostic.code for diagnostic in report.diagnostics
+    }
+
+    without_deenergise = "\n".join(
+        line for line in _model().splitlines()
+        if "inv__SAFE008_DEENERGISE_TO_LOCK" not in line
+    )
+    report = check_ag_graph(extract_ag_graph(without_deenergise, revision=1))
+    assert report.verdict == "FAIL"
+    assert "INVARIANT_SEMANTICS_INVALID" in {
+        diagnostic.code for diagnostic in report.diagnostics
+    }
+
+
+def test_locked_release_runtime_checker_requires_invariant_semantics_and_pattern():
+    model = _model()
+    without_invariants = "\n".join(
+        line for line in model.splitlines()
+        if "require constraint inv__" not in line
+    )
+    report = check_ag_graph(extract_ag_graph(without_invariants, revision=1))
+    assert report.verdict == "FAIL"
+    assert "INVARIANT_SEMANTICS_MISSING" in {
+        diagnostic.code for diagnostic in report.diagnostics
+    }
+
+    wrong_pattern = model.replace(
+        "safety_pattern=LOCKED_UNTIL_AUTHORISED_RELEASE",
+        "safety_pattern=STARTUP_INHIBIT",
+    )
+    report = check_ag_graph(extract_ag_graph(wrong_pattern, revision=1))
+    assert report.verdict == "FAIL"
+    assert "PATTERN_DECLARATION_INCONSISTENT" in {
+        diagnostic.code for diagnostic in report.diagnostics
+    }
 
 
 _GOLD_SRC = (

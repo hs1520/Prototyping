@@ -1,5 +1,5 @@
 {
-  "schema_version": "2.0",
+  "schema_version": "3.0",
   "artifact_role": "EVALUATOR_GOLD",
   "experiment_namespace": "BLACKBOARD_AG_V1",
   "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
@@ -16,55 +16,132 @@
     "blind_to_runtime_verdict": false,
     "independent_human_review": false
   },
-  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the reviewed decomposition, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
+  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the student-approved decomposition candidate, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
   "system": {
     "contract": "SystemArmingInhibitContract",
     "assumptions": [
-      "powerOnSelfTest",
+      "powerOnSelfTestActive",
       "sensorFailureReported"
     ],
-    "guarantee_observation": "armingPrevented",
-    "deadline_s": null,
-    "_review": "confirm system assumptions, observation, and deadline"
+    "guarantee_observation": "armingTransitionInhibited and airborneTransitionInhibited",
+    "_review": "confirm system assumptions and observation"
   },
   "allocations": [
     {
-      "owner": "selfTestMonitor",
-      "contract": "SelfTestMonitorContract",
-      "guarantee": "sensorFailureDetected",
+      "owner": "selfTestStatusLatch",
+      "contract": "SelfTestStatusLatchContract",
+      "guarantee": "startupInhibitActive",
       "_review": "confirm the responsible owner"
     },
     {
       "owner": "armingAuthority",
       "contract": "ArmingAuthorityContract",
-      "guarantee": "armingPrevented",
+      "guarantee": "armingTransitionInhibited",
+      "_review": "confirm the responsible owner"
+    },
+    {
+      "owner": "flightModeAuthority",
+      "contract": "FlightModeAuthorityContract",
+      "guarantee": "airborneTransitionInhibited",
       "_review": "confirm the responsible owner"
     }
   ],
   "discharge_edges": [
     {
-      "component": "SelfTestMonitorContract",
-      "assumption": "powerOnSelfTest",
+      "component": "SelfTestStatusLatchContract",
+      "assumption": "powerOnSelfTestActive",
       "by": "environment",
       "_review": "confirm the discharging source"
     },
     {
-      "component": "SelfTestMonitorContract",
+      "component": "SelfTestStatusLatchContract",
       "assumption": "sensorFailureReported",
       "by": "environment",
       "_review": "confirm the discharging source"
     },
     {
       "component": "ArmingAuthorityContract",
-      "assumption": "powerOnSelfTest",
-      "by": "environment",
+      "assumption": "startupInhibitActive",
+      "by": "SelfTestStatusLatchContract",
       "_review": "confirm the discharging source"
     },
     {
-      "component": "ArmingAuthorityContract",
-      "assumption": "sensorFailureDetected",
-      "by": "SelfTestMonitorContract",
+      "component": "FlightModeAuthorityContract",
+      "assumption": "startupInhibitActive",
+      "by": "SelfTestStatusLatchContract",
       "_review": "confirm the discharging source"
+    }
+  ],
+  "selected_model_elements": [
+    "powerOnSelfTestActive",
+    "sensorFailureReported",
+    "armed",
+    "airborne",
+    "startupInhibitActive",
+    "armingTransitionInhibited",
+    "airborneTransitionInhibited"
+  ],
+  "invariants": [
+    {
+      "invariant_id": "SAFE004_STARTUP_INHIBIT",
+      "scope": "SystemArmingInhibitContract",
+      "trigger_or_antecedent_ast": {
+        "node": "And",
+        "operands": [
+          {
+            "node": "Identifier",
+            "name": "powerOnSelfTestActive"
+          },
+          {
+            "node": "Identifier",
+            "name": "sensorFailureReported"
+          }
+        ]
+      },
+      "required_consequent_ast": {
+        "node": "And",
+        "operands": [
+          {
+            "node": "Not",
+            "expr": {
+              "node": "Identifier",
+              "name": "armed"
+            }
+          },
+          {
+            "node": "Not",
+            "expr": {
+              "node": "Identifier",
+              "name": "airborne"
+            }
+          }
+        ]
+      },
+      "source_kind": "STAKEHOLDER",
+      "source_id": "REQ_SAFE_004"
+    },
+    {
+      "invariant_id": "SAFE004_LATCH_EFFECT",
+      "scope": "SystemArmingInhibitContract",
+      "trigger_or_antecedent_ast": {
+        "node": "Identifier",
+        "name": "startupInhibitActive"
+      },
+      "required_consequent_ast": {
+        "node": "And",
+        "operands": [
+          {
+            "node": "Identifier",
+            "name": "armingTransitionInhibited"
+          },
+          {
+            "node": "Identifier",
+            "name": "airborneTransitionInhibited"
+          }
+        ]
+      },
+      "source_kind": "STUDENT_DERIVED_DESIGN_CONSTRAINT",
+      "source_id": "SAFE004_LATCH_RESET_V1"
     }
   ]
 }

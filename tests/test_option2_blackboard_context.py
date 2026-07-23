@@ -203,6 +203,38 @@ def test_context_builder_is_role_checked_revision_pinned_and_has_no_gold_input()
             system_name="Drone",
             source_record_ids=(gold.record_id,),
         )
+    nested_gold = board.publish(
+        RecordType.EVIDENCE,
+        "review.material",
+        "Evaluator",
+        {"wrapper": {"artifact_role": "EVALUATOR_GOLD"}},
+    )
+    nested_task = board.create_task("NESTED_GOLD_LEAK", "DesignAgent")
+    board.transition_task(nested_task.task_id, TaskStatus.ACTIVE)
+    with pytest.raises(ValueError, match="gold cannot enter"):
+        builder.build(
+            task_id=nested_task.task_id,
+            agent_role="DesignAgent",
+            objective="reject nested evaluator material",
+            allowed_operation="READ_ONLY",
+            included_record_ids=(nested_gold.record_id,),
+        )
+    blind_packet = board.publish(
+        RecordType.EVIDENCE,
+        "review.packet",
+        "Evaluator",
+        {"artifact_role": "BLIND_FAILURE_REVIEW_PACKET"},
+    )
+    blind_task = board.create_task("BLIND_PACKET_LEAK", "DesignAgent")
+    board.transition_task(blind_task.task_id, TaskStatus.ACTIVE)
+    with pytest.raises(ValueError, match="gold cannot enter"):
+        builder.build(
+            task_id=blind_task.task_id,
+            agent_role="DesignAgent",
+            objective="reject evaluator-only blind packet",
+            allowed_operation="READ_ONLY",
+            included_record_ids=(blind_packet.record_id,),
+        )
     board.commit_model(
         _MODEL, base_revision=0, base_digest=board.current_model.model_digest,
         producer="DesignAgent"
@@ -455,7 +487,8 @@ def test_r2_controller_records_rejected_repair_without_changing_revision():
 
 def test_r2_controller_blocks_unsupported_upstream_decomposition_repair():
     broken = _MINI_AG.replace(
-        "    dependency dischargeParachuteCommand from SafetyMonitorContract to RecoverySystemContract;\n",
+        "    dependency dischargeParachuteDeploymentCommand__to__RecoverySystemContract "
+        "from SafetyResponseArbiterContract to RecoverySystemContract;\n",
         "",
     )
     orch = _r2_orchestrator_with_committed_model(broken)

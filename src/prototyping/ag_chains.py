@@ -1,12 +1,14 @@
-"""Reviewed bounded A/G chain library (Stage 2 decomposition, design §7).
+"""Student-approved bounded A/G chain library (Stage 2 decomposition, design §7).
 
-Each entry is a human-reviewed A/G decomposition for one selected requirement
-chain. Three chains are encoded, each a distinct bounded safety pattern:
+Each entry is an implementation candidate, not independent evaluator gold or a
+human-frozen architecture.  The student-approved decisions are recorded in
+``docs/gold/STUDENT_DESIGN_DECISIONS.md`` and remain subject to independent review.
+Three chains are encoded, each a distinct bounded safety pattern:
 REQ_SAFE_005 (critical propulsion failure → parachute deployment, a timed
 failsafe), REQ_SAFE_004 (power-on self-test → arming inhibit, a Boolean
 startup-inhibit invariant), and REQ_SAFE_008 (payload stays locked at power-on,
 unlocks only on an authorised release — a locked-until-authorised-release
-invariant). Adding a chain is a reviewed activity (candidate doc §2); the emitter
+invariant). Adding a chain is a controlled design activity; the emitter
 renders it into the model deterministically.
 """
 from __future__ import annotations
@@ -14,46 +16,71 @@ from __future__ import annotations
 import re
 from typing import Iterable, Tuple
 
-from .ag_emitter import AGAssumptionSpec, AGChainSpec, AGComponentSpec
+from .ag_emitter import (
+    AGAssumptionSpec,
+    AGChainSpec,
+    AGComponentSpec,
+    AGInvariantSpec,
+    AGPrioritySpec,
+)
 from ..utils.req_id import normalise_req_id
 
-# REQ_SAFE_005 — additive budget 0.05 + 0.10 + 0.35 = 0.5 s (design §7).
+
+# Small typed-AST constructors keep the decision record and emitted SysML aligned.
+def _id(name: str) -> dict[str, str]:
+    return {"node": "Identifier", "name": name}
+
+
+def _not(name: str) -> dict[str, object]:
+    return {"node": "Not", "expr": _id(name)}
+
+
+def _and(*items: dict[str, object]) -> dict[str, object]:
+    return {"node": "And", "operands": list(items)}
+
+
+# REQ_SAFE_005 — timing starts at the already-detected failure event. Detection
+# latency is outside the chain; 0.10 + 0.35 = 0.45 s and the remaining 0.05 s is
+# unallocated margin (STUDENT_DESIGN_DECISIONS §4).
 REQ_SAFE_005_CHAIN = AGChainSpec(
     source_requirement="REQ_SAFE_005",
     package="REQ_SAFE_005_AG",
     system_contract="SystemParachuteContract",
-    system_assumptions=("airborne", "criticalPropulsionFailure"),
+    system_assumptions=("airborne", "criticalPropulsionFailureDetected"),
     observation="parachuteDeployed",
     deadline=0.5,
     components=(
         AGComponentSpec(
-            name="PropulsionMonitorContract",
-            owner_def="PropulsionMonitor",
-            owner_usage="propulsionMonitor",
-            guarantee="criticalFailureEvent",
-            behavior="PropulsionMonitorBehavior",
-            trigger_signal="CriticalPropulsionFailureSignal",
-            initial_state="monitoring",
-            response_state="failureDetected",
-            response_action="setCriticalFailureEvent",
-            assumptions=(AGAssumptionSpec("failureSensingAvailable", environment=True),),
-            latency_budget=0.05,
-        ),
-        AGComponentSpec(
-            name="SafetyMonitorContract",
-            owner_def="SafetyMonitor",
-            owner_usage="safetyMonitor",
-            guarantee="parachuteCommand",
-            behavior="SafetyMonitorBehavior",
-            trigger_signal="CriticalFailureEventSignal",
-            initial_state="monitoring",
-            response_state="emergencyCommanded",
-            response_action="setParachuteCommand",
+            name="SafetyResponseArbiterContract",
+            owner_def="SafetyResponseArbiter",
+            owner_usage="safetyResponseArbiter",
+            guarantee="parachuteDeploymentCommand",
+            behavior="SafetyResponseArbiterBehavior",
+            trigger_signal="CriticalPropulsionFailureDetectedSignal",
+            initial_state="awaitingFailure",
+            response_state="parachuteSelected",
+            response_action="issueParachuteDeploymentCommand",
             assumptions=(
                 AGAssumptionSpec("airborne", environment=True),
-                AGAssumptionSpec("criticalFailureEvent"),
+                AGAssumptionSpec(
+                    "criticalPropulsionFailureDetected", environment=True
+                ),
             ),
             latency_budget=0.10,
+            timing_segment_required=True,
+        ),
+        AGComponentSpec(
+            name="RecoveryPowerSupplyContract",
+            owner_def="RecoveryPowerSupply",
+            owner_usage="recoveryPowerSupply",
+            guarantee="recoveryActuationPowerAvailable",
+            behavior="RecoveryPowerSupplyBehavior",
+            trigger_signal="AirborneRecoveryModeSignal",
+            initial_state="standby",
+            response_state="recoveryPowerAvailable",
+            response_action="setRecoveryActuationPowerAvailable",
+            assumptions=(AGAssumptionSpec("airborne", environment=True),),
+            timing_segment_required=False,
         ),
         AGComponentSpec(
             name="RecoverySystemContract",
@@ -61,63 +88,138 @@ REQ_SAFE_005_CHAIN = AGChainSpec(
             owner_usage="recoverySystem",
             guarantee="parachuteDeployed",
             behavior="RecoverySystemBehavior",
-            trigger_signal="ParachuteCommandSignal",
+            trigger_signal="ParachuteDeploymentCommandSignal",
             initial_state="stowed",
             response_state="deployed",
             response_action="setParachuteDeployed",
             assumptions=(
-                AGAssumptionSpec("parachuteCommand"),
-                AGAssumptionSpec("actuatorPower", environment=True),
+                AGAssumptionSpec("parachuteDeploymentCommand"),
+                AGAssumptionSpec("recoveryActuationPowerAvailable"),
             ),
             latency_budget=0.35,
+            timing_segment_required=True,
         ),
+    ),
+    timing_origin="criticalPropulsionFailureDetected",
+    priority=AGPrioritySpec(
+        response_set_id="FLIGHT_RESPONSES_V1",
+        members=(
+            "PARACHUTE_DEPLOYMENT",
+            "CONTROLLED_BATTERY_LANDING",
+            "COMMUNICATION_LOSS_SAFE_LANDING",
+            "LOW_BATTERY_RETURN_TO_BASE",
+        ),
+        edges=(
+            ("PARACHUTE_DEPLOYMENT", "CONTROLLED_BATTERY_LANDING"),
+            ("PARACHUTE_DEPLOYMENT", "COMMUNICATION_LOSS_SAFE_LANDING"),
+            ("PARACHUTE_DEPLOYMENT", "LOW_BATTERY_RETURN_TO_BASE"),
+        ),
+        trigger="criticalPropulsionFailureDetected",
+        selected_response="PARACHUTE_DEPLOYMENT",
+    ),
+    selected_model_elements=(
+        "airborne",
+        "criticalPropulsionFailureDetected",
+        "parachuteDeploymentCommand",
+        "recoveryActuationPowerAvailable",
+        "parachuteDeployed",
+        "selectedResponse",
     ),
 )
 
 # REQ_SAFE_004 — startup self-test → arming inhibit. A Boolean *invariant*
 # (failed self-test ↛ armed), not a timed chain: no latency budgets, and the
-# StartupInhibit pattern carries no timing obligation. Second reviewed chain,
+# StartupInhibit pattern carries no timing obligation. Second selected chain,
 # exercising a structurally different property KIND + safety pattern.
 REQ_SAFE_004_CHAIN = AGChainSpec(
     source_requirement="REQ_SAFE_004",
     package="REQ_SAFE_004_AG",
     system_contract="SystemArmingInhibitContract",
-    system_assumptions=("powerOnSelfTest", "sensorFailureReported"),
-    observation="armingPrevented",
+    system_assumptions=("powerOnSelfTestActive", "sensorFailureReported"),
+    observation="armingTransitionInhibited and airborneTransitionInhibited",
     deadline=None,
     verification="ArmingInhibitVerification",
     pattern="STARTUP_INHIBIT",
     components=(
         AGComponentSpec(
-            name="SelfTestMonitorContract",
-            owner_def="SelfTestMonitor",
-            owner_usage="selfTestMonitor",
-            guarantee="sensorFailureDetected",
-            behavior="SelfTestMonitorBehavior",
+            name="SelfTestStatusLatchContract",
+            owner_def="SelfTestStatusLatch",
+            owner_usage="selfTestStatusLatch",
+            guarantee="startupInhibitActive",
+            behavior="SelfTestStatusLatchBehavior",
             trigger_signal="SensorFailureReportedSignal",
-            initial_state="selfTestRunning",
-            response_state="failureLatched",
-            response_action="setSensorFailureDetected",
+            initial_state="poweredOff",
+            response_state="startupInhibited",
+            response_action="setStartupInhibitActive",
             assumptions=(
-                AGAssumptionSpec("powerOnSelfTest", environment=True),
-                AGAssumptionSpec("sensorFailureReported"),
+                AGAssumptionSpec("powerOnSelfTestActive", environment=True),
+                AGAssumptionSpec("sensorFailureReported", environment=True),
             ),
         ),
         AGComponentSpec(
             name="ArmingAuthorityContract",
             owner_def="ArmingAuthority",
             owner_usage="armingAuthority",
-            guarantee="armingPrevented",
+            guarantee="armingTransitionInhibited",
             behavior="ArmingAuthorityBehavior",
-            trigger_signal="SensorFailureDetectedSignal",
+            trigger_signal="StartupInhibitActiveSignal",
             initial_state="preArm",
             response_state="armingInhibited",
-            response_action="setArmingPrevented",
+            response_action="setArmingTransitionInhibited",
             assumptions=(
-                AGAssumptionSpec("powerOnSelfTest", environment=True),
-                AGAssumptionSpec("sensorFailureDetected"),
+                AGAssumptionSpec("startupInhibitActive"),
             ),
         ),
+        AGComponentSpec(
+            name="FlightModeAuthorityContract",
+            owner_def="FlightModeAuthority",
+            owner_usage="flightModeAuthority",
+            guarantee="airborneTransitionInhibited",
+            behavior="FlightModeAuthorityBehavior",
+            trigger_signal="StartupInhibitActiveSignal",
+            initial_state="grounded",
+            response_state="airborneInhibited",
+            response_action="setAirborneTransitionInhibited",
+            assumptions=(
+                AGAssumptionSpec("startupInhibitActive"),
+            ),
+        ),
+    ),
+    invariants=(
+        AGInvariantSpec(
+            invariant_id="SAFE004_STARTUP_INHIBIT",
+            scope="SystemArmingInhibitContract",
+            trigger_or_antecedent_ast=_and(
+                _id("powerOnSelfTestActive"), _id("sensorFailureReported")
+            ),
+            required_consequent_ast=_and(_not("armed"), _not("airborne")),
+            source_kind="STAKEHOLDER",
+            source_id="REQ_SAFE_004",
+        ),
+        AGInvariantSpec(
+            invariant_id="SAFE004_LATCH_EFFECT",
+            scope="SystemArmingInhibitContract",
+            trigger_or_antecedent_ast=_id("startupInhibitActive"),
+            required_consequent_ast=_and(
+                _id("armingTransitionInhibited"),
+                _id("airborneTransitionInhibited"),
+            ),
+            source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            source_id="SAFE004_LATCH_RESET_V1",
+        ),
+    ),
+    selected_model_elements=(
+        "powerOnSelfTestActive",
+        "sensorFailureReported",
+        "armed",
+        "airborne",
+        "startupInhibitActive",
+        "armingTransitionInhibited",
+        "airborneTransitionInhibited",
+    ),
+    system_observation_concepts=(
+        "armingTransitionInhibited",
+        "airborneTransitionInhibited",
     ),
 )
 
@@ -131,42 +233,76 @@ REQ_SAFE_008_CHAIN = AGChainSpec(
     source_requirement="REQ_SAFE_008",
     package="REQ_SAFE_008_AG",
     system_contract="SystemPayloadLockContract",
-    system_assumptions=("powerOnDefault", "authorisedReleaseCommand"),
-    observation="payloadReleased",
+    system_assumptions=(),
+    observation="payloadLocked",
     deadline=None,
     verification="PayloadLockVerification",
     pattern="LOCKED_UNTIL_AUTHORISED_RELEASE",
     components=(
         AGComponentSpec(
-            name="ReleaseAuthorityContract",
-            owner_def="ReleaseAuthority",
-            owner_usage="releaseAuthority",
-            guarantee="releaseAuthorised",
-            behavior="ReleaseAuthorityBehavior",
-            trigger_signal="AuthorisedReleaseCommandSignal",
+            name="ReleaseCommandGatewayContract",
+            owner_def="ReleaseCommandGateway",
+            owner_usage="releaseCommandGateway",
+            guarantee="authorisedReleaseCommandReceived",
+            behavior="ReleaseCommandGatewayBehavior",
+            trigger_signal="ReceivedReleaseCommandSignal",
             initial_state="awaitingAuthorisation",
             response_state="authorisationGranted",
-            response_action="setReleaseAuthorised",
+            response_action="setAuthorisedReleaseCommandReceived",
             assumptions=(
-                AGAssumptionSpec("powerOnDefault", environment=True),
-                AGAssumptionSpec("authorisedReleaseCommand"),
+                AGAssumptionSpec("receivedReleaseCommand", environment=True),
+                AGAssumptionSpec("authorisationDataValid", environment=True),
             ),
         ),
         AGComponentSpec(
-            name="PayloadLockActuatorContract",
-            owner_def="PayloadLockActuator",
-            owner_usage="payloadLockActuator",
-            guarantee="payloadReleased",
-            behavior="PayloadLockBehavior",
-            trigger_signal="ReleaseAuthorisedSignal",
-            initial_state="locked",  # the power-on safe default
-            response_state="released",
-            response_action="setPayloadReleased",
+            name="PayloadLockMechanismContract",
+            owner_def="PayloadLockMechanism",
+            owner_usage="payloadLockMechanism",
+            guarantee="payloadLocked",
+            behavior="PayloadLockLifecycle",
+            trigger_signal="PowerOnSignal",
+            initial_state="lockedUnpowered",
+            response_state="lockedPowered",
+            response_action="setPayloadLocked",
             assumptions=(
-                AGAssumptionSpec("releaseAuthorised"),
-                AGAssumptionSpec("actuatorPower", environment=True),
+                AGAssumptionSpec("powerOnEvent", environment=True),
+                AGAssumptionSpec("powerLostEvent", environment=True),
+                AGAssumptionSpec("authorisedReleaseCommandReceived"),
             ),
         ),
+    ),
+    invariants=(
+        AGInvariantSpec(
+            invariant_id="SAFE008_POWER_ON_LOCKED",
+            scope="SystemPayloadLockContract",
+            trigger_or_antecedent_ast=_id("powerOnInitialisation"),
+            required_consequent_ast=_id("payloadLocked"),
+            source_kind="STAKEHOLDER",
+            source_id="REQ_SAFE_008",
+        ),
+        AGInvariantSpec(
+            invariant_id="SAFE008_UNLOCK_AUTHORISED",
+            scope="SystemPayloadLockContract",
+            trigger_or_antecedent_ast=_id("payloadUnlocked"),
+            required_consequent_ast=_id("authorisedReleaseCommandReceived"),
+            source_kind="STAKEHOLDER",
+            source_id="REQ_SAFE_008",
+        ),
+        AGInvariantSpec(
+            invariant_id="SAFE008_DEENERGISE_TO_LOCK",
+            scope="SystemPayloadLockContract",
+            trigger_or_antecedent_ast=_not("actuatorPowerAvailable"),
+            required_consequent_ast=_id("payloadLocked"),
+            source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            source_id="SAFE008_DEENERGISE_TO_LOCK_V1",
+        ),
+    ),
+    selected_model_elements=(
+        "powerOnInitialisation",
+        "payloadLocked",
+        "payloadUnlocked",
+        "authorisedReleaseCommandReceived",
+        "actuatorPowerAvailable",
     ),
 )
 
@@ -189,7 +325,7 @@ def _requirement_ids(requirements: Iterable[str]) -> set:
 
 
 def select_ag_chains(requirements: Iterable[str]) -> Tuple[AGChainSpec, ...]:
-    """Return reviewed chains whose source requirement is present in the run."""
+    """Return student-selected chains whose source requirement is present."""
     present = _requirement_ids(requirements)
     return tuple(
         chain for chain in _CHAIN_LIBRARY

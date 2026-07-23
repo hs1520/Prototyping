@@ -1,6 +1,6 @@
 """Deterministic emitter for the bounded A/G contract layer (Stage 2-3, §12).
 
-A reviewed A/G *decomposition* (the Stage-2 human-reviewed chain structure) is
+A student-approved A/G *decomposition candidate* is
 rendered into valid SysML v2 and merged into the model, so the committed model —
 the sole semantic authority (§6.2) — actually carries the contracts and R2-BBAG
 traces are non-empty. Emission is deterministic and syntax-gate-valid; it uses
@@ -8,13 +8,14 @@ only the validated convention (`requirement def` + `assume`/`require constraint`
 + `dependency decomposition`) and invents no keywords. The emitted layer is the
 inverse of ``ag_extractor`` and round-trips to a checker PASS for a sound chain.
 
-This renders the *contract* layer only. Behaviour that realises each guarantee
-(state machines, actions) remains ordinary LLM generation.
+For the three bounded MVP chains it also renders the selected minimal behaviour
+topology used by the conformance checker. It does not claim formal proof or
+physical verification.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Tuple
+from typing import Any, Iterable, Mapping, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,26 @@ class AGComponentSpec:
     response_action: str
     assumptions: Tuple[AGAssumptionSpec, ...] = ()
     latency_budget: Optional[float] = None
+    timing_segment_required: Optional[bool] = None
+
+
+@dataclass(frozen=True)
+class AGPrioritySpec:
+    response_set_id: str
+    members: Tuple[str, ...]
+    edges: Tuple[Tuple[str, str], ...]
+    trigger: str
+    selected_response: str
+
+
+@dataclass(frozen=True)
+class AGInvariantSpec:
+    invariant_id: str
+    scope: str
+    trigger_or_antecedent_ast: Mapping[str, Any]
+    required_consequent_ast: Mapping[str, Any]
+    source_kind: str
+    source_id: str
 
 
 @dataclass(frozen=True)
@@ -48,34 +69,75 @@ class AGChainSpec:
     deadline: Optional[float]       # system deadline (maxLatency), seconds
     components: Tuple[AGComponentSpec, ...]
     verification: str = "ParachuteDeploymentVerification"
-    # Reviewed safety-pattern kind for this chain (documentation/provenance). The
+    # Student-selected safety-pattern kind for this chain (provenance). The
     # conformance checker independently infers the pattern from the emitted
     # topology (a timing budget ⇒ timed failsafe; none ⇒ startup-inhibit invariant).
     pattern: str = "TRIGGERED_TIMED_FAILSAFE_RESPONSE"
+    timing_origin: Optional[str] = None
+    priority: Optional[AGPrioritySpec] = None
+    invariants: Tuple[AGInvariantSpec, ...] = ()
+    selected_model_elements: Tuple[str, ...] = ()
+    system_observation_concepts: Tuple[str, ...] = ()
 
 
 def _fmt(value: float) -> str:
     return repr(float(value))
 
 
+def _sysml_identifier(value: str) -> str:
+    token = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value)
+    if not token or token[0].isdigit():
+        token = f"id_{token}"
+    return token
+
+
 def _dedup(concepts: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(c for c in concepts if c))
 
 
+def _render_ast(node: Mapping[str, Any]) -> str:
+    kind = node.get("node")
+    if kind == "Identifier":
+        return str(node["name"])
+    if kind == "Not":
+        return f"not ({_render_ast(node['expr'])})"
+    if kind in {"And", "Or"}:
+        operator = " and " if kind == "And" else " or "
+        return "(" + operator.join(
+            _render_ast(item) for item in node.get("operands", ())
+        ) + ")"
+    if kind == "Implies":
+        return (
+            f"(not ({_render_ast(node['antecedent'])}) or "
+            f"({_render_ast(node['consequent'])}))"
+        )
+    raise ValueError(f"unsupported invariant AST node {kind!r}")
+
+
 def emit_ag_package(spec: AGChainSpec) -> str:
-    """Render one reviewed A/G chain as a valid SysML v2 package."""
+    """Render one student-approved A/G chain candidate as valid SysML v2."""
     out: list[str] = [f"package {spec.package} {{"]
 
     # System contract. The doc annotation carries the immutable source-requirement
-    # provenance and the reviewed safety_pattern, so the committed model (the sole
+    # provenance and selected safety_pattern, so the committed model (the sole
     # authority) declares which bounded pattern the conformance checker must apply
     # — three untimed patterns cannot be told apart by topology alone.
     out.append(f"    requirement def {spec.system_contract} {{")
     out.append(
         f"        doc /* bounded A/G system contract for {spec.source_requirement}"
-        f"; safety_pattern={spec.pattern} */"
+        f"; safety_pattern={spec.pattern}"
+        + (f"; timing_origin={spec.timing_origin}" if spec.timing_origin else "")
+        + " */"
     )
-    for concept in _dedup([*spec.system_assumptions, spec.observation]):
+    observation_concepts = (
+        spec.system_observation_concepts
+        or (spec.observation,)
+    )
+    for concept in _dedup([
+        *spec.system_assumptions,
+        *observation_concepts,
+        *spec.selected_model_elements,
+    ]):
         out.append(f"        attribute {concept} : Boolean;")
     if spec.deadline is not None:
         out.append(
@@ -84,6 +146,20 @@ def emit_ag_package(spec: AGChainSpec) -> str:
     for concept in spec.system_assumptions:
         out.append(f"        assume constraint a_{concept} {{ {concept} }}")
     out.append(f"        require constraint g_observed {{ {spec.observation} }}")
+    for invariant in spec.invariants:
+        name = (
+            f"inv__{_sysml_identifier(invariant.invariant_id)}"
+            f"__source__{_sysml_identifier(invariant.source_id)}"
+            f"__kind__{_sysml_identifier(invariant.source_kind)}"
+        )
+        implication = {
+            "node": "Implies",
+            "antecedent": invariant.trigger_or_antecedent_ast,
+            "consequent": invariant.required_consequent_ast,
+        }
+        out.append(
+            f"        require constraint {name} {{ {_render_ast(implication)} }}"
+        )
     out.append("    }")
 
     # Component contracts.
@@ -97,6 +173,12 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 f"        attribute latencyBudget : Real = "
                 f"{_fmt(comp.latency_budget)} [SI::s];"
             )
+        if comp.timing_segment_required is not None:
+            literal = "true" if comp.timing_segment_required else "false"
+            out.append(
+                "        attribute timingSegmentRequired : Boolean = "
+                f"{literal};"
+            )
         for assumption in comp.assumptions:
             prefix = "env_" if assumption.environment else "a_"
             out.append(
@@ -107,6 +189,78 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             f"        require constraint g_{comp.guarantee} {{ {comp.guarantee} }}"
         )
         out.append("    }")
+
+    # Explicit priority semantics for the bounded SAFE_005 profile.  The enum,
+    # requirement constraints, and guarded state transitions are all authoritative
+    # SysML; the evaluator JSON is extracted from these constructs.
+    if spec.priority is not None:
+        priority = spec.priority
+        enum_name = _sysml_identifier(priority.response_set_id)
+        out.append(f"    enum def {enum_name} {{")
+        for member in priority.members:
+            out.append(f"        enum {_sysml_identifier(member)};")
+        out.append("    }")
+        out.append("    requirement def SafetyResponsePriorityContract {")
+        out.append(
+            "        doc /* bounded A/G evaluator semantic auxiliary; "
+            f"response_set_id={priority.response_set_id} */"
+        )
+        out.append(f"        attribute {priority.trigger} : Boolean;")
+        out.append(f"        attribute selectedResponse : {enum_name};")
+        out.append(
+            "        assume constraint priorityTrigger "
+            f"{{ {priority.trigger} }}"
+        )
+        out.append(
+            "        require constraint selectHighestPriority "
+            f"{{ selectedResponse == {enum_name}::"
+            f"{_sysml_identifier(priority.selected_response)} }}"
+        )
+        for higher, lower in priority.edges:
+            out.append(
+                f"        require constraint precedence_{_sysml_identifier(higher)}"
+                f"_over_{_sysml_identifier(lower)} "
+                f"{{ not {priority.trigger} or selectedResponse != "
+                f"{enum_name}::{_sysml_identifier(lower)} }}"
+            )
+        out.append("    }")
+
+        declared_component_signals = {comp.trigger_signal for comp in spec.components}
+        if "CriticalPropulsionFailureDetectedSignal" not in declared_component_signals:
+            out.append("    attribute def CriticalPropulsionFailureDetectedSignal;")
+        for lower in (edge[1] for edge in priority.edges):
+            out.append(
+                f"    attribute def {_sysml_identifier(lower.title())}RequestSignal;"
+            )
+        out.append("    state def SafetyResponseArbitration {")
+        out.append(f"        attribute {priority.trigger} : Boolean;")
+        out.append("        entry; then awaitingResponse;")
+        out.append("        state awaitingResponse;")
+        out.append(
+            "        transition selectParachute first awaitingResponse "
+            "accept CriticalPropulsionFailureDetectedSignal "
+            f"if {priority.trigger} "
+            "then parachuteDeploymentSelected;"
+        )
+        for _higher, lower in priority.edges:
+            lower_token = _sysml_identifier(lower)
+            out.append(
+                f"        transition select{_sysml_identifier(lower.title())} "
+                "first awaitingResponse "
+                f"accept {_sysml_identifier(lower.title())}RequestSignal "
+                f"if not {priority.trigger} then {lower_token};"
+            )
+        out.append(
+            "        state parachuteDeploymentSelected "
+            "{ entry action issueParachuteDeploymentCommand; }"
+        )
+        for _higher, lower in priority.edges:
+            out.append(f"        state {_sysml_identifier(lower)};")
+        out.append("    }")
+        out.append(
+            "    dependency realizeSafetyResponsePriority "
+            "from SafetyResponsePriorityContract to SafetyResponseArbitration;"
+        )
 
     # Explicit component owners and legal satisfaction relationships. Ownership
     # is never inferred from the name of a contract definition.
@@ -119,8 +273,91 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         )
 
     # Reachable trigger -> response-state -> entry-action realizations.
+    emitted_signal_defs: set[str] = set()
     for comp in spec.components:
-        out.append(f"    attribute def {comp.trigger_signal};")
+        if comp.name == "ReleaseCommandGatewayContract":
+            for signal in (
+                "ReceivedReleaseCommandSignal",
+                "PowerOnSignal",
+                "PowerLostSignal",
+            ):
+                if signal not in emitted_signal_defs:
+                    out.append(f"    attribute def {signal};")
+                    emitted_signal_defs.add(signal)
+            out.extend([
+                f"    state def {comp.behavior} {{",
+                "        attribute authorisationDataValid : Boolean;",
+                "        entry; then awaitingAuthorisation;",
+                "        state awaitingAuthorisation;",
+                "        transition acceptAuthorisedCommand "
+                "first awaitingAuthorisation "
+                "accept ReceivedReleaseCommandSignal "
+                "if authorisationDataValid then authorisationGranted;",
+                "        state authorisationGranted "
+                "{ entry action setAuthorisedReleaseCommandReceived; }",
+                "        transition clearOnPowerLoss first authorisationGranted "
+                "accept PowerLostSignal then awaitingAuthorisation;",
+                "        transition clearOnNewPowerCycle first authorisationGranted "
+                "accept PowerOnSignal then awaitingAuthorisation;",
+                "    }",
+            ])
+            continue
+        if comp.name == "SelfTestStatusLatchContract":
+            for signal in (
+                "PowerOnSignal",
+                "SensorFailureReportedSignal",
+                "PowerCycleSignal",
+            ):
+                if signal not in emitted_signal_defs:
+                    out.append(f"    attribute def {signal};")
+                    emitted_signal_defs.add(signal)
+            out.extend([
+                f"    state def {comp.behavior} {{",
+                "        entry; then poweredOff;",
+                "        state poweredOff;",
+                "        transition beginSelfTest first poweredOff "
+                "accept PowerOnSignal then selfTesting;",
+                "        state selfTesting;",
+                "        transition latchFailure first selfTesting "
+                "accept SensorFailureReportedSignal then startupInhibited;",
+                "        state startupInhibited "
+                "{ entry action setStartupInhibitActive; }",
+                "        transition resetAfterPowerCycle first startupInhibited "
+                "accept PowerCycleSignal then poweredOff;",
+                "    }",
+            ])
+            continue
+        if comp.name == "PayloadLockMechanismContract":
+            for signal in (
+                "PowerOnSignal",
+                "PowerLostSignal",
+                "AuthorisedReleaseCommandReceivedSignal",
+            ):
+                if signal not in emitted_signal_defs:
+                    out.append(f"    attribute def {signal};")
+                    emitted_signal_defs.add(signal)
+            out.extend([
+                f"    state def {comp.behavior} {{",
+                "        entry; then lockedUnpowered;",
+                "        state lockedUnpowered "
+                "{ entry action setPayloadLocked; }",
+                "        transition powerApplied first lockedUnpowered "
+                "accept PowerOnSignal then lockedPowered;",
+                "        state lockedPowered "
+                "{ entry action maintainPayloadLocked; }",
+                "        transition authorisedUnlock first lockedPowered "
+                "accept AuthorisedReleaseCommandReceivedSignal "
+                "then unlockedPowered;",
+                "        state unlockedPowered "
+                "{ entry action setPayloadUnlocked; }",
+                "        transition powerLostLocks first unlockedPowered "
+                "accept PowerLostSignal then lockedUnpowered;",
+                "    }",
+            ])
+            continue
+        if comp.trigger_signal not in emitted_signal_defs:
+            out.append(f"    attribute def {comp.trigger_signal};")
+            emitted_signal_defs.add(comp.trigger_signal)
         out.append(f"    state def {comp.behavior} {{")
         out.append(f"        entry; then {comp.initial_state};")
         out.append(f"        state {comp.initial_state};")
@@ -156,7 +393,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             if producer is not None:
                 subject = assumption.concept[0].upper() + assumption.concept[1:]
                 out.append(
-                    f"    dependency discharge{subject} "
+                    f"    dependency discharge{subject}__to__{comp.name} "
                     f"from {producer} to {comp.name};"
                 )
 

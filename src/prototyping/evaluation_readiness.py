@@ -19,7 +19,11 @@ from .architecture_boundary import (
     architecture_boundary_digest,
     validate_frozen_boundary,
 )
-from .experiment_arms import REVISED_EXPERIMENT_NAMESPACE
+from .experiment_arms import (
+    REVISED_EXPERIMENT_NAMESPACE,
+    R2_DETERMINISTIC_GENERATION_MODE,
+    R2_DETERMINISTIC_INTERVENTION_VERSION,
+)
 from .requirement_inputs import (
     normalise_requirement_id,
     resolve_frozen_requirement_set,
@@ -28,19 +32,36 @@ from .requirement_inputs import (
 
 READINESS_SCHEMA_VERSION = "1.0"
 READINESS_ROLE = "POSTHOC_EVALUATION_READINESS_MANIFEST"
-FAILURE_TAXONOMY_ROLE = "FROZEN_FAILURE_TAXONOMY"
+FAILURE_TAXONOMY_ROLE = "FAILURE_TAXONOMY"
 BLIND_PACKET_ROLE = "BLIND_FAILURE_REVIEW_PACKET"
 BLIND_LABEL_ROLE = "BLIND_FAILURE_LABEL"
 R2_CONFIGURATION = "R2-BBAG"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_FORBIDDEN_BLIND_KEYS = {
+_FORBIDDEN_BLIND_KEY_TOKENS = {
+    "agcontractgraph",
+    "analysistrace",
     "verdict",
-    "runtime_verdict",
+    "runtimeverdict",
+    "runtimeagverdict",
+    "runtimepatternverdict",
+    "diagnostic",
     "diagnostics",
-    "failure_diagnostics",
-    "repair_decision",
-    "repair_decisions",
-    "checker_result",
+    "failurediagnostic",
+    "failurediagnostics",
+    "failurerouting",
+    "patternconformance",
+    "patternconformancereport",
+    "repairdecision",
+    "repairdecisions",
+    "checkerresult",
+    "failureclass",
+    "classification",
+}
+_FORBIDDEN_BLIND_ARTIFACT_ROLE_TOKENS = {
+    "runtimeagprediction",
+    "interventionpatternconformance",
+    "interventionfailurerouting",
+    "interventionrepairdecisions",
 }
 
 
@@ -65,14 +86,34 @@ def _valid_iso_date(value: Any) -> bool:
     return True
 
 
+def _has_review_markers(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        if any(
+            str(key).startswith("_") and "review" in str(key)
+            for key in value
+        ):
+            return True
+        return any(_has_review_markers(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_review_markers(item) for item in value)
+    return False
+
+
 def _forbidden_keys(value: Any, *, path: str = "packet") -> list[str]:
     found: list[str] = []
     if isinstance(value, Mapping):
         for key, item in value.items():
-            token = str(key).strip().lower()
+            # Key spelling is not a security boundary.  Fold snake_case,
+            # kebab-case, camelCase and punctuation variants to one token before
+            # checking so ``runtimeVerdict`` cannot evade ``runtime_verdict``.
+            token = re.sub(r"[^a-z0-9]", "", str(key).strip().lower())
             child = f"{path}.{key}"
-            if token in _FORBIDDEN_BLIND_KEYS:
+            if token in _FORBIDDEN_BLIND_KEY_TOKENS:
                 found.append(child)
+            if token == "artifactrole":
+                role = re.sub(r"[^a-z0-9]", "", str(item).strip().lower())
+                if role in _FORBIDDEN_BLIND_ARTIFACT_ROLE_TOKENS:
+                    found.append(child)
             found.extend(_forbidden_keys(item, path=child))
     elif isinstance(value, list):
         for index, item in enumerate(value):
@@ -95,12 +136,66 @@ def validate_frozen_failure_taxonomy(taxonomy: Mapping[str, Any]) -> list[str]:
     classes = taxonomy.get("classes")
     if not isinstance(classes, list) or not classes:
         problems.append("taxonomy classes must be a non-empty list")
+        classes = []
     elif len(classes) != len(set(map(str, classes))):
         problems.append("taxonomy classes must be unique")
+    class_codes = [str(item) for item in classes]
+    definitions = taxonomy.get("class_definitions")
+    if not isinstance(definitions, Mapping):
+        problems.append("taxonomy class_definitions must be an object")
+        definitions = {}
+    if set(map(str, definitions)) != set(class_codes):
+        problems.append(
+            "taxonomy class_definitions must exactly cover taxonomy classes"
+        )
+    for code in class_codes:
+        definition = definitions.get(code)
+        if not isinstance(definition, Mapping):
+            problems.append(f"taxonomy definition for {code!r} must be an object")
+            continue
+        if not str(definition.get("definition") or "").strip():
+            problems.append(f"taxonomy definition for {code!r} must be stated")
+        include_when = definition.get("include_when")
+        exclude_when = definition.get("exclude_when")
+        if not isinstance(include_when, list) or not include_when:
+            problems.append(
+                f"taxonomy definition for {code!r} must have non-empty include_when"
+            )
+        if not isinstance(exclude_when, list):
+            problems.append(
+                f"taxonomy definition for {code!r} must have an exclude_when list"
+            )
+    adjudication = taxonomy.get("adjudication")
+    if not isinstance(adjudication, Mapping):
+        problems.append("taxonomy adjudication must be an object")
+        adjudication = {}
+    if adjudication.get("unit_of_analysis") != "ONE_ARCHIVED_RUN_CHAIN_PAIR":
+        problems.append(
+            "taxonomy adjudication.unit_of_analysis must be "
+            "'ONE_ARCHIVED_RUN_CHAIN_PAIR'"
+        )
+    if adjudication.get("primary_label_count") != 1:
+        problems.append("taxonomy adjudication.primary_label_count must be 1")
+    if not str(adjudication.get("multi_fault_rule") or "").strip():
+        problems.append("taxonomy adjudication.multi_fault_rule must be stated")
+    if adjudication.get("inconclusive_class") not in class_codes:
+        problems.append(
+            "taxonomy adjudication.inconclusive_class must name a taxonomy class"
+        )
     if not taxonomy.get("reviewer"):
         problems.append("taxonomy reviewer must be set")
     if not _valid_iso_date(taxonomy.get("reviewed_date")):
         problems.append("taxonomy reviewed_date must be ISO YYYY-MM-DD")
+    protocol = taxonomy.get("review_protocol")
+    if not isinstance(protocol, Mapping):
+        problems.append("taxonomy review_protocol must be an object")
+        protocol = {}
+    if protocol.get("independent_human_review") is not True:
+        problems.append("taxonomy independent_human_review must be true")
+    if _has_review_markers(taxonomy):
+        problems.append(
+            "taxonomy contains leftover _review markers; confirm and remove them"
+        )
     digest = taxonomy.get("artifact_digest")
     if not _is_digest(digest) or digest != artifact_digest(taxonomy):
         problems.append("taxonomy artifact_digest is missing, malformed, or stale")
@@ -126,6 +221,27 @@ def validate_blind_packet(packet: Mapping[str, Any]) -> list[str]:
     review_material = packet.get("review_material")
     if not isinstance(review_material, Mapping) or not review_material:
         problems.append("blind packet review_material must be a non-empty object")
+    else:
+        source_text = review_material.get("source_requirement")
+        candidate_model = review_material.get("candidate_model")
+        if not isinstance(source_text, str) or not source_text:
+            problems.append(
+                "blind packet review_material.source_requirement must be set"
+            )
+        elif hashlib.sha256(source_text.encode("utf-8")).hexdigest() != packet.get(
+            "requirement_digest"
+        ):
+            problems.append(
+                "blind packet source requirement does not match requirement_digest"
+            )
+        if not isinstance(candidate_model, str) or not candidate_model:
+            problems.append("blind packet review_material.candidate_model must be set")
+        elif hashlib.sha256(candidate_model.encode("utf-8")).hexdigest() != packet.get(
+            "model_digest"
+        ):
+            problems.append(
+                "blind packet candidate model does not match model_digest"
+            )
     forbidden = _forbidden_keys(packet)
     if forbidden:
         problems.append(
@@ -136,6 +252,70 @@ def validate_blind_packet(packet: Mapping[str, Any]) -> list[str]:
     if not _is_digest(digest) or digest != artifact_digest(packet):
         problems.append("blind packet artifact_digest is missing, malformed, or stale")
     return problems
+
+
+def build_blind_review_packet(
+    *,
+    run_id: str,
+    chain_id: str,
+    source_requirement: str,
+    candidate_model: str,
+    expected_requirement_digest: str | None = None,
+    expected_model_digest: str | None = None,
+) -> dict[str, Any]:
+    """Package the exact human-visible source/model bytes without runtime leakage.
+
+    The optional expected digests are the bindings from the frozen requirement
+    set and archived prediction.  Supplying them makes packet production
+    fail-closed before a reviewer sees material from the wrong run or chain.
+    """
+    run = str(run_id).strip()
+    chain = normalise_requirement_id(str(chain_id))
+    source = str(source_requirement)
+    model = str(candidate_model)
+    if not run:
+        raise ValueError("run_id must be non-empty")
+    if not chain:
+        raise ValueError("chain_id must be non-empty")
+    if normalise_requirement_id(source) != chain:
+        raise ValueError("source_requirement id does not match chain_id")
+    if not source:
+        raise ValueError("source_requirement must be non-empty")
+    if not model:
+        raise ValueError("candidate_model must be non-empty")
+
+    requirement_digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    model_digest = hashlib.sha256(model.encode("utf-8")).hexdigest()
+    if (
+        expected_requirement_digest is not None
+        and requirement_digest != expected_requirement_digest
+    ):
+        raise ValueError(
+            "source_requirement bytes do not match expected_requirement_digest"
+        )
+    if expected_model_digest is not None and model_digest != expected_model_digest:
+        raise ValueError("candidate_model bytes do not match expected_model_digest")
+
+    packet: dict[str, Any] = {
+        "schema_version": READINESS_SCHEMA_VERSION,
+        "artifact_role": BLIND_PACKET_ROLE,
+        "experiment_namespace": REVISED_EXPERIMENT_NAMESPACE,
+        "configuration": R2_CONFIGURATION,
+        "run_id": run,
+        "chain_id": chain,
+        "model_digest": model_digest,
+        "requirement_digest": requirement_digest,
+        "review_material": {
+            "source_requirement": source,
+            "candidate_model": model,
+        },
+        "artifact_digest": None,
+    }
+    packet["artifact_digest"] = artifact_digest(packet)
+    problems = validate_blind_packet(packet)
+    if problems:  # Defensive: builder output must satisfy its own public validator.
+        raise ValueError("invalid blind review packet: " + "; ".join(problems))
+    return packet
 
 
 def validate_blind_label(
@@ -170,7 +350,10 @@ def validate_blind_label(
         problems.append("blind label reviewer must be set")
     if not _valid_iso_date(label.get("reviewed_date")):
         problems.append("blind label reviewed_date must be ISO YYYY-MM-DD")
-    protocol = label.get("review_protocol") or {}
+    protocol = label.get("review_protocol")
+    if not isinstance(protocol, Mapping):
+        problems.append("blind label review_protocol must be an object")
+        protocol = {}
     if protocol.get("independent_human_review") is not True:
         problems.append("blind label independent_human_review must be true")
     if protocol.get("blind_to_runtime_verdict") is not True:
@@ -183,12 +366,25 @@ def validate_blind_label(
 
 def _configuration_problems(config: Mapping[str, Any]) -> list[str]:
     problems: list[str] = []
+    if config.get("schema_version") != "1.0":
+        problems.append("experiment config schema_version must be '1.0'")
     if config.get("artifact_role") != "FROZEN_REVISED_PILOT_CONFIGURATION":
         problems.append("experiment config must be FROZEN_REVISED_PILOT_CONFIGURATION")
     if config.get("experiment_namespace") != REVISED_EXPERIMENT_NAMESPACE:
         problems.append("experiment config must use BLACKBOARD_AG_V1")
-    if R2_CONFIGURATION not in (config.get("arms") or []):
-        problems.append("experiment config does not contain R2-BBAG")
+    if config.get("arms") != ["R0-CURRENT", "R1-BBCTX", "R2-BBAG"]:
+        problems.append("experiment config arms must be exact R0/R1/R2 ordering")
+    if config.get("r2_generation_mode") != R2_DETERMINISTIC_GENERATION_MODE:
+        problems.append(
+            "experiment config must bind the deterministic R2 generation mode"
+        )
+    if (
+        config.get("r2_intervention_version")
+        != R2_DETERMINISTIC_INTERVENTION_VERSION
+    ):
+        problems.append(
+            "experiment config must bind the deterministic R2 intervention version"
+        )
     digest = config.get("configuration_digest")
     if not _is_digest(digest):
         problems.append("configuration_digest must be a lowercase SHA-256 digest")
@@ -206,9 +402,35 @@ def _configuration_problems(config: Mapping[str, Any]) -> list[str]:
     ]
     if not chains or len(chains) != len(set(chains)):
         problems.append("selected_ag_chain_ids must be non-empty and unique")
+    seeds = config.get("seeds")
+    if (
+        not isinstance(seeds, list)
+        or len(seeds) != 3
+        or len({str(value) for value in seeds}) != 3
+    ):
+        problems.append("experiment config must bind exactly three distinct seeds")
     runs = [str(value) for value in (config.get("selected_r2_run_ids") or [])]
     if not runs or len(runs) != len(set(runs)):
         problems.append("selected_r2_run_ids must be non-empty and unique")
+    expected_runs = (
+        [f"seed-{seed}:R2-BBAG" for seed in seeds]
+        if isinstance(seeds, list) else []
+    )
+    if runs != expected_runs:
+        problems.append(
+            "selected_r2_run_ids must exactly match the three frozen seeds"
+        )
+    for field in (
+        "gold_input_permitted",
+        "langsmith_permitted",
+        "gazebo_permitted",
+        "sitl_permitted",
+    ):
+        if config.get(field) is not False:
+            problems.append(f"experiment config {field} must be false")
+    for field in ("provider", "model", "code_revision", "ag_checker_version"):
+        if not str(config.get(field) or "").strip():
+            problems.append(f"experiment config {field} must be set")
     return problems
 
 
@@ -236,6 +458,12 @@ def build_evaluation_readiness_manifest(
         str(value)
         for value in (frozen_experiment_config.get("selected_r2_run_ids") or [])
     ]
+    if set(architecture_boundaries) != set(selected_chains):
+        problems.append(
+            "architecture boundaries must exactly cover the frozen chain selection"
+        )
+    if set(gold_by_chain) != set(selected_chains):
+        problems.append("gold artifacts must exactly cover the frozen chain selection")
 
     problems.extend(validate_frozen_failure_taxonomy(failure_taxonomy))
     taxonomy_digest = failure_taxonomy.get("artifact_digest")
@@ -316,6 +544,7 @@ def build_evaluation_readiness_manifest(
         problems.append("blind labels contain duplicate run_id/chain_id bindings")
 
     blind_evidence: list[dict[str, Any]] = []
+    model_digests_by_run: dict[str, set[str]] = {}
     expected_bindings = {
         (run_id, chain_id) for run_id in selected_runs for chain_id in selected_chains
     }
@@ -346,6 +575,16 @@ def build_evaluation_readiness_manifest(
             problems.append(f"{run_id}: archived run configuration digest mismatch")
         if run_manifest.get("requirement_set_digest") != requirement_set_digest:
             problems.append(f"{run_id}: archived run requirement-set digest mismatch")
+        if (
+            run_manifest.get("r2_generation_mode")
+            != frozen_experiment_config.get("r2_generation_mode")
+        ):
+            problems.append(f"{run_id}: archived run generation mode mismatch")
+        if (
+            run_manifest.get("r2_intervention_version")
+            != frozen_experiment_config.get("r2_intervention_version")
+        ):
+            problems.append(f"{run_id}: archived run intervention version mismatch")
         prediction = (archived.get("predictions") or {}).get(chain_id)
         if not isinstance(prediction, Mapping):
             problems.append(f"{run_id}/{chain_id}: archived prediction is missing")
@@ -363,6 +602,19 @@ def build_evaluation_readiness_manifest(
         prediction_model_digest = prediction.get("source_model_digest")
         if not _is_digest(prediction_model_digest):
             problems.append(f"{run_id}/{chain_id}: prediction model digest is invalid")
+        else:
+            model_digests_by_run.setdefault(run_id, set()).add(
+                str(prediction_model_digest)
+            )
+        expected_checker_version = frozen_experiment_config.get(
+            "ag_checker_version"
+        )
+        if run_manifest.get("ag_checker_version") != expected_checker_version:
+            problems.append(f"{run_id}: archived run checker version mismatch")
+        if prediction.get("checker_version") != expected_checker_version:
+            problems.append(f"{run_id}/{chain_id}: prediction checker version mismatch")
+        if not isinstance(prediction.get("graph"), Mapping):
+            problems.append(f"{run_id}/{chain_id}: prediction graph must be an object")
         packet = packet_index.get(binding)
         label = label_index.get(binding)
         if packet is None:
@@ -392,6 +644,11 @@ def build_evaluation_readiness_manifest(
             "run_manifest_digest": artifact_digest(run_manifest),
             "prediction_digest": artifact_digest(prediction),
         })
+    for run_id, model_digests in model_digests_by_run.items():
+        if len(model_digests) != 1:
+            problems.append(
+                f"{run_id}: per-chain predictions do not share one archived model digest"
+            )
 
     unique_problems = list(dict.fromkeys(problems))
     ready = not unique_problems
@@ -418,8 +675,21 @@ def build_evaluation_readiness_manifest(
     return payload
 
 
-def require_evaluation_ready(manifest: Mapping[str, Any]) -> None:
-    """Reject any attempt to pool without a self-consistent ready manifest."""
+def require_evaluation_ready(
+    manifest: Mapping[str, Any],
+    *,
+    evidence_bundle: Mapping[str, Any] | None = None,
+) -> None:
+    """Reject any attempt to pool without a complete, self-consistent manifest.
+
+    This is the durable-consumer validation boundary.  It deliberately validates
+    the evidence index again instead of trusting the two readiness booleans or a
+    caller-recomputed digest.
+    """
+    if manifest.get("schema_version") != READINESS_SCHEMA_VERSION:
+        raise ValueError(
+            f"readiness schema_version must be {READINESS_SCHEMA_VERSION!r}"
+        )
     if manifest.get("artifact_role") != READINESS_ROLE:
         raise ValueError(f"readiness artifact_role must be {READINESS_ROLE!r}")
     if manifest.get("experiment_namespace") != REVISED_EXPERIMENT_NAMESPACE:
@@ -434,3 +704,83 @@ def require_evaluation_ready(manifest: Mapping[str, Any]) -> None:
         or manifest.get("problems")
     ):
         raise ValueError("R2 evaluation evidence gate is not ready")
+    for field in ("configuration_digest", "requirement_set_digest"):
+        if not _is_digest(manifest.get(field)):
+            raise ValueError(f"readiness manifest {field} must be a SHA-256 digest")
+
+    chains = [str(item) for item in (manifest.get("selected_chain_ids") or [])]
+    runs = [str(item) for item in (manifest.get("selected_run_ids") or [])]
+    if not chains or len(chains) != len(set(chains)):
+        raise ValueError("readiness selected_chain_ids must be non-empty and unique")
+    if not runs or len(runs) != len(set(runs)):
+        raise ValueError("readiness selected_run_ids must be non-empty and unique")
+
+    boundary_digests = manifest.get("architecture_boundary_digests")
+    gold_digests = manifest.get("gold_artifact_digests")
+    if not isinstance(boundary_digests, Mapping) or set(boundary_digests) != set(chains):
+        raise ValueError("readiness boundary evidence must exactly cover selected chains")
+    if not isinstance(gold_digests, Mapping) or set(gold_digests) != set(chains):
+        raise ValueError("readiness gold evidence must exactly cover selected chains")
+    for label, evidence in (
+        ("architecture boundary", boundary_digests),
+        ("gold", gold_digests),
+    ):
+        if any(not _is_digest(value) for value in evidence.values()):
+            raise ValueError(f"readiness {label} evidence contains an invalid digest")
+    if not _is_digest(manifest.get("failure_taxonomy_digest")):
+        raise ValueError("readiness failure taxonomy digest is missing or invalid")
+
+    blind_evidence = manifest.get("blind_label_evidence")
+    if not isinstance(blind_evidence, list):
+        raise ValueError("readiness blind_label_evidence must be a list")
+    expected = {(run_id, chain_id) for run_id in runs for chain_id in chains}
+    actual: set[tuple[str, str]] = set()
+    for index, item in enumerate(blind_evidence):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"readiness blind evidence[{index}] must be an object")
+        binding = (str(item.get("run_id") or ""), str(item.get("chain_id") or ""))
+        if binding in actual:
+            raise ValueError("readiness blind evidence contains duplicate bindings")
+        actual.add(binding)
+        for field in (
+            "packet_digest",
+            "label_digest",
+            "run_manifest_digest",
+            "prediction_digest",
+        ):
+            if not _is_digest(item.get(field)):
+                raise ValueError(
+                    f"readiness blind evidence[{index}].{field} is invalid"
+                )
+    if actual != expected:
+        raise ValueError(
+            "readiness blind evidence must exactly cover the selected run/chain product"
+        )
+    if (
+        manifest.get("study_classification") != "DESCRIPTIVE_PILOT"
+        or manifest.get("confirmatory_inference_permitted") is not False
+    ):
+        raise ValueError("readiness manifest must remain descriptive and non-confirmatory")
+    if evidence_bundle is None:
+        raise ValueError(
+            "readiness source evidence bundle is required; digest-shaped indexes "
+            "alone are not authority"
+        )
+    required_bundle_keys = {
+        "frozen_experiment_config",
+        "architecture_boundaries",
+        "gold_by_chain",
+        "archived_runs",
+        "blind_packets",
+        "blind_labels",
+        "failure_taxonomy",
+    }
+    if set(evidence_bundle) != required_bundle_keys:
+        raise ValueError(
+            "readiness source evidence bundle must contain the exact evidence set"
+        )
+    rebuilt = build_evaluation_readiness_manifest(**dict(evidence_bundle))
+    if rebuilt != dict(manifest):
+        raise ValueError(
+            "readiness manifest does not reproduce from the supplied source evidence"
+        )

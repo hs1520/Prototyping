@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.agents.surgical_refiner import _find_def_span
 from src.prototyping.ag_assurance import (
     FailureClass,
@@ -65,7 +67,8 @@ def test_typed_failure_routing_distinguishes_model_integration_and_verifier():
     assert model_failure["repair_authorized"] is True
 
     missing_edge = GOOD.replace(
-        "    dependency dischargeParachuteCommand from SafetyMonitorContract to RecoverySystemContract;\n",
+        "    dependency dischargeParachuteDeploymentCommand__to__RecoverySystemContract "
+        "from SafetyResponseArbiterContract to RecoverySystemContract;\n",
         "",
     )
     _graph, report = _check(missing_edge)
@@ -158,3 +161,74 @@ def test_board_mediated_dependency_closed_repair_accepts_only_targeted_fix():
     assert llm.calls == 1
     assert "requirement def REQ_SAFE_005" in board.current_model.model_text
     assert check_ag_graph(extract_ag_graph(board.current_model.model_text)).verdict == "PASS"
+
+
+@pytest.mark.parametrize(
+    "malicious_block",
+    [
+        lambda: (
+            "requirement def REQ_SAFE_005 "
+            "{ doc /* rewritten source */ }"
+        ),
+        lambda: _definition(
+            GOOD, "requirement", "RecoverySystemContract"
+        ).replace("0.35 [SI::s]", "0.34 [SI::s]"),
+        lambda: _definition(
+            GOOD, "requirement", "RecoverySystemContract"
+        ).replace("[SI::s]", "[SI::ms]"),
+        lambda: _definition(
+            GOOD, "state", "SafetyResponseArbiterBehavior"
+        ).replace(
+            "issueParachuteDeploymentCommand",
+            "issueDifferentCommand",
+        ),
+    ],
+)
+def test_ag_repair_rejects_source_threshold_unit_and_unrelated_edits(
+    malicious_block
+):
+    broken = GOOD.replace(
+        "state deployed { entry action setParachuteDeployed; }",
+        "state deployed { }",
+    )
+    graph, report = _check(broken)
+    routed = route_failure_diagnostics(
+        report.diagnostics,
+        source_requirement=report.source_requirement,
+        realization_links=report.realization_links,
+    )
+    failure = next(
+        item for item in routed["failures"]
+        if item["diagnostic_code"] == "REALIZATION_ACTION_MISSING"
+    )
+    board = Blackboard("Drone")
+    board.commit_model(
+        broken,
+        base_revision=0,
+        base_digest=board.current_model.model_digest,
+        producer="test",
+    )
+    analysis = board.publish(
+        RecordType.ANALYSIS,
+        "analysis.ag_trace",
+        "AGChecker",
+        {"diagnostics": [item.as_dict() for item in report.diagnostics]},
+    )
+    failure_record = board.publish(
+        RecordType.ANALYSIS,
+        "diagnostic.failure",
+        "AGFailureRouter",
+        failure,
+    )
+    decision = attempt_dependency_closed_ag_repair(
+        llm=_RepairLLM(f"```sysml\n{malicious_block()}\n```"),
+        board=board,
+        context_builder=ContextBuilder(board),
+        sessions=TaskSessionRegistry(),
+        failure_record_id=failure_record.record_id,
+        analysis_record_id=analysis.record_id,
+    )
+    assert decision.status == "REJECTED"
+    assert decision.whole_model_fallback_used is False
+    assert board.current_revision == 1
+    assert board.current_model.model_text == broken

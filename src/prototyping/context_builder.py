@@ -9,6 +9,40 @@ from typing import Any, Iterable, Mapping, Optional
 from .blackboard import Blackboard, RecordType
 
 
+_EVALUATOR_ONLY_ROLES = {
+    "EVALUATOR_GOLD",
+    "BLIND_FAILURE_REVIEW_PACKET",
+    "BLIND_FAILURE_LABEL",
+    "FAILURE_TAXONOMY",
+    "FROZEN_FAILURE_TAXONOMY",
+    "POSTHOC_HUMAN_GOLD_EVALUATION",
+    "POSTHOC_EVALUATION_READINESS_MANIFEST",
+}
+_EVALUATOR_ONLY_KEYS = {
+    "gold",
+    "human_gold",
+    "evaluator_gold",
+    "blind_label",
+    "blind_labels",
+}
+
+
+def _contains_evaluator_only_material(value: Any) -> bool:
+    """Recursively reject evaluator-only artifacts hidden inside board payloads."""
+    if isinstance(value, Mapping):
+        role = str(value.get("artifact_role", "")).strip().upper()
+        if role in _EVALUATOR_ONLY_ROLES:
+            return True
+        for key, item in value.items():
+            if str(key).strip().lower() in _EVALUATOR_ONLY_KEYS:
+                return True
+            if _contains_evaluator_only_material(item):
+                return True
+    elif isinstance(value, (list, tuple)):
+        return any(_contains_evaluator_only_material(item) for item in value)
+    return False
+
+
 @dataclass(frozen=True)
 class ContextEnvelope:
     envelope_id: str
@@ -131,8 +165,7 @@ class ContextBuilder:
                 )
             if (
                 record.topic.lower().startswith("gold.")
-                or str(record.payload.get("artifact_role", "")).upper()
-                == "EVALUATOR_GOLD"
+                or _contains_evaluator_only_material(record.payload)
             ):
                 raise ValueError("evaluator gold cannot enter a ContextEnvelope")
         included_topics = {record.topic for record in referenced_records}
@@ -266,8 +299,7 @@ class ContextBuilder:
             record = self.board.record(record_id)
             if (
                 record.topic.lower().startswith("gold.")
-                or str(record.payload.get("artifact_role", "")).upper()
-                == "EVALUATOR_GOLD"
+                or _contains_evaluator_only_material(record.payload)
             ):
                 raise ValueError("evaluator gold cannot enter a ContextEnvelope")
             if record.topic != "requirements.authoritative":
@@ -311,8 +343,7 @@ class ContextBuilder:
             record = self.board.record(record_id)
             if (
                 record.topic.lower().startswith("gold.")
-                or str(record.payload.get("artifact_role", "")).upper()
-                == "EVALUATOR_GOLD"
+                or _contains_evaluator_only_material(record.payload)
             ):
                 raise ValueError("evaluator gold cannot enter a ContextEnvelope")
             if record.topic != "requirements.authoritative":

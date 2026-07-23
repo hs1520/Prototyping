@@ -7,6 +7,7 @@ from the prediction.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from tests.test_option2_ag_checker import REQ_SAFE_005_SYSML
 # Evaluator-only human gold for the REQ_SAFE_005 chain (authored blind to the
 # pipeline verdict, NOT copied from the prediction).
 REQ_SAFE_005_GOLD = {
+    "schema_version": "3.0",
     "artifact_role": GOLD_ROLE,
     "experiment_namespace": "BLACKBOARD_AG_V1",
     "status": "FROZEN",
@@ -34,18 +36,81 @@ REQ_SAFE_005_GOLD = {
         "independent_human_review": True,
     },
     "chain_id": "REQ_SAFE_005",
+    "source_requirement": "REQ_SAFE_005",
+    "source_text": (
+        "REQ-SAFE-005: independently authored evaluator fixture for the "
+        "parachute-deployment chain."
+    ),
+    "source_digest": hashlib.sha256(
+        (
+            "REQ-SAFE-005: independently authored evaluator fixture for the "
+            "parachute-deployment chain."
+        ).encode("utf-8")
+    ).hexdigest(),
+    "requirement_set_digest": "a" * 64,
+    "architecture_boundary_digest": "b" * 64,
     "allocations": [
-        {"owner": "propulsionMonitor", "guarantee": "criticalFailureEvent"},
-        {"owner": "safetyMonitor", "guarantee": "parachuteCommand"},
-        {"owner": "recoverySystem", "guarantee": "parachuteDeployed"},
+        {
+            "owner": "safetyResponseArbiter",
+            "contract": "SafetyResponseArbiterContract",
+            "guarantee": "parachuteDeploymentCommand",
+        },
+        {
+            "owner": "recoveryPowerSupply",
+            "contract": "RecoveryPowerSupplyContract",
+            "guarantee": "recoveryActuationPowerAvailable",
+        },
+        {
+            "owner": "recoverySystem",
+            "contract": "RecoverySystemContract",
+            "guarantee": "parachuteDeployed",
+        },
     ],
     "discharge_edges": [
-        {"component": "PropulsionMonitorContract", "assumption": "failureSensingAvailable", "by": "environment"},
-        {"component": "SafetyMonitorContract", "assumption": "airborne", "by": "environment"},
-        {"component": "SafetyMonitorContract", "assumption": "criticalFailureEvent", "by": "PropulsionMonitorContract"},
-        {"component": "RecoverySystemContract", "assumption": "parachuteCommand", "by": "SafetyMonitorContract"},
-        {"component": "RecoverySystemContract", "assumption": "actuatorPower", "by": "environment"},
+        {"component": "SafetyResponseArbiterContract", "assumption": "airborne", "by": "environment"},
+        {"component": "SafetyResponseArbiterContract", "assumption": "criticalPropulsionFailureDetected", "by": "environment"},
+        {"component": "RecoveryPowerSupplyContract", "assumption": "airborne", "by": "environment"},
+        {"component": "RecoverySystemContract", "assumption": "parachuteDeploymentCommand", "by": "SafetyResponseArbiterContract"},
+        {"component": "RecoverySystemContract", "assumption": "recoveryActuationPowerAvailable", "by": "RecoveryPowerSupplyContract"},
     ],
+    "timing": {
+        "origin": "criticalPropulsionFailureDetected",
+        "deadline": {"value": "0.5", "unit": "s"},
+        "segments": [
+            {
+                "component": "SafetyResponseArbiter",
+                "budget": {"value": "0.1", "unit": "s"},
+            },
+            {
+                "component": "RecoverySystem",
+                "budget": {"value": "0.35", "unit": "s"},
+            },
+        ],
+    },
+    "priority": {
+        "response_set_id": "FLIGHT_RESPONSES_V1",
+        "members": [
+            "PARACHUTE_DEPLOYMENT",
+            "CONTROLLED_BATTERY_LANDING",
+            "COMMUNICATION_LOSS_SAFE_LANDING",
+            "LOW_BATTERY_RETURN_TO_BASE",
+        ],
+        "edges": [
+            {
+                "higher": "PARACHUTE_DEPLOYMENT",
+                "lower": "CONTROLLED_BATTERY_LANDING",
+            },
+            {
+                "higher": "PARACHUTE_DEPLOYMENT",
+                "lower": "COMMUNICATION_LOSS_SAFE_LANDING",
+            },
+            {
+                "higher": "PARACHUTE_DEPLOYMENT",
+                "lower": "LOW_BATTERY_RETURN_TO_BASE",
+            },
+        ],
+        "trigger": "criticalPropulsionFailureDetected",
+    },
 }
 
 
@@ -65,16 +130,16 @@ def test_perfect_prediction_scores_f1_one_against_gold():
 
 
 def test_wrong_discharge_source_is_penalised():
-    # Prediction where PropulsionMonitor emits nothing → SafetyMonitor's event
-    # assumption is undischarged, so gold's discharge edge is a false negative and
-    # the downstream command edge shifts too.
+    # Prediction where RecoveryPowerSupply emits nothing leaves the RecoverySystem
+    # power assumption undischarged.
     broken = REQ_SAFE_005_SYSML.replace(
-        "require constraint g_criticalFailureEvent { criticalFailureEvent }", ""
+        "require constraint g_recoveryActuationPowerAvailable "
+        "{ recoveryActuationPowerAvailable }", ""
     )
     result = evaluate_ag_against_gold(_prediction(broken), REQ_SAFE_005_GOLD)
     assert result["assumption_discharge"]["recall"] < 1.0
     assert result["assumption_discharge"]["fn"] >= 1
-    # allocation also drops PropulsionMonitor's guarantee
+    # allocation also drops RecoveryPowerSupply's guarantee
     assert result["guarantee_allocation"]["recall"] < 1.0
 
 
@@ -84,6 +149,9 @@ def test_static_failure_class_is_rejected_in_favour_of_per_run_blind_labels():
     gold = {**REQ_SAFE_005_GOLD, "failure_class": "NO_FAILURE"}
     with pytest.raises(ValueError, match="per-run blind label"):
         evaluate_ag_against_gold(pred, gold)
+    nested = {**REQ_SAFE_005_GOLD, "metadata": {"failure_class": "NO_FAILURE"}}
+    with pytest.raises(ValueError, match="per-run blind label"):
+        evaluate_ag_against_gold(pred, nested)
 
 
 def test_role_guards_prevent_swapping_or_self_scoring():
@@ -94,6 +162,27 @@ def test_role_guards_prevent_swapping_or_self_scoring():
     # prediction passed where gold is expected (a checker cannot be its own gold)
     with pytest.raises(ValueError, match="gold artifact_role"):
         evaluate_ag_against_gold(pred, pred)
+
+
+def test_evaluator_rejects_flag_shaped_but_structurally_invalid_gold():
+    invalid = {
+        **REQ_SAFE_005_GOLD,
+        "timing": "not-an-atomic-timing-object",
+    }
+    with pytest.raises(ValueError, match="structural validation"):
+        evaluate_ag_against_gold(_prediction(), invalid)
+
+    wrong_chain = _prediction()
+    wrong_chain["source_requirement"] = "REQ_SAFE_008"
+    with pytest.raises(ValueError, match="does not match gold"):
+        evaluate_ag_against_gold(wrong_chain, REQ_SAFE_005_GOLD)
+
+    with pytest.raises(ValueError, match="ad-hoc"):
+        evaluate_ag_against_gold(
+            _prediction(),
+            REQ_SAFE_005_GOLD,
+            aliases={"wrongOwner": "safetyResponseArbiter"},
+        )
 
 
 def test_evaluator_never_imports_the_runtime_checker():
@@ -119,3 +208,32 @@ def test_gold_role_matches_what_the_context_builder_rejects():
     from src.prototyping import context_builder as cb
     source = Path(cb.__file__).read_text(encoding="utf-8")
     assert "gold" in source.lower()
+
+
+def test_missing_prediction_semantic_categories_are_reported_not_suppressed():
+    prediction = _prediction()
+    gold = {
+        **REQ_SAFE_005_GOLD,
+        "timing": {
+            "origin": "criticalPropulsionFailureDetected",
+            "deadline": {"value": "0.5", "unit": "s"},
+            "segments": [{
+                "component": "RecoverySystem",
+                "budget": {"value": "0.35", "unit": "s"},
+            }],
+        },
+        "priority": {
+            "response_set_id": "FLIGHT_RESPONSES_V1",
+            "members": ["PARACHUTE_DEPLOYMENT", "LOW_BATTERY_RETURN_TO_BASE"],
+            "edges": [{
+                "higher": "PARACHUTE_DEPLOYMENT",
+                "lower": "LOW_BATTERY_RETURN_TO_BASE",
+            }],
+            "trigger": "criticalPropulsionFailureDetected",
+        },
+    }
+    prediction["graph"].pop("timing", None)
+    prediction["graph"].pop("priority", None)
+    result = evaluate_ag_against_gold(prediction, gold)
+    assert result["timing_agreement"]["segment_prf"]["recall"] == 0.0
+    assert result["priority_agreement"]["arbitration_topology_conforms"] is False

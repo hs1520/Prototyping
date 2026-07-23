@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-AG_CHECKER_VERSION = "ag-mvp-1"
+AG_CHECKER_VERSION = "ag-mvp-3"
 
 # Completeness states (§6.3).
 READY = "READY"
@@ -55,6 +55,12 @@ CODE_REALIZATION_TRIGGER_MISSING = "REALIZATION_TRIGGER_MISSING"
 CODE_REALIZATION_ACTION_MISSING = "REALIZATION_ACTION_MISSING"
 CODE_OBSERVATION_MISSING = "OBSERVATION_MISSING"
 CODE_SOURCE_PROVENANCE_MISSING = "SOURCE_PROVENANCE_MISSING"
+CODE_PATTERN_DECLARATION_INCONSISTENT = "PATTERN_DECLARATION_INCONSISTENT"
+CODE_PRIORITY_TOPOLOGY_MISSING = "PRIORITY_TOPOLOGY_MISSING"
+CODE_PRIORITY_TOPOLOGY_INCOMPLETE = "PRIORITY_TOPOLOGY_INCOMPLETE"
+CODE_INVARIANT_SEMANTICS_MISSING = "INVARIANT_SEMANTICS_MISSING"
+CODE_INVARIANT_SEMANTICS_INVALID = "INVARIANT_SEMANTICS_INVALID"
+CODE_PATTERN_TOPOLOGY_INCOMPLETE = "PATTERN_TOPOLOGY_INCOMPLETE"
 
 _ERROR_CODES = frozenset({
     CODE_GUARANTEE_NO_OWNER,
@@ -73,7 +79,39 @@ _ERROR_CODES = frozenset({
     CODE_REALIZATION_ACTION_MISSING,
     CODE_OBSERVATION_MISSING,
     CODE_SOURCE_PROVENANCE_MISSING,
+    CODE_PATTERN_DECLARATION_INCONSISTENT,
+    CODE_PRIORITY_TOPOLOGY_MISSING,
+    CODE_PRIORITY_TOPOLOGY_INCOMPLETE,
+    CODE_INVARIANT_SEMANTICS_MISSING,
+    CODE_INVARIANT_SEMANTICS_INVALID,
+    CODE_PATTERN_TOPOLOGY_INCOMPLETE,
 })
+
+_TIMED_PATTERN = "TRIGGERED_TIMED_FAILSAFE_RESPONSE"
+_INVARIANT_PATTERNS = {
+    "STARTUP_INHIBIT",
+    "LOCKED_UNTIL_AUTHORISED_RELEASE",
+}
+_SOURCE_PATTERN_PROFILE = {
+    "REQ_SAFE_004": "STARTUP_INHIBIT",
+    "REQ_SAFE_005": _TIMED_PATTERN,
+    "REQ_SAFE_008": "LOCKED_UNTIL_AUTHORISED_RELEASE",
+}
+_INVARIANT_SOURCE_KINDS = {
+    "STAKEHOLDER",
+    "STUDENT_DERIVED_DESIGN_CONSTRAINT",
+}
+_SAFE005_PRIORITY_MEMBERS = {
+    "PARACHUTE_DEPLOYMENT",
+    "CONTROLLED_BATTERY_LANDING",
+    "COMMUNICATION_LOSS_SAFE_LANDING",
+    "LOW_BATTERY_RETURN_TO_BASE",
+}
+_SAFE005_PRIORITY_EDGES = {
+    ("PARACHUTE_DEPLOYMENT", "CONTROLLED_BATTERY_LANDING"),
+    ("PARACHUTE_DEPLOYMENT", "COMMUNICATION_LOSS_SAFE_LANDING"),
+    ("PARACHUTE_DEPLOYMENT", "LOW_BATTERY_RETURN_TO_BASE"),
+}
 
 
 def _norm(concept: str, aliases: Mapping[str, str]) -> str:
@@ -102,6 +140,7 @@ class Assumption:
     value: Optional[float] = None
     unit: Optional[str] = None
     constraint_name: Optional[str] = None
+    ast: Optional[Mapping[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +153,7 @@ class Guarantee:
     value: Optional[float] = None
     unit: Optional[str] = None
     constraint_name: Optional[str] = None
+    ast: Optional[Mapping[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -124,12 +164,15 @@ class Contract:
     guarantees: Tuple[Guarantee, ...] = ()
     timing_budget: Optional[float] = None  # component latency budget / system deadline
     timing_unit: Optional[str] = None
+    timing_value_literal: Optional[str] = None
+    timing_segment_required: Optional[bool] = None
+    timing_origin: Optional[str] = None
     observation: Optional[str] = None  # system-level observed signal concept
     element_id: Optional[str] = None
     span: Optional[Span] = None
     owners: Tuple[str, ...] = ()
     source_requirement: Optional[str] = None
-    declared_pattern: Optional[str] = None  # reviewed safety pattern (system only)
+    declared_pattern: Optional[str] = None  # selected safety pattern (system only)
 
     def boolean_guarantee_concepts(self) -> Tuple[str, ...]:
         return tuple(g.concept for g in self.guarantees if g.kind == "boolean")
@@ -148,6 +191,7 @@ class BehaviorTransition:
     source: str
     trigger: str
     target: str
+    guard: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +235,9 @@ class AGGraph:
     behaviors: Tuple[BehaviorRealization, ...] = ()
     verification_targets: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
     source_requirement_ids: Tuple[str, ...] = ()
+    priority: Mapping[str, Any] = field(default_factory=dict)
+    invariants: Tuple[Mapping[str, Any], ...] = ()
+    selected_model_elements: Tuple[str, ...] = ()
 
     def all_contracts(self) -> Tuple[Contract, ...]:
         return ((self.system,) if self.system else ()) + tuple(self.components)
@@ -211,6 +258,10 @@ class AGReport:
     realization_links: Tuple[Dict[str, Any], ...] = ()
     observation_links: Tuple[Dict[str, Any], ...] = ()
     source_requirement: Optional[str] = None
+    timing_atomic: Optional[Mapping[str, Any]] = None
+    priority: Optional[Mapping[str, Any]] = None
+    invariants: Tuple[Mapping[str, Any], ...] = ()
+    selected_model_elements: Tuple[str, ...] = ()
     checker_version: str = AG_CHECKER_VERSION
 
     def errors(self) -> Tuple[AGDiagnostic, ...]:
@@ -243,6 +294,21 @@ class AGReport:
                 "discharge_edges": [dict(e) for e in self.discharge_edges],
                 "realization_links": [dict(e) for e in self.realization_links],
                 "observation_links": [dict(e) for e in self.observation_links],
+                **(
+                    {"timing": dict(self.timing_atomic)}
+                    if self.timing_atomic is not None else {}
+                ),
+                **(
+                    {"priority": dict(self.priority)}
+                    if self.priority is not None else {}
+                ),
+                **(
+                    {
+                        "invariants": [dict(item) for item in self.invariants],
+                        "selected_model_elements": list(self.selected_model_elements),
+                    }
+                    if self.invariants else {}
+                ),
             },
             "source_requirement": self.source_requirement,
             "diagnostics": [d.as_dict() for d in self.diagnostics],
@@ -271,7 +337,14 @@ def _classify_completeness(
     reasons: List[str] = []
     if not contract.guarantees:
         reasons.append("no guarantee (require constraint)")
-    if not contract.assumptions:
+    pure_system_invariant = (
+        contract.role == "system"
+        and contract.declared_pattern in {
+            "STARTUP_INHIBIT",
+            "LOCKED_UNTIL_AUTHORISED_RELEASE",
+        }
+    )
+    if not contract.assumptions and not pure_system_invariant:
         reasons.append("no assumption (assume constraint)")
     if contract.role == "component" and owner_count == 0:
         reasons.append("no responsible owner (satisfy relationship)")
@@ -513,7 +586,9 @@ def _check_timing(graph: AGGraph) -> Tuple[Dict[str, Any], List[AGDiagnostic]]:
     ok: Optional[bool] = None
     if system_budget is not None:
         missing_budgets = [
-            c.name for c in graph.components if c.timing_budget is None
+            c.name for c in graph.components
+            if c.timing_budget is None
+            and c.timing_segment_required is not False
         ]
         if missing_budgets:
             diags.append(AGDiagnostic(
@@ -662,6 +737,447 @@ def _check_observation(
     return links, diags
 
 
+def _ast_identifiers(node: Any) -> set[str]:
+    if not isinstance(node, Mapping):
+        return set()
+    kind = node.get("node")
+    if kind == "Identifier":
+        return {str(node.get("name") or "")}
+    if kind == "Not":
+        return _ast_identifiers(node.get("expr"))
+    if kind in {"And", "Or"}:
+        return set().union(*(
+            _ast_identifiers(item) for item in (node.get("operands") or ())
+        ))
+    if kind == "Implies":
+        return (
+            _ast_identifiers(node.get("antecedent"))
+            | _ast_identifiers(node.get("consequent"))
+        )
+    return set()
+
+
+def _ast_shape(node: Any) -> tuple:
+    """Canonical structural shape for the fixed runtime-profile AST subset.
+
+    This is runtime profile validation, not evaluator comparison or theorem
+    proving. It prevents an arbitrary invariant from passing merely because it
+    carries an approved identifier.
+    """
+    if not isinstance(node, Mapping):
+        return ("INVALID",)
+    kind = str(node.get("node") or "")
+    if kind == "Identifier":
+        return ("Identifier", str(node.get("name") or ""))
+    if kind == "Not":
+        return ("Not", _ast_shape(node.get("expr")))
+    if kind in {"And", "Or"}:
+        return (
+            kind,
+            tuple(sorted(_ast_shape(item) for item in (node.get("operands") or ()))),
+        )
+    if kind == "Implies":
+        return (
+            "Implies",
+            _ast_shape(node.get("antecedent")),
+            _ast_shape(node.get("consequent")),
+        )
+    return ("INVALID", kind)
+
+
+def _id_ast(name: str) -> Mapping[str, Any]:
+    return {"node": "Identifier", "name": name}
+
+
+def _not_ast(name: str) -> Mapping[str, Any]:
+    return {"node": "Not", "expr": _id_ast(name)}
+
+
+def _and_ast(*items: Mapping[str, Any]) -> Mapping[str, Any]:
+    return {"node": "And", "operands": list(items)}
+
+
+_REQUIRED_PROFILE_INVARIANTS: Mapping[
+    str, Mapping[str, tuple[Mapping[str, Any], Mapping[str, Any], str, str]]
+] = {
+    "REQ_SAFE_004": {
+        "SAFE004_STARTUP_INHIBIT": (
+            _and_ast(_id_ast("powerOnSelfTestActive"), _id_ast("sensorFailureReported")),
+            _and_ast(_not_ast("armed"), _not_ast("airborne")),
+            "STAKEHOLDER",
+            "REQ_SAFE_004",
+        ),
+        "SAFE004_LATCH_EFFECT": (
+            _id_ast("startupInhibitActive"),
+            _and_ast(
+                _id_ast("armingTransitionInhibited"),
+                _id_ast("airborneTransitionInhibited"),
+            ),
+            "STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            "SAFE004_LATCH_RESET_V1",
+        ),
+    },
+    "REQ_SAFE_008": {
+        "SAFE008_POWER_ON_LOCKED": (
+            _id_ast("powerOnInitialisation"),
+            _id_ast("payloadLocked"),
+            "STAKEHOLDER",
+            "REQ_SAFE_008",
+        ),
+        "SAFE008_UNLOCK_AUTHORISED": (
+            _id_ast("payloadUnlocked"),
+            _id_ast("authorisedReleaseCommandReceived"),
+            "STAKEHOLDER",
+            "REQ_SAFE_008",
+        ),
+        "SAFE008_DEENERGISE_TO_LOCK": (
+            _not_ast("actuatorPowerAvailable"),
+            _id_ast("payloadLocked"),
+            "STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            "SAFE008_DEENERGISE_TO_LOCK_V1",
+        ),
+    },
+}
+
+
+def _behavior_for_contract(
+    graph: AGGraph,
+    realization_links: List[Dict[str, Any]],
+    contract_name: str,
+) -> Optional[BehaviorRealization]:
+    link = next(
+        (
+            item for item in realization_links
+            if item.get("contract") == contract_name
+        ),
+        None,
+    )
+    behavior_name = str((link or {}).get("behavior") or "")
+    return next(
+        (item for item in graph.behaviors if item.name == behavior_name),
+        None,
+    )
+
+
+def _transition_signatures(
+    behavior: Optional[BehaviorRealization],
+) -> set[tuple[str, str, str, str]]:
+    if behavior is None:
+        return set()
+    return {
+        (
+            transition.source,
+            transition.trigger,
+            transition.target,
+            " ".join(str(transition.guard or "").split()),
+        )
+        for transition in behavior.transitions
+    }
+
+
+def _startup_inhibit_topology_ok(
+    graph: AGGraph,
+    realization_links: List[Dict[str, Any]],
+) -> bool:
+    behavior = _behavior_for_contract(
+        graph, realization_links, "SelfTestStatusLatchContract"
+    )
+    if behavior is None or behavior.initial_state != "poweredOff":
+        return False
+    expected = {
+        ("poweredOff", "PowerOnSignal", "selfTesting", ""),
+        (
+            "selfTesting",
+            "SensorFailureReportedSignal",
+            "startupInhibited",
+            "",
+        ),
+        ("startupInhibited", "PowerCycleSignal", "poweredOff", ""),
+    }
+    actual = _transition_signatures(behavior)
+    states = {
+        str(behavior.initial_state or ""),
+        *behavior.entry_actions.keys(),
+        *(transition.source for transition in behavior.transitions),
+        *(transition.target for transition in behavior.transitions),
+    }
+    return all((
+        actual == expected,
+        {"poweredOff", "selfTesting", "startupInhibited"}.issubset(states),
+        _flat_token(behavior.entry_actions.get("startupInhibited", ""))
+        == "setstartupinhibitactive",
+        not any(
+            _flat_token(transition.target) in {"armed", "airborne"}
+            for transition in behavior.transitions
+        ),
+    ))
+
+
+def _locked_release_topology_ok(
+    graph: AGGraph,
+    realization_links: List[Dict[str, Any]],
+) -> bool:
+    mechanism = _behavior_for_contract(
+        graph, realization_links, "PayloadLockMechanismContract"
+    )
+    gateway = _behavior_for_contract(
+        graph, realization_links, "ReleaseCommandGatewayContract"
+    )
+    if (
+        mechanism is None
+        or mechanism.initial_state != "lockedUnpowered"
+        or gateway is None
+        or gateway.initial_state != "awaitingAuthorisation"
+    ):
+        return False
+    expected_mechanism = {
+        ("lockedUnpowered", "PowerOnSignal", "lockedPowered", ""),
+        (
+            "lockedPowered",
+            "AuthorisedReleaseCommandReceivedSignal",
+            "unlockedPowered",
+            "",
+        ),
+        ("unlockedPowered", "PowerLostSignal", "lockedUnpowered", ""),
+    }
+    expected_gateway = {
+        (
+            "awaitingAuthorisation",
+            "ReceivedReleaseCommandSignal",
+            "authorisationGranted",
+            "authorisationDataValid",
+        ),
+        (
+            "authorisationGranted",
+            "PowerLostSignal",
+            "awaitingAuthorisation",
+            "",
+        ),
+        (
+            "authorisationGranted",
+            "PowerOnSignal",
+            "awaitingAuthorisation",
+            "",
+        ),
+    }
+    states = {
+        str(mechanism.initial_state or ""),
+        *mechanism.entry_actions.keys(),
+        *(transition.source for transition in mechanism.transitions),
+        *(transition.target for transition in mechanism.transitions),
+    }
+    unlocks = [
+        transition for transition in mechanism.transitions
+        if transition.target == "unlockedPowered"
+    ]
+    return all((
+        _transition_signatures(mechanism) == expected_mechanism,
+        _transition_signatures(gateway) == expected_gateway,
+        {"lockedUnpowered", "lockedPowered", "unlockedPowered"}.issubset(states),
+        _flat_token(mechanism.entry_actions.get("lockedUnpowered", ""))
+        == "setpayloadlocked",
+        _flat_token(mechanism.entry_actions.get("lockedPowered", ""))
+        == "maintainpayloadlocked",
+        _flat_token(mechanism.entry_actions.get("unlockedPowered", ""))
+        == "setpayloadunlocked",
+        bool(unlocks),
+        all(
+            transition.trigger == "AuthorisedReleaseCommandReceivedSignal"
+            for transition in unlocks
+        ),
+    ))
+
+
+def _check_profile_semantics(
+    graph: AGGraph,
+    realization_links: List[Dict[str, Any]],
+    observation_links: List[Dict[str, Any]],
+) -> List[AGDiagnostic]:
+    """Check bounded-profile facts extracted only from committed SysML.
+
+    This is structural/internal consistency checking, not evaluator-gold
+    comparison and not a formal proof.
+    """
+    if graph.system is None:
+        return []
+    diagnostics: List[AGDiagnostic] = []
+    system = graph.system
+    expected_pattern = _SOURCE_PATTERN_PROFILE.get(system.source_requirement or "")
+    declared_pattern = system.declared_pattern
+    effective_pattern = (
+        declared_pattern
+        or (_TIMED_PATTERN if system.timing_budget is not None else "STARTUP_INHIBIT")
+    )
+    if expected_pattern is not None and declared_pattern != expected_pattern:
+        diagnostics.append(AGDiagnostic(
+            CODE_PATTERN_DECLARATION_INCONSISTENT,
+            f"{system.name} must declare safety_pattern={expected_pattern} for "
+            f"{system.source_requirement}; found {declared_pattern!r}",
+            contract=system.name,
+            subject=system.source_requirement,
+        ))
+        effective_pattern = expected_pattern
+    if (
+        (effective_pattern == _TIMED_PATTERN and system.timing_budget is None)
+        or (
+            effective_pattern in _INVARIANT_PATTERNS
+            and system.timing_budget is not None
+        )
+    ):
+        diagnostics.append(AGDiagnostic(
+            CODE_PATTERN_DECLARATION_INCONSISTENT,
+            f"{system.name} pattern/timing declaration is inconsistent",
+            contract=system.name,
+            subject=effective_pattern,
+        ))
+
+    if effective_pattern == _TIMED_PATTERN:
+        priority = graph.priority
+        if not isinstance(priority, Mapping) or not priority:
+            diagnostics.append(AGDiagnostic(
+                CODE_PRIORITY_TOPOLOGY_MISSING,
+                f"{system.name} timed failsafe has no extracted priority "
+                "contract/topology",
+                contract=system.name,
+            ))
+            return diagnostics
+        members = {str(item) for item in (priority.get("members") or ())}
+        edges = {
+            (str(item.get("higher") or ""), str(item.get("lower") or ""))
+            for item in (priority.get("edges") or ())
+            if isinstance(item, Mapping)
+        }
+        topology = priority.get("arbitration_topology")
+        selected = None
+        selection_when = ""
+        guards: set[str] = set()
+        reachable = False
+        if isinstance(topology, Mapping):
+            selection = topology.get("selection")
+            if isinstance(selection, Mapping):
+                selected = str(selection.get("selected_response") or "")
+                selection_when = str(selection.get("when") or "")
+            guards = {
+                str(item.get("response") or "")
+                for item in (topology.get("competing_transition_guards") or ())
+                if isinstance(item, Mapping)
+            }
+            reachable = topology.get("parachute_transition_reachable") is True
+        trigger = str(priority.get("trigger") or "")
+        higher = {item[0] for item in edges}
+        lowers = {item[1] for item in edges}
+        selection_action_connected = (
+            isinstance(topology, Mapping)
+            and topology.get("selection_action_connected") is True
+        )
+        recovery_link = next(
+            (
+                item for item in realization_links
+                if item.get("contract") == "RecoverySystemContract"
+            ),
+            {},
+        )
+        deployment_action_connected = any(
+            _flat_token(action) == "setparachutedeployed"
+            for action in (recovery_link.get("response_actions") or ())
+        )
+        observation_connected = bool(
+            observation_links
+            and all(item.get("status") == "PASS" for item in observation_links)
+        )
+        complete = all((
+            members == _SAFE005_PRIORITY_MEMBERS,
+            edges == _SAFE005_PRIORITY_EDGES,
+            higher == {"PARACHUTE_DEPLOYMENT"},
+            selected == "PARACHUTE_DEPLOYMENT",
+            guards == lowers,
+            trigger == "criticalPropulsionFailureDetected",
+            trigger == (system.timing_origin or ""),
+            selection_when == trigger,
+            reachable,
+            selection_action_connected,
+            deployment_action_connected,
+            observation_connected,
+        ))
+        if not complete:
+            diagnostics.append(AGDiagnostic(
+                CODE_PRIORITY_TOPOLOGY_INCOMPLETE,
+                f"{system.name} priority response-set/edges/trigger/arbitration "
+                "topology is incomplete or internally inconsistent",
+                contract=system.name,
+                subject=trigger or None,
+            ))
+    elif effective_pattern in _INVARIANT_PATTERNS:
+        if not graph.invariants:
+            diagnostics.append(AGDiagnostic(
+                CODE_INVARIANT_SEMANTICS_MISSING,
+                f"{system.name} has no extracted invariant constraints",
+                contract=system.name,
+            ))
+        else:
+            selected_elements = set(graph.selected_model_elements)
+            ids: set[str] = set()
+            invalid = False
+            by_id = {
+                str(item.get("invariant_id") or ""): item
+                for item in graph.invariants
+                if isinstance(item, Mapping)
+            }
+            for invariant in graph.invariants:
+                invariant_id = str(invariant.get("invariant_id") or "")
+                identifiers = (
+                    _ast_identifiers(invariant.get("trigger_or_antecedent_ast"))
+                    | _ast_identifiers(invariant.get("required_consequent_ast"))
+                )
+                invalid = invalid or any((
+                    not invariant_id,
+                    invariant_id in ids,
+                    invariant.get("scope") != system.name,
+                    invariant.get("source_kind") not in _INVARIANT_SOURCE_KINDS,
+                    not str(invariant.get("source_id") or ""),
+                    not identifiers,
+                    not identifiers.issubset(selected_elements),
+                ))
+                ids.add(invariant_id)
+            for invariant_id, expected in _REQUIRED_PROFILE_INVARIANTS.get(
+                system.source_requirement or "", {}
+            ).items():
+                actual = by_id.get(invariant_id)
+                if not isinstance(actual, Mapping):
+                    invalid = True
+                    continue
+                antecedent, consequent, source_kind, source_id = expected
+                invalid = invalid or any((
+                    _ast_shape(actual.get("trigger_or_antecedent_ast"))
+                    != _ast_shape(antecedent),
+                    _ast_shape(actual.get("required_consequent_ast"))
+                    != _ast_shape(consequent),
+                    actual.get("source_kind") != source_kind,
+                    actual.get("source_id") != source_id,
+                ))
+            if invalid:
+                diagnostics.append(AGDiagnostic(
+                    CODE_INVARIANT_SEMANTICS_INVALID,
+                    f"{system.name} invariant AST/provenance/model-element binding "
+                    "is incomplete or inconsistent",
+                    contract=system.name,
+                ))
+        topology_ok = (
+            _startup_inhibit_topology_ok(graph, realization_links)
+            if effective_pattern == "STARTUP_INHIBIT"
+            else _locked_release_topology_ok(graph, realization_links)
+        )
+        if not topology_ok:
+            diagnostics.append(AGDiagnostic(
+                CODE_PATTERN_TOPOLOGY_INCOMPLETE,
+                f"{system.name} {effective_pattern} state/transition topology is "
+                "missing, unauthorised, or inconsistent with the bounded profile",
+                contract=system.name,
+                subject=effective_pattern,
+            ))
+    return diagnostics
+
+
 def _check_sufficiency(
     graph: AGGraph, discharge_diags: List[AGDiagnostic], aliases: Mapping[str, str]
 ) -> List[AGDiagnostic]:
@@ -677,18 +1193,45 @@ def _check_sufficiency(
         _norm(concept, aliases)
         for c in graph.components for concept in c.boolean_guarantee_concepts()
     }
-    observation = _norm(graph.system.observation, aliases)
+    def identifiers(node: Optional[Mapping[str, Any]]) -> set[str]:
+        if not isinstance(node, Mapping):
+            return set()
+        if node.get("node") == "Identifier":
+            return {str(node.get("name") or "")}
+        if node.get("node") == "Not":
+            return identifiers(node.get("expr"))
+        if node.get("node") in {"And", "Or"}:
+            return set().union(*(
+                identifiers(item) for item in (node.get("operands") or ())
+            ))
+        return set()
+
+    observed_guarantee = next(
+        (
+            guarantee for guarantee in graph.system.guarantees
+            if guarantee.constraint_name == "g_observed"
+        ),
+        None,
+    )
+    required_observations = (
+        {
+            _norm(item, aliases)
+            for item in identifiers(observed_guarantee.ast)
+        }
+        if observed_guarantee and observed_guarantee.ast
+        else {_norm(graph.system.observation, aliases)}
+    )
     blocked = any(
         d.code in (CODE_ASSUMPTION_UNDISCHARGED, CODE_CIRCULAR_ASSUMPTION)
         for d in discharge_diags
     )
-    if observation not in produced or blocked:
+    if not required_observations.issubset(produced) or blocked:
         prov = {"element_id": graph.system.element_id,
                 "span": graph.system.span.as_dict() if graph.system.span else None}
         diags.append(AGDiagnostic(
             CODE_DECOMPOSITION_INSUFFICIENT,
             (f"component guarantees do not collectively support the system "
-             f"observation '{graph.system.observation}'"),
+             f"observation(s) {sorted(required_observations)}"),
             contract=graph.system.name, subject=graph.system.observation,
             provenance=prov,
         ))
@@ -752,6 +1295,11 @@ def check_ag_graph(
     diagnostics.extend(realization_diags)
     observation_links, observation_diags = _check_observation(graph)
     diagnostics.extend(observation_diags)
+    diagnostics.extend(
+        _check_profile_semantics(
+            graph, realization_links, observation_links
+        )
+    )
 
     diagnostics.extend(_check_sufficiency(graph, dis_diags, alias_map))
 
@@ -766,6 +1314,54 @@ def check_ag_graph(
         verdict = "INCOMPLETE"
     else:
         verdict = "PASS"
+
+    timing_atomic = None
+    if graph.system is not None and graph.system.timing_budget is not None:
+        timing_atomic = {
+            "origin": graph.system.timing_origin or "",
+            "deadline": {
+                "value": (
+                    graph.system.timing_value_literal
+                    or str(graph.system.timing_budget)
+                ),
+                "unit": "s",
+            },
+            "segments": [
+                {
+                    "component": component.name.removesuffix("Contract"),
+                    "budget": {
+                        "value": (
+                            component.timing_value_literal
+                            or str(component.timing_budget)
+                        ),
+                        "unit": "s",
+                    },
+                }
+                for component in graph.components
+                if component.timing_budget is not None
+                and component.timing_segment_required is not False
+            ],
+        }
+
+    priority = dict(graph.priority) if graph.priority else None
+    if priority is not None:
+        topology = dict(priority.get("arbitration_topology") or {})
+        recovery_link = next(
+            (
+                item for item in realization_links
+                if item.get("contract") == "RecoverySystemContract"
+            ),
+            {},
+        )
+        topology["deployment_action_connected"] = any(
+            _flat_token(action) == "setparachutedeployed"
+            for action in (recovery_link.get("response_actions") or ())
+        )
+        topology["observation_connected"] = bool(
+            observation_links
+            and all(item.get("status") == "PASS" for item in observation_links)
+        )
+        priority["arbitration_topology"] = topology
 
     return AGReport(
         verdict=verdict,
@@ -783,4 +1379,8 @@ def check_ag_graph(
         source_requirement=(
             graph.system.source_requirement if graph.system else None
         ),
+        timing_atomic=timing_atomic,
+        priority=priority,
+        invariants=graph.invariants,
+        selected_model_elements=graph.selected_model_elements,
     )

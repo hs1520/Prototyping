@@ -11,12 +11,17 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 import time
 from typing import Any, Callable, Mapping, Sequence
 
 from .ag_contracts import AG_CHECKER_VERSION
 from .evaluation_protocol import build_descriptive_pilot_manifest
-from .experiment_arms import REVISED_EXPERIMENT_NAMESPACE
+from .experiment_arms import (
+    REVISED_EXPERIMENT_NAMESPACE,
+    R2_DETERMINISTIC_GENERATION_MODE,
+    R2_DETERMINISTIC_INTERVENTION_VERSION,
+)
 from .requirement_inputs import (
     build_frozen_requirement_set,
     normalise_requirement_id,
@@ -24,6 +29,22 @@ from .requirement_inputs import (
 
 
 REVISED_PILOT_ARMS = ("R0-CURRENT", "R1-BBCTX", "R2-BBAG")
+_EVALUATOR_ONLY_ROLE_TOKENS = {
+    "evaluatorgold",
+    "blindfailurereviewpacket",
+    "blindfailurelabel",
+    "failuretaxonomy",
+    "frozenfailuretaxonomy",
+    "posthochumangoldevaluation",
+    "posthocevaluationreadinessmanifest",
+}
+_EVALUATOR_ONLY_KEY_TOKENS = {
+    "gold",
+    "humangold",
+    "evaluatorgold",
+    "blindlabel",
+    "blindlabels",
+}
 
 
 def _json_digest(value: Mapping[str, Any]) -> str:
@@ -58,7 +79,9 @@ class RevisedPilotConfig:
     task_session_max_tokens: int = 150000
     context_token_budget: int = 12000
     ag_checker_version: str = AG_CHECKER_VERSION
-    pattern_profile_version: str = "triggered-timed-failsafe-1.0"
+    pattern_profile_version: str = "bounded-ag-safety-profile-2.0"
+    r2_generation_mode: str = R2_DETERMINISTIC_GENERATION_MODE
+    r2_intervention_version: str = R2_DETERMINISTIC_INTERVENTION_VERSION
     system_name: str = "DeliveryUAV"
     system_description: str = (
         "An autonomous delivery UAV with ballistic parachute recovery and "
@@ -90,6 +113,16 @@ class RevisedPilotConfig:
             raise ValueError("provider and model must be explicit")
         if not self.code_revision.strip():
             raise ValueError("code_revision must be frozen before execution")
+        if (
+            self.r2_generation_mode != R2_DETERMINISTIC_GENERATION_MODE
+            or self.r2_intervention_version
+            != R2_DETERMINISTIC_INTERVENTION_VERSION
+        ):
+            raise ValueError(
+                "this runner is frozen to the deterministic R2 intervention; "
+                "LLM-authored A/G requires a separate configuration/version "
+                "and evidence gate"
+            )
         frozen = build_frozen_requirement_set(self.requirements)
         selected = tuple(
             normalise_requirement_id(value) for value in self.selected_ag_chain_ids
@@ -129,6 +162,8 @@ class RevisedPilotConfig:
             "context_token_budget": self.context_token_budget,
             "ag_checker_version": self.ag_checker_version,
             "pattern_profile_version": self.pattern_profile_version,
+            "r2_generation_mode": self.r2_generation_mode,
+            "r2_intervention_version": self.r2_intervention_version,
             "code_revision": self.code_revision,
             "system_name": self.system_name,
             "system_description": self.system_description,
@@ -160,6 +195,25 @@ def _usage(report: Mapping[str, Any]) -> tuple[int | None, int | None]:
     )
 
 
+def _contains_evaluator_only_material(value: Any) -> bool:
+    """Reject evaluator artifacts recursively, independent of key spelling."""
+    if isinstance(value, Mapping):
+        role = re.sub(
+            r"[^a-z0-9]", "", str(value.get("artifact_role") or "").lower()
+        )
+        if role in _EVALUATOR_ONLY_ROLE_TOKENS:
+            return True
+        for key, item in value.items():
+            token = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if token in _EVALUATOR_ONLY_KEY_TOKENS:
+                return True
+            if _contains_evaluator_only_material(item):
+                return True
+    elif isinstance(value, (list, tuple)):
+        return any(_contains_evaluator_only_material(item) for item in value)
+    return False
+
+
 def _validate_run_result(
     result: Mapping[str, Any],
     report: Mapping[str, Any],
@@ -167,6 +221,8 @@ def _validate_run_result(
     arm: str,
     requirement_set_digest: str,
     ag_checker_version: str,
+    r2_generation_mode: str,
+    r2_intervention_version: str,
 ) -> None:
     revised = result.get("revised_experiment") or {}
     if (
@@ -176,6 +232,13 @@ def _validate_run_result(
         raise ValueError("run result namespace/configuration does not match frozen arm")
     if arm == "R2-BBAG" and revised.get("evaluation_ready") is not False:
         raise ValueError("R2-BBAG must remain evaluation_ready=false before gold freeze")
+    if arm == "R2-BBAG" and (
+        revised.get("r2_generation_mode") != r2_generation_mode
+        or revised.get("r2_intervention_version") != r2_intervention_version
+    ):
+        raise ValueError(
+            "R2-BBAG run intervention identity does not match frozen configuration"
+        )
     if arm == "R2-BBAG" and (
         (result.get("ag_contract_graph") or {}).get("checker_version")
         != ag_checker_version
@@ -188,8 +251,10 @@ def _validate_run_result(
         raise ValueError("run report is missing the revised experiment namespace")
     if report.get("configuration") != arm:
         raise ValueError("run report configuration does not match frozen arm")
-    forbidden = {"gold", "human_gold", "evaluator_gold", "blind_labels"}
-    if forbidden.intersection(result) or forbidden.intersection(report):
+    if (
+        _contains_evaluator_only_material(result)
+        or _contains_evaluator_only_material(report)
+    ):
         raise ValueError("evaluator gold/blind labels cannot enter pilot generation")
 
 
@@ -299,6 +364,8 @@ def run_revised_pilot(
                 "requirement_set_digest": requirement_digest,
                 "ag_checker_version": config.ag_checker_version,
                 "pattern_profile_version": config.pattern_profile_version,
+                "r2_generation_mode": config.r2_generation_mode,
+                "r2_intervention_version": config.r2_intervention_version,
                 "started_at": started_at,
                 "gold_access": False,
                 "formal_ag_proof": False,
@@ -335,6 +402,8 @@ def run_revised_pilot(
                     arm=arm,
                     requirement_set_digest=requirement_digest,
                     ag_checker_version=config.ag_checker_version,
+                    r2_generation_mode=config.r2_generation_mode,
+                    r2_intervention_version=config.r2_intervention_version,
                 )
                 _write_json(run_dir / "run_report.json", report)
                 written: Mapping[str, str] = {}

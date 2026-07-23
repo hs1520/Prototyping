@@ -1706,7 +1706,7 @@ class Orchestrator:
                 raise RuntimeError("R2-BBAG A/G contract layer failed the syntax gate")
             print(
                 f"  [R2-BBAG] merged A/G contract layer for {len(specs)} "
-                f"reviewed chain(s)"
+                f"selected chain(s)"
             )
             return merged
         except Exception as exc:
@@ -1740,7 +1740,7 @@ class Orchestrator:
             model_digest=self.blackboard.current_model.model_digest,
         )
         if len(graphs) > 1:
-            # Several reviewed chains co-exist (e.g. the drone co-selects
+            # Several selected chains co-exist (e.g. the drone co-selects
             # REQ_SAFE_004 and REQ_SAFE_005): each is an independent A/G
             # decomposition and must be checked on its own graph.
             return self._build_multichain_ag_trace(graphs)
@@ -2015,7 +2015,7 @@ class Orchestrator:
         return report, pattern, failures, analysis_record, repair_candidate
 
     def _build_multichain_ag_trace(self, graphs) -> Dict[str, Any]:
-        """Aggregate independent per-chain A/G traces (several reviewed chains).
+        """Aggregate independent per-chain A/G traces (several selected chains).
 
         Each chain is checked on its own graph and publishes its own typed
         ``analysis.ag_trace`` record — one assurance case per source requirement.

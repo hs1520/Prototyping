@@ -11,6 +11,10 @@ from enum import Enum
 
 LEGACY_EXPERIMENT_NAMESPACE = "LEGACY_EXTERNAL_CONTRACT_V1"
 REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
+R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
+R2_DETERMINISTIC_INTERVENTION_VERSION = (
+    "r2-bbag-deterministic-spec-emitter-v1"
+)
 
 
 class RevisedExperimentArm(str, Enum):
@@ -59,11 +63,11 @@ class RevisedExperimentArm(str, Enum):
         """The arm can be scored and pooled into the controlled comparison.
 
         R0/R1 rest on deterministic coordination/context metrics. The R2-BBAG code
-        loop is complete — A/G-aware generation (``ag_emitter``/``ag_chains``), the
+        runtime loop exists — A/G-aware generation (``ag_emitter``/``ag_chains``), the
         extractor/checker, orchestrator wiring, and the independent evaluator
-        (``ag_evaluation.py``) all exist. The one remaining gate is frozen,
-        supervisor-reviewed human gold (design §18-Q7, candidate-doc freeze gate);
-        until that gold is frozen, pooling R2 accuracy/F1 is not valid, so R2 stays
+        (``ag_evaluation.py``) all exist. Post-hoc readiness additionally requires
+        the complete frozen configuration/boundary/gold/taxonomy/blind-label evidence
+        chain; until that manifest clears, pooling R2 accuracy/F1 is not valid, so R2 stays
         runnable-but-not-poolable and is deliberately excluded here.
         """
         return self in {self.CURRENT, self.BLACKBOARD_CONTEXT}
@@ -74,7 +78,7 @@ class RevisedExperimentArm(str, Enum):
 
 
 def revised_arm_metadata(arm: RevisedExperimentArm) -> dict[str, object]:
-    return {
+    metadata: dict[str, object] = {
         "experiment_namespace": REVISED_EXPERIMENT_NAMESPACE,
         "configuration": arm.value,
         "implemented": arm.implemented,
@@ -85,3 +89,9 @@ def revised_arm_metadata(arm: RevisedExperimentArm) -> dict[str, object]:
             arm is RevisedExperimentArm.LONG_SESSION_DIAGNOSTIC
         ),
     }
+    if arm is RevisedExperimentArm.SEMANTIC_ASSURANCE:
+        metadata.update({
+            "r2_generation_mode": R2_DETERMINISTIC_GENERATION_MODE,
+            "r2_intervention_version": R2_DETERMINISTIC_INTERVENTION_VERSION,
+        })
+    return metadata

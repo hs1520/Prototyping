@@ -1,6 +1,7 @@
 """Evaluator-only A/G gold template — draft generation and consistency.
 
-The draft is derived from the reviewed decomposition (not the checker, F3), carries
+The draft is derived from the student-approved decomposition (not the checker, F3),
+and carries
 the EVALUATOR_GOLD role and DRAFT status, and is internally consistent with the
 emit → extract → check pipeline (F1=1.0), which is what the supervisor reviews and
 freezes.
@@ -12,7 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+from src.prototyping.ag_chains import (
+    REQ_SAFE_004_CHAIN,
+    REQ_SAFE_005_CHAIN,
+    REQ_SAFE_008_CHAIN,
+)
 from src.prototyping.ag_contracts import check_ag_graph
 from src.prototyping.ag_evaluation import GOLD_ROLE, evaluate_ag_against_gold
 from src.prototyping.ag_extractor import extract_ag_graph
@@ -22,6 +27,7 @@ from src.prototyping.ag_gold_template import (
     build_gold_draft,
     validate_frozen_gold,
 )
+from src.simulation.syntax_checker import check_syntax
 
 
 def _freeze(draft: dict) -> dict:
@@ -77,6 +83,26 @@ def test_validator_rejects_static_failure_class_and_unbound_provenance():
     problems = validate_frozen_gold(frozen)
     assert any("requirement_set_digest" in p for p in problems)
     assert any("per-run blind label" in p for p in problems)
+
+
+def test_validator_rejects_nested_failure_labels_and_derived_timing_values():
+    frozen = _freeze(_draft())
+    frozen["metadata"] = {"failure_class": "NO_FAILURE"}
+    frozen["timing"]["metadata"] = {"within_deadline": True}
+    problems = validate_frozen_gold(frozen)
+    assert any("per-run blind label" in p for p in problems)
+    assert any("evaluator-derived fields" in p for p in problems)
+
+
+def test_validator_rejects_redundant_binary_float_deadline_authority():
+    frozen = _freeze(_draft())
+    frozen["system"]["deadline_s"] = 0.5
+    problems = validate_frozen_gold(frozen)
+    assert any("deadline_s must not appear" in problem for problem in problems)
+
+
+def test_atomic_semantics_use_a_distinct_gold_schema_version():
+    assert _draft()["schema_version"] == "3.0"
 
 
 def test_pooling_gate_requires_every_selected_chain_frozen(tmp_path):
@@ -152,6 +178,85 @@ def test_committed_draft_file_matches_the_generator_and_is_unfrozen():
     assert on_disk["artifact_role"] == "EVALUATOR_GOLD"
     # regenerable: the committed draft equals a fresh generation
     assert on_disk == _draft()
+
+
+@pytest.mark.parametrize(
+    ("chain", "expected_category"),
+    [
+        (REQ_SAFE_004_CHAIN, "invariant_agreement"),
+        (REQ_SAFE_005_CHAIN, "timing_agreement"),
+        (REQ_SAFE_008_CHAIN, "invariant_agreement"),
+    ],
+)
+def test_real_chain_prediction_round_trips_through_its_atomic_draft(
+    chain, expected_category
+):
+    """Structural integration only: the fixture freeze is not human validation."""
+    path = Path(f"docs/gold/{chain.source_requirement}_ag_gold.draft.json")
+    draft = json.loads(path.read_text(encoding="utf-8"))
+    assert draft == build_gold_draft(chain, source_text=draft["source_text"])
+    model = (
+        f"package Source {{ requirement def {chain.source_requirement} "
+        "{ doc /* source */ } }\n"
+        + emit_ag_package(chain)
+    )
+    syntax = check_syntax(model)
+    assert syntax.has_errors is False
+    assert syntax.score == 1.0
+    report = check_ag_graph(extract_ag_graph(model, revision=1))
+    assert report.verdict == "PASS", [item.code for item in report.diagnostics]
+    prediction = report.to_dict()
+    result = evaluate_ag_against_gold(prediction, _freeze(draft))
+    assert prediction["artifact_role"] == "RUNTIME_A_G_PREDICTION"
+    assert result["metric_name"] == "decomposition_extraction_agreement"
+    assert "f1" not in result
+    assert result["guarantee_allocation"]["f1"] == 1.0
+    assert result["assumption_discharge"]["f1"] == 1.0
+    assert expected_category in result
+    if expected_category == "invariant_agreement":
+        category = result[expected_category]
+        assert category["stakeholder"]["f1"] == 1.0
+        assert category["student_derived_design_constraint"]["f1"] == 1.0
+    else:
+        assert result["timing_agreement"]["segment_prf"]["f1"] == 1.0
+        assert result["priority_agreement"]["edge_prf"]["f1"] == 1.0
+        assert result["priority_agreement"]["arbitration_topology_conforms"] is True
+
+
+def test_three_real_chain_round_trips_cover_all_five_separate_categories():
+    observed = {
+        "guarantee_allocation",
+        "assumption_discharge",
+    }
+    for chain in (
+        REQ_SAFE_004_CHAIN,
+        REQ_SAFE_005_CHAIN,
+        REQ_SAFE_008_CHAIN,
+    ):
+        path = Path(f"docs/gold/{chain.source_requirement}_ag_gold.draft.json")
+        draft = json.loads(path.read_text(encoding="utf-8"))
+        model = (
+            f"package Source {{ requirement def {chain.source_requirement} "
+            "{ doc /* source */ } }\n"
+            + emit_ag_package(chain)
+        )
+        prediction = check_ag_graph(extract_ag_graph(model, revision=1)).to_dict()
+        result = evaluate_ag_against_gold(prediction, _freeze(draft))
+        observed.update(
+            key for key in (
+                "timing_agreement",
+                "priority_agreement",
+                "invariant_agreement",
+            )
+            if key in result
+        )
+    assert observed == {
+        "guarantee_allocation",
+        "assumption_discharge",
+        "timing_agreement",
+        "priority_agreement",
+        "invariant_agreement",
+    }
 
 
 def test_draft_discharge_edges_have_no_unresolved_sources_for_this_chain():

@@ -1,5 +1,5 @@
 {
-  "schema_version": "2.0",
+  "schema_version": "3.0",
   "artifact_role": "EVALUATOR_GOLD",
   "experiment_namespace": "BLACKBOARD_AG_V1",
   "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
@@ -16,28 +16,27 @@
     "blind_to_runtime_verdict": false,
     "independent_human_review": false
   },
-  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the reviewed decomposition, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
+  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the student-approved decomposition candidate, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
   "system": {
     "contract": "SystemParachuteContract",
     "assumptions": [
       "airborne",
-      "criticalPropulsionFailure"
+      "criticalPropulsionFailureDetected"
     ],
     "guarantee_observation": "parachuteDeployed",
-    "deadline_s": 0.5,
-    "_review": "confirm system assumptions, observation, and deadline"
+    "_review": "confirm system assumptions and observation"
   },
   "allocations": [
     {
-      "owner": "propulsionMonitor",
-      "contract": "PropulsionMonitorContract",
-      "guarantee": "criticalFailureEvent",
+      "owner": "safetyResponseArbiter",
+      "contract": "SafetyResponseArbiterContract",
+      "guarantee": "parachuteDeploymentCommand",
       "_review": "confirm the responsible owner"
     },
     {
-      "owner": "safetyMonitor",
-      "contract": "SafetyMonitorContract",
-      "guarantee": "parachuteCommand",
+      "owner": "recoveryPowerSupply",
+      "contract": "RecoveryPowerSupplyContract",
+      "guarantee": "recoveryActuationPowerAvailable",
       "_review": "confirm the responsible owner"
     },
     {
@@ -49,34 +48,81 @@
   ],
   "discharge_edges": [
     {
-      "component": "PropulsionMonitorContract",
-      "assumption": "failureSensingAvailable",
-      "by": "environment",
-      "_review": "confirm the discharging source"
-    },
-    {
-      "component": "SafetyMonitorContract",
+      "component": "SafetyResponseArbiterContract",
       "assumption": "airborne",
       "by": "environment",
       "_review": "confirm the discharging source"
     },
     {
-      "component": "SafetyMonitorContract",
-      "assumption": "criticalFailureEvent",
-      "by": "PropulsionMonitorContract",
-      "_review": "confirm the discharging source"
-    },
-    {
-      "component": "RecoverySystemContract",
-      "assumption": "parachuteCommand",
-      "by": "SafetyMonitorContract",
-      "_review": "confirm the discharging source"
-    },
-    {
-      "component": "RecoverySystemContract",
-      "assumption": "actuatorPower",
+      "component": "SafetyResponseArbiterContract",
+      "assumption": "criticalPropulsionFailureDetected",
       "by": "environment",
       "_review": "confirm the discharging source"
+    },
+    {
+      "component": "RecoveryPowerSupplyContract",
+      "assumption": "airborne",
+      "by": "environment",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "RecoverySystemContract",
+      "assumption": "parachuteDeploymentCommand",
+      "by": "SafetyResponseArbiterContract",
+      "_review": "confirm the discharging source"
+    },
+    {
+      "component": "RecoverySystemContract",
+      "assumption": "recoveryActuationPowerAvailable",
+      "by": "RecoveryPowerSupplyContract",
+      "_review": "confirm the discharging source"
     }
-  ]
+  ],
+  "timing": {
+    "origin": "criticalPropulsionFailureDetected",
+    "deadline": {
+      "value": "0.5",
+      "unit": "s"
+    },
+    "segments": [
+      {
+        "component": "SafetyResponseArbiter",
+        "budget": {
+          "value": "0.1",
+          "unit": "s"
+        }
+      },
+      {
+        "component": "RecoverySystem",
+        "budget": {
+          "value": "0.35",
+          "unit": "s"
+        }
+      }
+    ]
+  },
+  "priority": {
+    "response_set_id": "FLIGHT_RESPONSES_V1",
+    "members": [
+      "PARACHUTE_DEPLOYMENT",
+      "CONTROLLED_BATTERY_LANDING",
+      "COMMUNICATION_LOSS_SAFE_LANDING",
+      "LOW_BATTERY_RETURN_TO_BASE"
+    ],
+    "edges": [
+      {
+        "higher": "PARACHUTE_DEPLOYMENT",
+        "lower": "CONTROLLED_BATTERY_LANDING"
+      },
+      {
+        "higher": "PARACHUTE_DEPLOYMENT",
+        "lower": "COMMUNICATION_LOSS_SAFE_LANDING"
+      },
+      {
+        "higher": "PARACHUTE_DEPLOYMENT",
+        "lower": "LOW_BATTERY_RETURN_TO_BASE"
+      }
+    ],
+    "trigger": "criticalPropulsionFailureDetected"
+  }
 }

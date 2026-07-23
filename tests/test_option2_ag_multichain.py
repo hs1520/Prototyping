@@ -1,4 +1,4 @@
-"""Multi-chain R2-BBAG: a run that co-selects two reviewed chains.
+"""Multi-chain R2-BBAG: a run that co-selects two student-approved chains.
 
 The drone requirement set carries both REQ_SAFE_004 (startup inhibit) and
 REQ_SAFE_005 (timed failsafe). Each is an independent A/G decomposition emitted

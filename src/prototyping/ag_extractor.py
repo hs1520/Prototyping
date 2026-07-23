@@ -47,6 +47,10 @@ _ATTR_RE = re.compile(
     r"\battribute\s+(\w+)\s*:\s*(\w+)\s*(?:=\s*(-?[\d.]+)"
     r"\s*(?:\[([^\]]+)\])?)?\s*;"
 )
+_BOOL_ATTR_RE = re.compile(
+    r"\battribute\s+(\w+)\s*:\s*Boolean\s*=\s*(true|false)\s*;",
+    re.I,
+)
 _ASSUME_RE = re.compile(r"\bassume\s+constraint\s+(\w+)?\s*\{([^{}]*)\}")
 _REQUIRE_RE = re.compile(r"\brequire\s+constraint\s+(\w+)?\s*\{([^{}]*)\}")
 _DEP_RE = re.compile(
@@ -57,7 +61,8 @@ _SATISFY_RE = re.compile(
 )
 _STATE_DEF_RE = re.compile(r"\bstate\s+def\s+(\w+)\s*\{")
 _TRANSITION_RE = re.compile(
-    r"\btransition\s+\w+\s+first\s+(\w+)\s+accept\s+(\w+)\s+then\s+(\w+)\s*;",
+    r"\btransition\s+\w+\s+first\s+(\w+)\s+accept\s+(\w+)"
+    r"(?:\s+if\s+(.+?))?\s+then\s+(\w+)\s*;",
     re.DOTALL,
 )
 _VERIFICATION_DEF_RE = re.compile(r"\bverification\s+def\s+(\w+)\s*\{")
@@ -66,12 +71,79 @@ _VERIFY_REQ_RE = re.compile(
 )
 _SOURCE_REQ_RE = re.compile(r"bounded\s+A/G\s+system\s+contract\s+for\s+(REQ[_-]\w+)", re.I)
 _SAFETY_PATTERN_RE = re.compile(r"safety_pattern\s*=\s*(\w+)", re.I)
+_TIMING_ORIGIN_RE = re.compile(r"timing_origin\s*=\s*(\w+)", re.I)
+_PRIORITY_AUXILIARY_MARKER = "bounded A/G evaluator semantic auxiliary"
 _CMP_RE = re.compile(r"^(\w+)\s*(<=|>=|==|<|>)\s*([A-Za-z_][\w]*|-?[\d.]+)$")
 _IDENT_RE = re.compile(r"^(\w+)$")
+_BOOL_TOKEN_RE = re.compile(r"\s*(\(|\)|not\b|and\b|or\b|[A-Za-z_]\w*)", re.I)
 
 # Attribute names that carry a timing budget/deadline.
 _COMPONENT_BUDGET_KEYS = ("latencybudget",)
 _SYSTEM_BUDGET_KEYS = ("maxlatency", "deadline", "systemdeadline")
+
+
+def _boolean_ast(expr: str) -> Optional[Dict[str, object]]:
+    """Parse the fixed Identifier/Not/And/Or subset used by the bounded profile."""
+    source = str(expr or "").strip()
+    tokens: List[str] = []
+    cursor = 0
+    while cursor < len(source):
+        match = _BOOL_TOKEN_RE.match(source, cursor)
+        if not match:
+            return None
+        tokens.append(match.group(1))
+        cursor = match.end()
+    position = 0
+
+    def primary():
+        nonlocal position
+        if position >= len(tokens):
+            raise ValueError
+        token = tokens[position]
+        if token == "(":
+            position += 1
+            node = parse_or()
+            if position >= len(tokens) or tokens[position] != ")":
+                raise ValueError
+            position += 1
+            return node
+        if token.lower() in {"and", "or", "not"} or token == ")":
+            raise ValueError
+        position += 1
+        return {"node": "Identifier", "name": token}
+
+    def parse_not():
+        nonlocal position
+        if position < len(tokens) and tokens[position].lower() == "not":
+            position += 1
+            return {"node": "Not", "expr": parse_not()}
+        return primary()
+
+    def parse_and():
+        nonlocal position
+        operands = [parse_not()]
+        while position < len(tokens) and tokens[position].lower() == "and":
+            position += 1
+            operands.append(parse_not())
+        return operands[0] if len(operands) == 1 else {
+            "node": "And", "operands": operands,
+        }
+
+    def parse_or():
+        nonlocal position
+        operands = [parse_and()]
+        while position < len(tokens) and tokens[position].lower() == "or":
+            position += 1
+            operands.append(parse_and())
+        return operands[0] if len(operands) == 1 else {
+            "node": "Or", "operands": operands,
+        }
+
+    try:
+        result = parse_or()
+    except (KeyError, ValueError):
+        return None
+    return result if position == len(tokens) else None
 
 
 def _parse_expr(
@@ -93,7 +165,11 @@ def _parse_expr(
         return var, "numeric", {"variable": var, "comparator": cmp_op, "value": value}
     m = _IDENT_RE.match(body)
     if m:
-        return m.group(1), "boolean", {}
+        ast = {"node": "Identifier", "name": m.group(1)}
+        return m.group(1), "boolean", {"ast": ast}
+    ast = _boolean_ast(body)
+    if ast is not None:
+        return body, "boolean", {"ast": ast}
     return body, "unsupported", {}
 
 
@@ -105,6 +181,10 @@ def _parse_contract(name: str, block: str, span: Span) -> Contract:
         default = m.group(3)
         attrs[attr_name.lower()] = float(default) if default is not None else None
         attr_units[attr_name.lower()] = m.group(4)
+    bool_attrs = {
+        m.group(1).lower(): m.group(2).lower() == "true"
+        for m in _BOOL_ATTR_RE.finditer(block)
+    }
 
     assumptions: List[Assumption] = []
     for m in _ASSUME_RE.finditer(block):
@@ -116,6 +196,7 @@ def _parse_contract(name: str, block: str, span: Span) -> Contract:
             is_environment=is_env, constraint_name=cname,
             variable=extra.get("variable"), comparator=extra.get("comparator"),
             value=extra.get("value"),
+            ast=extra.get("ast"),
         ))
 
     guarantees: List[Guarantee] = []
@@ -126,18 +207,29 @@ def _parse_contract(name: str, block: str, span: Span) -> Contract:
             concept=concept, expr=" ".join(expr.split()), kind=kind,
             constraint_name=cname, variable=extra.get("variable"),
             comparator=extra.get("comparator"), value=extra.get("value"),
+            ast=extra.get("ast"),
         ))
 
     timing_budget: Optional[float] = None
     timing_unit: Optional[str] = None
+    timing_value_literal: Optional[str] = None
     for key in _COMPONENT_BUDGET_KEYS + _SYSTEM_BUDGET_KEYS:
         if attrs.get(key) is not None:
             timing_budget = attrs[key]
             timing_unit = attr_units.get(key)
+            match = next(
+                (
+                    item for item in _ATTR_RE.finditer(block)
+                    if item.group(1).lower() == key
+                ),
+                None,
+            )
+            timing_value_literal = match.group(3) if match else None
             break
 
     source = _SOURCE_REQ_RE.search(block)
     pattern = _SAFETY_PATTERN_RE.search(block)
+    timing_origin = _TIMING_ORIGIN_RE.search(block)
 
     return Contract(
         name=name,
@@ -146,6 +238,9 @@ def _parse_contract(name: str, block: str, span: Span) -> Contract:
         guarantees=tuple(guarantees),
         timing_budget=timing_budget,
         timing_unit=timing_unit,
+        timing_value_literal=timing_value_literal,
+        timing_segment_required=bool_attrs.get("timingsegmentrequired"),
+        timing_origin=timing_origin.group(1) if timing_origin else None,
         observation=None,  # set for the system contract only
         element_id=name,
         span=span,
@@ -157,7 +252,10 @@ def _parse_contract(name: str, block: str, span: Span) -> Contract:
 def _parse_behavior(name: str, block: str, span: Span) -> BehaviorRealization:
     initial = re.search(r"\bentry\s*;\s*then\s+(\w+)\s*;", block)
     transitions = tuple(
-        BehaviorTransition(m.group(1), m.group(2), m.group(3))
+        BehaviorTransition(
+            m.group(1), m.group(2), m.group(4),
+            " ".join(m.group(3).split()) if m.group(3) else None,
+        )
         for m in _TRANSITION_RE.finditer(block)
     )
     entry_actions: Dict[str, str] = {}
@@ -179,10 +277,169 @@ def _parse_behavior(name: str, block: str, span: Span) -> BehaviorRealization:
     )
 
 
+def _extract_priority(text: str) -> Dict[str, object]:
+    """Extract the bounded priority facts from authoritative SysML constructs."""
+    contract_match = re.search(
+        r"\brequirement\s+def\s+SafetyResponsePriorityContract\s*\{", text
+    )
+    state_match = re.search(
+        r"\bstate\s+def\s+SafetyResponseArbitration\s*\{", text
+    )
+    if not contract_match or not state_match:
+        return {}
+    contract_brace = text.index("{", contract_match.start())
+    contract_end = find_block_end(text, contract_brace)
+    state_brace = text.index("{", state_match.start())
+    state_end = find_block_end(text, state_brace)
+    if contract_end == -1 or state_end == -1:
+        return {}
+    contract = text[contract_brace + 1:contract_end]
+    state = text[state_brace + 1:state_end]
+
+    response_set = re.search(r"response_set_id\s*=\s*(\w+)", contract)
+    trigger_match = re.search(
+        r"assume\s+constraint\s+priorityTrigger\s*\{\s*(\w+)\s*\}",
+        contract,
+    )
+    selected_match = re.search(
+        r"require\s+constraint\s+selectHighestPriority\s*\{"
+        r"\s*selectedResponse\s*==\s*(\w+)::(\w+)\s*\}",
+        contract,
+    )
+    if not response_set or not trigger_match or not selected_match:
+        return {}
+    response_set_id = response_set.group(1)
+    enum_match = re.search(
+        rf"\benum\s+def\s+{re.escape(response_set_id)}\s*\{{", text
+    )
+    if not enum_match:
+        return {}
+    enum_brace = text.index("{", enum_match.start())
+    enum_end = find_block_end(text, enum_brace)
+    members = re.findall(r"\benum\s+(\w+)\s*;", text[enum_brace + 1:enum_end])
+    selected = selected_match.group(2)
+    lower_members = re.findall(
+        r"require\s+constraint\s+precedence_\w+\s*\{"
+        r"\s*not\s+\w+\s+or\s+selectedResponse\s*!=\s*\w+::(\w+)\s*\}",
+        contract,
+    )
+    edges = [{"higher": selected, "lower": lower} for lower in lower_members]
+    transitions = tuple(
+        BehaviorTransition(
+            match.group(1),
+            match.group(2),
+            match.group(4),
+            " ".join(match.group(3).split()) if match.group(3) else None,
+        )
+        for match in _TRANSITION_RE.finditer(state)
+    )
+    guards = [
+        {
+            "response": transition.target,
+            "guard_ast": {
+                "node": "Not",
+                "expr": {
+                    "node": "Identifier",
+                    "name": trigger_match.group(1),
+                },
+            },
+        }
+        for transition in transitions
+        if transition.guard == f"not {trigger_match.group(1)}"
+    ]
+    selected_transition = any(
+        transition.trigger == "CriticalPropulsionFailureDetectedSignal"
+        and transition.target == "parachuteDeploymentSelected"
+        and transition.guard == trigger_match.group(1)
+        for transition in transitions
+    )
+    selection_state = re.search(
+        r"\bstate\s+parachuteDeploymentSelected\s*\{([^{}]*)\}",
+        state,
+    )
+    selection_action_connected = bool(
+        selection_state
+        and re.search(
+            r"\bentry\s+action\s+issueParachuteDeploymentCommand\b",
+            selection_state.group(1),
+        )
+    )
+    selected_elements = set(members)
+    selected_elements.update({
+        trigger_match.group(1),
+        "selectedResponse",
+    })
+    return {
+        "response_set_id": response_set_id,
+        "members": members,
+        "edges": edges,
+        "trigger": trigger_match.group(1),
+        "arbitration_topology": {
+            "response_set_id": response_set_id,
+            "members": members,
+            "edges": edges,
+            "trigger": trigger_match.group(1),
+            "selection": {
+                "when": trigger_match.group(1),
+                "selected_response": selected,
+            },
+            "competing_transition_guards": guards,
+            "selected_model_elements": sorted(selected_elements),
+            "parachute_transition_reachable": selected_transition,
+            "selection_action_connected": selection_action_connected,
+            "deployment_action_connected": False,
+            "observation_connected": False,
+        },
+    }
+
+
+_INVARIANT_NAME_RE = re.compile(
+    r"^inv__(.+?)__source__(.+?)__kind__(.+)$"
+)
+
+
+def _extract_invariants(text: str) -> Tuple[Mapping[str, object], ...]:
+    result: List[Mapping[str, object]] = []
+    for requirement in _REQ_DEF_RE.finditer(text):
+        brace = text.index("{", requirement.start())
+        end = find_block_end(text, brace)
+        if end == -1:
+            continue
+        block = text[brace + 1:end]
+        for constraint in _REQUIRE_RE.finditer(block):
+            name = str(constraint.group(1) or "")
+            metadata = _INVARIANT_NAME_RE.match(name)
+            if not metadata:
+                continue
+            lowered = _boolean_ast(constraint.group(2))
+            if not isinstance(lowered, Mapping):
+                continue
+            operands = (
+                lowered.get("operands")
+                if lowered.get("node") == "Or" else None
+            )
+            if (
+                not isinstance(operands, list)
+                or len(operands) != 2
+                or not isinstance(operands[0], Mapping)
+                or operands[0].get("node") != "Not"
+            ):
+                continue
+            result.append({
+                "invariant_id": metadata.group(1),
+                "scope": requirement.group(1),
+                "trigger_or_antecedent_ast": operands[0].get("expr"),
+                "required_consequent_ast": operands[1],
+                "source_kind": metadata.group(3),
+                "source_id": metadata.group(2),
+            })
+    return tuple(result)
+
+
 _PACKAGE_RE = re.compile(r"\bpackage\s+(\w+)\s*\{")
 # The emitter stamps this exact marker on every A/G system contract (see
 # ``ag_emitter.emit_ag_package``); it is the reliable signal that a top-level
-# package carries a reviewed A/G chain rather than base model content.
+# package carries a bounded A/G chain candidate rather than base model content.
 _AG_PACKAGE_MARKER = "bounded A/G system contract for"
 
 
@@ -208,9 +465,9 @@ def extract_ag_graphs(
     revision: Optional[int] = None,
     model_digest: Optional[str] = None,
 ) -> List[AGGraph]:
-    """Extract one bounded A/G graph per reviewed chain in the committed model.
+    """Extract one bounded A/G graph per selected chain in the committed model.
 
-    A model may carry several independent A/G chains (one reviewed decomposition
+    A model may carry several independent A/G chains (one selected decomposition
     per selected requirement — the drone system co-selects REQ_SAFE_004 and
     REQ_SAFE_005). Each chain is emitted as its own top-level package with a
     single system contract, so each is a self-contained A/G decomposition that
@@ -262,7 +519,7 @@ def extract_ag_graph(
     """Parse committed SysML v2 text into a bounded A/G graph (§6.2).
 
     This resolves a single system contract. For a model that may carry more than
-    one reviewed chain, use :func:`extract_ag_graphs`, which returns one graph
+    one selected chain, use :func:`extract_ag_graphs`, which returns one graph
     per chain and degrades to ``[this]`` when only one chain is present.
     """
     text = sysml_text or ""
@@ -283,7 +540,10 @@ def extract_ag_graph(
         # Only a requirement def that declares assume/require constraints is an A/G
         # contract (§6.2). Ordinary stakeholder requirement defs imported into the
         # model carry no A/G semantics and must not pollute the graph.
-        if contract.assumptions or contract.guarantees:
+        if (
+            (contract.assumptions or contract.guarantees)
+            and _PRIORITY_AUXILIARY_MARKER not in block
+        ):
             raw[name] = contract
 
     owners: Dict[str, List[str]] = {}
@@ -317,7 +577,7 @@ def extract_ag_graph(
             edge_kind = "decomposes"
         elif kind.startswith("discharge"):
             edge_kind = "discharges"
-            subject = raw_kind[len("discharge"):]
+            subject = raw_kind[len("discharge"):].split("__to__", 1)[0]
         elif kind.startswith("realize"):
             edge_kind = "realized_by"
         elif kind.startswith("observe"):
@@ -360,6 +620,9 @@ def extract_ag_graph(
                 name=contract.name, role="system",
                 assumptions=contract.assumptions, guarantees=contract.guarantees,
                 timing_budget=contract.timing_budget, timing_unit=contract.timing_unit,
+                timing_value_literal=contract.timing_value_literal,
+                timing_segment_required=contract.timing_segment_required,
+                timing_origin=contract.timing_origin,
                 observation=obs, element_id=contract.element_id, span=contract.span,
                 owners=tuple(owners.get(name, ())),
                 source_requirement=contract.source_requirement,
@@ -370,6 +633,9 @@ def extract_ag_graph(
                 name=contract.name, role=contract.role,
                 assumptions=contract.assumptions, guarantees=contract.guarantees,
                 timing_budget=contract.timing_budget, timing_unit=contract.timing_unit,
+                timing_value_literal=contract.timing_value_literal,
+                timing_segment_required=contract.timing_segment_required,
+                timing_origin=contract.timing_origin,
                 observation=contract.observation, element_id=contract.element_id,
                 span=contract.span, owners=tuple(owners.get(name, ())),
                 source_requirement=contract.source_requirement,
@@ -385,4 +651,11 @@ def extract_ag_graph(
         behaviors=tuple(behaviors),
         verification_targets=verification_targets,
         source_requirement_ids=tuple(dict.fromkeys(all_requirement_ids)),
+        priority=_extract_priority(text),
+        invariants=_extract_invariants(text),
+        selected_model_elements=tuple(sorted({
+            match.group(1) for match in re.finditer(
+                r"\battribute\s+(\w+)\s*:", text
+            )
+        })),
     )

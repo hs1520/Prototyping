@@ -1,0 +1,65 @@
+{
+  "artifact_role": "ARCHITECTURE_BOUNDARY",
+  "experiment_namespace": "BLACKBOARD_AG_V1",
+  "schema_version": "1.0",
+  "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
+  "chain_id": "REQ_SAFE_008",
+  "source_requirement": "REQ_SAFE_008",
+  "requirement_set_digest": null,
+  "components": [
+    {
+      "component_id": "ReleaseCommandGatewayContract",
+      "owner_usage": "releaseCommandGateway",
+      "owner_def": "ReleaseCommandGateway",
+      "responsibility": null,
+      "_responsibility_review": "state this component's single responsibility as a frozen design decision, not from the stakeholder requirement text",
+      "interfaces": {
+        "consumes": [
+          "receivedReleaseCommand",
+          "authorisationDataValid"
+        ],
+        "produces": [
+          "authorisedReleaseCommandReceived"
+        ],
+        "trigger": "ReceivedReleaseCommandSignal"
+      }
+    },
+    {
+      "component_id": "PayloadLockMechanismContract",
+      "owner_usage": "payloadLockMechanism",
+      "owner_def": "PayloadLockMechanism",
+      "responsibility": null,
+      "_responsibility_review": "state this component's single responsibility as a frozen design decision, not from the stakeholder requirement text",
+      "interfaces": {
+        "consumes": [
+          "powerOnEvent",
+          "powerLostEvent",
+          "authorisedReleaseCommandReceived"
+        ],
+        "produces": [
+          "payloadLocked"
+        ],
+        "trigger": "PowerOnSignal"
+      }
+    }
+  ],
+  "allocations": [
+    {
+      "owner": "releaseCommandGateway",
+      "contract": "ReleaseCommandGatewayContract",
+      "guarantee": "authorisedReleaseCommandReceived"
+    },
+    {
+      "owner": "payloadLockMechanism",
+      "contract": "PayloadLockMechanismContract",
+      "guarantee": "payloadLocked"
+    }
+  ],
+  "reviewer": null,
+  "reviewed_date": null,
+  "review_protocol": {
+    "independent_architecture_review": false
+  },
+  "review_instructions": "Freeze the component decomposition as a design decision, independent of the stakeholder requirement and blind to the runtime verdict. Confirm each component's responsibility and interface boundary and each owner->guarantee allocation; drop the _review markers; set reviewer / reviewed_date and independent_architecture_review=true; set artifact_digest = architecture_boundary_digest(this); set status 'FROZEN'. The evaluator gold must cite this digest.",
+  "artifact_digest": null
+}

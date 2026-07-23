@@ -110,6 +110,25 @@ def test_timing_agreement_flags_an_over_budget_prediction():
     assert out["segment_prf"]["f1"] < 1.0
 
 
+def test_timing_agreement_preserves_order_duplicates_and_recomputes_derived():
+    gold = _timing(
+        "criticalPropulsionFailureDetected", "0.5", [("A", "0.10")]
+    )
+    gold.update({"additive_total": "999", "within_deadline": False})
+    duplicate = _timing(
+        "criticalPropulsionFailureDetected",
+        "0.5",
+        [("A", "0.10"), ("A", "0.10")],
+    )
+    out = timing_agreement(duplicate, gold)
+    assert out["segment_prf"]["f1"] < 1.0
+    assert out["additive_total_match"] is False
+    assert out["computed"]["gold"] == {
+        "additive_total_s": "0.10",
+        "within_deadline": True,
+    }
+
+
 # ── §6.4 priority agreement ──────────────────────────────────────────────────
 
 def test_priority_needs_explicit_edges_not_a_boolean_and_checks_topology():
@@ -119,13 +138,35 @@ def test_priority_needs_explicit_edges_not_a_boolean_and_checks_topology():
         "edges": [{"higher": "PARACHUTE_DEPLOYMENT", "lower": "LOW_BATTERY_RETURN_TO_BASE"}],
         "trigger": "criticalPropulsionFailureDetected",
     }
-    pred = dict(gold, arbitration_topology_present=True)
+    guard = {"node": "Not", "expr": _id("criticalPropulsionFailureDetected")}
+    pred = dict(gold, arbitration_topology={
+        **gold,
+        "selection": {
+            "when": "criticalPropulsionFailureDetected",
+            "selected_response": "PARACHUTE_DEPLOYMENT",
+        },
+        "competing_transition_guards": [{
+            "response": "LOW_BATTERY_RETURN_TO_BASE",
+            "guard_ast": guard,
+        }],
+        "selected_model_elements": [
+            "criticalPropulsionFailureDetected",
+            "PARACHUTE_DEPLOYMENT",
+            "LOW_BATTERY_RETURN_TO_BASE",
+        ],
+        "parachute_transition_reachable": True,
+        "selection_action_connected": True,
+        "deployment_action_connected": True,
+        "observation_connected": True,
+    })
     out = priority_agreement(pred, gold)
     assert out["response_set_id_match"] and out["members_match"]
     assert out["edge_prf"]["f1"] == 1.0 and out["trigger_match"]
-    assert out["arbitration_topology_present"] is True
+    assert out["arbitration_topology_conforms"] is True
     # a bare claim with no extracted arbitration structure does not count
-    assert priority_agreement(dict(gold), gold)["arbitration_topology_present"] is False
+    assert priority_agreement(
+        dict(gold, arbitration_topology_present=True), gold
+    )["arbitration_topology_conforms"] is False
 
 
 # ── §6.5 invariants: separate stakeholder / student-derived denominators ─────
@@ -140,12 +181,15 @@ def _inv(iid, ante, cons, kind):
 
 
 def test_invariants_are_scored_separately_by_source_kind():
-    gold = {"invariants": [
+    elements = [
+        "powerOnInitialisation", "payloadLocked", "notActuatorPowerAvailable",
+    ]
+    gold = {"selected_model_elements": elements, "invariants": [
         _inv("i1", "powerOnInitialisation", "payloadLocked", "STAKEHOLDER"),
         _inv("i2", "notActuatorPowerAvailable", "payloadLocked",
              "STUDENT_DERIVED_DESIGN_CONSTRAINT"),
     ]}
-    pred = {"invariants": [
+    pred = {"selected_model_elements": elements, "invariants": [
         _inv("i1", "powerOnInitialisation", "payloadLocked", "STAKEHOLDER"),
     ]}
     out = invariant_agreement(pred, gold)
@@ -155,32 +199,66 @@ def test_invariants_are_scored_separately_by_source_kind():
     assert "f1" not in out  # there is no composite score
 
 
+def test_invariant_identifiers_and_source_kind_fail_closed():
+    bad_identifier = {
+        "selected_model_elements": ["known"],
+        "invariants": [_inv("i1", "unknown", "known", "STAKEHOLDER")],
+    }
+    with pytest.raises(SemanticsError, match="does not resolve"):
+        invariant_agreement(bad_identifier, bad_identifier)
+
+    unknown_kind = {
+        "selected_model_elements": ["a", "b"],
+        "invariants": [_inv("i1", "a", "b", "TYPO")],
+    }
+    with pytest.raises(SemanticsError, match="source_kind"):
+        invariant_agreement(unknown_kind, unknown_kind)
+
+
 # ── evaluator wiring: separate categories surface, never a merged F1 ─────────
 
 def test_evaluator_reports_each_category_separately_when_present():
+    import hashlib
+
     from src.prototyping.ag_evaluation import evaluate_ag_against_gold
 
     timing = _timing("criticalPropulsionFailureDetected", "0.5",
                      [("SafetyResponseArbiter", "0.10"), ("RecoverySystem", "0.35")])
     priority = {
         "response_set_id": "FLIGHT_RESPONSES_V1",
-        "members": ["PARACHUTE_DEPLOYMENT"],
-        "edges": [],
+        "members": ["PARACHUTE_DEPLOYMENT", "LOW_BATTERY_RETURN_TO_BASE"],
+        "edges": [{
+            "higher": "PARACHUTE_DEPLOYMENT",
+            "lower": "LOW_BATTERY_RETURN_TO_BASE",
+        }],
         "trigger": "criticalPropulsionFailureDetected",
         "arbitration_topology_present": True,
     }
     invariants = [_inv("i1", "powerOnInitialisation", "payloadLocked", "STAKEHOLDER")]
+    selected_model_elements = ["powerOnInitialisation", "payloadLocked"]
 
     prediction = {
         "artifact_role": "RUNTIME_A_G_PREDICTION",
         "experiment_namespace": "BLACKBOARD_AG_V1",
         "configuration": "R2-BBAG",
+        "source_requirement": "REQ_TEST_001",
+        "source_model_digest": "a" * 64,
+        "checker_version": "fixture-checker",
         "graph": {
-            "allocations": [], "discharge_edges": [],
+            "allocations": [{
+                "owner": "fixtureOwner", "guarantee": "fixtureGuarantee",
+            }],
+            "discharge_edges": [{
+                "component": "FixtureContract",
+                "assumption": "fixtureAssumption",
+                "by": "environment",
+            }],
             "timing": timing, "priority": priority, "invariants": invariants,
+            "selected_model_elements": selected_model_elements,
         },
     }
     gold = {
+        "schema_version": "3.0",
         "artifact_role": "EVALUATOR_GOLD",
         "experiment_namespace": "BLACKBOARD_AG_V1",
         "status": "FROZEN",
@@ -189,8 +267,26 @@ def test_evaluator_reports_each_category_separately_when_present():
         "review_protocol": {
             "blind_to_runtime_verdict": True, "independent_human_review": True,
         },
-        "allocations": [],
+        "chain_id": "REQ_TEST_001",
+        "source_requirement": "REQ_TEST_001",
+        "source_text": "REQ-TEST-001: evaluator semantics fixture.",
+        "source_digest": hashlib.sha256(
+            "REQ-TEST-001: evaluator semantics fixture.".encode("utf-8")
+        ).hexdigest(),
+        "requirement_set_digest": "b" * 64,
+        "architecture_boundary_digest": "c" * 64,
+        "allocations": [{
+            "owner": "fixtureOwner",
+            "contract": "FixtureContract",
+            "guarantee": "fixtureGuarantee",
+        }],
+        "discharge_edges": [{
+            "component": "FixtureContract",
+            "assumption": "fixtureAssumption",
+            "by": "environment",
+        }],
         "timing": timing, "priority": priority, "invariants": invariants,
+        "selected_model_elements": selected_model_elements,
     }
     out = evaluate_ag_against_gold(prediction, gold)
     # each A2 category present, on its own, with no merged/composite F1 anywhere

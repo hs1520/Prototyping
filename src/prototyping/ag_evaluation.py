@@ -14,25 +14,29 @@ EVALUATOR-ONLY human gold. It is a different boundary from the runtime checker:
   * gold is authored blind to the pipeline verdict (a human process); this module
     only computes agreement between that gold and the archived prediction.
 
-The number produced here is a **decomposition/extraction agreement** F1 (over
-guarantee allocation + assumption discharge), **not** an LLM-accuracy score: under
-deterministic A/G emission the prediction is the reviewed decomposition rendered
-and read back, so agreement is ~1.0 by construction and measures extract/check
-faithfulness (it becomes a generation-accuracy metric only when R2 emits
-LLM-authored A/G models under a separately frozen intervention). It may be pooled
-for R2-BBAG only when a self-consistent
-``POSTHOC_EVALUATION_READINESS_MANIFEST`` binds every selected chain/run and all
-independent evidence. The global arm enum is deliberately not used as this gate.
+The evaluator reports **separate decomposition/extraction agreement** categories
+(allocation, discharge, timing, priority, and invariant), **not** a composite F1
+or an LLM-accuracy score. Under deterministic A/G emission the prediction is the
+selected decomposition rendered and read back, so agreement is ~1.0 by
+construction and measures extract/check faithfulness. A future LLM-authored
+intervention requires its own frozen configuration/version and evidence gate.
+Post-hoc R2-BBAG pooling is permitted only when the consumer reproduces a
+``POSTHOC_EVALUATION_READINESS_MANIFEST`` from the complete frozen source-evidence
+bundle. The global arm enum is deliberately not used as this gate.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Dict, Mapping, Optional
+
+from ..utils.req_id import normalise_req_id
 
 PREDICTION_ROLE = "RUNTIME_A_G_PREDICTION"
 GOLD_ROLE = "EVALUATOR_GOLD"
 REVISED_NAMESPACE = "BLACKBOARD_AG_V1"
 R2_CONFIGURATION = "R2-BBAG"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -84,26 +88,44 @@ def _tok(value: Any, aliases: Mapping[str, str]) -> str:
 
 
 def _allocation_set(items, aliases):
-    return {
-        (_tok(i.get("owner"), aliases), _tok(i.get("guarantee"), aliases))
-        for i in (items or [])
-    }
+    result = set()
+    for index, item in enumerate(items or ()):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"allocation[{index}] must be an object")
+        result.add((
+            _tok(item.get("owner"), aliases),
+            _tok(item.get("guarantee"), aliases),
+        ))
+    return result
 
 
 def _discharge_set(items, aliases, *, claimed_only: bool):
     out = set()
-    for i in (items or []):
-        by = i.get("by")
+    for index, item in enumerate(items or []):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"discharge edge[{index}] must be an object")
+        by = item.get("by")
         if claimed_only and by is None:
             # An undischarged prediction makes no discharge claim, so it is not a
             # predicted edge; it surfaces as a false negative against gold.
             continue
         out.add((
-            _tok(i.get("component"), aliases),
-            _tok(i.get("assumption"), aliases),
+            _tok(item.get("component"), aliases),
+            _tok(item.get("assumption"), aliases),
             _tok(by if by is not None else "undischarged", aliases),
         ))
     return out
+
+
+def _contains_key(value: Any, target: str) -> bool:
+    if isinstance(value, Mapping):
+        return any(
+            str(key) == target or _contains_key(item, target)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_key(item, target) for item in value)
+    return False
 
 
 def evaluate_ag_against_gold(
@@ -121,6 +143,11 @@ def evaluate_ag_against_gold(
     """
     if not isinstance(prediction, Mapping) or not isinstance(gold, Mapping):
         raise TypeError("prediction and gold must be mappings")
+    if aliases:
+        raise ValueError(
+            "ad-hoc allocation/discharge aliases are not authorised; evaluator "
+            "normalisation is frozen in code"
+        )
     if prediction.get("artifact_role") != PREDICTION_ROLE:
         raise ValueError(
             f"prediction artifact_role must be {PREDICTION_ROLE!r}; the evaluator "
@@ -143,7 +170,7 @@ def evaluate_ag_against_gold(
         raise ValueError("gold must be scoped to BLACKBOARD_AG_V1")
     if gold.get("status") != "FROZEN":
         raise ValueError("accuracy/F1 requires supervisor-reviewed FROZEN gold")
-    if "failure_class" in gold:
+    if _contains_key(gold, "failure_class"):
         raise ValueError(
             "reference gold must not contain failure_class; use a per-run blind label"
         )
@@ -157,12 +184,33 @@ def evaluate_ag_against_gold(
         raise ValueError(
             "accuracy/F1 requires documented independent blind human review"
         )
+    # The evaluator must not label a merely flag-shaped object as independent
+    # human gold.  Structural validation remains evaluator-only and imports no
+    # runtime extractor/checker.
+    from .ag_gold_template import validate_frozen_gold
+    gold_problems = validate_frozen_gold(dict(gold))
+    if gold_problems:
+        raise ValueError(
+            "frozen gold failed structural validation: "
+            + "; ".join(gold_problems)
+        )
+    chain_id = str(gold.get("chain_id") or "")
+    if normalise_req_id(str(prediction.get("source_requirement") or "")) != chain_id:
+        raise ValueError("prediction source_requirement does not match gold chain_id")
+    if not _SHA256_RE.fullmatch(
+        str(prediction.get("source_model_digest") or "")
+    ):
+        raise ValueError("prediction source_model_digest must be a SHA-256 digest")
+    if not str(prediction.get("checker_version") or ""):
+        raise ValueError("prediction checker_version must be set")
+    if not isinstance(prediction.get("graph"), Mapping):
+        raise ValueError("prediction graph must be an object")
     alias_map = {
         str(k).strip().lower(): str(v).strip().lower()
         for k, v in (aliases or {}).items()
     }
 
-    pred_graph = prediction.get("graph", {}) or {}
+    pred_graph = prediction["graph"]
     allocation = _prf(
         _allocation_set(pred_graph.get("allocations"), alias_map),
         _allocation_set(gold.get("allocations"), alias_map),
@@ -178,12 +226,14 @@ def evaluate_ag_against_gold(
         "measurement_boundary": "EVALUATOR_ONLY",
         "metric_name": "decomposition_extraction_agreement",
         "metric_interpretation": (
-            "set F1 over guarantee allocation + assumption discharge. This is "
+            "separate set P/R/F1 for guarantee allocation and assumption discharge. "
+            "This is "
             "decomposition/extraction AGREEMENT, NOT LLM accuracy: under "
-            "deterministic A/G emission the prediction is the reviewed "
+            "deterministic A/G emission the prediction is the selected "
             "decomposition rendered and read back, so agreement is ~1.0 by "
             "construction and measures extract/check faithfulness. It measures "
-            "model-generation accuracy only when R2 emits LLM-authored A/G models. "
+            "model-generation accuracy only for an LLM-authored intervention with "
+            "its own frozen configuration/version and evidence gate. "
             "Timing, priority, and invariant agreement are reported as SEPARATE "
             "categories when the gold and prediction carry them (§6); they are never "
             "merged with allocation/discharge or with each other into a composite F1."
@@ -213,17 +263,14 @@ def evaluate_ag_against_gold(
         priority_agreement,
         timing_agreement,
     )
-    if gold.get("timing") is not None and pred_graph.get("timing") is not None:
+    if gold.get("timing") is not None:
         result["timing_agreement"] = timing_agreement(
-            pred_graph["timing"], gold["timing"]
+            pred_graph.get("timing") or {}, gold["timing"]
         )
-    if gold.get("priority") is not None and pred_graph.get("priority") is not None:
+    if gold.get("priority") is not None:
         result["priority_agreement"] = priority_agreement(
-            pred_graph["priority"], gold["priority"]
+            pred_graph.get("priority") or {}, gold["priority"]
         )
-    if (
-        gold.get("invariants") is not None
-        and pred_graph.get("invariants") is not None
-    ):
+    if gold.get("invariants") is not None:
         result["invariant_agreement"] = invariant_agreement(pred_graph, gold)
     return result
