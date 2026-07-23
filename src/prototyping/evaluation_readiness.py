@@ -37,6 +37,14 @@ FAILURE_TAXONOMY_ROLE = "FAILURE_TAXONOMY"
 BLIND_PACKET_ROLE = "BLIND_FAILURE_REVIEW_PACKET"
 BLIND_LABEL_ROLE = "BLIND_FAILURE_LABEL"
 R2_CONFIGURATION = "R2-BBAG"
+_TAXONOMY_DECISION_SEQUENCE = [
+    "READINESS_GATE",
+    "CONTRACT_INCOMPLETENESS",
+    "INTEGRATION_DECOMPOSITION_GAP",
+    "ARCHITECTURE_DESIGN_ISSUE_VS_MODEL_SEMANTIC_FAULT",
+    "VERIFIER_LIMITATION",
+    "NO_FAILURE",
+]
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _FORBIDDEN_BLIND_KEY_TOKENS = {
     "agcontractgraph",
@@ -177,11 +185,35 @@ def validate_frozen_failure_taxonomy(taxonomy: Mapping[str, Any]) -> list[str]:
         )
     if adjudication.get("primary_label_count") != 1:
         problems.append("taxonomy adjudication.primary_label_count must be 1")
+    if not str(adjudication.get("mutual_exclusivity") or "").strip():
+        problems.append(
+            "taxonomy adjudication.mutual_exclusivity must state that only the "
+            "primary label is adjudicatively exclusive"
+        )
+    if (
+        adjudication.get("readiness_gate_failure_action")
+        != "NO_TAXONOMY_RUN_LABEL"
+    ):
+        problems.append(
+            "taxonomy adjudication.readiness_gate_failure_action must be "
+            "'NO_TAXONOMY_RUN_LABEL'"
+        )
+    if adjudication.get("decision_sequence") != _TAXONOMY_DECISION_SEQUENCE:
+        problems.append(
+            "taxonomy adjudication.decision_sequence must apply readiness, "
+            "upstream root causes, the architecture/model tie-break, "
+            "VERIFIER_LIMITATION, then NO_FAILURE"
+        )
     if not str(adjudication.get("multi_fault_rule") or "").strip():
         problems.append("taxonomy adjudication.multi_fault_rule must be stated")
-    if adjudication.get("inconclusive_class") not in class_codes:
+    if adjudication.get("inconclusive_class") != "VERIFIER_LIMITATION":
         problems.append(
-            "taxonomy adjudication.inconclusive_class must name a taxonomy class"
+            "taxonomy adjudication.inconclusive_class must be "
+            "'VERIFIER_LIMITATION'"
+        )
+    elif "VERIFIER_LIMITATION" not in class_codes:
+        problems.append(
+            "taxonomy classes must contain the declared VERIFIER_LIMITATION class"
         )
     if not taxonomy.get("reviewer"):
         problems.append("taxonomy reviewer must be set")
@@ -371,6 +403,18 @@ def validate_blind_label(
     taxonomy: Mapping[str, Any],
 ) -> list[str]:
     problems: list[str] = []
+    packet_problems = validate_blind_packet(packet)
+    if packet_problems:
+        problems.append(
+            "blind packet failed the readiness gate; no taxonomy run label may "
+            "be accepted"
+        )
+    taxonomy_problems = validate_frozen_failure_taxonomy(taxonomy)
+    if taxonomy_problems:
+        problems.append(
+            "failure taxonomy is not validly frozen; no taxonomy run label may "
+            "be accepted"
+        )
     if label.get("schema_version") != READINESS_SCHEMA_VERSION:
         problems.append(f"blind label schema_version must be {READINESS_SCHEMA_VERSION!r}")
     if label.get("artifact_role") != BLIND_LABEL_ROLE:

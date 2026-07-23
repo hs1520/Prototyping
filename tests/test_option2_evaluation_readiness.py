@@ -18,6 +18,7 @@ from src.prototyping.evaluation_readiness import (
     build_blind_review_packet,
     build_evaluation_readiness_manifest,
     require_evaluation_ready,
+    validate_blind_label,
     validate_frozen_failure_taxonomy,
 )
 from src.prototyping.revised_pilot import RevisedPilotConfig
@@ -116,6 +117,19 @@ def _fixtures():
         "adjudication": {
             "unit_of_analysis": "ONE_ARCHIVED_RUN_CHAIN_PAIR",
             "primary_label_count": 1,
+            "mutual_exclusivity": (
+                "Classes are adjudicatively mutually exclusive for the primary "
+                "label, although multiple visible symptoms may coexist."
+            ),
+            "readiness_gate_failure_action": "NO_TAXONOMY_RUN_LABEL",
+            "decision_sequence": [
+                "READINESS_GATE",
+                "CONTRACT_INCOMPLETENESS",
+                "INTEGRATION_DECOMPOSITION_GAP",
+                "ARCHITECTURE_DESIGN_ISSUE_VS_MODEL_SEMANTIC_FAULT",
+                "VERIFIER_LIMITATION",
+                "NO_FAILURE",
+            ],
             "multi_fault_rule": "label the most upstream supported root cause",
             "inconclusive_class": "VERIFIER_LIMITATION",
         },
@@ -329,6 +343,37 @@ def test_taxonomy_requires_operational_definitions_and_adjudication():
     problems = validate_frozen_failure_taxonomy(taxonomy)
     assert any("class_definitions" in item for item in problems)
     assert any("adjudication" in item for item in problems)
+
+
+def test_taxonomy_requires_the_reviewed_fail_closed_decision_sequence():
+    taxonomy = _fixtures()["failure_taxonomy"]
+    taxonomy["adjudication"]["decision_sequence"] = [
+        "CONTRACT_INCOMPLETENESS",
+        "NO_FAILURE",
+    ]
+    taxonomy["adjudication"]["readiness_gate_failure_action"] = (
+        "VERIFIER_LIMITATION"
+    )
+    taxonomy["adjudication"]["inconclusive_class"] = "NO_FAILURE"
+    taxonomy["artifact_digest"] = artifact_digest(taxonomy)
+    problems = validate_frozen_failure_taxonomy(taxonomy)
+    assert any("decision_sequence" in item for item in problems)
+    assert any("NO_TAXONOMY_RUN_LABEL" in item for item in problems)
+    assert any("inconclusive_class" in item for item in problems)
+
+
+def test_invalid_packet_cannot_receive_a_taxonomy_run_label():
+    fixtures = _fixtures()
+    packet = fixtures["blind_packets"][0]
+    label = fixtures["blind_labels"][0]
+    packet["review_material"].pop("architecture_boundary")
+    packet["artifact_digest"] = artifact_digest(packet)
+    problems = validate_blind_label(
+        label,
+        packet=packet,
+        taxonomy=fixtures["failure_taxonomy"],
+    )
+    assert any("no taxonomy run label" in item for item in problems)
 
 
 def test_taxonomy_cannot_freeze_with_unresolved_review_markers():

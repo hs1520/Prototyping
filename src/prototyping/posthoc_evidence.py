@@ -308,10 +308,14 @@ Human-only decisions:
    removing its review markers and freezing it.
 6. Keep reviewer-facing blind packets separate from the pilot directory. The
    reviewer must not inspect runtime verdicts, diagnostics, or repairs.
+7. Apply the readiness gate before classification. An invalid packet, missing
+   or unverified frozen boundary, or failed provenance binding receives no
+   taxonomy run label; it is not `VERIFIER_LIMITATION`.
 
 `NO_FAILURE` means only that no visible static defect was found in the permitted
-blind material. It is not formal A/G proof, LLM accuracy, dynamic performance,
-or physical verification.
+blind material and no required non-static adjudication question remains
+unresolved. It is not formal A/G proof, LLM accuracy, dynamic performance, or
+physical verification.
 """
 
 

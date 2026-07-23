@@ -21,13 +21,13 @@
         "no more specific failure class below is supported"
       ],
       "exclude_when": [
-        "the packet is valid but admissible evidence cannot decide a required non-static property",
+        "a required adjudication question remains non-static and cannot be decided from the permitted material",
         "any contract, decomposition, realization, architecture, or observation fault is visible"
       ],
       "_review": "confirm that absence of visible failure is not treated as formal proof or physical verification"
     },
     "CONTRACT_INCOMPLETENESS": {
-      "definition": "The candidate contract omits or leaves ambiguous a required source obligation, assumption, guarantee, provenance binding, or safety-topology declaration.",
+      "definition": "Within an otherwise valid evaluation packet, the candidate contract omits or leaves ambiguous a required source obligation, assumption, guarantee, candidate-contract provenance or traceability binding, or safety-topology declaration.",
       "include_when": [
         "a source obligation has no corresponding contract semantics",
         "the contract is too incomplete to assess a component realization"
@@ -60,16 +60,16 @@
       ],
       "exclude_when": [
         "the contract itself omits the obligation",
-        "the model faithfully represents the approved architecture but that architecture's unit, compatibility, or additive composition is inadequate",
+        "the model faithfully represents the approved architecture but that architecture's unit, compatibility, or approved timing composition is inadequate",
         "the observation interface is present but admissible evidence cannot establish a non-static outcome"
       ],
       "_review": "confirm that this class concerns committed SysML semantics, not checker implementation"
     },
     "ARCHITECTURE_DESIGN_ISSUE": {
-      "definition": "The candidate faithfully represents the frozen architecture, but the represented architecture violates an approved unit, compatibility, additive timing-budget, or composition constraint independently of any missing SysML realization element.",
+      "definition": "The candidate faithfully represents the frozen architecture, but the represented architecture violates an approved unit, compatibility, timing-composition, or component-composition constraint independently of any missing SysML realization element.",
       "include_when": [
         "exact-unit comparison is incompatible",
-        "required timing segments are absent or their additive budget exceeds the deadline",
+        "the frozen architecture requires additive timing composition and its required segments are absent or their additive budget exceeds the deadline",
         "component guarantees and assumptions are semantically incompatible",
         "the design defect remains after assuming every required model realization element is present and correctly connected"
       ],
@@ -96,7 +96,17 @@
   "adjudication": {
     "unit_of_analysis": "ONE_ARCHIVED_RUN_CHAIN_PAIR",
     "primary_label_count": 1,
-    "multi_fault_rule": "Choose one most-upstream root cause directly supported by the allowed blind material: CONTRACT_INCOMPLETENESS, then INTEGRATION_DECOMPOSITION_GAP. Between ARCHITECTURE_DESIGN_ISSUE and MODEL_SEMANTIC_FAULT, choose ARCHITECTURE_DESIGN_ISSUE only when the candidate faithfully represents the frozen boundary and the unit/compatibility/additive-composition defect remains with all required realization elements present; otherwise choose MODEL_SEMANTIC_FAULT for a missing or wrong realization or observation-interface element. Use VERIFIER_LIMITATION only when no visible static defect supports another class and the valid packet cannot decide a required non-static property. Use NO_FAILURE only for absence of visible static faults, never as formal or physical validation.",
+    "mutual_exclusivity": "Classes are adjudicatively mutually exclusive for the primary label, although multiple visible symptoms may coexist.",
+    "readiness_gate_failure_action": "NO_TAXONOMY_RUN_LABEL",
+    "decision_sequence": [
+      "READINESS_GATE",
+      "CONTRACT_INCOMPLETENESS",
+      "INTEGRATION_DECOMPOSITION_GAP",
+      "ARCHITECTURE_DESIGN_ISSUE_VS_MODEL_SEMANTIC_FAULT",
+      "VERIFIER_LIMITATION",
+      "NO_FAILURE"
+    ],
+    "multi_fault_rule": "Assign exactly one primary label to one archived run/chain pair. First apply the evaluation-readiness gate: an invalid packet, missing or unverified frozen architecture boundary, or failed required provenance binding receives no taxonomy run label. For a valid blind packet, choose the most-upstream directly supported root cause. Use CONTRACT_INCOMPLETENESS when the candidate contract omits or ambiguously represents a required source or frozen-boundary obligation. Otherwise use INTEGRATION_DECOMPOSITION_GAP when the approved component contracts lack unique ownership, valid discharge, required dependency closure, or complete decomposition. If the contract and decomposition are adequate, use ARCHITECTURE_DESIGN_ISSUE only when the candidate faithfully represents the frozen architecture and a unit, compatibility, approved timing-composition, or component-composition defect remains after assuming all required realization elements are present and correctly connected; otherwise use MODEL_SEMANTIC_FAULT for a missing, incorrect, unreachable, or disconnected realization or required observation-interface element. Use VERIFIER_LIMITATION only when no visible static defect supports another class, the required observation interface is present, and the valid permitted material cannot decide a required non-static property. Use NO_FAILURE only when no visible static fault supports another class and no required adjudication question remains unresolved for lack of non-static evidence. NO_FAILURE is not formal proof, dynamic validation, or physical verification.",
     "inconclusive_class": "VERIFIER_LIMITATION",
     "_review": "confirm the explicit architecture-versus-model tie-break and the distinction between a missing model observation interface (MODEL_SEMANTIC_FAULT) and unavailable non-static evidence (VERIFIER_LIMITATION) before the first label is authored"
   },
