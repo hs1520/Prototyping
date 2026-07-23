@@ -25,6 +25,7 @@ from src.prototyping.posthoc_evidence import (
     build_readiness_from_disk,
     load_completed_pilot,
     prepare_review_materials,
+    stamp_blind_label_digests,
     stamp_human_digest,
 )
 from src.prototyping.revised_pilot import RevisedPilotConfig
@@ -85,6 +86,8 @@ def _pilot(tmp_path: Path) -> Path:
                 "requirement_set_digest"
             ],
             "ag_checker_version": config["ag_checker_version"],
+            "r2_generation_mode": config["r2_generation_mode"],
+            "r2_intervention_version": config["r2_intervention_version"],
             "evaluation_ready": False,
         }
         prediction = {
@@ -261,3 +264,30 @@ def test_blind_materials_are_built_only_after_synthetic_human_freeze(tmp_path):
     assert readiness["evaluation_ready"] is False
     assert readiness["pooling_permitted"] is False
     assert any("blind label is missing" in item for item in readiness["problems"])
+
+    labels_dir = evidence / "operator_only" / "labels"
+    for template_path in templates:
+        label = json.loads(template_path.read_text())
+        label.update({
+            "status": "FROZEN",
+            "failure_class": "NO_FAILURE",
+            "reviewer": "Independent Blind Reviewer",
+            "reviewed_date": "2026-07-23",
+            "review_protocol": {
+                "independent_human_review": True,
+                "blind_to_runtime_verdict": True,
+            },
+        })
+        _write(labels_dir / template_path.name, label)
+    stamped = stamp_blind_label_digests(evidence_dir=evidence)
+    assert len(stamped) == 3
+
+    readiness = build_readiness_from_disk(
+        pilot_dir=pilot,
+        evidence_dir=evidence,
+    )
+    assert readiness["problems"] == []
+    assert readiness["evaluation_ready"] is True
+    assert readiness["pooling_permitted"] is True
+    assert readiness["study_classification"] == "DESCRIPTIVE_PILOT"
+    assert readiness["confirmatory_inference_permitted"] is False

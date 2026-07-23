@@ -9,6 +9,7 @@ from src.prototyping.posthoc_evidence import (
     build_blind_materials,
     build_readiness_from_disk,
     prepare_review_materials,
+    stamp_blind_label_digests,
     stamp_human_digest,
 )
 
@@ -34,6 +35,9 @@ def main() -> None:
     packets = sub.add_parser("build-blind-materials")
     packets.add_argument("--pilot-dir", required=True)
     packets.add_argument("--evidence-dir", required=True)
+
+    label_digests = sub.add_parser("stamp-label-digests")
+    label_digests.add_argument("--evidence-dir", required=True)
 
     readiness = sub.add_parser("build-readiness")
     readiness.add_argument("--pilot-dir", required=True)
@@ -61,6 +65,10 @@ def main() -> None:
             pilot_dir=args.pilot_dir,
             evidence_dir=args.evidence_dir,
         )
+    elif args.command == "stamp-label-digests":
+        result = {"stamped_labels": stamp_blind_label_digests(
+            evidence_dir=args.evidence_dir,
+        )}
     else:
         result = build_readiness_from_disk(
             pilot_dir=args.pilot_dir,

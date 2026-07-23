@@ -23,6 +23,7 @@ from .evaluation_readiness import (
     build_blind_review_packet,
     build_evaluation_readiness_manifest,
     require_evaluation_ready,
+    validate_blind_label,
     validate_blind_packet,
     validate_frozen_failure_taxonomy,
 )
@@ -456,6 +457,65 @@ def build_blind_materials(
     }
     _write_json(root / "blind_materials_manifest.json", summary)
     return summary
+
+
+def stamp_blind_label_digests(*, evidence_dir: str | Path) -> list[str]:
+    """Digest labels only after the human has supplied every review decision."""
+    root = Path(evidence_dir)
+    taxonomy = _read_json(root / "human_frozen" / "failure_taxonomy.json")
+    taxonomy_problems = validate_frozen_failure_taxonomy(taxonomy)
+    if taxonomy_problems:
+        raise ValueError(
+            "failure taxonomy is not independently frozen: "
+            + "; ".join(taxonomy_problems)
+        )
+    packet_index: dict[tuple[str, str], dict[str, Any]] = {}
+    for path in sorted((root / "blind_review" / "packets").glob("*.json")):
+        packet = _read_json(path)
+        problems = validate_blind_packet(packet)
+        if problems:
+            raise ValueError(f"{path}: invalid blind packet: " + "; ".join(problems))
+        key = (
+            str(packet.get("run_id") or ""),
+            normalise_requirement_id(str(packet.get("chain_id") or "")),
+        )
+        if key in packet_index:
+            raise ValueError(f"duplicate blind packet binding: {key!r}")
+        packet_index[key] = packet
+
+    prepared: list[tuple[Path, dict[str, Any]]] = []
+    label_paths = sorted((root / "operator_only" / "labels").glob("*.json"))
+    if not label_paths:
+        raise ValueError("no human-authored blind labels found")
+    for path in label_paths:
+        label = _read_json(path)
+        key = (
+            str(label.get("run_id") or ""),
+            normalise_requirement_id(str(label.get("chain_id") or "")),
+        )
+        packet = packet_index.get(key)
+        if packet is None:
+            raise ValueError(f"{path}: no matching blind packet")
+        candidate = copy.deepcopy(label)
+        candidate["artifact_digest"] = artifact_digest(candidate)
+        problems = validate_blind_label(
+            candidate,
+            packet=packet,
+            taxonomy=taxonomy,
+        )
+        if problems:
+            raise ValueError(
+                f"{path}: human label is incomplete; digest not written: "
+                + "; ".join(problems)
+            )
+        prepared.append((path, candidate))
+    if len(prepared) != len(packet_index):
+        raise ValueError(
+            "human labels must exactly cover all generated blind packets"
+        )
+    for path, candidate in prepared:
+        _write_json(path, candidate)
+    return [str(path) for path, _candidate in prepared]
 
 
 def build_readiness_from_disk(
