@@ -109,6 +109,8 @@
   },
   "priority": {
     "response_set_id": "FLIGHT_RESPONSES_V1",
+    "source_kind": "STUDENT_APPROVED_DECOMPOSITION",
+    "source_id": "STUDENT_DESIGN_DECISIONS.md§4.3",
     "members": [
       "PARACHUTE_DEPLOYMENT",
       "CONTROLLED_BATTERY_LANDING",

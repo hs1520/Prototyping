@@ -85,6 +85,14 @@ def test_validator_rejects_static_failure_class_and_unbound_provenance():
     assert any("per-run blind label" in p for p in problems)
 
 
+def test_validator_rejects_priority_without_response_set_provenance():
+    frozen = _freeze(_draft())
+    frozen["priority"].pop("source_kind")
+    frozen["priority"].pop("source_id")
+    problems = validate_frozen_gold(frozen)
+    assert any("priority response-set provenance" in p for p in problems)
+
+
 def test_validator_rejects_nested_failure_labels_and_derived_timing_values():
     frozen = _freeze(_draft())
     frozen["metadata"] = {"failure_class": "NO_FAILURE"}

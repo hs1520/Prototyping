@@ -115,6 +115,8 @@ def build_gold_draft(
     if spec.priority is not None:
         semantic_fields["priority"] = {
             "response_set_id": spec.priority.response_set_id,
+            "source_kind": spec.priority.source_kind,
+            "source_id": spec.priority.source_id,
             "members": list(spec.priority.members),
             "edges": [
                 {"higher": higher, "lower": lower}
@@ -363,11 +365,17 @@ def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
         problems.append("priority must be an object")
     elif isinstance(priority, Mapping):
         response_set_id = str(priority.get("response_set_id") or "")
+        source_kind = str(priority.get("source_kind") or "")
+        source_id = str(priority.get("source_id") or "")
         members = [str(item) for item in (priority.get("members") or [])]
         edges = priority.get("edges")
         trigger = str(priority.get("trigger") or "")
         if not response_set_id:
             problems.append("priority response_set_id must be set")
+        if not source_kind or not source_id:
+            problems.append(
+                "priority response-set provenance must set source_kind/source_id"
+            )
         if (
             not members
             or any(not item for item in members)

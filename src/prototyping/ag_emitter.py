@@ -55,6 +55,11 @@ class AGPrioritySpec:
     edges: Tuple[Tuple[str, str], ...]
     trigger: str
     selected_response: str
+    # Evaluator gold must identify the approved design input that supplies the
+    # concrete response-set members; the stakeholder requirement only says
+    # "all other safety responses" and does not enumerate them.
+    source_kind: str
+    source_id: str
 
 
 @dataclass(frozen=True)

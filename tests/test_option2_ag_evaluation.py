@@ -94,6 +94,8 @@ REQ_SAFE_005_GOLD = {
     },
     "priority": {
         "response_set_id": "FLIGHT_RESPONSES_V1",
+        "source_kind": "STUDENT_APPROVED_DECOMPOSITION",
+        "source_id": "STUDENT_DESIGN_DECISIONS.md§4.3",
         "members": [
             "PARACHUTE_DEPLOYMENT",
             "CONTROLLED_BATTERY_LANDING",
@@ -229,6 +231,8 @@ def test_missing_prediction_semantic_categories_are_reported_not_suppressed():
         },
         "priority": {
             "response_set_id": "FLIGHT_RESPONSES_V1",
+            "source_kind": "STUDENT_APPROVED_DECOMPOSITION",
+            "source_id": "STUDENT_DESIGN_DECISIONS.md§4.3",
             "members": ["PARACHUTE_DEPLOYMENT", "LOW_BATTERY_RETURN_TO_BASE"],
             "edges": [{
                 "higher": "PARACHUTE_DEPLOYMENT",

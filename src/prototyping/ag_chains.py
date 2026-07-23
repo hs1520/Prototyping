@@ -124,6 +124,8 @@ REQ_SAFE_005_CHAIN = AGChainSpec(
         ),
         trigger="criticalPropulsionFailureDetected",
         selected_response="PARACHUTE_DEPLOYMENT",
+        source_kind="STUDENT_APPROVED_DECOMPOSITION",
+        source_id="STUDENT_DESIGN_DECISIONS.md§4.3",
     ),
     selected_model_elements=(
         "airborne",

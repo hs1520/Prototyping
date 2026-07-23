@@ -226,6 +226,8 @@ def test_evaluator_reports_each_category_separately_when_present():
                      [("SafetyResponseArbiter", "0.10"), ("RecoverySystem", "0.35")])
     priority = {
         "response_set_id": "FLIGHT_RESPONSES_V1",
+        "source_kind": "STUDENT_APPROVED_DECOMPOSITION",
+        "source_id": "STUDENT_DESIGN_DECISIONS.md§4.3",
         "members": ["PARACHUTE_DEPLOYMENT", "LOW_BATTERY_RETURN_TO_BASE"],
         "edges": [{
             "higher": "PARACHUTE_DEPLOYMENT",
