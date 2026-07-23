@@ -19,7 +19,7 @@ from src.prototyping.architecture_boundary import (
 
 def _draft() -> dict:
     return build_architecture_boundary_draft(
-        REQ_SAFE_008_CHAIN, requirement_set_digest="reqset-abc"
+        REQ_SAFE_008_CHAIN, requirement_set_digest="a" * 64
     )
 
 
@@ -51,7 +51,7 @@ def test_draft_carries_full_provenance_and_allocations_from_the_spec():
     assert draft["artifact_role"] == "ARCHITECTURE_BOUNDARY"
     assert draft["schema_version"] == "1.0"
     assert draft["chain_id"] == "REQ_SAFE_008"
-    assert draft["requirement_set_digest"] == "reqset-abc"
+    assert draft["requirement_set_digest"] == "a" * 64
     # component ids + interfaces + owner->guarantee allocations are pre-filled
     assert {c["component_id"] for c in draft["components"]} == {
         "ReleaseAuthorityContract", "PayloadLockActuatorContract",
@@ -83,6 +83,33 @@ def test_digest_binding_detects_tampering_after_freeze():
     frozen["allocations"][0]["owner"] = "someoneElse"
     problems = validate_frozen_boundary(frozen)
     assert any("does not match the content" in p for p in problems)
+
+
+def test_validator_requires_complete_schema_provenance_and_interface_binding():
+    frozen = _freeze(_draft())
+    frozen["schema_version"] = "unknown"
+    frozen["requirement_set_digest"] = None
+    frozen["components"][0]["interfaces"].pop("trigger")
+    frozen["allocations"][0]["contract"] = "UnknownContract"
+    frozen["artifact_digest"] = architecture_boundary_digest(frozen)
+
+    problems = validate_frozen_boundary(frozen)
+    assert any("schema_version" in p for p in problems)
+    assert any("requirement_set_digest" in p for p in problems)
+    assert any("interfaces.trigger" in p for p in problems)
+    assert any("unknown component" in p for p in problems)
+    assert any("exactly match" in p for p in problems)
+
+
+def test_validator_rejects_duplicate_components_and_allocations():
+    frozen = _freeze(_draft())
+    frozen["components"].append(copy.deepcopy(frozen["components"][0]))
+    frozen["allocations"].append(copy.deepcopy(frozen["allocations"][0]))
+    frozen["artifact_digest"] = architecture_boundary_digest(frozen)
+
+    problems = validate_frozen_boundary(frozen)
+    assert any("duplicate component_id" in p for p in problems)
+    assert any("duplicate allocation" in p for p in problems)
 
 
 def test_module_never_imports_the_runtime_checker():

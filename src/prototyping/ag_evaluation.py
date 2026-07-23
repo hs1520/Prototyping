@@ -19,9 +19,10 @@ guarantee allocation + assumption discharge), **not** an LLM-accuracy score: und
 deterministic A/G emission the prediction is the reviewed decomposition rendered
 and read back, so agreement is ~1.0 by construction and measures extract/check
 faithfulness (it becomes a generation-accuracy metric only when R2 emits
-LLM-authored A/G models). It may be pooled for R2-BBAG only once
-``RevisedExperimentArm.evaluation_ready`` is true — i.e. once **every** selected
-chain has independent FROZEN gold, never on a single frozen file.
+LLM-authored A/G models under a separately frozen intervention). It may be pooled
+for R2-BBAG only when a self-consistent
+``POSTHOC_EVALUATION_READINESS_MANIFEST`` binds every selected chain/run and all
+independent evidence. The global arm enum is deliberately not used as this gate.
 """
 from __future__ import annotations
 
@@ -114,9 +115,9 @@ def evaluate_ag_against_gold(
     """Score an archived A/G prediction against evaluator-only human gold.
 
     Returns per-category precision/recall/F1 for guarantee allocation and
-    assumption discharge, plus failure-class agreement when both sides declare it.
-    Raises on a role mismatch so gold and predictions cannot be swapped or
-    self-scored.
+    assumption discharge. Per-run failure classification is evaluated only from
+    separately frozen blind labels, never from static reference gold. Raises on a
+    role mismatch so gold and predictions cannot be swapped or self-scored.
     """
     if not isinstance(prediction, Mapping) or not isinstance(gold, Mapping):
         raise TypeError("prediction and gold must be mappings")
@@ -142,6 +143,10 @@ def evaluate_ag_against_gold(
         raise ValueError("gold must be scoped to BLACKBOARD_AG_V1")
     if gold.get("status") != "FROZEN":
         raise ValueError("accuracy/F1 requires supervisor-reviewed FROZEN gold")
+    if "failure_class" in gold:
+        raise ValueError(
+            "reference gold must not contain failure_class; use a per-run blind label"
+        )
     review = gold.get("review_protocol") or {}
     if (
         not gold.get("reviewer")
@@ -179,8 +184,9 @@ def evaluate_ag_against_gold(
             "decomposition rendered and read back, so agreement is ~1.0 by "
             "construction and measures extract/check faithfulness. It measures "
             "model-generation accuracy only when R2 emits LLM-authored A/G models. "
-            "It does not yet score system assumptions, deadline/timing origin, "
-            "priority, or default-safe invariants — see gold-schema extension."
+            "Timing, priority, and invariant agreement are reported as SEPARATE "
+            "categories when the gold and prediction carry them (§6); they are never "
+            "merged with allocation/discharge or with each other into a composite F1."
         ),
         "chain_id": gold.get("chain_id"),
         "checker_version": prediction.get("checker_version"),
@@ -192,15 +198,32 @@ def evaluate_ag_against_gold(
         "configuration": R2_CONFIGURATION,
         "pooling_permitted": False,
         "pooling_note": (
-            "R2-BBAG remains evaluation_ready=false until the controlled "
-            "configuration/gold freeze gate is explicitly lifted"
+            "This single evaluation is not poolable until a strong-binding "
+            "POSTHOC_EVALUATION_READINESS_MANIFEST clears"
         ),
         "guarantee_allocation": allocation.as_dict(),
         "assumption_discharge": discharge.as_dict(),
     }
-    if "failure_class" in gold and "failure_class" in prediction:
-        result["failure_class_match"] = bool(
-            _tok(gold["failure_class"], alias_map)
-            == _tok(prediction["failure_class"], alias_map)
+
+    # Separate A2 agreement categories (§6), added only when both the gold and the
+    # prediction carry the atomic facts. Each is reported on its own; they are never
+    # merged with allocation/discharge or with each other into a composite F1.
+    from .ag_eval_semantics import (
+        invariant_agreement,
+        priority_agreement,
+        timing_agreement,
+    )
+    if gold.get("timing") is not None and pred_graph.get("timing") is not None:
+        result["timing_agreement"] = timing_agreement(
+            pred_graph["timing"], gold["timing"]
         )
+    if gold.get("priority") is not None and pred_graph.get("priority") is not None:
+        result["priority_agreement"] = priority_agreement(
+            pred_graph["priority"], gold["priority"]
+        )
+    if (
+        gold.get("invariants") is not None
+        and pred_graph.get("invariants") is not None
+    ):
+        result["invariant_agreement"] = invariant_agreement(pred_graph, gold)
     return result

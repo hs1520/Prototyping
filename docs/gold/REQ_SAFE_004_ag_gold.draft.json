@@ -1,4 +1,5 @@
 {
+  "schema_version": "2.0",
   "artifact_role": "EVALUATOR_GOLD",
   "experiment_namespace": "BLACKBOARD_AG_V1",
   "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
@@ -6,6 +7,9 @@
   "source_requirement": "REQ_SAFE_004",
   "source_text": "REQ-SAFE-004: The system shall not transition to the armed or airborne state if any onboard sensor reports a failure during the power-on self-test sequence.",
   "source_digest": "db9549a4c12825fa0b0be267a1d15929269be41b3f13a5fe024c5ec016109ccc",
+  "requirement_set_digest": null,
+  "architecture_boundary_digest": null,
+  "_provenance_review": "bind the frozen requirement-set and independently frozen architecture boundary SHA-256 digests before freeze",
   "reviewer": null,
   "reviewed_date": null,
   "review_protocol": {
@@ -62,7 +66,5 @@
       "by": "SelfTestMonitorContract",
       "_review": "confirm the discharging source"
     }
-  ],
-  "failure_class": "NO_FAILURE",
-  "_failure_class_review": "confirm the expected blind failure class"
+  ]
 }

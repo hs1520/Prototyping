@@ -88,12 +88,18 @@ def test_config_freezes_exact_three_seed_three_arm_protocol():
     assert manifest["gold_input_permitted"] is False
     assert manifest["langsmith_permitted"] is False
     assert manifest["gazebo_permitted"] is False
+    assert manifest["selected_ag_chain_ids"] == ["REQ_SAFE_005"]
+    assert manifest["selected_r2_run_ids"] == [
+        "seed-0:R2-BBAG", "seed-1:R2-BBAG", "seed-2:R2-BBAG",
+    ]
     assert len(manifest["configuration_digest"]) == 64
 
     with pytest.raises(ValueError, match="three distinct seeds"):
         _config(seeds=(0, 0, 1))
     with pytest.raises(ValueError, match="exact R0/R1/R2"):
         _config(arms=("R0-CURRENT", "R2-BBAG", "R1-BBCTX"))
+    with pytest.raises(ValueError, match="absent from the frozen requirement set"):
+        _config(selected_ag_chain_ids=("REQ_SAFE_008",))
 
 
 def test_external_execution_requires_explicit_authorization(tmp_path):

@@ -46,6 +46,8 @@ def _freeze(draft: dict) -> dict:
         "blind_to_runtime_verdict": True,
         "independent_human_review": True,
     }
+    gold["requirement_set_digest"] = "a" * 64
+    gold["architecture_boundary_digest"] = "b" * 64
     return gold
 
 
@@ -66,6 +68,15 @@ def test_validator_flags_an_unresolved_discharge_edge():
     frozen["discharge_edges"][0]["by"] = None  # reviewer left one unresolved
     problems = validate_frozen_gold(frozen)
     assert any("unresolved" in p for p in problems)
+
+
+def test_validator_rejects_static_failure_class_and_unbound_provenance():
+    frozen = _freeze(_draft())
+    frozen["requirement_set_digest"] = None
+    frozen["failure_class"] = "NO_FAILURE"
+    problems = validate_frozen_gold(frozen)
+    assert any("requirement_set_digest" in p for p in problems)
+    assert any("per-run blind label" in p for p in problems)
 
 
 def test_pooling_gate_requires_every_selected_chain_frozen(tmp_path):

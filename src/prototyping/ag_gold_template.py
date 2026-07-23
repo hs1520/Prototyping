@@ -17,7 +17,9 @@ reviewer's responsibility, which is why every field carries a review note.
 """
 from __future__ import annotations
 
+from datetime import date
 import hashlib
+import re
 from typing import Any, Dict
 
 from .ag_emitter import AGChainSpec
@@ -26,6 +28,16 @@ from ..utils.req_id import normalise_req_id
 
 GOLD_STATUS_DRAFT = "DRAFT_FOR_SUPERVISOR_REVIEW"
 GOLD_STATUS_FROZEN = "FROZEN"
+GOLD_SCHEMA_VERSION = "2.0"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _valid_iso_date(value: Any) -> bool:
+    try:
+        date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _digest(text: str) -> str:
@@ -36,7 +48,8 @@ def build_gold_draft(
     spec: AGChainSpec,
     *,
     source_text: str,
-    failure_class: str = "NO_FAILURE",
+    requirement_set_digest: str | None = None,
+    architecture_boundary_digest: str | None = None,
 ) -> Dict[str, Any]:
     """Build a review-ready DRAFT gold dict from a reviewed A/G chain decomposition.
 
@@ -73,6 +86,7 @@ def build_gold_draft(
             discharge_edges.append(edge)
 
     return {
+        "schema_version": GOLD_SCHEMA_VERSION,
         "artifact_role": GOLD_ROLE,
         "experiment_namespace": "BLACKBOARD_AG_V1",
         "status": GOLD_STATUS_DRAFT,
@@ -80,6 +94,12 @@ def build_gold_draft(
         "source_requirement": spec.source_requirement,
         "source_text": source_text,
         "source_digest": _digest(source_text),
+        "requirement_set_digest": requirement_set_digest,
+        "architecture_boundary_digest": architecture_boundary_digest,
+        "_provenance_review": (
+            "bind the frozen requirement-set and independently frozen architecture "
+            "boundary SHA-256 digests before freeze"
+        ),
         "reviewer": None,
         "reviewed_date": None,
         "review_protocol": {
@@ -102,8 +122,6 @@ def build_gold_draft(
         },
         "allocations": allocations,
         "discharge_edges": discharge_edges,
-        "failure_class": failure_class,
-        "_failure_class_review": "confirm the expected blind failure class",
     }
 
 
@@ -134,6 +152,8 @@ def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
     freeze is complete before the gold is pooled.
     """
     problems: list[str] = []
+    if gold.get("schema_version") != GOLD_SCHEMA_VERSION:
+        problems.append(f"schema_version must be {GOLD_SCHEMA_VERSION!r}")
     if gold.get("artifact_role") != GOLD_ROLE:
         problems.append(f"artifact_role must be {GOLD_ROLE!r}")
     if gold.get("experiment_namespace") != _REQUIRED_NAMESPACE:
@@ -142,10 +162,26 @@ def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
         problems.append(
             f"status must be {GOLD_STATUS_FROZEN!r} (still a draft?)"
         )
+    chain_id = str(gold.get("chain_id") or "")
+    source_requirement = str(gold.get("source_requirement") or "")
+    if not chain_id:
+        problems.append("chain_id must be set")
+    if not source_requirement:
+        problems.append("source_requirement must be set")
+    elif chain_id and normalise_req_id(source_requirement) != chain_id:
+        problems.append("chain_id must match the normalised source_requirement")
+    source_text = gold.get("source_text")
+    if not isinstance(source_text, str) or not source_text:
+        problems.append("source_text must be the immutable stakeholder text")
+    elif gold.get("source_digest") != _digest(source_text):
+        problems.append("source_digest does not match source_text")
+    for field in ("requirement_set_digest", "architecture_boundary_digest"):
+        if not _SHA256_RE.fullmatch(str(gold.get(field) or "")):
+            problems.append(f"{field} must be a lowercase SHA-256 digest")
     if not gold.get("reviewer"):
         problems.append("reviewer must be set to the reviewing supervisor")
-    if not gold.get("reviewed_date"):
-        problems.append("reviewed_date must be set")
+    if not _valid_iso_date(gold.get("reviewed_date")):
+        problems.append("reviewed_date must be ISO YYYY-MM-DD")
     review = gold.get("review_protocol") or {}
     if review.get("blind_to_runtime_verdict") is not True:
         problems.append("review_protocol.blind_to_runtime_verdict must be true")
@@ -153,6 +189,10 @@ def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
         problems.append("review_protocol.independent_human_review must be true")
     if not gold.get("allocations"):
         problems.append("allocations must be non-empty")
+    if "failure_class" in gold:
+        problems.append(
+            "failure_class must not appear in reference gold; use a per-run blind label"
+        )
     for edge in gold.get("discharge_edges") or []:
         if edge.get("by") is None:
             problems.append(
@@ -169,13 +209,14 @@ def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
 def frozen_gold_gate(
     requirements, *, gold_dir: str = "docs/gold"
 ) -> list[str]:
-    """Problems that must be empty before R2-BBAG accuracy may be pooled.
+    """Legacy convenience check for frozen gold coverage.
 
-    Design P2: ``evaluation_ready`` is a whole-arm state, so it may open only when
-    **every** chain selected for the run has an independent FROZEN gold on disk —
-    never on a single frozen file. Returns the per-chain problems (missing frozen
-    file, or a file that fails :func:`validate_frozen_gold`); empty ⇒ the gate is
-    clear for these requirements. Reads gold files only; authors nothing (F3).
+    This function still selects chains from live code, so an empty result is *not*
+    authority to pool. It remains for draft/freeze diagnostics and compatibility.
+    The sole pooling decision is
+    :func:`evaluation_readiness.build_evaluation_readiness_manifest`, which binds
+    a frozen experiment configuration, requirement and architecture digests, the
+    complete selected chain/run sets, and blind labels.
     """
     import json
     from pathlib import Path

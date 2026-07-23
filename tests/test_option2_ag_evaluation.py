@@ -46,7 +46,6 @@ REQ_SAFE_005_GOLD = {
         {"component": "RecoverySystemContract", "assumption": "parachuteCommand", "by": "SafetyMonitorContract"},
         {"component": "RecoverySystemContract", "assumption": "actuatorPower", "by": "environment"},
     ],
-    "failure_class": "NO_FAILURE",
 }
 
 
@@ -79,12 +78,12 @@ def test_wrong_discharge_source_is_penalised():
     assert result["guarantee_allocation"]["recall"] < 1.0
 
 
-def test_failure_class_agreement_is_reported_when_both_declare_it():
+def test_static_failure_class_is_rejected_in_favour_of_per_run_blind_labels():
     pred = _prediction()
     pred["failure_class"] = "NO_FAILURE"
-    assert evaluate_ag_against_gold(pred, REQ_SAFE_005_GOLD)["failure_class_match"] is True
-    pred["failure_class"] = "MODEL_SEMANTIC_FAULT"
-    assert evaluate_ag_against_gold(pred, REQ_SAFE_005_GOLD)["failure_class_match"] is False
+    gold = {**REQ_SAFE_005_GOLD, "failure_class": "NO_FAILURE"}
+    with pytest.raises(ValueError, match="per-run blind label"):
+        evaluate_ag_against_gold(pred, gold)
 
 
 def test_role_guards_prevent_swapping_or_self_scoring():

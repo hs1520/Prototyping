@@ -17,7 +17,10 @@ from typing import Any, Callable, Mapping, Sequence
 from .ag_contracts import AG_CHECKER_VERSION
 from .evaluation_protocol import build_descriptive_pilot_manifest
 from .experiment_arms import REVISED_EXPERIMENT_NAMESPACE
-from .requirement_inputs import build_frozen_requirement_set
+from .requirement_inputs import (
+    build_frozen_requirement_set,
+    normalise_requirement_id,
+)
 
 
 REVISED_PILOT_ARMS = ("R0-CURRENT", "R1-BBCTX", "R2-BBAG")
@@ -61,6 +64,7 @@ class RevisedPilotConfig:
         "An autonomous delivery UAV with ballistic parachute recovery and "
         "forward obstacle avoidance."
     )
+    selected_ag_chain_ids: tuple[str, ...] = ("REQ_SAFE_005",)
     experiment_namespace: str = REVISED_EXPERIMENT_NAMESPACE
     arms: tuple[str, str, str] = REVISED_PILOT_ARMS
 
@@ -86,7 +90,19 @@ class RevisedPilotConfig:
             raise ValueError("provider and model must be explicit")
         if not self.code_revision.strip():
             raise ValueError("code_revision must be frozen before execution")
-        build_frozen_requirement_set(self.requirements)
+        frozen = build_frozen_requirement_set(self.requirements)
+        selected = tuple(
+            normalise_requirement_id(value) for value in self.selected_ag_chain_ids
+        )
+        if not selected or len(selected) != len(set(selected)):
+            raise ValueError("selected_ag_chain_ids must be non-empty and unique")
+        available = set(frozen["source_digests"])
+        missing = sorted(set(selected) - available)
+        if missing:
+            raise ValueError(
+                "selected A/G chains are absent from the frozen requirement set: "
+                + ", ".join(missing)
+            )
 
     def frozen_requirements(self) -> dict[str, Any]:
         return build_frozen_requirement_set(
@@ -117,6 +133,13 @@ class RevisedPilotConfig:
             "system_name": self.system_name,
             "system_description": self.system_description,
             "frozen_requirement_set": frozen,
+            "selected_ag_chain_ids": [
+                normalise_requirement_id(value)
+                for value in self.selected_ag_chain_ids
+            ],
+            "selected_r2_run_ids": [
+                f"seed-{seed}:R2-BBAG" for seed in self.seeds
+            ],
             "gold_input_permitted": False,
             "langsmith_permitted": False,
             "gazebo_permitted": False,
