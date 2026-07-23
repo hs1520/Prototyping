@@ -105,3 +105,62 @@ def build_gold_draft(
         "failure_class": failure_class,
         "_failure_class_review": "confirm the expected blind failure class",
     }
+
+
+_REQUIRED_NAMESPACE = "BLACKBOARD_AG_V1"
+
+
+def _has_review_markers(obj: Any) -> bool:
+    if isinstance(obj, dict):
+        if any(
+            str(key).startswith("_") and "review" in str(key) for key in obj
+        ):
+            return True
+        return any(_has_review_markers(value) for value in obj.values())
+    if isinstance(obj, list):
+        return any(_has_review_markers(item) for item in obj)
+    return False
+
+
+def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
+    """Return the freeze-completeness problems of a supervisor gold file.
+
+    An empty list means the file satisfies every gate the post-hoc evaluator
+    enforces (``FROZEN`` status, evaluator role/namespace, a named reviewer and
+    date, both blind+independent review flags) and carries no leftover DRAFT
+    review markers or unresolved ``by: null`` discharge edges. This validates
+    STRUCTURE only — it never authors or second-guesses gold values (F3), so it
+    imports no checker and reads no prediction. It lets a supervisor confirm a
+    freeze is complete before the gold is pooled.
+    """
+    problems: list[str] = []
+    if gold.get("artifact_role") != GOLD_ROLE:
+        problems.append(f"artifact_role must be {GOLD_ROLE!r}")
+    if gold.get("experiment_namespace") != _REQUIRED_NAMESPACE:
+        problems.append(f"experiment_namespace must be {_REQUIRED_NAMESPACE!r}")
+    if gold.get("status") != GOLD_STATUS_FROZEN:
+        problems.append(
+            f"status must be {GOLD_STATUS_FROZEN!r} (still a draft?)"
+        )
+    if not gold.get("reviewer"):
+        problems.append("reviewer must be set to the reviewing supervisor")
+    if not gold.get("reviewed_date"):
+        problems.append("reviewed_date must be set")
+    review = gold.get("review_protocol") or {}
+    if review.get("blind_to_runtime_verdict") is not True:
+        problems.append("review_protocol.blind_to_runtime_verdict must be true")
+    if review.get("independent_human_review") is not True:
+        problems.append("review_protocol.independent_human_review must be true")
+    if not gold.get("allocations"):
+        problems.append("allocations must be non-empty")
+    for edge in gold.get("discharge_edges") or []:
+        if edge.get("by") is None:
+            problems.append(
+                f"discharge edge {edge.get('component')}/"
+                f"{edge.get('assumption')} is unresolved (by=null)"
+            )
+    if _has_review_markers(gold):
+        problems.append(
+            "leftover _review markers remain — drop them after confirming each field"
+        )
+    return problems

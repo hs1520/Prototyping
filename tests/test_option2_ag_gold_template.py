@@ -20,7 +20,52 @@ from src.prototyping.ag_emitter import emit_ag_package
 from src.prototyping.ag_gold_template import (
     GOLD_STATUS_DRAFT,
     build_gold_draft,
+    validate_frozen_gold,
 )
+
+
+def _freeze(draft: dict) -> dict:
+    """Mimic the supervisor's manual freeze: drop _review markers, set metadata."""
+    import copy
+
+    def strip(obj):
+        if isinstance(obj, dict):
+            return {
+                k: strip(v) for k, v in obj.items()
+                if not (str(k).startswith("_") and "review" in str(k))
+            }
+        if isinstance(obj, list):
+            return [strip(i) for i in obj]
+        return obj
+
+    gold = strip(copy.deepcopy(draft))
+    gold["status"] = "FROZEN"
+    gold["reviewer"] = "Dr. Supervisor"
+    gold["reviewed_date"] = "2026-07-30"
+    gold["review_protocol"] = {
+        "blind_to_runtime_verdict": True,
+        "independent_human_review": True,
+    }
+    return gold
+
+
+def test_validator_flags_an_unfrozen_draft():
+    problems = validate_frozen_gold(_draft())
+    # a draft trips the status, reviewer, date, both flags, and leftover markers
+    assert any("FROZEN" in p for p in problems)
+    assert any("reviewer" in p for p in problems)
+    assert any("_review markers" in p for p in problems)
+
+
+def test_validator_accepts_a_completely_frozen_gold():
+    assert validate_frozen_gold(_freeze(_draft())) == []
+
+
+def test_validator_flags_an_unresolved_discharge_edge():
+    frozen = _freeze(_draft())
+    frozen["discharge_edges"][0]["by"] = None  # reviewer left one unresolved
+    problems = validate_frozen_gold(frozen)
+    assert any("unresolved" in p for p in problems)
 
 _SRC = (
     "REQ-SAFE-005: The system shall deploy the ballistic recovery parachute "
