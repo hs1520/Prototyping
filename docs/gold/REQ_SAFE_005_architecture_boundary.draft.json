@@ -38,7 +38,7 @@
         "produces": [
           "recoveryActuationPowerAvailable"
         ],
-        "trigger": "AirborneRecoveryModeSignal"
+        "trigger": null
       }
     },
     {

@@ -78,7 +78,10 @@ REQ_SAFE_005_CHAIN = AGChainSpec(
             owner_usage="recoveryPowerSupply",
             guarantee="recoveryActuationPowerAvailable",
             behavior="RecoveryPowerSupplyBehavior",
-            trigger_signal="AirborneRecoveryModeSignal",
+            # Availability is a standing guarantee while the ``airborne``
+            # assumption holds, not a one-shot behavior triggered by an
+            # invented mode-entry signal.
+            trigger_signal=None,
             initial_state="recoveryPowerAvailable",
             response_state="recoveryPowerAvailable",
             response_action="setRecoveryActuationPowerAvailable",

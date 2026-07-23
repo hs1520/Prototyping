@@ -31,7 +31,9 @@ class AGComponentSpec:
     owner_usage: str                # concrete satisfying part usage
     guarantee: str                  # Boolean concept the component publishes
     behavior: str                   # realizing state definition
-    trigger_signal: str             # accepted event/signal
+    # ``None`` represents a continuously maintained state guarantee rather than
+    # an event-triggered transition (for example recovery-power availability).
+    trigger_signal: Optional[str]
     initial_state: str
     response_state: str
     response_action: str

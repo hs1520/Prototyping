@@ -104,6 +104,20 @@ def test_committed_boundary_drafts_match_the_student_candidate(spec, path):
     assert committed["artifact_digest"] is None
 
 
+def test_safe005_power_availability_is_continuous_not_event_triggered():
+    draft = build_architecture_boundary_draft(REQ_SAFE_005_CHAIN)
+    power = next(
+        component for component in draft["components"]
+        if component["component_id"] == "RecoveryPowerSupplyContract"
+    )
+    assert power["interfaces"]["consumes"] == ["airborne"]
+    assert power["interfaces"]["produces"] == [
+        "recoveryActuationPowerAvailable"
+    ]
+    assert "trigger" in power["interfaces"]
+    assert power["interfaces"]["trigger"] is None
+
+
 @pytest.mark.parametrize(
     "spec",
     [REQ_SAFE_004_CHAIN, REQ_SAFE_005_CHAIN, REQ_SAFE_008_CHAIN],

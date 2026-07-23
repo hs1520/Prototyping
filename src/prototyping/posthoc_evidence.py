@@ -34,20 +34,21 @@ _NAMESPACE = "BLACKBOARD_AG_V1"
 _R2 = "R2-BBAG"
 _RESPONSIBILITY_CANDIDATES = {
     "SafetyResponseArbiterContract": (
-        "Arbitrate the approved flight-response set after an airborne critical "
-        "propulsion failure, select PARACHUTE_DEPLOYMENT as the highest-priority "
-        "response, and issue its deployment command within the allocated 0.10 s "
-        "timing segment."
+        "When criticalPropulsionFailureDetected is asserted while airborne, "
+        "apply the frozen approved response-priority policy, select "
+        "PARACHUTE_DEPLOYMENT, expose that selection, and issue the parachute "
+        "deployment command within 0.10 s of the triggering failure-detection "
+        "event."
     ),
     "RecoveryPowerSupplyContract": (
-        "Provide recovery-actuation power whenever airborne recovery is required, "
-        "independently of nominal propulsion power, and expose that availability "
-        "to the recovery system."
+        "While airborne, maintain recovery-actuation power independently of "
+        "nominal propulsion power and continuously expose whether that power is "
+        "available to the recovery system."
     ),
     "RecoverySystemContract": (
-        "Consume the deployment command and recovery-actuation power, execute a "
-        "reachable parachute deployment, and expose the deployment observation "
-        "within the allocated 0.35 s timing segment."
+        "When a parachute deployment command is received with recovery-actuation "
+        "power available, execute parachute deployment and expose the "
+        "parachute-deployed observation within 0.35 s of command receipt."
     ),
 }
 
