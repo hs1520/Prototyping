@@ -14,8 +14,14 @@ EVALUATOR-ONLY human gold. It is a different boundary from the runtime checker:
   * gold is authored blind to the pipeline verdict (a human process); this module
     only computes agreement between that gold and the archived prediction.
 
-Accuracy/F1 produced here is the only number that may be pooled for R2-BBAG, and
-only once ``RevisedExperimentArm.evaluation_ready`` is true.
+The number produced here is a **decomposition/extraction agreement** F1 (over
+guarantee allocation + assumption discharge), **not** an LLM-accuracy score: under
+deterministic A/G emission the prediction is the reviewed decomposition rendered
+and read back, so agreement is ~1.0 by construction and measures extract/check
+faithfulness (it becomes a generation-accuracy metric only when R2 emits
+LLM-authored A/G models). It may be pooled for R2-BBAG only once
+``RevisedExperimentArm.evaluation_ready`` is true — i.e. once **every** selected
+chain has independent FROZEN gold, never on a single frozen file.
 """
 from __future__ import annotations
 
@@ -165,6 +171,17 @@ def evaluate_ag_against_gold(
         "artifact_role": "POSTHOC_HUMAN_GOLD_EVALUATION",
         "producing_stage": "POSTHOC_EVALUATION",
         "measurement_boundary": "EVALUATOR_ONLY",
+        "metric_name": "decomposition_extraction_agreement",
+        "metric_interpretation": (
+            "set F1 over guarantee allocation + assumption discharge. This is "
+            "decomposition/extraction AGREEMENT, NOT LLM accuracy: under "
+            "deterministic A/G emission the prediction is the reviewed "
+            "decomposition rendered and read back, so agreement is ~1.0 by "
+            "construction and measures extract/check faithfulness. It measures "
+            "model-generation accuracy only when R2 emits LLM-authored A/G models. "
+            "It does not yet score system assumptions, deadline/timing origin, "
+            "priority, or default-safe invariants — see gold-schema extension."
+        ),
         "chain_id": gold.get("chain_id"),
         "checker_version": prediction.get("checker_version"),
         "source_model_revision": prediction.get("source_model_revision"),

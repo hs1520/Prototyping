@@ -67,6 +67,28 @@ def test_validator_flags_an_unresolved_discharge_edge():
     problems = validate_frozen_gold(frozen)
     assert any("unresolved" in p for p in problems)
 
+
+def test_pooling_gate_requires_every_selected_chain_frozen(tmp_path):
+    from src.prototyping.ag_gold_template import frozen_gold_gate
+
+    reqs = [
+        "REQ-SAFE-004: prevent arming on self-test failure",
+        "REQ-SAFE-005: deploy the parachute within 0.5 s",
+    ]
+    # no frozen files yet -> the gate blocks and names both chains
+    problems = frozen_gold_gate(reqs, gold_dir=str(tmp_path))
+    assert any("REQ_SAFE_004" in p for p in problems)
+    assert any("REQ_SAFE_005" in p for p in problems)
+
+    # freeze only ONE chain -> the gate still blocks on the other (P2: all chains)
+    import json
+    from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+    frozen = _freeze(build_gold_draft(REQ_SAFE_005_CHAIN, source_text="REQ-SAFE-005: x"))
+    (tmp_path / "REQ_SAFE_005_ag_gold.json").write_text(json.dumps(frozen))
+    still = frozen_gold_gate(reqs, gold_dir=str(tmp_path))
+    assert not any("REQ_SAFE_005" in p for p in still)
+    assert any("REQ_SAFE_004" in p for p in still)
+
 _SRC = (
     "REQ-SAFE-005: The system shall deploy the ballistic recovery parachute "
     "within 0.5 seconds of detecting a critical propulsion subsystem failure "

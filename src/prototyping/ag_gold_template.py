@@ -164,3 +164,40 @@ def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
             "leftover _review markers remain — drop them after confirming each field"
         )
     return problems
+
+
+def frozen_gold_gate(
+    requirements, *, gold_dir: str = "docs/gold"
+) -> list[str]:
+    """Problems that must be empty before R2-BBAG accuracy may be pooled.
+
+    Design P2: ``evaluation_ready`` is a whole-arm state, so it may open only when
+    **every** chain selected for the run has an independent FROZEN gold on disk —
+    never on a single frozen file. Returns the per-chain problems (missing frozen
+    file, or a file that fails :func:`validate_frozen_gold`); empty ⇒ the gate is
+    clear for these requirements. Reads gold files only; authors nothing (F3).
+    """
+    import json
+    from pathlib import Path
+
+    from .ag_chains import select_ag_chains
+
+    chains = select_ag_chains(requirements)
+    if not chains:
+        return ["no reviewed A/G chain is selected for these requirements"]
+    problems: list[str] = []
+    for chain in chains:
+        req = normalise_req_id(chain.source_requirement)
+        path = Path(gold_dir) / f"{req}_ag_gold.json"
+        if not path.exists():
+            problems.append(
+                f"{req}: no FROZEN gold at {path} (a .draft is not sufficient)"
+            )
+            continue
+        try:
+            gold = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            problems.append(f"{req}: gold file unreadable ({exc})")
+            continue
+        problems.extend(f"{req}: {issue}" for issue in validate_frozen_gold(gold))
+    return problems
