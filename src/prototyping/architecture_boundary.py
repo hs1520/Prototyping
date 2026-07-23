@@ -89,16 +89,20 @@ def build_architecture_boundary_draft(
                 "decision, not from the stakeholder requirement text"
             ),
             "interfaces": {
-                "consumes": [a.concept for a in comp.assumptions],
-                "produces": [comp.guarantee],
+                "consumes": list(dict.fromkeys([
+                    *(a.concept for a in comp.assumptions),
+                    *comp.interface_inputs,
+                ])),
+                "produces": list(comp.guarantees),
                 "trigger": comp.trigger_signal,
             },
         }
         for comp in spec.components
     ]
     allocations = [
-        {"owner": comp.owner_usage, "contract": comp.name, "guarantee": comp.guarantee}
+        {"owner": comp.owner_usage, "contract": comp.name, "guarantee": guarantee}
         for comp in spec.components
+        for guarantee in comp.guarantees
     ]
     return {
         "artifact_role": ARCHITECTURE_BOUNDARY_ROLE,

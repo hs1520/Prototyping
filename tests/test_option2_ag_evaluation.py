@@ -56,6 +56,11 @@ REQ_SAFE_005_GOLD = {
             "guarantee": "parachuteDeploymentCommand",
         },
         {
+            "owner": "safetyResponseArbiter",
+            "contract": "SafetyResponseArbiterContract",
+            "guarantee": "parachuteResponseSelected",
+        },
+        {
             "owner": "recoveryPowerSupply",
             "contract": "RecoveryPowerSupplyContract",
             "guarantee": "recoveryActuationPowerAvailable",

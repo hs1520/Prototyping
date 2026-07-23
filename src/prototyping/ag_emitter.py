@@ -36,8 +36,14 @@ class AGComponentSpec:
     response_state: str
     response_action: str
     assumptions: Tuple[AGAssumptionSpec, ...] = ()
+    interface_inputs: Tuple[str, ...] = ()
+    additional_guarantees: Tuple[str, ...] = ()
     latency_budget: Optional[float] = None
     timing_segment_required: Optional[bool] = None
+
+    @property
+    def guarantees(self) -> Tuple[str, ...]:
+        return (self.guarantee, *self.additional_guarantees)
 
 
 @dataclass(frozen=True)
@@ -117,6 +123,15 @@ def _render_ast(node: Mapping[str, Any]) -> str:
 def emit_ag_package(spec: AGChainSpec) -> str:
     """Render one student-approved A/G chain candidate as valid SysML v2."""
     out: list[str] = [f"package {spec.package} {{"]
+    # Official release-corpus models explicitly import the standard-library
+    # namespaces they use. Keeping these imports in every standalone package makes
+    # raw Syside semantic diagnostics clean rather than relying on diagnostic
+    # suppression in the project-wide legacy syntax wrapper.
+    out.extend([
+        "    private import ScalarValues::*;",
+        "    private import ISQ::*;",
+        "    private import SI::*;",
+    ])
 
     # System contract. The doc annotation carries the immutable source-requirement
     # provenance and selected safety_pattern, so the committed model (the sole
@@ -141,7 +156,8 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         out.append(f"        attribute {concept} : Boolean;")
     if spec.deadline is not None:
         out.append(
-            f"        attribute maxLatency : Real = {_fmt(spec.deadline)} [SI::s];"
+            "        attribute maxLatency : DurationValue = "
+            f"{_fmt(spec.deadline)} [s];"
         )
     for concept in spec.system_assumptions:
         out.append(f"        assume constraint a_{concept} {{ {concept} }}")
@@ -165,13 +181,17 @@ def emit_ag_package(spec: AGChainSpec) -> str:
     # Component contracts.
     for comp in spec.components:
         out.append(f"    requirement def {comp.name} {{")
-        concepts = _dedup([*(a.concept for a in comp.assumptions), comp.guarantee])
+        concepts = _dedup([
+            *(a.concept for a in comp.assumptions),
+            *comp.interface_inputs,
+            *comp.guarantees,
+        ])
         for concept in concepts:
             out.append(f"        attribute {concept} : Boolean;")
         if comp.latency_budget is not None:
             out.append(
-                f"        attribute latencyBudget : Real = "
-                f"{_fmt(comp.latency_budget)} [SI::s];"
+                f"        attribute latencyBudget : DurationValue = "
+                f"{_fmt(comp.latency_budget)} [s];"
             )
         if comp.timing_segment_required is not None:
             literal = "true" if comp.timing_segment_required else "false"
@@ -185,9 +205,10 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 f"        assume constraint {prefix}{assumption.concept} "
                 f"{{ {assumption.concept} }}"
             )
-        out.append(
-            f"        require constraint g_{comp.guarantee} {{ {comp.guarantee} }}"
-        )
+        for guarantee in comp.guarantees:
+            out.append(
+                f"        require constraint g_{guarantee} {{ {guarantee} }}"
+            )
         out.append("    }")
 
     # Explicit priority semantics for the bounded SAFE_005 profile.  The enum,
@@ -225,9 +246,10 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             )
         out.append("    }")
 
-        declared_component_signals = {comp.trigger_signal for comp in spec.components}
-        if "CriticalPropulsionFailureDetectedSignal" not in declared_component_signals:
-            out.append("    attribute def CriticalPropulsionFailureDetectedSignal;")
+        # The arbitration behavior itself consumes this signal.  It therefore
+        # needs a package-level definition even when a component spec names the
+        # same trigger but delegates its behavior to this shared topology.
+        out.append("    attribute def CriticalPropulsionFailureDetectedSignal;")
         for lower in (edge[1] for edge in priority.edges):
             out.append(
                 f"    attribute def {_sysml_identifier(lower.title())}RequestSignal;"
@@ -252,7 +274,8 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             )
         out.append(
             "        state parachuteDeploymentSelected "
-            "{ entry action issueParachuteDeploymentCommand; }"
+            "{ entry action "
+            "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand; }"
         )
         for _higher, lower in priority.edges:
             out.append(f"        state {_sysml_identifier(lower)};")
@@ -273,8 +296,14 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         )
 
     # Reachable trigger -> response-state -> entry-action realizations.
-    emitted_signal_defs: set[str] = set()
+    emitted_signal_defs: set[str] = (
+        {"CriticalPropulsionFailureDetectedSignal"}
+        if spec.priority is not None
+        else set()
+    )
     for comp in spec.components:
+        if comp.behavior == "SafetyResponseArbitration":
+            continue
         if comp.name == "ReleaseCommandGatewayContract":
             for signal in (
                 "ReceivedReleaseCommandSignal",
@@ -306,6 +335,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             for signal in (
                 "PowerOnSignal",
                 "SensorFailureReportedSignal",
+                "SelfTestPassedSignal",
                 "PowerCycleSignal",
             ):
                 if signal not in emitted_signal_defs:
@@ -320,6 +350,10 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 "        state selfTesting;",
                 "        transition latchFailure first selfTesting "
                 "accept SensorFailureReportedSignal then startupInhibited;",
+                "        transition completePassingSelfTest first selfTesting "
+                "accept SelfTestPassedSignal then selfTestPassed;",
+                "        state selfTestPassed "
+                "{ entry action clearStartupInhibitActive; }",
                 "        state startupInhibited "
                 "{ entry action setStartupInhibitActive; }",
                 "        transition resetAfterPowerCycle first startupInhibited "
@@ -340,7 +374,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 f"    state def {comp.behavior} {{",
                 "        entry; then lockedUnpowered;",
                 "        state lockedUnpowered "
-                "{ entry action setPayloadLocked; }",
+                "{ entry action setPayloadLockedForDeenergiseToLock; }",
                 "        transition powerApplied first lockedUnpowered "
                 "accept PowerOnSignal then lockedPowered;",
                 "        state lockedPowered "
@@ -349,9 +383,18 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 "accept AuthorisedReleaseCommandReceivedSignal "
                 "then unlockedPowered;",
                 "        state unlockedPowered "
-                "{ entry action setPayloadUnlocked; }",
+                "{ entry action enforceAuthorisedUnlockOnly; }",
                 "        transition powerLostLocks first unlockedPowered "
                 "accept PowerLostSignal then lockedUnpowered;",
+                "    }",
+            ])
+            continue
+        if comp.name == "RecoveryPowerSupplyContract":
+            out.extend([
+                f"    state def {comp.behavior} {{",
+                "        entry; then recoveryPowerAvailable;",
+                "        state recoveryPowerAvailable "
+                "{ entry action setRecoveryActuationPowerAvailable; }",
                 "    }",
             ])
             continue
@@ -383,7 +426,11 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             f"from {comp.name} to {comp.behavior};"
         )
 
-    producers = {comp.guarantee: comp.name for comp in spec.components}
+    producers = {
+        guarantee: comp.name
+        for comp in spec.components
+        for guarantee in comp.guarantees
+    }
     system_environment = set(spec.system_assumptions)
     for comp in spec.components:
         for assumption in comp.assumptions:

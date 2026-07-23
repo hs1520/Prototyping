@@ -185,20 +185,49 @@ def _compute_score(n_parser: int, n_sema: int, n_warn: int) -> float:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def check_syntax(sysml_text: str) -> SyntaxCheckResult:
+def check_syntax(
+    sysml_text: str,
+    *,
+    fail_closed: bool = False,
+    filter_stdlib_diagnostics: bool = True,
+) -> SyntaxCheckResult:
     """
     Parse *sysml_text* with syside and return a SyntaxCheckResult.
 
-    If syside is unavailable, returns a clean result (score=1.0) so the
-    rest of the pipeline is not blocked.
+    Legacy callers retain the historical best-effort behavior. Evidence-producing
+    paths must pass ``fail_closed=True`` and
+    ``filter_stdlib_diagnostics=False``: a missing tool/load failure or unresolved
+    standard-library reference is then an error rather than a synthetic PASS.
     """
     if not _SYSIDE_OK:
+        if fail_closed:
+            return SyntaxCheckResult(
+                has_errors=True,
+                sema_errors=[{
+                    "line": 0,
+                    "col": 0,
+                    "message": "Syside Python API is unavailable",
+                    "code": "SYSIDE_UNAVAILABLE",
+                }],
+                score=0.0,
+            )
         return SyntaxCheckResult(has_errors=False, score=1.0)
 
     try:
         _model, diags = _syside.try_load_model(sysml_source=sysml_text)
-    except Exception:
-        # Can't even call the API — treat as unverified (neutral score)
+    except Exception as exc:
+        if fail_closed:
+            return SyntaxCheckResult(
+                has_errors=True,
+                sema_errors=[{
+                    "line": 0,
+                    "col": 0,
+                    "message": f"Syside model load failed: {exc}",
+                    "code": "SYSIDE_LOAD_FAILED",
+                }],
+                score=0.0,
+            )
+        # Historical non-evidence callers treat tool failure as unverified/neutral.
         return SyntaxCheckResult(has_errors=False, score=1.0)
 
     def _collect(category, filter_stdlib: bool = False) -> List[Dict]:
@@ -219,7 +248,10 @@ def check_syntax(sysml_text: str) -> SyntaxCheckResult:
         return out
 
     parser_errs = _collect(diags.parser)
-    sema_errs   = _collect(diags.sema, filter_stdlib=True)   # filter stdlib false positives
+    sema_errs = _collect(
+        diags.sema,
+        filter_stdlib=filter_stdlib_diagnostics,
+    )
     warn_items  = _collect(diags.warnings)
 
     has_errors = bool(parser_errs or sema_errs)

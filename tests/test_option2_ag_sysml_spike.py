@@ -3,14 +3,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.simulation import syntax_checker
 from src.simulation.syntax_checker import check_syntax
 
 
 _AG_SPIKE = """package AGSpike {
+    private import ScalarValues::*;
+    private import ISQ::*;
+    private import SI::*;
     requirement def SystemContract {
         attribute failureDetected : Boolean;
-        attribute deploymentLatency : Real;
-        attribute maximumLatency : Real = 0.5;
+        attribute deploymentLatency : DurationValue;
+        attribute maximumLatency : DurationValue = 0.5 [s];
         assume constraint { failureDetected }
         require constraint { deploymentLatency <= maximumLatency }
     }
@@ -142,12 +146,48 @@ def test_official_release_corpus_contains_assume_and_require_constraints():
 
 
 def test_selected_ag_profile_constructs_pass_the_project_syside_gate():
-    result = check_syntax(_AG_SPIKE)
+    result = check_syntax(
+        _AG_SPIKE,
+        fail_closed=True,
+        filter_stdlib_diagnostics=False,
+    )
     assert result.has_errors is False
     assert result.score == 1.0
 
 
 def test_student_decision_requirement_units_logic_and_trace_constructs_parse():
-    result = check_syntax(_STUDENT_DECISION_SPIKE)
+    result = check_syntax(
+        _STUDENT_DECISION_SPIKE,
+        fail_closed=True,
+        filter_stdlib_diagnostics=False,
+    )
     assert result.has_errors is False, result.errors
     assert result.score == 1.0
+
+
+def test_evidence_syntax_gate_rejects_missing_tool_and_unresolved_stdlib(
+    monkeypatch,
+):
+    monkeypatch.setattr(syntax_checker, "_SYSIDE_OK", False)
+    unavailable = check_syntax(
+        _AG_SPIKE,
+        fail_closed=True,
+        filter_stdlib_diagnostics=False,
+    )
+    assert unavailable.has_errors is True
+    assert unavailable.sema_errors[0]["code"] == "SYSIDE_UNAVAILABLE"
+
+    monkeypatch.setattr(syntax_checker, "_SYSIDE_OK", True)
+    without_imports = _AG_SPIKE.replace(
+        "    private import ScalarValues::*;\n"
+        "    private import ISQ::*;\n"
+        "    private import SI::*;\n",
+        "",
+    )
+    unresolved = check_syntax(
+        without_imports,
+        fail_closed=True,
+        filter_stdlib_diagnostics=False,
+    )
+    assert unresolved.has_errors is True
+    assert unresolved.sema_errors

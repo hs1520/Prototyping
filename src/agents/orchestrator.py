@@ -1702,7 +1702,11 @@ class Orchestrator:
                         f"{spec.source_requirement}; A/G emission cannot invent it"
                     )
             merged = merge_ag_contracts(model_text, specs)
-            if check_syntax(merged).has_errors:
+            if check_syntax(
+                merged,
+                fail_closed=True,
+                filter_stdlib_diagnostics=False,
+            ).has_errors:
                 raise RuntimeError("R2-BBAG A/G contract layer failed the syntax gate")
             print(
                 f"  [R2-BBAG] merged A/G contract layer for {len(specs)} "

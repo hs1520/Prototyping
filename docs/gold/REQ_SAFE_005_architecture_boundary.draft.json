@@ -19,7 +19,8 @@
           "criticalPropulsionFailureDetected"
         ],
         "produces": [
-          "parachuteDeploymentCommand"
+          "parachuteDeploymentCommand",
+          "parachuteResponseSelected"
         ],
         "trigger": "CriticalPropulsionFailureDetectedSignal"
       }
@@ -63,6 +64,11 @@
       "owner": "safetyResponseArbiter",
       "contract": "SafetyResponseArbiterContract",
       "guarantee": "parachuteDeploymentCommand"
+    },
+    {
+      "owner": "safetyResponseArbiter",
+      "contract": "SafetyResponseArbiterContract",
+      "guarantee": "parachuteResponseSelected"
     },
     {
       "owner": "recoveryPowerSupply",

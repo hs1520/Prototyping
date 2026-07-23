@@ -1,4 +1,4 @@
-"""Third student-approved candidate: REQ_SAFE_008 locked-until-authorised-release.
+"""Third candidate: current-source REQ_SAFE_008 plus derived lock constraints.
 
 Exercises a third bounded safety pattern, LOCKED_UNTIL_AUTHORISED_RELEASE, whose
 defining obligation is *default-safe*: the power-on (initial) state must be the
@@ -30,8 +30,8 @@ from src.prototyping.ag_extractor import extract_ag_graph
 from src.simulation.syntax_checker import check_syntax
 
 _SRC = (
-    "The payload release mechanism shall remain locked at power-on and shall "
-    "unlock only upon receipt of an authorised release command."
+    "The payload-release actuator shall default to the mechanically locked "
+    "state upon power-on, before any arming or flight authorisation."
 )
 
 
@@ -40,6 +40,16 @@ def _model() -> str:
         "package Src { requirement def REQ_SAFE_008 { doc /* " + _SRC + " */ } }\n"
         + emit_ag_package(REQ_SAFE_008_CHAIN)
     )
+
+
+def test_safe008_gold_uses_the_exact_current_repository_source():
+    from examples.drone_system_v2 import DRONE_REQUIREMENTS
+
+    current = next(
+        item for item in DRONE_REQUIREMENTS
+        if item.startswith("REQ-SAFE-008:")
+    )
+    assert _GOLD_SRC == current
 
 
 def test_locked_release_chain_is_valid_sysml_and_passes_the_ag_trace():
@@ -52,8 +62,10 @@ def test_locked_release_chain_is_valid_sysml_and_passes_the_ag_trace():
     assert report.verdict == "PASS", [d.code for d in report.diagnostics]
     # a guard/ordering invariant, not a timed chain: no timing composition
     assert report.timing["ok"] is None
-    assert len(report.allocations) == 2
-    assert len(report.discharge_edges) == 5
+    assert len(report.allocations) == 4
+    # Lifecycle events are typed interface inputs, not permanent conjunctive
+    # assumptions; only the command transaction predicates are discharged.
+    assert len(report.discharge_edges) == 2
 
 
 def test_pattern_is_taken_from_the_declared_model_annotation():
@@ -142,7 +154,8 @@ def test_locked_release_pattern_needs_real_topology_not_a_label():
 def test_locked_release_checks_actions_authorisation_and_power_loss_relock():
     mutations = (
         (
-            "state lockedUnpowered { entry action setPayloadLocked; }",
+            "state lockedUnpowered "
+            "{ entry action setPayloadLockedForDeenergiseToLock; }",
             "state lockedUnpowered { entry action setPayloadUnlocked; }",
         ),
         (
@@ -244,6 +257,18 @@ def test_locked_release_checker_requires_states_and_deenergise_invariant():
         diagnostic.code for diagnostic in report.diagnostics
     }
 
+    without_mechanism_guarantee = _model().replace(
+        "require constraint g_deenergiseToLock { deenergiseToLock }",
+        "",
+    )
+    report = check_ag_graph(
+        extract_ag_graph(without_mechanism_guarantee, revision=1)
+    )
+    assert report.verdict == "FAIL"
+    assert "PATTERN_TOPOLOGY_INCOMPLETE" in {
+        diagnostic.code for diagnostic in report.diagnostics
+    }
+
 
 def test_locked_release_runtime_checker_requires_invariant_semantics_and_pattern():
     model = _model()
@@ -269,9 +294,9 @@ def test_locked_release_runtime_checker_requires_invariant_semantics_and_pattern
 
 
 _GOLD_SRC = (
-    "REQ-SAFE-008: The payload release mechanism shall remain locked at "
-    "power-on and shall unlock only upon receipt of an authorised release "
-    "command."
+    "REQ-SAFE-008: The payload-release actuator shall default to the "
+    "mechanically locked state upon power-on, before any arming or flight "
+    "authorisation."
 )
 _DRAFT_FILE = Path("docs/gold/REQ_SAFE_008_ag_gold.draft.json")
 

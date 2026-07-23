@@ -177,9 +177,9 @@ def test_board_mediated_dependency_closed_repair_accepts_only_targeted_fix():
             GOOD, "requirement", "RecoverySystemContract"
         ).replace("[SI::s]", "[SI::ms]"),
         lambda: _definition(
-            GOOD, "state", "SafetyResponseArbiterBehavior"
+            GOOD, "state", "SafetyResponseArbitration"
         ).replace(
-            "issueParachuteDeploymentCommand",
+            "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand",
             "issueDifferentCommand",
         ),
     ],

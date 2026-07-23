@@ -37,7 +37,9 @@
           "authorisedReleaseCommandReceived"
         ],
         "produces": [
-          "payloadLocked"
+          "payloadLocked",
+          "authorisedUnlockOnly",
+          "deenergiseToLock"
         ],
         "trigger": "PowerOnSignal"
       }
@@ -53,6 +55,16 @@
       "owner": "payloadLockMechanism",
       "contract": "PayloadLockMechanismContract",
       "guarantee": "payloadLocked"
+    },
+    {
+      "owner": "payloadLockMechanism",
+      "contract": "PayloadLockMechanismContract",
+      "guarantee": "authorisedUnlockOnly"
+    },
+    {
+      "owner": "payloadLockMechanism",
+      "contract": "PayloadLockMechanismContract",
+      "guarantee": "deenergiseToLock"
     }
   ],
   "reviewer": null,

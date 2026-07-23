@@ -67,6 +67,8 @@ def test_draft_carries_full_provenance_and_allocations_from_the_spec():
     assert {(a["owner"], a["guarantee"]) for a in draft["allocations"]} == {
         ("releaseCommandGateway", "authorisedReleaseCommandReceived"),
         ("payloadLockMechanism", "payloadLocked"),
+        ("payloadLockMechanism", "authorisedUnlockOnly"),
+        ("payloadLockMechanism", "deenergiseToLock"),
     }
     releaser = next(
         c for c in draft["components"]

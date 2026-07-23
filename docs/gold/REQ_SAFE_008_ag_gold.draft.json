@@ -5,8 +5,8 @@
   "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
   "chain_id": "REQ_SAFE_008",
   "source_requirement": "REQ_SAFE_008",
-  "source_text": "REQ-SAFE-008: The payload release mechanism shall remain locked at power-on and shall unlock only upon receipt of an authorised release command.",
-  "source_digest": "b3e48df6ce05d718615385ddedc6fd32e660f422e9a288df9ec6d7be98ed4904",
+  "source_text": "REQ-SAFE-008: The payload-release actuator shall default to the mechanically locked state upon power-on, before any arming or flight authorisation.",
+  "source_digest": "6941a2a0b5156b75b1d17f8d2407084534d4bcdf3fec00ecfe709c6d6867ffde",
   "requirement_set_digest": null,
   "architecture_boundary_digest": null,
   "_provenance_review": "bind the frozen requirement-set and independently frozen architecture boundary SHA-256 digests before freeze",
@@ -16,11 +16,11 @@
     "blind_to_runtime_verdict": false,
     "independent_human_review": false
   },
-  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the student-approved decomposition candidate, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
+  "review_instructions": "Label blind to any pipeline verdict (design §13). Confirm or edit each field from the source requirement and the student-approved decomposition candidate, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
   "system": {
     "contract": "SystemPayloadLockContract",
     "assumptions": [],
-    "guarantee_observation": "payloadLocked",
+    "guarantee_observation": "not powerOnInitialisation or payloadLocked",
     "_review": "confirm system assumptions and observation"
   },
   "allocations": [
@@ -35,6 +35,18 @@
       "contract": "PayloadLockMechanismContract",
       "guarantee": "payloadLocked",
       "_review": "confirm the responsible owner"
+    },
+    {
+      "owner": "payloadLockMechanism",
+      "contract": "PayloadLockMechanismContract",
+      "guarantee": "authorisedUnlockOnly",
+      "_review": "confirm the responsible owner"
+    },
+    {
+      "owner": "payloadLockMechanism",
+      "contract": "PayloadLockMechanismContract",
+      "guarantee": "deenergiseToLock",
+      "_review": "confirm the responsible owner"
     }
   ],
   "discharge_edges": [
@@ -48,24 +60,6 @@
       "component": "ReleaseCommandGatewayContract",
       "assumption": "authorisationDataValid",
       "by": "environment",
-      "_review": "confirm the discharging source"
-    },
-    {
-      "component": "PayloadLockMechanismContract",
-      "assumption": "powerOnEvent",
-      "by": "environment",
-      "_review": "confirm the discharging source"
-    },
-    {
-      "component": "PayloadLockMechanismContract",
-      "assumption": "powerLostEvent",
-      "by": "environment",
-      "_review": "confirm the discharging source"
-    },
-    {
-      "component": "PayloadLockMechanismContract",
-      "assumption": "authorisedReleaseCommandReceived",
-      "by": "ReleaseCommandGatewayContract",
       "_review": "confirm the discharging source"
     }
   ],
@@ -102,8 +96,8 @@
         "node": "Identifier",
         "name": "authorisedReleaseCommandReceived"
       },
-      "source_kind": "STAKEHOLDER",
-      "source_id": "REQ_SAFE_008"
+      "source_kind": "STUDENT_DERIVED_DESIGN_CONSTRAINT",
+      "source_id": "SAFE008_UNLOCK_AUTHORIZATION_V1"
     },
     {
       "invariant_id": "SAFE008_DEENERGISE_TO_LOCK",

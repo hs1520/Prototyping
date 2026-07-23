@@ -106,6 +106,7 @@ def check_safety_pattern_conformance(
         behavior = behaviors.get(str(realization.get("behavior") or ""))
         timed = component.timing_budget is not None
         pattern = declared or (_TIMED_FAILSAFE if timed else _STARTUP_INHIBIT)
+        availability_invariant = component.timing_segment_required is False
         # Default-safe: the power-on (initial) state is present and is not one of
         # the guarded response states — the locked default is genuinely distinct
         # from the released state it guards.
@@ -216,7 +217,14 @@ def check_safety_pattern_conformance(
             contract=component.name,
             pattern=pattern,
             trigger_present=bool(realization.get("trigger_ok")),
-            reachable_response=len(reachable) >= 2,
+            # A non-timed availability invariant is established in its initial
+            # state and deliberately has no activation transition or additive
+            # timing segment. Other components still need a genuine path.
+            reachable_response=(
+                bool(reachable)
+                if availability_invariant
+                else len(reachable) >= 2
+            ),
             entry_action_present=bool(actions),
             timing_criterion_present=(
                 timed or component.timing_segment_required is False

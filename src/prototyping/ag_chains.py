@@ -6,9 +6,9 @@ human-frozen architecture.  The student-approved decisions are recorded in
 Three chains are encoded, each a distinct bounded safety pattern:
 REQ_SAFE_005 (critical propulsion failure → parachute deployment, a timed
 failsafe), REQ_SAFE_004 (power-on self-test → arming inhibit, a Boolean
-startup-inhibit invariant), and REQ_SAFE_008 (payload stays locked at power-on,
-unlocks only on an authorised release — a locked-until-authorised-release
-invariant). Adding a chain is a controlled design activity; the emitter
+startup-inhibit invariant), and REQ_SAFE_008 (stakeholder power-on default lock
+plus student-derived authorised-unlock/de-energise rules — a
+locked-until-authorised-release invariant). Adding a chain is a controlled design activity; the emitter
 renders it into the model deterministically.
 """
 from __future__ import annotations
@@ -55,11 +55,14 @@ REQ_SAFE_005_CHAIN = AGChainSpec(
             owner_def="SafetyResponseArbiter",
             owner_usage="safetyResponseArbiter",
             guarantee="parachuteDeploymentCommand",
-            behavior="SafetyResponseArbiterBehavior",
+            behavior="SafetyResponseArbitration",
             trigger_signal="CriticalPropulsionFailureDetectedSignal",
             initial_state="awaitingFailure",
             response_state="parachuteSelected",
-            response_action="issueParachuteDeploymentCommand",
+            response_action=(
+                "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand"
+            ),
+            additional_guarantees=("parachuteResponseSelected",),
             assumptions=(
                 AGAssumptionSpec("airborne", environment=True),
                 AGAssumptionSpec(
@@ -76,10 +79,12 @@ REQ_SAFE_005_CHAIN = AGChainSpec(
             guarantee="recoveryActuationPowerAvailable",
             behavior="RecoveryPowerSupplyBehavior",
             trigger_signal="AirborneRecoveryModeSignal",
-            initial_state="standby",
+            initial_state="recoveryPowerAvailable",
             response_state="recoveryPowerAvailable",
             response_action="setRecoveryActuationPowerAvailable",
-            assumptions=(AGAssumptionSpec("airborne", environment=True),),
+            assumptions=(
+                AGAssumptionSpec("airborne", environment=True),
+            ),
             timing_segment_required=False,
         ),
         AGComponentSpec(
@@ -205,6 +210,14 @@ REQ_SAFE_004_CHAIN = AGChainSpec(
                 _id("airborneTransitionInhibited"),
             ),
             source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            source_id="SAFE004_LATCH_PROPAGATION_V1",
+        ),
+        AGInvariantSpec(
+            invariant_id="SAFE004_LATCH_RESET_AFTER_PASS",
+            scope="SystemArmingInhibitContract",
+            trigger_or_antecedent_ast=_id("selfTestPassed"),
+            required_consequent_ast=_not("startupInhibitActive"),
+            source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",
             source_id="SAFE004_LATCH_RESET_V1",
         ),
     ),
@@ -216,6 +229,7 @@ REQ_SAFE_004_CHAIN = AGChainSpec(
         "startupInhibitActive",
         "armingTransitionInhibited",
         "airborneTransitionInhibited",
+        "selfTestPassed",
     ),
     system_observation_concepts=(
         "armingTransitionInhibited",
@@ -223,18 +237,17 @@ REQ_SAFE_004_CHAIN = AGChainSpec(
     ),
 )
 
-# REQ_SAFE_008 — payload release stays locked at power-on and unlocks only on an
-# authorised release command. A Boolean invariant like REQ_SAFE_004, but a third
-# distinct safety pattern: LockedUntilAuthorisedRelease. Its defining obligation
-# is default-safe — the power-on (initial) state is the *locked* state, and the
-# released state is reachable only through the authorised-release trigger. No
-# timing budget (it is an ordering/guard invariant, not a deadline).
+# REQ_SAFE_008 — the selected stakeholder source requires a locked power-on
+# default before arming/flight authorisation. The guarded-unlock and
+# de-energise-to-lock rules are separately identified student architecture
+# constraints. Together they instantiate the third bounded pattern,
+# LockedUntilAuthorisedRelease. No timing budget applies.
 REQ_SAFE_008_CHAIN = AGChainSpec(
     source_requirement="REQ_SAFE_008",
     package="REQ_SAFE_008_AG",
     system_contract="SystemPayloadLockContract",
     system_assumptions=(),
-    observation="payloadLocked",
+    observation="not powerOnInitialisation or payloadLocked",
     deadline=None,
     verification="PayloadLockVerification",
     pattern="LOCKED_UNTIL_AUTHORISED_RELEASE",
@@ -263,11 +276,15 @@ REQ_SAFE_008_CHAIN = AGChainSpec(
             trigger_signal="PowerOnSignal",
             initial_state="lockedUnpowered",
             response_state="lockedPowered",
-            response_action="setPayloadLocked",
-            assumptions=(
-                AGAssumptionSpec("powerOnEvent", environment=True),
-                AGAssumptionSpec("powerLostEvent", environment=True),
-                AGAssumptionSpec("authorisedReleaseCommandReceived"),
+            response_action="setPayloadLockedForDeenergiseToLock",
+            interface_inputs=(
+                "powerOnEvent",
+                "powerLostEvent",
+                "authorisedReleaseCommandReceived",
+            ),
+            additional_guarantees=(
+                "authorisedUnlockOnly",
+                "deenergiseToLock",
             ),
         ),
     ),
@@ -285,8 +302,8 @@ REQ_SAFE_008_CHAIN = AGChainSpec(
             scope="SystemPayloadLockContract",
             trigger_or_antecedent_ast=_id("payloadUnlocked"),
             required_consequent_ast=_id("authorisedReleaseCommandReceived"),
-            source_kind="STAKEHOLDER",
-            source_id="REQ_SAFE_008",
+            source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            source_id="SAFE008_UNLOCK_AUTHORIZATION_V1",
         ),
         AGInvariantSpec(
             invariant_id="SAFE008_DEENERGISE_TO_LOCK",
@@ -303,6 +320,10 @@ REQ_SAFE_008_CHAIN = AGChainSpec(
         "payloadUnlocked",
         "authorisedReleaseCommandReceived",
         "actuatorPowerAvailable",
+    ),
+    system_observation_concepts=(
+        "powerOnInitialisation",
+        "payloadLocked",
     ),
 )
 

@@ -16,7 +16,7 @@
     "blind_to_runtime_verdict": false,
     "independent_human_review": false
   },
-  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the student-approved decomposition candidate, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
+  "review_instructions": "Label blind to any pipeline verdict (design §13). Confirm or edit each field from the source requirement and the student-approved decomposition candidate, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
   "system": {
     "contract": "SystemParachuteContract",
     "assumptions": [
@@ -31,6 +31,12 @@
       "owner": "safetyResponseArbiter",
       "contract": "SafetyResponseArbiterContract",
       "guarantee": "parachuteDeploymentCommand",
+      "_review": "confirm the responsible owner"
+    },
+    {
+      "owner": "safetyResponseArbiter",
+      "contract": "SafetyResponseArbiterContract",
+      "guarantee": "parachuteResponseSelected",
       "_review": "confirm the responsible owner"
     },
     {

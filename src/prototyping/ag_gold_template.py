@@ -59,17 +59,22 @@ def build_gold_draft(
     environment/system assumption nor produced by an upstream guarantee is left
     ``by = None`` and flagged UNRESOLVED for the reviewer.
     """
-    producers = {comp.guarantee: comp.name for comp in spec.components}
+    producers = {
+        guarantee: comp.name
+        for comp in spec.components
+        for guarantee in comp.guarantees
+    }
     system_env = set(spec.system_assumptions)
 
     allocations = [
         {
             "owner": comp.owner_usage,
             "contract": comp.name,
-            "guarantee": comp.guarantee,
+            "guarantee": guarantee,
             "_review": "confirm the responsible owner",
         }
         for comp in spec.components
+        for guarantee in comp.guarantees
     ]
 
     discharge_edges = []

@@ -84,8 +84,8 @@ def test_exactly_one_owner_per_component_guarantee():
 
 def test_additive_timing_budget_exceeded_is_detected():
     over = REQ_SAFE_005_SYSML.replace(
-        "attribute latencyBudget : Real = 0.35 [SI::s];",
-        "attribute latencyBudget : Real = 0.45 [SI::s];",
+        "attribute latencyBudget : DurationValue = 0.35 [s];",
+        "attribute latencyBudget : DurationValue = 0.45 [s];",
     )
     report = check_ag_graph(extract_ag_graph(over))
     assert report.verdict == "FAIL"

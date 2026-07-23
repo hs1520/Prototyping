@@ -360,7 +360,7 @@ def _extract_priority(text: str) -> Dict[str, object]:
     selection_action_connected = bool(
         selection_state
         and re.search(
-            r"\bentry\s+action\s+issueParachuteDeploymentCommand\b",
+            r"\bentry\s+action\s+\w*ParachuteDeploymentCommand\b",
             selection_state.group(1),
         )
     )

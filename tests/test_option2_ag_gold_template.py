@@ -200,7 +200,11 @@ def test_real_chain_prediction_round_trips_through_its_atomic_draft(
         "{ doc /* source */ } }\n"
         + emit_ag_package(chain)
     )
-    syntax = check_syntax(model)
+    syntax = check_syntax(
+        model,
+        fail_closed=True,
+        filter_stdlib_diagnostics=False,
+    )
     assert syntax.has_errors is False
     assert syntax.score == 1.0
     report = check_ag_graph(extract_ag_graph(model, revision=1))

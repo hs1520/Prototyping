@@ -8,6 +8,7 @@ arm metadata.
 """
 from __future__ import annotations
 
+import copy
 from datetime import date
 import hashlib
 import json
@@ -215,7 +216,11 @@ def validate_blind_packet(packet: Mapping[str, Any]) -> list[str]:
     for field in ("run_id", "chain_id"):
         if not str(packet.get(field) or "").strip():
             problems.append(f"blind packet {field} must be set")
-    for field in ("model_digest", "requirement_digest"):
+    for field in (
+        "model_digest",
+        "requirement_digest",
+        "architecture_boundary_digest",
+    ):
         if not _is_digest(packet.get(field)):
             problems.append(f"blind packet {field} must be a lowercase SHA-256 digest")
     review_material = packet.get("review_material")
@@ -224,6 +229,7 @@ def validate_blind_packet(packet: Mapping[str, Any]) -> list[str]:
     else:
         source_text = review_material.get("source_requirement")
         candidate_model = review_material.get("candidate_model")
+        boundary = review_material.get("architecture_boundary")
         if not isinstance(source_text, str) or not source_text:
             problems.append(
                 "blind packet review_material.source_requirement must be set"
@@ -242,6 +248,29 @@ def validate_blind_packet(packet: Mapping[str, Any]) -> list[str]:
             problems.append(
                 "blind packet candidate model does not match model_digest"
             )
+        if not isinstance(boundary, Mapping):
+            problems.append(
+                "blind packet review_material.architecture_boundary must be set"
+            )
+        else:
+            problems.extend(
+                "blind packet architecture boundary: " + issue
+                for issue in validate_frozen_boundary(boundary)
+            )
+            if (
+                architecture_boundary_digest(boundary)
+                != packet.get("architecture_boundary_digest")
+            ):
+                problems.append(
+                    "blind packet architecture boundary does not match "
+                    "architecture_boundary_digest"
+                )
+            if normalise_requirement_id(
+                str(boundary.get("chain_id") or "")
+            ) != normalise_requirement_id(str(packet.get("chain_id") or "")):
+                problems.append(
+                    "blind packet architecture boundary chain_id mismatch"
+                )
     forbidden = _forbidden_keys(packet)
     if forbidden:
         problems.append(
@@ -260,6 +289,7 @@ def build_blind_review_packet(
     chain_id: str,
     source_requirement: str,
     candidate_model: str,
+    architecture_boundary: Mapping[str, Any] | None = None,
     expected_requirement_digest: str | None = None,
     expected_model_digest: str | None = None,
 ) -> dict[str, Any]:
@@ -295,6 +325,20 @@ def build_blind_review_packet(
         )
     if expected_model_digest is not None and model_digest != expected_model_digest:
         raise ValueError("candidate_model bytes do not match expected_model_digest")
+    if architecture_boundary is None:
+        raise ValueError("architecture_boundary is required for blind review")
+    # Detach packet evidence from mutable caller-owned nested objects. Any later
+    # change to the source boundary must require a newly built packet and digest.
+    boundary = copy.deepcopy(dict(architecture_boundary))
+    boundary_problems = validate_frozen_boundary(boundary)
+    if boundary_problems:
+        raise ValueError(
+            "architecture_boundary must be independently frozen: "
+            + "; ".join(boundary_problems)
+        )
+    if normalise_requirement_id(str(boundary.get("chain_id") or "")) != chain:
+        raise ValueError("architecture_boundary chain_id does not match chain_id")
+    boundary_digest = architecture_boundary_digest(boundary)
 
     packet: dict[str, Any] = {
         "schema_version": READINESS_SCHEMA_VERSION,
@@ -305,9 +349,11 @@ def build_blind_review_packet(
         "chain_id": chain,
         "model_digest": model_digest,
         "requirement_digest": requirement_digest,
+        "architecture_boundary_digest": boundary_digest,
         "review_material": {
             "source_requirement": source,
             "candidate_model": model,
+            "architecture_boundary": boundary,
         },
         "artifact_digest": None,
     }
@@ -627,6 +673,13 @@ def build_evaluation_readiness_manifest(
             problems.append(f"{run_id}/{chain_id}: packet requirement digest mismatch")
         if packet.get("model_digest") != prediction_model_digest:
             problems.append(f"{run_id}/{chain_id}: packet model digest mismatch")
+        if (
+            packet.get("architecture_boundary_digest")
+            != boundary_evidence.get(chain_id)
+        ):
+            problems.append(
+                f"{run_id}/{chain_id}: packet architecture-boundary digest mismatch"
+            )
         if label is None:
             problems.append(f"{run_id}/{chain_id}: frozen blind label is missing")
             continue

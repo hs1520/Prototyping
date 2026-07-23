@@ -34,9 +34,18 @@ _REQS = ["REQ-SAFE-005: The system shall deploy the parachute within 0.5 s."]
 
 
 def test_emitted_chain_passes_the_syside_gate():
-    result = check_syntax(emit_ag_package(REQ_SAFE_005_CHAIN))
+    emitted = emit_ag_package(REQ_SAFE_005_CHAIN)
+    result = check_syntax(
+        emitted,
+        fail_closed=True,
+        filter_stdlib_diagnostics=False,
+    )
     assert result.has_errors is False
     assert result.score == 1.0
+    assert "private import ScalarValues::*;" in emitted
+    assert "private import ISQ::*;" in emitted
+    assert "private import SI::*;" in emitted
+    assert "attribute maxLatency : DurationValue = 0.5 [s];" in emitted
 
 
 def test_emitted_chain_round_trips_to_a_checker_pass():
@@ -45,7 +54,11 @@ def test_emitted_chain_round_trips_to_a_checker_pass():
     assert report.verdict == "PASS", [d.code for d in report.diagnostics]
     assert report.timing["sum"] == 0.45
     assert report.timing["ok"] is True
-    assert len(report.allocations) == 3
+    assert len(report.allocations) == 4
+    assert {
+        item["guarantee"] for item in report.allocations
+        if item["contract"] == "SafetyResponseArbiterContract"
+    } == {"parachuteDeploymentCommand", "parachuteResponseSelected"}
     prediction = report.to_dict()["graph"]
     assert prediction["timing"]["origin"] == "criticalPropulsionFailureDetected"
     assert prediction["priority"]["arbitration_topology"][
@@ -78,7 +91,8 @@ def test_runtime_checker_fails_closed_when_priority_semantics_are_removed():
 
     missing_selection_action = sysml.replace(
         "state parachuteDeploymentSelected "
-        "{ entry action issueParachuteDeploymentCommand; }",
+        "{ entry action "
+        "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand; }",
         "state parachuteDeploymentSelected;",
     )
     report = check_ag_graph(
@@ -122,6 +136,18 @@ def test_runtime_checker_fails_closed_when_priority_semantics_are_removed():
             "from SystemParachuteContract "
             "to ParachuteDeploymentVerification;",
             "",
+            "PRIORITY_TOPOLOGY_INCOMPLETE",
+        ),
+        (
+            "require constraint g_parachuteResponseSelected "
+            "{ parachuteResponseSelected }",
+            "",
+            "PRIORITY_TOPOLOGY_INCOMPLETE",
+        ),
+        (
+            "state recoveryPowerAvailable "
+            "{ entry action setRecoveryActuationPowerAvailable; }",
+            "state recoveryPowerAvailable;",
             "PRIORITY_TOPOLOGY_INCOMPLETE",
         ),
     ],
@@ -170,7 +196,7 @@ def test_r2_orchestrator_merges_ag_layer_and_emits_non_empty_pass_trace():
     )
     graph = orch._build_collaboration_artifacts(merged)["ag_contract_graph"]
     assert graph["verdict"] == "PASS"
-    assert len(graph["graph"]["allocations"]) == 3
+    assert len(graph["graph"]["allocations"]) == 4
     assert len(graph["graph"]["discharge_edges"]) == 5
 
 
@@ -239,7 +265,7 @@ def test_r2_end_to_end_orchestrator_seam_produces_full_evidence_chain():
     # Non-empty PASS A/G trace attached to the run artifacts.
     graph = artifacts["ag_contract_graph"]
     assert graph["verdict"] == "PASS"
-    assert len(graph["graph"]["allocations"]) == 3
+    assert len(graph["graph"]["allocations"]) == 4
     assert graph["source_model_revision"] == orch.blackboard.current_revision
 
     # Honest experiment metadata: runnable R2, not gold-poolable.

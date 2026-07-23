@@ -167,6 +167,7 @@ def _fixtures():
             chain_id="REQ_SAFE_005",
             source_requirement=_SOURCE,
             candidate_model=candidate_model,
+            architecture_boundary=boundary,
             expected_requirement_digest=requirement_digest,
             expected_model_digest=candidate_model_digest,
         )
@@ -265,6 +266,40 @@ def test_blind_packet_binds_the_exact_reviewed_source_and_model_bytes():
     assert any(
         "source requirement does not match requirement_digest" in item
         for item in manifest["problems"]
+    )
+
+
+def test_blind_packet_exposes_and_binds_the_frozen_architecture_boundary():
+    fixtures = _fixtures()
+    packet = fixtures["blind_packets"][0]
+    boundary = packet["review_material"]["architecture_boundary"]
+    assert boundary["status"] == "FROZEN"
+    assert (
+        packet["architecture_boundary_digest"]
+        == boundary["artifact_digest"]
+    )
+
+    boundary["components"][0]["responsibility"] += " altered"
+    packet["artifact_digest"] = artifact_digest(packet)
+    manifest = build_evaluation_readiness_manifest(**fixtures)
+    assert any(
+        "architecture boundary" in item
+        and (
+            "artifact_digest" in item
+            or "architecture_boundary_digest" in item
+        )
+        for item in manifest["problems"]
+    )
+
+
+def test_blind_packet_detaches_embedded_boundary_from_caller_mutation():
+    fixtures = _fixtures()
+    packet = fixtures["blind_packets"][0]
+    embedded = packet["review_material"]["architecture_boundary"]
+    original = fixtures["architecture_boundaries"]["REQ_SAFE_005"]
+    original["components"][0]["responsibility"] += " changed later"
+    assert embedded["components"][0]["responsibility"] != (
+        original["components"][0]["responsibility"]
     )
 
 

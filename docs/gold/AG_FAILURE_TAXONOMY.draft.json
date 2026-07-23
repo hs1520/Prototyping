@@ -3,7 +3,7 @@
   "artifact_role": "FAILURE_TAXONOMY",
   "experiment_namespace": "BLACKBOARD_AG_V1",
   "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
-  "taxonomy_version": "ag-failures-1.0-candidate",
+  "taxonomy_version": "ag-failures-1.1-candidate",
   "classes": [
     "NO_FAILURE",
     "CONTRACT_INCOMPLETENESS",
@@ -14,13 +14,14 @@
   ],
   "class_definitions": {
     "NO_FAILURE": {
-      "definition": "The reviewed candidate model represents the selected source obligation and frozen architecture boundary without an observable failure in this run/chain pair.",
+      "definition": "The reviewed candidate SysML represents the selected source obligation and frozen architecture boundary without a visible static contract, decomposition, architecture, realization, or observation-interface fault in this run/chain pair. This label makes no claim about dynamic performance, formal proof, or physical verification.",
       "include_when": [
-        "all source and frozen-boundary obligations visible in the packet are represented",
+        "all source and frozen-boundary obligations in the packet are represented in the candidate SysML",
+        "the required static observation interface and dependency are represented",
         "no more specific failure class below is supported"
       ],
       "exclude_when": [
-        "required evidence is absent rather than affirmative",
+        "the packet is valid but admissible evidence cannot decide a required non-static property",
         "any contract, decomposition, realization, architecture, or observation fault is visible"
       ],
       "_review": "confirm that absence of visible failure is not treated as formal proof or physical verification"
@@ -51,38 +52,43 @@
       "_review": "confirm that the frozen architecture boundary, not runtime output, defines the approved decomposition"
     },
     "MODEL_SEMANTIC_FAULT": {
-      "definition": "The contract/decomposition intent is present, but the candidate SysML behavior does not realize it through the required reachable trigger, transition, state, action, or observation path.",
+      "definition": "The contract/decomposition intent and approved architecture are present, but the candidate SysML does not realize them through the required reachable trigger, transition, state, action, reset/relock path, or declared observation interface/dependency.",
       "include_when": [
         "a required response is unreachable",
-        "a required trigger, guard, entry action, reset, relock, or realization link is absent or wrong"
+        "a required trigger, guard, entry action, reset, relock, or realization link is absent or wrong",
+        "a boundary-required observation interface or model dependency is absent or disconnected"
       ],
       "exclude_when": [
         "the contract itself omits the obligation",
-        "the model is internally realized but the architecture budget or compatibility is inadequate"
+        "the model faithfully represents the approved architecture but that architecture's unit, compatibility, or additive composition is inadequate",
+        "the observation interface is present but admissible evidence cannot establish a non-static outcome"
       ],
       "_review": "confirm that this class concerns committed SysML semantics, not checker implementation"
     },
     "ARCHITECTURE_DESIGN_ISSUE": {
-      "definition": "The candidate accurately represents its selected architecture, but that architecture violates an approved unit, compatibility, timing-budget, or composition constraint.",
+      "definition": "The candidate faithfully represents the frozen architecture, but the represented architecture violates an approved unit, compatibility, additive timing-budget, or composition constraint independently of any missing SysML realization element.",
       "include_when": [
         "exact-unit comparison is incompatible",
         "required timing segments are absent or their additive budget exceeds the deadline",
-        "component guarantees and assumptions are semantically incompatible"
+        "component guarantees and assumptions are semantically incompatible",
+        "the design defect remains after assuming every required model realization element is present and correctly connected"
       ],
       "exclude_when": [
-        "the architecture is adequate but the model fails to realize it",
+        "the frozen architecture is adequate but the candidate model fails to realize it",
+        "the candidate diverges from the frozen architecture rather than faithfully representing it",
         "the evidence is insufficient to distinguish a design issue"
       ],
       "_review": "confirm that this class does not authorize automatic semantic repair or design-space decisions"
     },
     "VERIFIER_LIMITATION": {
-      "definition": "The allowed blind review material lacks an observation or other evidence needed to decide one of the substantive classes without inspecting forbidden runtime verdicts or diagnostics.",
+      "definition": "The structurally valid blind packet contains the source, frozen architecture boundary, and candidate model, but those permitted materials cannot decide a required non-static property without additional independent evidence. This class is not used for a missing model observation interface or another visible model defect.",
       "include_when": [
-        "the required observation point is absent",
-        "the packet is structurally valid but insufficient for a defensible substantive label"
+        "the model contains the boundary-required observation interface, but the permitted material cannot establish the observed dynamic or physical outcome",
+        "the packet is structurally valid and no visible static defect supports another class, yet a defensible substantive conclusion still requires evidence outside the permitted material"
       ],
       "exclude_when": [
-        "a more specific source, contract, decomposition, realization, or architecture failure is directly visible"
+        "a more specific source, contract, decomposition, realization, architecture, or missing-observation-interface failure is directly visible",
+        "the packet itself is invalid or missing its frozen architecture boundary; that is a readiness-gate failure, not a run label"
       ],
       "_review": "confirm this is the sole inconclusive class and is not used to hide a visible model fault"
     }
@@ -90,15 +96,15 @@
   "adjudication": {
     "unit_of_analysis": "ONE_ARCHIVED_RUN_CHAIN_PAIR",
     "primary_label_count": 1,
-    "multi_fault_rule": "Choose the most upstream root cause directly supported by the allowed blind material: CONTRACT_INCOMPLETENESS before INTEGRATION_DECOMPOSITION_GAP before ARCHITECTURE_DESIGN_ISSUE or MODEL_SEMANTIC_FAULT. Use VERIFIER_LIMITATION only when the material cannot support a substantive class; use NO_FAILURE only when no fault is visible.",
+    "multi_fault_rule": "Choose one most-upstream root cause directly supported by the allowed blind material: CONTRACT_INCOMPLETENESS, then INTEGRATION_DECOMPOSITION_GAP. Between ARCHITECTURE_DESIGN_ISSUE and MODEL_SEMANTIC_FAULT, choose ARCHITECTURE_DESIGN_ISSUE only when the candidate faithfully represents the frozen boundary and the unit/compatibility/additive-composition defect remains with all required realization elements present; otherwise choose MODEL_SEMANTIC_FAULT for a missing or wrong realization or observation-interface element. Use VERIFIER_LIMITATION only when no visible static defect supports another class and the valid packet cannot decide a required non-static property. Use NO_FAILURE only for absence of visible static faults, never as formal or physical validation.",
     "inconclusive_class": "VERIFIER_LIMITATION",
-    "_review": "confirm class precedence, especially the relative treatment of architecture and realization faults, before the first label is authored"
+    "_review": "confirm the explicit architecture-versus-model tie-break and the distinction between a missing model observation interface (MODEL_SEMANTIC_FAULT) and unavailable non-static evidence (VERIFIER_LIMITATION) before the first label is authored"
   },
   "reviewer": null,
   "reviewed_date": null,
   "review_protocol": {
     "independent_human_review": false
   },
-  "review_instructions": "This is an AI-assisted candidate taxonomy, not evaluator authority. Independently confirm or edit every definition, inclusion/exclusion rule, and adjudication rule without viewing runtime classifications; remove all _review markers; set a named reviewer and ISO date; set independent_human_review=true; change status to FROZEN; then compute artifact_digest with evaluation_readiness.artifact_digest.",
+  "review_instructions": "This is an AI-assisted candidate taxonomy, not evaluator authority. Reviewers receive the exact source requirement, independently frozen architecture boundary, and candidate model, but no runtime verdict, checker diagnostics, classification, or repair trace. Independently confirm or edit every definition, inclusion/exclusion rule, and adjudication rule; remove all _review markers; set a named reviewer and ISO date; set independent_human_review=true; change status to FROZEN; then compute artifact_digest with evaluation_readiness.artifact_digest.",
   "artifact_digest": null
 }

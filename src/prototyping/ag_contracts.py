@@ -344,7 +344,14 @@ def _classify_completeness(
             "LOCKED_UNTIL_AUTHORISED_RELEASE",
         }
     )
-    if not contract.assumptions and not pure_system_invariant:
+    # A component contract may deliberately use A=true (no assume constraints),
+    # for example a normally-safe lock mechanism. System contracts still need an
+    # explicit envelope unless their selected profile is a pure invariant.
+    if (
+        contract.role == "system"
+        and not contract.assumptions
+        and not pure_system_invariant
+    ):
         reasons.append("no assumption (assume constraint)")
     if contract.role == "component" and owner_count == 0:
         reasons.append("no responsible owner (satisfy relationship)")
@@ -662,13 +669,6 @@ def _check_realization(
                 for expected in expected_triggers)
             for t in used_transitions
         )
-        if not trigger_ok:
-            diags.append(AGDiagnostic(
-                CODE_REALIZATION_TRIGGER_MISSING,
-                f"{comp.name} realization has no reachable trigger compatible "
-                "with its/system assumptions",
-                contract=comp.name,
-            ))
 
         guarantee_tokens = {
             _flat_token(g.concept) for g in comp.guarantees if g.kind == "boolean"
@@ -679,7 +679,33 @@ def _check_realization(
                 token and token in _flat_token(action) for token in guarantee_tokens
             )
         ]
-        if not reachable or not used_transitions:
+        # An explicitly untimed availability invariant is established in the
+        # initial state at the chain boundary; it must not invent an unbudgeted
+        # activation transition. All other component guarantees require a real
+        # reachable trigger-response transition.
+        availability_invariant = (
+            comp.timing_segment_required is False
+            and behavior.initial_state in behavior.entry_actions
+            and bool(action_matches)
+        )
+        # An A=true lifecycle component is driven by typed interface events rather
+        # than by a permanent environment predicate.  Its reachable transitions
+        # are the structural trigger evidence; requiring a conjunctive assumption
+        # for power-on/power-loss events would change their event semantics.
+        unconditional_lifecycle = not comp.assumptions and bool(used_transitions)
+        trigger_ok = trigger_ok or availability_invariant or unconditional_lifecycle
+        if not trigger_ok:
+            diags.append(AGDiagnostic(
+                CODE_REALIZATION_TRIGGER_MISSING,
+                f"{comp.name} realization has no reachable trigger compatible "
+                "with its/system assumptions",
+                contract=comp.name,
+            ))
+        if not reachable or (
+            not used_transitions
+            and not availability_invariant
+            and not unconditional_lifecycle
+        ):
             diags.append(AGDiagnostic(
                 CODE_REALIZATION_UNREACHABLE,
                 f"{comp.name} realization has no reachable trigger-response path",
@@ -700,7 +726,17 @@ def _check_realization(
             "trigger_ok": trigger_ok,
             "response_actions": [action for _state, action in action_matches],
             "response_states": [state for state, _action in action_matches],
-            "status": "PASS" if trigger_ok and action_matches and used_transitions else "FAIL",
+            "status": (
+                "PASS"
+                if trigger_ok
+                and action_matches
+                and (
+                    used_transitions
+                    or availability_invariant
+                    or unconditional_lifecycle
+                )
+                else "FAIL"
+            ),
         })
     return links, diags
 
@@ -814,6 +850,12 @@ _REQUIRED_PROFILE_INVARIANTS: Mapping[
                 _id_ast("airborneTransitionInhibited"),
             ),
             "STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            "SAFE004_LATCH_PROPAGATION_V1",
+        ),
+        "SAFE004_LATCH_RESET_AFTER_PASS": (
+            _id_ast("selfTestPassed"),
+            _not_ast("startupInhibitActive"),
+            "STUDENT_DERIVED_DESIGN_CONSTRAINT",
             "SAFE004_LATCH_RESET_V1",
         ),
     },
@@ -827,8 +869,8 @@ _REQUIRED_PROFILE_INVARIANTS: Mapping[
         "SAFE008_UNLOCK_AUTHORISED": (
             _id_ast("payloadUnlocked"),
             _id_ast("authorisedReleaseCommandReceived"),
-            "STAKEHOLDER",
-            "REQ_SAFE_008",
+            "STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            "SAFE008_UNLOCK_AUTHORIZATION_V1",
         ),
         "SAFE008_DEENERGISE_TO_LOCK": (
             _not_ast("actuatorPowerAvailable"),
@@ -893,6 +935,7 @@ def _startup_inhibit_topology_ok(
             "",
         ),
         ("startupInhibited", "PowerCycleSignal", "poweredOff", ""),
+        ("selfTesting", "SelfTestPassedSignal", "selfTestPassed", ""),
     }
     actual = _transition_signatures(behavior)
     states = {
@@ -903,9 +946,16 @@ def _startup_inhibit_topology_ok(
     }
     return all((
         actual == expected,
-        {"poweredOff", "selfTesting", "startupInhibited"}.issubset(states),
+        {
+            "poweredOff",
+            "selfTesting",
+            "startupInhibited",
+            "selfTestPassed",
+        }.issubset(states),
         _flat_token(behavior.entry_actions.get("startupInhibited", ""))
         == "setstartupinhibitactive",
+        _flat_token(behavior.entry_actions.get("selfTestPassed", ""))
+        == "clearstartupinhibitactive",
         not any(
             _flat_token(transition.target) in {"armed", "airborne"}
             for transition in behavior.transitions
@@ -975,11 +1025,11 @@ def _locked_release_topology_ok(
         _transition_signatures(gateway) == expected_gateway,
         {"lockedUnpowered", "lockedPowered", "unlockedPowered"}.issubset(states),
         _flat_token(mechanism.entry_actions.get("lockedUnpowered", ""))
-        == "setpayloadlocked",
+        == "setpayloadlockedfordeenergisetolock",
         _flat_token(mechanism.entry_actions.get("lockedPowered", ""))
         == "maintainpayloadlocked",
         _flat_token(mechanism.entry_actions.get("unlockedPowered", ""))
-        == "setpayloadunlocked",
+        == "enforceauthorisedunlockonly",
         bool(unlocks),
         all(
             transition.trigger == "AuthorisedReleaseCommandReceivedSignal"
@@ -1077,6 +1127,41 @@ def _check_profile_semantics(
             ),
             {},
         )
+        arbiter = next(
+            (
+                item for item in graph.components
+                if item.name == "SafetyResponseArbiterContract"
+            ),
+            None,
+        )
+        arbiter_guarantees = (
+            set(arbiter.boolean_guarantee_concepts()) if arbiter else set()
+        )
+        recovery_power = next(
+            (
+                item for item in graph.components
+                if item.name == "RecoveryPowerSupplyContract"
+            ),
+            None,
+        )
+        recovery_power_behavior = _behavior_for_contract(
+            graph, realization_links, "RecoveryPowerSupplyContract"
+        )
+        recovery_power_available_at_boundary = bool(
+            recovery_power
+            and set(recovery_power.boolean_guarantee_concepts())
+            == {"recoveryActuationPowerAvailable"}
+            and recovery_power.timing_segment_required is False
+            and recovery_power_behavior
+            and recovery_power_behavior.initial_state == "recoveryPowerAvailable"
+            and not recovery_power_behavior.transitions
+            and _flat_token(
+                recovery_power_behavior.entry_actions.get(
+                    "recoveryPowerAvailable", ""
+                )
+            )
+            == "setrecoveryactuationpoweravailable"
+        )
         deployment_action_connected = any(
             _flat_token(action) == "setparachutedeployed"
             for action in (recovery_link.get("response_actions") or ())
@@ -1096,6 +1181,12 @@ def _check_profile_semantics(
             selection_when == trigger,
             reachable,
             selection_action_connected,
+            arbiter_guarantees
+            == {
+                "parachuteDeploymentCommand",
+                "parachuteResponseSelected",
+            },
+            recovery_power_available_at_boundary,
             deployment_action_connected,
             observation_connected,
         ))
@@ -1167,6 +1258,24 @@ def _check_profile_semantics(
             if effective_pattern == "STARTUP_INHIBIT"
             else _locked_release_topology_ok(graph, realization_links)
         )
+        if effective_pattern == "LOCKED_UNTIL_AUTHORISED_RELEASE":
+            mechanism = next(
+                (
+                    item for item in graph.components
+                    if item.name == "PayloadLockMechanismContract"
+                ),
+                None,
+            )
+            topology_ok = topology_ok and bool(
+                mechanism
+                and not mechanism.assumptions
+                and set(mechanism.boolean_guarantee_concepts())
+                == {
+                    "payloadLocked",
+                    "authorisedUnlockOnly",
+                    "deenergiseToLock",
+                }
+            )
         if not topology_ok:
             diagnostics.append(AGDiagnostic(
                 CODE_PATTERN_TOPOLOGY_INCOMPLETE,
@@ -1193,17 +1302,37 @@ def _check_sufficiency(
         _norm(concept, aliases)
         for c in graph.components for concept in c.boolean_guarantee_concepts()
     }
-    def identifiers(node: Optional[Mapping[str, Any]]) -> set[str]:
+    def positive_obligations(
+        node: Optional[Mapping[str, Any]], *, negated: bool = False
+    ) -> set[str]:
+        """Return positively asserted identifiers from the bounded Boolean AST.
+
+        A condition in negative polarity (for example ``not powerOn`` in the
+        implication form ``not powerOn or payloadLocked``) is a trigger, not a
+        component guarantee that the decomposition must produce.
+        """
         if not isinstance(node, Mapping):
             return set()
         if node.get("node") == "Identifier":
-            return {str(node.get("name") or "")}
+            return set() if negated else {str(node.get("name") or "")}
         if node.get("node") == "Not":
-            return identifiers(node.get("expr"))
+            return positive_obligations(
+                node.get("expr"), negated=not negated
+            )
         if node.get("node") in {"And", "Or"}:
             return set().union(*(
-                identifiers(item) for item in (node.get("operands") or ())
+                positive_obligations(item, negated=negated)
+                for item in (node.get("operands") or ())
             ))
+        if node.get("node") == "Implies":
+            return (
+                positive_obligations(
+                    node.get("antecedent"), negated=not negated
+                )
+                | positive_obligations(
+                    node.get("consequent"), negated=negated
+                )
+            )
         return set()
 
     observed_guarantee = next(
@@ -1216,7 +1345,7 @@ def _check_sufficiency(
     required_observations = (
         {
             _norm(item, aliases)
-            for item in identifiers(observed_guarantee.ast)
+            for item in positive_obligations(observed_guarantee.ast)
         }
         if observed_guarantee and observed_guarantee.ast
         else {_norm(graph.system.observation, aliases)}

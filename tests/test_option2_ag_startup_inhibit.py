@@ -112,6 +112,32 @@ def test_startup_inhibit_latch_resets_only_on_a_new_power_cycle():
     assert latch["invariant_preserved"] is False
 
 
+def test_startup_inhibit_reset_requires_a_completed_passing_self_test():
+    """Power-cycle reset alone must not clear a previously latched inhibit."""
+    model = _model()
+    mutations = (
+        (
+            "transition completePassingSelfTest first selfTesting "
+            "accept SelfTestPassedSignal then selfTestPassed;",
+            "",
+        ),
+        (
+            "state selfTestPassed "
+            "{ entry action clearStartupInhibitActive; }",
+            "state selfTestPassed;",
+        ),
+    )
+    for before, after in mutations:
+        assert before in model
+        report = check_ag_graph(
+            extract_ag_graph(model.replace(before, after), revision=1)
+        )
+        assert report.verdict == "FAIL"
+        assert "PATTERN_TOPOLOGY_INCOMPLETE" in {
+            diagnostic.code for diagnostic in report.diagnostics
+        }
+
+
 def test_startup_inhibit_checker_rejects_unauthorised_direct_transition():
     approved = (
         "transition resetAfterPowerCycle first startupInhibited "

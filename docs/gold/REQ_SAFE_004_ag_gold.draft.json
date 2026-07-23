@@ -16,7 +16,7 @@
     "blind_to_runtime_verdict": false,
     "independent_human_review": false
   },
-  "review_instructions": "Label blind to any pipeline verdict (design \u00a713). Confirm or edit each field from the source requirement and the student-approved decomposition candidate, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
+  "review_instructions": "Label blind to any pipeline verdict (design §13). Confirm or edit each field from the source requirement and the student-approved decomposition candidate, drop the _review notes, set reviewer/reviewed_date, and change status to 'FROZEN'. This artifact is evaluator-only: never feed it into generation, context, checking, routing, or repair.",
   "system": {
     "contract": "SystemArmingInhibitContract",
     "assumptions": [
@@ -79,7 +79,8 @@
     "airborne",
     "startupInhibitActive",
     "armingTransitionInhibited",
-    "airborneTransitionInhibited"
+    "airborneTransitionInhibited",
+    "selfTestPassed"
   ],
   "invariants": [
     {
@@ -139,6 +140,23 @@
             "name": "airborneTransitionInhibited"
           }
         ]
+      },
+      "source_kind": "STUDENT_DERIVED_DESIGN_CONSTRAINT",
+      "source_id": "SAFE004_LATCH_PROPAGATION_V1"
+    },
+    {
+      "invariant_id": "SAFE004_LATCH_RESET_AFTER_PASS",
+      "scope": "SystemArmingInhibitContract",
+      "trigger_or_antecedent_ast": {
+        "node": "Identifier",
+        "name": "selfTestPassed"
+      },
+      "required_consequent_ast": {
+        "node": "Not",
+        "expr": {
+          "node": "Identifier",
+          "name": "startupInhibitActive"
+        }
       },
       "source_kind": "STUDENT_DERIVED_DESIGN_CONSTRAINT",
       "source_id": "SAFE004_LATCH_RESET_V1"
