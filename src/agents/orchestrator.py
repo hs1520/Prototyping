@@ -1685,7 +1685,10 @@ class Orchestrator:
             return model_text
         try:
             from ..prototyping.ag_chains import select_ag_chains
-            from ..prototyping.ag_emitter import merge_ag_contracts
+            from ..prototyping.ag_emitter import (
+                emit_ag_package,
+                merge_ag_contracts,
+            )
 
             specs = select_ag_chains(requirements)
             if not specs:
@@ -1701,13 +1704,54 @@ class Orchestrator:
                         f"committed base model is missing authoritative "
                         f"{spec.source_requirement}; A/G emission cannot invent it"
                     )
+
+            # The generated base model has already passed the legacy syntax gate.
+            # Re-check it here so a later terminal mutation cannot smuggle a new
+            # parser/reference error into R2.  This gate uses the same narrowly
+            # scoped standard-library diagnostic allowlist as R0/R1: Syside's
+            # single-source loader reports official implicit/standard constructs
+            # such as ``transition initial`` and SI unit symbols as unresolved.
+            # Those diagnostics are not caused by the A/G intervention.
+            base_gate = check_syntax(
+                model_text,
+                fail_closed=True,
+                filter_stdlib_diagnostics=True,
+            )
+            if base_gate.has_errors or base_gate.score != 1.0:
+                raise RuntimeError(
+                    "committed base model failed the shared syntax gate: "
+                    f"{base_gate.short_summary()} (score={base_gate.score:.3f})"
+                )
+
+            # Validate every emitted package independently with *no* diagnostic
+            # filtering.  The deterministic emitter owns its imports, so an A/G
+            # syntax/reference defect must fail closed rather than be attributed
+            # to the generated base model's known standard-library diagnostics.
+            for spec in specs:
+                package_gate = check_syntax(
+                    emit_ag_package(spec),
+                    fail_closed=True,
+                    filter_stdlib_diagnostics=False,
+                )
+                if package_gate.has_errors or package_gate.score != 1.0:
+                    raise RuntimeError(
+                        f"{spec.source_requirement} A/G package failed the raw "
+                        f"syntax gate: {package_gate.short_summary()} "
+                        f"(score={package_gate.score:.3f})"
+                    )
+
             merged = merge_ag_contracts(model_text, specs)
-            if check_syntax(
+            merged_gate = check_syntax(
                 merged,
                 fail_closed=True,
-                filter_stdlib_diagnostics=False,
-            ).has_errors:
-                raise RuntimeError("R2-BBAG A/G contract layer failed the syntax gate")
+                filter_stdlib_diagnostics=True,
+            )
+            if merged_gate.has_errors or merged_gate.score != 1.0:
+                raise RuntimeError(
+                    "R2-BBAG A/G contract layer failed the merged syntax gate: "
+                    f"{merged_gate.short_summary()} "
+                    f"(score={merged_gate.score:.3f})"
+                )
             print(
                 f"  [R2-BBAG] merged A/G contract layer for {len(specs)} "
                 f"selected chain(s)"

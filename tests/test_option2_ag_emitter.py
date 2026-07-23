@@ -48,6 +48,64 @@ def test_emitted_chain_passes_the_syside_gate():
     assert "attribute maxLatency : DurationValue = 0.5 [s];" in emitted
 
 
+def test_r2_accepts_real_generated_base_shape_but_keeps_emitter_raw_gate():
+    """The R2 gate must not reclassify R0/R1 stdlib-loader false positives.
+
+    Real LLM models commonly use official ``transition initial`` and SI unit
+    syntax without explicitly importing every standard namespace.  The shared
+    generated-model gate allowlists only those known Syside diagnostics, while
+    the deterministic A/G package remains subject to the unfiltered raw gate.
+    """
+    generated_shape = """
+package Drone {
+    requirement def REQ_SAFE_005 {
+        doc /* The system shall deploy the parachute within 0.5 s. */
+    }
+    part def SafetyMonitor {
+        attribute deploymentTime : Real = 0.5 [s];
+        state def Monitor {
+            state nominal;
+            state failed;
+            transition initial then nominal;
+            transition detect first nominal then failed;
+        }
+    }
+}
+"""
+    raw = check_syntax(
+        generated_shape,
+        fail_closed=True,
+        filter_stdlib_diagnostics=False,
+    )
+    assert raw.has_errors is True
+
+    orch = Orchestrator(_NoCallLLM(), revised_experiment_arm="R2-BBAG")
+    merged = orch._apply_ag_contract_layer(generated_shape, _REQS)
+
+    shared_gate = check_syntax(
+        merged,
+        fail_closed=True,
+        filter_stdlib_diagnostics=True,
+    )
+    assert shared_gate.has_errors is False
+    assert shared_gate.score == 1.0
+    assert "requirement def SystemParachuteContract" in merged
+
+
+def test_r2_raw_gate_rejects_a_broken_deterministic_package(monkeypatch):
+    import src.prototyping.ag_emitter as emitter
+
+    monkeypatch.setattr(
+        emitter,
+        "emit_ag_package",
+        lambda _spec: "package Broken { requirement def Missing {",
+    )
+    orch = Orchestrator(_NoCallLLM(), revised_experiment_arm="R2-BBAG")
+
+    with pytest.raises(RuntimeError, match="A/G package failed the raw syntax gate"):
+        orch._apply_ag_contract_layer(_BASE_MODEL, _REQS)
+
+
 def test_emitted_chain_round_trips_to_a_checker_pass():
     sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
     report = check_ag_graph(extract_ag_graph(sysml, revision=1))
