@@ -122,6 +122,7 @@ def write_revised_run_artifacts(
         ("failure_diagnostics", "failure_diagnostics.json"),
         ("repair_decisions", "repair_decisions.json"),
         ("verification_plan", "verification_plan.json"),
+        ("control_agenda", "control_agenda.json"),
     ):
         payload = run_result.get(key)
         if payload is not None:

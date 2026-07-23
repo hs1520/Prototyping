@@ -1632,13 +1632,33 @@ class Orchestrator:
                     "formal_ag_proof": False,
                     "physical_verification": False,
                 })
-            # Second board-mediated handoff (DesignAgent -> VerificationAgent),
-            # published before the snapshot so it is captured. Runs for every
-            # blackboard arm (R1 and R2), giving the §13 handoff/role metrics a
-            # denominator greater than one.
-            verification_plan = self._run_verification_handoff()
-            if verification_plan is not None:
-                result["verification_plan"] = verification_plan
+            # Event-driven control: the Blackboard Controller opportunistically
+            # activates each registered downstream knowledge source once the board
+            # satisfies its typed preconditions. The second board-mediated handoff
+            # (DesignAgent -> VerificationAgent) is the first such source; it
+            # activates only after a successful design (agent.design.result) and
+            # runs for both R1 and R2, giving the §13 handoff/role metrics a
+            # denominator greater than one. Runs before the snapshot so it is
+            # captured.
+            from ..prototyping.controller import (
+                BlackboardController,
+                KnowledgeSource,
+            )
+
+            controller = BlackboardController(self.blackboard)
+            controller.register(KnowledgeSource(
+                name="verification_planning",
+                agent_role="VerificationAgent",
+                precondition_topics=("agent.design.result",),
+                activate=self._run_verification_handoff,
+            ))
+            for activation in controller.run():
+                if (
+                    activation["knowledge_source"] == "verification_planning"
+                    and activation["result"] is not None
+                ):
+                    result["verification_plan"] = activation["result"]
+            result["control_agenda"] = controller.agenda()
             result["collaboration"] = {
                 "blackboard": self.blackboard.snapshot(),
                 "contexts": self.context_builder.snapshot(),
