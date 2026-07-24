@@ -1848,15 +1848,17 @@ class Orchestrator:
     def _generate_llm_authored_ag_package(self, spec, model_text: str) -> str:
         """Author one chain's bounded A/G SysML package with the LLM.
 
-        LLM_AUTHORED_AG mode (design §15). The LLM is given the stakeholder
-        requirement and the approved component architecture (owner -> guarantee,
-        the frozen architecture-boundary allocation), plus the bounded SysML v2
-        convention — but NOT the evaluator gold and NOT the reviewed discharge /
-        timing / invariant facts. Those are exactly what the post-hoc evaluator
-        scores, so a decomposition the LLM gets wrong yields a real generation
-        accuracy below 1.0 rather than the deterministic round-trip fidelity.
-        The output is gated and traced by the same pipeline; a malformed package
-        fails the syntax gate and fails the run closed.
+        LLM_AUTHORED_AG mode, setup (C). The LLM is given the stakeholder
+        requirement and the COMPLETE approved architecture from the frozen boundary
+        — components, owners, and each component's interfaces (the concepts it
+        consumes and produces) — plus the bounded SysML v2 convention. It is NOT
+        given the evaluator gold, nor the reviewed discharge wiring / timing /
+        priority / invariant facts: it must DERIVE the discharge edges, the
+        realizing behaviour, and those safety facts itself. So a decomposition the
+        LLM gets wrong yields a real generation accuracy below 1.0, and the A/G
+        assurance then detects and (partly) repairs the residual defects — the
+        robustness enhancement this measures. The output is gated and traced by the
+        same pipeline; a malformed package fails the run closed.
         """
         match = re.search(
             rf"requirement\s+def\s+{re.escape(spec.source_requirement)}\b[^{{]*\{{"
@@ -1865,11 +1867,20 @@ class Orchestrator:
             re.DOTALL,
         )
         requirement_body = (match.group(1).strip() if match else "").strip()
-        architecture = "\n".join(
-            f"  - component `{comp.name}` (owned by part `{comp.owner_usage}` : "
-            f"{comp.owner_def}) guarantees `{comp.guarantee}`"
-            for comp in spec.components
-        )
+        architecture_blocks = []
+        for comp in spec.components:
+            consumes = list(dict.fromkeys([
+                *(a.concept for a in comp.assumptions),
+                *comp.interface_inputs,
+            ]))
+            architecture_blocks.append(
+                f"  - component `{comp.name}` (part `{comp.owner_usage}` : "
+                f"{comp.owner_def})\n"
+                f"      consumes (its assumptions/inputs): "
+                f"{', '.join(consumes) or '(none)'}\n"
+                f"      produces (its guarantees): {', '.join(comp.guarantees)}"
+            )
+        architecture = "\n".join(architecture_blocks)
         system_prompt = (
             "You are a systems engineer authoring a bounded Assume-Guarantee "
             "decomposition in SysML v2. Use ONLY these constructs: `requirement "
@@ -1893,19 +1904,21 @@ class Orchestrator:
             "Author the bounded A/G contract package for this requirement.\n\n"
             f"Stakeholder requirement {spec.source_requirement}:\n"
             f"{requirement_body}\n\n"
-            "Approved component architecture (use exactly these owners and "
-            f"guarantees):\n{architecture}\n\n"
+            "Approved component architecture — use exactly these components, "
+            "owners, consumed inputs, and produced guarantees. You must DERIVE "
+            "yourself: which producer discharges each consumed assumption, and each "
+            f"component's realizing behaviour:\n{architecture}\n\n"
             f"System contract: {spec.system_contract}, decomposing to the "
             f"components above; system observed guarantee: {spec.observation}. Its "
             f"first member MUST be the provenance line "
             f"`doc /* bounded A/G system contract for {spec.source_requirement} */`.\n"
-            "For each component author its Boolean attributes, assume constraints "
-            "(environment inputs) and require constraint (its guarantee), the "
-            "owning part and a satisfy, a realizing state-machine behaviour, and "
-            "the decompose/realize/discharge dependencies so every non-environment "
-            "assumption is discharged by the upstream component that guarantees "
-            f"it.\n\nWrap everything in `package {spec.package} {{ ... }}` and "
-            "output ONLY that package."
+            "For each component author its Boolean attributes, an assume constraint "
+            "for each consumed input and a require constraint for each produced "
+            "guarantee, the owning part and a satisfy, a realizing state-machine "
+            "behaviour, and the decompose/realize/discharge dependencies so every "
+            "non-environment assumption is discharged by the upstream component "
+            f"that produces it.\n\nWrap everything in `package {spec.package} "
+            "{{ ... }}` and output ONLY that package."
         )
         raw = str(self.llm.chat(prompt, system_prompt=system_prompt))
         text = raw.replace("```sysml", "").replace("```", "").strip()

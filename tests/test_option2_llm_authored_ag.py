@@ -100,3 +100,26 @@ def test_unknown_generation_mode_is_rejected():
             revised_experiment_arm="R2-BBAG",
             r2_generation_mode="BOGUS_MODE",
         )
+
+
+def test_setup_c_prompt_gives_complete_interfaces_but_not_the_discharge_answer():
+    """(C): the LLM is handed the complete architecture (all guarantees + the
+    consumes/produces interfaces) but must still DERIVE the discharge wiring."""
+    captured = {}
+
+    class _Capture:
+        def chat(self, prompt, system_prompt=None):
+            captured["prompt"] = prompt
+            return emit_ag_package(REQ_SAFE_005_CHAIN)
+
+    orch = Orchestrator(_Capture(), revised_experiment_arm="R2-BBAG",
+                        r2_generation_mode="LLM_AUTHORED_AG")
+    orch._generate_llm_authored_ag_package(REQ_SAFE_005_CHAIN, _BASE)
+    prompt = captured["prompt"]
+    # complete architecture: interfaces + the secondary guarantee are now given
+    assert "consumes" in prompt and "produces" in prompt
+    assert "parachuteResponseSelected" in prompt
+    assert "airborne" in prompt
+    # but the discharge relationships are the LLM's to derive — not handed over
+    assert "dischargeCommand" not in prompt
+    assert "discharge from" not in prompt.lower()
