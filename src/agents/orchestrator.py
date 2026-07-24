@@ -340,6 +340,7 @@ class Orchestrator:
         revised_experiment_arm: Optional[Any] = None,
         task_session_max_turns: int = 12,
         task_session_max_tokens: int = 150000,
+        r2_generation_mode: Optional[str] = None,
     ):
         self.llm = llm
         self.rag = rag_retriever
@@ -398,6 +399,18 @@ class Orchestrator:
         self.context_builder = None
         self.task_sessions = None
         self._active_design_handoff = None
+        from ..prototyping.experiment_arms import (
+            R2_DETERMINISTIC_GENERATION_MODE,
+            R2_GENERATION_MODES,
+        )
+        self.r2_generation_mode = (
+            r2_generation_mode or R2_DETERMINISTIC_GENERATION_MODE
+        )
+        if self.r2_generation_mode not in R2_GENERATION_MODES:
+            raise ValueError(
+                f"unknown r2_generation_mode {self.r2_generation_mode!r}; "
+                f"must be one of {R2_GENERATION_MODES}"
+            )
         self.task_session_max_turns = int(task_session_max_turns)
         self.task_session_max_tokens = int(task_session_max_tokens)
         if self.task_session_max_turns <= 0 or self.task_session_max_tokens <= 0:
@@ -1738,9 +1751,9 @@ class Orchestrator:
             return model_text
         try:
             from ..prototyping.ag_chains import select_ag_chains
-            from ..prototyping.ag_emitter import (
-                emit_ag_package,
-                merge_ag_contracts,
+            from ..prototyping.ag_emitter import emit_ag_package
+            from ..prototyping.experiment_arms import (
+                R2_LLM_AUTHORED_GENERATION_MODE,
             )
 
             specs = select_ag_chains(requirements)
@@ -1776,13 +1789,24 @@ class Orchestrator:
                     f"{base_gate.short_summary()} (score={base_gate.score:.3f})"
                 )
 
-            # Validate every emitted package independently with *no* diagnostic
-            # filtering.  The deterministic emitter owns its imports, so an A/G
-            # syntax/reference defect must fail closed rather than be attributed
-            # to the generated base model's known standard-library diagnostics.
+            # Produce one A/G package per selected chain, then gate each raw
+            # package with *no* diagnostic filtering. In DETERMINISTIC_SPEC_EMITTER
+            # mode the reviewed spec is rendered; in LLM_AUTHORED_AG mode the LLM
+            # authors it from the requirement + approved architecture. Either way an
+            # A/G syntax/reference defect must fail closed rather than be attributed
+            # to the base model's known standard-library diagnostics — so an LLM
+            # authoring error is honestly a failed R2 run, not a silent downgrade.
+            llm_authored = (
+                self.r2_generation_mode == R2_LLM_AUTHORED_GENERATION_MODE
+            )
+            packages: list[str] = []
             for spec in specs:
+                package_text = (
+                    self._generate_llm_authored_ag_package(spec, model_text)
+                    if llm_authored else emit_ag_package(spec)
+                )
                 package_gate = check_syntax(
-                    emit_ag_package(spec),
+                    package_text,
                     fail_closed=True,
                     filter_stdlib_diagnostics=False,
                 )
@@ -1792,8 +1816,9 @@ class Orchestrator:
                         f"syntax gate: {package_gate.short_summary()} "
                         f"(score={package_gate.score:.3f})"
                     )
+                packages.append(package_text)
 
-            merged = merge_ag_contracts(model_text, specs)
+            merged = model_text.rstrip() + "\n\n" + "\n\n".join(packages) + "\n"
             merged_gate = check_syntax(
                 merged,
                 fail_closed=True,
@@ -1806,12 +1831,72 @@ class Orchestrator:
                     f"(score={merged_gate.score:.3f})"
                 )
             print(
-                f"  [R2-BBAG] merged A/G contract layer for {len(specs)} "
-                f"selected chain(s)"
+                f"  [R2-BBAG] merged {self.r2_generation_mode} A/G contract layer "
+                f"for {len(specs)} selected chain(s)"
             )
             return merged
         except Exception as exc:
             raise RuntimeError(f"R2-BBAG failed closed: {exc}") from exc
+
+    def _generate_llm_authored_ag_package(self, spec, model_text: str) -> str:
+        """Author one chain's bounded A/G SysML package with the LLM.
+
+        LLM_AUTHORED_AG mode (design §15). The LLM is given the stakeholder
+        requirement and the approved component architecture (owner -> guarantee,
+        the frozen architecture-boundary allocation), plus the bounded SysML v2
+        convention — but NOT the evaluator gold and NOT the reviewed discharge /
+        timing / invariant facts. Those are exactly what the post-hoc evaluator
+        scores, so a decomposition the LLM gets wrong yields a real generation
+        accuracy below 1.0 rather than the deterministic round-trip fidelity.
+        The output is gated and traced by the same pipeline; a malformed package
+        fails the syntax gate and fails the run closed.
+        """
+        match = re.search(
+            rf"requirement\s+def\s+{re.escape(spec.source_requirement)}\b[^{{]*\{{"
+            r"(.*?)\}",
+            model_text,
+            re.DOTALL,
+        )
+        requirement_body = (match.group(1).strip() if match else "").strip()
+        architecture = "\n".join(
+            f"  - component `{comp.name}` (owned by part `{comp.owner_usage}` : "
+            f"{comp.owner_def}) guarantees `{comp.guarantee}`"
+            for comp in spec.components
+        )
+        system_prompt = (
+            "You are a systems engineer authoring a bounded Assume-Guarantee "
+            "decomposition in SysML v2. Use ONLY these constructs: `requirement "
+            "def` with `attribute <name> : Boolean;`, `assume constraint <name> "
+            "{ <bool-id> }` and `require constraint <name> { <bool-id> }`, "
+            "`part def`/`part`, `satisfy requirement <usage> : <Contract> by "
+            "<part>;`, `state def` with `entry; then <state>;` / `transition "
+            "<name> first <s> accept <Signal> then <t>;` / `state <t> { entry "
+            "action <a>; }`, and `dependency <name> from <A> to <B>;` "
+            "(decompose*/realize*/discharge*). Invent no new keywords. Output "
+            "ONLY the SysML package."
+        )
+        prompt = (
+            "Author the bounded A/G contract package for this requirement.\n\n"
+            f"Stakeholder requirement {spec.source_requirement}:\n"
+            f"{requirement_body}\n\n"
+            "Approved component architecture (use exactly these owners and "
+            f"guarantees):\n{architecture}\n\n"
+            f"System contract: {spec.system_contract}, decomposing to the "
+            f"components above; system observed guarantee: {spec.observation}.\n"
+            "For each component author its Boolean attributes, assume constraints "
+            "(environment inputs) and require constraint (its guarantee), the "
+            "owning part and a satisfy, a realizing state-machine behaviour, and "
+            "the decompose/realize/discharge dependencies so every non-environment "
+            "assumption is discharged by the upstream component that guarantees "
+            f"it.\n\nWrap everything in `package {spec.package} {{ ... }}` and "
+            "output ONLY that package."
+        )
+        raw = str(self.llm.chat(prompt, system_prompt=system_prompt))
+        text = raw.replace("```sysml", "").replace("```", "").strip()
+        index = text.find(f"package {spec.package}")
+        if index == -1:
+            index = text.find("package ")
+        return (text[index:] if index != -1 else text).strip()
 
     def _build_ag_trace(self, model_text: str) -> Dict[str, Any]:
         """R2-BBAG A/G intervention: extract and check the bounded A/G graph from

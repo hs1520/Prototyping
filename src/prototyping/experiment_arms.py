@@ -15,6 +15,23 @@ R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-deterministic-spec-emitter-v1"
 )
+# LLM-authored A/G is a SEPARATE frozen intervention (design §15 line 1089): the
+# LLM authors the bounded A/G decomposition instead of the deterministic emitter,
+# so scoring against frozen gold becomes a real generation-accuracy measure rather
+# than round-trip fidelity. Its results must never be pooled with the deterministic
+# configuration — the readiness manifest binds a run's mode/version to its config.
+R2_LLM_AUTHORED_GENERATION_MODE = "LLM_AUTHORED_AG"
+R2_LLM_AUTHORED_INTERVENTION_VERSION = "r2-bbag-llm-authored-v1"
+
+R2_GENERATION_MODES = (
+    R2_DETERMINISTIC_GENERATION_MODE,
+    R2_LLM_AUTHORED_GENERATION_MODE,
+)
+# The one accepted (mode, version) pair per intervention; nothing else may run.
+R2_INTERVENTION_VERSION_BY_MODE = {
+    R2_DETERMINISTIC_GENERATION_MODE: R2_DETERMINISTIC_INTERVENTION_VERSION,
+    R2_LLM_AUTHORED_GENERATION_MODE: R2_LLM_AUTHORED_INTERVENTION_VERSION,
+}
 
 
 class RevisedExperimentArm(str, Enum):

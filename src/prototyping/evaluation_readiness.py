@@ -24,6 +24,7 @@ from .experiment_arms import (
     REVISED_EXPERIMENT_NAMESPACE,
     R2_DETERMINISTIC_GENERATION_MODE,
     R2_DETERMINISTIC_INTERVENTION_VERSION,
+    R2_INTERVENTION_VERSION_BY_MODE,
 )
 from .requirement_inputs import (
     normalise_requirement_id,
@@ -464,16 +465,19 @@ def _configuration_problems(config: Mapping[str, Any]) -> list[str]:
         problems.append("experiment config must use BLACKBOARD_AG_V1")
     if config.get("arms") != ["R0-CURRENT", "R1-BBCTX", "R2-BBAG"]:
         problems.append("experiment config arms must be exact R0/R1/R2 ordering")
-    if config.get("r2_generation_mode") != R2_DETERMINISTIC_GENERATION_MODE:
+    # One frozen intervention per config: either the deterministic emitter or the
+    # LLM-authored intervention, with its exact matching version. The mode->version
+    # binding plus the per-run mode/version checks below keep the two interventions
+    # in separate frozen configurations that can never be pooled together.
+    mode = config.get("r2_generation_mode")
+    if mode not in R2_INTERVENTION_VERSION_BY_MODE:
         problems.append(
-            "experiment config must bind the deterministic R2 generation mode"
+            "experiment config must bind a recognised R2 generation mode "
+            "(deterministic emitter or LLM-authored)"
         )
-    if (
-        config.get("r2_intervention_version")
-        != R2_DETERMINISTIC_INTERVENTION_VERSION
-    ):
+    elif config.get("r2_intervention_version") != R2_INTERVENTION_VERSION_BY_MODE[mode]:
         problems.append(
-            "experiment config must bind the deterministic R2 intervention version"
+            "experiment config r2_intervention_version must match its generation mode"
         )
     digest = config.get("configuration_digest")
     if not _is_digest(digest):
