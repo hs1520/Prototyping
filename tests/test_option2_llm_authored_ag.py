@@ -123,3 +123,57 @@ def test_setup_c_prompt_gives_complete_interfaces_but_not_the_discharge_answer()
     # but the discharge relationships are the LLM's to derive — not handed over
     assert "dischargeCommand" not in prompt
     assert "discharge from" not in prompt.lower()
+
+
+class _SequenceLLM:
+    """Returns a fixed sequence of packages across successive chat() calls."""
+
+    def __init__(self, packages):
+        self._packages = list(packages)
+        self._calls = 0
+
+    def chat(self, prompt, system_prompt=None):
+        self.last_prompt = prompt
+        pkg = self._packages[min(self._calls, len(self._packages) - 1)]
+        self._calls += 1
+        return pkg
+
+
+def test_feedback_loop_converges_to_pass_under_the_ag_check():
+    """The A/G check gates each round; a broken first attempt is regenerated on
+    the checker's diagnostics until the merged model is verified PASS."""
+    correct = emit_ag_package(REQ_SAFE_005_CHAIN)
+    broken = "\n".join(
+        line for line in correct.splitlines()
+        if "dependency discharge" not in line.lower()
+    )
+    llm = _SequenceLLM([broken, correct])
+    orch = Orchestrator(llm, revised_experiment_arm="R2-BBAG",
+                        r2_generation_mode="LLM_AUTHORED_AG")
+    result = orch._author_llm_ag_with_feedback(
+        REQ_SAFE_005_CHAIN, _BASE, max_iterations=4)
+
+    history = result["history"]
+    assert history[0]["verdict"] != "PASS"      # undischarged -> not yet robust
+    assert history[-1]["verdict"] == "PASS"      # converged to a verified model
+    assert history[-1]["error_count"] == 0
+    assert len(history) == 2                      # fixed on the first feedback round
+    # the second call carried the checker's diagnostics + the previous attempt
+    assert "PREVIOUS attempt" in llm.last_prompt
+    assert "DISCHARGE" in llm.last_prompt.upper()  # the checker's actual defect code
+
+
+def test_feedback_loop_returns_the_lowest_error_attempt_within_budget():
+    correct = emit_ag_package(REQ_SAFE_005_CHAIN)
+    broken = "\n".join(
+        line for line in correct.splitlines()
+        if "dependency discharge" not in line.lower()
+    )
+    # never converges (always broken): the loop must still return a usable best
+    orch = Orchestrator(_SequenceLLM([broken]), revised_experiment_arm="R2-BBAG",
+                        r2_generation_mode="LLM_AUTHORED_AG")
+    result = orch._author_llm_ag_with_feedback(
+        REQ_SAFE_005_CHAIN, _BASE, max_iterations=3)
+    assert len(result["history"]) == 3           # exhausted the budget
+    assert all(h["verdict"] != "PASS" for h in result["history"])
+    assert "SystemParachuteContract" in result["final_package"]

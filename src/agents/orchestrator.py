@@ -1845,7 +1845,9 @@ class Orchestrator:
         except Exception as exc:
             raise RuntimeError(f"R2-BBAG failed closed: {exc}") from exc
 
-    def _generate_llm_authored_ag_package(self, spec, model_text: str) -> str:
+    def _generate_llm_authored_ag_package(
+        self, spec, model_text: str, feedback: Optional[Dict[str, Any]] = None
+    ) -> str:
         """Author one chain's bounded A/G SysML package with the LLM.
 
         LLM_AUTHORED_AG mode, setup (C). The LLM is given the stakeholder
@@ -1881,6 +1883,21 @@ class Orchestrator:
                 f"      produces (its guarantees): {', '.join(comp.guarantees)}"
             )
         architecture = "\n".join(architecture_blocks)
+
+        # On a feedback iteration the LLM is shown its previous attempt plus the
+        # A/G checker's diagnostics and asked to regenerate a complete, corrected
+        # package — the check gates every round, so the model converges toward a
+        # verified, internally-complete decomposition (robustness enhancement).
+        feedback_section = ""
+        if feedback:
+            diagnostics = str(feedback.get("diagnostics") or "").strip()
+            previous = str(feedback.get("previous_package") or "").strip()
+            feedback_section = (
+                "Your PREVIOUS attempt was checked and failed with these A/G "
+                "defects. Regenerate the COMPLETE package, fixing ALL of them while "
+                f"keeping what was already correct:\n{diagnostics}\n\n"
+                f"Your previous attempt was:\n{previous}\n\n"
+            )
         system_prompt = (
             "You are a systems engineer authoring a bounded Assume-Guarantee "
             "decomposition in SysML v2. Use ONLY these constructs: `requirement "
@@ -1917,7 +1934,8 @@ class Orchestrator:
             "guarantee, the owning part and a satisfy, a realizing state-machine "
             "behaviour, and the decompose/realize/discharge dependencies so every "
             "non-environment assumption is discharged by the upstream component "
-            f"that produces it.\n\nWrap everything in `package {spec.package} "
+            f"that produces it.\n\n{feedback_section}"
+            f"Wrap everything in `package {spec.package} "
             "{{ ... }}` and output ONLY that package."
         )
         raw = str(self.llm.chat(prompt, system_prompt=system_prompt))
@@ -1926,6 +1944,81 @@ class Orchestrator:
         if index == -1:
             index = text.find("package ")
         return (text[index:] if index != -1 else text).strip()
+
+    @staticmethod
+    def _format_ag_diagnostics(report) -> str:
+        """Render the A/G checker's diagnostics as an LLM fix-request list."""
+        lines = []
+        for diagnostic in report.diagnostics:
+            where = (
+                f" [contract: {diagnostic.contract}]"
+                if getattr(diagnostic, "contract", None) else ""
+            )
+            lines.append(f"- ({diagnostic.code}) {diagnostic.message}{where}")
+        return "\n".join(lines) or "(no diagnostics)"
+
+    def _author_llm_ag_with_feedback(
+        self, spec, model_text: str, max_iterations: int = 4
+    ) -> Dict[str, Any]:
+        """Iteratively author a chain's A/G with the LLM under A/G-check feedback.
+
+        The LLM authors the bounded A/G; the committed-convention checker verifies
+        the merged model; on a non-PASS verdict the diagnostics + the previous
+        attempt are fed back and the LLM regenerates. The check gates every round,
+        so the model converges toward a verified, internally-complete decomposition
+        (verdict PASS, guarantees realised, assumptions discharged, patterns
+        conformant) — the robustness enhancement. The check is the oracle, so this
+        is sound; it maximises internal completeness/verifiability, not correctness
+        against a reviewed gold (that remains the gold's job). Bounded by
+        ``max_iterations``; returns the lowest-error attempt with its history.
+        """
+        from ..prototyping.ag_contracts import check_ag_graph
+        from ..prototyping.ag_extractor import extract_ag_graph
+
+        authored = self._generate_llm_authored_ag_package(spec, model_text)
+        best_package = authored
+        best_errors: Optional[int] = None
+        history: List[Dict[str, Any]] = []
+        for iteration in range(max_iterations):
+            merged = model_text.rstrip() + "\n\n" + authored + "\n"
+            gate = check_syntax(
+                authored, fail_closed=True, filter_stdlib_diagnostics=True
+            )
+            if gate.has_errors or gate.score != 1.0:
+                history.append({
+                    "iteration": iteration, "syntax_ok": False,
+                    "verdict": None, "error_count": None,
+                    "syntax_summary": gate.short_summary()[:120],
+                })
+                feedback = {
+                    "diagnostics": f"SYNTAX ERRORS: {gate.short_summary()}",
+                    "previous_package": authored,
+                }
+            else:
+                report = check_ag_graph(extract_ag_graph(merged))
+                error_count = len(report.errors())
+                history.append({
+                    "iteration": iteration, "syntax_ok": True,
+                    "verdict": report.verdict, "error_count": error_count,
+                })
+                if best_errors is None or error_count < best_errors:
+                    best_package, best_errors = authored, error_count
+                if report.verdict == "PASS":
+                    break
+                feedback = {
+                    "diagnostics": self._format_ag_diagnostics(report),
+                    "previous_package": authored,
+                }
+            if iteration == max_iterations - 1:
+                break
+            authored = self._generate_llm_authored_ag_package(
+                spec, model_text, feedback=feedback
+            )
+        return {
+            "final_package": best_package,
+            "final_merged": model_text.rstrip() + "\n\n" + best_package + "\n",
+            "history": history,
+        }
 
     def _build_ag_trace(self, model_text: str) -> Dict[str, Any]:
         """R2-BBAG A/G intervention: extract and check the bounded A/G graph from
