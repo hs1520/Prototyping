@@ -1808,7 +1808,14 @@ class Orchestrator:
                 package_gate = check_syntax(
                     package_text,
                     fail_closed=True,
-                    filter_stdlib_diagnostics=False,
+                    # The deterministic emitter owns its imports, so its package is
+                    # gated strictly (any diagnostic is a real defect). An
+                    # LLM-authored package legitimately uses standard-library types
+                    # (Boolean, SI units) that Syside's single-source loader reports
+                    # as unresolved; gate it with the same stdlib filter the base and
+                    # merged models already use, so a genuine parser/reference defect
+                    # still fails closed while a standard-library reference does not.
+                    filter_stdlib_diagnostics=llm_authored,
                 )
                 if package_gate.has_errors or package_gate.score != 1.0:
                     raise RuntimeError(
@@ -1872,8 +1879,15 @@ class Orchestrator:
             "<part>;`, `state def` with `entry; then <state>;` / `transition "
             "<name> first <s> accept <Signal> then <t>;` / `state <t> { entry "
             "action <a>; }`, and `dependency <name> from <A> to <B>;` "
-            "(decompose*/realize*/discharge*). Invent no new keywords. Output "
-            "ONLY the SysML package."
+            "(decompose*/realize*/discharge*). Invent no new keywords.\n"
+            "Two rules the toolchain enforces:\n"
+            "1. Declare EVERY event you `accept` in a transition as its own "
+            "`attribute def <Signal>;` inside the package before using it.\n"
+            "2. `dependency` endpoints are element NAMES only — never dotted "
+            "member references. A discharge links the producing contract to the "
+            "consuming contract by name: `dependency dischargeX from "
+            "<ProducerContract> to <ConsumerContract>;` (NOT `Contract.constraint`).\n"
+            "Output ONLY the SysML package."
         )
         prompt = (
             "Author the bounded A/G contract package for this requirement.\n\n"
@@ -1882,7 +1896,9 @@ class Orchestrator:
             "Approved component architecture (use exactly these owners and "
             f"guarantees):\n{architecture}\n\n"
             f"System contract: {spec.system_contract}, decomposing to the "
-            f"components above; system observed guarantee: {spec.observation}.\n"
+            f"components above; system observed guarantee: {spec.observation}. Its "
+            f"first member MUST be the provenance line "
+            f"`doc /* bounded A/G system contract for {spec.source_requirement} */`.\n"
             "For each component author its Boolean attributes, assume constraints "
             "(environment inputs) and require constraint (its guarantee), the "
             "owning part and a satisfy, a realizing state-machine behaviour, and "
