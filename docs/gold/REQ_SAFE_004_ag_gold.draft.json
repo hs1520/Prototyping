@@ -72,6 +72,67 @@
       "_review": "confirm the discharging source"
     }
   ],
+  "realization_links": [
+    {
+      "contract": "SelfTestStatusLatchContract",
+      "owner": "selfTestStatusLatch",
+      "behavior": "SelfTestStatusLatchBehavior",
+      "initial_state": "poweredOff",
+      "response_paths": [
+        {
+          "source": "selfTesting",
+          "trigger": "SensorFailureReportedSignal",
+          "target": "startupInhibited",
+          "guard": null,
+          "action": "setStartupInhibitActive"
+        }
+      ],
+      "continuous_guarantee": false,
+      "_review": "confirm every exact guarantee-producing behavior path from the approved design, not from runtime checker output"
+    },
+    {
+      "contract": "ArmingAuthorityContract",
+      "owner": "armingAuthority",
+      "behavior": "ArmingAuthorityBehavior",
+      "initial_state": "preArm",
+      "response_paths": [
+        {
+          "source": "preArm",
+          "trigger": "StartupInhibitActiveSignal",
+          "target": "armingInhibited",
+          "guard": null,
+          "action": "setArmingTransitionInhibited"
+        }
+      ],
+      "continuous_guarantee": false,
+      "_review": "confirm every exact guarantee-producing behavior path from the approved design, not from runtime checker output"
+    },
+    {
+      "contract": "FlightModeAuthorityContract",
+      "owner": "flightModeAuthority",
+      "behavior": "FlightModeAuthorityBehavior",
+      "initial_state": "grounded",
+      "response_paths": [
+        {
+          "source": "grounded",
+          "trigger": "StartupInhibitActiveSignal",
+          "target": "airborneInhibited",
+          "guard": null,
+          "action": "setAirborneTransitionInhibited"
+        }
+      ],
+      "continuous_guarantee": false,
+      "_review": "confirm every exact guarantee-producing behavior path from the approved design, not from runtime checker output"
+    }
+  ],
+  "observation_links": [
+    {
+      "contract": "SystemArmingInhibitContract",
+      "verification": "ArmingInhibitVerification",
+      "observation": "armingTransitionInhibited and airborneTransitionInhibited",
+      "_review": "confirm the verification case and observed guarantee concept"
+    }
+  ],
   "selected_model_elements": [
     "powerOnSelfTestActive",
     "sensorFailureReported",

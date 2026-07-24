@@ -109,6 +109,18 @@ def test_validator_rejects_redundant_binary_float_deadline_authority():
     assert any("deadline_s must not appear" in problem for problem in problems)
 
 
+def test_validator_rejects_incomplete_realization_and_observation_facts():
+    frozen = _freeze(_draft())
+    frozen["realization_links"][0]["response_paths"][0]["source"] = ""
+    frozen["observation_links"][0]["observation"] = ""
+    problems = validate_frozen_gold(frozen)
+    assert any("must set source/target/action" in problem for problem in problems)
+    assert any(
+        "must set contract/verification/observation" in problem
+        for problem in problems
+    )
+
+
 def test_atomic_semantics_use_a_distinct_gold_schema_version():
     assert _draft()["schema_version"] == "3.0"
 
@@ -224,6 +236,8 @@ def test_real_chain_prediction_round_trips_through_its_atomic_draft(
     assert "f1" not in result
     assert result["guarantee_allocation"]["f1"] == 1.0
     assert result["assumption_discharge"]["f1"] == 1.0
+    assert result["realization_link_agreement"]["f1"] == 1.0
+    assert result["observation_link_agreement"]["f1"] == 1.0
     assert expected_category in result
     if expected_category == "invariant_agreement":
         category = result[expected_category]
@@ -259,6 +273,8 @@ def test_three_real_chain_round_trips_cover_all_five_separate_categories():
                 "timing_agreement",
                 "priority_agreement",
                 "invariant_agreement",
+                "realization_link_agreement",
+                "observation_link_agreement",
             )
             if key in result
         )
@@ -268,7 +284,37 @@ def test_three_real_chain_round_trips_cover_all_five_separate_categories():
         "timing_agreement",
         "priority_agreement",
         "invariant_agreement",
+        "realization_link_agreement",
+        "observation_link_agreement",
     }
+
+
+def test_missing_realization_path_and_observation_are_penalised_separately():
+    model = (
+        "package Source { requirement def REQ_SAFE_005 { doc /* source */ } }\n"
+        + emit_ag_package(REQ_SAFE_005_CHAIN)
+    )
+    prediction = check_ag_graph(extract_ag_graph(model, revision=1)).to_dict()
+    frozen = _freeze(_draft())
+    prediction["graph"]["realization_links"][0]["response_paths"] = []
+    prediction["graph"]["observation_links"] = []
+    result = evaluate_ag_against_gold(prediction, frozen)
+    assert result["realization_link_agreement"]["recall"] < 1.0
+    assert result["realization_link_agreement"]["fn"] == 1
+    assert result["observation_link_agreement"]["recall"] == 0.0
+    assert result["observation_link_agreement"]["fn"] == 1
+    assert "f1" not in result
+
+
+def test_malformed_archived_realization_fact_fails_closed():
+    model = (
+        "package Source { requirement def REQ_SAFE_005 { doc /* source */ } }\n"
+        + emit_ag_package(REQ_SAFE_005_CHAIN)
+    )
+    prediction = check_ag_graph(extract_ag_graph(model, revision=1)).to_dict()
+    prediction["graph"]["realization_links"][0].pop("continuous_guarantee")
+    with pytest.raises(ValueError, match="continuous_guarantee"):
+        evaluate_ag_against_gold(prediction, _freeze(_draft()))
 
 
 def test_draft_discharge_edges_have_no_unresolved_sources_for_this_chain():

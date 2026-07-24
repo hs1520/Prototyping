@@ -15,11 +15,13 @@ EVALUATOR-ONLY human gold. It is a different boundary from the runtime checker:
     only computes agreement between that gold and the archived prediction.
 
 The evaluator reports **separate decomposition/extraction agreement** categories
-(allocation, discharge, timing, priority, and invariant), **not** a composite F1
-or an LLM-accuracy score. Under deterministic A/G emission the prediction is the
-selected decomposition rendered and read back, so agreement is ~1.0 by
-construction and measures extract/check faithfulness. A future LLM-authored
-intervention requires its own frozen configuration/version and evidence gate.
+(allocation, discharge, realization, observation, timing, priority, and
+invariant), **not** a composite F1 or an LLM-accuracy score. Optional categories
+are reported only when independently reviewed gold contains their atomic facts.
+Under deterministic A/G emission the prediction is the selected decomposition
+rendered and read back, so agreement is ~1.0 by construction and measures
+extract/check faithfulness. A future LLM-authored intervention requires its own
+frozen configuration/version and evidence gate.
 Post-hoc R2-BBAG pooling is permitted only when the consumer reproduces a
 ``POSTHOC_EVALUATION_READINESS_MANIFEST`` from the complete frozen source-evidence
 bundle. The global arm enum is deliberately not used as this gate.
@@ -117,6 +119,95 @@ def _discharge_set(items, aliases, *, claimed_only: bool):
     return out
 
 
+def _text(value: Any) -> str:
+    return str(value if value is not None else "").strip()
+
+
+def _realization_set(items: Any) -> set[tuple[str, ...]]:
+    """Flatten independently authored component/path links into atomic facts."""
+    result: set[tuple[str, ...]] = set()
+    for link_index, link in enumerate(items or ()):
+        if not isinstance(link, Mapping):
+            raise ValueError(
+                f"realization_links[{link_index}] must be an object"
+            )
+        paths = link.get("response_paths")
+        if not isinstance(paths, list):
+            raise ValueError(
+                f"realization_links[{link_index}].response_paths must be a list"
+            )
+        scalar = (
+            _text(link.get("contract")),
+            _text(link.get("owner")),
+            _text(link.get("behavior")),
+            _text(link.get("initial_state")),
+        )
+        if not all(scalar):
+            raise ValueError(
+                f"realization_links[{link_index}] must set "
+                "contract/owner/behavior/initial_state"
+            )
+        continuous = link.get("continuous_guarantee")
+        if not isinstance(continuous, bool):
+            raise ValueError(
+                f"realization_links[{link_index}].continuous_guarantee "
+                "must be Boolean"
+            )
+        prefix = (
+            *scalar,
+            str(continuous).lower(),
+        )
+        for path_index, path in enumerate(paths):
+            if not isinstance(path, Mapping):
+                raise ValueError(
+                    f"realization_links[{link_index}].response_paths"
+                    f"[{path_index}] must be an object"
+                )
+            path_fact = (
+                _text(path.get("source")),
+                _text(path.get("trigger")),
+                _text(path.get("target")),
+                _text(path.get("guard")),
+                _text(path.get("action")),
+            )
+            if not path_fact[0] or not path_fact[2] or not path_fact[4]:
+                raise ValueError(
+                    f"realization_links[{link_index}].response_paths"
+                    f"[{path_index}] must set source/target/action"
+                )
+            if continuous and path.get("trigger") is not None:
+                raise ValueError(
+                    f"realization_links[{link_index}] continuous path must "
+                    "use trigger=null"
+                )
+            if not continuous and not path_fact[1]:
+                raise ValueError(
+                    f"realization_links[{link_index}] event-driven path must "
+                    "set trigger"
+                )
+            result.add(prefix + path_fact)
+    return result
+
+
+def _observation_set(items: Any) -> set[tuple[str, str, str]]:
+    result: set[tuple[str, str, str]] = set()
+    for index, item in enumerate(items or ()):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"observation_links[{index}] must be an object")
+        fact = (
+            _text(item.get("contract")),
+            _text(item.get("verification")),
+            _text(item.get("observation")),
+        )
+        if not all(fact):
+            raise ValueError(
+                f"observation_links[{index}] must set "
+                "contract/verification/observation"
+            )
+        result.add(fact)
+    return result
+
+
 def _contains_key(value: Any, target: str) -> bool:
     if isinstance(value, Mapping):
         return any(
@@ -136,10 +227,10 @@ def evaluate_ag_against_gold(
 ) -> Dict[str, Any]:
     """Score an archived A/G prediction against evaluator-only human gold.
 
-    Returns per-category precision/recall/F1 for guarantee allocation and
-    assumption discharge. Per-run failure classification is evaluated only from
-    separately frozen blind labels, never from static reference gold. Raises on a
-    role mismatch so gold and predictions cannot be swapped or self-scored.
+    Returns separate per-category agreement metrics. Per-run failure
+    classification is evaluated only from separately frozen blind labels, never
+    from static reference gold. Raises on a role mismatch so gold and predictions
+    cannot be swapped or self-scored.
     """
     if not isinstance(prediction, Mapping) or not isinstance(gold, Mapping):
         raise TypeError("prediction and gold must be mappings")
@@ -226,7 +317,9 @@ def evaluate_ag_against_gold(
         "measurement_boundary": "EVALUATOR_ONLY",
         "metric_name": "decomposition_extraction_agreement",
         "metric_interpretation": (
-            "separate set P/R/F1 for guarantee allocation and assumption discharge. "
+            "separate agreement metrics for allocation, discharge, realization, "
+            "observation, timing, priority, and invariant facts when independently "
+            "reviewed gold supplies those categories. "
             "This is "
             "decomposition/extraction AGREEMENT, NOT LLM accuracy: under "
             "deterministic A/G emission the prediction is the selected "
@@ -234,9 +327,8 @@ def evaluate_ag_against_gold(
             "construction and measures extract/check faithfulness. It measures "
             "model-generation accuracy only for an LLM-authored intervention with "
             "its own frozen configuration/version and evidence gate. "
-            "Timing, priority, and invariant agreement are reported as SEPARATE "
-            "categories when the gold and prediction carry them (§6); they are never "
-            "merged with allocation/discharge or with each other into a composite F1."
+            "Every category is reported SEPARATELY; categories are never merged "
+            "into a composite F1."
         ),
         "chain_id": gold.get("chain_id"),
         "checker_version": prediction.get("checker_version"),
@@ -273,4 +365,14 @@ def evaluate_ag_against_gold(
         )
     if gold.get("invariants") is not None:
         result["invariant_agreement"] = invariant_agreement(pred_graph, gold)
+    if gold.get("realization_links") is not None:
+        result["realization_link_agreement"] = _prf(
+            _realization_set(pred_graph.get("realization_links")),
+            _realization_set(gold.get("realization_links")),
+        ).as_dict()
+    if gold.get("observation_links") is not None:
+        result["observation_link_agreement"] = _prf(
+            _observation_set(pred_graph.get("observation_links")),
+            _observation_set(gold.get("observation_links")),
+        ).as_dict()
     return result

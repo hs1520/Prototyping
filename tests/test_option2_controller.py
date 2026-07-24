@@ -124,3 +124,41 @@ def test_agenda_reports_registration_and_readiness_without_firing():
     ks = agenda["registered_knowledge_sources"][0]
     assert ks["activated"] is False
     assert ks["preconditions_met"] is False  # precondition not yet on the board
+
+
+def test_stale_topic_cannot_activate_a_current_revision_source():
+    board = _board()
+    _publish_topic(board, "ready")
+    board.commit_model(
+        "package Current {}",
+        base_revision=board.current_revision,
+        base_digest=board.current_model.model_digest,
+        producer="test",
+    )
+    controller = BlackboardController(board)
+    controller.register(KnowledgeSource(
+        name="current_only",
+        agent_role="Role",
+        precondition_topics=("ready",),
+        activate=lambda: None,
+    ))
+    assert controller.activatable() == []
+
+
+def test_declared_output_topic_is_enforced_and_failure_is_audited():
+    board = _board()
+    _publish_topic(board, "ready")
+    controller = BlackboardController(board)
+    controller.register(KnowledgeSource(
+        name="broken",
+        agent_role="Role",
+        precondition_topics=("ready",),
+        activate=lambda: None,
+        output_topics=("result.required",),
+    ))
+    with pytest.raises(RuntimeError, match="did not publish"):
+        controller.run()
+    activation = board.records(topic="control.activation")
+    assert len(activation) == 1
+    assert activation[0].payload["status"] == "FAILED"
+    assert controller.agenda()["activations"][0]["status"] == "FAILED"

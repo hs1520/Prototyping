@@ -114,6 +114,19 @@ def test_second_handoff_makes_the_metric_denominator_two_in_r2():
     assert m["cross_role_contamination"]["count"] == 0
     assert m["stale_revision_use"]["count"] == 0
     assert m["context_revision_consistency"]["value"] == 1.0
+    sources = artifacts["control_agenda"]["registered_knowledge_sources"]
+    assert [item["name"] for item in sources] == [
+        "verification_planning",
+        "ag_semantic_assurance",
+    ]
+    assert sources[1]["precondition_topics"] == [
+        "model.terminal.ready",
+        "agent.verification.result",
+    ]
+    assert [item["status"] for item in artifacts["control_agenda"]["activations"]] == [
+        "COMPLETED",
+        "COMPLETED",
+    ]
 
 
 def test_second_handoff_also_runs_in_r1_without_the_ag_layer():

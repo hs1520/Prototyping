@@ -84,6 +84,67 @@
       "_review": "confirm the discharging source"
     }
   ],
+  "realization_links": [
+    {
+      "contract": "SafetyResponseArbiterContract",
+      "owner": "safetyResponseArbiter",
+      "behavior": "SafetyResponseArbitration",
+      "initial_state": "awaitingResponse",
+      "response_paths": [
+        {
+          "source": "awaitingResponse",
+          "trigger": "CriticalPropulsionFailureDetectedSignal",
+          "target": "parachuteDeploymentSelected",
+          "guard": "criticalPropulsionFailureDetected",
+          "action": "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand"
+        }
+      ],
+      "continuous_guarantee": false,
+      "_review": "confirm every exact guarantee-producing behavior path from the approved design, not from runtime checker output"
+    },
+    {
+      "contract": "RecoveryPowerSupplyContract",
+      "owner": "recoveryPowerSupply",
+      "behavior": "RecoveryPowerSupplyBehavior",
+      "initial_state": "recoveryPowerAvailable",
+      "response_paths": [
+        {
+          "source": "recoveryPowerAvailable",
+          "trigger": null,
+          "target": "recoveryPowerAvailable",
+          "guard": null,
+          "action": "setRecoveryActuationPowerAvailable"
+        }
+      ],
+      "continuous_guarantee": true,
+      "_review": "confirm every exact guarantee-producing behavior path from the approved design, not from runtime checker output"
+    },
+    {
+      "contract": "RecoverySystemContract",
+      "owner": "recoverySystem",
+      "behavior": "RecoverySystemBehavior",
+      "initial_state": "stowed",
+      "response_paths": [
+        {
+          "source": "stowed",
+          "trigger": "ParachuteDeploymentCommandSignal",
+          "target": "deployed",
+          "guard": null,
+          "action": "setParachuteDeployed"
+        }
+      ],
+      "continuous_guarantee": false,
+      "_review": "confirm every exact guarantee-producing behavior path from the approved design, not from runtime checker output"
+    }
+  ],
+  "observation_links": [
+    {
+      "contract": "SystemParachuteContract",
+      "verification": "ParachuteDeploymentVerification",
+      "observation": "parachuteDeployed",
+      "_review": "confirm the verification case and observed guarantee concept"
+    }
+  ],
   "timing": {
     "origin": "criticalPropulsionFailureDetected",
     "deadline": {

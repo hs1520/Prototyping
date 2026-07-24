@@ -63,6 +63,64 @@
       "_review": "confirm the discharging source"
     }
   ],
+  "realization_links": [
+    {
+      "contract": "ReleaseCommandGatewayContract",
+      "owner": "releaseCommandGateway",
+      "behavior": "ReleaseCommandGatewayBehavior",
+      "initial_state": "awaitingAuthorisation",
+      "response_paths": [
+        {
+          "source": "awaitingAuthorisation",
+          "trigger": "ReceivedReleaseCommandSignal",
+          "target": "authorisationGranted",
+          "guard": "authorisationDataValid",
+          "action": "setAuthorisedReleaseCommandReceived"
+        }
+      ],
+      "continuous_guarantee": false,
+      "_review": "confirm every exact guarantee-producing behavior path from the approved design, not from runtime checker output"
+    },
+    {
+      "contract": "PayloadLockMechanismContract",
+      "owner": "payloadLockMechanism",
+      "behavior": "PayloadLockLifecycle",
+      "initial_state": "lockedUnpowered",
+      "response_paths": [
+        {
+          "source": "lockedUnpowered",
+          "trigger": "PowerOnSignal",
+          "target": "lockedPowered",
+          "guard": null,
+          "action": "maintainPayloadLocked"
+        },
+        {
+          "source": "lockedPowered",
+          "trigger": "AuthorisedReleaseCommandReceivedSignal",
+          "target": "unlockedPowered",
+          "guard": null,
+          "action": "enforceAuthorisedUnlockOnly"
+        },
+        {
+          "source": "unlockedPowered",
+          "trigger": "PowerLostSignal",
+          "target": "lockedUnpowered",
+          "guard": null,
+          "action": "setPayloadLockedForDeenergiseToLock"
+        }
+      ],
+      "continuous_guarantee": false,
+      "_review": "confirm every exact guarantee-producing behavior path from the approved design, not from runtime checker output"
+    }
+  ],
+  "observation_links": [
+    {
+      "contract": "SystemPayloadLockContract",
+      "verification": "PayloadLockVerification",
+      "observation": "not powerOnInitialisation or payloadLocked",
+      "_review": "confirm the verification case and observed guarantee concept"
+    }
+  ],
   "selected_model_elements": [
     "powerOnInitialisation",
     "payloadLocked",

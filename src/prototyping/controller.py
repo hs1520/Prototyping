@@ -12,10 +12,10 @@ The pay-off is that adding a knowledge source becomes *registration*, not new
 bespoke wiring in the orchestrator — control lives in one place and is recorded on
 the board (a ``control.activation`` record per firing) as evidence.
 
-Bounded scope (design §15): the Controller drives the post-design board-mediated
-handoffs (verification planning today; extensible). The DesignAgent generation
-step stays orchestrator-driven because it is interleaved with LLM generation and
-is not a pure board-triggered activation.
+Bounded scope (design §15): the Controller drives post-design board-mediated
+knowledge sources, including verification planning and R2 semantic assurance.
+The DesignAgent generation step stays orchestrator-driven because it is
+interleaved with LLM generation and is not a pure board-triggered activation.
 """
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ class KnowledgeSource:
     agent_role: str
     precondition_topics: Tuple[str, ...]
     activate: Callable[[], Any]
+    output_topics: Tuple[str, ...] = ()
 
 
 class BlackboardController:
@@ -53,7 +54,15 @@ class BlackboardController:
         return self
 
     def _published_topics(self) -> set:
-        return {record.topic for record in self.board.records()}
+        # A stale publication must never activate work against a newer model
+        # revision. Upstream facts that remain valid are explicitly reaffirmed
+        # on the current revision by the orchestrator/knowledge source.
+        return {
+            record.topic
+            for record in self.board.records()
+            if record.model_revision == self.board.current_revision
+            and record.model_digest == self.board.current_model.model_digest
+        }
 
     def activatable(self) -> List[KnowledgeSource]:
         """Registered sources not yet run whose every precondition is on the board."""
@@ -78,7 +87,49 @@ class BlackboardController:
         while progressed:
             progressed = False
             for source in self.activatable():
-                result = source.activate()
+                activation_index = len(self.activation_log)
+                try:
+                    result = source.activate()
+                    missing_outputs = (
+                        set(source.output_topics) - self._published_topics()
+                    )
+                    if missing_outputs:
+                        raise RuntimeError(
+                            f"knowledge source {source.name!r} did not publish "
+                            "declared output topic(s): "
+                            + ", ".join(sorted(missing_outputs))
+                        )
+                except Exception as exc:
+                    self._activated.add(source.name)
+                    record = self.board.publish(
+                        RecordType.CONTROL,
+                        "control.activation",
+                        "BlackboardController",
+                        {
+                            "knowledge_source": source.name,
+                            "agent_role": source.agent_role,
+                            "precondition_topics": list(
+                                source.precondition_topics
+                            ),
+                            "output_topics": list(source.output_topics),
+                            "activation_index": activation_index,
+                            "status": "FAILED",
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        },
+                    )
+                    entry = {
+                        "knowledge_source": source.name,
+                        "agent_role": source.agent_role,
+                        "precondition_topics": list(
+                            source.precondition_topics
+                        ),
+                        "output_topics": list(source.output_topics),
+                        "activation_record_id": record.record_id,
+                        "status": "FAILED",
+                    }
+                    self.activation_log.append(entry)
+                    raise
                 self._activated.add(source.name)
                 record = self.board.publish(
                     RecordType.CONTROL,
@@ -88,14 +139,18 @@ class BlackboardController:
                         "knowledge_source": source.name,
                         "agent_role": source.agent_role,
                         "precondition_topics": list(source.precondition_topics),
-                        "activation_index": len(self.activation_log),
+                        "output_topics": list(source.output_topics),
+                        "activation_index": activation_index,
+                        "status": "COMPLETED",
                     },
                 )
                 entry = {
                     "knowledge_source": source.name,
                     "agent_role": source.agent_role,
                     "precondition_topics": list(source.precondition_topics),
+                    "output_topics": list(source.output_topics),
                     "activation_record_id": record.record_id,
+                    "status": "COMPLETED",
                 }
                 self.activation_log.append(entry)
                 agenda.append({**entry, "result": result})
@@ -115,6 +170,7 @@ class BlackboardController:
                     "name": source.name,
                     "agent_role": source.agent_role,
                     "precondition_topics": list(source.precondition_topics),
+                    "output_topics": list(source.output_topics),
                     "activated": source.name in self._activated,
                     "preconditions_met": all(
                         topic in published

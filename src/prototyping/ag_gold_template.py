@@ -23,7 +23,7 @@ import hashlib
 import re
 from typing import Any, Dict, Mapping
 
-from .ag_emitter import AGChainSpec
+from .ag_emitter import AGChainSpec, AGComponentSpec
 from ..utils.req_id import normalise_req_id
 
 GOLD_ROLE = "EVALUATOR_GOLD"
@@ -43,6 +43,30 @@ def _valid_iso_date(value: Any) -> bool:
 
 def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def _gold_realization_paths(
+    component: AGComponentSpec,
+) -> list[dict[str, Any]]:
+    paths = component.realization_paths
+    if not paths:
+        return [{
+            "source": component.initial_state,
+            "trigger": component.trigger_signal,
+            "target": component.response_state,
+            "guard": None,
+            "action": component.response_action,
+        }]
+    return [
+        {
+            "source": path.source,
+            "trigger": path.trigger,
+            "target": path.target,
+            "guard": path.guard,
+            "action": path.action,
+        }
+        for path in paths
+    ]
 
 
 def build_gold_draft(
@@ -92,6 +116,31 @@ def build_gold_draft(
             discharge_edges.append(edge)
 
     semantic_fields: Dict[str, Any] = {}
+    semantic_fields["realization_links"] = [
+        {
+            "contract": comp.name,
+            "owner": comp.owner_usage,
+            "behavior": comp.behavior,
+            "initial_state": comp.initial_state,
+            "response_paths": _gold_realization_paths(comp),
+            "continuous_guarantee": comp.trigger_signal is None,
+            "_review": (
+                "confirm every exact guarantee-producing behavior path from the "
+                "approved design, not from runtime checker output"
+            ),
+        }
+        for comp in spec.components
+    ]
+    semantic_fields["observation_links"] = [
+        {
+            "contract": spec.system_contract,
+            "verification": spec.verification,
+            "observation": spec.observation,
+            "_review": (
+                "confirm the verification case and observed guarantee concept"
+            ),
+        }
+    ]
     if spec.deadline is not None and spec.timing_origin:
         semantic_fields["timing"] = {
             "origin": spec.timing_origin,
@@ -427,6 +476,107 @@ def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
                     problems.append("priority precedence edges must be acyclic")
         if not trigger:
             problems.append("priority trigger must be set")
+
+    realization_links = gold.get("realization_links")
+    if realization_links is not None:
+        if not isinstance(realization_links, list) or not realization_links:
+            problems.append("realization_links must be a non-empty list")
+        else:
+            seen_contracts: set[str] = set()
+            for index, link in enumerate(realization_links):
+                if not isinstance(link, Mapping):
+                    problems.append(f"realization_links[{index}] must be an object")
+                    continue
+                contract = str(link.get("contract") or "")
+                scalar = (
+                    contract,
+                    str(link.get("owner") or ""),
+                    str(link.get("behavior") or ""),
+                    str(link.get("initial_state") or ""),
+                )
+                if not all(scalar):
+                    problems.append(
+                        f"realization_links[{index}] must set "
+                        "contract/owner/behavior/initial_state"
+                    )
+                if contract in seen_contracts:
+                    problems.append(
+                        f"realization_links contains duplicate contract {contract!r}"
+                    )
+                seen_contracts.add(contract)
+                paths = link.get("response_paths")
+                if not isinstance(paths, list) or not paths:
+                    problems.append(
+                        f"realization_links[{index}].response_paths must be a "
+                        "non-empty list"
+                    )
+                    continue
+                continuous = link.get("continuous_guarantee")
+                if not isinstance(continuous, bool):
+                    problems.append(
+                        f"realization_links[{index}].continuous_guarantee "
+                        "must be Boolean"
+                    )
+                seen_paths: set[tuple[str, str, str, str, str]] = set()
+                for path_index, path in enumerate(paths):
+                    if not isinstance(path, Mapping):
+                        problems.append(
+                            f"realization_links[{index}].response_paths"
+                            f"[{path_index}] must be an object"
+                        )
+                        continue
+                    key = (
+                        str(path.get("source") or ""),
+                        str(path.get("trigger") or ""),
+                        str(path.get("target") or ""),
+                        str(path.get("guard") or ""),
+                        str(path.get("action") or ""),
+                    )
+                    if not key[0] or not key[2] or not key[4]:
+                        problems.append(
+                            f"realization_links[{index}].response_paths"
+                            f"[{path_index}] must set source/target/action"
+                        )
+                    if key in seen_paths:
+                        problems.append(
+                            f"realization_links[{index}] contains duplicate "
+                            f"response path {key!r}"
+                        )
+                    seen_paths.add(key)
+                    if continuous is True and path.get("trigger") is not None:
+                        problems.append(
+                            f"realization_links[{index}] continuous guarantee "
+                            "must use trigger=null"
+                        )
+                    if continuous is False and not str(path.get("trigger") or ""):
+                        problems.append(
+                            f"realization_links[{index}] event-driven path must "
+                            "set trigger"
+                        )
+
+    observation_links = gold.get("observation_links")
+    if observation_links is not None:
+        if not isinstance(observation_links, list) or not observation_links:
+            problems.append("observation_links must be a non-empty list")
+        else:
+            seen_observations: set[tuple[str, str, str]] = set()
+            for index, link in enumerate(observation_links):
+                if not isinstance(link, Mapping):
+                    problems.append(f"observation_links[{index}] must be an object")
+                    continue
+                key = (
+                    str(link.get("contract") or ""),
+                    str(link.get("verification") or ""),
+                    str(link.get("observation") or ""),
+                )
+                if not all(key):
+                    problems.append(
+                        f"observation_links[{index}] must set "
+                        "contract/verification/observation"
+                    )
+                if key in seen_observations:
+                    problems.append(f"duplicate observation link {key!r}")
+                seen_observations.add(key)
 
     invariants = gold.get("invariants")
     if invariants is not None:

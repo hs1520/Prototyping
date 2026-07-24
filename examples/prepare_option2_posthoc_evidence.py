@@ -12,6 +12,7 @@ from src.prototyping.posthoc_evidence import (
     stamp_blind_label_digests,
     stamp_human_digest,
 )
+from src.prototyping.posthoc_reporting import evaluate_ready_pilot_from_disk
 
 
 def main() -> None:
@@ -43,6 +44,10 @@ def main() -> None:
     readiness.add_argument("--pilot-dir", required=True)
     readiness.add_argument("--evidence-dir", required=True)
 
+    evaluate = sub.add_parser("evaluate-ready")
+    evaluate.add_argument("--pilot-dir", required=True)
+    evaluate.add_argument("--evidence-dir", required=True)
+
     args = parser.parse_args()
     if args.command == "prepare-review":
         result = prepare_review_materials(
@@ -69,8 +74,13 @@ def main() -> None:
         result = {"stamped_labels": stamp_blind_label_digests(
             evidence_dir=args.evidence_dir,
         )}
-    else:
+    elif args.command == "build-readiness":
         result = build_readiness_from_disk(
+            pilot_dir=args.pilot_dir,
+            evidence_dir=args.evidence_dir,
+        )
+    else:
+        result = evaluate_ready_pilot_from_disk(
             pilot_dir=args.pilot_dir,
             evidence_dir=args.evidence_dir,
         )

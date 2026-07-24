@@ -22,6 +22,7 @@ from .ag_emitter import (
     AGComponentSpec,
     AGInvariantSpec,
     AGPrioritySpec,
+    AGRealizationPathSpec,
 )
 from ..utils.req_id import normalise_req_id
 
@@ -57,10 +58,22 @@ REQ_SAFE_005_CHAIN = AGChainSpec(
             guarantee="parachuteDeploymentCommand",
             behavior="SafetyResponseArbitration",
             trigger_signal="CriticalPropulsionFailureDetectedSignal",
-            initial_state="awaitingFailure",
-            response_state="parachuteSelected",
+            initial_state="awaitingResponse",
+            response_state="parachuteDeploymentSelected",
             response_action=(
                 "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand"
+            ),
+            realization_paths=(
+                AGRealizationPathSpec(
+                    source="awaitingResponse",
+                    trigger="CriticalPropulsionFailureDetectedSignal",
+                    target="parachuteDeploymentSelected",
+                    action=(
+                        "setParachuteResponseSelectedAndIssue"
+                        "ParachuteDeploymentCommand"
+                    ),
+                    guard="criticalPropulsionFailureDetected",
+                ),
             ),
             additional_guarantees=("parachuteResponseSelected",),
             assumptions=(
@@ -85,6 +98,14 @@ REQ_SAFE_005_CHAIN = AGChainSpec(
             initial_state="recoveryPowerAvailable",
             response_state="recoveryPowerAvailable",
             response_action="setRecoveryActuationPowerAvailable",
+            realization_paths=(
+                AGRealizationPathSpec(
+                    source="recoveryPowerAvailable",
+                    trigger=None,
+                    target="recoveryPowerAvailable",
+                    action="setRecoveryActuationPowerAvailable",
+                ),
+            ),
             assumptions=(
                 AGAssumptionSpec("airborne", environment=True),
             ),
@@ -100,6 +121,14 @@ REQ_SAFE_005_CHAIN = AGChainSpec(
             initial_state="stowed",
             response_state="deployed",
             response_action="setParachuteDeployed",
+            realization_paths=(
+                AGRealizationPathSpec(
+                    source="stowed",
+                    trigger="ParachuteDeploymentCommandSignal",
+                    target="deployed",
+                    action="setParachuteDeployed",
+                ),
+            ),
             assumptions=(
                 AGAssumptionSpec("parachuteDeploymentCommand"),
                 AGAssumptionSpec("recoveryActuationPowerAvailable"),
@@ -161,6 +190,14 @@ REQ_SAFE_004_CHAIN = AGChainSpec(
             initial_state="poweredOff",
             response_state="startupInhibited",
             response_action="setStartupInhibitActive",
+            realization_paths=(
+                AGRealizationPathSpec(
+                    source="selfTesting",
+                    trigger="SensorFailureReportedSignal",
+                    target="startupInhibited",
+                    action="setStartupInhibitActive",
+                ),
+            ),
             assumptions=(
                 AGAssumptionSpec("powerOnSelfTestActive", environment=True),
                 AGAssumptionSpec("sensorFailureReported", environment=True),
@@ -176,6 +213,14 @@ REQ_SAFE_004_CHAIN = AGChainSpec(
             initial_state="preArm",
             response_state="armingInhibited",
             response_action="setArmingTransitionInhibited",
+            realization_paths=(
+                AGRealizationPathSpec(
+                    source="preArm",
+                    trigger="StartupInhibitActiveSignal",
+                    target="armingInhibited",
+                    action="setArmingTransitionInhibited",
+                ),
+            ),
             assumptions=(
                 AGAssumptionSpec("startupInhibitActive"),
             ),
@@ -190,6 +235,14 @@ REQ_SAFE_004_CHAIN = AGChainSpec(
             initial_state="grounded",
             response_state="airborneInhibited",
             response_action="setAirborneTransitionInhibited",
+            realization_paths=(
+                AGRealizationPathSpec(
+                    source="grounded",
+                    trigger="StartupInhibitActiveSignal",
+                    target="airborneInhibited",
+                    action="setAirborneTransitionInhibited",
+                ),
+            ),
             assumptions=(
                 AGAssumptionSpec("startupInhibitActive"),
             ),
@@ -267,6 +320,15 @@ REQ_SAFE_008_CHAIN = AGChainSpec(
             initial_state="awaitingAuthorisation",
             response_state="authorisationGranted",
             response_action="setAuthorisedReleaseCommandReceived",
+            realization_paths=(
+                AGRealizationPathSpec(
+                    source="awaitingAuthorisation",
+                    trigger="ReceivedReleaseCommandSignal",
+                    target="authorisationGranted",
+                    action="setAuthorisedReleaseCommandReceived",
+                    guard="authorisationDataValid",
+                ),
+            ),
             assumptions=(
                 AGAssumptionSpec("receivedReleaseCommand", environment=True),
                 AGAssumptionSpec("authorisationDataValid", environment=True),
@@ -282,6 +344,26 @@ REQ_SAFE_008_CHAIN = AGChainSpec(
             initial_state="lockedUnpowered",
             response_state="lockedPowered",
             response_action="setPayloadLockedForDeenergiseToLock",
+            realization_paths=(
+                AGRealizationPathSpec(
+                    source="lockedUnpowered",
+                    trigger="PowerOnSignal",
+                    target="lockedPowered",
+                    action="maintainPayloadLocked",
+                ),
+                AGRealizationPathSpec(
+                    source="lockedPowered",
+                    trigger="AuthorisedReleaseCommandReceivedSignal",
+                    target="unlockedPowered",
+                    action="enforceAuthorisedUnlockOnly",
+                ),
+                AGRealizationPathSpec(
+                    source="unlockedPowered",
+                    trigger="PowerLostSignal",
+                    target="lockedUnpowered",
+                    action="setPayloadLockedForDeenergiseToLock",
+                ),
+            ),
             interface_inputs=(
                 "powerOnEvent",
                 "powerLostEvent",

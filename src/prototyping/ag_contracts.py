@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-AG_CHECKER_VERSION = "ag-mvp-3"
+AG_CHECKER_VERSION = "ag-bounded-4"
 
 # Completeness states (§6.3).
 READY = "READY"
@@ -675,8 +675,15 @@ def _check_realization(
         }
         action_matches = [
             (state, action) for state, action in behavior.entry_actions.items()
-            if state in reachable and any(
-                token and token in _flat_token(action) for token in guarantee_tokens
+            if (
+                state in reachable
+                # A clear/reset action consumes or negates a positive guarantee;
+                # a substring match alone would falsely call it a realization.
+                and not _flat_token(action).startswith("clear")
+                and any(
+                    token and token in _flat_token(action)
+                    for token in guarantee_tokens
+                )
             )
         ]
         # An explicitly untimed availability invariant is established in the
@@ -726,6 +733,36 @@ def _check_realization(
             "trigger_ok": trigger_ok,
             "response_actions": [action for _state, action in action_matches],
             "response_states": [state for state, _action in action_matches],
+            # Exact committed-model paths used by the independent post-hoc
+            # realization evaluator.  Competing transitions that do not enter a
+            # guarantee-producing state are intentionally excluded; priority
+            # topology is evaluated in its own category.
+            "response_paths": [
+                {
+                    "source": transition.source,
+                    "trigger": transition.trigger,
+                    "target": transition.target,
+                    "guard": transition.guard,
+                    "action": action,
+                }
+                for state, action in action_matches
+                for transition in used_transitions
+                if transition.target == state
+            ] or (
+                [
+                    {
+                        "source": behavior.initial_state,
+                        "trigger": None,
+                        "target": behavior.initial_state,
+                        "guard": None,
+                        "action": action,
+                    }
+                    for state, action in action_matches
+                    if state == behavior.initial_state
+                ]
+                if availability_invariant else []
+            ),
+            "continuous_guarantee": availability_invariant,
             "status": (
                 "PASS"
                 if trigger_ok
@@ -760,6 +797,7 @@ def _check_observation(
         links.append({
             "contract": edge.src,
             "verification": edge.dst,
+            "observation": graph.system.observation,
             "status": "PASS" if edge in valid else "FAIL",
         })
     if len(valid) != 1:

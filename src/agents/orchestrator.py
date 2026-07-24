@@ -1613,51 +1613,104 @@ class Orchestrator:
             )
         }
         if self.blackboard is not None:
-            # Publish the A/G trace first so the collaboration snapshot below
-            # includes its typed ANALYSIS record.
-            if (
-                self.revised_experiment_arm
-                is RevisedExperimentArm.SEMANTIC_ASSURANCE
-                and model_text is not None
+            from ..prototyping.blackboard import RecordType, text_digest
+
+            if model_text is not None and (
+                text_digest(model_text)
+                != self.blackboard.current_model.model_digest
             ):
-                assurance = self._build_ag_trace(model_text)
-                result.update(assurance)
-                result["revised_experiment"].update({
-                    "runtime_assurance_status": (
-                        "PASS"
-                        if assurance["ag_contract_graph"]["verdict"] == "PASS"
-                        and assurance["pattern_conformance_report"]["verdict"] == "PASS"
-                        else "FAILED_OR_INCOMPLETE"
-                    ),
-                    "formal_ag_proof": False,
-                    "physical_verification": False,
-                })
+                raise ValueError(
+                    "collaboration artifact input does not match the committed "
+                    "Blackboard model revision/digest"
+                )
+            # Explicit current-revision activation fact. Controller preconditions
+            # never use stale topics from an earlier model revision.
+            terminal_records = [
+                record
+                for record in self.blackboard.records(
+                    topic="model.terminal.ready"
+                )
+                if record.model_revision == self.blackboard.current_revision
+                and record.model_digest
+                == self.blackboard.current_model.model_digest
+            ]
+            if not terminal_records:
+                design_results = self.blackboard.records(
+                    topic="agent.design.result"
+                )
+                self.blackboard.publish(
+                    RecordType.CONTROL,
+                    "model.terminal.ready",
+                    "Orchestrator",
+                    {
+                        "model_revision": self.blackboard.current_revision,
+                        "model_digest": self.blackboard.current_model.model_digest,
+                        "upstream_design_result_record_id": (
+                            design_results[-1].record_id
+                            if design_results else None
+                        ),
+                    },
+                )
             # Event-driven control: the Blackboard Controller opportunistically
             # activates each registered downstream knowledge source once the board
-            # satisfies its typed preconditions. The second board-mediated handoff
-            # (DesignAgent -> VerificationAgent) is the first such source; it
-            # activates only after a successful design (agent.design.result) and
-            # runs for both R1 and R2, giving the §13 handoff/role metrics a
-            # denominator greater than one. Runs before the snapshot so it is
-            # captured.
+            # satisfies current-revision typed preconditions. Verification
+            # planning consumes the terminal-model fact and publishes its result;
+            # R2 assurance then consumes both. Runs before the snapshot so the
+            # complete agenda and typed outputs are captured.
             from ..prototyping.controller import (
                 BlackboardController,
                 KnowledgeSource,
             )
 
             controller = BlackboardController(self.blackboard)
-            controller.register(KnowledgeSource(
-                name="verification_planning",
-                agent_role="VerificationAgent",
-                precondition_topics=("agent.design.result",),
-                activate=self._run_verification_handoff,
-            ))
+            has_authoritative_source = bool(
+                self.blackboard.records(topic="requirements.authoritative")
+            )
+            if has_authoritative_source:
+                controller.register(KnowledgeSource(
+                    name="verification_planning",
+                    agent_role="VerificationAgent",
+                    precondition_topics=("model.terminal.ready",),
+                    activate=self._run_verification_handoff,
+                    output_topics=("agent.verification.result",),
+                ))
+            if (
+                self.revised_experiment_arm
+                is RevisedExperimentArm.SEMANTIC_ASSURANCE
+                and model_text is not None
+            ):
+                assurance_preconditions = ["model.terminal.ready"]
+                if has_authoritative_source:
+                    assurance_preconditions.append(
+                        "agent.verification.result"
+                    )
+                controller.register(KnowledgeSource(
+                    name="ag_semantic_assurance",
+                    agent_role="AssuranceAgent",
+                    precondition_topics=tuple(assurance_preconditions),
+                    activate=lambda: self._build_ag_trace(model_text),
+                    output_topics=("analysis.ag_trace",),
+                ))
             for activation in controller.run():
                 if (
                     activation["knowledge_source"] == "verification_planning"
                     and activation["result"] is not None
                 ):
                     result["verification_plan"] = activation["result"]
+                if activation["knowledge_source"] == "ag_semantic_assurance":
+                    assurance = activation["result"]
+                    result.update(assurance)
+                    result["revised_experiment"].update({
+                        "runtime_assurance_status": (
+                            "PASS"
+                            if assurance["ag_contract_graph"]["verdict"] == "PASS"
+                            and assurance["pattern_conformance_report"]["verdict"]
+                            == "PASS"
+                            else "FAILED_OR_INCOMPLETE"
+                        ),
+                        "formal_ag_proof": False,
+                        "physical_verification": False,
+                    })
             result["control_agenda"] = controller.agenda()
             result["collaboration"] = {
                 "blackboard": self.blackboard.snapshot(),

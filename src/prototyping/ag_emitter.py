@@ -25,6 +25,22 @@ class AGAssumptionSpec:
 
 
 @dataclass(frozen=True)
+class AGRealizationPathSpec:
+    """One approved guarantee-producing path in the bounded behavior profile.
+
+    These facts describe the student-approved decomposition candidate used to
+    prepare evaluator-gold drafts.  They are not runtime checker output and do
+    not make a draft independent or frozen.
+    """
+
+    source: str
+    trigger: Optional[str]
+    target: str
+    action: str
+    guard: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class AGComponentSpec:
     name: str                       # component requirement-def name
     owner_def: str                  # responsible component type
@@ -42,6 +58,7 @@ class AGComponentSpec:
     additional_guarantees: Tuple[str, ...] = ()
     latency_budget: Optional[float] = None
     timing_segment_required: Optional[bool] = None
+    realization_paths: Tuple[AGRealizationPathSpec, ...] = ()
 
     @property
     def guarantees(self) -> Tuple[str, ...]:
