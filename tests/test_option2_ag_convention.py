@@ -214,7 +214,7 @@ def test_the_checker_holds_no_reviewed_answer():
     # debt is recorded explicitly here rather than hidden: a PASS on REQ_SAFE_004 or
     # REQ_SAFE_008 is partly "reproduce the reviewed answer", and neither chain can
     # carry an honest generation-accuracy claim until this is closed.
-    # See docs/R2_GENERATION_FINDINGS.md §6.
+    # See docs/R2_GENERATION_FINDINGS.md §6 (limitation).
     leaked = sorted(answer for answer in answers if answer in code)
     assert not leaked, (
         f"the runtime checker compares against reviewed answers: {leaked}. Those "
