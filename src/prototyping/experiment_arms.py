@@ -23,14 +23,27 @@ R2_DETERMINISTIC_INTERVENTION_VERSION = (
 R2_LLM_AUTHORED_GENERATION_MODE = "LLM_AUTHORED_AG"
 R2_LLM_AUTHORED_INTERVENTION_VERSION = "r2-bbag-llm-authored-v1"
 
+# LLM-decided specs are a THIRD frozen intervention. The LLM emits the engineering
+# decisions — pattern, timing origin and apportionment, discharge wiring, response
+# ordering — and the deterministic emitter renders the SysML from them. Measurement
+# motivated it: the LLM-authored mode agreed with gold on allocation 6/6 and
+# discharge 4/6 while never once reaching a PASS, because it kept losing rounds to
+# the notation rather than to the engineering. Here conformance holds by
+# construction and only the decisions are judged. Separate frozen config; never
+# pooled with either other mode.
+R2_LLM_DECIDED_GENERATION_MODE = "LLM_DECIDED_SPEC"
+R2_LLM_DECIDED_INTERVENTION_VERSION = "r2-bbag-llm-decided-spec-v1"
+
 R2_GENERATION_MODES = (
     R2_DETERMINISTIC_GENERATION_MODE,
     R2_LLM_AUTHORED_GENERATION_MODE,
+    R2_LLM_DECIDED_GENERATION_MODE,
 )
 # The one accepted (mode, version) pair per intervention; nothing else may run.
 R2_INTERVENTION_VERSION_BY_MODE = {
     R2_DETERMINISTIC_GENERATION_MODE: R2_DETERMINISTIC_INTERVENTION_VERSION,
     R2_LLM_AUTHORED_GENERATION_MODE: R2_LLM_AUTHORED_INTERVENTION_VERSION,
+    R2_LLM_DECIDED_GENERATION_MODE: R2_LLM_DECIDED_INTERVENTION_VERSION,
 }
 
 

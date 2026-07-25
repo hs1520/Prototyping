@@ -1754,6 +1754,7 @@ class Orchestrator:
             from ..prototyping.ag_emitter import emit_ag_package
             from ..prototyping.experiment_arms import (
                 R2_LLM_AUTHORED_GENERATION_MODE,
+                R2_LLM_DECIDED_GENERATION_MODE,
             )
 
             specs = select_ag_chains(requirements)
@@ -1799,12 +1800,23 @@ class Orchestrator:
             llm_authored = (
                 self.r2_generation_mode == R2_LLM_AUTHORED_GENERATION_MODE
             )
+            llm_decided = (
+                self.r2_generation_mode == R2_LLM_DECIDED_GENERATION_MODE
+            )
             packages: list[str] = []
             for spec in specs:
-                package_text = (
-                    self._generate_llm_authored_ag_package(spec, model_text)
-                    if llm_authored else emit_ag_package(spec)
-                )
+                if llm_authored:
+                    package_text = self._generate_llm_authored_ag_package(
+                        spec, model_text
+                    )
+                elif llm_decided:
+                    # the LLM decides; the emitter renders, so the notation is
+                    # conformant by construction and only the decisions are judged
+                    package_text = emit_ag_package(
+                        self._generate_llm_decided_ag_spec(spec, model_text)
+                    )
+                else:
+                    package_text = emit_ag_package(spec)
                 package_gate = check_syntax(
                     package_text,
                     fail_closed=True,
@@ -1960,6 +1972,103 @@ class Orchestrator:
             )
             lines.append(f"- ({diagnostic.code}) {diagnostic.message}{where}")
         return "\n".join(lines) or "(no diagnostics)"
+
+    def _generate_llm_decided_ag_spec(
+        self, spec, model_text: str, max_decision_attempts: int = 3
+    ):
+        """Ask the LLM for the engineering decisions and assemble the emitter spec.
+
+        LLM_DECIDED_SPEC mode. The model never writes SysML: it returns which
+        pattern the requirement instantiates, what starts the timing, how the
+        deadline divides, which producer discharges each assumption, and how the
+        responses are ordered. `ag_decision` validates that against the frozen
+        architecture boundary and builds the spec; `ag_emitter` renders it.
+
+        The reviewed answers stay withheld exactly as in the authored mode — the
+        boundary supplies components, ownership and interfaces, nothing more — so
+        agreement with gold remains a real accuracy measure. What changes is that a
+        wrong decision now yields a well-formed model that is wrong, instead of an
+        unparseable one whose engineering cannot be scored at all.
+        """
+        from ..prototyping.ag_decision import (
+            KNOWN_PATTERNS as KNOWN_AG_PATTERNS,
+            DecisionError,
+            build_spec_from_decisions,
+            extract_decisions,
+        )
+        from ..prototyping.architecture_boundary import (
+            build_architecture_boundary_draft,
+        )
+
+        boundary = build_architecture_boundary_draft(spec)
+        architecture = "\n".join(
+            f"  - component_id: {item['component_id']}\n"
+            f"      consumes: "
+            f"{', '.join(item['interfaces']['consumes']) or '(none)'}\n"
+            f"      produces: {', '.join(item['interfaces']['produces'])}"
+            for item in boundary["components"]
+        )
+        match = re.search(
+            rf"requirement\s+def\s+{re.escape(spec.source_requirement)}\b[^{{]*\{{"
+            r"(.*?)\}",
+            model_text,
+            re.DOTALL,
+        )
+        requirement_body = (match.group(1).strip() if match else "").strip()
+        system_prompt = (
+            "You are a systems engineer making the decisions behind a bounded "
+            "Assume-Guarantee decomposition. You do NOT write SysML — a renderer "
+            "does that. Return ONE JSON object, nothing else, with exactly these "
+            "keys:\n"
+            '{\n'
+            '  "safety_pattern": one of '
+            f'{list(KNOWN_AG_PATTERNS)},\n'
+            '  "timing_origin": the assumption concept that starts the deadline,\n'
+            '  "deadline_seconds": number or null,\n'
+            '  "observation": the concept the system as a whole guarantees,\n'
+            '  "system_assumptions": [concepts the system assumes of its '
+            'environment],\n'
+            '  "components": [ { "component_id": from the architecture below,\n'
+            '      "latency_budget_seconds": number or null,\n'
+            '      "timing_segment_required": true/false,\n'
+            '      "assumptions": [ { "concept": ...,\n'
+            '          "discharged_by": the component_id that produces it, or '
+            'null if it is an environment input } ] } ],\n'
+            '  "priority": null, or for a timed failsafe { "response_set_id": ..., '
+            '"members": [...], "selected_response": ... }\n'
+            '}\n'
+            "Decide these yourself from the requirement: the pattern, the timing "
+            "origin, the deadline and how it divides across components, which "
+            "producer discharges each assumption, and the response ordering."
+        )
+        prompt = (
+            f"Requirement {spec.source_requirement}:\n{requirement_body}\n\n"
+            "Approved architecture — use exactly these components; you may not "
+            f"add or rename any:\n{architecture}\n\n"
+            "Return only the JSON decision object."
+        )
+        # Decisions are small and structured, so a validation failure is worth
+        # feeding back rather than discarding the run: the validator says exactly
+        # what is incoherent, and the model only has to repair that field. The
+        # validator still decides — a decision set that never becomes coherent
+        # fails closed, it is never patched here.
+        attempt_prompt = prompt
+        last: Optional[DecisionError] = None
+        for attempt in range(max_decision_attempts):
+            raw = str(self.llm.chat(attempt_prompt, system_prompt=system_prompt))
+            try:
+                return build_spec_from_decisions(extract_decisions(raw), boundary)
+            except DecisionError as exc:
+                last = exc
+                attempt_prompt = (
+                    f"{prompt}\n\nYour previous decisions were rejected: {exc}\n"
+                    "Return the corrected JSON decision object, keeping everything "
+                    "that was already valid."
+                )
+        raise RuntimeError(
+            f"{spec.source_requirement} LLM decisions failed closed after "
+            f"{max_decision_attempts} attempts: {last}"
+        )
 
     def _author_llm_ag_with_feedback(
         self, spec, model_text: str, max_iterations: int = 4
