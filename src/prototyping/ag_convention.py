@@ -35,6 +35,17 @@ from typing import Tuple
 CONVENTION = "CONVENTION"
 SPEC_VALUED = "SPEC_VALUED"
 
+#: Tiers exist because rule-set size is itself a variable. A leaner hand-written
+#: prompt outscored the full rendered set on the same chain and checker, so
+#: "state every rule" is not automatically the best policy and the split must be
+#: measurable rather than assumed.
+#: CORE — without it the package does not parse, or the A/G graph cannot be
+#: extracted and composed at all.
+#: REFINEMENT — what a particular safety pattern additionally requires once the
+#: decomposition is already well formed.
+CORE = "CORE"
+REFINEMENT = "REFINEMENT"
+
 
 @dataclass(frozen=True)
 class Obligation:
@@ -47,10 +58,16 @@ class Obligation:
     authoring_rule: str = ""
     #: What the checker holds internally that must never reach a prompt.
     withheld: str = ""
+    #: Whether the rule is needed for a well-formed decomposition at all (CORE) or
+    #: refines an already-well-formed one (REFINEMENT). Lets rule-set size be
+    #: ablated instead of assumed.
+    tier: str = CORE
 
     def __post_init__(self) -> None:
         if self.category not in (CONVENTION, SPEC_VALUED):
             raise ValueError(f"unknown category {self.category!r}")
+        if self.tier not in (CORE, REFINEMENT):
+            raise ValueError(f"unknown tier {self.tier!r}")
         if self.category == CONVENTION and not self.authoring_rule:
             raise ValueError(
                 f"{self.obligation_id}: a CONVENTION must state its rule, or an "
@@ -127,6 +144,7 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "UNIT_INCOMPATIBLE", CONVENTION,
         "Every timing budget carries an explicit SysML unit and they must all use "
         "the same one, e.g. `attribute maxLatency : DurationValue = <N> [s];`.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "TIMING_BUDGET_MISSING", CONVENTION,
@@ -134,11 +152,13 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         ": DurationValue = <N> [s];`, and every component contributing a segment "
         "carries `attribute latencyBudget : DurationValue = <N> [s];` with "
         "`attribute timingSegmentRequired : Boolean = true;`.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "TIMING_BUDGET_EXCEEDED", CONVENTION,
         "Component budgets are additive: their sum must not exceed the system "
         "deadline. Apportion the deadline across the contributing components.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "REALIZATION_MISSING", CONVENTION,
@@ -186,22 +206,26 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "A timed pattern must carry a timing budget; an invariant pattern must "
         "not. Whether your classification is the right one is scored by the "
         "evaluator, not enforced here.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "PATTERN_TOPOLOGY_INCOMPLETE", CONVENTION,
         "The declared pattern's state/transition topology must be present and "
         "conform to the bounded profile: the states, the guarded transitions, and "
         "the initial state the pattern requires.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "INVARIANT_SEMANTICS_MISSING", CONVENTION,
         "An invariant pattern must state its invariant as constraints in the "
         "committed model; an invariant absent from SysML does not exist.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "INVARIANT_SEMANTICS_INVALID", CONVENTION,
         "Each invariant must bind a parseable Boolean AST, its provenance, and "
         "the model elements it constrains, consistently with each other.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "PRIORITY_TOPOLOGY_MISSING", CONVENTION,
@@ -213,6 +237,7 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "<RESPONSE_SET>;`, `assume constraint priorityTrigger { <TRIGGER> }`, "
         "`require constraint selectHighestPriority { selectedResponse == "
         "<RESPONSE_SET>::<WINNER> }`, and `state def SafetyResponseArbitration`.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "PRIORITY_TOPOLOGY_INCOMPLETE", CONVENTION,
@@ -224,6 +249,7 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "transition guarded `if not <TRIGGER>`, each accepting its own request "
         "signal, e.g. `transition select<LOSER> first <await> accept "
         "<LOSER>RequestSignal if not <TRIGGER> then <LOSER>;`.",
+           tier=REFINEMENT,
     ),
 )
 
@@ -236,73 +262,87 @@ PRIORITY_OBLIGATIONS: Tuple[Obligation, ...] = (
         "The response set must be non-empty and must contain every response named "
         "by a precedence constraint — no edge may reference a member you did not "
         "declare in the `enum def`.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "precedence_edges", CONVENTION,
         "Precedence must be a single-winner ordering: state one precedence "
         "constraint for every other member of the response set, so the winner "
         "outranks all of them and none is left unordered.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "single_highest_response", CONVENTION,
         "Exactly one response may sit at the top of the ordering; two responses "
         "both outranking others is not a precedence the checker can interpret.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "selected_response", CONVENTION,
         "The response named by `selectHighestPriority` must be one of the members "
         "declared in the response-set `enum def`.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "trigger_concept", CONVENTION,
         "The arbitration trigger must be one of the system contract's own "
         "assumption concepts, not a concept introduced only in the arbitration.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "trigger_matches_timing_origin", CONVENTION,
         "The arbitration trigger must be the same concept the provenance line "
         "declares as `timing_origin=`.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "selection_guarded_by_trigger", CONVENTION,
         "The selection transition must be guarded by the trigger concept.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "competing_transitions_guarded", CONVENTION,
         "Every response the winner outranks must have a competing transition "
         "carrying the guard `if not <TRIGGER>`, so it cannot fire while the "
         "trigger holds. A response with no such transition is unguarded.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "selected_transition_reachable", CONVENTION,
         "The transition selecting the winning response must be reachable from the "
         "arbitration state machine's initial state.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "selection_action_connected", CONVENTION,
         "The selecting transition's action must set the response selection "
         "guarantee, not merely enter a state.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "arbiter_guarantees", CONVENTION,
         "The arbiter contract must produce both the command it issues and the "
         "response-selected guarantee, so the selection is observable downstream.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "recovery_power_available_at_boundary", CONVENTION,
         "A component whose guarantee is available at the boundary (no timing "
         "segment) is realized by a single initial state named after that "
         "guarantee, with no transitions and an `entry action set<Concept>;`.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "deployment_action_connected", CONVENTION,
         "The component realizing the system observation must perform the action "
         "that establishes it, named `set<ObservationConcept>`.",
+           tier=REFINEMENT,
     ),
     Obligation(
         "observation_connected", CONVENTION,
         "The verification observation link must itself be satisfied, not merely "
         "declared.",
+           tier=REFINEMENT,
     ),
 )
 
@@ -353,11 +393,19 @@ def withheld_values() -> Tuple[str, ...]:
     )
 
 
-def render_authoring_rules() -> str:
+def render_authoring_rules(tiers: Tuple[str, ...] = (CORE, REFINEMENT)) -> str:
     """The checker's obligations as a numbered rule block for a generation prompt.
 
     Rendered from the entries above rather than hand-written, so a rule added to
     the checker cannot be silently omitted from what the author is told.
+
+    ``tiers`` selects how much to state. It defaults to everything, but rule-set
+    size is a measured variable, not a settled one: a leaner prompt has scored
+    better than the full set on the same chain and checker, so the ability to
+    state only CORE exists to keep that comparable rather than anecdotal.
     """
-    rules = [item.authoring_rule for item in ALL_OBLIGATIONS if item.authoring_rule]
+    rules = [
+        item.authoring_rule for item in ALL_OBLIGATIONS
+        if item.authoring_rule and item.tier in tiers
+    ]
     return "\n".join(f"{n}. {rule}" for n, rule in enumerate(rules, start=1))

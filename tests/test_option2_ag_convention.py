@@ -212,6 +212,26 @@ def test_spec_valued_entries_record_what_is_withheld():
             assert item.withheld, item.obligation_id
 
 
+def test_core_tier_renders_a_strict_subset_of_the_full_rule_set():
+    """Rule-set size is an experimental variable, so the tiers must actually
+    partition the rules — a CORE arm that silently renders everything would make
+    the ablation measure nothing."""
+    full = render_authoring_rules()
+    core = render_authoring_rules(tiers=(ag_convention.CORE,))
+    full_rules = {line.split(". ", 1)[-1] for line in full.splitlines()}
+    core_rules = {line.split(". ", 1)[-1] for line in core.splitlines()}
+    assert core_rules < full_rules, "CORE must be a strict subset of the full set"
+    assert core_rules, "CORE must not be empty"
+    # the tiers together must account for every rendered rule, or an obligation
+    # would be unstated in every arm
+    refinement = render_authoring_rules(tiers=(ag_convention.REFINEMENT,))
+    refinement_rules = {line.split(". ", 1)[-1] for line in refinement.splitlines()}
+    assert core_rules | refinement_rules == full_rules
+    assert not (core_rules & refinement_rules)
+    # CORE must still carry what makes a package parse at all
+    assert "private import ScalarValues::*;" in core
+
+
 def test_obligation_ids_are_unique():
     ids = [item.obligation_id for item in ALL_OBLIGATIONS]
     assert len(ids) == len(set(ids))
