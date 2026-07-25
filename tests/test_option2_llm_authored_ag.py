@@ -144,6 +144,12 @@ def test_prompt_states_the_notation_conventions_but_not_the_reviewed_answers():
     text = captured["both"]
 
     # conventions the checker enforces must be stated, or a defect is unfixable
+    # the imports that make DurationValue/Boolean resolve — stating the types
+    # without their imports cost every v2 seed its first iteration to a
+    # "No Type named 'DurationValue' found" syntax rejection
+    for statement in ("private import ScalarValues::*;",
+                      "private import ISQ::*;", "private import SI::*;"):
+        assert statement in text
     assert "verification def" in text          # OBSERVATION_MISSING
     assert "realize" in text                   # REALIZATION_MISSING
     assert "safety_pattern=" in text           # PATTERN_DECLARATION_INCONSISTENT

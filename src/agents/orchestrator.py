@@ -1910,6 +1910,12 @@ class Orchestrator:
             "(decompose*/realize*/discharge*). Invent no new keywords.\n"
             "Rules the toolchain enforces (these are the notation's rules — the "
             "engineering content is still yours to derive):\n"
+            "0. The package MUST open with exactly these three imports, which "
+            "supply Boolean, DurationValue and the SI units — without them those "
+            "type names do not resolve:\n"
+            "   `private import ScalarValues::*;`\n"
+            "   `private import ISQ::*;`\n"
+            "   `private import SI::*;`\n"
             "1. Declare EVERY event you `accept` in a transition as its own "
             "`attribute def <Signal>;` inside the package before using it.\n"
             "2. `dependency` endpoints are element NAMES only — never dotted "
@@ -2024,7 +2030,12 @@ class Orchestrator:
         best_verdict: Optional[str] = None
         best_codes: Dict[str, int] = {}
         history: List[Dict[str, Any]] = []
+        # Every attempt is retained: a rejected round is the evidence for *why*
+        # the loop did or did not converge, and a syntax-rejected package is
+        # otherwise unrecoverable (it never reaches the returned model).
+        attempts: List[str] = []
         for iteration in range(max_iterations):
+            attempts.append(authored)
             merged = model_text.rstrip() + "\n\n" + authored + "\n"
             gate = check_syntax(
                 authored, fail_closed=True, filter_stdlib_diagnostics=True
@@ -2034,6 +2045,10 @@ class Orchestrator:
                     "iteration": iteration, "syntax_ok": False,
                     "verdict": None, "error_count": None,
                     "syntax_summary": gate.short_summary()[:120],
+                    "syntax_diagnostics": [
+                        str(item)[:200]
+                        for item in (*gate.parser_errors, *gate.sema_errors)[:8]
+                    ],
                 })
                 feedback = {
                     "diagnostics": f"SYNTAX ERRORS: {gate.short_summary()}",
@@ -2075,6 +2090,7 @@ class Orchestrator:
             "final_error_count": best_errors,
             "final_error_codes": best_codes,
             "history": history,
+            "attempts": attempts,
         }
 
     def _build_ag_trace(self, model_text: str) -> Dict[str, Any]:

@@ -1208,31 +1208,39 @@ def _check_profile_semantics(
             observation_links
             and all(item.get("status") == "PASS" for item in observation_links)
         )
-        complete = all((
-            members == _SAFE005_PRIORITY_MEMBERS,
-            edges == _SAFE005_PRIORITY_EDGES,
-            higher == {"PARACHUTE_DEPLOYMENT"},
-            selected == "PARACHUTE_DEPLOYMENT",
-            guards == lowers,
-            trigger == "criticalPropulsionFailureDetected",
-            trigger == (system.timing_origin or ""),
-            selection_when == trigger,
-            reachable,
-            selection_action_connected,
-            arbiter_guarantees
-            == {
-                "parachuteDeploymentCommand",
-                "parachuteResponseSelected",
-            },
-            recovery_power_available_at_boundary,
-            deployment_action_connected,
-            observation_connected,
-        ))
-        if not complete:
+        # Each obligation is named so a failure says *which* fact is wrong. A
+        # diagnostic that lumps fourteen conditions under one message is not
+        # actionable — an author (human or LLM) cannot tell what to repair.
+        # Deliberately still ONE diagnostic: the error count stays comparable
+        # with runs measured before the message was itemised.
+        obligations = (
+            ("response_set_members", members == _SAFE005_PRIORITY_MEMBERS),
+            ("precedence_edges", edges == _SAFE005_PRIORITY_EDGES),
+            ("single_highest_response", higher == {"PARACHUTE_DEPLOYMENT"}),
+            ("selected_response", selected == "PARACHUTE_DEPLOYMENT"),
+            ("competing_transitions_guarded", guards == lowers),
+            ("trigger_concept", trigger == "criticalPropulsionFailureDetected"),
+            ("trigger_matches_timing_origin",
+             trigger == (system.timing_origin or "")),
+            ("selection_guarded_by_trigger", selection_when == trigger),
+            ("selected_transition_reachable", reachable),
+            ("selection_action_connected", selection_action_connected),
+            ("arbiter_guarantees",
+             arbiter_guarantees == {
+                 "parachuteDeploymentCommand",
+                 "parachuteResponseSelected",
+             }),
+            ("recovery_power_available_at_boundary",
+             recovery_power_available_at_boundary),
+            ("deployment_action_connected", deployment_action_connected),
+            ("observation_connected", observation_connected),
+        )
+        unmet = [name for name, satisfied in obligations if not satisfied]
+        if unmet:
             diagnostics.append(AGDiagnostic(
                 CODE_PRIORITY_TOPOLOGY_INCOMPLETE,
-                f"{system.name} priority response-set/edges/trigger/arbitration "
-                "topology is incomplete or internally inconsistent",
+                f"{system.name} priority/arbitration topology is incomplete or "
+                f"internally inconsistent; unsatisfied: {', '.join(unmet)}",
                 contract=system.name,
                 subject=trigger or None,
             ))
