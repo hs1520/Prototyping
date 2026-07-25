@@ -127,3 +127,48 @@ def test_the_archived_pilot_reproduces_the_measured_separation():
     assert r2["runs_with_ag_layer"] == r2["runs"] == 3
     assert r2["pattern_pass"] == 3
     assert r2["mean_trace_completeness"] == 1.0
+
+
+def test_generation_modes_share_the_cross_arm_measurement_path():
+    """Two results tables computed two ways would not be comparable, and the
+    difference would be invisible in the write-up. `summarise_models` must reuse
+    `measure_model`, so a model measured either way gives the same answer."""
+    from src.prototyping.robustness_report import measure_model, summarise_models
+
+    direct = measure_model(_WITH_AG, ["REQ_SAFE_005"])
+    grouped = summarise_models(
+        {"m": [_WITH_AG]}, declared_requirements=["REQ_SAFE_005"]
+    )["by_group"]["m"]
+    assert grouped["pattern_pass"] == (
+        1 if direct["pattern_conformance"]["verdict"] == "PASS" else 0
+    )
+    assert grouped["mean_trace_completeness"] == (
+        direct["traceability"]["mean_trace_completeness"]
+    )
+
+
+def test_a_group_without_an_ag_layer_is_not_applicable_not_zero():
+    from src.prototyping.robustness_report import summarise_models
+
+    out = summarise_models({"baseline": [_BASE]})["by_group"]["baseline"]
+    assert out["models_with_ag_layer"] == 0
+    assert "mean_trace_completeness" not in out
+    assert "rather than zero" in out["note"]
+
+
+def test_a_conforming_and_a_non_conforming_group_are_separated():
+    """The measure must distinguish a model that passes from one that does not,
+    or the generation-mode table evidences nothing."""
+    from src.prototyping.robustness_report import summarise_models
+
+    broken = "\n".join(
+        line for line in _WITH_AG.splitlines()
+        if "dependency discharge" not in line.lower()
+    )
+    out = summarise_models(
+        {"good": [_WITH_AG], "broken": [broken]},
+        declared_requirements=["REQ_SAFE_005"],
+    )["by_group"]
+    assert out["good"]["pattern_pass"] == 1
+    assert out["broken"]["pattern_pass"] == 0
+    assert out["broken"]["mean_errors"] > out["good"]["mean_errors"]

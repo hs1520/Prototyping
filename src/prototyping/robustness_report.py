@@ -54,9 +54,15 @@ def assert_reads_no_gold(paths: Sequence[Path]) -> None:
             raise ValueError(f"{path.name} is not a permitted input")
 
 
-def _measure_model(
-    model_text: str, declared_requirements: Sequence[str]
+def measure_model(
+    model_text: str, declared_requirements: Sequence[str] = ()
 ) -> Dict[str, Any]:
+    """Pattern conformance + traceability for one committed model.
+
+    Public so that a comparison of generation modes goes through exactly the same
+    measurement path as the cross-arm table. Two tables computed two ways would not
+    be comparable, and the difference would be invisible in the write-up.
+    """
     from .ag_contracts import check_ag_graph
     from .ag_extractor import extract_ag_graph, extract_ag_graphs
     from .ag_traceability import compute_traceability
@@ -134,7 +140,7 @@ def build_robustness_report(
             }
             if model_path.exists():
                 entry.update(
-                    _measure_model(model_path.read_text(), declared_requirements)
+                    measure_model(model_path.read_text(), declared_requirements)
                 )
             else:
                 entry["note"] = (
@@ -193,6 +199,68 @@ def build_robustness_report(
         "declared_requirements": list(declared_requirements),
         "by_arm": by_arm,
         "runs": runs,
+    }
+
+
+def summarise_models(
+    named_models: Mapping[str, Sequence[str]],
+    *,
+    declared_requirements: Sequence[str] = (),
+) -> Dict[str, Any]:
+    """Summarise labelled groups of committed models — e.g. generation modes.
+
+    Uses `measure_model`, the same path as the cross-arm table, so the two results
+    tables in the write-up are computed identically and can be read together. A
+    group whose models carry no A/G layer is reported as such rather than as zero,
+    for the same reason it is in the cross-arm table.
+    """
+    groups: Dict[str, Any] = {}
+    for label, models in named_models.items():
+        measured = [
+            measure_model(text, declared_requirements) for text in models
+        ]
+        with_layer = [item for item in measured if item.get("ag_layer_present")]
+        summary: Dict[str, Any] = {
+            "models": len(measured),
+            "models_with_ag_layer": len(with_layer),
+        }
+        if with_layer:
+            traces = [
+                item["traceability"]["mean_trace_completeness"] for item in with_layer
+                if item["traceability"]["mean_trace_completeness"] is not None
+            ]
+            summary.update({
+                "pattern_pass": sum(
+                    1 for item in with_layer
+                    if item["pattern_conformance"]["verdict"] == "PASS"
+                ),
+                "mean_errors": round(
+                    mean(item["pattern_conformance"]["errors"] for item in with_layer),
+                    3,
+                ),
+                "mean_trace_completeness": round(mean(traces), 4) if traces else None,
+                "fully_traced": sum(
+                    1 for item in with_layer if item["traceability"]["fully_traced"]
+                ),
+            })
+        else:
+            summary["note"] = (
+                "no model in this group carries an A/G layer; not applicable "
+                "rather than zero"
+            )
+        groups[label] = summary
+    return {
+        "schema_version": ROBUSTNESS_REPORT_SCHEMA_VERSION,
+        "artifact_role": "GENERATION_MODE_ROBUSTNESS_SUMMARY",
+        "measurement_boundary": (
+            "committed models only; no human gold, no blind labels, identical "
+            "measurement path to the cross-arm report"
+        ),
+        "metric_interpretation": (
+            "presence, conformance and completeness of the generated model; NOT "
+            "correctness against a reviewed decomposition"
+        ),
+        "by_group": groups,
     }
 
 
