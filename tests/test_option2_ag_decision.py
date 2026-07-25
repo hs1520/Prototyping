@@ -352,3 +352,45 @@ def test_the_r2_assurance_path_produces_all_three_pillars_and_artifacts(tmp_path
     assert trace["declared_requirements"] == ["REQ_SAFE_005"]
     assert trace["traceability"]["fully_traced"] == 1
     assert trace["pattern_conformance"]["verdict"] == "PASS"
+
+
+def test_the_prompt_states_every_field_the_validator_can_demand():
+    """Six times this session a validator demanded something the generator was
+    never told. Here it cost a whole 3x3 pilot: all three R2 runs failed closed
+    with "STARTUP_INHIBIT must state at least one invariant" because the decision
+    prompt listed no invariants key at all. The previous pilot ran only the timed
+    chain, which needs none, so nothing surfaced it.
+    """
+    from src.prototyping.ag_chains import REQ_SAFE_008_CHAIN
+    from src.prototyping.ag_decision import (
+        INVARIANT_SOURCE_KINDS,
+        KNOWN_PATTERNS,
+    )
+
+    captured = {}
+
+    class _Capture:
+        def chat(self, prompt, system_prompt=None):
+            captured["text"] = f"{system_prompt or ''}\n{prompt}"
+            return json.dumps(_CORRECT)
+
+    orch = Orchestrator(_Capture(), revised_experiment_arm="R2-BBAG",
+                        r2_generation_mode="LLM_DECIDED_SPEC")
+    try:
+        orch._generate_llm_decided_ag_spec(REQ_SAFE_008_CHAIN, _BASE)
+    except RuntimeError:
+        pass  # the stub answers with the wrong chain's decisions; the prompt is
+              # what is under test
+    text = captured["text"]
+
+    for field in ("safety_pattern", "timing_origin", "deadline_seconds",
+                  "observation", "system_assumptions", "components",
+                  "discharged_by", "priority", "invariants",
+                  "invariant_id", "antecedent", "consequent", "source_kind"):
+        assert field in text, f"the validator can demand {field!r}; state it"
+    for pattern in KNOWN_PATTERNS:
+        assert pattern in text
+    for kind in INVARIANT_SOURCE_KINDS:
+        assert kind in text
+    # and the exclusivity the validator enforces must be stated, not discovered
+    assert "no deadline" in text and "no invariants" in text

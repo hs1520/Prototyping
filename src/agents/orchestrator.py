@@ -1992,6 +1992,7 @@ class Orchestrator:
         unparseable one whose engineering cannot be scored at all.
         """
         from ..prototyping.ag_decision import (
+            INVARIANT_SOURCE_KINDS as KNOWN_INVARIANT_SOURCE_KINDS,
             KNOWN_PATTERNS as KNOWN_AG_PATTERNS,
             DecisionError,
             build_spec_from_decisions,
@@ -2036,11 +2037,25 @@ class Orchestrator:
             '          "discharged_by": the component_id that produces it, or '
             'null if it is an environment input } ] } ],\n'
             '  "priority": null, or for a timed failsafe { "response_set_id": ..., '
-            '"members": [...], "selected_response": ... }\n'
+            '"members": [...], "selected_response": ... },\n'
+            '  "invariants": [] for a timed failsafe, or for an invariant pattern '
+            '(STARTUP_INHIBIT / LOCKED_UNTIL_AUTHORISED_RELEASE) one entry per '
+            'obligation:\n'
+            '      { "invariant_id": bare identifier,\n'
+            '        "antecedent": [ { "concept": ..., "negated": true/false } ],\n'
+            '        "consequent": [ { "concept": ..., "negated": true/false } ],\n'
+            f'        "source_kind": one of {list(KNOWN_INVARIANT_SOURCE_KINDS)} }}\n'
+            '      Each side is a conjunction of possibly-negated concepts, read as '
+            '"whenever the antecedent holds, the consequent must hold". Use '
+            'STAKEHOLDER when the requirement states the obligation and '
+            'STUDENT_DERIVED_DESIGN_CONSTRAINT when you inferred it.\n'
             '}\n'
             "Decide these yourself from the requirement: the pattern, the timing "
             "origin, the deadline and how it divides across components, which "
-            "producer discharges each assumption, and the response ordering."
+            "producer discharges each assumption, the response ordering, and — for "
+            "an invariant pattern — the invariants that must always hold. An "
+            "invariant pattern carries no deadline and no priority; a timed "
+            "failsafe carries no invariants."
         )
         prompt = (
             f"Requirement {spec.source_requirement}:\n{requirement_body}\n\n"
