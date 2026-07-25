@@ -29,8 +29,14 @@ from .ag_chains import (
     AGAssumptionSpec,
     AGChainSpec,
     AGComponentSpec,
+    AGInvariantSpec,
     AGPrioritySpec,
 )
+
+#: Invariant source kinds. Whether an invariant is stated by the stakeholder or
+#: derived by the designer changes the evaluator's denominators, so it is a
+#: decision the author must make, not something inferred here.
+INVARIANT_SOURCE_KINDS = ("STAKEHOLDER", "STUDENT_DERIVED_DESIGN_CONSTRAINT")
 
 #: Patterns an author may choose between; the choice itself is the model's.
 KNOWN_PATTERNS = (
@@ -99,6 +105,68 @@ def _identifier(value: Any, field: str) -> str:
 
 def _capitalise(concept: str) -> str:
     return concept[:1].upper() + concept[1:] if concept else concept
+
+
+def _bounded_expression(value: Any, field: str) -> str:
+    """A bare concept, or a bounded Boolean expression over concepts.
+
+    An invariant pattern's system guarantee is an expression rather than a single
+    concept — REQ_SAFE_008 observes ``not powerOnInitialisation or payloadLocked``
+    — so the observation accepts the same bounded subset the constraints use, and
+    nothing richer.
+    """
+    text = str(value or "").strip()
+    if not text:
+        raise DecisionError(f"{field} must be set")
+    tokens = text.replace("(", " ").replace(")", " ").split()
+    if not tokens:
+        raise DecisionError(f"{field} must be set")
+    for token in tokens:
+        if token in ("not", "and", "or"):
+            continue
+        if not re.fullmatch(r"[A-Za-z_]\w*", token):
+            raise DecisionError(
+                f"{field} must use only concepts and not/and/or, got {value!r}"
+            )
+    return text
+
+
+def _ast_concepts(node: Any) -> List[str]:
+    """Every concept name a bounded Boolean AST references."""
+    if not isinstance(node, Mapping):
+        return []
+    if node.get("node") == "Identifier":
+        return [str(node.get("name"))]
+    if node.get("node") == "Not":
+        return _ast_concepts(node.get("expr"))
+    return [
+        name for operand in (node.get("operands") or ())
+        for name in _ast_concepts(operand)
+    ]
+
+
+def _conjunction_ast(terms: Any, field: str) -> Dict[str, Any]:
+    """Build the bounded Boolean AST from a list of possibly-negated concepts.
+
+    The profile's invariants are conjunctions of literals — every invariant across
+    the three encoded chains has this shape — so the decision format is a list of
+    ``{"concept": ..., "negated": ...}`` rather than a nested AST the model would
+    have to assemble correctly.
+    """
+    if not isinstance(terms, Sequence) or isinstance(terms, str) or not terms:
+        raise DecisionError(f"{field} must be a non-empty list of terms")
+    nodes = []
+    for term in terms:
+        if not isinstance(term, Mapping):
+            raise DecisionError(f"{field} terms must be objects")
+        node: Dict[str, Any] = {
+            "node": "Identifier",
+            "name": _identifier(term.get("concept"), f"{field}.concept"),
+        }
+        if term.get("negated"):
+            node = {"node": "Not", "expr": node}
+        nodes.append(node)
+    return nodes[0] if len(nodes) == 1 else {"node": "And", "operands": nodes}
 
 
 def component_aliases(boundary: Mapping[str, Any]) -> Dict[str, str]:
@@ -191,6 +259,32 @@ def validate_decisions(
             f"{sorted(known_components - seen)}"
         )
 
+    if pattern != "TRIGGERED_TIMED_FAILSAFE_RESPONSE":
+        # an invariant pattern states its obligation as invariants and must carry
+        # no timing budget — the two are mutually exclusive in the profile
+        invariants = decisions.get("invariants")
+        if not isinstance(invariants, Sequence) or not invariants:
+            raise DecisionError(
+                f"{pattern} must state at least one invariant; an invariant "
+                "absent from the model does not exist"
+            )
+        if decisions.get("deadline_seconds") not in (None, ""):
+            raise DecisionError(
+                f"{pattern} is an invariant pattern and must not carry a deadline"
+            )
+        for index, item in enumerate(invariants):
+            if not isinstance(item, Mapping):
+                raise DecisionError(f"invariants[{index}] must be an object")
+            _identifier(item.get("invariant_id"), f"invariants[{index}].invariant_id")
+            _conjunction_ast(item.get("antecedent"), f"invariants[{index}].antecedent")
+            _conjunction_ast(item.get("consequent"), f"invariants[{index}].consequent")
+            kind = str(item.get("source_kind") or "")
+            if kind not in INVARIANT_SOURCE_KINDS:
+                raise DecisionError(
+                    f"invariants[{index}].source_kind must be one of "
+                    f"{list(INVARIANT_SOURCE_KINDS)}, got {kind!r}"
+                )
+
     if pattern == "TRIGGERED_TIMED_FAILSAFE_RESPONSE":
         if decisions.get("deadline_seconds") in (None, ""):
             raise DecisionError("a timed pattern needs deadline_seconds")
@@ -228,7 +322,7 @@ def build_spec_from_decisions(
         for item in boundary.get("components", ())
         for concept in item.get("interfaces", {}).get("produces", ())
     }
-    observation = _identifier(decisions.get("observation"), "observation")
+    observation = _bounded_expression(decisions.get("observation"), "observation")
 
     # The arbiter is the component feeding the one that produces the system
     # observation. Under a timed pattern the profile realizes it with the fixed
@@ -358,10 +452,29 @@ def build_spec_from_decisions(
 
     deadline = decisions.get("deadline_seconds")
     stem = requirement.replace("REQ_", "").title().replace("_", "")
+    system_contract = f"System{stem}Contract"
+    invariants = tuple(
+        AGInvariantSpec(
+            invariant_id=_identifier(
+                item.get("invariant_id"), "invariants.invariant_id"
+            ),
+            scope=system_contract,
+            trigger_or_antecedent_ast=_conjunction_ast(
+                item.get("antecedent"), "invariants.antecedent"
+            ),
+            required_consequent_ast=_conjunction_ast(
+                item.get("consequent"), "invariants.consequent"
+            ),
+            source_kind=str(item["source_kind"]),
+            source_id=str(item.get("source_id") or item["invariant_id"]),
+        )
+        for item in (decisions.get("invariants") or ())
+        if isinstance(item, Mapping)
+    )
     return AGChainSpec(
         source_requirement=requirement,
         package=f"{requirement}_AG",
-        system_contract=f"System{stem}Contract",
+        system_contract=system_contract,
         system_assumptions=tuple(
             _identifier(item, "system_assumptions")
             for item in decisions.get("system_assumptions", ())
@@ -376,11 +489,20 @@ def build_spec_from_decisions(
             if decisions.get("timing_origin") else None
         ),
         priority=priority,
-        invariants=(),
+        invariants=invariants,
         selected_model_elements=tuple(sorted({
             *(item.concept for component in components
               for item in component.assumptions),
             *(component.guarantee for component in components),
-            observation,
+            *(concept for component in components
+              for concept in component.additional_guarantees),
+            # an invariant binds the concepts it constrains, so they must be
+            # selected too or the binding is incomplete
+            *(name for item in invariants
+              for name in _ast_concepts(item.trigger_or_antecedent_ast)),
+            *(name for item in invariants
+              for name in _ast_concepts(item.required_consequent_ast)),
+            *(token for token in observation.replace("(", " ").replace(")", " ").split()
+              if token not in ("not", "and", "or")),
         })),
     )

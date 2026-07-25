@@ -175,26 +175,57 @@ def test_the_checker_holds_no_reviewed_answer():
     measures, and the priority topology could only be recalled, never derived.
     Those comparisons belong to `ag_eval_semantics.priority_agreement`.
     """
+    from src.prototyping import ag_chains
+
     source = open(ag_contracts.__file__).read()
     code = "\n".join(
         line for line in source.splitlines() if not line.strip().startswith("#")
     )
-    for answer in (
-        "CONTROLLED_BATTERY_LANDING",      # reviewed response-set members
-        "COMMUNICATION_LOSS_SAFE_LANDING",
-        "LOW_BATTERY_RETURN_TO_BASE",
-        "PARACHUTE_DEPLOYMENT",           # the reviewed winning response
-        "criticalPropulsionFailureDetected",  # the reviewed trigger
-        "parachuteDeployed",              # the reviewed observation
-        "RecoverySystemContract",         # reviewed element names
-        "SafetyResponseArbiterContract",
-        "RecoveryPowerSupplyContract",
-        "_SOURCE_PATTERN_PROFILE",        # requirement-to-pattern table
-    ):
-        assert answer not in code, (
-            f"{answer!r} is a reviewed answer for a specific chain; the runtime "
-            "checker must not compare against it — score it in the evaluator"
+    # Derived from the chains rather than hand-listed. A hand-list only covers the
+    # answers already thought of: the first version of this test named REQ_SAFE_005
+    # literals and missed a per-requirement table of REQ_SAFE_004's and
+    # REQ_SAFE_008's reviewed invariants sitting in the same module.
+    def _chain_answers(chain) -> set[str]:
+        found = {chain.system_contract, chain.source_requirement}
+        found.update(component.name for component in chain.components)
+        if chain.priority:
+            found.update(chain.priority.members)
+            found.add(chain.priority.response_set_id)
+        found.update(item.invariant_id for item in chain.invariants)
+        found.update(item.source_id for item in chain.invariants)
+        return {item for item in found if item}
+
+    timed, invariant_patterned = {"_SOURCE_PATTERN_PROFILE"}, set()
+    for name in dir(ag_chains):
+        if not (name.startswith("REQ_") and name.endswith("_CHAIN")):
+            continue
+        chain = getattr(ag_chains, name)
+        target = (
+            timed if chain.pattern == "TRIGGERED_TIMED_FAILSAFE_RESPONSE"
+            else invariant_patterned
         )
+        target |= _chain_answers(chain)
+    answers = timed
+
+    # Gold-blindness is complete for the TIMED-FAILSAFE path and NOT for the
+    # invariant patterns, which still compare against reviewed invariant sets and
+    # against per-chain state-machine shapes (exact state names, signals and
+    # transition sets). Generalising those is a design task, not a refactor, so the
+    # debt is recorded explicitly here rather than hidden: a PASS on REQ_SAFE_004 or
+    # REQ_SAFE_008 is partly "reproduce the reviewed answer", and neither chain can
+    # carry an honest generation-accuracy claim until this is closed.
+    # See docs/R2_GENERATION_FINDINGS.md §6.
+    leaked = sorted(answer for answer in answers if answer in code)
+    assert not leaked, (
+        f"the runtime checker compares against reviewed answers: {leaked}. Those "
+        "are what the LLM arms are measured on — score them in the evaluator."
+    )
+    # The debt is real and must stay visible: the invariant chains' reviewed
+    # answers ARE still in the checker, so a PASS on them is partly recall.
+    assert sorted(item for item in invariant_patterned if item in code), (
+        "the invariant patterns appear to be gold-blind now — if that is real, "
+        "close the limitation in docs/R2_GENERATION_FINDINGS.md and delete this"
+    )
 
 
 def test_every_convention_entry_actually_tells_the_author_what_to_do():
