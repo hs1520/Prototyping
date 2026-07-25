@@ -12,6 +12,7 @@ syntax_checker.py
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -107,13 +108,51 @@ def _is_stdlib_sema_error(message: str) -> bool:
       "No Namespace named '<X>' found." — stdlib package (SI, ISQ …)
       "No Feature named '<X>' found."   — SI unit symbol (m, Hz, deg …)
     """
-    import re
     m = re.search(r"No (?:Type|Namespace|Feature) named '([^']+)' found", message)
     if not m:
         return False
     name = m.group(1)
     root = name.split("::")[0]
     return root in _STDLIB_TYPE_NAMES or root in _STDLIB_UNIT_NAMES
+
+
+_EXPECTED_SET_RE = re.compile(r"expected one of \[(.*)\]", re.S)
+_QUOTED_TOKEN_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+#: How many alternatives of a parser's expected-token set survive condensation.
+_KEPT_ALTERNATIVES = 6
+
+
+def condense_diagnostic(message: str, *, kept: int = _KEPT_ALTERNATIVES) -> str:
+    """Shorten a syside parser diagnostic for a repair PROMPT (never for a log).
+
+    Syside reports a parser failure with the whole expected-terminal set of the
+    state it is in — around 200 alternatives, ~2400 characters, including grammar
+    rule names like ``Dependency_repeat1``. One such message is longer than the
+    code chunk it is attached to, and it is not even discriminating: a measured
+    run reported ``Unexpected 'part', expected one of [… "part" …]``, listing the
+    very token it rejected, because the set spans keyword and NAME token classes
+    alike. The real cause is usually an unterminated construct on an earlier line.
+
+    So the head of the message — which token was rejected, and where — is kept,
+    and the tail is cut to a handful of alternatives. Raw messages stay untouched
+    in the console, the run artifacts and the diagnostics record: this is a
+    prompt-budget measure, not a redaction, and evidence must remain verbatim.
+    """
+    text = str(message or "")
+    match = _EXPECTED_SET_RE.search(text)
+    if not match:
+        return text
+    alternatives = _QUOTED_TOKEN_RE.findall(match.group(1))
+    if len(alternatives) <= kept:
+        return text
+    remaining = len(alternatives) - kept
+    condensed = (
+        "expected one of ["
+        + ", ".join(alternatives[:kept])
+        + f", … +{remaining} more]"
+    )
+    return text[:match.start()] + condensed + text[match.end():]
 
 
 # ---------------------------------------------------------------------------

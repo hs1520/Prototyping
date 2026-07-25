@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
 from .levenshtein_fixer import SysMLVocab, build_vocab
+from .syntax_checker import condense_diagnostic
 
 
 # ---------------------------------------------------------------------------
@@ -396,11 +397,14 @@ def build_fix_prompt(chunk: ErrorChunk) -> str:
     返回字符串通常在 30-45 行之间（vs 整个模型的 100-300 行）。
     """
     # ── 格式化错误列表 ────────────────────────────────────────────────────
+    # syside 的 parser 诊断会把整个期望终结符集合打出来（~2400 字符），单条就
+    # 比它所附的代码片段还长，而且不具区分度（实测出现过 "Unexpected 'part',
+    # expected one of [… "part" …]"）。喂给 LLM 前压缩；日志与 artifact 保持原样。
     err_lines: List[str] = []
     for e in chunk.errors:
         ln  = e.get('line', '?')
         col = e.get('col',  '?')
-        msg = e.get('message', '')
+        msg = condense_diagnostic(e.get('message', ''))
         err_lines.append(f"  Line {ln}, col {col}: {msg}")
     errors_block = "\n".join(err_lines)
 

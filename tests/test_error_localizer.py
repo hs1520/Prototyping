@@ -415,6 +415,56 @@ def test_missing_feature_hints_skips_unit():
 # 入口
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# T16 — syside 的期望终结符集合不得淹没修复 prompt
+# ---------------------------------------------------------------------------
+
+_SYSIDE_DUMP = (
+    "Unexpected 'part', expected one of [\"NAME\", \"}\", \"dependency\", "
+    "\"locale\", \"comment\", \"doc\", \"rep\", \"language\", \"private\", "
+    "\"protected\", \"public\", \"alias\", \"import\", \"[\", \"abstract\", "
+    "\"in\", \"inout\", \"out\", \"part\", \"state\", \"transition\", "
+    "\"Dependency_repeat1\"]."
+)
+
+
+def test_condense_diagnostic():
+    print("T16  condense_diagnostic — 期望集合压缩")
+    from src.simulation.syntax_checker import condense_diagnostic
+
+    condensed = condense_diagnostic(_SYSIDE_DUMP)
+    # 被拒绝的 token 和位置信息是唯一有用的部分，必须保留
+    ok("keeps_head",      "Unexpected 'part'" in condensed)
+    ok("keeps_some_alts", '"NAME"' in condensed)
+    ok("drops_the_rest",  '"Dependency_repeat1"' not in condensed)
+    ok("says_how_many",   "more]" in condensed)
+    ok("much_shorter",    len(condensed) < len(_SYSIDE_DUMP) / 2,
+       f"{len(_SYSIDE_DUMP)} -> {len(condensed)}")
+    # 没有期望集合的诊断原样通过 —— 这是压缩，不是重写
+    for intact in ("Unexpected identifier.",
+                   "No Feature named 'batteryLow' found."):
+        ok("passthrough", condense_diagnostic(intact) == intact, intact)
+
+
+def test_fix_prompt_is_not_drowned_by_the_expected_set():
+    print("T17  build_fix_prompt — 诊断压缩后才进 prompt")
+    ln = _line_of(SYSML, "part def FlightController")
+    errs = [{"line": ln, "col": 4, "message": _SYSIDE_DUMP, "code": ""}]
+    chunk = extract_error_context(SYSML, errs)[0]
+
+    prompt = build_fix_prompt(chunk)
+
+    ok("error_still_stated", "Unexpected 'part'" in prompt)
+    ok("dump_not_verbatim",  '"Dependency_repeat1"' not in prompt)
+    # 单条诊断有固定预算：实测中它是所附代码片段的数倍（2900 字符 vs 58 行）
+    diagnostic_line = next(
+        line for line in prompt.split("\n") if "Unexpected 'part'" in line
+    )
+    ok("within_budget", len(diagnostic_line) <= 200, f"len={len(diagnostic_line)}")
+    ok("prompt_still_compact", len(prompt.split("\n")) <= 70,
+       f"lines={len(prompt.split(chr(10)))}")
+
+
 if __name__ == "__main__":
     test_strip_fences()
     test_extract_single_block()
@@ -431,6 +481,8 @@ if __name__ == "__main__":
     test_infer_attr_decl()
     test_unit_bracket_not_declared()
     test_missing_feature_hints_skips_unit()
+    test_condense_diagnostic()
+    test_fix_prompt_is_not_drowned_by_the_expected_set()
 
     print(f"\n{_PASS} passed, {_FAIL} failed")
     sys.exit(0 if _FAIL == 0 else 1)
