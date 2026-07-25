@@ -247,3 +247,44 @@ def test_orchestrator_decided_mode_fails_closed_on_unusable_decisions():
         orch._apply_ag_contract_layer(
             _BASE, ["REQ-SAFE-005: deploy the parachute within 0.5 s"]
         )
+
+
+def test_a_run_reports_the_generation_mode_it_actually_executed():
+    """The arm metadata used to hardcode the deterministic intervention, and the
+    pipeline dropped the mode entirely. Together that meant a run could execute one
+    intervention and record another — mislabelled evidence the pooling gates would
+    accept, because they compare the recorded mode rather than observe behaviour.
+    The whole suite passed while this was true, so it needs its own test.
+    """
+    from src.prototyping.experiment_arms import (
+        R2_INTERVENTION_VERSION_BY_MODE,
+        RevisedExperimentArm,
+        revised_arm_metadata,
+    )
+
+    for mode, version in R2_INTERVENTION_VERSION_BY_MODE.items():
+        meta = revised_arm_metadata(RevisedExperimentArm.SEMANTIC_ASSURANCE, mode)
+        assert meta["r2_generation_mode"] == mode
+        # the version is derived from the mode, so the two cannot drift apart
+        assert meta["r2_intervention_version"] == version
+
+    with pytest.raises(ValueError, match="unknown r2_generation_mode"):
+        revised_arm_metadata(RevisedExperimentArm.SEMANTIC_ASSURANCE, "MADE_UP")
+
+
+def test_the_pipeline_hands_the_mode_to_the_orchestrator():
+    """Plumbing test: the pilot configures the mode, but it only takes effect if
+    the pipeline forwards it."""
+    from src.prototyping.pipeline import PrototypingPipeline
+
+    pipeline = PrototypingPipeline(
+        llm=_DecisionLLM(_CORRECT),
+        revised_experiment_arm="R2-BBAG",
+        r2_generation_mode="LLM_DECIDED_SPEC",
+    )
+    assert pipeline.orchestrator.r2_generation_mode == "LLM_DECIDED_SPEC"
+    reported = pipeline.orchestrator._build_collaboration_artifacts(
+        _render(_CORRECT)
+    )["revised_experiment"]
+    assert reported["r2_generation_mode"] == "LLM_DECIDED_SPEC"
+    assert reported["r2_intervention_version"] == "r2-bbag-llm-decided-spec-v1"

@@ -398,6 +398,9 @@ def run_revised_pilot(
                     quality_threshold=config.quality_threshold,
                     verbose=False,
                     revised_experiment_arm=arm,
+                    # without this the run executed the default mode while the
+                    # manifest recorded the configured one
+                    r2_generation_mode=config.r2_generation_mode,
                     task_session_max_turns=config.task_session_max_turns,
                     task_session_max_tokens=config.task_session_max_tokens,
                 )

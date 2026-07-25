@@ -1621,8 +1621,9 @@ class Orchestrator:
         )
 
         result: Dict[str, Any] = {
+            # report the mode this orchestrator actually ran, not a fixed default
             "revised_experiment": revised_arm_metadata(
-                self.revised_experiment_arm
+                self.revised_experiment_arm, self.r2_generation_mode
             )
         }
         if self.blackboard is not None:

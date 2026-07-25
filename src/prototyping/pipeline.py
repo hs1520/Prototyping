@@ -52,6 +52,7 @@ class PrototypingPipeline:
         dse_mode: str = "variation",
         phase9_hifi: Optional[str] = None,
         revised_experiment_arm: Optional[Any] = None,
+        r2_generation_mode: Optional[str] = None,
         task_session_max_turns: int = 12,
         task_session_max_tokens: int = 150000,
     ):
@@ -81,6 +82,7 @@ class PrototypingPipeline:
             max_iterations=max_iterations,
             verbose=verbose,
             revised_experiment_arm=revised_experiment_arm,
+            r2_generation_mode=r2_generation_mode,
             task_session_max_turns=task_session_max_turns,
             task_session_max_tokens=task_session_max_tokens,
         )

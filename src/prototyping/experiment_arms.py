@@ -107,7 +107,17 @@ class RevisedExperimentArm(str, Enum):
         return self in {self.BLACKBOARD_CONTEXT, self.SEMANTIC_ASSURANCE}
 
 
-def revised_arm_metadata(arm: RevisedExperimentArm) -> dict[str, object]:
+def revised_arm_metadata(
+    arm: RevisedExperimentArm, r2_generation_mode: str | None = None
+) -> dict[str, object]:
+    """Arm metadata for a run result.
+
+    ``r2_generation_mode`` must be the mode the run actually executed. It used to
+    be hardcoded to the deterministic intervention, which meant a run executing a
+    different mode would report itself as deterministic — mislabelled evidence that
+    the pooling gates would then accept, because they compare the recorded mode
+    rather than observe the behaviour.
+    """
     metadata: dict[str, object] = {
         "experiment_namespace": REVISED_EXPERIMENT_NAMESPACE,
         "configuration": arm.value,
@@ -120,8 +130,17 @@ def revised_arm_metadata(arm: RevisedExperimentArm) -> dict[str, object]:
         ),
     }
     if arm is RevisedExperimentArm.SEMANTIC_ASSURANCE:
+        mode = r2_generation_mode or R2_DETERMINISTIC_GENERATION_MODE
+        if mode not in R2_INTERVENTION_VERSION_BY_MODE:
+            raise ValueError(
+                f"unknown r2_generation_mode {mode!r}; a run may not report an "
+                "intervention that has no frozen version"
+            )
         metadata.update({
-            "r2_generation_mode": R2_DETERMINISTIC_GENERATION_MODE,
-            "r2_intervention_version": R2_DETERMINISTIC_INTERVENTION_VERSION,
+            "r2_generation_mode": mode,
+            # derived, never passed in: the recorded version must be the one bound
+            # to the mode actually executed, or results from different
+            # interventions could be pooled under one version
+            "r2_intervention_version": R2_INTERVENTION_VERSION_BY_MODE[mode],
         })
     return metadata
