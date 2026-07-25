@@ -82,6 +82,22 @@ def test_rendered_rules_leak_no_withheld_value():
         assert secret not in rendered
 
 
+def test_the_orchestrator_imports_cleanly_on_its_own():
+    """`src.prototyping` imports the orchestrator, so a module-level import of an
+    ag_* module from the orchestrator is circular whenever the orchestrator is
+    imported first. The suite does not catch it because conftest imports in the
+    other order — only a fresh interpreter entering through the orchestrator does.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import src.agents.orchestrator"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr[-800:]
+
+
 def test_the_checker_holds_no_reviewed_answer():
     """The runtime checker must stay gold-blind (AG_CHECKER_VERSION ag-bounded-5).
 

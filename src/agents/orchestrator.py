@@ -25,7 +25,6 @@ from ..sysml.lite_model import SysMLLiteModel, build_lite_model
 
 # Accept both model types wherever SysMLModel is checked
 _SysMLModelTypes = (SysMLModel, SysMLLiteModel)
-from ..prototyping.ag_convention import render_authoring_rules
 from ..simulation.validator import SimulationValidator, SimulationResult
 from ..simulation.syntax_checker import check_syntax, SyntaxCheckResult
 from ..simulation.levenshtein_fixer import (
@@ -1899,6 +1898,10 @@ class Orchestrator:
                 f"keeping what was already correct:\n{diagnostics}\n\n"
                 f"Your previous attempt was:\n{previous}\n\n"
             )
+        # deferred: src.prototyping imports the orchestrator, so a module-level
+        # import here is circular whenever the orchestrator is imported first
+        from ..prototyping.ag_convention import render_authoring_rules
+
         system_prompt = (
             "You are a systems engineer authoring a bounded Assume-Guarantee "
             "decomposition in SysML v2.\n"
