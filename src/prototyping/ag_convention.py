@@ -150,6 +150,42 @@ INVARIANT_ROLE_OBLIGATIONS: Tuple[PatternRoles, ...] = (
 )
 
 
+#: Obligations attached to individual decision fields. A decision prompt that
+#: names a field without stating what the checker will do with it is the same
+#: defect as an unstated convention: `timing_segment_required` was offered as a
+#: bare `true/false`, a measured seed set it true for a component whose guarantee
+#: is simply available at the boundary, and the run lost the timed chain to four
+#: diagnostics at once (TIMING_BUDGET_EXCEEDED, REALIZATION_TRIGGER_MISSING,
+#: REALIZATION_UNREACHABLE, PRIORITY_TOPOLOGY_INCOMPLETE/
+#: recovery_power_available_at_boundary).
+DECISION_FIELD_OBLIGATIONS: Tuple[Tuple[str, str], ...] = (
+    (
+        "timing_segment_required",
+        "true only for a component that CONSUMES TIME on the path from the "
+        "trigger to the response — one whose guarantee is produced in reaction to "
+        "something upstream. A component whose guarantee is simply available at "
+        "the boundary (a supply that is already on, not something that gets "
+        "triggered) sets it false: it is realised as one steady state that "
+        "establishes its guarantee, and a trigger-response machine cannot be "
+        "built for it.",
+    ),
+    (
+        "latency_budget_seconds",
+        "null exactly when timing_segment_required is false — a component that "
+        "consumes no time on the path owns no part of the deadline. The budgets "
+        "that are set must SUM TO AT MOST deadline_seconds: they apportion the "
+        "system deadline, they do not each restate it.",
+    ),
+)
+
+
+def render_decision_field_rules() -> str:
+    """The per-field obligations, as prompt text for the decision schema."""
+    return "\n".join(
+        f"  * `{field}`: {rule}" for field, rule in DECISION_FIELD_OBLIGATIONS
+    )
+
+
 def render_invariant_role_rules() -> str:
     """The per-pattern role obligations, as prompt text.
 

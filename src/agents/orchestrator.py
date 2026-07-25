@@ -1998,7 +1998,10 @@ class Orchestrator:
             build_spec_from_decisions,
             extract_decisions,
         )
-        from ..prototyping.ag_convention import render_invariant_role_rules
+        from ..prototyping.ag_convention import (
+            render_decision_field_rules,
+            render_invariant_role_rules,
+        )
         from ..prototyping.architecture_boundary import (
             build_architecture_boundary_draft,
         )
@@ -2061,6 +2064,8 @@ class Orchestrator:
             'STAKEHOLDER when the requirement states the obligation and '
             'STUDENT_DERIVED_DESIGN_CONSTRAINT when you inferred it.\n'
             '}\n'
+            "Two of those fields carry obligations the checker will hold you to:\n"
+            f"{render_decision_field_rules()}\n"
             "Each invariant pattern is defined by the roles its invariants fill; "
             "an invariant set that leaves a role unfilled has not stated the "
             "pattern. Which concepts fill the roles is yours to derive from the "

@@ -419,7 +419,11 @@ def test_the_prompt_states_the_semantic_obligations_not_only_the_field_names():
     to `PATTERN_INVARIANT_ROLES` fails here until the prompt states it.
     """
     from src.prototyping.ag_contracts import PATTERN_INVARIANT_ROLES
-    from src.prototyping.ag_convention import render_invariant_role_rules
+    from src.prototyping.ag_convention import (
+        DECISION_FIELD_OBLIGATIONS,
+        render_decision_field_rules,
+        render_invariant_role_rules,
+    )
 
     text = _decision_prompt_text()
 
@@ -434,6 +438,11 @@ def test_the_prompt_states_the_semantic_obligations_not_only_the_field_names():
     assert render_invariant_role_rules() in text
     # the entailment obligation behind `observation`, likewise stated
     assert "PRODUCES" in text
+    # and the timed pattern's field obligations, which cost a measured seed its
+    # timed chain: `timing_segment_required` was offered as a bare true/false
+    assert render_decision_field_rules() in text
+    for field, _rule in DECISION_FIELD_OBLIGATIONS:
+        assert field in text
 
 
 def test_all_three_safety_patterns_reach_pass_under_the_decided_mode():
@@ -678,6 +687,79 @@ def test_an_observation_that_is_an_expression_still_emits_parseable_sysml():
     assert " and " in decisions["observation"], "this case must stay conjunctive"
     assert _verdict(chain, decisions) == ("PASS", [])
     assert chain is ag_chains.REQ_SAFE_004_CHAIN
+
+
+def test_the_timing_segment_field_decides_the_timed_chain():
+    """`timing_segment_required` was offered to the author as a bare `true/false`.
+
+    A measured seed set it true for the component whose guarantee is simply
+    available at the boundary — a supply that is already on, not something that
+    gets triggered — and lost the whole timed chain to four diagnostics at once:
+    the budgets no longer fitted the deadline, the emitter built a trigger-response
+    machine with no trigger to give it, and the arbitration obligation that names
+    that component went unsatisfied.
+
+    Nothing had told the author what the field means. This pins both directions:
+    the violation reproduces those diagnostics, and the published rule resolves
+    them with every other decision held identical.
+    """
+    from src.prototyping import ag_chains
+
+    chain = ag_chains.REQ_SAFE_005_CHAIN
+    boundary = build_architecture_boundary_draft(chain)
+    produced = {
+        concept: item["component_id"]
+        for item in boundary["components"]
+        for concept in item["interfaces"]["produces"]
+    }
+    budgets = {
+        "SafetyResponseArbiterContract": 0.2, "RecoverySystemContract": 0.3,
+    }
+
+    def _decisions(segment, budget):
+        return {
+            "safety_pattern": "TRIGGERED_TIMED_FAILSAFE_RESPONSE",
+            "timing_origin": chain.timing_origin,
+            "deadline_seconds": 0.5,
+            "observation": chain.observation,
+            "system_assumptions": list(chain.system_assumptions),
+            "invariants": [],
+            "priority": {
+                "response_set_id": chain.priority.response_set_id,
+                "members": list(chain.priority.members),
+                "selected_response": chain.priority.selected_response,
+            },
+            "components": [
+                {
+                    "component_id": item["component_id"],
+                    "timing_segment_required": (
+                        segment if "RecoveryPowerSupply" in item["component_id"]
+                        else True
+                    ),
+                    "latency_budget_seconds": (
+                        budget if "RecoveryPowerSupply" in item["component_id"]
+                        else budgets[item["component_id"]]
+                    ),
+                    "lifecycle_events": [],
+                    "assumptions": [
+                        {"concept": concept,
+                         "discharged_by": (
+                             produced.get(concept)
+                             if produced.get(concept) not in (
+                                 None, item["component_id"]) else None)}
+                        for concept in item["interfaces"]["consumes"]
+                    ],
+                }
+                for item in boundary["components"]
+            ],
+        }
+
+    verdict, codes = _verdict(chain, _decisions(True, 0.2))
+    assert verdict == "FAIL"
+    assert {"TIMING_BUDGET_EXCEEDED", "REALIZATION_TRIGGER_MISSING",
+            "PRIORITY_TOPOLOGY_INCOMPLETE"} <= set(codes)
+    # the only change is the two fields the rule now explains
+    assert _verdict(chain, _decisions(False, None)) == ("PASS", [])
 
 
 def test_the_release_rule_may_be_phrased_over_the_complement_of_locked():
