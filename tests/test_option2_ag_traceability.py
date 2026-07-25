@@ -23,11 +23,15 @@ _BASE = f"package DeliveryUAV {{ requirement def REQ_SAFE_005 {{ doc /* {_REQ} *
 _FULL = _BASE + "\n\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
 
 
-def _trace(text: str) -> dict:
+def _links(text: str):
     report = check_ag_graph(extract_ag_graph(text)).to_dict()
+    return (report.get("graph") or {}).get("realization_links") or ()
+
+
+def _trace(text: str) -> dict:
     return compute_traceability(
         extract_ag_graphs(text),
-        realization_links=(report.get("graph") or {}).get("realization_links") or (),
+        realization_links=_links(text),
         declared_requirements=["REQ_SAFE_005"],
     )
 
@@ -97,3 +101,53 @@ def test_the_measure_declares_it_is_not_an_accuracy_claim():
     assert "no human gold" in out["measurement_boundary"]
     assert "NOT correctness" in out["metric_interpretation"]
     assert len(TRACE_LINKS) == out["per_requirement"][0]["links_total"]
+
+
+def test_an_out_of_scope_requirement_must_be_declared_not_inferred():
+    """Scope is a design decision. An undeclared requirement counts as in scope, so
+    excluding one always takes an explicit recorded decision and the denominator
+    cannot be quietly shrunk — which is exactly how an earlier version of the table
+    reached 1.00."""
+    graphs = extract_ag_graphs(_FULL)
+    both = ["REQ_SAFE_005", "REQ_FUNC_002"]
+
+    undeclared = compute_traceability(
+        graphs, realization_links=_links(_FULL), declared_requirements=both
+    )
+    assert undeclared["untraced_requirements"] == ["REQ_FUNC_002"]
+    assert undeclared["mean_trace_completeness"] == 0.5
+
+    declared = compute_traceability(
+        graphs,
+        realization_links=_links(_FULL),
+        declared_requirements=both,
+        out_of_scope={"REQ_FUNC_002": "continuous control envelope"},
+    )
+    assert declared["untraced_requirements"] == []
+    assert declared["mean_trace_completeness"] == 1.0
+
+
+def test_an_excluded_requirement_is_reported_with_its_reason():
+    """Silently dropping it would make the denominator unauditable — the reader
+    could not tell a scoped exclusion from a missing requirement."""
+    out = compute_traceability(
+        extract_ag_graphs(_FULL),
+        realization_links=_links(_FULL),
+        declared_requirements=["REQ_SAFE_005", "REQ_FUNC_002"],
+        out_of_scope={"REQ_FUNC_002": "no trigger, no deadline, no invariant state"},
+    )
+    excluded = out["out_of_scope_requirements"]
+    assert [item["requirement"] for item in excluded] == ["REQ_FUNC_002"]
+    assert "invariant state" in excluded[0]["reason"]
+
+
+def test_scope_does_not_excuse_an_in_scope_requirement_that_is_missing():
+    """Exclusion applies only to what is declared; everything else still counts."""
+    out = compute_traceability(
+        extract_ag_graphs(_FULL),
+        realization_links=_links(_FULL),
+        declared_requirements=["REQ_SAFE_005", "REQ_SAFE_004", "REQ_FUNC_002"],
+        out_of_scope={"REQ_FUNC_002": "continuous control envelope"},
+    )
+    assert out["untraced_requirements"] == ["REQ_SAFE_004"]
+    assert out["mean_trace_completeness"] == 0.5

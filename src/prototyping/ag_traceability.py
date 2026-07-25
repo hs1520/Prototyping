@@ -112,11 +112,26 @@ def trace_requirement(graph: Any, realization_links: Sequence[Mapping[str, Any]]
     }
 
 
+#: A requirement is in scope for the bounded A/G layer when it instantiates one of
+#: the encoded safety patterns: an event-triggered timed response, or a state
+#: invariant (startup inhibit, locked-until-authorised release). A continuous
+#: control envelope — "maintain at least 5 metres of separation while avoiding it" —
+#: has no trigger, no deadline and no invariant state, and is not something this
+#: layer is built to decompose.
+#:
+#: Scope is a DECLARED design decision, never inferred from the text here. An
+#: undeclared requirement counts as in scope, so excluding one always requires an
+#: explicit recorded decision and the denominator cannot be quietly shrunk.
+IN_SCOPE = "IN_SCOPE"
+OUT_OF_SCOPE = "OUT_OF_SCOPE"
+
+
 def compute_traceability(
     graphs: Sequence[Any],
     *,
     realization_links: Sequence[Mapping[str, Any]] = (),
     declared_requirements: Sequence[str] = (),
+    out_of_scope: Mapping[str, str] = {},
 ) -> Dict[str, Any]:
     """Traceability across every selected chain, plus the requirements with none.
 
@@ -137,9 +152,16 @@ def compute_traceability(
         item for item in traced if item["source_requirement"]
     ]
     traced_ids = {item["source_requirement"] for item in per_requirement}
-    untraced = [
-        str(item) for item in declared_requirements if str(item) not in traced_ids
+    # An out-of-scope requirement is not an implementation gap: counting it would
+    # penalise a requirement for lacking a mechanism it was never eligible for —
+    # the same error as scoring R0/R1 at 0.0 for carrying no A/G layer.
+    excluded = [
+        str(item) for item in declared_requirements if str(item) in out_of_scope
     ]
+    in_scope = [
+        str(item) for item in declared_requirements if str(item) not in out_of_scope
+    ]
+    untraced = [item for item in in_scope if item not in traced_ids]
     for requirement in untraced:
         per_requirement.append({
             "source_requirement": requirement,
@@ -175,6 +197,11 @@ def compute_traceability(
             round(sum(scores) / len(scores), 4) if scores else None
         ),
         "untraced_requirements": untraced,
+        # reported, never silently dropped: an excluded requirement must be visible
+        # with the reason it was excluded, or the denominator is unauditable
+        "out_of_scope_requirements": [
+            {"requirement": item, "reason": out_of_scope[item]} for item in excluded
+        ],
         # Kept in full, not just counted: a chain can carry most of its links and
         # still be untraceable because it never cites a requirement. Losing that
         # detail would make "0.0" look like nothing was built, when what actually

@@ -55,7 +55,9 @@ def assert_reads_no_gold(paths: Sequence[Path]) -> None:
 
 
 def measure_model(
-    model_text: str, declared_requirements: Sequence[str] = ()
+    model_text: str,
+    declared_requirements: Sequence[str] = (),
+    out_of_scope: Mapping[str, str] = {},
 ) -> Dict[str, Any]:
     """Pattern conformance + traceability for one committed model.
 
@@ -85,6 +87,7 @@ def measure_model(
             "realization_links"
         ) or (),
         declared_requirements=declared_requirements,
+        out_of_scope=out_of_scope,
     )
     return {
         "ag_layer_present": True,
@@ -98,6 +101,7 @@ def measure_model(
             "fully_traced": traceability["fully_traced"],
             "mean_trace_completeness": traceability["mean_trace_completeness"],
             "untraced_requirements": traceability["untraced_requirements"],
+            "out_of_scope_requirements": traceability["out_of_scope_requirements"],
             "unattributed_chains": len(traceability["unattributed_chains"]),
         },
     }
@@ -121,6 +125,7 @@ def build_robustness_report(
     pilot_dir: Path | str,
     *,
     declared_requirements: Sequence[str] = (),
+    out_of_scope: Mapping[str, str] = {},
 ) -> Dict[str, Any]:
     """Per-run and per-arm robustness across an archived pilot directory."""
     root = Path(pilot_dir)
@@ -140,7 +145,9 @@ def build_robustness_report(
             }
             if model_path.exists():
                 entry.update(
-                    measure_model(model_path.read_text(), declared_requirements)
+                    measure_model(
+                        model_path.read_text(), declared_requirements, out_of_scope
+                    )
                 )
             else:
                 entry["note"] = (
@@ -205,6 +212,7 @@ def build_robustness_report(
             "the physical system satisfies the requirement"
         ),
         "declared_requirements": list(declared_requirements),
+        "out_of_scope_declaration": dict(out_of_scope),
         "by_arm": by_arm,
         "runs": runs,
     }
