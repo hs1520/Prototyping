@@ -394,3 +394,121 @@ def test_the_prompt_states_every_field_the_validator_can_demand():
         assert kind in text
     # and the exclusivity the validator enforces must be stated, not discovered
     assert "no deadline" in text and "no invariants" in text
+
+
+def test_all_three_safety_patterns_reach_pass_under_the_decided_mode():
+    """The decided mode covers every encoded pattern, not only the timed one.
+
+    Two things had to exist for the invariant patterns to be assemblable at all:
+    the lock lifecycle is synthesised from the declared invariants, and the author
+    declares which consumed concepts are typed lifecycle EVENTS rather than
+    assumptions. Without the second, every consumed concept became an assumption
+    and a default-safe mechanism could not be built - a component that assumes its
+    power-on event is not safe by default, it is safe once that event happens to
+    have occurred.
+    """
+    from src.prototyping import ag_chains
+    from src.prototyping.ag_emitter import emit_ag_package as _emit
+
+    def _terms(node):
+        if node.get("node") == "Identifier":
+            return [{"concept": node["name"]}]
+        if node.get("node") == "Not":
+            return [{"concept": node["expr"]["name"], "negated": True}]
+        out = []
+        for item in node.get("operands", ()):
+            out += _terms(item)
+        return out
+
+    for name in ("REQ_SAFE_004_CHAIN", "REQ_SAFE_008_CHAIN"):
+        chain = getattr(ag_chains, name)
+        boundary = build_architecture_boundary_draft(chain)
+        produced = {
+            concept: item["component_id"]
+            for item in boundary["components"]
+            for concept in item["interfaces"]["produces"]
+        }
+        events = {c.name: set(c.interface_inputs) for c in chain.components}
+        decisions = {
+            "safety_pattern": chain.pattern,
+            "timing_origin": None, "deadline_seconds": None,
+            "observation": chain.observation,
+            "system_assumptions": list(chain.system_assumptions),
+            "priority": None,
+            "components": [
+                {
+                    "component_id": item["component_id"],
+                    "lifecycle_events": sorted(events.get(item["component_id"], ())),
+                    "assumptions": [
+                        {"concept": concept,
+                         "discharged_by": (
+                             produced.get(concept)
+                             if produced.get(concept) not in (
+                                 None, item["component_id"]) else None)}
+                        for concept in item["interfaces"]["consumes"]
+                    ],
+                }
+                for item in boundary["components"]
+            ],
+            "invariants": [
+                {"invariant_id": inv.invariant_id,
+                 "antecedent": _terms(inv.trigger_or_antecedent_ast),
+                 "consequent": _terms(inv.required_consequent_ast),
+                 "source_kind": inv.source_kind, "source_id": inv.source_id}
+                for inv in chain.invariants
+            ],
+        }
+        base = (
+            f"package X {{ requirement def {chain.source_requirement} "
+            "{ doc /* t */ } }"
+        )
+        spec = build_spec_from_decisions(decisions, boundary)
+        report = check_ag_graph(
+            extract_ag_graph(base + "\n\n" + _emit(spec))
+        )
+        assert report.verdict == "PASS", (
+            chain.source_requirement, [d.code for d in report.errors()]
+        )
+
+
+def test_a_declared_lifecycle_event_is_not_an_assumption():
+    """The distinction is what makes a default-safe component assemblable: the
+    boundary merges both into one `consumes` list, so which is which is the
+    author's judgement."""
+    from src.prototyping import ag_chains
+
+    chain = ag_chains.REQ_SAFE_008_CHAIN
+    boundary = build_architecture_boundary_draft(chain)
+    mechanism = next(
+        item for item in boundary["components"] if "Mechanism" in item["component_id"]
+    )
+    consumed = list(mechanism["interfaces"]["consumes"])
+
+    def _spec(events):
+        decisions = json.loads(json.dumps({
+            "safety_pattern": chain.pattern, "observation": chain.observation,
+            "system_assumptions": [], "priority": None,
+            "components": [
+                {"component_id": item["component_id"],
+                 "lifecycle_events": events if item is mechanism else [],
+                 "assumptions": [
+                     {"concept": c, "discharged_by": None}
+                     for c in item["interfaces"]["consumes"]]}
+                for item in boundary["components"]
+            ],
+            "invariants": [
+                {"invariant_id": "I1", "antecedent": [{"concept": "powerOnEvent"}],
+                 "consequent": [{"concept": "payloadLocked"}],
+                 "source_kind": "STAKEHOLDER"},
+            ],
+        }))
+        return build_spec_from_decisions(decisions, boundary)
+
+    without = next(
+        c for c in _spec([]).components if "Mechanism" in c.name
+    )
+    with_events = next(
+        c for c in _spec(consumed).components if "Mechanism" in c.name
+    )
+    assert len(without.assumptions) == len(consumed)
+    assert with_events.assumptions == ()

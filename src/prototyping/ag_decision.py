@@ -446,6 +446,16 @@ def build_spec_from_decisions(
         # The emitter derives the discharge edge from the matching upstream
         # guarantee, so the decision only has to say whether the assumption is an
         # environment input or is discharged internally.
+        # Concepts the author declared as typed lifecycle events are consumed but
+        # not *assumed*: a mechanism that assumes its power-on event is not locked
+        # by default, it is locked once that event happens to have occurred. The
+        # boundary merges both into one `consumes` list, so which is which is the
+        # author's judgement, and without it a default-safe component cannot be
+        # assembled at all.
+        events = {
+            str(item) for item in entry.get("lifecycle_events", ())
+            if isinstance(item, str)
+        }
         assumptions = tuple(
             AGAssumptionSpec(
                 concept=_identifier(item.get("concept"), "assumption.concept"),
@@ -457,6 +467,7 @@ def build_spec_from_decisions(
                 ),
             )
             for item in entry.get("assumptions", ())
+            if str(item.get("concept")) not in events
         )
         primary = produces[0]
         stem = name[:-len("Contract")] if name.endswith("Contract") else name
