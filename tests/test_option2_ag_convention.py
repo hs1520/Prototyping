@@ -82,6 +82,37 @@ def test_rendered_rules_leak_no_withheld_value():
         assert secret not in rendered
 
 
+def test_published_syntax_agrees_with_the_emitter():
+    """The deterministic emitter is the reference implementation of the notation,
+    so a template published to an author must match what it actually emits.
+
+    A rule once demanded guarded competing transitions while the transition
+    template it published had no guard slot. The generator invented `guard <expr>`,
+    which does not parse, and lost three of four feedback rounds to it.
+    """
+    from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+    from src.prototyping.ag_emitter import emit_ag_package
+
+    emitted = emit_ag_package(REQ_SAFE_005_CHAIN)
+    transitions = [
+        line.strip() for line in emitted.splitlines()
+        if line.strip().startswith("transition ")
+    ]
+    assert transitions, "emitter reference produced no transitions"
+    guarded = [line for line in transitions if " if " in line]
+    assert guarded, "expected the reference to contain a guarded transition"
+
+    rendered = render_authoring_rules()
+    # the guard keyword the emitter actually uses must be the one we publish
+    assert "if <expr>" in rendered or "if <TRIGGER>" in rendered
+    # and we must never publish a keyword the grammar does not have
+    assert "guard <" not in rendered
+    for line in guarded:
+        assert " guard " not in line, (
+            "emitter uses a guard keyword the published rules do not describe"
+        )
+
+
 def test_the_orchestrator_imports_cleanly_on_its_own():
     """`src.prototyping` imports the orchestrator, so a module-level import of an
     ag_* module from the orchestrator is circular whenever the orchestrator is

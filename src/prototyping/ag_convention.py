@@ -148,8 +148,12 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "REALIZATION_TRIGGER_MISSING", CONVENTION,
         "A realizing state machine must accept a trigger compatible with the "
         "contract's assumptions. Declare each accepted event as its own "
-        "`attribute def <Signal>;` before using it in "
-        "`transition <n> first <s> accept <Signal> then <t>;`.",
+        "`attribute def <Signal>;`, then write transitions in exactly this form — "
+        "the guard clause is `if <boolean-expression>` and is written between "
+        "`accept` and `then`, never as `guard`:\n"
+        "   `transition <n> first <source> accept <Signal> then <target>;`\n"
+        "   `transition <n> first <source> accept <Signal> if <expr> then "
+        "<target>;`",
     ),
     Obligation(
         "REALIZATION_UNREACHABLE", CONVENTION,
@@ -210,9 +214,11 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "The arbitration must be internally consistent: one "
         "`require constraint precedence_<WINNER>_over_<LOSER> { not <TRIGGER> or "
         "selectedResponse != <RESPONSE_SET>::<LOSER> }` for every response the "
-        "winner outranks, a competing transition guarded by `not <TRIGGER>` for "
-        "each of those losers, and a reachable selection transition whose action "
-        "sets the winning response.",
+        "winner outranks; a selection transition guarded `if <TRIGGER>` reaching "
+        "the winning state; and for each outranked response its own competing "
+        "transition guarded `if not <TRIGGER>`, each accepting its own request "
+        "signal, e.g. `transition select<LOSER> first <await> accept "
+        "<LOSER>RequestSignal if not <TRIGGER> then <LOSER>;`.",
     ),
 )
 
@@ -259,7 +265,8 @@ PRIORITY_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
         "competing_transitions_guarded", CONVENTION,
         "Every response the winner outranks must have a competing transition "
-        "guarded by `not <TRIGGER>`, so it cannot fire when the trigger holds.",
+        "carrying the guard `if not <TRIGGER>`, so it cannot fire while the "
+        "trigger holds. A response with no such transition is unguarded.",
     ),
     Obligation(
         "selected_transition_reachable", CONVENTION,
@@ -320,9 +327,11 @@ GATE_OBLIGATIONS: Tuple[Obligation, ...] = (
         "bounded_construct_set", CONVENTION,
         "Use only the bounded construct set: `requirement def`, `attribute`, "
         "`assume`/`require constraint`, `part def`/`part`, `satisfy requirement "
-        "... by ...`, `state def` with `entry; then`/`transition ... accept ... "
-        "then`/`state { entry action }`, `enum def`, `verification def`, and "
-        "`dependency`. Invent no new keywords.",
+        "... by ...`, `state def` containing `entry; then <state>;` / `state "
+        "<s>;` / `state <s> { entry action <a>; }` / `transition <n> first <s> "
+        "accept <Signal> [if <expr>] then <t>;`, `enum def`, `verification def`, "
+        "and `dependency`. Invent no new keywords — in particular there is no "
+        "`guard` keyword: a transition guard is written `if <expr>`.",
     ),
 )
 
