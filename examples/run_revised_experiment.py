@@ -20,14 +20,35 @@ from src.prototyping.revised_pilot import RevisedPilotConfig, run_revised_pilot
 from src.prototyping.run_artifacts import write_revised_run_artifacts
 
 
+# Three encoded chains covering the three bounded safety patterns, plus one
+# requirement that instantiates none of them. REQ-FUNC-002 is a continuous control
+# envelope — no trigger, no deadline, no invariant state — and is kept deliberately:
+# a declared out-of-scope case is stronger evidence that the method's boundary is
+# real than a set containing only requirements it can handle. The texts are the
+# authoritative ones the gold drafts cite.
 FROZEN_REQUIREMENTS = (
+    "REQ-SAFE-004: The system shall not transition to the armed or airborne state "
+    "if any onboard sensor reports a failure during the power-on self-test "
+    "sequence.",
     "REQ-SAFE-005: The system shall deploy the ballistic recovery parachute "
     "within 0.5 seconds of detecting a critical propulsion subsystem failure "
     "during flight, taking precedence over all other safety responses.",
+    "REQ-SAFE-008: The payload-release actuator shall default to the mechanically "
+    "locked state upon power-on, before any arming or flight authorisation.",
     "REQ-FUNC-002: The system shall detect a stationary obstacle directly ahead "
     "within the forward sensor field of view and maintain at least 5 metres of "
     "separation while avoiding it.",
 )
+
+#: Requirements outside the bounded A/G layer's scope, with the reason recorded.
+#: Declared, never inferred: an undeclared requirement counts as in scope, so the
+#: traceability denominator cannot be quietly shrunk.
+OUT_OF_SCOPE_REQUIREMENTS = {
+    "REQ_FUNC_002": (
+        "continuous control envelope: no trigger, no deadline and no invariant "
+        "state, so it instantiates none of the encoded safety patterns"
+    ),
+}
 
 
 def _git_revision() -> str:
@@ -81,6 +102,10 @@ def main() -> None:
         max_iterations=args.max_iterations,
         code_revision=_git_revision(),
         requirements=FROZEN_REQUIREMENTS,
+        # must be explicit: the default selects REQ_SAFE_005 alone, so adding
+        # requirements to the frozen set would otherwise leave the extra chains
+        # unselected and silently unexercised
+        selected_ag_chain_ids=("REQ_SAFE_004", "REQ_SAFE_005", "REQ_SAFE_008"),
         r2_generation_mode=args.r2_generation_mode,
         # bound, never chosen independently: a mode running under another
         # intervention's version would pool with it
