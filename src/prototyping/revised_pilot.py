@@ -21,6 +21,7 @@ from .experiment_arms import (
     REVISED_EXPERIMENT_NAMESPACE,
     R2_DETERMINISTIC_GENERATION_MODE,
     R2_DETERMINISTIC_INTERVENTION_VERSION,
+    R2_INTERVENTION_VERSION_BY_MODE,
 )
 from .requirement_inputs import (
     build_frozen_requirement_set,
@@ -113,15 +114,25 @@ class RevisedPilotConfig:
             raise ValueError("provider and model must be explicit")
         if not self.code_revision.strip():
             raise ValueError("code_revision must be frozen before execution")
-        if (
-            self.r2_generation_mode != R2_DETERMINISTIC_GENERATION_MODE
-            or self.r2_intervention_version
-            != R2_DETERMINISTIC_INTERVENTION_VERSION
-        ):
+        # Each R2 generation mode is its own frozen intervention with its own
+        # version, and results from different modes must never be pooled. That is
+        # enforced by binding the mode to exactly one version — the same binding
+        # `evaluation_readiness` gates on — rather than by pinning the runner to a
+        # single mode, which prevented the other interventions from ever executing.
+        expected_version = R2_INTERVENTION_VERSION_BY_MODE.get(
+            self.r2_generation_mode
+        )
+        if expected_version is None:
             raise ValueError(
-                "this runner is frozen to the deterministic R2 intervention; "
-                "LLM-authored A/G requires a separate configuration/version "
-                "and evidence gate"
+                f"unknown r2_generation_mode {self.r2_generation_mode!r}; "
+                f"expected one of {sorted(R2_INTERVENTION_VERSION_BY_MODE)}"
+            )
+        if self.r2_intervention_version != expected_version:
+            raise ValueError(
+                f"r2_generation_mode {self.r2_generation_mode!r} is bound to "
+                f"intervention version {expected_version!r}, not "
+                f"{self.r2_intervention_version!r}; a mode may not run under "
+                "another intervention's version or the results would pool"
             )
         frozen = build_frozen_requirement_set(self.requirements)
         selected = tuple(

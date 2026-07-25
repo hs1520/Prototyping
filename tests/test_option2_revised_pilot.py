@@ -115,8 +115,27 @@ def test_config_freezes_exact_three_seed_three_arm_protocol():
         _config(arms=("R0-CURRENT", "R2-BBAG", "R1-BBCTX"))
     with pytest.raises(ValueError, match="absent from the frozen requirement set"):
         _config(selected_ag_chain_ids=("REQ_SAFE_008",))
-    with pytest.raises(ValueError, match="separate configuration/version"):
-        _config(r2_generation_mode="LLM_AUTHORED")
+    # Each R2 generation mode is its own frozen intervention. The runner used to be
+    # pinned to the deterministic mode, which kept the other interventions from
+    # ever executing; the red line is now the mode->version binding itself, so a
+    # mode cannot borrow another intervention's version and pool with it.
+    from src.prototyping.experiment_arms import (
+        R2_LLM_AUTHORED_GENERATION_MODE,
+        R2_LLM_DECIDED_GENERATION_MODE,
+        R2_LLM_DECIDED_INTERVENTION_VERSION,
+    )
+
+    with pytest.raises(ValueError, match="unknown r2_generation_mode"):
+        _config(r2_generation_mode="LLM_AUTHORED")  # not a real mode
+    with pytest.raises(ValueError, match="would pool"):
+        # a real mode carrying the deterministic intervention's version
+        _config(r2_generation_mode=R2_LLM_AUTHORED_GENERATION_MODE)
+    # correctly bound, so it may run
+    bound = _config(
+        r2_generation_mode=R2_LLM_DECIDED_GENERATION_MODE,
+        r2_intervention_version=R2_LLM_DECIDED_INTERVENTION_VERSION,
+    )
+    assert bound.r2_generation_mode == R2_LLM_DECIDED_GENERATION_MODE
 
 
 def test_external_execution_requires_explicit_authorization(tmp_path):

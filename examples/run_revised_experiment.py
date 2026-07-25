@@ -10,6 +10,10 @@ import argparse
 from pathlib import Path
 import subprocess
 
+from src.prototyping.experiment_arms import (
+    R2_DETERMINISTIC_GENERATION_MODE,
+    R2_INTERVENTION_VERSION_BY_MODE,
+)
 from src.prototyping.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
 from src.prototyping.revised_pilot import RevisedPilotConfig, run_revised_pilot
@@ -54,6 +58,16 @@ def main() -> None:
     parser.add_argument("--seeds", nargs=3, type=int, default=(0, 1, 2))
     parser.add_argument("--max-iterations", type=int, default=1)
     parser.add_argument(
+        "--r2-generation-mode",
+        default=R2_DETERMINISTIC_GENERATION_MODE,
+        choices=sorted(R2_INTERVENTION_VERSION_BY_MODE),
+        help=(
+            "Which R2 intervention to execute. Each mode is a separate frozen "
+            "intervention whose version is bound to it; results from different "
+            "modes must never be pooled, so give each its own --out directory."
+        ),
+    )
+    parser.add_argument(
         "--confirm-external-experiment",
         action="store_true",
         help="Confirm that this current invocation is authorised to call a provider.",
@@ -67,6 +81,12 @@ def main() -> None:
         max_iterations=args.max_iterations,
         code_revision=_git_revision(),
         requirements=FROZEN_REQUIREMENTS,
+        r2_generation_mode=args.r2_generation_mode,
+        # bound, never chosen independently: a mode running under another
+        # intervention's version would pool with it
+        r2_intervention_version=R2_INTERVENTION_VERSION_BY_MODE[
+            args.r2_generation_mode
+        ],
     )
     manifest = run_revised_pilot(
         config,
