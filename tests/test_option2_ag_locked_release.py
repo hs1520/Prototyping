@@ -237,11 +237,21 @@ def test_locked_release_checker_rejects_extra_unauthorised_unlock_transition():
 
 
 def test_locked_release_checker_requires_states_and_deenergise_invariant():
-    missing_state = _model().replace(
-        "state lockedPowered { entry action maintainPayloadLocked; }",
-        "state powered { entry action maintainPayloadLocked; }",
+    # Renaming a state is NOT a defect. The obligation is judged against the
+    # chain's own invariants rather than REQ_SAFE_008's spellings, so a model that
+    # names its states differently and behaves correctly conforms — which is what
+    # lets a generated model be checked without the checker holding the answer.
+    renamed_state = _model().replace("lockedPowered", "poweredAndStillLocked")
+    report = check_ag_graph(extract_ag_graph(renamed_state, revision=1))
+    assert report.verdict == "PASS", [d.code for d in report.errors()]
+
+    # What must still fail is losing the way back to the default-safe state.
+    no_relock = _model().replace(
+        "transition powerLostLocks first unlockedPowered "
+        "accept PowerLostSignal then lockedUnpowered;",
+        "",
     )
-    report = check_ag_graph(extract_ag_graph(missing_state, revision=1))
+    report = check_ag_graph(extract_ag_graph(no_relock, revision=1))
     assert report.verdict == "FAIL"
     assert "PATTERN_TOPOLOGY_INCOMPLETE" in {
         diagnostic.code for diagnostic in report.diagnostics
@@ -315,3 +325,49 @@ def test_committed_gold_draft_is_regenerable_and_unfrozen():
     assert all(e["by"] is not None for e in on_disk["discharge_edges"])
     # regenerable: the committed draft equals a fresh generation from the spec
     assert on_disk == build_gold_draft(REQ_SAFE_008_CHAIN, source_text=_GOLD_SRC)
+
+
+def test_conformance_follows_behaviour_not_this_chain_s_spellings():
+    """The obligation is derived from the model's own invariants, so the checker no
+    longer holds REQ_SAFE_008's state names, signals and contract names.
+
+    Both halves matter. A correct model that names things differently must pass, or
+    a generated model can only conform by reproducing the reviewed answer — which is
+    what made a PASS here partly recall. And a model wearing the reviewed names
+    while wiring the unlock to an unauthorised event must still fail, or the
+    generalisation has simply stopped checking.
+    """
+    from src.prototyping import ag_contracts
+
+    renamed = (
+        _model()
+        .replace("lockedUnpowered", "safeIdle")
+        .replace("lockedPowered", "safeArmed")
+        .replace("unlockedPowered", "releasePermitted")
+    )
+    report = check_ag_graph(extract_ag_graph(renamed, revision=1))
+    assert report.verdict == "PASS", [d.code for d in report.errors()]
+
+    miswired = _model().replace(
+        "accept AuthorisedReleaseCommandReceivedSignal then unlockedPowered;",
+        "accept PowerOnSignal then unlockedPowered;",
+    )
+    report = check_ag_graph(extract_ag_graph(miswired, revision=1))
+    assert report.verdict == "FAIL"
+    assert "PATTERN_TOPOLOGY_INCOMPLETE" in {d.code for d in report.diagnostics}
+
+    # and the chain's own names are gone from the checker
+    source = open(ag_contracts.__file__).read()
+    for literal in ("PayloadLockMechanismContract", "ReleaseCommandGatewayContract",
+                    "lockedUnpowered", "unlockedPowered"):
+        assert literal not in source, literal
+
+
+def test_the_roles_come_from_the_declared_invariants():
+    from src.prototyping.ag_contracts import _invariant_roles
+
+    roles = _invariant_roles(extract_ag_graph(_model(), revision=1))
+    assert roles["locked"] == "payloadLocked"
+    assert roles["authorisation"] == "authorisedReleaseCommandReceived"
+    assert roles["unlocked"] == "payloadUnlocked"
+    assert roles["power"] == "actuatorPowerAvailable"

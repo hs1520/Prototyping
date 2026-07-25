@@ -997,79 +997,121 @@ def _startup_inhibit_topology_ok(
     ))
 
 
+def _invariant_roles(graph: AGGraph) -> Dict[str, str]:
+    """The concepts a locked-until-authorised-release chain's invariants define.
+
+    The pattern's topology follows from its invariants rather than from any
+    chain's element names:
+
+      * ``<power-on> => <locked>``            fixes the default-safe state;
+      * ``<unlocked> => <authorisation>``     fixes the only way out of it;
+      * ``not <power> => <locked>``           fixes where power loss returns to.
+
+    Deriving the roles this way is what lets the obligation be checked without the
+    checker holding REQ_SAFE_008's state names, signals and action spellings — the
+    condition that made a PASS on this chain partly recall rather than a verdict.
+    """
+    roles: Dict[str, str] = {}
+    for invariant in graph.invariants or ():
+        if not isinstance(invariant, Mapping):
+            continue
+        antecedent = invariant.get("trigger_or_antecedent_ast") or {}
+        consequent = invariant.get("required_consequent_ast") or {}
+        consequents = _ast_identifiers(consequent)
+        if len(consequents) != 1:
+            continue
+        consequent_name = next(iter(consequents))
+        if isinstance(antecedent, Mapping) and antecedent.get("node") == "Not":
+            # not <power> => <locked>
+            power = _ast_identifiers(antecedent.get("expr"))
+            if len(power) == 1:
+                roles["power"] = next(iter(power))
+                roles["locked"] = consequent_name
+            continue
+        antecedents = _ast_identifiers(antecedent)
+        if len(antecedents) != 1:
+            continue
+        antecedent_name = next(iter(antecedents))
+        if consequent_name == roles.get("locked") or "lock" in consequent_name.lower():
+            roles.setdefault("locked", consequent_name)
+            roles.setdefault("power_on", antecedent_name)
+        else:
+            # <unlocked> => <authorisation>
+            roles["unlocked"] = antecedent_name
+            roles["authorisation"] = consequent_name
+    return roles
+
+
 def _locked_release_topology_ok(
     graph: AGGraph,
     realization_links: List[Dict[str, Any]],
 ) -> bool:
-    mechanism = _behavior_for_contract(
-        graph, realization_links, "PayloadLockMechanismContract"
+    """Does the model instantiate de-energise-to-lock, judged against its own
+    invariants rather than against REQ_SAFE_008's spellings?
+
+    The obligations are the pattern's meaning: the default state is the locked one,
+    the only way out of it is the authorisation event, and losing power returns to
+    it. Which identifiers carry those roles comes from the declared invariants, so a
+    model that names its states differently but behaves correctly conforms — and a
+    model that reproduces the reviewed names while wiring them wrongly does not.
+    """
+    roles = _invariant_roles(graph)
+    locked = roles.get("locked")
+    authorisation = roles.get("authorisation")
+    if not locked or not authorisation:
+        return False
+
+    mechanism = next(
+        (
+            _behavior_for_contract(graph, realization_links, item.name)
+            for item in graph.components
+            if locked in item.boolean_guarantee_concepts()
+        ),
+        None,
     )
-    gateway = _behavior_for_contract(
-        graph, realization_links, "ReleaseCommandGatewayContract"
-    )
-    if (
-        mechanism is None
-        or mechanism.initial_state != "lockedUnpowered"
-        or gateway is None
-        or gateway.initial_state != "awaitingAuthorisation"
+    if mechanism is None or not mechanism.initial_state:
+        return False
+
+    # the event that authorises release, named by the profile's signal convention
+    signal = f"{authorisation[:1].upper()}{authorisation[1:]}Signal"
+    unlock_transitions = [
+        transition for transition in mechanism.transitions
+        if transition.trigger == signal
+    ]
+    if not unlock_transitions:
+        return False
+    unlocked_states = {transition.target for transition in unlock_transitions}
+    if len(unlocked_states) != 1:
+        return False
+    unlocked_state = next(iter(unlocked_states))
+    if unlocked_state == mechanism.initial_state:
+        return False
+
+    # nothing else may reach the unlocked state: authorisation is the only way out
+    if any(
+        transition.target == unlocked_state and transition.trigger != signal
+        for transition in mechanism.transitions
     ):
         return False
-    expected_mechanism = {
-        ("lockedUnpowered", "PowerOnSignal", "lockedPowered", ""),
-        (
-            "lockedPowered",
-            "AuthorisedReleaseCommandReceivedSignal",
-            "unlockedPowered",
-            "",
-        ),
-        ("unlockedPowered", "PowerLostSignal", "lockedUnpowered", ""),
+    # Losing power must return to the default-safe state, on an event distinct from
+    # the one that energises it. Without the distinctness a model can satisfy the
+    # return edge with the power-on signal itself, so the same event both energises
+    # and de-energises — incoherent, and it passed until this was added.
+    energising = {
+        transition.trigger for transition in mechanism.transitions
+        if transition.source == mechanism.initial_state
     }
-    expected_gateway = {
-        (
-            "awaitingAuthorisation",
-            "ReceivedReleaseCommandSignal",
-            "authorisationGranted",
-            "authorisationDataValid",
-        ),
-        (
-            "authorisationGranted",
-            "PowerLostSignal",
-            "awaitingAuthorisation",
-            "",
-        ),
-        (
-            "authorisationGranted",
-            "PowerOnSignal",
-            "awaitingAuthorisation",
-            "",
-        ),
-    }
-    states = {
-        str(mechanism.initial_state or ""),
-        *mechanism.entry_actions.keys(),
-        *(transition.source for transition in mechanism.transitions),
-        *(transition.target for transition in mechanism.transitions),
-    }
-    unlocks = [
-        transition for transition in mechanism.transitions
-        if transition.target == "unlockedPowered"
-    ]
-    return all((
-        _transition_signatures(mechanism) == expected_mechanism,
-        _transition_signatures(gateway) == expected_gateway,
-        {"lockedUnpowered", "lockedPowered", "unlockedPowered"}.issubset(states),
-        _flat_token(mechanism.entry_actions.get("lockedUnpowered", ""))
-        == "setpayloadlockedfordeenergisetolock",
-        _flat_token(mechanism.entry_actions.get("lockedPowered", ""))
-        == "maintainpayloadlocked",
-        _flat_token(mechanism.entry_actions.get("unlockedPowered", ""))
-        == "enforceauthorisedunlockonly",
-        bool(unlocks),
-        all(
-            transition.trigger == "AuthorisedReleaseCommandReceivedSignal"
-            for transition in unlocks
-        ),
-    ))
+    if not any(
+        transition.source == unlocked_state
+        and transition.target == mechanism.initial_state
+        and transition.trigger not in energising
+        for transition in mechanism.transitions
+    ):
+        return False
+    # the default state must actually establish the locked guarantee
+    return _flat_token(locked) in _flat_token(
+        mechanism.entry_actions.get(mechanism.initial_state, "")
+    )
 
 
 def _check_profile_semantics(
@@ -1331,22 +1373,26 @@ def _check_profile_semantics(
             else _locked_release_topology_ok(graph, realization_links)
         )
         if effective_pattern == "LOCKED_UNTIL_AUTHORISED_RELEASE":
+            # "Default safe" means the locking component holds its guarantee
+            # without depending on anything: a mechanism that assumes some
+            # condition is not locked by default, it is locked when that condition
+            # happens to hold. Identified by the role its invariants give it rather
+            # than by this chain's contract name, and required to carry more than
+            # the lock alone so the authorisation and de-energise obligations are
+            # someone's responsibility.
+            locked_concept = _invariant_roles(graph).get("locked")
             mechanism = next(
                 (
                     item for item in graph.components
-                    if item.name == "PayloadLockMechanismContract"
+                    if locked_concept
+                    and locked_concept in item.boolean_guarantee_concepts()
                 ),
                 None,
             )
             topology_ok = topology_ok and bool(
                 mechanism
                 and not mechanism.assumptions
-                and set(mechanism.boolean_guarantee_concepts())
-                == {
-                    "payloadLocked",
-                    "authorisedUnlockOnly",
-                    "deenergiseToLock",
-                }
+                and len(mechanism.boolean_guarantee_concepts()) >= 3
             )
         if not topology_ok:
             diagnostics.append(AGDiagnostic(
