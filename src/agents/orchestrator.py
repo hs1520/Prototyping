@@ -1817,7 +1817,15 @@ class Orchestrator:
                     # still fails closed while a standard-library reference does not.
                     filter_stdlib_diagnostics=llm_authored,
                 )
-                if package_gate.has_errors or package_gate.score != 1.0:
+                # Gate on ERRORS. The score is also depressed by warnings, and an
+                # LLM-authored package legitimately earns benign ones (naming a
+                # state `done` shadows a stdlib member). Rejecting on score threw
+                # away valid packages and fed back "SYNTAX ERRORS" for a model that
+                # had none. The deterministic emitter earns no warnings, so its
+                # strict score check is kept.
+                if package_gate.has_errors or (
+                    not llm_authored and package_gate.score != 1.0
+                ):
                     raise RuntimeError(
                         f"{spec.source_requirement} A/G package failed the raw "
                         f"syntax gate: {package_gate.short_summary()} "
@@ -1831,7 +1839,9 @@ class Orchestrator:
                 fail_closed=True,
                 filter_stdlib_diagnostics=True,
             )
-            if merged_gate.has_errors or merged_gate.score != 1.0:
+            if merged_gate.has_errors or (
+                not llm_authored and merged_gate.score != 1.0
+            ):
                 raise RuntimeError(
                     "R2-BBAG A/G contract layer failed the merged syntax gate: "
                     f"{merged_gate.short_summary()} "
@@ -1985,7 +1995,10 @@ class Orchestrator:
             gate = check_syntax(
                 authored, fail_closed=True, filter_stdlib_diagnostics=True
             )
-            if gate.has_errors or gate.score != 1.0:
+            # errors only — a warning-depressed score is not a syntax failure, and
+            # rejecting on it discarded valid packages and fed back a defect list
+            # for a model that had none, destabilising the next round
+            if gate.has_errors:
                 history.append({
                     "iteration": iteration, "syntax_ok": False,
                     "verdict": None, "error_count": None,

@@ -217,6 +217,31 @@ def test_feedback_loop_converges_to_pass_under_the_ag_check():
     assert "DISCHARGE" in llm.last_prompt.upper()  # the checker's actual defect code
 
 
+def test_a_benign_warning_is_not_treated_as_a_syntax_failure():
+    """A package with warnings but no errors must be accepted.
+
+    The gate rejected on `score != 1.0`, but the score is also depressed by
+    warnings — naming a state `done` shadows a stdlib member and costs 0.05. Valid
+    packages were discarded and fed back as "SYNTAX ERRORS", wasting the round and
+    destabilising the next one.
+    """
+    from src.simulation.syntax_checker import check_syntax
+
+    correct = emit_ag_package(REQ_SAFE_005_CHAIN)
+    # `done` shadows States::StateAction::done — a warning, not an error
+    warned = correct.replace("state stowed;", "state stowed;\n        state done;")
+    gate = check_syntax(warned, fail_closed=True, filter_stdlib_diagnostics=True)
+    assert not gate.has_errors, "fixture must warn, not error"
+    assert gate.score < 1.0, "fixture must actually depress the score"
+
+    orch = Orchestrator(_SequenceLLM([warned]), revised_experiment_arm="R2-BBAG",
+                        r2_generation_mode="LLM_AUTHORED_AG")
+    result = orch._author_llm_ag_with_feedback(
+        REQ_SAFE_005_CHAIN, _BASE, max_iterations=1)
+    assert result["history"][0]["syntax_ok"] is True
+    assert result["history"][0]["error_count"] is not None
+
+
 def test_feedback_loop_reports_the_verdict_of_the_package_it_returns():
     """A later round can regress — even to invalid syntax. The reported verdict
     must describe the package actually delivered, not the last attempt made."""
