@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .ag_chains import (
     AGAssumptionSpec,
+    AGRealizationPathSpec,
     AGChainSpec,
     AGComponentSpec,
     AGInvariantSpec,
@@ -167,6 +168,87 @@ def _conjunction_ast(terms: Any, field: str) -> Dict[str, Any]:
             node = {"node": "Not", "expr": node}
         nodes.append(node)
     return nodes[0] if len(nodes) == 1 else {"node": "And", "operands": nodes}
+
+
+def _locked_release_lifecycle(
+    decisions: Mapping[str, Any],
+    boundary_component: Mapping[str, Any],
+    produces: Sequence[str],
+    assumptions: Any,
+) -> tuple:
+    """The lock lifecycle, synthesised from the declared invariants.
+
+    A locked-until-authorised-release mechanism needs more than the single
+    trigger-response transition the other patterns use: it must start locked, admit
+    exactly one authorised way out, and return on a *distinct* event. Those three
+    facts are already in the decisions — the invariants name the locked concept and
+    the authorisation concept, and the boundary names the events the component
+    consumes — so the lifecycle is derived rather than asked for, and the model is
+    never required to write a state machine.
+    """
+    if decisions.get("safety_pattern") != "LOCKED_UNTIL_AUTHORISED_RELEASE":
+        return ()
+    locked = authorisation = None
+    for item in decisions.get("invariants") or ():
+        if not isinstance(item, Mapping):
+            continue
+        antecedent = [
+            str(term.get("concept")) for term in item.get("antecedent") or ()
+            if isinstance(term, Mapping)
+        ]
+        consequent = [
+            str(term.get("concept")) for term in item.get("consequent") or ()
+            if isinstance(term, Mapping)
+        ]
+        negated = any(
+            term.get("negated") for term in item.get("antecedent") or ()
+            if isinstance(term, Mapping)
+        )
+        if len(consequent) != 1:
+            continue
+        if negated:
+            locked = consequent[0]          # not <power> => <locked>
+        elif len(antecedent) == 1 and "lock" in consequent[0].lower():
+            locked = locked or consequent[0]
+        elif len(antecedent) == 1:
+            authorisation = consequent[0]   # <unlocked> => <authorisation>
+    if not locked or not authorisation:
+        return ()
+    # only the component that actually guarantees the lock has a lock lifecycle;
+    # applying it to every component gave the authorisation gateway a nonsensical
+    # machine built from whatever inputs it happened to consume
+    if locked not in [str(item) for item in produces]:
+        return ()
+
+    consumed = [
+        str(concept)
+        for concept in boundary_component.get("interfaces", {}).get("consumes", ())
+    ]
+    # the events that are not the authorisation itself power the component up and
+    # down; their order in the interface is the boundary's, not ours to invent
+    events = [concept for concept in consumed if concept != authorisation]
+    if len(events) < 2:
+        return ()
+    power_on, power_lost = events[0], events[1]
+    locked_state = f"{locked}Unpowered"
+    powered_state = f"{locked}Powered"
+    unlocked_state = f"{locked}Released"
+    return (
+        AGRealizationPathSpec(
+            source=locked_state, trigger=f"{_capitalise(power_on)}Signal",
+            target=powered_state, action=f"maintain{_capitalise(locked)}",
+        ),
+        AGRealizationPathSpec(
+            source=powered_state,
+            trigger=f"{_capitalise(authorisation)}Signal",
+            target=unlocked_state,
+            action=f"enforce{_capitalise(authorisation)}Only",
+        ),
+        AGRealizationPathSpec(
+            source=unlocked_state, trigger=f"{_capitalise(power_lost)}Signal",
+            target=locked_state, action=f"set{_capitalise(locked)}",
+        ),
+    )
 
 
 def component_aliases(boundary: Mapping[str, Any]) -> Dict[str, str]:
@@ -387,6 +469,9 @@ def build_spec_from_decisions(
             ),
             None,
         )
+        lifecycle = _locked_release_lifecycle(
+            decisions, boundary_component, produces, entry.get("assumptions", ())
+        )
         origin = str(decisions.get("timing_origin") or "")
         is_arbiter = name == arbiter
         if is_arbiter and origin:
@@ -407,13 +492,19 @@ def build_spec_from_decisions(
             guarantee=primary,
             behavior=behavior,
             trigger_signal=(
-                f"{_capitalise(trigger_concept)}Signal" if trigger_concept else None
+                lifecycle[0].trigger if lifecycle
+                else (f"{_capitalise(trigger_concept)}Signal"
+                      if trigger_concept else None)
             ),
-            initial_state="awaitingResponse" if is_arbiter else (
-                "idle" if trigger_concept else primary
+            initial_state=(
+                lifecycle[0].source if lifecycle
+                else ("awaitingResponse" if is_arbiter else (
+                    "idle" if trigger_concept else primary
+                ))
             ),
             response_state=primary,
             response_action=response_action,
+            realization_paths=lifecycle,
             assumptions=assumptions,
             interface_inputs=tuple(
                 str(concept)
