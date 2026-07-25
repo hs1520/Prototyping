@@ -1785,7 +1785,14 @@ class Orchestrator:
                 fail_closed=True,
                 filter_stdlib_diagnostics=True,
             )
-            if base_gate.has_errors or base_gate.score != 1.0:
+            # Errors only. A warning is not a syntax failure, and gating on the
+            # score made one warning enough to fail an entire arm closed on a model
+            # with zero parser and zero sema errors — a measured seed lost its R2
+            # evidence to exactly that, its diagnostic reading "failed the shared
+            # syntax gate: ✓ no syntax errors (score=0.950)". The same defect was
+            # already removed from the A/G authoring loop (b9b5cdc); this copy of
+            # the gate survived it.
+            if base_gate.has_errors:
                 raise RuntimeError(
                     "committed base model failed the shared syntax gate: "
                     f"{base_gate.short_summary()} (score={base_gate.score:.3f})"
@@ -1831,13 +1838,18 @@ class Orchestrator:
                     filter_stdlib_diagnostics=llm_authored,
                 )
                 # Gate on ERRORS. The score is also depressed by warnings, and an
-                # LLM-authored package legitimately earns benign ones (naming a
-                # state `done` shadows a stdlib member). Rejecting on score threw
-                # away valid packages and fed back "SYNTAX ERRORS" for a model that
-                # had none. The deterministic emitter earns no warnings, so its
-                # strict score check is kept.
+                # authored package legitimately earns benign ones (naming a state
+                # `done` shadows a stdlib member). Rejecting on score threw away
+                # valid packages and fed back "SYNTAX ERRORS" for a model that had
+                # none. The strict score check survives only for the fully
+                # deterministic path, where every identifier comes from a reviewed
+                # spec: once the emitter renders concepts the MODEL chose, that
+                # assumption no longer holds, and a benign warning would cost the
+                # whole arm.
                 if package_gate.has_errors or (
-                    not llm_authored and package_gate.score != 1.0
+                    not llm_authored
+                    and not llm_decided
+                    and package_gate.score != 1.0
                 ):
                     raise RuntimeError(
                         f"{spec.source_requirement} A/G package failed the raw "

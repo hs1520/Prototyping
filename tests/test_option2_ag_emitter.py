@@ -106,6 +106,41 @@ def test_r2_raw_gate_rejects_a_broken_deterministic_package(monkeypatch):
         orch._apply_ag_contract_layer(_BASE_MODEL, _REQS)
 
 
+def test_a_warning_on_the_base_model_does_not_fail_the_arm_closed(monkeypatch):
+    """A warning is not a syntax failure.
+
+    The base-model gate rejected on `score != 1.0`, so a single warning — 0.05 of
+    score, zero parser errors, zero sema errors — was enough to fail a whole arm
+    closed. A measured seed lost its R2 evidence to it, with the self-contradicting
+    diagnostic "failed the shared syntax gate: ✓ no syntax errors (score=0.950)".
+    The same defect was removed from the A/G authoring loop once already.
+    """
+    import src.agents.orchestrator as orchestrator_module
+    from src.simulation.syntax_checker import SyntaxCheckResult
+
+    real = orchestrator_module.check_syntax
+
+    def _warned(text, **kwargs):
+        result = real(text, **kwargs)
+        # only the BASE model earns the warning; the emitted package is left alone
+        # so this pins the base-model gate and nothing else
+        if result.has_errors or text != _BASE_MODEL:
+            return result
+        return SyntaxCheckResult(
+            has_errors=False,
+            parser_errors=[],
+            sema_errors=[],
+            warnings=[{"line": 1, "col": 1, "message": "style", "code": ""}],
+            score=0.95,
+        )
+
+    monkeypatch.setattr(orchestrator_module, "check_syntax", _warned)
+    orch = Orchestrator(_NoCallLLM(), revised_experiment_arm="R2-BBAG")
+
+    merged = orch._apply_ag_contract_layer(_BASE_MODEL, _REQS)
+    assert "package REQ_SAFE_005_AG" in merged
+
+
 def test_emitted_chain_round_trips_to_a_checker_pass():
     sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
     report = check_ag_graph(extract_ag_graph(sysml, revision=1))
