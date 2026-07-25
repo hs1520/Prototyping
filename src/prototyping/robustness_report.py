@@ -174,8 +174,16 @@ def build_robustness_report(
             summary["mean_trace_completeness"] = (
                 round(mean(traces), 4) if traces else None
             )
+            # A run counts as fully traced only when EVERY declared requirement is
+            # traced. `traceability["fully_traced"]` is a count, so testing it for
+            # truthiness marked a run with one of two requirements traced as fully
+            # traced — the column then read 3/3 for runs that each covered half the
+            # requirement set.
             summary["fully_traced_runs"] = sum(
-                1 for item in measured if item["traceability"]["fully_traced"]
+                1 for item in measured
+                if item["traceability"]["requirements"]
+                and item["traceability"]["fully_traced"]
+                == item["traceability"]["requirements"]
             )
         else:
             summary["note"] = (
@@ -239,8 +247,13 @@ def summarise_models(
                     3,
                 ),
                 "mean_trace_completeness": round(mean(traces), 4) if traces else None,
+                # same rule as the cross-arm table: every declared requirement,
+                # not merely at least one
                 "fully_traced": sum(
-                    1 for item in with_layer if item["traceability"]["fully_traced"]
+                    1 for item in with_layer
+                    if item["traceability"]["requirements"]
+                    and item["traceability"]["fully_traced"]
+                    == item["traceability"]["requirements"]
                 ),
             })
         else:

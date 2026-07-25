@@ -214,3 +214,32 @@ def test_run_artifacts_carry_traceability_with_matching_requirement_ids(tmp_path
     assert payload["traceability"]["fully_traced"] == 1
     assert "no human gold" in payload["measurement_boundary"]
     assert "requirement_traceability" in written
+
+
+def test_partial_requirement_coverage_is_not_reported_as_fully_traced(tmp_path):
+    """A live run exposed this: the frozen set has two requirements but only one
+    has an encoded A/G chain, so every run traces half of it. `fully_traced` is a
+    COUNT, and testing it for truthiness marked those runs fully traced — the
+    column read 3/3 for runs each covering half the requirement set."""
+    report = build_robustness_report(
+        _pilot(tmp_path, {"R2-BBAG": _WITH_AG}),
+        declared_requirements=["REQ_SAFE_005", "REQ_FUNC_002"],
+    )
+    arm = report["by_arm"]["R2-BBAG"]
+    assert arm["runs_with_ag_layer"] == 2
+    assert arm["fully_traced_runs"] == 0, "half-covered runs are not fully traced"
+    assert arm["mean_trace_completeness"] == 0.5
+    run = report["runs"][0]
+    assert run["traceability"]["untraced_requirements"] == ["REQ_FUNC_002"]
+
+
+def test_the_denominator_is_the_declared_set_not_only_what_was_covered():
+    """Passing only the covered requirement would report 1.00 — measuring the
+    denominator against the answer. The declared set is what a run was asked to
+    implement."""
+    from src.prototyping.robustness_report import measure_model
+
+    covered_only = measure_model(_WITH_AG, ["REQ_SAFE_005"])
+    full_set = measure_model(_WITH_AG, ["REQ_SAFE_005", "REQ_FUNC_002"])
+    assert covered_only["traceability"]["mean_trace_completeness"] == 1.0
+    assert full_set["traceability"]["mean_trace_completeness"] == 0.5
