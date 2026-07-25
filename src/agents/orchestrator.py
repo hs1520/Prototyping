@@ -1998,6 +1998,7 @@ class Orchestrator:
             build_spec_from_decisions,
             extract_decisions,
         )
+        from ..prototyping.ag_convention import render_invariant_role_rules
         from ..prototyping.architecture_boundary import (
             build_architecture_boundary_draft,
         )
@@ -2027,7 +2028,12 @@ class Orchestrator:
             f'{list(KNOWN_AG_PATTERNS)},\n'
             '  "timing_origin": the assumption concept that starts the deadline,\n'
             '  "deadline_seconds": number or null,\n'
-            '  "observation": the concept the system as a whole guarantees,\n'
+            '  "observation": what the system as a whole guarantees — a concept, '
+            'or a bounded expression over concepts using not/and/or. Every '
+            'concept it asserts positively must be one the architecture below '
+            'PRODUCES: the decomposition has to support the observation, so an '
+            'observation naming a concept no component produces is unsupported '
+            'however well it paraphrases the requirement,\n'
             '  "system_assumptions": [concepts the system assumes of its '
             'environment],\n'
             '  "components": [ { "component_id": from the architecture below,\n'
@@ -2055,6 +2061,11 @@ class Orchestrator:
             'STAKEHOLDER when the requirement states the obligation and '
             'STUDENT_DERIVED_DESIGN_CONSTRAINT when you inferred it.\n'
             '}\n'
+            "Each invariant pattern is defined by the roles its invariants fill; "
+            "an invariant set that leaves a role unfilled has not stated the "
+            "pattern. Which concepts fill the roles is yours to derive from the "
+            "requirement — the roles themselves are the pattern:\n"
+            f"{render_invariant_role_rules()}\n"
             "Decide these yourself from the requirement: the pattern, the timing "
             "origin, the deadline and how it divides across components, which "
             "producer discharges each assumption, the response ordering, and — for "

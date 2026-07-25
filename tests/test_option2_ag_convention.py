@@ -241,6 +241,77 @@ def test_the_checker_holds_no_reviewed_answer():
     assert not remaining, remaining
 
 
+def test_every_pattern_role_the_checker_demands_is_published():
+    """The checker refuses an invariant set that leaves one of a pattern's roles
+    unfilled. Which roles a pattern has is the pattern's definition — CONVENTION,
+    like the notation itself — so it must be published; which concepts fill them
+    stays the author's derivation.
+
+    Two measured chains failed on exactly this: well-formed invariants that did not
+    cover the roles, because no prompt had ever said the pattern had roles. The two
+    tables are pinned to each other here so a role added to the checker cannot go
+    unstated.
+    """
+    published = {
+        item.pattern: item.roles
+        for item in ag_convention.INVARIANT_ROLE_OBLIGATIONS
+    }
+    assert published == dict(ag_contracts.PATTERN_INVARIANT_ROLES), (
+        "the checker's required roles and the published ones have diverged; a "
+        "role the author is never told is unsatisfiable by any author"
+    )
+    rendered = ag_convention.render_invariant_role_rules()
+    for pattern, roles in published.items():
+        assert pattern in rendered
+        for role in roles:
+            assert role in rendered, f"{pattern} role {role!r} is not stated"
+
+
+def test_the_role_rules_reach_the_authored_sysml_rules_too():
+    """The obligation is the checker's, not one mode's: whichever way a package is
+    produced, an unfilled role is INVARIANT_SEMANTICS_INVALID."""
+    rendered = render_authoring_rules()
+    for item in ag_convention.INVARIANT_ROLE_OBLIGATIONS:
+        for role in item.roles:
+            assert role in rendered, f"{item.pattern} role {role!r} unstated"
+
+
+def test_the_published_role_shapes_match_the_reference_invariants():
+    """Read off the reference implementation rather than assumed (defect class:
+    a rule published from a guess about what the checker wanted).
+
+    Every shape the rules describe must be one the encoded chains actually use, so
+    an author following them writes invariants the checker can read roles from.
+    """
+    from src.prototyping import ag_chains
+    from src.prototyping.ag_contracts import (
+        _invariant_roles, _startup_inhibit_roles,
+    )
+    from src.prototyping.ag_emitter import emit_ag_package
+    from src.prototyping.ag_extractor import extract_ag_graph
+
+    derive = {
+        "STARTUP_INHIBIT": _startup_inhibit_roles,
+        "LOCKED_UNTIL_AUTHORISED_RELEASE": _invariant_roles,
+    }
+    exercised = set()
+    for name in dir(ag_chains):
+        if not (name.startswith("REQ_") and name.endswith("_CHAIN")):
+            continue
+        chain = getattr(ag_chains, name)
+        if chain.pattern not in derive:
+            continue
+        graph = extract_ag_graph(emit_ag_package(chain))
+        roles = derive[chain.pattern](graph)
+        for role in ag_contracts.PATTERN_INVARIANT_ROLES[chain.pattern]:
+            assert roles.get(role), (
+                f"{chain.source_requirement}: the reference itself does not fill "
+                f"the {role!r} role the rules publish"
+            )
+        exercised.add(chain.pattern)
+    assert exercised == set(ag_contracts.PATTERN_INVARIANT_ROLES)
+
+
 def test_every_convention_entry_actually_tells_the_author_what_to_do():
     for item in ALL_OBLIGATIONS:
         if item.category == CONVENTION:

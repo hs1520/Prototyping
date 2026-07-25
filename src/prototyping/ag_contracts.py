@@ -97,6 +97,22 @@ _INVARIANT_PATTERNS = {
     "LOCKED_UNTIL_AUTHORISED_RELEASE",
 }
 _KNOWN_PATTERNS = {_TIMED_PATTERN, *_INVARIANT_PATTERNS}
+
+#: The roles each invariant pattern is *defined* by. An invariant set that leaves
+#: one of them unfilled has not stated the pattern, whatever it names its
+#: invariants — so this is a completeness obligation, not a comparison against any
+#: requirement's reviewed answer, and it is published to authors verbatim.
+#:
+#: Public because a checker obligation the generator is never told is unsatisfiable
+#: by any author: ``ag_convention`` republishes these role names as an authoring
+#: rule and the two tables are pinned to each other in the tests, so a role added
+#: here cannot go unstated in the prompts.
+PATTERN_INVARIANT_ROLES: Mapping[str, Tuple[str, ...]] = {
+    "LOCKED_UNTIL_AUTHORISED_RELEASE": (
+        "locked", "authorisation", "unlocked", "power", "power_on",
+    ),
+    "STARTUP_INHIBIT": ("latch", "reset", "inhibited", "forbidden"),
+}
 _INVARIANT_SOURCE_KINDS = {
     "STAKEHOLDER",
     "STUDENT_DERIVED_DESIGN_CONSTRAINT",
@@ -940,26 +956,40 @@ def _invariant_roles(graph: AGGraph) -> Dict[str, str]:
     condition that made a PASS on this chain partly recall rather than a verdict.
     """
     roles: Dict[str, str] = {}
+    implications: List[Tuple[Any, str]] = []
     for invariant in graph.invariants or ():
         if not isinstance(invariant, Mapping):
             continue
         antecedent = invariant.get("trigger_or_antecedent_ast") or {}
-        consequent = invariant.get("required_consequent_ast") or {}
-        consequents = _ast_identifiers(consequent)
+        consequents = _ast_identifiers(invariant.get("required_consequent_ast") or {})
         if len(consequents) != 1:
             continue
         consequent_name = next(iter(consequents))
+        # de-energise-to-lock is the one invariant with a negated antecedent, and it
+        # names the locked concept outright — so it is read first and the rest are
+        # classified against what it establishes. Reading them in declaration order
+        # instead made the roles depend on the order the author happened to list
+        # them in, which is not a property of the pattern.
         if isinstance(antecedent, Mapping) and antecedent.get("node") == "Not":
             power = _ast_identifiers(antecedent.get("expr"))
             if len(power) == 1:
                 roles["power"] = next(iter(power))
                 roles["locked"] = consequent_name
             continue
+        implications.append((antecedent, consequent_name))
+    for antecedent, consequent_name in implications:
         antecedents = _ast_identifiers(antecedent)
         if len(antecedents) != 1:
             continue
         antecedent_name = next(iter(antecedents))
-        if consequent_name == roles.get("locked") or "lock" in consequent_name.lower():
+        # <power-on> => <locked> fixes the default-safe state; anything else
+        # implying a single concept is the guarded-release rule. With no
+        # de-energise invariant the locked concept is unknown here, so the
+        # pattern's own word for it is the only remaining signal — that model
+        # fails on the missing power role regardless.
+        if consequent_name == roles.get("locked") or (
+            "locked" not in roles and "lock" in consequent_name.lower()
+        ):
             roles.setdefault("locked", consequent_name)
             roles.setdefault("power_on", antecedent_name)
         else:
@@ -1383,18 +1413,13 @@ def _check_profile_semantics(
             #
             # Removing the per-requirement table without this lost detection
             # outright: deleting a required invariant passed.
-            required_roles = {
-                "LOCKED_UNTIL_AUTHORISED_RELEASE": (
-                    _invariant_roles(graph),
-                    ("locked", "authorisation", "unlocked", "power"),
-                ),
-                "STARTUP_INHIBIT": (
-                    _startup_inhibit_roles(graph),
-                    ("latch", "reset", "inhibited", "forbidden"),
-                ),
-            }.get(effective_pattern)
-            if required_roles is not None:
-                roles, needed = required_roles
+            needed = PATTERN_INVARIANT_ROLES.get(effective_pattern)
+            if needed:
+                roles = (
+                    _startup_inhibit_roles(graph)
+                    if effective_pattern == "STARTUP_INHIBIT"
+                    else _invariant_roles(graph)
+                )
                 invalid = invalid or any(not roles.get(name) for name in needed)
             if invalid:
                 diagnostics.append(AGDiagnostic(

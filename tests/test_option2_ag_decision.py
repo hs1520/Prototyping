@@ -12,6 +12,8 @@ model that looks correct.
 """
 from __future__ import annotations
 
+import copy
+import itertools
 import json
 
 import pytest
@@ -354,18 +356,9 @@ def test_the_r2_assurance_path_produces_all_three_pillars_and_artifacts(tmp_path
     assert trace["pattern_conformance"]["verdict"] == "PASS"
 
 
-def test_the_prompt_states_every_field_the_validator_can_demand():
-    """Six times this session a validator demanded something the generator was
-    never told. Here it cost a whole 3x3 pilot: all three R2 runs failed closed
-    with "STARTUP_INHIBIT must state at least one invariant" because the decision
-    prompt listed no invariants key at all. The previous pilot ran only the timed
-    chain, which needs none, so nothing surfaced it.
-    """
+def _decision_prompt_text() -> str:
+    """The full prompt the decided mode puts in front of the model."""
     from src.prototyping.ag_chains import REQ_SAFE_008_CHAIN
-    from src.prototyping.ag_decision import (
-        INVARIANT_SOURCE_KINDS,
-        KNOWN_PATTERNS,
-    )
 
     captured = {}
 
@@ -381,7 +374,22 @@ def test_the_prompt_states_every_field_the_validator_can_demand():
     except RuntimeError:
         pass  # the stub answers with the wrong chain's decisions; the prompt is
               # what is under test
-    text = captured["text"]
+    return captured["text"]
+
+
+def test_the_prompt_states_every_field_the_validator_can_demand():
+    """Six times this session a validator demanded something the generator was
+    never told. Here it cost a whole 3x3 pilot: all three R2 runs failed closed
+    with "STARTUP_INHIBIT must state at least one invariant" because the decision
+    prompt listed no invariants key at all. The previous pilot ran only the timed
+    chain, which needs none, so nothing surfaced it.
+    """
+    from src.prototyping.ag_decision import (
+        INVARIANT_SOURCE_KINDS,
+        KNOWN_PATTERNS,
+    )
+
+    text = _decision_prompt_text()
 
     for field in ("safety_pattern", "timing_origin", "deadline_seconds",
                   "observation", "system_assumptions", "components",
@@ -394,6 +402,38 @@ def test_the_prompt_states_every_field_the_validator_can_demand():
         assert kind in text
     # and the exclusivity the validator enforces must be stated, not discovered
     assert "no deadline" in text and "no invariants" in text
+
+
+def test_the_prompt_states_the_semantic_obligations_not_only_the_field_names():
+    """A field name in the schema is not the obligation attached to it.
+
+    The pilot proved the granularity gap: the prompt listed `invariants`, so the
+    field-name guardrail above passed — while the checker separately demanded that
+    those invariants FILL THE PATTERN'S ROLES, which nothing had ever said. Both
+    invariant chains failed INVARIANT_SEMANTICS_INVALID with well-formed invariants
+    that simply did not cover the roles. The same held for `observation`: named in
+    the schema, but its entailment obligation unstated, and REQ_SAFE_004 answered
+    with an invented concept no component produces (DECOMPOSITION_INSUFFICIENT).
+
+    So this asserts against the checker's own tables, not a hand-list: a role added
+    to `PATTERN_INVARIANT_ROLES` fails here until the prompt states it.
+    """
+    from src.prototyping.ag_contracts import PATTERN_INVARIANT_ROLES
+    from src.prototyping.ag_convention import render_invariant_role_rules
+
+    text = _decision_prompt_text()
+
+    for pattern, roles in PATTERN_INVARIANT_ROLES.items():
+        for role in roles:
+            assert role in text, (
+                f"the checker refuses {pattern} when the {role!r} role is "
+                "unfilled; the prompt never says the role exists"
+            )
+    # single-sourced from ag_convention, so the rule cannot drift between the
+    # decided prompt and the authored-SysML one
+    assert render_invariant_role_rules() in text
+    # the entailment obligation behind `observation`, likewise stated
+    assert "PRODUCES" in text
 
 
 def test_all_three_safety_patterns_reach_pass_under_the_decided_mode():
@@ -469,6 +509,181 @@ def test_all_three_safety_patterns_reach_pass_under_the_decided_mode():
         assert report.verdict == "PASS", (
             chain.source_requirement, [d.code for d in report.errors()]
         )
+
+
+def _verdict(chain, decisions):
+    from src.prototyping.ag_emitter import emit_ag_package
+
+    spec = build_spec_from_decisions(
+        decisions, build_architecture_boundary_draft(chain)
+    )
+    base = (
+        f"package X {{ requirement def {chain.source_requirement} "
+        "{ doc /* t */ } }"
+    )
+    report = check_ag_graph(
+        extract_ag_graph(base + "\n\n" + emit_ag_package(spec))
+    )
+    return report.verdict, [item.code for item in report.errors()]
+
+
+def _decisions_from_the_published_rules():
+    """Decision sets an author could write from the published rules alone.
+
+    Every concept the rules leave free is spelled differently from the reviewed
+    chain — the forbidden states, the reset event, the unlocked and power
+    concepts. Only the role-carrying concepts are the boundary's, because the
+    published rule says the latch/locked concept must be one the architecture
+    produces.
+    """
+    from src.prototyping import ag_chains
+
+    derived = "STUDENT_DERIVED_DESIGN_CONSTRAINT"
+    startup_inhibit = {
+        "safety_pattern": "STARTUP_INHIBIT",
+        "timing_origin": None, "deadline_seconds": None,
+        "observation": (
+            "armingTransitionInhibited and airborneTransitionInhibited"
+        ),
+        "system_assumptions": ["powerOnSelfTestActive", "sensorFailureReported"],
+        "priority": None,
+        "components": [
+            {"component_id": "SelfTestStatusLatchContract",
+             "lifecycle_events": [],
+             "assumptions": [
+                 {"concept": "powerOnSelfTestActive", "discharged_by": None},
+                 {"concept": "sensorFailureReported", "discharged_by": None}]},
+            {"component_id": "ArmingAuthorityContract", "lifecycle_events": [],
+             "assumptions": [{"concept": "startupInhibitActive",
+                              "discharged_by": "SelfTestStatusLatchContract"}]},
+            {"component_id": "FlightModeAuthorityContract",
+             "lifecycle_events": [],
+             "assumptions": [{"concept": "startupInhibitActive",
+                              "discharged_by": "SelfTestStatusLatchContract"}]},
+        ],
+        "invariants": [
+            # (a) the forbidden role — this author's own names for the states
+            {"invariant_id": "INV_NoArmOnFailedSelfTest",
+             "antecedent": [{"concept": "powerOnSelfTestActive"},
+                            {"concept": "sensorFailureReported"}],
+             "consequent": [{"concept": "vehicleArmed", "negated": True},
+                            {"concept": "vehicleAirborne", "negated": True}],
+             "source_kind": "STAKEHOLDER"},
+            # (b) the latch and what it inhibits
+            {"invariant_id": "INV_LatchEffect",
+             "antecedent": [{"concept": "startupInhibitActive"}],
+             "consequent": [{"concept": "armingTransitionInhibited"},
+                            {"concept": "airborneTransitionInhibited"}],
+             "source_kind": derived},
+            # (c) the reset event that clears it
+            {"invariant_id": "INV_LatchClearedOnPass",
+             "antecedent": [{"concept": "selfTestCompletedWithoutFault"}],
+             "consequent": [{"concept": "startupInhibitActive", "negated": True}],
+             "source_kind": derived},
+        ],
+    }
+    locked_release = {
+        "safety_pattern": "LOCKED_UNTIL_AUTHORISED_RELEASE",
+        "timing_origin": None, "deadline_seconds": None,
+        "observation": "payloadLocked",
+        "system_assumptions": ["receivedReleaseCommand", "authorisationDataValid"],
+        "priority": None,
+        "components": [
+            {"component_id": "ReleaseCommandGatewayContract",
+             "lifecycle_events": [],
+             "assumptions": [
+                 {"concept": "receivedReleaseCommand", "discharged_by": None},
+                 {"concept": "authorisationDataValid", "discharged_by": None}]},
+            # safe by DEFAULT: every consumed concept is an event, so it assumes
+            # nothing — the published rule, not this chain's encoding
+            {"component_id": "PayloadLockMechanismContract",
+             "lifecycle_events": ["powerOnEvent", "powerLostEvent",
+                                  "authorisedReleaseCommandReceived"],
+             "assumptions": [
+                 {"concept": "powerOnEvent", "discharged_by": None},
+                 {"concept": "powerLostEvent", "discharged_by": None},
+                 {"concept": "authorisedReleaseCommandReceived",
+                  "discharged_by": "ReleaseCommandGatewayContract"}]},
+        ],
+        "invariants": [
+            {"invariant_id": "INV_DefaultLockedAtPowerOn",
+             "antecedent": [{"concept": "powerOnEvent"}],
+             "consequent": [{"concept": "payloadLocked"}],
+             "source_kind": "STAKEHOLDER"},
+            {"invariant_id": "INV_ReleaseNeedsAuthorisation",
+             "antecedent": [{"concept": "payloadReleased"}],
+             "consequent": [{"concept": "authorisedReleaseCommandReceived"}],
+             "source_kind": derived},
+            {"invariant_id": "INV_DeenergiseToLock",
+             "antecedent": [{"concept": "lockActuatorPowered", "negated": True}],
+             "consequent": [{"concept": "payloadLocked"}],
+             "source_kind": derived},
+        ],
+    }
+
+    return (
+        (ag_chains.REQ_SAFE_004_CHAIN, startup_inhibit),
+        (ag_chains.REQ_SAFE_008_CHAIN, locked_release),
+    )
+
+
+def test_an_author_following_only_the_published_roles_reaches_pass():
+    """Sufficiency of the *rules*, not reproduction of the *answer*.
+
+    The test above feeds the reviewed chains' own invariants back in, so it cannot
+    distinguish "the rules are enough" from "the answer was copied". Both chains
+    failed INVARIANT_SEMANTICS_INVALID on the measured pilot; if stating the roles
+    is the fix, they pass here without either chain's reviewed invariant set.
+    """
+    for chain, decisions in _decisions_from_the_published_rules():
+        assert _verdict(chain, decisions) == ("PASS", []), (
+            chain.source_requirement, _verdict(chain, decisions)
+        )
+        # and none of it may be the reviewed chain's own invariant identity
+        reviewed = {
+            name
+            for item in chain.invariants
+            for name in (item.invariant_id, item.source_id)
+        }
+        assert not reviewed & {
+            item["invariant_id"] for item in decisions["invariants"]
+        }
+
+
+def test_dropping_any_one_published_obligation_is_still_detected():
+    """Publishing the roles must not cost detection strength.
+
+    The rules now say each invariant pattern needs three invariants, so omitting
+    any one of them must be caught — including the power-on default, which was NOT
+    caught until `power_on` became a required role: locked and power were both
+    filled by the de-energise invariant, so a model that never said what the system
+    powers up into passed.
+    """
+    for chain, decisions in _decisions_from_the_published_rules():
+        for index in range(len(decisions["invariants"])):
+            thinned = copy.deepcopy(decisions)
+            dropped = thinned["invariants"].pop(index)["invariant_id"]
+            verdict, codes = _verdict(chain, thinned)
+            assert verdict != "PASS", (
+                f"{chain.source_requirement} passed without {dropped}"
+            )
+            assert "INVARIANT_SEMANTICS_INVALID" in codes
+
+
+def test_the_roles_do_not_depend_on_the_order_the_invariants_are_listed_in():
+    """Declaration order is not a property of the pattern, and an author has no
+    way to know a hidden one. The locked-release roles were read in list order
+    until this was pinned, so the same three invariants passed or failed depending
+    on which the author wrote first."""
+    for chain, decisions in _decisions_from_the_published_rules():
+        for order in itertools.permutations(range(len(decisions["invariants"]))):
+            reordered = copy.deepcopy(decisions)
+            reordered["invariants"] = [
+                decisions["invariants"][index] for index in order
+            ]
+            assert _verdict(chain, reordered) == ("PASS", []), (
+                chain.source_requirement, order, _verdict(chain, reordered)
+            )
 
 
 def test_a_declared_lifecycle_event_is_not_an_assumption():

@@ -80,6 +80,85 @@ class Obligation:
             )
 
 
+@dataclass(frozen=True)
+class PatternRoles:
+    """The roles one safety pattern's invariants must fill, and how to say so.
+
+    A pattern is *defined* by these roles: a locked-until-authorised-release model
+    that never says where power loss leads has not stated the pattern, however it
+    names its invariants. The checker therefore refuses an invariant set that
+    leaves a role unfilled — which is CONVENTION, not gold, and must be published:
+    stating "which roles" leaves "which concepts fill them" entirely to the author,
+    exactly as a notation rule leaves the engineering to the engineer.
+
+    Two measured chains failed on precisely this. Both stated well-formed
+    invariants that simply did not cover the pattern's roles, because nothing in
+    the prompt had ever said which roles the pattern has.
+    """
+
+    pattern: str
+    #: Role names, identical to ``ag_contracts.PATTERN_INVARIANT_ROLES``; the two
+    #: are pinned to each other in the tests.
+    roles: Tuple[str, ...]
+    #: The invariant shapes that fill them, in the decision format's terms.
+    authoring_rule: str
+
+
+#: What each invariant pattern's invariants must SAY. The shapes are the ones the
+#: checker derives its roles from, read off the reference implementation rather
+#: than assumed.
+INVARIANT_ROLE_OBLIGATIONS: Tuple[PatternRoles, ...] = (
+    PatternRoles(
+        "LOCKED_UNTIL_AUTHORISED_RELEASE",
+        ("locked", "authorisation", "unlocked", "power", "power_on"),
+        "LOCKED_UNTIL_AUTHORISED_RELEASE is defined by five roles — locked, "
+        "power_on, unlocked, authorisation, power — and needs one invariant per "
+        "obligation, three in all:\n"
+        "     (a) `<power-on concept> => <locked concept>`: the POWER_ON and "
+        "LOCKED roles — the state the system defaults to when it powers on.\n"
+        "     (b) `<unlocked concept> => <authorisation concept>`: the UNLOCKED "
+        "and AUTHORISATION roles — being unlocked implies the authorisation was "
+        "granted, so authorisation is the only way out of locked.\n"
+        "     (c) `not <power-available concept> => <locked concept>`: the POWER "
+        "role — losing power returns to locked. Its antecedent is negated; no "
+        "other antecedent in this pattern is.\n"
+        "     The locked concept must be one the architecture actually produces: "
+        "the component producing it is the mechanism whose behaviour realises the "
+        "pattern, and that mechanism must be safe by DEFAULT — list every concept "
+        "it consumes under lifecycle_events so it assumes nothing at all.",
+    ),
+    PatternRoles(
+        "STARTUP_INHIBIT",
+        ("latch", "reset", "inhibited", "forbidden"),
+        "STARTUP_INHIBIT is defined by four roles — latch, reset, inhibited, "
+        "forbidden — and needs one invariant per obligation, three in all:\n"
+        "     (a) `<condition concepts> => not <forbidden> and not <forbidden>`: "
+        "the FORBIDDEN role — name in this one invariant every state the inhibit "
+        "must keep the system out of, each of them negated.\n"
+        "     (b) `<latch concept> => <inhibited concept> [and <inhibited>]`: the "
+        "LATCH and INHIBITED roles — what holding the latch inhibits. Nothing is "
+        "negated here.\n"
+        "     (c) `<reset concept> => not <latch concept>`: the RESET role, the "
+        "event that clears the latch. This is the only invariant whose antecedent "
+        "is one concept and whose consequent is one negated concept.\n"
+        "     The latch concept must be one the architecture actually produces: "
+        "the component producing it is the one whose behaviour the pattern is "
+        "checked against.",
+    ),
+)
+
+
+def render_invariant_role_rules() -> str:
+    """The per-pattern role obligations, as prompt text.
+
+    Rendered from the table above so a role the checker demands cannot be stated
+    in one prompt and forgotten in another.
+    """
+    return "\n".join(
+        f"  * {item.authoring_rule}" for item in INVARIANT_ROLE_OBLIGATIONS
+    )
+
+
 #: Obligations keyed by checker diagnostic code.
 DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
@@ -224,7 +303,9 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
         "INVARIANT_SEMANTICS_INVALID", CONVENTION,
         "Each invariant must bind a parseable Boolean AST, its provenance, and "
-        "the model elements it constrains, consistently with each other.",
+        "the model elements it constrains, consistently with each other — and the "
+        "invariants must together fill every role the declared pattern is defined "
+        "by:\n" + render_invariant_role_rules(),
            tier=REFINEMENT,
     ),
     Obligation(
