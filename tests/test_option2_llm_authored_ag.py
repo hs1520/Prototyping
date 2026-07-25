@@ -110,6 +110,7 @@ def test_setup_c_prompt_gives_complete_interfaces_but_not_the_discharge_answer()
     class _Capture:
         def chat(self, prompt, system_prompt=None):
             captured["prompt"] = prompt
+            captured["system"] = system_prompt or ""
             return emit_ag_package(REQ_SAFE_005_CHAIN)
 
     orch = Orchestrator(_Capture(), revised_experiment_arm="R2-BBAG",
@@ -123,6 +124,53 @@ def test_setup_c_prompt_gives_complete_interfaces_but_not_the_discharge_answer()
     # but the discharge relationships are the LLM's to derive — not handed over
     assert "dischargeCommand" not in prompt
     assert "discharge from" not in prompt.lower()
+
+
+def test_prompt_states_the_notation_conventions_but_not_the_reviewed_answers():
+    """The checker's conventions are properties of the notation, so stating them
+    is fair (the deterministic emitter has them by construction). The *safety
+    facts* — which pattern applies, the timing origin, the deadline, the winning
+    priority member — stay the LLM's to derive, or the accuracy signal is void."""
+    captured = {}
+
+    class _Capture:
+        def chat(self, prompt, system_prompt=None):
+            captured["both"] = f"{system_prompt or ''}\n{prompt}"
+            return emit_ag_package(REQ_SAFE_005_CHAIN)
+
+    orch = Orchestrator(_Capture(), revised_experiment_arm="R2-BBAG",
+                        r2_generation_mode="LLM_AUTHORED_AG")
+    orch._generate_llm_authored_ag_package(REQ_SAFE_005_CHAIN, _BASE)
+    text = captured["both"]
+
+    # conventions the checker enforces must be stated, or a defect is unfixable
+    assert "verification def" in text          # OBSERVATION_MISSING
+    assert "realize" in text                   # REALIZATION_MISSING
+    assert "safety_pattern=" in text           # PATTERN_DECLARATION_INCONSISTENT
+    assert "timing_origin=" in text
+
+    # the full pattern vocabulary is offered, so classifying is a real derivation
+    for pattern in ("TRIGGERED_TIMED_FAILSAFE_RESPONSE", "STARTUP_INHIBIT",
+                    "LOCKED_UNTIL_AUTHORISED_RELEASE"):
+        assert pattern in text
+    # ...and the answer is never asserted for this requirement
+    assert "safety_pattern=TRIGGERED_TIMED_FAILSAFE_RESPONSE" not in text
+    assert f"timing_origin={REQ_SAFE_005_CHAIN.timing_origin}" not in text
+
+    # Reviewed safety facts stay withheld. The requirement text itself is the
+    # legitimate input (it is what the deadline must be *read from*), so the leak
+    # check is on everything the prompt adds around it.
+    assert "0.5" in text, "the requirement text must still carry its own deadline"
+    requirement_text = _BASE.split("doc /*")[1].split("*/")[0]
+    added = text.replace(requirement_text, "")
+    assert requirement_text not in added, "requirement text must be stripped once"
+    # the deadline VALUE is never stated outside the requirement — only the
+    # attribute name that must carry it, and an instruction to derive it
+    assert str(REQ_SAFE_005_CHAIN.deadline) not in added
+    assert "maxLatency" in text                # the convention name is fair game
+    assert REQ_SAFE_005_CHAIN.priority.response_set_id not in added
+    for member in REQ_SAFE_005_CHAIN.priority.members:
+        assert member not in added
 
 
 class _SequenceLLM:
@@ -161,6 +209,31 @@ def test_feedback_loop_converges_to_pass_under_the_ag_check():
     # the second call carried the checker's diagnostics + the previous attempt
     assert "PREVIOUS attempt" in llm.last_prompt
     assert "DISCHARGE" in llm.last_prompt.upper()  # the checker's actual defect code
+
+
+def test_feedback_loop_reports_the_verdict_of_the_package_it_returns():
+    """A later round can regress — even to invalid syntax. The reported verdict
+    must describe the package actually delivered, not the last attempt made."""
+    correct = emit_ag_package(REQ_SAFE_005_CHAIN)
+    broken = "\n".join(
+        line for line in correct.splitlines()
+        if "dependency discharge" not in line.lower()
+    )
+    # scores 2 errors, then regresses to unparseable output on every later round
+    orch = Orchestrator(_SequenceLLM([broken, "not sysml at all"]),
+                        revised_experiment_arm="R2-BBAG",
+                        r2_generation_mode="LLM_AUTHORED_AG")
+    result = orch._author_llm_ag_with_feedback(
+        REQ_SAFE_005_CHAIN, _BASE, max_iterations=3)
+
+    # the last attempt never even parsed, so its history verdict is absent...
+    assert result["history"][-1]["syntax_ok"] is False
+    assert result["history"][-1]["verdict"] is None
+    # ...but the delivered package is the scoreable first one, reported as such
+    assert result["final_verdict"] == "FAIL"
+    assert result["final_error_count"] == result["history"][0]["error_count"]
+    assert result["final_error_codes"] == result["history"][0]["error_codes"]
+    assert "SystemParachuteContract" in result["final_package"]
 
 
 def test_feedback_loop_returns_the_lowest_error_attempt_within_budget():

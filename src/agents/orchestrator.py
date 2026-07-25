@@ -1908,13 +1908,55 @@ class Orchestrator:
             "<name> first <s> accept <Signal> then <t>;` / `state <t> { entry "
             "action <a>; }`, and `dependency <name> from <A> to <B>;` "
             "(decompose*/realize*/discharge*). Invent no new keywords.\n"
-            "Two rules the toolchain enforces:\n"
+            "Rules the toolchain enforces (these are the notation's rules — the "
+            "engineering content is still yours to derive):\n"
             "1. Declare EVERY event you `accept` in a transition as its own "
             "`attribute def <Signal>;` inside the package before using it.\n"
             "2. `dependency` endpoints are element NAMES only — never dotted "
             "member references. A discharge links the producing contract to the "
             "consuming contract by name: `dependency dischargeX from "
             "<ProducerContract> to <ConsumerContract>;` (NOT `Contract.constraint`).\n"
+            "3. EVERY contract (system and component) must be realized by exactly "
+            "one state-machine behaviour, linked as `dependency realize<Contract> "
+            "from <Contract> to <ItsStateDef>;`.\n"
+            "4. The system contract must be observed by exactly one verification "
+            "element:\n"
+            "   `verification def <V> { objective <o> { verify requirement <r> : "
+            "<SystemContract>; } }`\n"
+            "   plus `dependency observe<V> from <SystemContract> to <V>;`.\n"
+            "5. The system contract's provenance line must also declare which "
+            "safety pattern it instantiates and which assumption attribute starts "
+            "its timing, in exactly this form:\n"
+            "   `doc /* bounded A/G system contract for <REQ>; safety_pattern="
+            "<PATTERN>; timing_origin=<assumption attribute> */`\n"
+            "   <PATTERN> is exactly one of TRIGGERED_TIMED_FAILSAFE_RESPONSE, "
+            "STARTUP_INHIBIT, LOCKED_UNTIL_AUTHORISED_RELEASE — classify the "
+            "requirement yourself.\n"
+            "6. If (and only if) you classify it as "
+            "TRIGGERED_TIMED_FAILSAFE_RESPONSE, the pattern requires the response "
+            "arbitration to be modelled explicitly, using these fixed element names "
+            "(the CAPITALISED parts are yours to derive from the requirement):\n"
+            "   `enum def <RESPONSE_SET> { enum <MEMBER>; ... }`\n"
+            "   `requirement def SafetyResponsePriorityContract {`\n"
+            "     `doc /* bounded A/G evaluator semantic auxiliary; "
+            "response_set_id=<RESPONSE_SET> */`\n"
+            "     `attribute <TRIGGER> : Boolean;`\n"
+            "     `attribute selectedResponse : <RESPONSE_SET>;`\n"
+            "     `assume constraint priorityTrigger { <TRIGGER> }`\n"
+            "     `require constraint selectHighestPriority { selectedResponse == "
+            "<RESPONSE_SET>::<WINNER> }`\n"
+            "     one `require constraint precedence_<WINNER>_over_<LOSER> { not "
+            "<TRIGGER> or selectedResponse != <RESPONSE_SET>::<LOSER> }` per "
+            "response the winner must beat\n"
+            "   `}`\n"
+            "   plus `state def SafetyResponseArbitration { ... }` and its realize "
+            "dependency (rule 3).\n"
+            "7. A timed pattern must carry its budget in these attribute names: the "
+            "system contract gets `attribute maxLatency : DurationValue = <N> [s];` "
+            "and each component that consumes part of that budget gets `attribute "
+            "latencyBudget : DurationValue = <N> [s];` together with `attribute "
+            "timingSegmentRequired : Boolean = true;`. Read the overall deadline "
+            "from the requirement and apportion it across the components yourself.\n"
             "Output ONLY the SysML package."
         )
         prompt = (
@@ -1927,8 +1969,9 @@ class Orchestrator:
             f"component's realizing behaviour:\n{architecture}\n\n"
             f"System contract: {spec.system_contract}, decomposing to the "
             f"components above; system observed guarantee: {spec.observation}. Its "
-            f"first member MUST be the provenance line "
-            f"`doc /* bounded A/G system contract for {spec.source_requirement} */`.\n"
+            "first member MUST be the provenance line in the form given by rule 5 "
+            f"for {spec.source_requirement} — you choose the safety_pattern and the "
+            "timing_origin.\n"
             "For each component author its Boolean attributes, an assume constraint "
             "for each consumed input and a require constraint for each produced "
             "guarantee, the owning part and a satisfy, a realizing state-machine "
@@ -1936,7 +1979,7 @@ class Orchestrator:
             "non-environment assumption is discharged by the upstream component "
             f"that produces it.\n\n{feedback_section}"
             f"Wrap everything in `package {spec.package} "
-            "{{ ... }}` and output ONLY that package."
+            "{ ... }` and output ONLY that package."
         )
         raw = str(self.llm.chat(prompt, system_prompt=system_prompt))
         text = raw.replace("```sysml", "").replace("```", "").strip()
@@ -1978,6 +2021,8 @@ class Orchestrator:
         authored = self._generate_llm_authored_ag_package(spec, model_text)
         best_package = authored
         best_errors: Optional[int] = None
+        best_verdict: Optional[str] = None
+        best_codes: Dict[str, int] = {}
         history: List[Dict[str, Any]] = []
         for iteration in range(max_iterations):
             merged = model_text.rstrip() + "\n\n" + authored + "\n"
@@ -1996,13 +2041,19 @@ class Orchestrator:
                 }
             else:
                 report = check_ag_graph(extract_ag_graph(merged))
-                error_count = len(report.errors())
+                errors = report.errors()
+                error_count = len(errors)
+                codes: Dict[str, int] = {}
+                for diagnostic in errors:
+                    codes[diagnostic.code] = codes.get(diagnostic.code, 0) + 1
                 history.append({
                     "iteration": iteration, "syntax_ok": True,
                     "verdict": report.verdict, "error_count": error_count,
+                    "error_codes": codes,
                 })
                 if best_errors is None or error_count < best_errors:
                     best_package, best_errors = authored, error_count
+                    best_verdict, best_codes = report.verdict, codes
                 if report.verdict == "PASS":
                     break
                 feedback = {
@@ -2017,6 +2068,12 @@ class Orchestrator:
         return {
             "final_package": best_package,
             "final_merged": model_text.rstrip() + "\n\n" + best_package + "\n",
+            # The delivered package is the lowest-error attempt, which is not
+            # necessarily the last one (a later round can regress, even to invalid
+            # syntax). Report the verdict of what is actually returned.
+            "final_verdict": best_verdict,
+            "final_error_count": best_errors,
+            "final_error_codes": best_codes,
             "history": history,
         }
 
