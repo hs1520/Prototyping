@@ -288,3 +288,67 @@ def test_the_pipeline_hands_the_mode_to_the_orchestrator():
     )["revised_experiment"]
     assert reported["r2_generation_mode"] == "LLM_DECIDED_SPEC"
     assert reported["r2_intervention_version"] == "r2-bbag-llm-decided-spec-v1"
+
+
+def test_the_r2_assurance_path_produces_all_three_pillars_and_artifacts(tmp_path):
+    """End-to-end through the post-design R2 path, not a component call.
+
+    Every earlier validation of this mode called _apply_ag_contract_layer alone,
+    which is why a dropped generation mode and a hardcoded metadata field both
+    survived a green suite. This drives commit -> assurance -> artifact writing and
+    asserts the blackboard, pattern and traceability pillars all arrive, and that
+    the run reports the mode it actually executed.
+    """
+    from types import SimpleNamespace
+
+    from src.prototyping.run_artifacts import write_revised_run_artifacts
+    from src.sysml.lite_model import build_lite_model
+
+    # the committed doc text and the published requirement must agree — the
+    # blackboard protects source text and rejects a mismatch
+    requirement = (
+        "REQ-SAFE-005: " + _BASE.split("doc /*", 1)[1].split("*/", 1)[0].strip()
+    )
+
+    class _StubLLM:
+        def chat(self, user_message, system_prompt="", **kw):
+            return f"```json\n{json.dumps(_CORRECT)}\n```"
+
+        def complete(self, messages, **kw):
+            from src.llm.interface import LLMResponse
+            return LLMResponse(content="package Repair {}", model="stub")
+
+    orch = Orchestrator(_StubLLM(), revised_experiment_arm="R2-BBAG",
+                        r2_generation_mode="LLM_DECIDED_SPEC")
+    orch.last_requirement_input = {"mode": "frozen", "requirement_set_digest": "d"}
+    orch._prepare_design_handoff("DeliveryUAV", [requirement])
+    orch._finalize_design_handoff(
+        SimpleNamespace(success=True, reasoning="gen", metadata={}),
+        build_lite_model(_BASE, model_name="DeliveryUAV"),
+    )
+    merged = orch._apply_ag_contract_layer(_BASE, [requirement])
+    orch._commit_terminal_model(merged, producer="llm-decided")
+    assurance = orch._build_collaboration_artifacts(merged)
+
+    collaboration = assurance["collaboration"]
+    assert collaboration["blackboard"]                      # pillar 2
+    assert assurance["pattern_conformance_report"]          # pillar 1
+    assert assurance["ag_contract_graph"]
+    assert assurance["revised_experiment"]["r2_generation_mode"] == (
+        "LLM_DECIDED_SPEC"
+    )
+
+    result = dict(assurance)
+    result["model_sysml"] = merged
+    result["requirements"] = [requirement]
+    written = write_revised_run_artifacts(result, tmp_path)
+    for artifact in ("blackboard_snapshot", "pattern_conformance_report",
+                     "requirement_traceability", "coordination_metrics"):
+        assert artifact in written
+
+    trace = json.loads(
+        (tmp_path / "requirement_traceability.json").read_text()
+    )                                                       # pillar 3
+    assert trace["declared_requirements"] == ["REQ_SAFE_005"]
+    assert trace["traceability"]["fully_traced"] == 1
+    assert trace["pattern_conformance"]["verdict"] == "PASS"
