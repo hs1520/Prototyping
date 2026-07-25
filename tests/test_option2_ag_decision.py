@@ -680,6 +680,52 @@ def test_an_observation_that_is_an_expression_still_emits_parseable_sysml():
     assert chain is ag_chains.REQ_SAFE_004_CHAIN
 
 
+def test_the_release_rule_may_be_phrased_over_the_complement_of_locked():
+    """`not <locked> => <authorisation>` states the release obligation exactly as
+    `<unlocked> => <authorisation>` does — the author simply did not introduce a
+    second name for the complement of a concept.
+
+    A measured seed wrote it that way and was failed for it: the derivation read
+    every negated antecedent as de-energise-to-lock, so the unlocked and
+    authorisation roles came out empty and the model was rejected on phrasing
+    rather than on what it asserts. That is the same defect as rejecting an
+    element name, which this checker closed for names in ag-bounded-5.
+    """
+    from src.prototyping.ag_contracts import (
+        PATTERN_INVARIANT_ROLES, _invariant_roles,
+    )
+    from src.prototyping.ag_emitter import emit_ag_package
+
+    chain, decisions = _decisions_from_the_published_rules()[1]
+    complement = copy.deepcopy(decisions)
+    release = next(
+        item for item in complement["invariants"]
+        if item["consequent"][0]["concept"] == "authorisedReleaseCommandReceived"
+    )
+    release["antecedent"] = [{"concept": "payloadLocked", "negated": True}]
+
+    spec = build_spec_from_decisions(
+        complement, build_architecture_boundary_draft(chain)
+    )
+    roles = _invariant_roles(extract_ag_graph(emit_ag_package(spec)))
+    unfilled = [
+        role for role in PATTERN_INVARIANT_ROLES["LOCKED_UNTIL_AUTHORISED_RELEASE"]
+        if not roles.get(role)
+    ]
+    assert not unfilled, (unfilled, roles)
+    assert _verdict(chain, complement) == ("PASS", [])
+
+    # and the phrasing must not become a way to skip the obligation: with the
+    # release invariant gone the roles must go unfilled again
+    without = copy.deepcopy(complement)
+    without["invariants"] = [
+        item for item in without["invariants"] if item is not release
+        and item["consequent"][0]["concept"] != "authorisedReleaseCommandReceived"
+    ]
+    verdict, codes = _verdict(chain, without)
+    assert verdict != "PASS" and "INVARIANT_SEMANTICS_INVALID" in codes
+
+
 def test_dropping_any_one_published_obligation_is_still_detected():
     """Publishing the roles must not cost detection strength.
 

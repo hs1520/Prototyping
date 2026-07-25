@@ -954,9 +954,18 @@ def _invariant_roles(graph: AGGraph) -> Dict[str, str]:
     Deriving the roles this way is what lets the obligation be checked without the
     checker holding REQ_SAFE_008's state names, signals and action spellings — the
     condition that made a PASS on this chain partly recall rather than a verdict.
+
+    The unlocked state may be a concept of its own or simply ``not <locked>``:
+    ``not <locked> => <authorisation>`` states the release obligation exactly as
+    ``<unlocked> => <authorisation>`` does, and a measured run wrote it that way.
+    Rejecting a logical form because the author did not introduce a second name for
+    the complement of a concept is the same defect as rejecting an element name —
+    it makes a PASS depend on phrasing rather than on what the model asserts.
     """
     roles: Dict[str, str] = {}
     implications: List[Tuple[Any, str]] = []
+    negated: List[Tuple[str, str]] = []
+    concluded: Dict[str, int] = {}
     for invariant in graph.invariants or ():
         if not isinstance(invariant, Mapping):
             continue
@@ -965,18 +974,37 @@ def _invariant_roles(graph: AGGraph) -> Dict[str, str]:
         if len(consequents) != 1:
             continue
         consequent_name = next(iter(consequents))
-        # de-energise-to-lock is the one invariant with a negated antecedent, and it
-        # names the locked concept outright — so it is read first and the rest are
-        # classified against what it establishes. Reading them in declaration order
-        # instead made the roles depend on the order the author happened to list
-        # them in, which is not a property of the pattern.
+        concluded[consequent_name] = concluded.get(consequent_name, 0) + 1
+        # A negated antecedent is either de-energise-to-lock or the release rule
+        # phrased over the complement of the locked concept. Both are collected
+        # first and told apart below, once every conclusion is known; reading them
+        # in declaration order instead made the roles depend on the order the
+        # author happened to list them in, which is not a property of the pattern.
         if isinstance(antecedent, Mapping) and antecedent.get("node") == "Not":
-            power = _ast_identifiers(antecedent.get("expr"))
-            if len(power) == 1:
-                roles["power"] = next(iter(power))
-                roles["locked"] = consequent_name
+            operand = _ast_identifiers(antecedent.get("expr"))
+            if len(operand) == 1:
+                negated.append((next(iter(operand)), consequent_name))
             continue
         implications.append((antecedent, consequent_name))
+    # Two invariants conclude the locked concept — power-on defaults to it and
+    # power loss returns to it — so the concept concluded more than once is it.
+    # Identifying it first is what tells the two negated-antecedent forms apart.
+    ranked = sorted(concluded.items(), key=lambda item: -item[1])
+    locked_concept = (
+        ranked[0][0]
+        if ranked and ranked[0][1] > 1 and (len(ranked) == 1 or ranked[1][1] < ranked[0][1])
+        else None
+    )
+    for operand, consequent_name in negated:
+        if operand == locked_concept:
+            # not <locked> => <authorisation>: the release rule, with the unlocked
+            # state expressed as the complement of the locked one
+            roles["locked"] = operand
+            roles["unlocked"] = operand      # filled in negated position
+            roles["authorisation"] = consequent_name
+        else:
+            roles["power"] = operand
+            roles["locked"] = consequent_name
     for antecedent, consequent_name in implications:
         antecedents = _ast_identifiers(antecedent)
         if len(antecedents) != 1:
