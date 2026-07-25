@@ -132,6 +132,22 @@ def _bounded_expression(value: Any, field: str) -> str:
     return text
 
 
+def _expression_concepts(expression: str) -> Tuple[str, ...]:
+    """The concepts a bounded Boolean expression names, in order, deduplicated.
+
+    The emitter declares one `attribute <concept> : Boolean;` per observation
+    concept, so an observation that is an *expression* must be handed over as its
+    concepts, never as the expression itself: `attribute a and b : Boolean;` does
+    not parse. The hand-encoded chains carry the split explicitly; decisions did
+    not, and a measured seed died on the raw syntax gate for it.
+    """
+    return tuple(dict.fromkeys(
+        token
+        for token in expression.replace("(", " ").replace(")", " ").split()
+        if token not in ("not", "and", "or")
+    ))
+
+
 def _ast_concepts(node: Any) -> List[str]:
     """Every concept name a bounded Boolean AST references."""
     if not isinstance(node, Mapping):
@@ -585,6 +601,7 @@ def build_spec_from_decisions(
         deadline=float(deadline) if deadline not in (None, "") else None,
         components=tuple(components),
         verification=f"{stem}Verification",
+        system_observation_concepts=_expression_concepts(observation),
         pattern=str(decisions["safety_pattern"]),
         timing_origin=(
             _identifier(decisions.get("timing_origin"), "timing_origin")
@@ -604,7 +621,6 @@ def build_spec_from_decisions(
               for name in _ast_concepts(item.trigger_or_antecedent_ast)),
             *(name for item in invariants
               for name in _ast_concepts(item.required_consequent_ast)),
-            *(token for token in observation.replace("(", " ").replace(")", " ").split()
-              if token not in ("not", "and", "or")),
+            *_expression_concepts(observation),
         })),
     )

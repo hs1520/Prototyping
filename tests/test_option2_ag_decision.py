@@ -448,7 +448,6 @@ def test_all_three_safety_patterns_reach_pass_under_the_decided_mode():
     have occurred.
     """
     from src.prototyping import ag_chains
-    from src.prototyping.ag_emitter import emit_ag_package as _emit
 
     def _terms(node):
         if node.get("node") == "Identifier":
@@ -498,32 +497,36 @@ def test_all_three_safety_patterns_reach_pass_under_the_decided_mode():
                 for inv in chain.invariants
             ],
         }
-        base = (
-            f"package X {{ requirement def {chain.source_requirement} "
-            "{ doc /* t */ } }"
-        )
-        spec = build_spec_from_decisions(decisions, boundary)
-        report = check_ag_graph(
-            extract_ag_graph(base + "\n\n" + _emit(spec))
-        )
-        assert report.verdict == "PASS", (
-            chain.source_requirement, [d.code for d in report.errors()]
+        assert _verdict(chain, decisions) == ("PASS", []), (
+            chain.source_requirement, _verdict(chain, decisions)
         )
 
 
 def _verdict(chain, decisions):
+    """The verdict the *runner* would reach: raw syntax gate, then the A/G check.
+
+    The gate is included because the runner applies it and these tests did not: a
+    measured seed failed closed on `1 parser error` from a package every A/G-level
+    test here called PASS. An extractor that tolerates a malformed line is not
+    evidence that the parser does.
+    """
     from src.prototyping.ag_emitter import emit_ag_package
+    from src.simulation.syntax_checker import check_syntax
 
     spec = build_spec_from_decisions(
         decisions, build_architecture_boundary_draft(chain)
     )
+    emitted = emit_ag_package(spec)
+    gate = check_syntax(emitted, fail_closed=True, filter_stdlib_diagnostics=True)
+    if gate.has_errors:
+        return "SYNTAX", [
+            str(item)[:160] for item in (*gate.parser_errors, *gate.sema_errors)[:3]
+        ]
     base = (
         f"package X {{ requirement def {chain.source_requirement} "
         "{ doc /* t */ } }"
     )
-    report = check_ag_graph(
-        extract_ag_graph(base + "\n\n" + emit_ag_package(spec))
-    )
+    report = check_ag_graph(extract_ag_graph(base + "\n\n" + emitted))
     return report.verdict, [item.code for item in report.errors()]
 
 
@@ -648,6 +651,33 @@ def test_an_author_following_only_the_published_roles_reaches_pass():
         assert not reviewed & {
             item["invariant_id"] for item in decisions["invariants"]
         }
+
+
+def test_an_observation_that_is_an_expression_still_emits_parseable_sysml():
+    """The decided mode accepts a Boolean expression as the observation — an
+    invariant pattern's system guarantee often is one — but the emitter declares
+    one `attribute <concept> : Boolean;` per observation concept. Handed the whole
+    expression it wrote `attribute a and b : Boolean;`, which does not parse.
+
+    A measured seed died on exactly that, one parser error, after every A/G-level
+    test in this file called the same package PASS.
+    """
+    from src.prototyping import ag_chains
+
+    for chain, decisions in _decisions_from_the_published_rules():
+        spec = build_spec_from_decisions(
+            decisions, build_architecture_boundary_draft(chain)
+        )
+        for concept in spec.system_observation_concepts:
+            assert " " not in concept, concept
+        assert set(spec.system_observation_concepts) <= set(
+            spec.selected_model_elements
+        )
+    # and the case that actually broke: a two-concept observation
+    chain, decisions = _decisions_from_the_published_rules()[0]
+    assert " and " in decisions["observation"], "this case must stay conjunctive"
+    assert _verdict(chain, decisions) == ("PASS", [])
+    assert chain is ag_chains.REQ_SAFE_004_CHAIN
 
 
 def test_dropping_any_one_published_obligation_is_still_detected():
