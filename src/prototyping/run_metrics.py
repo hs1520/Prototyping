@@ -13,8 +13,17 @@ Honesty notes carried in the output:
 - handoff-based metrics have a denominator of two migrated handoffs in the MVP
   (RequirementsAgent→DesignAgent, DesignAgent→VerificationAgent) — a bounded
   subset, still reported as illustrative rather than a pipeline-wide rate (§13).
-- ``irrelevant_context_ratio`` needs a per-task dependency oracle and is not
-  computed here; envelope truncation is reported instead.
+- ``irrelevant_context_ratio`` (§13) is deliberately NOT computed, and no proxy
+  is reported in its place. Its definition — envelope elements outside the
+  dependency closure of the task target — has no operational meaning here: the
+  ContextBuilder does not derive a closure, it carries exactly the record ids its
+  caller passes. Defining "in closure" as "was included" makes the ratio 0 by
+  construction; defining it as "is a required topic" misclassifies legitimate
+  context, since repair envelopes properly carry prior attempts. Either number
+  would look like evidence and be none. Computing it honestly needs an
+  independent per-task dependency oracle over model elements, which does not
+  exist. ``envelope_composition`` and ``envelope_truncation`` are reported
+  instead, as descriptions rather than as a quality ratio.
 """
 from __future__ import annotations
 
@@ -81,6 +90,31 @@ def compute_coordination_metrics(
     # A model-dependent turn on a superseded base without rebasing is prevented by
     # TaskSession.assert_current; a completed session that carries a rebase pointer
     # rebased correctly. Count any COMPLETED session left on a non-committed base.
+    # envelope composition: how many carried items were required typed
+    # publications for their task, and how many were supplementary
+    tasks_by_id = {str(t.get("task_id")): t for t in (board.get("tasks") or ())}
+    envelope_items = 0
+    envelope_required_items = 0
+    for envelope in envelopes:
+        required = {
+            str(topic)
+            for topic in (
+                tasks_by_id.get(str(envelope.get("task_id")), {}).get(
+                    "required_topics"
+                ) or ()
+            )
+        }
+        for item in envelope.get("context_item_provenance") or ():
+            if item.get("kind") != "blackboard_record":
+                continue
+            envelope_items += 1
+            if str(item.get("topic")) in required:
+                envelope_required_items += 1
+
+    stale_access = dict(board.get("stale_access") or {})
+    stale_rejected = int(stale_access.get("rejected") or 0)
+    stale_permitted = int(stale_access.get("permitted") or 0)
+    stale_attempted = stale_rejected + stale_permitted
     stale_revision_use = sum(
         1 for s in sessions
         if s.get("status") == "COMPLETED"
@@ -158,6 +192,21 @@ def compute_coordination_metrics(
             "target": 0,
             "note": "enforced by TaskSession.assert_current",
         },
+        # §13: rejected / attempted operations against a superseded revision. A
+        # rejection raises, so it is counted at the guard rather than recovered
+        # from the record log, which only ever holds operations that succeeded.
+        # `value` is None when nothing was attempted: a run that never went stale
+        # reports no rate rather than a vacuous 1.0.
+        "stale_rejection_rate": {
+            "rejected": stale_rejected,
+            "permitted": stale_permitted,
+            "attempted": stale_attempted,
+            "value": _ratio(stale_rejected, stale_attempted),
+            "note": (
+                "denominator is attempts against a superseded revision; a run "
+                "with no stale attempt reports null, not 1.0"
+            ),
+        },
         "cross_role_contamination": {
             "count": cross_role,
             "target": 0,
@@ -165,6 +214,19 @@ def compute_coordination_metrics(
         },
         "session_context_growth": growth,
         "envelope_truncation": {"truncated": truncated, "total": len(envelopes)},
+        # Descriptive stand-in for irrelevant_context_ratio, which is deliberately
+        # NOT computed (see the module docstring). This reports what the envelopes
+        # actually contained — required-topic items versus supplementary ones — and
+        # makes no claim that the supplementary items were unnecessary.
+        "envelope_composition": {
+            "items": envelope_items,
+            "required_topic_items": envelope_required_items,
+            "supplementary_items": envelope_items - envelope_required_items,
+            "note": (
+                "descriptive only; a supplementary item is not evidence of "
+                "irrelevance — repair context legitimately carries prior attempts"
+            ),
+        },
         "cost": cost,
         "mvp_caveats": [
             "handoff/role metrics have a denominator of two migrated handoffs "

@@ -145,6 +145,13 @@ class Blackboard:
         self._records: list[BlackboardRecord] = []
         self._tasks: dict[str, BlackboardTask] = {}
         self._protected_requirement_defs: dict[str, str] = {}
+        # Stale-access accounting (§13 Group A). A rejection raises, so without
+        # counting it here neither the numerator nor the denominator survives into
+        # the archived artifacts and the metric cannot be computed at all.
+        # `permitted` counts accesses to a superseded revision that were allowed
+        # (an explicit `allow_stale` read), so the rate has a denominator that can
+        # in principle be less than 1.0 rather than being true by construction.
+        self._stale_access: dict[str, int] = {"rejected": 0, "permitted": 0}
         self._check_and_extend_protection(initial_text)
 
     @staticmethod
@@ -272,10 +279,15 @@ class Blackboard:
         revision = self.current_revision if model_revision is None else int(model_revision)
         if revision < 0 or revision >= len(self._revisions):
             raise StaleRevisionError(f"unknown model revision: {revision}")
-        if not allow_stale and revision != self.current_revision:
-            raise StaleRevisionError(
-                f"record revision {revision} is stale; current={self.current_revision}"
-            )
+        if revision != self.current_revision:
+            if allow_stale:
+                self._stale_access["permitted"] += 1
+            else:
+                self._stale_access["rejected"] += 1
+                raise StaleRevisionError(
+                    f"record revision {revision} is stale; "
+                    f"current={self.current_revision}"
+                )
         model = self._revisions[revision]
         self._record_sequence += 1
         clean_payload = dict(payload)
@@ -377,11 +389,13 @@ class Blackboard:
         session_id: Optional[str] = None,
     ) -> ModelRevision:
         if int(base_revision) != self.current_revision:
+            self._stale_access["rejected"] += 1
             raise StaleRevisionError(
                 f"patch base revision {base_revision} is stale; "
                 f"current={self.current_revision}"
             )
         if str(base_digest) != self.current_model.model_digest:
+            self._stale_access["rejected"] += 1
             raise StaleRevisionError(
                 "patch base digest does not match the committed model at "
                 f"revision {self.current_revision}"
@@ -451,4 +465,5 @@ class Blackboard:
             },
             "tasks": [self._tasks[key].to_dict() for key in sorted(self._tasks)],
             "records": [item.to_dict() for item in self._records],
+            "stale_access": dict(self._stale_access),
         }
