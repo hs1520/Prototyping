@@ -28,7 +28,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-AG_CHECKER_VERSION = "ag-bounded-4"
+# ag-bounded-5: the checker became gold-blind. Comparisons against reviewed
+# per-requirement answers (pattern profile, REQ_SAFE_005 response set/ordering,
+# literal element names) moved to the evaluator, which already scored them.
+# Verdicts are NOT comparable with ag-bounded-4 evidence.
+AG_CHECKER_VERSION = "ag-bounded-5"
 
 # Completeness states (§6.3).
 READY = "READY"
@@ -92,26 +96,18 @@ _INVARIANT_PATTERNS = {
     "STARTUP_INHIBIT",
     "LOCKED_UNTIL_AUTHORISED_RELEASE",
 }
-_SOURCE_PATTERN_PROFILE = {
-    "REQ_SAFE_004": "STARTUP_INHIBIT",
-    "REQ_SAFE_005": _TIMED_PATTERN,
-    "REQ_SAFE_008": "LOCKED_UNTIL_AUTHORISED_RELEASE",
-}
+_KNOWN_PATTERNS = {_TIMED_PATTERN, *_INVARIANT_PATTERNS}
 _INVARIANT_SOURCE_KINDS = {
     "STAKEHOLDER",
     "STUDENT_DERIVED_DESIGN_CONSTRAINT",
 }
-_SAFE005_PRIORITY_MEMBERS = {
-    "PARACHUTE_DEPLOYMENT",
-    "CONTROLLED_BATTERY_LANDING",
-    "COMMUNICATION_LOSS_SAFE_LANDING",
-    "LOW_BATTERY_RETURN_TO_BASE",
-}
-_SAFE005_PRIORITY_EDGES = {
-    ("PARACHUTE_DEPLOYMENT", "CONTROLLED_BATTERY_LANDING"),
-    ("PARACHUTE_DEPLOYMENT", "COMMUNICATION_LOSS_SAFE_LANDING"),
-    ("PARACHUTE_DEPLOYMENT", "LOW_BATTERY_RETURN_TO_BASE"),
-}
+# REQ_SAFE_005's reviewed response set and precedence ordering used to be pinned
+# here and compared against directly. That made a gold-blind runtime verdict depend
+# on the reviewed answer, contradicting this module's own contract (a PASS means
+# the graph is complete and *internally* compatible) and making the priority
+# topology unmeasurable in the LLM-authored arm — it could only be recalled, never
+# derived. Those comparisons now live solely in
+# `ag_eval_semantics.priority_agreement`, which scores them against frozen gold.
 
 
 def _norm(concept: str, aliases: Mapping[str, str]) -> str:
@@ -1090,21 +1086,23 @@ def _check_profile_semantics(
         return []
     diagnostics: List[AGDiagnostic] = []
     system = graph.system
-    expected_pattern = _SOURCE_PATTERN_PROFILE.get(system.source_requirement or "")
     declared_pattern = system.declared_pattern
     effective_pattern = (
         declared_pattern
         or (_TIMED_PATTERN if system.timing_budget is not None else "STARTUP_INHIBIT")
     )
-    if expected_pattern is not None and declared_pattern != expected_pattern:
+    # Which pattern a given requirement *ought* to instantiate is an accuracy
+    # question answered by the evaluator against frozen gold, not here: this
+    # checker is gold-blind and may only ask whether the model is internally
+    # consistent with the pattern it declares.
+    if declared_pattern is not None and declared_pattern not in _KNOWN_PATTERNS:
         diagnostics.append(AGDiagnostic(
             CODE_PATTERN_DECLARATION_INCONSISTENT,
-            f"{system.name} must declare safety_pattern={expected_pattern} for "
-            f"{system.source_requirement}; found {declared_pattern!r}",
+            f"{system.name} declares unknown safety_pattern={declared_pattern!r}; "
+            f"expected one of {sorted(_KNOWN_PATTERNS)}",
             contract=system.name,
             subject=system.source_requirement,
         ))
-        effective_pattern = expected_pattern
     if (
         (effective_pattern == _TIMED_PATTERN and system.timing_budget is None)
         or (
@@ -1158,51 +1156,60 @@ def _check_profile_semantics(
             isinstance(topology, Mapping)
             and topology.get("selection_action_connected") is True
         )
-        recovery_link = next(
+        # Identify the participants structurally, by the role each plays in the
+        # committed model, rather than by this chain's reviewed element names.
+        observation = system.observation or ""
+        observing_component = next(
+            (
+                item for item in graph.components
+                if observation in item.boolean_guarantee_concepts()
+            ),
+            None,
+        )
+        observing_link = next(
             (
                 item for item in realization_links
-                if item.get("contract") == "RecoverySystemContract"
+                if observing_component
+                and item.get("contract") == observing_component.name
             ),
             {},
         )
-        arbiter = next(
-            (
-                item for item in graph.components
-                if item.name == "SafetyResponseArbiterContract"
-            ),
-            None,
-        )
-        arbiter_guarantees = (
-            set(arbiter.boolean_guarantee_concepts()) if arbiter else set()
-        )
-        recovery_power = next(
-            (
-                item for item in graph.components
-                if item.name == "RecoveryPowerSupplyContract"
-            ),
-            None,
-        )
-        recovery_power_behavior = _behavior_for_contract(
-            graph, realization_links, "RecoveryPowerSupplyContract"
-        )
-        recovery_power_available_at_boundary = bool(
-            recovery_power
-            and set(recovery_power.boolean_guarantee_concepts())
-            == {"recoveryActuationPowerAvailable"}
-            and recovery_power.timing_segment_required is False
-            and recovery_power_behavior
-            and recovery_power_behavior.initial_state == "recoveryPowerAvailable"
-            and not recovery_power_behavior.transitions
-            and _flat_token(
-                recovery_power_behavior.entry_actions.get(
-                    "recoveryPowerAvailable", ""
-                )
+        # the arbiter is whichever contract the arbitration behaviour realizes
+        arbiter_guarantees = {
+            concept
+            for item in graph.components
+            if _behavior_for_contract(graph, realization_links, item.name)
+            and (
+                _behavior_for_contract(
+                    graph, realization_links, item.name
+                ).name == "SafetyResponseArbitration"
             )
-            == "setrecoveryactuationpoweravailable"
+            for concept in item.boolean_guarantee_concepts()
+        }
+        # a guarantee available at the boundary carries no timing segment, so its
+        # behaviour is a single initial state that simply establishes it
+        boundary_components = [
+            item for item in graph.components
+            if item.timing_segment_required is False
+            and item.boolean_guarantee_concepts()
+        ]
+        def _establishes_at_boundary(component: "Contract") -> bool:
+            behavior = _behavior_for_contract(
+                graph, realization_links, component.name
+            )
+            if not behavior or behavior.transitions or not behavior.initial_state:
+                return False
+            entry = behavior.entry_actions.get(behavior.initial_state, "")
+            return any(
+                _flat_token(entry) == _flat_token(f"set{concept}")
+                for concept in component.boolean_guarantee_concepts()
+            )
+        recovery_power_available_at_boundary = bool(boundary_components) and all(
+            _establishes_at_boundary(item) for item in boundary_components
         )
-        deployment_action_connected = any(
-            _flat_token(action) == "setparachutedeployed"
-            for action in (recovery_link.get("response_actions") or ())
+        deployment_action_connected = bool(observation) and any(
+            _flat_token(action) == _flat_token(f"set{observation}")
+            for action in (observing_link.get("response_actions") or ())
         )
         observation_connected = bool(
             observation_links
@@ -1213,23 +1220,42 @@ def _check_profile_semantics(
         # actionable — an author (human or LLM) cannot tell what to repair.
         # Deliberately still ONE diagnostic: the error count stays comparable
         # with runs measured before the message was itemised.
+        # Every obligation below is INTERNAL: it relates the model to itself, never
+        # to a reviewed answer this module holds. Whether the arbitration matches
+        # the gold response set, ordering, or winner is an accuracy question, and
+        # `ag_eval_semantics.priority_agreement` already answers it against frozen
+        # gold. Asking it here too made a gold-blind runtime verdict depend on the
+        # very facts the LLM-authored arm exists to measure.
+        edge_endpoints = {name for edge in edges for name in edge}
         obligations = (
-            ("response_set_members", members == _SAFE005_PRIORITY_MEMBERS),
-            ("precedence_edges", edges == _SAFE005_PRIORITY_EDGES),
-            ("single_highest_response", higher == {"PARACHUTE_DEPLOYMENT"}),
-            ("selected_response", selected == "PARACHUTE_DEPLOYMENT"),
+            ("response_set_members",
+             bool(members) and edge_endpoints <= members),
+            ("precedence_edges",
+             bool(edges) and lowers == (members - {selected} if selected else set())),
+            ("single_highest_response", len(higher) == 1),
+            ("selected_response", bool(selected) and selected in members),
             ("competing_transitions_guarded", guards == lowers),
-            ("trigger_concept", trigger == "criticalPropulsionFailureDetected"),
+            ("trigger_concept",
+             bool(trigger)
+             and trigger in {a.concept for a in system.assumptions}),
             ("trigger_matches_timing_origin",
              trigger == (system.timing_origin or "")),
             ("selection_guarded_by_trigger", selection_when == trigger),
             ("selected_transition_reachable", reachable),
             ("selection_action_connected", selection_action_connected),
+            # the arbiter must both command the downstream responder and record
+            # the selection — one guarantee alone cannot do both
             ("arbiter_guarantees",
-             arbiter_guarantees == {
-                 "parachuteDeploymentCommand",
-                 "parachuteResponseSelected",
-             }),
+             len(arbiter_guarantees) >= 2
+             and bool(
+                 arbiter_guarantees
+                 & {
+                     a.concept for a in (
+                         observing_component.assumptions
+                         if observing_component else ()
+                     )
+                 }
+             )),
             ("recovery_power_available_at_boundary",
              recovery_power_available_at_boundary),
             ("deployment_action_connected", deployment_action_connected),
@@ -1521,16 +1547,26 @@ def check_ag_graph(
     priority = dict(graph.priority) if graph.priority else None
     if priority is not None:
         topology = dict(priority.get("arbitration_topology") or {})
-        recovery_link = next(
+        # the observing component is identified by the role it plays — it produces
+        # the system's observed guarantee — not by this chain's element names
+        observed = (graph.system.observation or "") if graph.system else ""
+        observing = next(
+            (
+                item for item in graph.components
+                if observed in item.boolean_guarantee_concepts()
+            ),
+            None,
+        )
+        observing_link = next(
             (
                 item for item in realization_links
-                if item.get("contract") == "RecoverySystemContract"
+                if observing and item.get("contract") == observing.name
             ),
             {},
         )
-        topology["deployment_action_connected"] = any(
-            _flat_token(action) == "setparachutedeployed"
-            for action in (recovery_link.get("response_actions") or ())
+        topology["deployment_action_connected"] = bool(observed) and any(
+            _flat_token(action) == _flat_token(f"set{observed}")
+            for action in (observing_link.get("response_actions") or ())
         )
         topology["observation_connected"] = bool(
             observation_links

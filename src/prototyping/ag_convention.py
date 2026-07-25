@@ -170,19 +170,13 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "to <V>;`.",
     ),
     Obligation(
-        "PATTERN_DECLARATION_INCONSISTENT", SPEC_VALUED,
-        authoring_rule=(
-            "Declare `safety_pattern=` on the provenance line as exactly one of "
-            "TRIGGERED_TIMED_FAILSAFE_RESPONSE, STARTUP_INHIBIT, "
-            "LOCKED_UNTIL_AUTHORISED_RELEASE, and classify the requirement "
-            "yourself. A timed pattern must carry a timing budget; an invariant "
-            "pattern must not."
-        ),
-        withheld=(
-            "which pattern each source requirement instantiates "
-            "(_SOURCE_PATTERN_PROFILE) — the classification is the author's to "
-            "derive"
-        ),
+        "PATTERN_DECLARATION_INCONSISTENT", CONVENTION,
+        "Declare `safety_pattern=` on the provenance line as exactly one of "
+        "TRIGGERED_TIMED_FAILSAFE_RESPONSE, STARTUP_INHIBIT, "
+        "LOCKED_UNTIL_AUTHORISED_RELEASE, and classify the requirement yourself. "
+        "A timed pattern must carry a timing budget; an invariant pattern must "
+        "not. Whether your classification is the right one is scored by the "
+        "evaluator, not enforced here.",
     ),
     Obligation(
         "PATTERN_TOPOLOGY_INCOMPLETE", CONVENTION,
@@ -212,21 +206,13 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "<RESPONSE_SET>::<WINNER> }`, and `state def SafetyResponseArbitration`.",
     ),
     Obligation(
-        "PRIORITY_TOPOLOGY_INCOMPLETE", SPEC_VALUED,
-        authoring_rule=(
-            "The arbitration must be internally consistent: one "
-            "`require constraint precedence_<WINNER>_over_<LOSER> { not <TRIGGER> "
-            "or selectedResponse != <RESPONSE_SET>::<LOSER> }` for every response "
-            "the winner outranks, a competing transition guarded by `not "
-            "<TRIGGER>` for each of those losers, and a reachable selection "
-            "transition whose action sets the winning response."
-        ),
-        withheld=(
-            "REQ_SAFE_005's reviewed response-set members and precedence edges "
-            "(_SAFE005_PRIORITY_MEMBERS / _SAFE005_PRIORITY_EDGES) and the "
-            "literal winning response — the vocabulary and the ordering are what "
-            "the LLM-authored arm measures"
-        ),
+        "PRIORITY_TOPOLOGY_INCOMPLETE", CONVENTION,
+        "The arbitration must be internally consistent: one "
+        "`require constraint precedence_<WINNER>_over_<LOSER> { not <TRIGGER> or "
+        "selectedResponse != <RESPONSE_SET>::<LOSER> }` for every response the "
+        "winner outranks, a competing transition guarded by `not <TRIGGER>` for "
+        "each of those losers, and a reachable selection transition whose action "
+        "sets the winning response.",
     ),
 )
 
@@ -235,24 +221,31 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
 #: category, because several compare against REQ_SAFE_005's reviewed answer.
 PRIORITY_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
-        "response_set_members", SPEC_VALUED,
-        withheld="the reviewed member names of the response set",
+        "response_set_members", CONVENTION,
+        "The response set must be non-empty and must contain every response named "
+        "by a precedence constraint — no edge may reference a member you did not "
+        "declare in the `enum def`.",
     ),
     Obligation(
-        "precedence_edges", SPEC_VALUED,
-        withheld="the reviewed precedence ordering between responses",
+        "precedence_edges", CONVENTION,
+        "Precedence must be a single-winner ordering: state one precedence "
+        "constraint for every other member of the response set, so the winner "
+        "outranks all of them and none is left unordered.",
     ),
     Obligation(
-        "single_highest_response", SPEC_VALUED,
-        withheld="the literal identity of the highest-priority response",
+        "single_highest_response", CONVENTION,
+        "Exactly one response may sit at the top of the ordering; two responses "
+        "both outranking others is not a precedence the checker can interpret.",
     ),
     Obligation(
-        "selected_response", SPEC_VALUED,
-        withheld="the literal identity of the selected response",
+        "selected_response", CONVENTION,
+        "The response named by `selectHighestPriority` must be one of the members "
+        "declared in the response-set `enum def`.",
     ),
     Obligation(
-        "trigger_concept", SPEC_VALUED,
-        withheld="the literal trigger concept for this requirement",
+        "trigger_concept", CONVENTION,
+        "The arbitration trigger must be one of the system contract's own "
+        "assumption concepts, not a concept introduced only in the arbitration.",
     ),
     Obligation(
         "trigger_matches_timing_origin", CONVENTION,

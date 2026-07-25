@@ -82,6 +82,38 @@ def test_rendered_rules_leak_no_withheld_value():
         assert secret not in rendered
 
 
+def test_the_checker_holds_no_reviewed_answer():
+    """The runtime checker must stay gold-blind (AG_CHECKER_VERSION ag-bounded-5).
+
+    It documents PASS as meaning the graph is complete and *internally* compatible.
+    It previously also compared against REQ_SAFE_005's reviewed response set,
+    precedence ordering and winning response, and against a requirement-to-pattern
+    table — so a gold-blind verdict depended on the very facts the LLM-authored arm
+    measures, and the priority topology could only be recalled, never derived.
+    Those comparisons belong to `ag_eval_semantics.priority_agreement`.
+    """
+    source = open(ag_contracts.__file__).read()
+    code = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith("#")
+    )
+    for answer in (
+        "CONTROLLED_BATTERY_LANDING",      # reviewed response-set members
+        "COMMUNICATION_LOSS_SAFE_LANDING",
+        "LOW_BATTERY_RETURN_TO_BASE",
+        "PARACHUTE_DEPLOYMENT",           # the reviewed winning response
+        "criticalPropulsionFailureDetected",  # the reviewed trigger
+        "parachuteDeployed",              # the reviewed observation
+        "RecoverySystemContract",         # reviewed element names
+        "SafetyResponseArbiterContract",
+        "RecoveryPowerSupplyContract",
+        "_SOURCE_PATTERN_PROFILE",        # requirement-to-pattern table
+    ):
+        assert answer not in code, (
+            f"{answer!r} is a reviewed answer for a specific chain; the runtime "
+            "checker must not compare against it — score it in the evaluator"
+        )
+
+
 def test_every_convention_entry_actually_tells_the_author_what_to_do():
     for item in ALL_OBLIGATIONS:
         if item.category == CONVENTION:

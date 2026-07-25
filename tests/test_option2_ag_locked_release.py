@@ -287,8 +287,13 @@ def test_locked_release_runtime_checker_requires_invariant_semantics_and_pattern
         "safety_pattern=STARTUP_INHIBIT",
     )
     report = check_ag_graph(extract_ag_graph(wrong_pattern, revision=1))
+    # Still rejected, but now for a reason derived from the model itself: the
+    # declared pattern's required topology is not what this model contains. The
+    # checker no longer holds a requirement-to-pattern table — "is this the right
+    # pattern for REQ_SAFE_008?" is an accuracy question the evaluator answers
+    # against frozen gold (see AG_CHECKER_VERSION ag-bounded-5).
     assert report.verdict == "FAIL"
-    assert "PATTERN_DECLARATION_INCONSISTENT" in {
+    assert "PATTERN_TOPOLOGY_INCOMPLETE" in {
         diagnostic.code for diagnostic in report.diagnostics
     }
 
