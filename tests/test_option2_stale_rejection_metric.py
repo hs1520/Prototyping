@@ -119,3 +119,28 @@ def test_envelope_composition_is_descriptive_not_an_irrelevance_ratio():
     # it must not present itself as a quality ratio
     assert "value" not in composition
     assert "not evidence of" in composition["note"]
+
+
+def test_gold_metric_coverage_surfaces_an_incomplete_freeze():
+    """A gold fact family is optional in the schema, so a freeze can omit one and
+    still validate — which is how the REQ_SAFE_005 freeze came to lack
+    realization_links, leaving a named primary metric uncomputable and unnoticed.
+    The omission must be visible at freeze time."""
+    from src.prototyping.ag_gold_template import gold_metric_coverage
+
+    complete = {
+        "chain_id": "X", "allocations": [1], "discharge_edges": [1],
+        "realization_links": [1], "timing": {"a": 1}, "priority": {"a": 1},
+        "invariants": [1],
+    }
+    assert not gold_metric_coverage(complete)["unsupported_metrics"]
+
+    missing = dict(complete)
+    del missing["realization_links"]
+    out = gold_metric_coverage(missing)
+    assert "realization_links" in out["unsupported_metrics"]
+    assert "realization" in out["unsupported_metrics"]["realization_links"]
+
+    # an empty family counts as absent, not as present-but-empty
+    emptied = dict(complete, realization_links=[])
+    assert "realization_links" in gold_metric_coverage(emptied)["unsupported_metrics"]

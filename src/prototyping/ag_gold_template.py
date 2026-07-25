@@ -261,6 +261,47 @@ def _contains_key(obj: Any, target: str) -> bool:
     return False
 
 
+#: Which §13 Group B metric each gold fact family makes computable. A family is
+#: optional in the schema, so a freeze can omit one and still validate — which is
+#: how the REQ_SAFE_005 freeze came to lack `realization_links`, leaving a named
+#: primary metric uncomputable and unnoticed for months.
+GOLD_METRIC_SUPPORT: Dict[str, str] = {
+    "allocations": "guarantee allocation accuracy",
+    "discharge_edges": "assumption-discharge P/R/F1",
+    "realization_links": "guarantee-realization trace P/R/F1",
+    "timing": "timing origin / deadline / apportionment agreement",
+    "priority": "safety topology (priority) conformance",
+    "invariants": "safety invariant conformance",
+}
+
+
+def gold_metric_coverage(gold: Dict[str, Any]) -> Dict[str, Any]:
+    """Which §13 Group B metrics this gold can and cannot support.
+
+    Reported rather than enforced. Requiring every family would invalidate an
+    existing freeze, and whether to re-freeze is the supervisor's decision, not
+    this module's. What this does guarantee is that an omission is visible at
+    freeze time instead of surfacing months later as a metric nobody can compute.
+    """
+    supported, unsupported = {}, {}
+    for family, metric in GOLD_METRIC_SUPPORT.items():
+        value = gold.get(family)
+        present = bool(value) and (
+            not isinstance(value, (list, tuple, dict)) or len(value) > 0
+        )
+        (supported if present else unsupported)[family] = metric
+    return {
+        "artifact_role": "GOLD_METRIC_COVERAGE",
+        "chain_id": gold.get("chain_id"),
+        "supported_metrics": supported,
+        "unsupported_metrics": unsupported,
+        "note": (
+            "a family absent from the freeze makes its metric uncomputable; this "
+            "is a completeness report, not a validation failure"
+        ),
+    }
+
+
 def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
     """Return the freeze-completeness problems of a supervisor gold file.
 
