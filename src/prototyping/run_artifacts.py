@@ -10,6 +10,7 @@ separate from the post-hoc evaluator boundary.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
@@ -24,6 +25,25 @@ def _write_json(path: Path, payload: Any) -> None:
 def _write_jsonl(path: Path, rows: List[Mapping[str, Any]]) -> None:
     lines = [json.dumps(row, ensure_ascii=False) for row in rows]
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+
+def _declared_requirement_ids(requirements: Any) -> List[str]:
+    """Requirement ids from the run's requirement strings.
+
+    A run carries entries like ``"REQ-SAFE-005: The system shall ..."`` while a
+    committed contract cites ``REQ_SAFE_005``. Passing the raw strings through
+    would match nothing and silently report every requirement as untraced — a
+    false negative that looks exactly like a real finding.
+    """
+    ids: List[str] = []
+    for item in requirements or ():
+        if not isinstance(item, str):
+            continue
+        head = item.split(":", 1)[0].strip()
+        match = re.fullmatch(r"[A-Za-z][\w-]*", head)
+        if match:
+            ids.append(head.replace("-", "_").upper())
+    return list(dict.fromkeys(ids))
 
 
 def write_revised_run_artifacts(
@@ -136,5 +156,25 @@ def write_revised_run_artifacts(
     p = out / "coordination_metrics.json"
     _write_json(p, metrics)
     record("coordination_metrics", p)
+
+    # Requirement traceability, carried natively rather than reconstructed
+    # post-hoc. It is derived from the committed model alone and needs no gold, so
+    # it is safe to write beside the run; the older archived pilot predates this
+    # and is measured after the fact by `robustness_report` instead.
+    if model_sysml is not None:
+        from .robustness_report import measure_model
+
+        declared = _declared_requirement_ids(run_result.get("requirements"))
+        measurement = measure_model(str(model_sysml), declared)
+        p = out / "requirement_traceability.json"
+        _write_json(p, {
+            "artifact_role": "REQUIREMENT_TRACEABILITY",
+            "measurement_boundary": (
+                "committed model only; no human gold, no blind review"
+            ),
+            "declared_requirements": declared,
+            **measurement,
+        })
+        record("requirement_traceability", p)
 
     return written

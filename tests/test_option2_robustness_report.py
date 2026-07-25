@@ -172,3 +172,45 @@ def test_a_conforming_and_a_non_conforming_group_are_separated():
     assert out["good"]["pattern_pass"] == 1
     assert out["broken"]["pattern_pass"] == 0
     assert out["broken"]["mean_errors"] > out["good"]["mean_errors"]
+
+
+def test_run_artifacts_carry_traceability_with_matching_requirement_ids(tmp_path):
+    """Wired into the run, not reconstructed post-hoc.
+
+    The trap: a run carries "REQ-SAFE-005: The system shall ..." while a committed
+    contract cites REQ_SAFE_005. Passing the raw strings through matches nothing
+    and reports every requirement as untraced — a false negative indistinguishable
+    from a real finding.
+    """
+    import json as _json
+
+    from src.prototyping.run_artifacts import (
+        _declared_requirement_ids,
+        write_revised_run_artifacts,
+    )
+
+    assert _declared_requirement_ids(
+        ["REQ-SAFE-005: The system shall deploy...", "REQ-SAFE-004: other"]
+    ) == ["REQ_SAFE_005", "REQ_SAFE_004"]
+
+    written = write_revised_run_artifacts(
+        {
+            "revised_experiment": {
+                "experiment_namespace": "BLACKBOARD_AG_V1",
+                "configuration": "R2-BBAG",
+            },
+            "collaboration": {"blackboard": {}, "contexts": {}, "task_sessions": {}},
+            "model_sysml": _WITH_AG,
+            "requirements": ["REQ-SAFE-005: deploy the parachute within 0.5 s"],
+        },
+        tmp_path,
+    )
+    payload = _json.loads(
+        (tmp_path / "requirement_traceability.json").read_text()
+    )
+    assert payload["declared_requirements"] == ["REQ_SAFE_005"]
+    # the ids matched, so the requirement is traced rather than reported missing
+    assert payload["traceability"]["untraced_requirements"] == []
+    assert payload["traceability"]["fully_traced"] == 1
+    assert "no human gold" in payload["measurement_boundary"]
+    assert "requirement_traceability" in written
