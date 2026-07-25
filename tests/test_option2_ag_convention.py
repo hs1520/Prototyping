@@ -177,10 +177,24 @@ def test_the_checker_holds_no_reviewed_answer():
     """
     from src.prototyping import ag_chains
 
-    source = open(ag_contracts.__file__).read()
-    code = "\n".join(
-        line for line in source.splitlines() if not line.strip().startswith("#")
-    )
+    # Strip comments AND docstrings: a line of prose explaining which answer was
+    # removed is not the checker holding one, and counting it kept the debt below
+    # looking open after it had been closed.
+    code_lines, in_doc = [], False
+    for line in open(ag_contracts.__file__).read().splitlines():
+        stripped = line.strip()
+        if in_doc:
+            if '"""' in stripped:
+                in_doc = False
+            continue
+        if stripped.startswith("#"):
+            continue
+        if stripped.startswith(('"""', 'r"""')):
+            if stripped.count('"""') == 1:
+                in_doc = True
+            continue
+        code_lines.append(line)
+    code = "\n".join(code_lines)
     # Derived from the chains rather than hand-listed. A hand-list only covers the
     # answers already thought of: the first version of this test named REQ_SAFE_005
     # literals and missed a per-requirement table of REQ_SAFE_004's and
@@ -220,12 +234,11 @@ def test_the_checker_holds_no_reviewed_answer():
         f"the runtime checker compares against reviewed answers: {leaked}. Those "
         "are what the LLM arms are measured on — score them in the evaluator."
     )
-    # The debt is real and must stay visible: the invariant chains' reviewed
-    # answers ARE still in the checker, so a PASS on them is partly recall.
-    assert sorted(item for item in invariant_patterned if item in code), (
-        "the invariant patterns appear to be gold-blind now — if that is real, "
-        "close the limitation in docs/R2_GENERATION_FINDINGS.md and delete this"
-    )
+    # The debt is CLOSED: the invariant patterns' obligations are now derived from
+    # each chain's own declared invariants, so no reviewed answer remains here for
+    # any pattern.
+    remaining = sorted(item for item in invariant_patterned if item in code)
+    assert not remaining, remaining
 
 
 def test_every_convention_entry_actually_tells_the_author_what_to_do():

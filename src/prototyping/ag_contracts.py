@@ -867,53 +867,9 @@ def _and_ast(*items: Mapping[str, Any]) -> Mapping[str, Any]:
     return {"node": "And", "operands": list(items)}
 
 
-_REQUIRED_PROFILE_INVARIANTS: Mapping[
-    str, Mapping[str, tuple[Mapping[str, Any], Mapping[str, Any], str, str]]
-] = {
-    "REQ_SAFE_004": {
-        "SAFE004_STARTUP_INHIBIT": (
-            _and_ast(_id_ast("powerOnSelfTestActive"), _id_ast("sensorFailureReported")),
-            _and_ast(_not_ast("armed"), _not_ast("airborne")),
-            "STAKEHOLDER",
-            "REQ_SAFE_004",
-        ),
-        "SAFE004_LATCH_EFFECT": (
-            _id_ast("startupInhibitActive"),
-            _and_ast(
-                _id_ast("armingTransitionInhibited"),
-                _id_ast("airborneTransitionInhibited"),
-            ),
-            "STUDENT_DERIVED_DESIGN_CONSTRAINT",
-            "SAFE004_LATCH_PROPAGATION_V1",
-        ),
-        "SAFE004_LATCH_RESET_AFTER_PASS": (
-            _id_ast("selfTestPassed"),
-            _not_ast("startupInhibitActive"),
-            "STUDENT_DERIVED_DESIGN_CONSTRAINT",
-            "SAFE004_LATCH_RESET_V1",
-        ),
-    },
-    "REQ_SAFE_008": {
-        "SAFE008_POWER_ON_LOCKED": (
-            _id_ast("powerOnInitialisation"),
-            _id_ast("payloadLocked"),
-            "STAKEHOLDER",
-            "REQ_SAFE_008",
-        ),
-        "SAFE008_UNLOCK_AUTHORISED": (
-            _id_ast("payloadUnlocked"),
-            _id_ast("authorisedReleaseCommandReceived"),
-            "STUDENT_DERIVED_DESIGN_CONSTRAINT",
-            "SAFE008_UNLOCK_AUTHORIZATION_V1",
-        ),
-        "SAFE008_DEENERGISE_TO_LOCK": (
-            _not_ast("actuatorPowerAvailable"),
-            _id_ast("payloadLocked"),
-            "STUDENT_DERIVED_DESIGN_CONSTRAINT",
-            "SAFE008_DEENERGISE_TO_LOCK_V1",
-        ),
-    },
-}
+# REQ_SAFE_004's and REQ_SAFE_008's reviewed invariant sets (ids, ASTs,
+# provenance) used to be pinned here and compared against directly, which
+# left the runtime checker holding the answer for those chains.
 
 
 def _behavior_for_contract(
@@ -951,50 +907,22 @@ def _transition_signatures(
     }
 
 
-def _startup_inhibit_topology_ok(
-    graph: AGGraph,
-    realization_links: List[Dict[str, Any]],
-) -> bool:
-    behavior = _behavior_for_contract(
-        graph, realization_links, "SelfTestStatusLatchContract"
-    )
-    if behavior is None or behavior.initial_state != "poweredOff":
-        return False
-    expected = {
-        ("poweredOff", "PowerOnSignal", "selfTesting", ""),
-        (
-            "selfTesting",
-            "SensorFailureReportedSignal",
-            "startupInhibited",
-            "",
-        ),
-        ("startupInhibited", "PowerCycleSignal", "poweredOff", ""),
-        ("selfTesting", "SelfTestPassedSignal", "selfTestPassed", ""),
-    }
-    actual = _transition_signatures(behavior)
-    states = {
-        str(behavior.initial_state or ""),
-        *behavior.entry_actions.keys(),
-        *(transition.source for transition in behavior.transitions),
-        *(transition.target for transition in behavior.transitions),
-    }
-    return all((
-        actual == expected,
-        {
-            "poweredOff",
-            "selfTesting",
-            "startupInhibited",
-            "selfTestPassed",
-        }.issubset(states),
-        _flat_token(behavior.entry_actions.get("startupInhibited", ""))
-        == "setstartupinhibitactive",
-        _flat_token(behavior.entry_actions.get("selfTestPassed", ""))
-        == "clearstartupinhibitactive",
-        not any(
-            _flat_token(transition.target) in {"armed", "airborne"}
-            for transition in behavior.transitions
-        ),
-    ))
+def _negated_identifiers(node: Any) -> set[str]:
+    """Identifiers appearing under a negation in a bounded Boolean AST.
+
+    An invariant's negated consequents name what it forbids — the states a startup
+    inhibit must keep the system out of — so they are read from the AST rather than
+    from a list of this chain's state names.
+    """
+    if not isinstance(node, Mapping):
+        return set()
+    if node.get("node") == "Not":
+        return _ast_identifiers(node.get("expr"))
+    operands = node.get("operands") or ()
+    result: set[str] = set()
+    for item in operands:
+        result |= _negated_identifiers(item)
+    return result
 
 
 def _invariant_roles(graph: AGGraph) -> Dict[str, str]:
@@ -1022,7 +950,6 @@ def _invariant_roles(graph: AGGraph) -> Dict[str, str]:
             continue
         consequent_name = next(iter(consequents))
         if isinstance(antecedent, Mapping) and antecedent.get("node") == "Not":
-            # not <power> => <locked>
             power = _ast_identifiers(antecedent.get("expr"))
             if len(power) == 1:
                 roles["power"] = next(iter(power))
@@ -1036,10 +963,114 @@ def _invariant_roles(graph: AGGraph) -> Dict[str, str]:
             roles.setdefault("locked", consequent_name)
             roles.setdefault("power_on", antecedent_name)
         else:
-            # <unlocked> => <authorisation>
             roles["unlocked"] = antecedent_name
             roles["authorisation"] = consequent_name
     return roles
+
+
+def _startup_inhibit_roles(graph: AGGraph) -> Dict[str, Any]:
+    """The concepts a startup-inhibit chain's invariants define.
+
+    As with de-energise-to-lock, the topology follows from the invariants rather
+    than from any chain's element names:
+
+      * ``<condition> => not <forbidden> ...``  names the states inhibition forbids;
+      * ``<latch> => <inhibited> ...``          names the latch and what it inhibits;
+      * ``<reset> => not <latch>``              names the event that clears it.
+    """
+    roles: Dict[str, Any] = {"forbidden": set()}
+    for invariant in graph.invariants or ():
+        if not isinstance(invariant, Mapping):
+            continue
+        antecedent = invariant.get("trigger_or_antecedent_ast") or {}
+        consequent = invariant.get("required_consequent_ast") or {}
+        negated = _negated_identifiers(consequent)
+        antecedents = _ast_identifiers(antecedent)
+        if negated and len(antecedents) == 1 and len(negated) == 1:
+            # <reset> => not <latch>
+            roles["reset"] = next(iter(antecedents))
+            roles["latch"] = next(iter(negated))
+        elif negated:
+            # <condition> => not <forbidden> and not <forbidden>
+            roles["forbidden"] |= negated
+        elif len(antecedents) == 1:
+            roles.setdefault("latch", next(iter(antecedents)))
+            roles["inhibited"] = _ast_identifiers(consequent)
+    return roles
+
+
+def _startup_inhibit_topology_ok(
+    graph: AGGraph,
+    realization_links: List[Dict[str, Any]],
+) -> bool:
+    """Does the model latch inhibition on failure and clear it only on a pass?
+
+    Judged against the chain's own invariants, so a conforming model may name its
+    states and signals however it likes — the condition for a generated model to be
+    checkable rather than merely recalled.
+    """
+    roles = _startup_inhibit_roles(graph)
+    latch = roles.get("latch")
+    if not latch:
+        return False
+
+    behavior = next(
+        (
+            _behavior_for_contract(graph, realization_links, item.name)
+            for item in graph.components
+            if latch in item.boolean_guarantee_concepts()
+        ),
+        None,
+    )
+    if behavior is None or not behavior.initial_state:
+        return False
+
+    set_token, clear_token = _flat_token(f"set{latch}"), _flat_token(f"clear{latch}")
+    inhibit_states = {
+        state for state, action in behavior.entry_actions.items()
+        if _flat_token(action) == set_token
+    }
+    reset_states = {
+        state for state, action in behavior.entry_actions.items()
+        if _flat_token(action) == clear_token
+    }
+    if len(inhibit_states) != 1 or not reset_states:
+        return False
+    inhibit_state = next(iter(inhibit_states))
+    if inhibit_state == behavior.initial_state:
+        return False
+
+    # inhibition and the pass that clears it must be alternatives of the same
+    # decision point, or the latch is not a self-test outcome at all
+    entering = {
+        transition.source for transition in behavior.transitions
+        if transition.target == inhibit_state
+    }
+    clearing = {
+        transition.source for transition in behavior.transitions
+        if transition.target in reset_states
+    }
+    if not entering or not (entering & clearing):
+        return False
+    # A latch that is released by the very event that set it is not a latch. The
+    # triggers leaving the inhibited state must differ from the ones that reach it,
+    # or the failure signal both inhibits and clears.
+    latching_triggers = {
+        transition.trigger for transition in behavior.transitions
+        if transition.target == inhibit_state
+    }
+    if any(
+        transition.trigger in latching_triggers
+        for transition in behavior.transitions
+        if transition.source == inhibit_state
+    ):
+        return False
+    # and nothing may transition into a state the invariants forbid
+    forbidden = {_flat_token(item) for item in roles.get("forbidden") or ()}
+    return not any(
+        _flat_token(transition.target) in forbidden
+        for transition in behavior.transitions
+    )
 
 
 def _locked_release_topology_ok(
@@ -1344,22 +1375,27 @@ def _check_profile_semantics(
                     not identifiers.issubset(selected_elements),
                 ))
                 ids.add(invariant_id)
-            for invariant_id, expected in _REQUIRED_PROFILE_INVARIANTS.get(
-                system.source_requirement or "", {}
-            ).items():
-                actual = by_id.get(invariant_id)
-                if not isinstance(actual, Mapping):
-                    invalid = True
-                    continue
-                antecedent, consequent, source_kind, source_id = expected
-                invalid = invalid or any((
-                    _ast_shape(actual.get("trigger_or_antecedent_ast"))
-                    != _ast_shape(antecedent),
-                    _ast_shape(actual.get("required_consequent_ast"))
-                    != _ast_shape(consequent),
-                    actual.get("source_kind") != source_kind,
-                    actual.get("source_id") != source_id,
-                ))
+            # WHICH invariants a requirement ought to state is an accuracy
+            # question the evaluator answers against frozen gold. What the pattern
+            # itself requires is that every ROLE it depends on is filled — a
+            # de-energise-to-lock chain that never says where power loss leads has
+            # not stated the pattern, whatever it names its invariants.
+            #
+            # Removing the per-requirement table without this lost detection
+            # outright: deleting a required invariant passed.
+            required_roles = {
+                "LOCKED_UNTIL_AUTHORISED_RELEASE": (
+                    _invariant_roles(graph),
+                    ("locked", "authorisation", "unlocked", "power"),
+                ),
+                "STARTUP_INHIBIT": (
+                    _startup_inhibit_roles(graph),
+                    ("latch", "reset", "inhibited", "forbidden"),
+                ),
+            }.get(effective_pattern)
+            if required_roles is not None:
+                roles, needed = required_roles
+                invalid = invalid or any(not roles.get(name) for name in needed)
             if invalid:
                 diagnostics.append(AGDiagnostic(
                     CODE_INVARIANT_SEMANTICS_INVALID,
