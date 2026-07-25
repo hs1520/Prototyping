@@ -113,6 +113,42 @@ def test_published_syntax_agrees_with_the_emitter():
         )
 
 
+def test_guard_concepts_are_declared_in_their_own_state_def():
+    """Across every encoded chain the emitter declares each guard concept as an
+    attribute of the state def that uses it — a state machine cannot see the
+    attributes of the contract it realizes. The generator produced undeclared
+    guard references until this was published, so the rules must state it and the
+    reference must keep obeying it.
+    """
+    import re
+
+    from src.prototyping import ag_chains
+    from src.prototyping.ag_emitter import emit_ag_package
+
+    chains = [
+        getattr(ag_chains, name) for name in dir(ag_chains)
+        if name.startswith("REQ_") and name.endswith("_CHAIN")
+    ]
+    assert chains, "no encoded chains found"
+    checked = 0
+    for chain in chains:
+        for block in re.finditer(
+            r"state def (\w+) \{(.*?)\n    \}", emit_ag_package(chain), re.S
+        ):
+            declared = set(re.findall(r"attribute (\w+)\s*:", block.group(2)))
+            referenced = set(
+                re.findall(r"\bif\s+(?:not\s+)?(\w+)", block.group(2))
+            )
+            assert referenced <= declared, (
+                f"{block.group(1)} guards on undeclared "
+                f"{sorted(referenced - declared)}"
+            )
+            checked += len(referenced)
+    assert checked, "no guarded transitions exercised this invariant"
+
+    assert "same `state def`" in render_authoring_rules()
+
+
 def test_the_orchestrator_imports_cleanly_on_its_own():
     """`src.prototyping` imports the orchestrator, so a module-level import of an
     ag_* module from the orchestrator is circular whenever the orchestrator is

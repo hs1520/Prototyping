@@ -86,8 +86,9 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     ),
     Obligation(
         "GUARANTEE_NO_OWNER", CONVENTION,
-        "Each component contract is allocated to exactly one owning part via "
-        "`part <usage> : <Def>;` and `satisfy requirement <u> : <Contract> by "
+        "Each component contract is allocated to exactly one owning part, "
+        "declaring the part definition before using it: `part def <Def>;` then "
+        "`part <usage> : <Def>;` then `satisfy requirement <u> : <Contract> by "
         "<usage>;`.",
     ),
     Obligation(
@@ -153,7 +154,11 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "`accept` and `then`, never as `guard`:\n"
         "   `transition <n> first <source> accept <Signal> then <target>;`\n"
         "   `transition <n> first <source> accept <Signal> if <expr> then "
-        "<target>;`",
+        "<target>;`\n"
+        "   Every concept a guard references must ALSO be declared inside that "
+        "same `state def` as `attribute <name> : Boolean;` — a state machine "
+        "cannot see the attributes of the contract it realizes, so an undeclared "
+        "guard concept is an unresolved reference.",
     ),
     Obligation(
         "REALIZATION_UNREACHABLE", CONVENTION,
