@@ -40,15 +40,11 @@ FROZEN_REQUIREMENTS = (
     "separation while avoiding it.",
 )
 
-#: Requirements outside the bounded A/G layer's scope, with the reason recorded.
-#: Declared, never inferred: an undeclared requirement counts as in scope, so the
-#: traceability denominator cannot be quietly shrunk.
-OUT_OF_SCOPE_REQUIREMENTS = {
-    "REQ_FUNC_002": (
-        "continuous control envelope: no trigger, no deadline and no invariant "
-        "state, so it instantiates none of the encoded safety patterns"
-    ),
-}
+#: The scope declaration lives in `ag_traceability.DECLARED_OUT_OF_SCOPE`, because
+#: the runner writes it into every traceability artifact and a second copy here
+#: would be a second table to drift. It was declared in this file first and never
+#: read by anything; two statements of one design decision is how the reason and
+#: the number stop matching.
 
 
 def _git_revision() -> str:
