@@ -514,3 +514,60 @@ def test_r1_arm_does_not_emit_an_ag_trace():
     orch = _r2_orchestrator_with_committed_model(_MINI_AG, arm="R1-BBCTX")
     arts = orch._build_collaboration_artifacts(_MINI_AG)
     assert "ag_contract_graph" not in arts
+
+
+def test_the_derived_ag_graph_cannot_become_model_authority():
+    """§14: the derived JSON view is never generation or repair authority.
+
+    Two halves, because only the pair closes it. The positive rule (SysML is the
+    sole commit authority) was already pinned; what was not is the NEGATIVE one —
+    that serialising the graph and feeding it back cannot install a fact the
+    committed SysML does not contain. A JSON-supplied A/G fact is exactly the
+    "repair by editing the export" failure §6.2 forbids.
+    """
+    import json
+
+    from src.prototyping.ag_contracts import check_ag_graph
+    from src.prototyping.ag_extractor import extract_ag_graph
+    from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+    from src.prototyping.ag_emitter import emit_ag_package
+
+    model = (
+        "package Drone {\n"
+        "    requirement def REQ_SAFE_005 { doc /* Critical propulsion failure "
+        "shall deploy a parachute. */ }\n"
+        "}\n\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
+    )
+    view = check_ag_graph(extract_ag_graph(model)).to_dict()
+    assert view["verdict"] == "PASS"
+
+    # 1. the derived view cannot be committed as the model: it carries none of the
+    #    authoritative requirement text the commit gate demands
+    board = Blackboard("Drone")
+    board.publish(
+        RecordType.SOURCE, "requirements.authoritative", "RequirementsAgent",
+        {"requirements": [_REQ]},
+    )
+    with pytest.raises(ProtectedModelElementError):
+        board.commit_model(
+            json.dumps(view), base_revision=0,
+            base_digest=board.current_model.model_digest, producer="RepairAgent",
+        )
+
+    # 2. a fact injected into the derived view does not survive re-extraction:
+    #    extraction reads the committed SysML, so the JSON cannot add an edge
+    tampered = json.loads(json.dumps(view))
+    tampered["graph"]["allocations"].append({
+        "contract": "InventedContract", "guarantee": "inventedGuarantee",
+        "owner": "inventedPart",
+    })
+    tampered["verdict"] = "PASS"
+    reextracted = check_ag_graph(extract_ag_graph(model)).to_dict()
+    assert reextracted["graph"]["allocations"] == view["graph"]["allocations"]
+    assert not any(
+        item.get("contract") == "InventedContract"
+        for item in reextracted["graph"]["allocations"]
+    )
+    # and the checker's own input type is an extracted graph, never a parsed view
+    with pytest.raises((AttributeError, TypeError)):
+        check_ag_graph(tampered)
