@@ -354,9 +354,20 @@ def attempt_dependency_closed_ag_repair(
         failure.get("diagnostic_code"), failure.get("contract"), failure.get("subject")
     )
     target_removed = target not in after_ids
+    # Every realizing state def named by the routed failure, identified by BEING a
+    # state def rather than by ending in "Behavior". The suffix filter silently
+    # exempted the one state def the emitter names differently
+    # (`SafetyResponseArbitration`), so a repair could delete another state's entry
+    # action from it and `behavior_preserved` stayed vacuously true. A measured run
+    # did exactly that; only the pattern-conformance gate caught it, which is luck,
+    # not design. Same defect class as a checker keyed on names instead of
+    # declarations.
     affected_behaviors = [
         str(item) for item in failure.get("affected_elements", ())
-        if str(item).endswith("Behavior")
+        if re.search(
+            rf"\bstate\s+def\s+{re.escape(str(item))}\s*\{{",
+            board.current_model.model_text,
+        )
     ]
     behavior_preserved = all(
         _behavior_tokens(board.current_model.model_text, behavior)
@@ -366,8 +377,22 @@ def attempt_dependency_closed_ag_repair(
     regression_free = (
         not (after_ids - (before_ids - {target})) and behavior_preserved
     )
+    # A SCOPED repair is judged for regression, not for finishing the chain. The
+    # gate demanded `pattern verdict == PASS` outright, so a repair could clear the
+    # one diagnostic it was routed and still be refused for an unrelated profile
+    # failure it was never told about — measured: the routed task named only
+    # REALIZATION_ACTION_MISSING, the patch removed it, and the refusal came from
+    # PRIORITY_TOPOLOGY_INCOMPLETE, which was already there before the attempt. That
+    # is the same asymmetry as a gate enforcing an unstated rule, and it makes a
+    # bounded repair unacceptable no matter what it does. The condition is now "no
+    # worse than before": breaking conformance (PASS -> FAIL) is still refused, and
+    # the run verdict still reports the chain as failing, honestly.
     pattern = check_safety_pattern_conformance(after_graph, after)
-    if not target_removed or not regression_free or pattern["verdict"] != "PASS":
+    pattern_before = check_safety_pattern_conformance(before_graph, before)
+    pattern_regressed = (
+        pattern["verdict"] != "PASS" and pattern_before["verdict"] == "PASS"
+    )
+    if not target_removed or not regression_free or pattern_regressed:
         decision = AGRepairDecision(
             str(failure.get("failure_id")), "REJECTED",
             "target_not_removed_or_regression",

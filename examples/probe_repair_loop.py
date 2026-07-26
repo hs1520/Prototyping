@@ -190,12 +190,15 @@ def main() -> int:
         print(f"recheck of committed: {after.verdict} "
               f"{sorted({d.code for d in after.errors()})}")
     if decision.status != "ACCEPTED":
-        snapshot = sessions.snapshot()
+        # the application-owned transcript is the whole point of §5.3: without it a
+        # rejected repair is a verdict with no visible cause. include_messages is
+        # opt-in, and asking for the digest only (the default) is what hid it.
+        snapshot = sessions.snapshot(include_messages=True)
         for item in snapshot.get("sessions", []):
-            for turn in item.get("transcript", []) or []:
+            for turn in item.get("messages", []) or []:
                 if turn.get("role") == "assistant":
                     print("\n--- what the repair agent actually returned ---")
-                    print(str(turn.get("content"))[:900])
+                    print(str(turn.get("content"))[:1200])
     print("DIAGNOSTIC ONLY — not experiment evidence")
     return 0 if decision.status == "ACCEPTED" else 1
 

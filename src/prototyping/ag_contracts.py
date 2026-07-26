@@ -812,9 +812,18 @@ def _check_realization(
                 contract=comp.name,
             ))
         if not action_matches:
+            # Name the concept the action must carry. The message used to say only
+            # "for its guarantee", and a measured repair attempt answered it by
+            # naming the action after the STATE it sits in
+            # (`setParachuteDeploymentSelected` for a contract guaranteeing
+            # `parachuteResponseSelected`) — a plausible guess the gate correctly
+            # refused. The concept is in the committed model the author already
+            # reads, so saying it is actionability, not an answer: the checker
+            # stays gold-blind.
             diags.append(AGDiagnostic(
                 CODE_REALIZATION_ACTION_MISSING,
-                f"{comp.name} has no reachable response entry action for its guarantee",
+                f"{comp.name} has no reachable response entry action naming one "
+                f"of its guarantee concepts {sorted(guarantee_tokens)}",
                 contract=comp.name,
             ))
         links.append({

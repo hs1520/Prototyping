@@ -316,3 +316,118 @@ def test_the_repair_prompt_states_the_rules_its_gate_enforces():
     assert "prefixed with `set`" in feedback
     # and an unknown code still gets the scope rules, just no convention line
     assert "adding a new definition" in _repair_feedback("SOMETHING_ELSE")
+
+
+def test_preservation_guards_every_realizing_state_def_not_just_named_behaviors():
+    """The preservation gate selected affected elements by the suffix "Behavior".
+
+    The emitter names one state def differently — `SafetyResponseArbitration` — so
+    that one was silently exempt from token preservation: a repair could shed a
+    transition or an entry action from it and `behavior_preserved` stayed vacuously
+    true. Selection is now by BEING a state def in the committed model.
+
+    Staged so the loss is real: the patch restores the routed target and deletes a
+    transition, which is a preserved token.
+    """
+    from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+    from src.prototyping.ag_emitter import emit_ag_package
+
+    model = (
+        "package Drone {\n    requirement def REQ_SAFE_005 { doc /* deploy the "
+        "parachute within 0.5 seconds */ }\n}\n\n"
+        + emit_ag_package(REQ_SAFE_005_CHAIN)
+    )
+    arbitration = _definition(model, "state", "SafetyResponseArbitration")
+    assert "SafetyResponseArbitration" in arbitration
+    assert not arbitration.split("{")[0].strip().endswith("Behavior"), (
+        "this test only means something while the emitter names this state def "
+        "without the suffix the old filter required"
+    )
+
+    action = (
+        "entry action setParachuteResponseSelectedAndIssue"
+        "ParachuteDeploymentCommand;"
+    )
+    broken = model.replace(f"{{ {action} }}", "").replace(
+        "state parachuteDeploymentSelected \n", "state parachuteDeploymentSelected;\n"
+    )
+    graph, report = _check(model.replace(action, ""))
+    routed = route_failure_diagnostics(
+        report.diagnostics,
+        source_requirement=report.source_requirement,
+        realization_links=report.realization_links,
+    )
+    failure = next(
+        (item for item in routed["failures"]
+         if item.get("repair_authorized")
+         and "SafetyResponseArbitration" in (item.get("affected_elements") or ())),
+        None,
+    )
+    if failure is None:
+        pytest.skip("this injury no longer routes through the arbitration state def")
+
+    board = Blackboard("Drone")
+    board.commit_model(
+        model.replace(action, ""), base_revision=0,
+        base_digest=board.current_model.model_digest, producer="test",
+    )
+    analysis = board.publish(
+        RecordType.ANALYSIS, "analysis.ag_trace", "AGChecker", {"diagnostics": []},
+    )
+    failure_record = board.publish(
+        RecordType.ANALYSIS, "diagnostic.failure", "AGFailureRouter", failure,
+    )
+    # restores the target action, but sheds a transition from the same state def
+    import re as _re
+
+    transition = _re.search(
+        r"\n\s*transition selectParachute [^;]+;", arbitration
+    )
+    assert transition, "the reference arbitration must carry the selection transition"
+    lossy = arbitration.replace(transition.group(0), "")
+    decision = attempt_dependency_closed_ag_repair(
+        llm=_RepairLLM(f"```sysml\n{lossy}\n```"),
+        board=board,
+        context_builder=ContextBuilder(board),
+        sessions=TaskSessionRegistry(),
+        failure_record_id=failure_record.record_id,
+        analysis_record_id=analysis.record_id,
+    )
+    assert decision.status == "REJECTED", decision.reason
+    assert decision.regression_free is False, (
+        "a shed transition must be caught by preservation on a state def the old "
+        "suffix filter exempted"
+    )
+
+
+def test_a_scoped_repair_is_judged_for_regression_not_for_finishing_the_chain():
+    """The accept gate demanded `pattern verdict == PASS` outright.
+
+    Measured: the routed task named only REALIZATION_ACTION_MISSING, the patch
+    removed it, and the refusal came from PRIORITY_TOPOLOGY_INCOMPLETE — which was
+    already present before the attempt. A bounded repair was therefore
+    unacceptable no matter what it did. The condition is now "no worse than
+    before"; breaking conformance is still refused, and the run verdict still
+    reports the chain as failing.
+    """
+    from src.prototyping.ag_assurance import check_safety_pattern_conformance
+    from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+    from src.prototyping.ag_emitter import emit_ag_package
+    from src.prototyping.ag_extractor import extract_ag_graph
+
+    model = (
+        "package Drone {\n    requirement def REQ_SAFE_005 { doc /* deploy the "
+        "parachute within 0.5 seconds */ }\n}\n\n"
+        + emit_ag_package(REQ_SAFE_005_CHAIN)
+    )
+    action = (
+        "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand"
+    )
+    injured = model.replace(f"entry action {action};", "")
+    graph = extract_ag_graph(injured)
+    report = check_ag_graph(graph)
+    codes = {item.code for item in report.errors()}
+    assert {"REALIZATION_ACTION_MISSING", "PRIORITY_TOPOLOGY_INCOMPLETE"} <= codes
+    # pattern conformance already fails BEFORE any repair, on a profile diagnostic
+    # the routed task does not name
+    assert check_safety_pattern_conformance(graph, report)["verdict"] == "FAIL"
