@@ -11,6 +11,7 @@ from .ag_extractor import extract_ag_graph
 from .blackboard import Blackboard, RecordType, TaskStatus
 from .context_builder import ContextBuilder
 from .task_session import SessionStatus, TaskSessionRegistry
+from ..utils.sysml_text_utils import find_block_end
 from ..agents.surgical_refiner import (
     SurgicalAudit,
     attempt_surgical_refinement,
@@ -100,6 +101,49 @@ def _behavior_tokens(model_text: str, behavior: str) -> set[tuple[str, str]]:
     return tokens
 
 
+_ATTR_DEF_RE = re.compile(r"^\s*attribute def \w+;\s*$", re.M)
+
+
+def _ag_context_supplement(model_text: str, contract: str) -> str:
+    """The A/G facts a reference-closure slice structurally cannot contain.
+
+    `build_dependency_closed_context` closes over symbols the sliced elements
+    REFERENCE. For an omission fault that is exactly the wrong direction: the
+    element to restore is absent, so nothing references it and the closure cannot
+    reach it. Measured on a real committed model — delete one transition and the
+    slice keeps the injured state machine but loses
+    `attribute def ParachuteDeploymentCommandSignal;`, the declaration the fix has
+    to name. An agent that cannot see it either invents a signal name (an
+    undeclared reference — the failure class that cost the authored mode every
+    seed) or guesses from the diagnostic text.
+
+    So the two A/G facts the diagnostic implies are added deterministically: the
+    contract being realized, whose assumptions name the trigger concept and whose
+    guarantee fixes the `set<Concept>` action name, and the package's declared
+    event signals. Both are small and neither widens the EDIT scope — the slice is
+    prompt context, and the accept gates are unchanged.
+    """
+    additions: list[str] = []
+    match = re.search(
+        rf"\brequirement def {re.escape(contract)}\s*\{{", model_text
+    ) if contract else None
+    if match:
+        end = find_block_end(model_text, model_text.index("{", match.start()))
+        if end != -1:
+            additions.append(model_text[match.start():end + 1])
+    signals = sorted({
+        item.strip() for item in _ATTR_DEF_RE.findall(model_text)
+    })
+    if signals:
+        additions.append("\n".join(signals))
+    if not additions:
+        return ""
+    return (
+        "\n\n// A/G context the reference closure cannot reach for an omission "
+        "fault (read-only):\n" + "\n\n".join(additions)
+    )
+
+
 def attempt_dependency_closed_ag_repair(
     *,
     llm: Any,
@@ -163,12 +207,15 @@ def attempt_dependency_closed_ag_repair(
         )
         return decision
     board.transition_task(task.task_id, TaskStatus.ACTIVE)
+    supplement = _ag_context_supplement(
+        board.current_model.model_text, str(failure.get("contract") or "")
+    )
     envelope = context_builder.build(
         task_id=task.task_id,
         agent_role="RepairAgent",
         objective=f"Remove {failure.get('diagnostic_code')} without semantic regression",
         allowed_operation="DEPENDENCY_CLOSED_SCOPED_MODEL_PATCH",
-        model_context=context_slice.text,
+        model_context=context_slice.text + supplement,
         diagnostic_record_ids=(analysis_record_id, failure_record_id),
         included_record_ids=(analysis_record_id, failure_record_id),
         protected_elements=(

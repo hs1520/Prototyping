@@ -208,3 +208,75 @@ def test_the_archive_offered_no_context_failure_to_learn_from():
     if not statuses:
         pytest.skip("no archived runs in this checkout")
     assert statuses <= {"COMPLETED", "BLOCKED"}, statuses
+
+
+def test_the_repair_slice_carries_what_an_omission_fault_needs():
+    """§17 risk row "context selection omits a necessary dependency", measured.
+
+    The dependency-closed slicer closes over symbols the sliced elements
+    REFERENCE, which is the wrong direction for an omission fault: the element to
+    restore is absent, so nothing references it and the closure cannot reach it.
+    On a real committed model, deleting one transition leaves the injured state
+    machine in the slice and drops
+    `attribute def ParachuteDeploymentCommandSignal;` — the declaration the fix
+    has to name. An agent that cannot see it invents a signal name, which is an
+    undeclared reference: the failure class that cost the authored mode every seed.
+
+    `ag_repair._ag_context_supplement` adds the two A/G facts the diagnostic
+    implies — the contract being realized and the package's declared signals — and
+    nothing else. It is prompt context; the accept gates are untouched.
+    """
+    import re
+
+    from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+    from src.prototyping.ag_contracts import check_ag_graph
+    from src.prototyping.ag_emitter import emit_ag_package
+    from src.prototyping.ag_extractor import extract_ag_graph
+    from src.prototyping.ag_assurance import route_failure_diagnostics
+    from src.prototyping.ag_repair import _ag_context_supplement
+    from src.agents.surgical_refiner import build_dependency_closed_context
+
+    model = (
+        "package Drone {\n    requirement def REQ_SAFE_005 { doc /* deploy the "
+        "parachute within 0.5 seconds */ }\n}\n\n"
+        + emit_ag_package(REQ_SAFE_005_CHAIN)
+    )
+    transition = re.search(
+        r"transition (\w+) first (\w+) accept (\w+) then (\w+);", model
+    )
+    signal = transition.group(3)
+    injured = model.replace(transition.group(0), "")
+
+    report = check_ag_graph(extract_ag_graph(injured))
+    routed = route_failure_diagnostics(
+        report.diagnostics,
+        source_requirement=report.source_requirement,
+        realization_links=report.realization_links,
+    )
+    failure = next(
+        item for item in routed["failures"] if item.get("repair_authorized")
+    )
+    issue = (
+        f"{failure.get('source_requirement')} {failure.get('contract') or ''} "
+        + " ".join(str(x) for x in failure.get("affected_elements", ()))
+        + f": {failure.get('message') or failure.get('diagnostic_code')}"
+    )
+    sliced = build_dependency_closed_context(
+        injured, [issue],
+        allowed_req_ids={str(failure.get("source_requirement"))},
+    )
+    assert sliced is not None
+
+    declaration = f"attribute def {signal};"
+    assert declaration in injured, "the declaration still exists in the model"
+    assert declaration not in sliced.text, (
+        "if the closure already reached it this test no longer measures anything"
+    )
+
+    supplemented = sliced.text + _ag_context_supplement(
+        injured, str(failure.get("contract") or "")
+    )
+    assert declaration in supplemented
+    assert f"requirement def {failure.get('contract')}" in supplemented
+    # and it stays a slice: prompt context, not the whole model
+    assert len(supplemented.splitlines()) < len(injured.splitlines()) / 2
