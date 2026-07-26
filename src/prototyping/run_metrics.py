@@ -68,12 +68,29 @@ def compute_coordination_metrics(
         if (int(e.get("model_revision", -1)), e.get("model_digest")) in committed
     )
 
-    # required-context coverage: a design/refinement envelope must carry its
-    # authoritative source (source_requirements) or explicit included records.
-    coverage_num = sum(
-        1 for e in envelopes
-        if e.get("source_requirements") or e.get("included_record_ids")
-    )
+    # required-context coverage, §13: required categories present in the envelope
+    # over the required categories in that ROLE's policy, averaged over tasks. The
+    # denominator used to be "one per envelope, satisfied by carrying anything at
+    # all", which cannot fall below 1.0 for any envelope that carries a single
+    # record — a metric that cannot fail. The policy
+    # (`context_builder.REQUIRED_CONTEXT_BY_ROLE`) is ablation-derived, so each
+    # category in the denominator is one whose removal demonstrably breaks or
+    # silently degrades the task.
+    from .context_builder import context_coverage
+
+    per_envelope = [context_coverage(item) for item in envelopes]
+    scored = [item for item in per_envelope if item]
+    coverage_ratios = [
+        item["present"] / item["required"] for item in scored if item["required"]
+    ]
+    coverage_missing = sorted({
+        name for item in scored for name in item["missing"]
+    })
+    unscored_roles = sorted({
+        str(envelope.get("agent_role"))
+        for envelope, coverage in zip(envelopes, per_envelope)
+        if coverage is None
+    })
 
     # cross-agent handoff completeness: every required topic of a migrated task
     # was published as a typed record (illustrative — one handoff in the MVP).
@@ -173,9 +190,19 @@ def compute_coordination_metrics(
             "note": "enforced: envelopes are revision-pinned to a committed model",
         },
         "required_context_coverage": {
-            "covered": coverage_num,
-            "total": len(envelopes),
-            "value": _ratio(coverage_num, len(envelopes)),
+            "envelopes_scored": len(scored),
+            "envelopes_total": len(envelopes),
+            "value": (
+                round(sum(coverage_ratios) / len(coverage_ratios), 4)
+                if coverage_ratios else None
+            ),
+            "missing_categories": coverage_missing,
+            "roles_without_a_policy": unscored_roles,
+            "note": (
+                "denominator is the role's ablation-derived required categories "
+                "(context_builder.REQUIRED_CONTEXT_BY_ROLE); a role with no "
+                "declared policy is not scored rather than scored 1.0"
+            ),
         },
         "cross_agent_handoff_completeness": {
             "complete": handoff_complete,

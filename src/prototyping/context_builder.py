@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 
 from .blackboard import Blackboard, RecordType
 
@@ -99,6 +99,102 @@ class ContextEnvelope:
             f"```sysml\n{model_section}\n```\n"
             f"context_envelope_digest: {self.envelope_digest}"
         )
+
+
+@dataclass(frozen=True)
+class ContextRequirement:
+    """One context category a role's task cannot be done without.
+
+    ``failure_mode`` records what actually happens when it is removed, which is
+    the point: a category whose absence RAISES is safe, and one whose absence
+    silently degrades the result is the dangerous kind — the task still reports
+    success on a worse answer.
+    """
+
+    category: str
+    failure_mode: str  # "raises" | "empty_result" | "silent_degradation"
+    evidence: str
+    present: Callable[[Mapping[str, Any]], bool]
+
+
+def _has_source_requirements(envelope: Mapping[str, Any]) -> bool:
+    return bool(envelope.get("source_requirements"))
+
+
+def _has_model_slice(envelope: Mapping[str, Any]) -> bool:
+    return bool(str(envelope.get("model_context") or "").strip())
+
+
+def _slice_carries_source_text(envelope: Mapping[str, Any]) -> bool:
+    return "doc /*" in str(envelope.get("model_context") or "")
+
+
+#: What each role's task demonstrably cannot be done without (§18-Q1).
+#:
+#: Derived by ABLATION, not by judgement, because the archive offered nothing to
+#: learn from: across every archived revised run every task is COMPLETED except
+#: ten that are BLOCKED by design (§11 routes an integration gap to BLOCKED), so
+#: there is no observed context failure to generalise from. "Required" is therefore
+#: given an operational meaning — remove the category and the task fails, returns
+#: nothing, or silently returns a worse answer — and each entry below cites the
+#: measured effect. `tests/test_option2_context_policy.py` re-runs every ablation,
+#: so an entry cannot stay in the policy once it stops being load-bearing.
+#:
+#: Deliberately NOT listed: categories the envelope carries for provenance and
+#: protection rather than for the task. VerificationAgent's `source_requirements`
+#: is the clear case — the planner reads the committed slice and never touches it,
+#: so calling it required would inflate the denominator of §13's
+#: required-context-coverage metric with an item no task can fail on.
+REQUIRED_CONTEXT_BY_ROLE: Mapping[str, Tuple[ContextRequirement, ...]] = {
+    "DesignAgent": (
+        ContextRequirement(
+            "authoritative_source_requirements",
+            "raises",
+            "build_design_context without the authoritative SOURCE record raises "
+            "'required typed publications are missing from context'",
+            _has_source_requirements,
+        ),
+    ),
+    "VerificationAgent": (
+        ContextRequirement(
+            "committed_requirement_slice",
+            "empty_result",
+            "plan_verification over an empty slice plans 0 of 6 requirements",
+            _has_model_slice,
+        ),
+        ContextRequirement(
+            "requirement_source_text",
+            "silent_degradation",
+            "with the `doc` text stripped the planner still reports 6 planned "
+            "requirements, but every method collapses to `inspection` — the "
+            "tier histogram goes from {behavioral:2, analysis:2, inspection:2} to "
+            "{inspection:6}. It does not fail; it silently plans the wrong methods",
+            _slice_carries_source_text,
+        ),
+    ),
+}
+
+
+def required_context_categories(role: str) -> Tuple[ContextRequirement, ...]:
+    return REQUIRED_CONTEXT_BY_ROLE.get(str(role), ())
+
+
+def context_coverage(envelope: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Which of this role's required categories the envelope actually carries.
+
+    Returns None for a role with no declared policy: no policy means no
+    denominator, and reporting 1.0 for "nothing was required" would be a vacuous
+    pass — the same error as scoring an arm 0.00 for an intervention it never had.
+    """
+    requirements = required_context_categories(envelope.get("agent_role") or "")
+    if not requirements:
+        return None
+    missing = [item.category for item in requirements if not item.present(envelope)]
+    return {
+        "required": len(requirements),
+        "present": len(requirements) - len(missing),
+        "missing": missing,
+    }
 
 
 class ContextBuilder:
