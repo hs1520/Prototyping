@@ -66,7 +66,7 @@ def measure_model(
     be comparable, and the difference would be invisible in the write-up.
     """
     from .ag_contracts import check_ag_graph
-    from .ag_extractor import extract_ag_graph, extract_ag_graphs
+    from .ag_extractor import extract_ag_graphs
     from .ag_traceability import compute_traceability
 
     graphs = extract_ag_graphs(model_text)
@@ -80,21 +80,43 @@ def measure_model(
                 "than a score of zero"
             ),
         }
-    report = check_ag_graph(extract_ag_graph(model_text))
+    # Per chain, never pooled. A model carrying several A/G packages has several
+    # system contracts, so a single extraction leaves the decomposition root
+    # ambiguous and manufactures failures: on a three-chain model whose chains each
+    # verify PASS, the pooled graph reported FAIL with 14 errors
+    # (DECOMPOSITION_MISSING, GUARANTEE_NO_OWNER, REALIZATION_MISSING,
+    # ASSUMPTION_UNDISCHARGED) — every one of them an artefact of the pooling. The
+    # run verdict is the conjunction, as it is everywhere else.
+    reports = [check_ag_graph(graph) for graph in graphs]
     traceability = compute_traceability(
         graphs,
-        realization_links=(report.to_dict().get("graph") or {}).get(
-            "realization_links"
-        ) or (),
+        realization_links=[
+            link
+            for report in reports
+            for link in ((report.to_dict().get("graph") or {}).get(
+                "realization_links"
+            ) or ())
+        ],
         declared_requirements=declared_requirements,
         out_of_scope=out_of_scope,
     )
     return {
         "ag_layer_present": True,
         "pattern_conformance": {
-            "verdict": report.verdict,
-            "errors": len(report.errors()),
-            "codes": sorted({item.code for item in report.errors()}),
+            "verdict": (
+                "PASS" if reports and all(
+                    item.verdict == "PASS" for item in reports
+                ) else "FAIL"
+            ),
+            "errors": sum(len(item.errors()) for item in reports),
+            "codes": sorted({
+                diagnostic.code
+                for item in reports for diagnostic in item.errors()
+            }),
+            "chains": {
+                str(item.source_requirement or f"chain_{index}"): item.verdict
+                for index, item in enumerate(reports)
+            },
         },
         "traceability": {
             "requirements": traceability["requirements"],

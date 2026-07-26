@@ -243,3 +243,38 @@ def test_the_denominator_is_the_declared_set_not_only_what_was_covered():
     full_set = measure_model(_WITH_AG, ["REQ_SAFE_005", "REQ_FUNC_002"])
     assert covered_only["traceability"]["mean_trace_completeness"] == 1.0
     assert full_set["traceability"]["mean_trace_completeness"] == 0.5
+
+
+def test_a_multi_chain_model_is_measured_per_chain_not_pooled():
+    """Several A/G packages mean several system contracts.
+
+    Extracting them as ONE graph leaves the decomposition root ambiguous, and the
+    checker reports the structure it cannot resolve as real defects. A measured
+    three-seed run whose nine chains all verified PASS had `pattern_conformance:
+    FAIL, 14 errors` written into every traceability artifact for exactly this
+    reason — two artifacts of the same run contradicting each other, in one of the
+    three pillars the claim rests on.
+    """
+    from src.prototyping.ag_chains import REQ_SAFE_004_CHAIN, REQ_SAFE_008_CHAIN
+    from src.prototyping.robustness_report import measure_model
+
+    base = (
+        "package DeliveryUAV { "
+        f"requirement def REQ_SAFE_005 {{ doc /* {_REQ} */ }} "
+        "requirement def REQ_SAFE_004 { doc /* self-test inhibit */ } "
+        "requirement def REQ_SAFE_008 { doc /* locked until authorised */ } }"
+    )
+    model = base + "\n\n" + "\n\n".join(
+        emit_ag_package(chain) for chain in
+        (REQ_SAFE_004_CHAIN, REQ_SAFE_005_CHAIN, REQ_SAFE_008_CHAIN)
+    )
+    measured = measure_model(
+        model, ["REQ_SAFE_004", "REQ_SAFE_005", "REQ_SAFE_008"]
+    )
+    conformance = measured["pattern_conformance"]
+    assert conformance["verdict"] == "PASS", conformance
+    assert conformance["errors"] == 0
+    assert conformance["chains"] == {
+        "REQ_SAFE_004": "PASS", "REQ_SAFE_005": "PASS", "REQ_SAFE_008": "PASS",
+    }
+    assert measured["traceability"]["fully_traced"] == 3
