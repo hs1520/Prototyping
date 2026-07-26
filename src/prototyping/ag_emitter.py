@@ -58,6 +58,9 @@ class AGComponentSpec:
     additional_guarantees: Tuple[str, ...] = ()
     latency_budget: Optional[float] = None
     timing_segment_required: Optional[bool] = None
+    #: Segments sharing a group are concurrent; the group contributes its maximum.
+    #: None means "own group", i.e. serial — the composition addition assumed.
+    timing_segment_group: Optional[int] = None
     realization_paths: Tuple[AGRealizationPathSpec, ...] = ()
 
     @property
@@ -108,6 +111,11 @@ class AGChainSpec:
     invariants: Tuple[AGInvariantSpec, ...] = ()
     selected_model_elements: Tuple[str, ...] = ()
     system_observation_concepts: Tuple[str, ...] = ()
+    #: Deadline the design deliberately does not apportion. Explicit, because
+    #: "how much reserve a safety response keeps" is a design decision the
+    #: requirement does not contain — the measured divergence between 0.1+0.35
+    #: (0.05 s held back) and 0.2+0.3 (none) was exactly this decision, unstated.
+    timing_margin: Optional[float] = None
 
 
 def _fmt(value: float) -> str:
@@ -183,6 +191,11 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             "        attribute maxLatency : DurationValue = "
             f"{_fmt(spec.deadline)} [s];"
         )
+    if spec.timing_margin is not None:
+        out.append(
+            "        attribute timingMargin : DurationValue = "
+            f"{_fmt(spec.timing_margin)} [s];"
+        )
     for concept in spec.system_assumptions:
         out.append(f"        assume constraint a_{concept} {{ {concept} }}")
     out.append(f"        require constraint g_observed {{ {spec.observation} }}")
@@ -216,6 +229,11 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             out.append(
                 f"        attribute latencyBudget : DurationValue = "
                 f"{_fmt(comp.latency_budget)} [s];"
+            )
+        if comp.timing_segment_group is not None:
+            out.append(
+                "        attribute timingSegmentGroup : Integer = "
+                f"{int(comp.timing_segment_group)};"
             )
         if comp.timing_segment_required is not None:
             literal = "true" if comp.timing_segment_required else "false"

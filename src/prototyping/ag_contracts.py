@@ -26,7 +26,7 @@ supplied from JSON (§6.2).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 # ag-bounded-5: the checker became gold-blind. Comparisons against reviewed
 # per-requirement answers (pattern profile, REQ_SAFE_005 response set/ordering,
@@ -178,6 +178,13 @@ class Contract:
     timing_unit: Optional[str] = None
     timing_value_literal: Optional[str] = None
     timing_segment_required: Optional[bool] = None
+    #: Segments sharing a group run CONCURRENTLY, so the group contributes its
+    #: maximum rather than its sum. Undeclared means "own group" — i.e. serial,
+    #: which is what plain addition already assumed.
+    timing_segment_group: Optional[int] = None
+    #: Deadline the system deliberately does NOT apportion (system contract only).
+    timing_margin: Optional[float] = None
+    timing_margin_unit: Optional[str] = None
     timing_origin: Optional[str] = None
     observation: Optional[str] = None  # system-level observed signal concept
     element_id: Optional[str] = None
@@ -574,13 +581,71 @@ def _check_discharge(
     return discharge, discharge_edges, diags
 
 
+def _compose_timing(
+    components: Sequence[Contract],
+) -> Tuple[Optional[float], Dict[str, Any]]:
+    """Compose component budgets by declared structure, not by blanket addition.
+
+    Plain addition is only sound for a SERIAL chain. It was applied unconditionally,
+    which happened to be right for the one encoded timed chain and would be wrong —
+    conservatively, but wrong — for any chain with concurrent segments: two 0.3 s
+    responses running side by side occupy 0.3 s, not 0.6 s, so a valid design would
+    be reported as exceeding its deadline.
+
+    Segments declaring the same ``timingSegmentGroup`` are concurrent and contribute
+    their MAXIMUM; groups compose serially and contribute their SUM. An undeclared
+    segment is its own group, so a model that says nothing composes exactly as
+    before and no existing verdict moves.
+    """
+    groups: Dict[Any, List[Tuple[str, float]]] = {}
+    for index, component in enumerate(components):
+        if component.timing_budget is None:
+            continue
+        key = (
+            component.timing_segment_group
+            if component.timing_segment_group is not None
+            else f"_serial_{index}"
+        )
+        groups.setdefault(key, []).append((component.name, component.timing_budget))
+    if not groups:
+        return None, {"groups": [], "structure": "none"}
+    structure = []
+    total = 0.0
+    for key, members in groups.items():
+        concurrent = len(members) > 1
+        contribution = (
+            max(value for _name, value in members) if concurrent
+            else members[0][1]
+        )
+        total += contribution
+        structure.append({
+            "group": key if isinstance(key, int) else None,
+            "members": [name for name, _value in members],
+            "composition": "concurrent_max" if concurrent else "serial",
+            "contributes": contribution,
+        })
+    return round(total, 12), {
+        "groups": structure,
+        "structure": (
+            "serial_and_concurrent"
+            if any(item["composition"] == "concurrent_max" for item in structure)
+            else "serial"
+        ),
+    }
+
+
 def _check_timing(graph: AGGraph) -> Tuple[Dict[str, Any], List[AGDiagnostic]]:
-    """Additive timing-budget composition (§6.4, §7): sum(components) <= system."""
+    """Timing-budget composition (§6.4, §7, §18-Q5).
+
+    Serial segments add, concurrent segments take their maximum, and a declared
+    margin is deadline the design deliberately does not apportion.
+    """
     diags: List[AGDiagnostic] = []
     budgets = {c.name: c.timing_budget for c in graph.components
                if c.timing_budget is not None}
     system_budget = graph.system.timing_budget if graph.system else None
-    total = round(sum(budgets.values()), 12) if budgets else None
+    margin = (graph.system.timing_margin if graph.system else None) or 0.0
+    total, composition = _compose_timing(graph.components)
 
     # Unit safety: all declared timing units must agree (§6.4).
     units = {c.timing_unit for c in graph.all_contracts()
@@ -589,6 +654,13 @@ def _check_timing(graph: AGGraph) -> Tuple[Dict[str, Any], List[AGDiagnostic]]:
         c.name for c in graph.all_contracts()
         if c.timing_budget is not None and c.timing_unit is None
     ]
+    # a margin is a duration too: unstated or mismatched units would let 50 ms of
+    # reserve be compared against a deadline in seconds
+    if graph.system is not None and graph.system.timing_margin is not None:
+        if graph.system.timing_margin_unit is None:
+            missing_units.append(f"{graph.system.name}.timingMargin")
+        else:
+            units.add(graph.system.timing_margin_unit)
     if missing_units:
         diags.append(AGDiagnostic(
             CODE_UNIT_INCOMPATIBLE,
@@ -616,15 +688,24 @@ def _check_timing(graph: AGGraph) -> Tuple[Dict[str, Any], List[AGDiagnostic]]:
                 + ", ".join(sorted(missing_budgets)),
             ))
     if total is not None and system_budget is not None:
-        ok = total <= system_budget + 1e-9
+        committed = round(total + margin, 12)
+        ok = committed <= system_budget + 1e-9
         if not ok:
+            detail = (
+                f"composed timing {total}"
+                + (f" + declared margin {margin}" if margin else "")
+                + f" = {committed} > system deadline {system_budget}"
+            )
             diags.append(AGDiagnostic(
                 CODE_TIMING_BUDGET_EXCEEDED,
-                f"component timing budgets sum to {total} > system deadline {system_budget}",
+                detail,
                 contract=graph.system.name if graph.system else None,
             ))
     return (
         {"component_budgets": budgets, "sum": total,
+         "margin": margin or None,
+         "committed": round(total + margin, 12) if total is not None else None,
+         "composition": composition,
          "system_deadline": system_budget, "ok": ok},
         diags,
     )

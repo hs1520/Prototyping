@@ -207,10 +207,27 @@ def compute_coordination_metrics(
                 "with no stale attempt reports null, not 1.0"
             ),
         },
+        # NOT a measurement under this architecture, and reported as what it is.
+        # A session owns exactly one role and one task (design §5.3 rules 1 and 6),
+        # so contamination cannot occur: the count is 0 because the structure
+        # forbids it, not because a run avoided it. Reporting it as a measured rate
+        # would restate a definition as a finding. It becomes measurable only in
+        # the R1-LONG shared-session condition, which is not implemented (§18-Q2),
+        # so `measured` stays false and no denominator is claimed. The pillar-2
+        # evidence is the metrics below that CAN fail on a real run:
+        # context_revision_consistency, stale_revision_use, required_context_
+        # coverage, envelope_truncation, stale_session_detection.
         "cross_role_contamination": {
+            "kind": "ARCHITECTURAL_PROPERTY",
+            "measured": False,
             "count": cross_role,
             "target": 0,
-            "note": "0 by construction for R1; meaningful only for R1-LONG",
+            "note": (
+                "structurally impossible: one session owns one role and one task, "
+                "so 0 is entailed by the design rather than observed. Measurable "
+                "only under the R1-LONG shared-session diagnostic, which is not "
+                "implemented; do not report this as a coordination rate"
+            ),
         },
         "session_context_growth": growth,
         "envelope_truncation": {"truncated": truncated, "total": len(envelopes)},

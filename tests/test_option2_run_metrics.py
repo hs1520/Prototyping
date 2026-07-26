@@ -142,3 +142,40 @@ def test_metrics_flag_stale_and_contamination_when_present():
     m = compute_coordination_metrics(collaboration)
     assert m["stale_revision_use"]["count"] == 1
     assert m["cross_role_contamination"]["count"] == 1
+
+
+def test_contamination_is_reported_as_a_property_not_as_a_measured_rate():
+    """§18-Q2, option B. A session owns one role and one task by construction, so
+    contamination cannot occur — 0 is entailed by the design, not observed.
+
+    Reporting it as a coordination rate would restate a definition as a finding,
+    which is the same over-claim this project polices elsewhere (an arm with no
+    A/G layer is `n/a`, not 0.00). It becomes measurable only under the R1-LONG
+    shared-session diagnostic, which is not implemented.
+    """
+    metrics = compute_coordination_metrics({
+        "blackboard": {
+            "semantic_authority": "COMMITTED_SYSML_MODEL",
+            "model_revisions": [{"revision": 0, "model_digest": "d0"}],
+            "records": [], "tasks": [],
+        },
+        "contexts": {"envelopes": []},
+        "task_sessions": {"sessions": [
+            {"session_id": "s1", "agent_role": "DesignAgent", "task_id": "t1",
+             "status": "COMPLETED", "base_model_revision": 0,
+             "base_model_digest": "d0"},
+        ]},
+    })
+
+    contamination = metrics["cross_role_contamination"]
+    assert contamination["kind"] == "ARCHITECTURAL_PROPERTY"
+    assert contamination["measured"] is False
+    assert "structurally impossible" in contamination["note"]
+    assert "R1-LONG" in contamination["note"]
+
+    # and the pillar-2 evidence must still rest on metrics that CAN fail
+    for falsifiable in ("context_revision_consistency", "stale_revision_use",
+                        "required_context_coverage", "envelope_truncation",
+                        "stale_session_detection"):
+        assert falsifiable in metrics
+        assert metrics[falsifiable].get("kind") != "ARCHITECTURAL_PROPERTY"

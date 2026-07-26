@@ -80,6 +80,10 @@ _BOOL_TOKEN_RE = re.compile(r"\s*(\(|\)|not\b|and\b|or\b|[A-Za-z_]\w*)", re.I)
 # Attribute names that carry a timing budget/deadline.
 _COMPONENT_BUDGET_KEYS = ("latencybudget",)
 _SYSTEM_BUDGET_KEYS = ("maxlatency", "deadline", "systemdeadline")
+#: Deliberately NOT budget keys: the margin is not the deadline, and reading it as
+#: one would let a reserved margin masquerade as the whole budget.
+_SEGMENT_GROUP_KEY = "timingsegmentgroup"
+_MARGIN_KEY = "timingmargin"
 
 
 def _boolean_ast(expr: str) -> Optional[Dict[str, object]]:
@@ -230,6 +234,10 @@ def _parse_contract(name: str, block: str, span: Span) -> Contract:
     source = _SOURCE_REQ_RE.search(block)
     pattern = _SAFETY_PATTERN_RE.search(block)
     timing_origin = _TIMING_ORIGIN_RE.search(block)
+    # Composition structure and reserved margin. Both are optional: absent, the
+    # composition is the plain sum it always was.
+    group = attrs.get(_SEGMENT_GROUP_KEY)
+    margin = attrs.get(_MARGIN_KEY)
 
     return Contract(
         name=name,
@@ -240,6 +248,9 @@ def _parse_contract(name: str, block: str, span: Span) -> Contract:
         timing_unit=timing_unit,
         timing_value_literal=timing_value_literal,
         timing_segment_required=bool_attrs.get("timingsegmentrequired"),
+        timing_segment_group=int(group) if group is not None else None,
+        timing_margin=margin,
+        timing_margin_unit=attr_units.get(_MARGIN_KEY),
         timing_origin=timing_origin.group(1) if timing_origin else None,
         observation=None,  # set for the system contract only
         element_id=name,
@@ -622,6 +633,9 @@ def extract_ag_graph(
                 timing_budget=contract.timing_budget, timing_unit=contract.timing_unit,
                 timing_value_literal=contract.timing_value_literal,
                 timing_segment_required=contract.timing_segment_required,
+                timing_segment_group=contract.timing_segment_group,
+                timing_margin=contract.timing_margin,
+                timing_margin_unit=contract.timing_margin_unit,
                 timing_origin=contract.timing_origin,
                 observation=obs, element_id=contract.element_id, span=contract.span,
                 owners=tuple(owners.get(name, ())),
@@ -635,6 +649,9 @@ def extract_ag_graph(
                 timing_budget=contract.timing_budget, timing_unit=contract.timing_unit,
                 timing_value_literal=contract.timing_value_literal,
                 timing_segment_required=contract.timing_segment_required,
+                timing_segment_group=contract.timing_segment_group,
+                timing_margin=contract.timing_margin,
+                timing_margin_unit=contract.timing_margin_unit,
                 timing_origin=contract.timing_origin,
                 observation=contract.observation, element_id=contract.element_id,
                 span=contract.span, owners=tuple(owners.get(name, ())),

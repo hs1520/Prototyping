@@ -182,8 +182,25 @@ DECISION_FIELD_OBLIGATIONS: Tuple[Tuple[str, str], ...] = (
         "latency_budget_seconds",
         "null exactly when timing_segment_required is false — a component that "
         "consumes no time on the path owns no part of the deadline. The budgets "
-        "that are set must SUM TO AT MOST deadline_seconds: they apportion the "
-        "system deadline, they do not each restate it.",
+        "that are set must fit inside deadline_seconds once composed: they "
+        "apportion the system deadline, they do not each restate it.",
+    ),
+    (
+        "timing_segment_group",
+        "optional, and only meaningful for segments that run CONCURRENTLY: give "
+        "the same integer to segments that execute at the same time, and their "
+        "group contributes its MAXIMUM instead of its sum. Omit it for a segment "
+        "on the serial path — omitted means its own group, so the composition is "
+        "the plain sum. Declare it when it is true: two 0.3 s responses running "
+        "side by side occupy 0.3 s, and calling that 0.6 s would reject a design "
+        "that meets its deadline.",
+    ),
+    (
+        "timing_margin_seconds",
+        "optional: deadline you deliberately do NOT apportion, checked as "
+        "composed + margin <= deadline_seconds. How much reserve a safety "
+        "response keeps is a design decision the requirement does not contain, so "
+        "state it rather than leaving it implicit in an underspent budget.",
     ),
 )
 
@@ -282,8 +299,13 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     ),
     Obligation(
         "TIMING_BUDGET_EXCEEDED", CONVENTION,
-        "Component budgets are additive: their sum must not exceed the system "
-        "deadline. Apportion the deadline across the contributing components.",
+        "Compose the component budgets and keep them inside the system deadline. "
+        "Segments on the serial path ADD. Segments that run concurrently declare "
+        "the same `attribute timingSegmentGroup : Integer = <n>;` and their group "
+        "contributes its MAXIMUM, not its sum — omit the attribute for a serial "
+        "segment. If the design keeps reserve, declare it on the system contract "
+        "as `attribute timingMargin : DurationValue = <N> [s];` and the check "
+        "becomes composed + margin <= deadline.",
            tier=REFINEMENT,
     ),
     Obligation(

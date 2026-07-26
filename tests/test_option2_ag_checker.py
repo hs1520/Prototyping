@@ -204,3 +204,92 @@ def test_decomposition_insufficient_when_observation_unproduced():
                     edges=(AGEdge("decomposes", "Sys", "C"),), revision=1)
     report = check_ag_graph(graph)
     assert CODE_DECOMPOSITION_INSUFFICIENT in _codes(report)
+
+
+def test_concurrent_segments_compose_by_maximum_not_by_sum():
+    """§18-Q5. Blanket addition is only sound for a serial chain.
+
+    It was applied unconditionally, which was right for the one encoded timed
+    chain by accident of its shape. Two 0.3 s responses running side by side
+    occupy 0.3 s; calling that 0.6 s rejects a design that meets its deadline —
+    conservative, but wrong, and the author had no way to say "these are
+    concurrent" at all.
+    """
+    from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+    from src.prototyping.ag_emitter import emit_ag_package
+    from dataclasses import replace
+
+    # both contributing segments in one concurrent group; each fits the deadline
+    # alone, their sum does not
+    components = tuple(
+        replace(item, latency_budget=0.35, timing_segment_group=1)
+        if item.latency_budget is not None else item
+        for item in REQ_SAFE_005_CHAIN.components
+    )
+    concurrent = replace(REQ_SAFE_005_CHAIN, components=components)
+    report = check_ag_graph(extract_ag_graph(emit_ag_package(concurrent)))
+    timing = report.timing
+    assert timing["sum"] == 0.35, timing
+    assert timing["ok"] is True
+    assert timing["composition"]["structure"] == "serial_and_concurrent"
+    assert "TIMING_BUDGET_EXCEEDED" not in {d.code for d in report.errors()}
+
+    # the same budgets on the serial path (no group) must still be rejected
+    serial = replace(REQ_SAFE_005_CHAIN, components=tuple(
+        replace(item, latency_budget=0.35)
+        if item.latency_budget is not None else item
+        for item in REQ_SAFE_005_CHAIN.components
+    ))
+    serial_report = check_ag_graph(extract_ag_graph(emit_ag_package(serial)))
+    assert serial_report.timing["sum"] == 0.7
+    assert "TIMING_BUDGET_EXCEEDED" in {
+        d.code for d in serial_report.errors()
+    }
+
+
+def test_a_declared_margin_is_deadline_that_is_not_apportioned():
+    """§18-Q5, and the measured divergence behind it.
+
+    Gold apportioned 0.1 + 0.35 = 0.45 of a 0.5 s deadline, holding 0.05 s back;
+    the model used 0.2 + 0.3 = 0.5 and kept none. Both met the deadline, so the
+    difference — how much reserve a safety response keeps — was invisible to the
+    checker and looked like noise. Declared, it is checkable.
+    """
+    from dataclasses import replace
+
+    from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+    from src.prototyping.ag_emitter import emit_ag_package
+
+    # the reference apportions 0.45 of 0.5; a 0.05 s margin exactly fits
+    fits = replace(REQ_SAFE_005_CHAIN, timing_margin=0.05)
+    report = check_ag_graph(extract_ag_graph(emit_ag_package(fits)))
+    assert report.timing["margin"] == 0.05
+    assert report.timing["committed"] == 0.5
+    assert report.timing["ok"] is True
+
+    # ask for more reserve than the unspent deadline and it must fail, even
+    # though the budgets alone are well inside the deadline
+    overcommitted = replace(REQ_SAFE_005_CHAIN, timing_margin=0.1)
+    failed = check_ag_graph(extract_ag_graph(emit_ag_package(overcommitted)))
+    assert failed.timing["ok"] is False
+    assert "TIMING_BUDGET_EXCEEDED" in {d.code for d in failed.errors()}
+    message = next(
+        d.message for d in failed.errors()
+        if d.code == "TIMING_BUDGET_EXCEEDED"
+    )
+    assert "margin" in message, message
+
+
+def test_the_composition_rules_are_published_to_the_author():
+    """Every obligation in this file's checks must be stated somewhere an author
+    reads, or it is unsatisfiable — the defect class this project met eight
+    times."""
+    from src.prototyping.ag_convention import (
+        DECISION_FIELD_OBLIGATIONS, render_authoring_rules,
+    )
+
+    rules = render_authoring_rules()
+    assert "timingSegmentGroup" in rules
+    assert "timingMargin" in rules
+    fields = {name for name, _rule in DECISION_FIELD_OBLIGATIONS}
+    assert {"timing_segment_group", "timing_margin_seconds"} <= fields

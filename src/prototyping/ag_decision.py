@@ -489,6 +489,7 @@ def build_spec_from_decisions(
         stem = name[:-len("Contract")] if name.endswith("Contract") else name
         budget = entry.get("latency_budget_seconds")
         segment = entry.get("timing_segment_required")
+        group = entry.get("timing_segment_group")
         trigger_concept = next(
             (
                 item.concept for item in assumptions
@@ -544,6 +545,10 @@ def build_spec_from_decisions(
             timing_segment_required=(
                 bool(segment) if segment is not None else None
             ),
+            # concurrency is the author's to declare; undeclared stays serial
+            timing_segment_group=(
+                int(group) if isinstance(group, (int, float)) else None
+            ),
         ))
 
     priority: Optional[AGPrioritySpec] = None
@@ -569,6 +574,7 @@ def build_spec_from_decisions(
         )
 
     deadline = decisions.get("deadline_seconds")
+    margin = decisions.get("timing_margin_seconds")
     stem = requirement.replace("REQ_", "").title().replace("_", "")
     system_contract = f"System{stem}Contract"
     invariants = tuple(
@@ -599,6 +605,10 @@ def build_spec_from_decisions(
         ),
         observation=observation,
         deadline=float(deadline) if deadline not in (None, "") else None,
+        # reserve the author chose to keep unapportioned, if any
+        timing_margin=(
+            float(margin) if margin not in (None, "") else None
+        ),
         components=tuple(components),
         verification=f"{stem}Verification",
         system_observation_concepts=_expression_concepts(observation),
