@@ -124,3 +124,109 @@ def test_multichain_run_writes_per_chain_graph_artifacts(tmp_path):
     )
     assert per_chain["source_requirement"] == "REQ_SAFE_004"
     assert per_chain["verdict"] == "PASS"
+
+
+class _FixingLLM:
+    """Returns one corrected state def, the way a repair agent would."""
+
+    def __init__(self, replacement: str):
+        self._replacement = replacement
+        self.calls = 0
+
+    def chat(self, _prompt, system_prompt="", **_kwargs):
+        self.calls += 1
+        return f"```sysml\n{self._replacement}\n```"
+
+    def complete(self, *_a, **_k):  # pragma: no cover
+        raise AssertionError("repair uses chat()")
+
+
+def _injured_two_chain_model() -> tuple[str, str]:
+    """Two chains, one carrying an authorised model-semantic fault."""
+    import re
+
+    model = _two_chain_model()
+    match = re.search(
+        r"state (\w+) \{ entry action (setArmingTransitionInhibited); \}", model
+    )
+    assert match, "expected REQ_SAFE_004's arming response action"
+    healthy = match.group(0)
+    return model.replace(healthy, f"state {match.group(1)};"), healthy
+
+
+def test_repair_now_runs_inside_a_multi_chain_run():
+    """§15 Increment 3's exit gate, previously unreachable in every pilot.
+
+    Repair was disabled whenever several chains co-existed, so with three chains
+    selected the gate was never exercised and every archived repair decision read
+    `multi_chain_auto_repair_out_of_scope` — a repair that never ran, not one that
+    failed.
+
+    Repair is per chain now, as a fixpoint, because an accepted repair commits a
+    revision that invalidates every OTHER chain's graph: each round re-extracts
+    all chains from the current revision and re-checks them. That is what the two
+    analysis rounds below show.
+    """
+    from src.agents.surgical_refiner import _find_def_span
+
+    injured, _healthy_state = _injured_two_chain_model()
+    span = _find_def_span(_two_chain_model(), "state", "ArmingAuthorityBehavior")
+    assert span is not None
+    llm = _FixingLLM(_two_chain_model()[span[0]:span[1]])
+
+    orch = Orchestrator(llm, revised_experiment_arm="R2-BBAG")
+    orch.last_requirement_input = {"mode": "frozen", "requirement_set_digest": "d"}
+    orch._prepare_design_handoff("DeliveryUAV", _REQS)
+    orch._finalize_design_handoff(
+        SimpleNamespace(success=True, reasoning="generated", metadata={}),
+        build_lite_model(_BASE_MODEL, model_name="DeliveryUAV"),
+    )
+    orch._commit_terminal_model(injured, producer="test")
+    artifacts = orch._build_collaboration_artifacts(injured)
+
+    decisions = artifacts["repair_decisions"]["decisions"]
+    assert not any(
+        item.get("reason") == "multi_chain_auto_repair_out_of_scope"
+        for item in decisions
+    ), "the multi-chain exemption must be gone"
+    accepted = [item for item in decisions if item["status"] == "ACCEPTED"]
+    assert accepted, f"the repair must be attempted and accepted: {decisions}"
+    assert llm.calls >= 1
+
+    # the commit advanced the revision, and every chain was re-checked against it
+    assert accepted[0]["committed_model_revision"] == orch.blackboard.current_revision
+    history = artifacts["failure_diagnostics"]["analysis_history"]
+    assert {item["analysis_round"] for item in history} == {0, 1}
+    round_one = [item for item in history if item["analysis_round"] == 1]
+    assert len(round_one) == 2, "both chains re-checked, not only the repaired one"
+    assert all(
+        item["source_model_revision"] == orch.blackboard.current_revision
+        for item in round_one
+    ), "a re-check must run on the committed revision, not the superseded one"
+
+    graph = artifacts["ag_contract_graph"]
+    assert graph["source_model_revision"] == orch.blackboard.current_revision
+    assert graph["verdict"] == "PASS", "the repaired chain now passes"
+
+
+def test_the_repair_budget_is_one_attempt_across_all_chains():
+    """The budget is per run, not per chain: a second authorised failure reports
+    budget exhaustion rather than silently getting another attempt."""
+    injured, _healthy = _injured_two_chain_model()
+    # a patch that changes nothing is refused, spending the single attempt
+    llm = _FixingLLM("state def ArmingAuthorityBehavior { entry; then idle; }")
+
+    orch = Orchestrator(llm, revised_experiment_arm="R2-BBAG")
+    orch.last_requirement_input = {"mode": "frozen", "requirement_set_digest": "d"}
+    orch._prepare_design_handoff("DeliveryUAV", _REQS)
+    orch._finalize_design_handoff(
+        SimpleNamespace(success=True, reasoning="generated", metadata={}),
+        build_lite_model(_BASE_MODEL, model_name="DeliveryUAV"),
+    )
+    orch._commit_terminal_model(injured, producer="test")
+    artifacts = orch._build_collaboration_artifacts(injured)
+
+    decisions = artifacts["repair_decisions"]["decisions"]
+    assert sum(1 for item in decisions if item["status"] != "BLOCKED") <= 1, (
+        "at most one attempt may be spent per run"
+    )

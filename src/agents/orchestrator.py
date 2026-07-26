@@ -2411,10 +2411,16 @@ class Orchestrator:
                         {
                             "failure_id": failure["failure_id"],
                             "status": "BLOCKED",
+                            # `multi_chain_auto_repair_out_of_scope` used to be
+                            # reported here whenever several chains co-existed.
+                            # Repair now runs per chain as a fixpoint, so that
+                            # exemption no longer exists and the only honest
+                            # reasons left are budget and an explicitly disabled
+                            # run. Archived artifacts still carry the old string.
                             "reason": (
                                 "automatic_repair_budget_exhausted"
                                 if allow_repair
-                                else "multi_chain_auto_repair_out_of_scope"
+                                else "automatic_repair_disabled_for_this_run"
                             ),
                             "base_model_revision": revision,
                             "base_model_digest": digest,
@@ -2517,54 +2523,114 @@ class Orchestrator:
         Each chain is checked on its own graph and publishes its own typed
         ``analysis.ag_trace`` record — one assurance case per source requirement.
         The run-level verdict is the conjunction: PASS only when every chain is
-        PASS. Automatic surgical repair is disabled (a single-chain capability),
-        so an authorised model-semantic fault in any chain is routed to a BLOCKED
-        task, keeping the aggregate honest.
+        PASS.
+
+        **Repair runs here too, one authorised attempt per run, as a fixpoint.**
+        It used to be disabled outright on the grounds that surgical repair is a
+        single-chain capability. The repair itself is — it edits one dependency-
+        closed slice — but disabling it for multi-chain runs had a consequence
+        nobody had stated: every pilot selects three chains, so the Increment 3
+        exit gate ("one authorised model-semantic failure is automatically routed,
+        attempted, and rechecked against the committed revision") was never
+        exercised by any evidence run, and every archived repair decision read
+        `multi_chain_auto_repair_out_of_scope` — not a repair that failed, a repair
+        that never ran.
+
+        What made it more than a flag is staleness: an accepted repair commits a
+        new revision, which invalidates every OTHER chain's graph. So each round
+        re-extracts all chains from the current committed revision, analyses them,
+        attempts at most one authorised repair, and — if that repair is accepted —
+        starts a new round. The accumulators are rebuilt per round so the returned
+        artifacts describe the terminal revision, while `analysis_history` keeps
+        every round. Budget is the same single attempt the single-chain path
+        allows, and once it is spent a further authorised failure reports
+        `automatic_repair_budget_exhausted`, which is the honest reason.
         """
+        from ..prototyping.ag_extractor import extract_ag_graphs
+        from ..prototyping.ag_repair import attempt_dependency_closed_ag_repair
+
         severity = {"PASS": 0, "INCOMPLETE": 1, "FAIL": 2}
+        maximum_repair_attempts = 1
+        repair_attempts = 0
+        analysis_round = 0
+        analysis_history: list[dict[str, Any]] = []
         chains: list[dict[str, Any]] = []
         pattern_cases: list[dict[str, Any]] = []
         pattern_per_chain: list[dict[str, Any]] = []
         all_failures: list[dict[str, Any]] = []
-        analysis_history: list[dict[str, Any]] = []
         aggregate_verdict = "PASS"
         pattern_verdict = "PASS"
         checker_version: Optional[str] = None
 
-        for graph in graphs:
-            report, pattern, failures, _record, _candidate = (
-                self._run_ag_analysis_round(
-                    graph,
-                    analysis_round=0,
-                    repair_attempts=0,
-                    maximum_repair_attempts=1,
-                    allow_repair=False,
+        while True:
+            # per round: the artifacts must describe ONE revision, so anything
+            # accumulated from a superseded revision is discarded
+            chains = []
+            pattern_cases = []
+            pattern_per_chain = []
+            all_failures = []
+            aggregate_verdict = "PASS"
+            pattern_verdict = "PASS"
+            candidate: Optional[tuple] = None
+
+            for graph in graphs:
+                report, pattern, failures, _record, chain_candidate = (
+                    self._run_ag_analysis_round(
+                        graph,
+                        analysis_round=analysis_round,
+                        repair_attempts=repair_attempts,
+                        maximum_repair_attempts=maximum_repair_attempts,
+                        allow_repair=True,
+                    )
                 )
+                checker_version = report.checker_version
+                chains.append(report.to_dict())
+                pattern_cases.extend(pattern.get("cases", ()))
+                pattern_per_chain.append({
+                    "source_requirement": report.source_requirement,
+                    "verdict": pattern["verdict"],
+                    "cases": list(pattern.get("cases", ())),
+                })
+                all_failures.extend(failures["failures"])
+                analysis_history.append({
+                    "analysis_round": analysis_round,
+                    "source_requirement": report.source_requirement,
+                    "source_model_revision": graph.revision,
+                    "source_model_digest": graph.model_digest,
+                    "verdict": report.verdict,
+                    "pattern_verdict": pattern["verdict"],
+                    "failure_ids": [
+                        item["failure_id"] for item in failures["failures"]
+                    ],
+                })
+                if severity[report.verdict] > severity[aggregate_verdict]:
+                    aggregate_verdict = report.verdict
+                if pattern["verdict"] != "PASS":
+                    pattern_verdict = "FAIL"
+                # one repair per round; the chain that surfaces it first owns it
+                if candidate is None and chain_candidate is not None:
+                    candidate = chain_candidate
+
+            if candidate is None:
+                break
+            decision = attempt_dependency_closed_ag_repair(
+                llm=self.llm,
+                board=self.blackboard,
+                context_builder=self.context_builder,
+                sessions=self.task_sessions,
+                failure_record_id=candidate[0],
+                analysis_record_id=candidate[1],
             )
-            checker_version = report.checker_version
-            chains.append(report.to_dict())
-            pattern_cases.extend(pattern.get("cases", ()))
-            pattern_per_chain.append({
-                "source_requirement": report.source_requirement,
-                "verdict": pattern["verdict"],
-                "cases": list(pattern.get("cases", ())),
-            })
-            all_failures.extend(failures["failures"])
-            analysis_history.append({
-                "analysis_round": 0,
-                "source_requirement": report.source_requirement,
-                "source_model_revision": graph.revision,
-                "source_model_digest": graph.model_digest,
-                "verdict": report.verdict,
-                "pattern_verdict": pattern["verdict"],
-                "failure_ids": [
-                    item["failure_id"] for item in failures["failures"]
-                ],
-            })
-            if severity[report.verdict] > severity[aggregate_verdict]:
-                aggregate_verdict = report.verdict
-            if pattern["verdict"] != "PASS":
-                pattern_verdict = "FAIL"
+            repair_attempts += 1
+            if decision.status != "ACCEPTED":
+                break
+            # the commit superseded every chain's graph: re-extract, then re-check
+            analysis_round += 1
+            graphs = extract_ag_graphs(
+                self.blackboard.current_model.model_text,
+                revision=self.blackboard.current_revision,
+                model_digest=self.blackboard.current_model.model_digest,
+            )
 
         revision = self.blackboard.current_revision
         digest = self.blackboard.current_model.model_digest
