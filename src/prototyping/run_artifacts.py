@@ -162,10 +162,19 @@ def write_revised_run_artifacts(
     # it is safe to write beside the run; the older archived pilot predates this
     # and is measured after the fact by `robustness_report` instead.
     if model_sysml is not None:
+        from .ag_traceability import DECLARED_OUT_OF_SCOPE
         from .robustness_report import measure_model
 
         declared = _declared_requirement_ids(run_result.get("requirements"))
-        measurement = measure_model(str(model_sysml), declared)
+        # The scope declaration travels WITH the artifact, reason included: a
+        # requirement the A/G layer is not built to decompose is not an
+        # implementation gap, and passing no declaration reported it as one.
+        out_of_scope = {
+            requirement: reason
+            for requirement, reason in DECLARED_OUT_OF_SCOPE.items()
+            if requirement in declared
+        }
+        measurement = measure_model(str(model_sysml), declared, out_of_scope)
         p = out / "requirement_traceability.json"
         _write_json(p, {
             "artifact_role": "REQUIREMENT_TRACEABILITY",
@@ -173,6 +182,7 @@ def write_revised_run_artifacts(
                 "committed model only; no human gold, no blind review"
             ),
             "declared_requirements": declared,
+            "out_of_scope_declaration": out_of_scope,
             **measurement,
         })
         record("requirement_traceability", p)

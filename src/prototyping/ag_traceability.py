@@ -125,6 +125,22 @@ def trace_requirement(graph: Any, realization_links: Sequence[Mapping[str, Any]]
 IN_SCOPE = "IN_SCOPE"
 OUT_OF_SCOPE = "OUT_OF_SCOPE"
 
+#: The declarations themselves, for the frozen requirement set this project runs.
+#: Kept here as DATA with its reason attached, so a shrunk denominator is always
+#: reviewable: the reason is what a reader checks, not the number.
+#:
+#: Recorded 2026-07-26. Until then the runner passed no declaration at all, so a
+#: requirement the layer is not built to decompose was reported as an
+#: implementation gap (3/4 = 0.75) — the mirror image of scoring an arm 0.00 for
+#: carrying no A/G layer, and wrong for the same reason.
+DECLARED_OUT_OF_SCOPE: Mapping[str, str] = {
+    "REQ_FUNC_002": (
+        "continuous control envelope (maintain separation while avoiding an "
+        "obstacle): no trigger event, no deadline and no invariant state, so it "
+        "instantiates none of the three encoded bounded safety patterns"
+    ),
+}
+
 
 def compute_traceability(
     graphs: Sequence[Any],

@@ -278,3 +278,52 @@ def test_a_multi_chain_model_is_measured_per_chain_not_pooled():
         "REQ_SAFE_004": "PASS", "REQ_SAFE_005": "PASS", "REQ_SAFE_008": "PASS",
     }
     assert measured["traceability"]["fully_traced"] == 3
+
+
+def test_the_runner_carries_the_scope_declaration_with_its_reason(tmp_path):
+    """A requirement the A/G layer is not built to decompose is not a gap.
+
+    The runner passed NO declaration, so REQ_FUNC_002 — a continuous control
+    envelope with no trigger, deadline or invariant state — was written into every
+    traceability artifact as untraced (3/4 = 0.75). That is the mirror image of
+    scoring an arm 0.00 for carrying no A/G layer.
+
+    The declaration must travel with the artifact AND carry its reason, because a
+    shrunk denominator is only reviewable if the reason is reviewable. An
+    UNDECLARED requirement must still count, or the denominator could be shrunk
+    silently.
+    """
+    from src.prototyping.ag_traceability import DECLARED_OUT_OF_SCOPE
+    from src.prototyping.run_artifacts import write_revised_run_artifacts
+
+    assert DECLARED_OUT_OF_SCOPE["REQ_FUNC_002"], "declaration must state a reason"
+
+    written = write_revised_run_artifacts(
+        {
+            "revised_experiment": {
+                "experiment_namespace": "BLACKBOARD_AG_V1",
+                "configuration": "R2-BBAG",
+            },
+            "collaboration": {"blackboard": {}, "contexts": {}, "task_sessions": {}},
+            "model_sysml": _WITH_AG,
+            "requirements": [
+                "REQ-SAFE-005: deploy the parachute within 0.5 s",
+                "REQ-FUNC-002: maintain separation while avoiding an obstacle",
+                "REQ-FUNC-003: something else entirely",
+            ],
+        },
+        tmp_path,
+    )
+    artifact = json.loads(
+        (tmp_path / "requirement_traceability.json").read_text()
+    )
+
+    assert artifact["out_of_scope_declaration"] == {
+        "REQ_FUNC_002": DECLARED_OUT_OF_SCOPE["REQ_FUNC_002"]
+    }
+    traceability = artifact["traceability"]
+    assert [item["requirement"] for item in
+            traceability["out_of_scope_requirements"]] == ["REQ_FUNC_002"]
+    # REQ_FUNC_003 is undeclared, so it still counts as an in-scope gap
+    assert traceability["untraced_requirements"] == ["REQ_FUNC_003"]
+    assert traceability["fully_traced"] == 1
