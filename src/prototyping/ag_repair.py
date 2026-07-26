@@ -144,6 +144,36 @@ def _ag_context_supplement(model_text: str, contract: str) -> str:
     )
 
 
+def _repair_feedback(diagnostic_code: str) -> str:
+    """What the repair must and must not do — including the rules the GATE enforces.
+
+    The feedback used to state only "repair the routed realization; these elements
+    are immutable". Two rules the merge gate enforces were left unsaid, and a
+    measured run died on both at once: the model added a new action definition
+    (`addition_out_of_scope:action:DeployBallisticRecoveryParachute`) instead of
+    restoring the conventional `set<GuaranteeConcept>` entry action inside the
+    existing state. Ninth instance in this project of a gate demanding something
+    the generator was never told, so the convention is rendered from
+    `ag_convention` rather than restated here — one statement, one place.
+    """
+    from .ag_convention import DIAGNOSTIC_OBLIGATIONS
+
+    published = {
+        item.obligation_id: item.authoring_rule for item in DIAGNOSTIC_OBLIGATIONS
+    }
+    rule = published.get(diagnostic_code, "")
+    return (
+        "Repair only the routed behavior realization. Requirement definitions, "
+        "contract constraints, thresholds, units, satisfy/dependency links, and "
+        "unrelated elements are immutable. No whole-model fallback is allowed.\n"
+        "Restore or correct EXISTING elements only: adding a new definition "
+        "(action, state def, part def, attribute def) is out of scope and the "
+        "merge gate rejects it. The element you need already exists or its name "
+        "follows the convention below."
+        + (f"\nThe convention for this defect: {rule}" if rule else "")
+    )
+
+
 def attempt_dependency_closed_ag_repair(
     *,
     llm: Any,
@@ -245,11 +275,7 @@ def attempt_dependency_closed_ag_repair(
             _CapturingChat(llm, session),
             board.current_model.model_text,
             [issue],
-            feedback=(
-                "Repair only the routed behavior realization. Requirement definitions, "
-                "contract constraints, thresholds, units, satisfy/dependency links, and "
-                "unrelated elements are immutable. No whole-model fallback is allowed."
-            ),
+            feedback=_repair_feedback(str(failure.get("diagnostic_code") or "")),
             audit=audit,
             context_slice=context_slice,
         )
@@ -294,6 +320,19 @@ def attempt_dependency_closed_ag_repair(
             details={
                 "context_envelope_digest": envelope.envelope_digest,
                 "transcript_digest": session.transcript_digest,
+                # WHICH gate refused, not just that one did. Without this a
+                # REJECTED decision is unactionable: an out-of-scope edit, an
+                # unparseable patch and an over-strict gate all looked identical
+                # in `repair_decisions.json`. Same defect as the lumped
+                # PRIORITY_TOPOLOGY_INCOMPLETE diagnostic, in the repair artifact.
+                "audit": {
+                    "llm_invoked": audit.llm_invoked,
+                    "response_count": audit.response_count,
+                    "rejection_reasons": list(audit.rejection_reasons),
+                    "context_mode": audit.context_mode,
+                    "context_line_count": audit.context_line_count,
+                    "full_model_line_count": audit.full_model_line_count,
+                },
             },
         )
         board.transition_task(
@@ -343,6 +382,26 @@ def attempt_dependency_closed_ag_repair(
             details={
                 "context_envelope_digest": envelope.envelope_digest,
                 "transcript_digest": session.transcript_digest,
+                # which of the three gate conditions failed, and what changed.
+                # "target_not_removed_or_regression" names three possibilities at
+                # once; a reader of repair_decisions.json could not tell whether
+                # the patch missed the target, introduced a new defect, or broke
+                # pattern conformance.
+                "gate": {
+                    "target": [item for item in target],
+                    "target_removed": target_removed,
+                    "regression_free": regression_free,
+                    "behavior_preserved": behavior_preserved,
+                    "pattern_verdict": pattern["verdict"],
+                    "new_diagnostics": sorted(
+                        f"{code}:{contract}"
+                        for code, contract, _subject
+                        in after_ids - (before_ids - {target})
+                    ),
+                    "remaining_diagnostics": sorted(
+                        f"{code}:{contract}" for code, contract, _subject in after_ids
+                    ),
+                },
             },
         )
         board.transition_task(
