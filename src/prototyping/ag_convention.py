@@ -126,8 +126,8 @@ INVARIANT_ROLE_OBLIGATIONS: Tuple[PatternRoles, ...] = (
         "other antecedent in this pattern is.\n"
         "     The locked concept must be one the architecture actually produces: "
         "the component producing it is the mechanism whose behaviour realises the "
-        "pattern, and that mechanism must be safe by DEFAULT — list every concept "
-        "it consumes under lifecycle_events so it assumes nothing at all.",
+        "pattern, and that mechanism must be safe by default (see "
+        "`lifecycle_events`).",
     ),
     PatternRoles(
         "STARTUP_INHIBIT",
@@ -168,6 +168,15 @@ DECISION_FIELD_OBLIGATIONS: Tuple[Tuple[str, str], ...] = (
         "triggered) sets it false: it is realised as one steady state that "
         "establishes its guarantee, and a trigger-response machine cannot be "
         "built for it.",
+    ),
+    (
+        "lifecycle_events",
+        "under an invariant pattern the component that guarantees the locked or "
+        "latched concept must be safe by DEFAULT, which means it assumes NOTHING: "
+        "list EVERY concept it consumes here, the authorisation included. A "
+        "component that assumes the authorisation is not locked by default, it is "
+        "locked while that authorisation happens to be absent — a different, "
+        "weaker claim, and the topology check rejects it.",
     ),
     (
         "latency_budget_seconds",
