@@ -129,6 +129,10 @@ def _slice_carries_source_text(envelope: Mapping[str, Any]) -> bool:
     return "doc /*" in str(envelope.get("model_context") or "")
 
 
+def _has_diagnostic_records(envelope: Mapping[str, Any]) -> bool:
+    return bool(envelope.get("diagnostic_record_ids"))
+
+
 #: What each role's task demonstrably cannot be done without (§18-Q1).
 #:
 #: Derived by ABLATION, not by judgement, because the archive offered nothing to
@@ -153,6 +157,26 @@ REQUIRED_CONTEXT_BY_ROLE: Mapping[str, Tuple[ContextRequirement, ...]] = {
             "build_design_context without the authoritative SOURCE record raises "
             "'required typed publications are missing from context'",
             _has_source_requirements,
+        ),
+    ),
+    "RepairAgent": (
+        ContextRequirement(
+            "typed_diagnostic_records",
+            "blocked",
+            "the repair slice is DERIVED from the failure record's element "
+            "pointers: with contract/affected_elements/message stripped, "
+            "attempt_dependency_closed_ag_repair returns BLOCKED "
+            "('dependency_closed_context_unresolved') and no envelope is built "
+            "at all, where the intact record reaches ACCEPTED",
+            _has_diagnostic_records,
+        ),
+        ContextRequirement(
+            "dependency_closed_model_slice",
+            "blocked",
+            "same ablation: no resolvable slice means the task fails closed "
+            "rather than repairing a guessed scope — there is no whole-model "
+            "fallback (§11)",
+            _has_model_slice,
         ),
     ),
     "VerificationAgent": (
@@ -463,34 +487,15 @@ class ContextBuilder:
             token_budget=token_budget,
         )
 
-    def build_repair_context(
-        self,
-        *,
-        task_id: str,
-        issues: list[str],
-        repair_packet: Optional[Mapping[str, Any]] = None,
-        allowed_req_ids: Optional[set[str]] = None,
-        token_budget: int = 12000,
-    ) -> ContextEnvelope:
-        from ..agents.surgical_refiner import build_dependency_closed_context
-
-        context = build_dependency_closed_context(
-            self.board.current_model.model_text,
-            issues,
-            repair_packet=repair_packet,
-            allowed_req_ids=allowed_req_ids,
-        )
-        if context is None:
-            raise ValueError("dependency-closed repair context could not be built")
-        return self.build(
-            task_id=task_id,
-            agent_role="RepairAgent",
-            objective="Repair only the reported semantic/model defects",
-            allowed_operation="SCOPED_MODEL_PATCH",
-            model_context=context.text,
-            protected_elements=("requirement_defs", "unrelated_model_elements"),
-            token_budget=token_budget,
-        )
+    # A `build_repair_context` convenience wrapper lived here and had no callers.
+    # It was not merely unused — it was WEAKER than the path in use: it linked no
+    # diagnostic records (so the repair's typed target was not attributable) and
+    # protected only `requirement_defs`/`unrelated_model_elements`, omitting the
+    # source requirement, thresholds and units. `ag_repair` builds the repair
+    # envelope through `build()` directly with the diagnostic records attached and
+    # the source values protected, because the accept gate checks against them.
+    # Keeping a friendlier-looking wrapper that produces a less safe envelope is a
+    # trap for the next caller, so it is deleted rather than wired up.
 
     def snapshot(self) -> dict[str, Any]:
         return {

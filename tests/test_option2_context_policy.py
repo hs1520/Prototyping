@@ -91,16 +91,94 @@ def test_every_policy_entry_names_a_measured_failure_mode():
         assert requirements, role
         for item in requirements:
             assert item.failure_mode in {
-                "raises", "empty_result", "silent_degradation",
+                "raises", "blocked", "empty_result", "silent_degradation",
             }, (role, item.category)
             # the evidence must be specific enough to re-run, not a claim
             assert len(item.evidence) > 40, (role, item.category)
 
 
+def test_the_repair_agent_is_blocked_without_resolvable_diagnostics():
+    """failure_mode: blocked. The repair slice is derived from the failure
+    record's element pointers, so an unresolvable diagnostic must fail closed —
+    §11 allows no whole-model fallback — rather than repair a guessed scope."""
+    import importlib.util
+
+    from src.prototyping.ag_assurance import route_failure_diagnostics
+    from src.prototyping.ag_repair import attempt_dependency_closed_ag_repair
+    from src.prototyping.task_session import TaskSessionRegistry
+
+    spec = importlib.util.spec_from_file_location(
+        "_assurance_fixtures", "tests/test_option2_ag_assurance.py"
+    )
+    fixtures = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixtures)
+
+    broken = fixtures.GOOD.replace(
+        "state deployed { entry action setParachuteDeployed; }",
+        "state deployed { }",
+    )
+    _graph, report = fixtures._check(broken)
+    routed = route_failure_diagnostics(
+        report.diagnostics,
+        source_requirement=report.source_requirement,
+        realization_links=report.realization_links,
+    )
+    failure = next(
+        item for item in routed["failures"]
+        if item["diagnostic_code"] == "REALIZATION_ACTION_MISSING"
+    )
+
+    def _repair(mutate):
+        board = Blackboard("Drone")
+        board.commit_model(
+            broken, base_revision=0,
+            base_digest=board.current_model.model_digest, producer="test",
+        )
+        analysis = board.publish(
+            RecordType.ANALYSIS, "analysis.ag_trace", "AGChecker",
+            {"diagnostics": []},
+        )
+        payload = dict(failure)
+        mutate(payload)
+        record = board.publish(
+            RecordType.ANALYSIS, "diagnostic.failure", "AGFailureRouter", payload,
+        )
+        builder = ContextBuilder(board)
+        decision = attempt_dependency_closed_ag_repair(
+            llm=fixtures._RepairLLM(
+                "```sysml\n"
+                + fixtures._definition(
+                    fixtures.GOOD, "state", "RecoverySystemBehavior"
+                )
+                + "\n```"
+            ),
+            board=board, context_builder=builder,
+            sessions=TaskSessionRegistry(),
+            failure_record_id=record.record_id,
+            analysis_record_id=analysis.record_id,
+        )
+        return decision, builder.snapshot()["envelopes"]
+
+    intact, envelopes = _repair(lambda payload: None)
+    assert intact.status == "ACCEPTED", (intact.status, intact.reason)
+    assert len(envelopes) == 1
+    coverage = context_coverage(envelopes[0])
+    assert coverage == {"required": 2, "present": 2, "missing": []}, coverage
+
+    stripped, no_envelopes = _repair(
+        lambda payload: payload.update(
+            affected_elements=(), contract="", message="",
+        )
+    )
+    assert stripped.status == "BLOCKED"
+    assert stripped.reason == "dependency_closed_context_unresolved"
+    assert no_envelopes == []
+
+
 def test_a_role_without_a_policy_is_not_scored_as_perfect():
     """A missing denominator must read as "not scored", never as 1.0 — the same
     rule that makes an arm without an A/G layer `n/a` rather than 0.00."""
-    assert context_coverage({"agent_role": "RepairAgent"}) is None
+    assert context_coverage({"agent_role": "ArchitectureAgent"}) is None
     assert context_coverage({
         "agent_role": "VerificationAgent",
         "model_context": _MODEL,
