@@ -35,6 +35,19 @@ class TransitionObligation:
             "guard": self.guard,
         }
 
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "TransitionObligation":
+        return cls(
+            source=str(value.get("source") or ""),
+            trigger=str(value.get("trigger") or ""),
+            target=str(value.get("target") or ""),
+            action=str(value.get("action") or ""),
+            guard=(
+                str(value["guard"])
+                if value.get("guard") not in (None, "") else None
+            ),
+        )
+
 
 @dataclass(frozen=True)
 class BehaviorObligation:
@@ -66,6 +79,38 @@ class BehaviorObligation:
             "invariant_expression": self.invariant_expression,
             "pattern": self.pattern,
         }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "BehaviorObligation":
+        return cls(
+            requirement_id=str(value.get("requirement_id") or ""),
+            contract_id=str(value.get("contract_id") or ""),
+            owner_def=str(value.get("owner_def") or ""),
+            owner_usage=str(value.get("owner_usage") or ""),
+            realization_kind=str(value.get("realization_kind") or ""),
+            stable_behavior_id=str(value.get("stable_behavior_id") or ""),
+            assumptions=tuple(
+                str(item) for item in (value.get("assumptions") or ())
+            ),
+            guarantees=tuple(
+                str(item) for item in (value.get("guarantees") or ())
+            ),
+            initial_state=(
+                str(value["initial_state"])
+                if value.get("initial_state") not in (None, "") else None
+            ),
+            transitions=tuple(
+                TransitionObligation.from_dict(dict(item))
+                for item in (value.get("transitions") or ())
+                if isinstance(item, dict)
+            ),
+            invariant_expression=(
+                str(value["invariant_expression"])
+                if value.get("invariant_expression") not in (None, "")
+                else None
+            ),
+            pattern=str(value.get("pattern") or ""),
+        )
 
 
 @dataclass(frozen=True)

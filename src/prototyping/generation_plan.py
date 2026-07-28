@@ -8,9 +8,13 @@ this object is generation input and an auditable conformance expectation only.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Mapping, Sequence
 
+from .ag_behavior_plan import (
+    BehaviorObligation,
+    BehaviorObligationPlan,
+)
 from ..utils.req_id import normalise_req_id
 
 
@@ -90,6 +94,7 @@ class ConnectionPlan:
 class ModelGenerationPlan:
     components: tuple[ComponentPlan, ...] = ()
     connections: tuple[ConnectionPlan, ...] = ()
+    behavior_obligations: tuple[BehaviorObligation, ...] = ()
     source: str = "LLM_TYPED_JSON"
     issues: tuple[str, ...] = ()
     schema_version: str = "1.0"
@@ -102,13 +107,18 @@ class ModelGenerationPlan:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": self.schema_version,
+            "schema_version": (
+                "2.0" if self.behavior_obligations else self.schema_version
+            ),
             "artifact_role": "WHOLE_MODEL_GENERATION_PLAN",
             "semantic_authority": "GENERATION_INPUT_ONLY_COMMITTED_SYSML_WINS",
             "source": self.source,
             "status": self.status,
             "components": [item.to_dict() for item in self.components],
             "connections": [item.to_dict() for item in self.connections],
+            "behavior_obligations": [
+                item.to_dict() for item in self.behavior_obligations
+            ],
             "issues": list(self.issues),
         }
 
@@ -300,11 +310,22 @@ class ModelGenerationPlan:
                 if port.direction == "out" and key not in produced:
                     issues.append(f"{component.name}.{port.name} has no planned consumer")
 
+        behavior_obligations = tuple(
+            BehaviorObligation.from_dict(dict(item))
+            for item in (payload.get("behavior_obligations") or ())
+            if isinstance(item, Mapping)
+        )
         return cls(
             components=tuple(components),
             connections=tuple(connections),
+            behavior_obligations=behavior_obligations,
             source=source,
             issues=tuple(dict.fromkeys(issues)),
+            schema_version=(
+                "2.0" if behavior_obligations else str(
+                    payload.get("schema_version") or "1.0"
+                )
+            ),
         )
 
     @classmethod
@@ -395,10 +416,72 @@ class ModelGenerationPlan:
                 f"{connection.target_component}.{connection.target_port} : "
                 f"{connection.item_type}{trace}"
             )
+        if self.behavior_obligations:
+            lines.append("")
+            lines.append(
+                BehaviorObligationPlan(
+                    self.behavior_obligations
+                ).render_for_prompt()
+            )
         if self.issues:
             lines.append("Plan validation issues (must be resolved; do not hide them):")
             lines.extend(f"- {item}" for item in self.issues)
         return "\n".join(lines)
+
+
+def attach_ag_behavior_obligations(
+    plan: ModelGenerationPlan,
+    behavior_plan: BehaviorObligationPlan,
+) -> ModelGenerationPlan:
+    """Cross-validate and attach A/G behavior facts to the whole-model plan."""
+    issues = list(plan.issues)
+    component_names = {item.name for item in plan.components}
+    allocated = {
+        (component.name, requirement)
+        for component in plan.components
+        for requirement in component.requirements
+    }
+    contract_ids: set[str] = set()
+    stable_ids: set[tuple[str, str]] = set()
+    for obligation in behavior_plan.obligations:
+        if obligation.contract_id in contract_ids:
+            issues.append(
+                f"duplicate A/G behavior contract {obligation.contract_id}"
+            )
+        contract_ids.add(obligation.contract_id)
+        if obligation.owner_def not in component_names:
+            issues.append(
+                f"A/G behavior owner {obligation.owner_def} is absent from "
+                "the whole-model component plan"
+            )
+        if (
+            obligation.owner_def,
+            normalise_req_id(obligation.requirement_id),
+        ) not in allocated:
+            issues.append(
+                f"{obligation.owner_def} is not allocated "
+                f"{normalise_req_id(obligation.requirement_id)}"
+            )
+        stable_key = (
+            obligation.owner_def,
+            obligation.stable_behavior_id,
+        )
+        if stable_key in stable_ids:
+            issues.append(
+                f"duplicate stable behavior id "
+                f"{obligation.owner_def}::{obligation.stable_behavior_id}"
+            )
+        stable_ids.add(stable_key)
+    if behavior_plan.status != "PASS":
+        issues.append(
+            f"A/G behavior obligation plan is {behavior_plan.status}"
+        )
+    return replace(
+        plan,
+        behavior_obligations=behavior_plan.obligations,
+        issues=tuple(dict.fromkeys(issues)),
+        schema_version="2.0",
+    )
 
 
 def apply_generation_plan(
