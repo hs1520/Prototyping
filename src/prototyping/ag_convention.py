@@ -515,8 +515,9 @@ GATE_OBLIGATIONS: Tuple[Obligation, ...] = (
     ),
     Obligation(
         "declared_accept_signals", CONVENTION,
-        "Declare every event accepted in a transition as its own `attribute def "
-        "<Signal>;` inside the package before it is used.",
+        "Declare every event accepted in a transition as its own `action def "
+        "<Signal> {}` inside the package before it is used. Do not also declare "
+        "an `attribute def` with the same package member name.",
     ),
     Obligation(
         "bounded_construct_set", CONVENTION,

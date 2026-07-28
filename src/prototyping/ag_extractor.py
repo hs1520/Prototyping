@@ -52,7 +52,9 @@ _BOOL_ATTR_RE = re.compile(
     r"\battribute\s+(\w+)\s*:\s*Boolean\s*=\s*(true|false)\s*;",
     re.I,
 )
-_ATTRIBUTE_DEF_RE = re.compile(r"\battribute\s+def\s+(\w+)\s*;")
+_EVENT_DEF_RE = re.compile(
+    r"\b(?:action|attribute)\s+def\s+(\w+)\s*(?:\{\s*\}|;)"
+)
 _ASSUME_RE = re.compile(r"\bassume\s+constraint\s+(\w+)?\s*\{([^{}]*)\}")
 _REQUIRE_RE = re.compile(r"\brequire\s+constraint\s+(\w+)?\s*\{([^{}]*)\}")
 _DEP_RE = re.compile(
@@ -798,6 +800,6 @@ def extract_ag_graph(
             )
         })),
         declared_event_signals=tuple(dict.fromkeys(
-            match.group(1) for match in _ATTRIBUTE_DEF_RE.finditer(text)
+            match.group(1) for match in _EVENT_DEF_RE.finditer(text)
         )),
     )

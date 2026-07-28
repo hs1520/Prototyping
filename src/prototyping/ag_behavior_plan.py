@@ -617,12 +617,14 @@ def materialize_behavior_obligations(
     missing_trigger_defs = [
         trigger for trigger in trigger_types
         if re.search(
-            rf"\battribute\s+def\s+{re.escape(trigger)}\b", text
+            rf"\b(?:action|attribute)\s+def\s+"
+            rf"{re.escape(trigger)}\b",
+            text,
         ) is None
     ]
     if missing_trigger_defs:
         prefix = "\n".join(
-            f"attribute def {trigger};" for trigger in missing_trigger_defs
+            f"action def {trigger} {{}}" for trigger in missing_trigger_defs
         )
         text = (prefix + "\n\n" + text).rstrip()
     for obligation in plan.obligations:

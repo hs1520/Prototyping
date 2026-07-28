@@ -122,6 +122,7 @@ _STATE_DECL_RE = re.compile(r'\bstate\s+(\w+)\s*(?:\{|;)')
 _ENUM_DEF_RE = re.compile(r'\benum\s+def\s+(\w+)\s*\{([^}]*)\}', re.DOTALL)
 _ENUM_VAL_RE = re.compile(r'\benum\s+(\w+)\s*;')
 _ACTION_DEF_RE = re.compile(r'\baction\s+def\s+(\w+)')
+_LEGACY_EVENT_DEF_RE = re.compile(r'\battribute\s+def\s+(\w+)\s*;')
 
 # transition <name> first <src> if <guard> then <tgt> ;  (guard-based)
 _TX_RE = re.compile(
@@ -216,8 +217,12 @@ def build_state_machine_summary(
         if values:
             info.enum_values[enum_name] = values
 
-    # Action defs (file-wide — for validating accept command types)
-    info.action_defs = {m.group(1) for m in _ACTION_DEF_RE.finditer(sysml_text)}
+    # Canonical action definitions plus legacy attribute-defined events. New
+    # models emit only action defs; archived models remain readable.
+    info.action_defs = {
+        m.group(1) for pattern in (_ACTION_DEF_RE, _LEGACY_EVENT_DEF_RE)
+        for m in pattern.finditer(sysml_text)
+    }
 
     return info
 

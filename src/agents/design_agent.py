@@ -1604,7 +1604,9 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         missing_trigger_types = [
             trigger for trigger in trigger_types
             if re.search(
-                rf"\battribute\s+def\s+{re.escape(trigger)}\b", result
+                rf"\b(?:action|attribute)\s+def\s+"
+                rf"{re.escape(trigger)}\b",
+                result,
             ) is None
         ]
         if missing_trigger_types:
@@ -1612,7 +1614,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             if package_match is not None:
                 package_open = result.find("{", package_match.start())
                 declarations = "".join(
-                    f"\n    attribute def {trigger};"
+                    f"\n    action def {trigger} {{}}"
                     for trigger in missing_trigger_types
                 )
                 result = (

@@ -328,11 +328,12 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             else "CriticalPropulsionFailureDetectedSignal"
         )
         out.append(
-            f"    attribute def {_sysml_identifier(trigger_signal)};"
+            f"    action def {_sysml_identifier(trigger_signal)} {{}}"
         )
         for lower in (edge[1] for edge in priority.edges):
             out.append(
-                f"    attribute def {_sysml_identifier(lower.title())}RequestSignal;"
+                f"    action def "
+                f"{_sysml_identifier(lower.title())}RequestSignal {{}}"
             )
         out.append("    state def SafetyResponseArbitration {")
         out.append(f"        attribute {priority.trigger} : Boolean;")
@@ -413,7 +414,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 "PowerLostSignal",
             ):
                 if signal not in emitted_signal_defs:
-                    out.append(f"    attribute def {signal};")
+                    out.append(f"    action def {signal} {{}}")
                     emitted_signal_defs.add(signal)
             out.extend([
                 f"    state def {comp.behavior} {{",
@@ -441,7 +442,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 "PowerCycleSignal",
             ):
                 if signal not in emitted_signal_defs:
-                    out.append(f"    attribute def {signal};")
+                    out.append(f"    action def {signal} {{}}")
                     emitted_signal_defs.add(signal)
             out.extend([
                 f"    state def {comp.behavior} {{",
@@ -470,7 +471,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 "AuthorisedReleaseCommandReceivedSignal",
             ):
                 if signal not in emitted_signal_defs:
-                    out.append(f"    attribute def {signal};")
+                    out.append(f"    action def {signal} {{}}")
                     emitted_signal_defs.add(signal)
             out.extend([
                 f"    state def {comp.behavior} {{",
@@ -501,7 +502,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             ])
             continue
         if comp.trigger_signal not in emitted_signal_defs:
-            out.append(f"    attribute def {comp.trigger_signal};")
+            out.append(f"    action def {comp.trigger_signal} {{}}")
             emitted_signal_defs.add(comp.trigger_signal)
         out.append(f"    state def {comp.behavior} {{")
         out.append(f"        entry; then {comp.initial_state};")

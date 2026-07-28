@@ -101,7 +101,11 @@ def _behavior_tokens(model_text: str, behavior: str) -> set[tuple[str, str]]:
     return tokens
 
 
-_ATTR_DEF_RE = re.compile(r"^\s*attribute def \w+;\s*$", re.M)
+_EVENT_DEF_RE = re.compile(
+    r"^\s*(?:action\s+def\s+\w+\s*\{\s*\}|"
+    r"attribute\s+def\s+\w+\s*;)\s*$",
+    re.M,
+)
 
 
 def _ag_context_supplement(model_text: str, contract: str) -> str:
@@ -112,7 +116,7 @@ def _ag_context_supplement(model_text: str, contract: str) -> str:
     element to restore is absent, so nothing references it and the closure cannot
     reach it. Measured on a real committed model — delete one transition and the
     slice keeps the injured state machine but loses
-    `attribute def ParachuteDeploymentCommandSignal;`, the declaration the fix has
+    `action def ParachuteDeploymentCommandSignal {}`, the declaration the fix has
     to name. An agent that cannot see it either invents a signal name (an
     undeclared reference — the failure class that cost the authored mode every
     seed) or guesses from the diagnostic text.
@@ -132,7 +136,7 @@ def _ag_context_supplement(model_text: str, contract: str) -> str:
         if end != -1:
             additions.append(model_text[match.start():end + 1])
     signals = sorted({
-        item.strip() for item in _ATTR_DEF_RE.findall(model_text)
+        item.strip() for item in _EVENT_DEF_RE.findall(model_text)
     })
     if signals:
         additions.append("\n".join(signals))
