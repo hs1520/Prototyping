@@ -523,6 +523,7 @@ def apply_generation_plan(
         parse_connects,
         validate_connects,
     )
+    from ..simulation.extractor import extract_behavioral_graph
 
     directory = build_port_directory(model_text)
     existing = parse_connects(model_text)
@@ -566,7 +567,29 @@ def apply_generation_plan(
 
     validation = validate_connects(candidate_lines, directory, existing)
     merged = merge_connects(model_text, validation.accepted)
-    final_connections = {item.key() for item in parse_connects(merged.merged_text)}
+    final_directory = build_port_directory(merged.merged_text)
+    package_match = re.search(r"\bpackage\s+([A-Za-z_]\w*)\s*\{", model_text)
+    root_package = package_match.group(1) if package_match else None
+    scoped_graph = extract_behavioral_graph(
+        merged.merged_text,
+        root_package=root_package,
+    )
+    scoped_instances = set(scoped_graph.parts)
+    if not scoped_instances:
+        scoped_instances = set(final_directory.instances)
+    actual_instance_types = {
+        instance: component_type
+        for instance, component_type in final_directory.instance_type.items()
+        if instance in scoped_instances
+    }
+    final_connections = {
+        item.key()
+        for item in parse_connects(merged.merged_text)
+        if (
+            item.src_inst in scoped_instances
+            and item.tgt_inst in scoped_instances
+        )
+    }
     missing = [
         ".".join((src, sp)) + " -> " + ".".join((tgt, tp))
         for src, sp, tgt, tp in expected_keys
@@ -577,8 +600,119 @@ def apply_generation_plan(
         for line, reason in validation.rejected
     )
     issues.extend(f"planned connect missing: {item}" for item in missing)
+
+    planned_component_types = {item.name for item in plan.components}
+    actual_by_type: dict[str, list[str]] = {}
+    for instance, component_type in actual_instance_types.items():
+        actual_by_type.setdefault(component_type, []).append(instance)
+    missing_components = sorted(
+        component
+        for component in planned_component_types
+        if not actual_by_type.get(component)
+    )
+    duplicate_component_usages = sorted(
+        f"{component}: {', '.join(sorted(usages))}"
+        for component, usages in actual_by_type.items()
+        if component in planned_component_types and len(usages) != 1
+    )
+    unplanned_components = sorted(
+        f"{instance} : {component_type}"
+        for instance, component_type in actual_instance_types.items()
+        if component_type not in planned_component_types
+    )
+
+    planned_ports = {
+        (
+            component.name,
+            port.name,
+            port.direction,
+            port.port_type,
+        )
+        for component in plan.components
+        for port in component.ports
+    }
+    actual_ports = {
+        (
+            component_type,
+            port.name,
+            port.direction,
+            str(port.port_type or ""),
+        )
+        for instance, component_type in actual_instance_types.items()
+        if component_type in planned_component_types
+        for port in final_directory.instances.get(instance, {}).values()
+    }
+    missing_ports = sorted(
+        f"{component}.{name} ({direction}:{port_type})"
+        for component, name, direction, port_type
+        in planned_ports - actual_ports
+    )
+    unplanned_ports = sorted(
+        f"{component}.{name} ({direction}:{port_type})"
+        for component, name, direction, port_type
+        in actual_ports - planned_ports
+    )
+
+    expected_key_set = set(expected_keys)
+    unplanned_connections = sorted(
+        ".".join((src, source_port))
+        + " -> "
+        + ".".join((target, target_port))
+        for src, source_port, target, target_port
+        in final_connections - expected_key_set
+    )
+
+    internalized_external_ports: list[str] = []
+    for component in plan.components:
+        usages = actual_by_type.get(component.name, ())
+        if len(usages) != 1:
+            continue
+        usage = usages[0]
+        for port in component.ports:
+            if not port.external:
+                continue
+            if (
+                port.direction in {"in", "inout"}
+                and any(
+                    target == usage and target_port == port.name
+                    for _, _, target, target_port in final_connections
+                )
+            ):
+                internalized_external_ports.append(
+                    f"{usage}.{port.name} receives an internal connection"
+                )
+            if (
+                port.direction in {"out", "inout"}
+                and any(
+                    source == usage and source_port == port.name
+                    for source, source_port, _, _ in final_connections
+                )
+            ):
+                internalized_external_ports.append(
+                    f"{usage}.{port.name} drives an internal connection"
+                )
+
+    issues.extend(
+        f"planned component missing: {item}" for item in missing_components
+    )
+    issues.extend(
+        f"planned component usage multiplicity mismatch: {item}"
+        for item in duplicate_component_usages
+    )
+    issues.extend(
+        f"unplanned component usage: {item}" for item in unplanned_components
+    )
+    issues.extend(f"planned port missing: {item}" for item in missing_ports)
+    issues.extend(f"unplanned port: {item}" for item in unplanned_ports)
+    issues.extend(
+        f"unplanned connection: {item}" for item in unplanned_connections
+    )
+    issues.extend(
+        f"external boundary violation: {item}"
+        for item in internalized_external_ports
+    )
     report = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "artifact_role": "GENERATION_PLAN_CONFORMANCE",
         "status": (
             "PASS"
@@ -590,6 +724,13 @@ def apply_generation_plan(
         "realized_connection_count": len(expected_keys) - len(missing),
         "deterministically_added_connections": list(merged.added_lines),
         "missing_connections": missing,
+        "unplanned_connections": unplanned_connections,
+        "missing_components": missing_components,
+        "duplicate_component_usages": duplicate_component_usages,
+        "unplanned_components": unplanned_components,
+        "missing_ports": missing_ports,
+        "unplanned_ports": unplanned_ports,
+        "internalized_external_ports": internalized_external_ports,
         "issues": list(dict.fromkeys(issues)),
     }
     return merged.merged_text, report

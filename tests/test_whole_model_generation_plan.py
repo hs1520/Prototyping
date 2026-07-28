@@ -133,6 +133,91 @@ def test_typed_plan_rejects_item_type_that_disagrees_with_endpoints():
     assert any("does not match endpoint type" in item for item in plan.issues)
 
 
+def test_terminal_conformance_rejects_unplanned_ports_and_connections():
+    plan = ModelGenerationPlan.from_payload(
+        _PAYLOAD,
+        requirements=["REQ_FUNC_001: propagate status."],
+    )
+    model = """package P {
+        port def DataPort;
+        part def Producer {
+            out port status : DataPort;
+            out port invented : DataPort;
+        }
+        part def Consumer {
+            in port status : DataPort;
+            in port invented : DataPort;
+        }
+        part producer : Producer;
+        part consumer : Consumer;
+        connect producer.status to consumer.status;
+        connect producer.invented to consumer.invented;
+    }"""
+
+    _, report = apply_generation_plan(model, plan)
+
+    assert report["status"] == "FAIL"
+    assert len(report["unplanned_ports"]) == 2
+    assert report["unplanned_connections"] == [
+        "producer.invented -> consumer.invented"
+    ]
+
+
+def test_external_plan_port_cannot_be_silently_internalized():
+    payload = {
+        "components": [
+            {
+                "name": "InternalSource",
+                "responsibility": "Produces a request.",
+                "requirements": ["REQ_FUNC_001"],
+                "ports": [{
+                    "name": "request",
+                    "direction": "out",
+                    "type": "DataPort",
+                    "external": True,
+                }],
+            },
+            {
+                "name": "Gateway",
+                "responsibility": "Accepts an external request.",
+                "requirements": ["REQ_FUNC_001"],
+                "ports": [{
+                    "name": "request",
+                    "direction": "in",
+                    "type": "DataPort",
+                    "external": True,
+                }],
+            },
+        ],
+        "connections": [{
+            "source": {
+                "component": "InternalSource",
+                "port": "request",
+            },
+            "target": {"component": "Gateway", "port": "request"},
+            "item_type": "DataPort",
+            "requirements": ["REQ_FUNC_001"],
+        }],
+    }
+    plan = ModelGenerationPlan.from_payload(payload)
+    model = """package P {
+        port def DataPort;
+        part def InternalSource { out port request : DataPort; }
+        part def Gateway { in port request : DataPort; }
+        part internalSource : InternalSource;
+        part gateway : Gateway;
+        connect internalSource.request to gateway.request;
+    }"""
+
+    _, report = apply_generation_plan(model, plan)
+
+    assert report["status"] == "FAIL"
+    assert report["internalized_external_ports"] == [
+        "internalSource.request drives an internal connection",
+        "gateway.request receives an internal connection",
+    ]
+
+
 def test_terminal_qualification_is_independent_of_continuous_score():
     model_text = """package P {
         requirement def REQ_FUNC_001 { doc /* propagate status */ }
