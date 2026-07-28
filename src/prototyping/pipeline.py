@@ -55,6 +55,8 @@ class PrototypingPipeline:
         r2_generation_mode: Optional[str] = None,
         task_session_max_turns: int = 12,
         task_session_max_tokens: int = 150000,
+        r2_authored_syntax_max_attempts: int = 3,
+        maximum_ag_repair_attempts: int = 3,
     ):
         self.llm = llm
         self.parse_strict = parse_strict
@@ -83,6 +85,8 @@ class PrototypingPipeline:
             verbose=verbose,
             revised_experiment_arm=revised_experiment_arm,
             r2_generation_mode=r2_generation_mode,
+            r2_authored_syntax_max_attempts=r2_authored_syntax_max_attempts,
+            maximum_ag_repair_attempts=maximum_ag_repair_attempts,
             task_session_max_turns=task_session_max_turns,
             task_session_max_tokens=task_session_max_tokens,
         )
@@ -393,6 +397,19 @@ class PrototypingPipeline:
             "dse_search_coverage": result.get("dse_search_coverage"),
             "design_space_summary": result.get("design_space_summary"),
             "llm_usage": result.get("llm_usage"),
+            "terminal_consistency": result.get("terminal_consistency"),
+            "model_qualification": result.get("model_qualification"),
+            "model_acceptance_status": result.get(
+                "model_acceptance_status"
+            ),
+            "whole_model_generation_plan": result.get(
+                "whole_model_generation_plan"
+            ),
+            "generation_plan_conformance": result.get(
+                "generation_plan_conformance"
+            ),
+            "ag_binding_report": result.get("ag_binding_report"),
+            "ag_non_degradation": result.get("ag_non_degradation"),
         }
         revised = result.get("revised_experiment")
         if revised:
@@ -414,6 +431,7 @@ class PrototypingPipeline:
                 "pattern_conformance_report",
                 "failure_diagnostics",
                 "repair_decisions",
+                "ag_authoring_attempts",
                 "verification_plan",
                 "control_agenda",
             ):
@@ -423,10 +441,14 @@ class PrototypingPipeline:
         if suppressed:
             report["suppressed"] = suppressed
         if sim is not None:
+            consistency = result.get("terminal_consistency") or {}
             report["simulation"] = {
                 "reachability_score": getattr(sim, "reachability_score", None),
                 "scenarios_passed": len(sim.passed_scenarios()),
                 "scenarios_total": len(sim.scenario_results),
+                "source_model_digest": consistency.get(
+                    "simulation_source_model_digest"
+                ),
             }
         ver = result.get("dse_verification")
         if ver:

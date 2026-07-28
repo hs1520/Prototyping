@@ -50,9 +50,11 @@ def _remove_named_block(text: str, keyword: str, name: str) -> str:
         result = result[:match.start()] + result[end + 1:]
 
 
-def emit_ag_planning_package(spec: AGChainSpec) -> str:
-    """Render contract decisions without fictional owners or realizations."""
-    text = emit_ag_package(spec)
+def strip_ag_implementation(
+    package_text: str, spec: AGChainSpec
+) -> str:
+    """Remove implementation claims from an emitted or authored A/G package."""
+    text = str(package_text)
 
     # A planning artifact may describe the behavior obligation by name in the
     # typed AGChainSpec, but no concrete state definition exists until the main
@@ -91,6 +93,11 @@ def emit_ag_planning_package(spec: AGChainSpec) -> str:
         text,
     )
     return text
+
+
+def emit_ag_planning_package(spec: AGChainSpec) -> str:
+    """Render contract decisions without fictional owners or realizations."""
+    return strip_ag_implementation(emit_ag_package(spec), spec)
 
 
 @dataclass(frozen=True)
