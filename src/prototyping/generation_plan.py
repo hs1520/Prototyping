@@ -19,6 +19,10 @@ from .structural_obligations import (
     StructuralObligation,
     compile_structural_obligations,
 )
+from .requirement_semantics import (
+    RequirementSemanticObligation,
+    compile_requirement_semantic_obligations,
+)
 from ..utils.req_id import normalise_req_id
 
 
@@ -99,6 +103,7 @@ class ModelGenerationPlan:
     components: tuple[ComponentPlan, ...] = ()
     connections: tuple[ConnectionPlan, ...] = ()
     structural_obligations: tuple[StructuralObligation, ...] = ()
+    semantic_obligations: tuple[RequirementSemanticObligation, ...] = ()
     behavior_obligations: tuple[BehaviorObligation, ...] = ()
     source: str = "LLM_TYPED_JSON"
     issues: tuple[str, ...] = ()
@@ -121,6 +126,9 @@ class ModelGenerationPlan:
             "connections": [item.to_dict() for item in self.connections],
             "structural_obligations": [
                 item.to_dict() for item in self.structural_obligations
+            ],
+            "semantic_obligations": [
+                item.to_dict() for item in self.semantic_obligations
             ],
             "behavior_obligations": [
                 item.to_dict() for item in self.behavior_obligations
@@ -321,6 +329,15 @@ class ModelGenerationPlan:
             for item in (payload.get("behavior_obligations") or ())
             if isinstance(item, Mapping)
         )
+        archived_semantic_obligations = tuple(
+            RequirementSemanticObligation.from_dict(dict(item))
+            for item in (payload.get("semantic_obligations") or ())
+            if isinstance(item, Mapping)
+        )
+        semantic_obligations = (
+            compile_requirement_semantic_obligations(requirements)
+            if requirements else archived_semantic_obligations
+        )
         structural_obligations, structural_issues = (
             compile_structural_obligations(
                 components,
@@ -333,11 +350,14 @@ class ModelGenerationPlan:
             components=tuple(components),
             connections=tuple(connections),
             structural_obligations=structural_obligations,
+            semantic_obligations=semantic_obligations,
             behavior_obligations=behavior_obligations,
             source=source,
             issues=tuple(dict.fromkeys(issues)),
             schema_version=(
-                "3.0"
+                "4.0"
+                if semantic_obligations
+                else "3.0"
                 if structural_obligations
                 else str(payload.get("schema_version") or "1.0")
             ),
@@ -444,6 +464,20 @@ class ModelGenerationPlan:
                     f"[{obligation.requirement_id}]: {path} "
                     f"({obligation.entry_kind})"
                 )
+        if self.semantic_obligations:
+            lines.append("")
+            lines.append(
+                "FROZEN REQUIREMENT SEMANTIC OBLIGATIONS "
+                "(model fidelity only; not physical proof):"
+            )
+            for obligation in self.semantic_obligations:
+                subject = "/".join(obligation.subject_terms)
+                lines.append(
+                    f"- {obligation.obligation_id} "
+                    f"[{obligation.requirement_id}]: maintain {subject} "
+                    f"{obligation.operator} {obligation.threshold:g} "
+                    f"[{obligation.unit}]"
+                )
         if self.behavior_obligations:
             lines.append("")
             lines.append(
@@ -508,7 +542,9 @@ def attach_ag_behavior_obligations(
         plan,
         behavior_obligations=behavior_plan.obligations,
         issues=tuple(dict.fromkeys(issues)),
-        schema_version="3.0",
+        schema_version=(
+            "4.0" if plan.semantic_obligations else "3.0"
+        ),
     )
 
 
