@@ -1638,6 +1638,18 @@ def _check_profile_semantics(
             and item.boolean_guarantee_concepts()
         ]
         def _establishes_at_boundary(component: "Contract") -> bool:
+            link = next(
+                (
+                    item for item in realization_links
+                    if item.get("contract") == component.name
+                ),
+                {},
+            )
+            if link.get("realization_kind") == "INVARIANT":
+                return (
+                    link.get("status") == "PASS"
+                    and link.get("continuous_guarantee") is True
+                )
             behavior = _behavior_for_contract(
                 graph, realization_links, component.name
             )

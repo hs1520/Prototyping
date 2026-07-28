@@ -22,9 +22,13 @@ from src.agents.orchestrator import Orchestrator
 from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
 from src.prototyping.ag_contracts import check_ag_graph
 from src.prototyping.ag_decision import (
+    ArchitectureInputRequired,
     DecisionError,
+    DecisionFailureDisposition,
     build_spec_from_decisions,
+    classify_decision_failure,
     extract_decisions,
+    extract_runtime_response_catalog,
     validate_decisions,
 )
 from src.prototyping.ag_emitter import emit_ag_package
@@ -37,6 +41,21 @@ _BASE = (
     "package Src { requirement def REQ_SAFE_005 { doc /* deploy the ballistic "
     "recovery parachute within 0.5 s of a critical propulsion failure. */ } }"
 )
+_BASE_WITH_RESPONSE_CATALOG = _BASE + """
+package ExistingSafetyBehavior {
+    action def deployParachute;
+    action def inhibitArming;
+    state def SafetyArbiter {
+        state nominal;
+        state parachuteMode {
+            entry action onParachute : deployParachute;
+        }
+        state inhibitMode {
+            entry action onInhibit : inhibitArming;
+        }
+    }
+}
+"""
 _BOUNDARY = build_architecture_boundary_draft(REQ_SAFE_005_CHAIN)
 
 _CORRECT = {
@@ -66,6 +85,12 @@ _CORRECT = {
                  "members": ["PARACHUTE_DEPLOYMENT", "OTHER_RESPONSE"],
                  "selected_response": "PARACHUTE_DEPLOYMENT"},
 }
+_CATALOG_CORRECT = copy.deepcopy(_CORRECT)
+_CATALOG_CORRECT["priority"] = {
+    "response_set_id": "EXISTING_SAFETY_RESPONSES",
+    "members": ["deployParachute", "inhibitArming"],
+    "selected_response": "deployParachute",
+}
 
 
 def _render(decisions) -> str:
@@ -85,6 +110,15 @@ def test_decisions_render_to_a_model_that_passes_by_construction():
     report = check_ag_graph(extract_ag_graph(_render(_CORRECT)))
     assert report.verdict == "PASS"
     assert not report.errors()
+
+
+def test_decided_priority_uses_one_selected_response_id_in_enum_and_behavior():
+    emitted = emit_ag_package(build_spec_from_decisions(_CORRECT, _BOUNDARY))
+
+    assert "enum PARACHUTE_DEPLOYMENT;" in emitted
+    assert "then PARACHUTE_DEPLOYMENT;" in emitted
+    assert "state PARACHUTE_DEPLOYMENT {" in emitted
+    assert "parachuteDeploymentSelected" not in emitted
 
 
 def test_a_non_gold_response_set_still_passes_the_gold_blind_checker():
@@ -176,6 +210,31 @@ def test_a_selected_response_outside_the_member_set_is_refused():
         validate_decisions(inconsistent, _BOUNDARY)
 
 
+def test_runtime_response_catalog_comes_only_from_existing_arbiter_actions():
+    catalog = extract_runtime_response_catalog(_BASE_WITH_RESPONSE_CATALOG)
+    assert catalog["source"] == "COMMITTED_SYSML_BEHAVIOR"
+    assert {
+        item["response_id"] for item in catalog["entries"]
+    } == {"deployParachute", "inhibitArming"}
+    assert all(
+        item["source_kind"] == "EXISTING_MODEL_BEHAVIOR"
+        and item["source_id"].startswith("SafetyArbiter.")
+        for item in catalog["entries"]
+    )
+
+
+def test_priority_members_must_match_the_provenance_backed_catalog():
+    boundary = copy.deepcopy(_BOUNDARY)
+    boundary["response_catalog"] = extract_runtime_response_catalog(
+        _BASE_WITH_RESPONSE_CATALOG
+    )
+    # Interface concepts are not selectable responses, even though this was the
+    # exact cardinality-satisfying answer selected by the v5 diagnostic.
+    with pytest.raises(DecisionError, match="provenance-backed"):
+        validate_decisions(_CORRECT, boundary)
+    validate_decisions(_CATALOG_CORRECT, boundary)
+
+
 def test_decisions_are_extracted_from_a_fenced_response():
     payload = extract_decisions('noise\n```json\n{"a": {"b": 1}}\n```\ntrailing')
     assert payload == {"a": {"b": 1}}
@@ -187,10 +246,12 @@ def test_a_response_without_a_json_object_fails_closed():
 
 
 def test_orchestrator_decided_mode_renders_a_passing_package():
-    orch = Orchestrator(_DecisionLLM(_CORRECT), revised_experiment_arm="R2-BBAG",
+    orch = Orchestrator(_DecisionLLM(_CATALOG_CORRECT),
+                        revised_experiment_arm="R2-BBAG",
                         r2_generation_mode="LLM_DECIDED_SPEC")
     merged = orch._apply_ag_contract_layer(
-        _BASE, ["REQ-SAFE-005: deploy the parachute within 0.5 s"]
+        _BASE_WITH_RESPONSE_CATALOG,
+        ["REQ-SAFE-005: deploy the parachute within 0.5 s"],
     )
     report = check_ag_graph(extract_ag_graph(merged))
     assert report.verdict == "PASS"
@@ -209,35 +270,66 @@ class _SequenceDecisionLLM:
         return json.dumps(payload)
 
 
-def test_incoherent_decisions_are_fed_back_and_repaired():
-    """Two live seeds returned a single-member response set, because the
-    requirement never names the other responses. Decisions are small and the
-    validator says exactly what is wrong, so that is worth one feedback round
-    rather than discarding the whole run."""
+def test_singleton_priority_stops_for_architecture_input_without_guessing():
+    """The requirement says "all other responses" but never names those responses.
+
+    A retry previously invented ``OTHER_RESPONSE`` and made the checker pass. That
+    is not improved engineering quality: it is an unsupported architecture fact.
+    """
     thin = json.loads(json.dumps(_CORRECT))
     thin["priority"]["members"] = ["PARACHUTE_DEPLOYMENT"]
     llm = _SequenceDecisionLLM([thin, _CORRECT])
 
     orch = Orchestrator(llm, revised_experiment_arm="R2-BBAG",
                         r2_generation_mode="LLM_DECIDED_SPEC")
-    merged = orch._apply_ag_contract_layer(
-        _BASE, ["REQ-SAFE-005: deploy the parachute within 0.5 s"]
+    with pytest.raises(
+        ArchitectureInputRequired, match="fewer than two provenance-backed"
+    ):
+        orch._generate_llm_decided_ag_spec(
+            REQ_SAFE_005_CHAIN, _BASE, max_decision_attempts=3
+        )
+    assert llm._calls == 1
+
+
+def test_decision_failure_classification_is_narrow_and_biting():
+    missing_fact = DecisionError("priority.members needs at least two responses")
+    repairable = DecisionError(
+        "priority.selected_response 'X' is not in members"
     )
-    assert check_ag_graph(extract_ag_graph(merged)).verdict == "PASS"
-    # the retry carried the validator's actual complaint
-    assert "at least two responses" in llm.last_prompt
+    assert classify_decision_failure(missing_fact) is (
+        DecisionFailureDisposition.NEEDS_ARCHITECTURE_INPUT
+    )
+    assert classify_decision_failure(repairable) is (
+        DecisionFailureDisposition.RETRYABLE_VALIDATION_ERROR
+    )
+
+
+def test_retryable_decision_error_gets_bounded_feedback():
+    inconsistent = json.loads(json.dumps(_CATALOG_CORRECT))
+    inconsistent["priority"]["selected_response"] = "NOT_A_MEMBER"
+    llm = _SequenceDecisionLLM([inconsistent, _CATALOG_CORRECT])
+    orch = Orchestrator(llm, revised_experiment_arm="R2-BBAG",
+                        r2_generation_mode="LLM_DECIDED_SPEC")
+    decided = orch._generate_llm_decided_ag_spec(
+        REQ_SAFE_005_CHAIN, _BASE_WITH_RESPONSE_CATALOG,
+        max_decision_attempts=2,
+    )
+    assert emit_ag_package(decided)
+    assert llm._calls == 2
+    assert "not in members" in llm.last_prompt
 
 
 def test_decisions_that_never_become_coherent_still_fail_closed():
     """The retry must not become a way to eventually accept anything."""
-    thin = json.loads(json.dumps(_CORRECT))
-    thin["priority"]["members"] = ["PARACHUTE_DEPLOYMENT"]
-    orch = Orchestrator(_SequenceDecisionLLM([thin]),
+    inconsistent = json.loads(json.dumps(_CATALOG_CORRECT))
+    inconsistent["priority"]["selected_response"] = "NOT_A_MEMBER"
+    orch = Orchestrator(_SequenceDecisionLLM([inconsistent]),
                         revised_experiment_arm="R2-BBAG",
                         r2_generation_mode="LLM_DECIDED_SPEC")
     with pytest.raises(RuntimeError, match="failed closed after"):
         orch._apply_ag_contract_layer(
-            _BASE, ["REQ-SAFE-005: deploy the parachute within 0.5 s"]
+            _BASE_WITH_RESPONSE_CATALOG,
+            ["REQ-SAFE-005: deploy the parachute within 0.5 s"],
         )
 
 
@@ -289,7 +381,9 @@ def test_the_pipeline_hands_the_mode_to_the_orchestrator():
         _render(_CORRECT)
     )["revised_experiment"]
     assert reported["r2_generation_mode"] == "LLM_DECIDED_SPEC"
-    assert reported["r2_intervention_version"] == "r2-bbag-llm-decided-spec-v1"
+    assert reported["r2_intervention_version"] == (
+        "r2-bbag-whole-model-guided-decided-v5"
+    )
 
 
 def test_the_r2_assurance_path_produces_all_three_pillars_and_artifacts(tmp_path):
@@ -314,7 +408,7 @@ def test_the_r2_assurance_path_produces_all_three_pillars_and_artifacts(tmp_path
 
     class _StubLLM:
         def chat(self, user_message, system_prompt="", **kw):
-            return f"```json\n{json.dumps(_CORRECT)}\n```"
+            return f"```json\n{json.dumps(_CATALOG_CORRECT)}\n```"
 
         def complete(self, messages, **kw):
             from src.llm.interface import LLMResponse
@@ -326,9 +420,11 @@ def test_the_r2_assurance_path_produces_all_three_pillars_and_artifacts(tmp_path
     orch._prepare_design_handoff("DeliveryUAV", [requirement])
     orch._finalize_design_handoff(
         SimpleNamespace(success=True, reasoning="gen", metadata={}),
-        build_lite_model(_BASE, model_name="DeliveryUAV"),
+        build_lite_model(_BASE_WITH_RESPONSE_CATALOG, model_name="DeliveryUAV"),
     )
-    merged = orch._apply_ag_contract_layer(_BASE, [requirement])
+    merged = orch._apply_ag_contract_layer(
+        _BASE_WITH_RESPONSE_CATALOG, [requirement]
+    )
     orch._commit_terminal_model(merged, producer="llm-decided")
     assurance = orch._build_collaboration_artifacts(merged)
 

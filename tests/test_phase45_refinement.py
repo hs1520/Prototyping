@@ -40,6 +40,9 @@ from src.llm.interface import MockLLM
 from src.dse.design_space import DesignConfiguration
 from src.sysml.model import PartDefinition, SysMLModel
 from src.sysml.lite_model import build_lite_model
+from src.simulation.validator import SimulationResult
+from src.prototyping.blackboard import text_digest
+from src.utils.sysml_text_utils import get_sysml_text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,6 +218,118 @@ class TestBestModelTracking:
         # Iter 2 blended: 0.6*0.70 + 0.4*0.80 = 0.74
         assert result_model.name == "model_b"
         assert abs(result_score - 0.74) < 0.01
+
+    def test_last_chance_surgical_improvement_is_returned_for_terminal_scoring(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Never pair the old best model with a newer post-fix simulation."""
+        model_a = _make_model("before_fix")
+        model_b = _make_model("after_fix")
+        before_sim = SimulationResult(model_name="before_fix")
+        after_sim = SimulationResult(model_name="after_fix")
+        orch = _make_orch(max_iterations=1, quality_threshold=0.75)
+        orch.evaluator = FakeEvaluator([FakeEvalResult(weighted_total=0.90)])
+        orch.cot = FakeCot([])
+
+        monkeypatch.setattr(
+            orch,
+            "_syntax_gate",
+            lambda text, model, requirements, max_attempts: (
+                text,
+                model,
+                SimpleNamespace(has_errors=False, total_errors=lambda: 0),
+            ),
+        )
+        monkeypatch.setattr(
+            orch, "_connect_audit_step", lambda text, model: (text, model)
+        )
+        monkeypatch.setattr(orch, "_run_simulation", lambda *_args: before_sim)
+        monkeypatch.setattr(orch, "_verification_gap_issues", lambda *_args: [])
+        monkeypatch.setattr(
+            orch, "_early_exit_gates", lambda *_args: (False, False, True)
+        )
+        monkeypatch.setattr(orch, "_print_iteration_summary", lambda **_kwargs: None)
+        monkeypatch.setattr(
+            orch, "_sim_refinement_loop", lambda *_args, **_kwargs: model_b
+        )
+        monkeypatch.setattr(
+            orch,
+            "_resolve_after_forced_fix",
+            lambda *_args, **_kwargs: (False, model_b, 0.91, after_sim),
+        )
+
+        result_model, result_score, result_sim = orch._iterative_refinement(
+            model_a, []
+        )
+
+        assert result_model is model_b
+        assert result_score == 0.91
+        assert result_sim is after_sim
+
+    def test_last_iteration_accepted_refinement_is_promoted_immediately(self):
+        model_a = _make_model("before_refinement")
+        model_b = _make_model("accepted_refinement")
+        orch = _make_orch(max_iterations=1, quality_threshold=0.95)
+        orch.evaluator = FakeEvaluator([
+            FakeEvalResult(weighted_total=0.60, issues=["improve"]),
+            FakeEvalResult(weighted_total=0.90),
+        ])
+        orch.cot = FakeCot([
+            FakeCotResult(
+                _scores={"overall": 0.60},
+                final_answer="apply the improvement",
+            ),
+        ])
+        orch.design_agent = FakeDesignAgent([model_b])
+
+        result_model, result_score, _result_sim = (
+            orch._iterative_refinement(model_a, [])
+        )
+
+        assert result_model is model_b
+        assert result_score == 0.90
+
+
+class TestTerminalConsistencyGate:
+
+    def test_recomputes_score_and_simulation_from_exact_returned_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        orch = _make_orch()
+        stale_model = build_lite_model(
+            "package D { part def Before { } }", model_name="D"
+        )
+        terminal_text = "package D { part def After { } }"
+        terminal_sim = SimulationResult(
+            model_name="D", reachability_score=0.5
+        )
+        orch.evaluator = FakeEvaluator([FakeEvalResult(weighted_total=0.73)])
+        seen = {}
+
+        def simulate(text, model_name):
+            seen["simulation_text"] = text
+            return terminal_sim
+
+        monkeypatch.setattr(orch, "_run_simulation", simulate)
+        model, score, sim, consistency = orch._synchronize_terminal_snapshot(
+            stale_model,
+            terminal_text,
+            [],
+            prior_score=0.91,
+            dse_best_config=None,
+        )
+
+        digest = text_digest(terminal_text)
+        assert get_sysml_text(model) == terminal_text
+        assert seen["simulation_text"] == terminal_text
+        assert score == 0.73
+        assert sim is terminal_sim
+        assert consistency["pre_terminal_iteration_score"] == 0.91
+        assert {
+            consistency["model_digest"],
+            consistency["simulation_source_model_digest"],
+            consistency["evaluation_source_model_digest"],
+        } == {digest}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

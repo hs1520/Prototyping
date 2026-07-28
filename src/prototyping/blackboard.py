@@ -264,6 +264,11 @@ class Blackboard:
     def current_revision(self) -> int:
         return self.current_model.revision
 
+    @property
+    def event_sequence(self) -> int:
+        """Sequence of the latest archived board event."""
+        return self._record_sequence
+
     def publish(
         self,
         record_type: RecordType,

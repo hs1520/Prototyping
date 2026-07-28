@@ -97,7 +97,11 @@ def test_terminal_reconciliation_reuses_the_frozen_plan_without_reauthoring():
             }
             part safetyResponseArbiter : SafetyResponseArbiter;
             part def RecoveryPowerSupply {
-                state def RecoveryPowerSupplyBehavior { state idle; }
+                attribute airborne : Boolean = false;
+                attribute recoveryActuationPowerAvailable : Boolean = true;
+                assert constraint RecoveryPowerSupplyBehavior {
+                    not (airborne) or (recoveryActuationPowerAvailable)
+                }
             }
             part recoveryPowerSupply : RecoveryPowerSupply;
             part def RecoverySystem {

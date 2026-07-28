@@ -68,6 +68,9 @@ KEY CONSTRUCT RULES (same as generation):
       transition initial then nominal;
       transition <name>Fault first nominal if <condition> then fault;
   }
+  // Bounded A/G state defs use `entry; then <state>;` for their initial edge.
+  // If the supplied block uses that form, preserve it; never translate it to
+  // the legacy `transition initial then <state>;` form.
   // Initialization/default-state requirements are NOT fault monitors:
   // - declare the required initial state and a consistent Boolean attribute;
   // - a single-state invariant may contain only `transition initial`;

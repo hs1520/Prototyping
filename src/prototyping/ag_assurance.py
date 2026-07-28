@@ -8,9 +8,14 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
+import re
 from typing import Any, Dict, Iterable, Tuple
 
 from .ag_contracts import AGDiagnostic, AGGraph, AGReport
+from .ag_convention import (
+    PRIORITY_MODEL_WIRING,
+    PRIORITY_OBLIGATIONS,
+)
 
 
 class FailureClass(str, Enum):
@@ -107,6 +112,11 @@ def check_safety_pattern_conformance(
         timed = component.timing_budget is not None
         pattern = declared or (_TIMED_FAILSAFE if timed else _STARTUP_INHIBIT)
         availability_invariant = component.timing_segment_required is False
+        continuous_invariant = (
+            realization.get("realization_kind") == "INVARIANT"
+            and realization.get("status") == "PASS"
+            and realization.get("continuous_guarantee") is True
+        )
         # Default-safe: the power-on (initial) state is present and is not one of
         # the guarded response states — the locked default is genuinely distinct
         # from the released state it guards.
@@ -143,11 +153,12 @@ def check_safety_pattern_conformance(
                 and power_loss_relocks
             )
         else:
-            default_safe_present = bool(initial_state) and (
-                initial_state not in response_states
+            default_safe_present = continuous_invariant or (
+                bool(initial_state) and initial_state not in response_states
             )
         pattern_invariant = (
-            bool(realization.get("trigger_ok")) and bool(actions)
+            continuous_invariant
+            or (bool(realization.get("trigger_ok")) and bool(actions))
         )
         if (
             pattern == _LOCKED_UNTIL_RELEASE
@@ -216,16 +227,21 @@ def check_safety_pattern_conformance(
         case = PatternCase(
             contract=component.name,
             pattern=pattern,
-            trigger_present=bool(realization.get("trigger_ok")),
+            trigger_present=(
+                continuous_invariant
+                or bool(realization.get("trigger_ok"))
+            ),
             # A non-timed availability invariant is established in its initial
             # state and deliberately has no activation transition or additive
             # timing segment. Other components still need a genuine path.
             reachable_response=(
-                bool(reachable)
+                True
+                if continuous_invariant
+                else bool(reachable)
                 if availability_invariant
                 else len(reachable) >= 2
             ),
-            entry_action_present=bool(actions),
+            entry_action_present=continuous_invariant or bool(actions),
             timing_criterion_present=(
                 timed or component.timing_segment_required is False
             ),
@@ -268,6 +284,8 @@ def check_safety_pattern_conformance(
 
 _CONTRACT_CODES = {
     "CONTRACT_INCOMPLETE", "CONTRACT_UNSUPPORTED",
+    "COMPONENT_GUARANTEE_NONATOMIC",
+    "SYSTEM_OBSERVATION_BINDING_MISSING",
     "SOURCE_PROVENANCE_MISSING",
     "PATTERN_DECLARATION_INCONSISTENT",
     "PRIORITY_TOPOLOGY_MISSING",
@@ -284,15 +302,42 @@ _INTEGRATION_CODES = {
 _MODEL_CODES = {
     "REALIZATION_MISSING", "REALIZATION_UNREACHABLE",
     "REALIZATION_TRIGGER_MISSING", "REALIZATION_ACTION_MISSING",
-    "PATTERN_NONCONFORMANT", "PATTERN_TOPOLOGY_INCOMPLETE",
+    "PATTERN_TOPOLOGY_INCOMPLETE",
 }
 _DESIGN_CODES = {
     "UNIT_INCOMPATIBLE", "TIMING_BUDGET_EXCEEDED", "TIMING_BUDGET_MISSING",
 }
 _VERIFIER_CODES = {"OBSERVATION_MISSING"}
+_PRIORITY_INCOMPLETE = "PRIORITY_TOPOLOGY_INCOMPLETE"
+_PRIORITY_OBLIGATION_BY_ID = {
+    item.obligation_id: item for item in PRIORITY_OBLIGATIONS
+}
 
 
-def _classification(code: str) -> Tuple[FailureClass, FailureRoute, bool]:
+def _classification(
+    code: str,
+    *,
+    priority_obligation: str | None = None,
+) -> Tuple[FailureClass, FailureRoute, bool]:
+    if code == _PRIORITY_INCOMPLETE and priority_obligation is not None:
+        obligation = _PRIORITY_OBLIGATION_BY_ID.get(priority_obligation)
+        if (
+            obligation is not None
+            and obligation.failure_scope == PRIORITY_MODEL_WIRING
+        ):
+            return (
+                FailureClass.MODEL_SEMANTIC_FAULT,
+                FailureRoute.DEPENDENCY_CLOSED_SURGICAL_REPAIR,
+                True,
+            )
+        # Unknown and input/contract-valued obligations fail closed. In
+        # particular, response vocabulary and precedence facts may not be guessed
+        # by a local behavior repair.
+        return (
+            FailureClass.CONTRACT_INCOMPLETENESS,
+            FailureRoute.CLARIFICATION_OR_BLOCKED,
+            False,
+        )
     if code in _MODEL_CODES:
         return (
             FailureClass.MODEL_SEMANTIC_FAULT,
@@ -324,6 +369,44 @@ def _classification(code: str) -> Tuple[FailureClass, FailureRoute, bool]:
     )
 
 
+def _priority_obligation_ids(diagnostic: AGDiagnostic) -> Tuple[str, ...]:
+    """Return the named priority failures, structured first, text as fallback.
+
+    Current checker output carries a typed provenance list. The message fallback
+    keeps routing fail-closed and useful for an archived/hand-authored diagnostic
+    produced before that field existed.
+    """
+    values = diagnostic.provenance.get("unsatisfied_obligations", ())
+    if isinstance(values, (list, tuple)):
+        structured = tuple(
+            dict.fromkeys(str(item).strip() for item in values if str(item).strip())
+        )
+        if structured:
+            return structured
+    match = re.search(r"\bunsatisfied\s*:\s*([^;]+)", diagnostic.message)
+    if not match:
+        return ()
+    return tuple(dict.fromkeys(
+        item.strip() for item in match.group(1).split(",") if item.strip()
+    ))
+
+
+def _priority_failure_message(
+    diagnostic: AGDiagnostic, obligation_id: str
+) -> str:
+    obligation = _PRIORITY_OBLIGATION_BY_ID.get(obligation_id)
+    if obligation is None:
+        return (
+            f"Priority topology obligation `{obligation_id}` is unsatisfied, "
+            "but the obligation is unknown to the frozen convention; fail closed "
+            "for clarification."
+        )
+    return (
+        f"Priority topology obligation `{obligation_id}` is unsatisfied. "
+        f"Required convention: {obligation.authoring_rule}"
+    )
+
+
 def route_failure_diagnostics(
     diagnostics: Iterable[AGDiagnostic],
     *,
@@ -335,27 +418,161 @@ def route_failure_diagnostics(
         for item in realization_links
     }
     failures = []
-    for index, diagnostic in enumerate(
-        diagnostics, 1
-    ):
-        failure_class, route, authorised = _classification(diagnostic.code)
-        affected = [item for item in (
-            diagnostic.contract,
-            behavior_by_contract.get(str(diagnostic.contract)),
-        ) if item]
-        failures.append({
-            "failure_id": f"failure-{index:04d}",
-            "diagnostic_code": diagnostic.code,
-            "message": diagnostic.message,
-            "source_requirement": source_requirement,
-            "contract": diagnostic.contract,
-            "subject": diagnostic.subject,
-            "classification": failure_class.value,
-            "route": route.value,
-            "repair_authorized": authorised,
-            "affected_elements": affected,
-            "provenance": dict(diagnostic.provenance),
-        })
+    for diagnostic in diagnostics:
+        priority_ids = (
+            _priority_obligation_ids(diagnostic)
+            if diagnostic.code == _PRIORITY_INCOMPLETE
+            else ()
+        )
+        # One aggregate checker diagnostic may contain both unrepairable
+        # response vocabulary and repairable behavior wiring. Routing it as one
+        # unit necessarily gives one side the wrong treatment, so publish one
+        # typed failure per named obligation. An old aggregate with no names
+        # remains one fail-closed contract failure.
+        units: Tuple[str | None, ...] = priority_ids or (None,)
+        for priority_id in units:
+            failure_class, route, authorised = _classification(
+                diagnostic.code,
+                priority_obligation=priority_id,
+            )
+            affected = [item for item in (
+                diagnostic.contract,
+                behavior_by_contract.get(str(diagnostic.contract)),
+            ) if item]
+            obligation_elements = diagnostic.provenance.get(
+                "obligation_affected_elements", {}
+            )
+            specific_affected: list[str] = []
+            if (
+                priority_id is not None
+                and isinstance(obligation_elements, dict)
+            ):
+                specific_affected = [
+                    str(item)
+                    for item in obligation_elements.get(priority_id, ())
+                    if item
+                ]
+                affected.extend(specific_affected)
+            elif (
+                diagnostic.code == "PATTERN_TOPOLOGY_INCOMPLETE"
+                and isinstance(obligation_elements, dict)
+            ):
+                specific_affected = list(dict.fromkeys(
+                    str(item)
+                    for values in obligation_elements.values()
+                    if isinstance(values, (list, tuple))
+                    for item in values
+                    if item
+                ))
+                affected.extend(specific_affected)
+            routing_basis = (
+                "NAMED_PRIORITY_OBLIGATION"
+                if priority_id is not None
+                else "DIAGNOSTIC_CODE"
+            )
+            behavior_target = (
+                behavior_by_contract.get(str(diagnostic.contract))
+                or (specific_affected[0] if specific_affected else None)
+            )
+            if authorised and priority_id is not None and not specific_affected:
+                # A behavior-wiring obligation is repairable only when the
+                # checker can bind it to an existing state definition. Otherwise
+                # a "surgical" task would have to invent a behavior, rewrite a
+                # contract, or guess which component owns the missing topology.
+                failure_class = FailureClass.CONTRACT_INCOMPLETENESS
+                route = FailureRoute.CLARIFICATION_OR_BLOCKED
+                authorised = False
+                routing_basis = (
+                    "NAMED_PRIORITY_OBLIGATION_WITHOUT_BEHAVIOR_TARGET"
+                )
+            if (
+                authorised
+                and priority_id is None
+                and not behavior_target
+            ):
+                # A route called "surgical behavior repair" needs an existing
+                # state definition to replace. REALIZATION_MISSING and aggregate
+                # pattern failures may have none; authorizing them would require
+                # adding a definition, which the merge policy deliberately
+                # forbids.
+                failure_class = FailureClass.CONTRACT_INCOMPLETENESS
+                route = FailureRoute.CLARIFICATION_OR_BLOCKED
+                authorised = False
+                routing_basis = "MODEL_FAULT_WITHOUT_BEHAVIOR_TARGET"
+            compatible_signals = diagnostic.provenance.get(
+                "scoped_repair_compatible_signals"
+            )
+            if (
+                authorised
+                and diagnostic.code in {
+                    "REALIZATION_TRIGGER_MISSING",
+                    "REALIZATION_UNREACHABLE",
+                }
+                and (
+                    not isinstance(compatible_signals, (list, tuple))
+                    or not compatible_signals
+                )
+            ):
+                # The scoped merge may replace an existing state definition but
+                # may not invent a package-level attribute definition. A missing
+                # compatible signal therefore crosses the bounded edit boundary:
+                # attempting it only spends the one repair budget on a patch the
+                # merge gate is guaranteed to reject.
+                failure_class = FailureClass.CONTRACT_INCOMPLETENESS
+                route = FailureRoute.CLARIFICATION_OR_BLOCKED
+                authorised = False
+                routing_basis = (
+                    "REALIZATION_WITHOUT_DECLARED_COMPATIBLE_SIGNAL"
+                )
+            affected = list(dict.fromkeys(affected))
+            provenance = {
+                **dict(diagnostic.provenance),
+                **({
+                    "aggregate_diagnostic_message": diagnostic.message,
+                    "routed_priority_obligation": priority_id,
+                } if priority_id is not None else {}),
+            }
+            failures.append({
+                "failure_id": f"failure-{len(failures) + 1:04d}",
+                "diagnostic_code": diagnostic.code,
+                "message": (
+                    _priority_failure_message(diagnostic, priority_id)
+                    + (
+                        " No existing behavior target was identified, so bounded "
+                        "surgical repair is not authorized."
+                        if routing_basis.endswith("WITHOUT_BEHAVIOR_TARGET")
+                        else ""
+                    )
+                    if priority_id is not None else (
+                        diagnostic.message
+                        + (
+                            " No compatible event signal is declared in the "
+                            "package, so the bounded behavior-only repair cannot "
+                            "introduce one."
+                            if routing_basis
+                            == "REALIZATION_WITHOUT_DECLARED_COMPATIBLE_SIGNAL"
+                            else ""
+                        )
+                        + (
+                            " No existing behavior target was identified, so "
+                            "bounded surgical repair is not authorized."
+                            if routing_basis
+                            == "MODEL_FAULT_WITHOUT_BEHAVIOR_TARGET"
+                            else ""
+                        )
+                    )
+                ),
+                "source_requirement": source_requirement,
+                "contract": diagnostic.contract,
+                "subject": diagnostic.subject,
+                "classification": failure_class.value,
+                "route": route.value,
+                "repair_authorized": authorised,
+                "affected_elements": affected,
+                "priority_obligation": priority_id,
+                "routing_basis": routing_basis,
+                "provenance": provenance,
+            })
     return {
         "schema_version": "1.0",
         "artifact_role": "INTERVENTION_FAILURE_ROUTING",

@@ -13,10 +13,12 @@ state_extractor.py
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..utils.suppressed import record_suppressed
+from ..utils.sysml_text_utils import find_block_end
 
 try:
     import syside as _syside
@@ -698,6 +700,18 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
     result: List[StateMachineDef] = []
 
     for sd in model.elements(_syside.StateDefinition):
+        state_source = sysml_text
+        state_match = re.search(
+            rf"\bstate\s+def\s+{re.escape(str(sd.name))}\s*\{{",
+            sysml_text,
+        )
+        if state_match is not None:
+            state_open = sysml_text.find("{", state_match.start())
+            state_close = find_block_end(sysml_text, state_open)
+            if state_close != -1:
+                state_source = sysml_text[
+                    state_match.start():state_close + 1
+                ]
         owner = sd.owner
         owner_name: str = owner.name if owner else "__unknown__"
 
@@ -751,7 +765,7 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
                 import re as _re
                 _m = _re.search(
                     r"\btransition\s+" + _re.escape(tr.name)
-                    + r"\b[^;{}]*?\baccept\s+(\w+)", sysml_text
+                    + r"\b[^;{}]*?\baccept\s+(\w+)", state_source
                 )
                 if _m:
                     accept_trigger = _m.group(1)
@@ -768,6 +782,17 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
 
             if is_initial and tgt_name:
                 sm.initial_state = tgt_name
+
+        # Syside exposes `transition initial then X;` as an owned transition,
+        # but the bounded A/G spelling `entry; then X;` is an entry edge rather
+        # than a TransitionUsage. Preserve the same initial-state semantics.
+        if sm.initial_state is None:
+            entry_initial = re.search(
+                r"\bentry\s*;\s*then\s+([A-Za-z_]\w*)\s*;",
+                state_source,
+            )
+            if entry_initial is not None:
+                sm.initial_state = entry_initial.group(1)
 
         # ── Resolve effective thresholds now that initial_values are known ──
         # A comparison whose RHS references an attribute (e.g.

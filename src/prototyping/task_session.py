@@ -36,6 +36,9 @@ class SessionMessage:
     role: str
     content: str
     token_count: int = 0
+    model_revision: Optional[int] = None
+    model_digest: Optional[str] = None
+    board_sequence: Optional[int] = None
 
 
 @dataclass
@@ -61,7 +64,16 @@ class TaskSession:
     def assistant_turns(self) -> int:
         return sum(item.role == "assistant" for item in self.messages)
 
-    def append(self, role: str, content: str, *, token_count: int = 0) -> None:
+    def append(
+        self,
+        role: str,
+        content: str,
+        *,
+        token_count: int = 0,
+        model_revision: Optional[int] = None,
+        model_digest: Optional[str] = None,
+        board_sequence: Optional[int] = None,
+    ) -> None:
         if self.status is not SessionStatus.OPEN:
             raise SessionError(f"session is not open: {self.status.value}")
         if self.assistant_turns >= self.max_turns:
@@ -75,6 +87,15 @@ class TaskSession:
             role=str(role),
             content=str(content),
             token_count=max(int(token_count), 0),
+            model_revision=(
+                int(model_revision) if model_revision is not None else None
+            ),
+            model_digest=(
+                str(model_digest) if model_digest is not None else None
+            ),
+            board_sequence=(
+                int(board_sequence) if board_sequence is not None else None
+            ),
         ))
 
     def assert_current(self, revision: int, digest: str) -> None:

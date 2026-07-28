@@ -145,6 +145,85 @@ def test_normal_functional_entry_actions_are_not_misclassified_as_emergencies():
     assert statuses["REQ-FUNC-008"] == BEHAVIORALLY_VERIFIED
 
 
+def test_emergency_only_recovery_does_not_require_a_fake_nominal_transition():
+    model = """package D {
+        action def CmdParachuteDeploy;
+        part def RecoverySystem {
+            action def deployRecoveryParachute;
+            state def RecoveryBehavior {
+                state Stowed;
+                state Deployed {
+                    entry action onDeploy : deployRecoveryParachute;
+                }
+                transition initial then Stowed;
+                transition deploy first Stowed
+                    accept CmdParachuteDeploy then Deployed;
+            }
+        }
+    }"""
+
+    result = run_behavioral_simulation(model, model_name="D")
+    recovery = [
+        item for item in result.scenario_results
+        if item.state_machine == "RecoveryBehavior"
+    ]
+
+    assert len(recovery) == 1
+    assert recovery[0].tags == ["accept_machine", "emergency"]
+    assert recovery[0].passed, recovery[0].violations
+    assert "onDeploy" in recovery[0].fired_actions
+    assert all(
+        "No nominal transitions found" not in item.violations
+        for item in recovery
+    )
+    assert result.sim_score == 1.0
+
+
+def test_ag_entry_edges_and_reused_transition_names_are_scoped_per_machine():
+    model = """package D {
+        action def FirstSignal;
+        action def SecondSignal;
+        part def FirstOwner {
+            attribute allowed : Boolean = false;
+            action def setFirst;
+            state def FirstBehavior {
+                entry; then idle;
+                state idle;
+                state firstDone { entry action setFirst; }
+                transition realize1 first idle
+                    accept FirstSignal if allowed then firstDone;
+            }
+        }
+        part def SecondOwner {
+            action def setSecond;
+            state def SecondBehavior {
+                entry; then waiting;
+                state waiting;
+                state secondDone { entry action setSecond; }
+                transition realize1 first waiting
+                    accept SecondSignal then secondDone;
+            }
+        }
+    }"""
+    from src.simulation.state_extractor import extract_state_machines
+
+    machines = {
+        item.name: item for item in extract_state_machines(model)
+    }
+    assert machines["FirstBehavior"].initial_state == "idle"
+    assert machines["SecondBehavior"].initial_state == "waiting"
+    assert machines["FirstBehavior"].transitions[0].accept_trigger == (
+        "FirstSignal"
+    )
+    assert machines["SecondBehavior"].transitions[0].accept_trigger == (
+        "SecondSignal"
+    )
+    result = run_behavioral_simulation(model, model_name="D")
+    assert result.sim_score == 1.0, [
+        item.violations for item in result.scenario_results
+    ]
+
+
 def test_generation_and_surgical_prompts_require_executable_functional_responses():
     from src.agents.surgical_refiner import SURGICAL_SYSTEM_PROMPT
     from src.llm.chain_of_thought import BEHAVIOR_TEMPLATE

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import json
 from typing import List
 from collections import deque
 
@@ -329,6 +330,77 @@ class TestMultistepGeneratePipeline:
 
         assert result.success
         assert agent.llm.call_count == 5
+
+    def test_invalid_typed_plan_gets_one_bounded_retry(self, monkeypatch):
+        invalid = {
+            "components": [{
+                "name": "Controller",
+                "responsibility": "Controls the system.",
+                "requirements": [
+                    "REQ_FUNC_001", "REQ_PERF_001",
+                    "REQ_SAFE_001", "REQ_INTF_001",
+                ],
+                "ports": [{
+                    "name": "status",
+                    "direction": "out",
+                    "type": "StatusPort",
+                    "external": False,
+                }],
+            }],
+            "connections": [],
+        }
+        valid = {
+            "components": [
+                {
+                    "name": "Controller",
+                    "responsibility": "Controls the system.",
+                    "requirements": ["REQ_FUNC_001", "REQ_PERF_001"],
+                    "ports": [{
+                        "name": "status",
+                        "direction": "out",
+                        "type": "StatusPort",
+                        "external": False,
+                    }],
+                },
+                {
+                    "name": "SafetyMonitor",
+                    "responsibility": "Monitors system safety.",
+                    "requirements": ["REQ_SAFE_001", "REQ_INTF_001"],
+                    "ports": [{
+                        "name": "status",
+                        "direction": "in",
+                        "type": "StatusPort",
+                        "external": False,
+                    }],
+                },
+            ],
+            "connections": [{
+                "source": {"component": "Controller", "port": "status"},
+                "target": {"component": "SafetyMonitor", "port": "status"},
+                "item_type": "StatusPort",
+                "requirements": ["REQ_FUNC_001", "REQ_SAFE_001"],
+            }],
+        }
+        responses = [
+            f"```json\n{json.dumps(invalid)}\n```",
+            f"```json\n{json.dumps(valid)}\n```",
+        ]
+        agent = self._make_agent(responses, monkeypatch)
+        metadata = {"degraded_steps": []}
+
+        _step, rendered = agent._step1_architecture(
+            "DroneSystem",
+            self._REQUIREMENTS,
+            "",
+            "",
+            metadata,
+            False,
+        )
+
+        assert agent.llm.call_count == 2
+        assert metadata["step1_plan_retries"] == 1
+        assert metadata["whole_model_generation_plan"]["status"] == "PASS"
+        assert "Controller.status -> SafetyMonitor.status" in rendered
 
     def test_metadata_contains_generation_steps(self, monkeypatch):
         import src.agents.design_agent as da_module

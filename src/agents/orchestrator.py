@@ -1396,6 +1396,11 @@ class Orchestrator:
             task["semantic_guidance_by_step"] = dict(
                 self._active_ag_generation_plan["guidance_by_step"]
             )
+            behavior_plan = self._active_ag_generation_plan.get(
+                "behavior_plan"
+            )
+            if behavior_plan is not None:
+                task["ag_behavior_obligation_plan"] = behavior_plan.to_dict()
         observer_id = None
         add_observer = getattr(self.llm, "add_call_observer", None)
         remove_observer = getattr(self.llm, "remove_call_observer", None)
@@ -1492,6 +1497,7 @@ class Orchestrator:
         packages: List[str],
         *,
         authored_mode: bool = False,
+        behavior_plan: Optional[Any] = None,
     ) -> Dict[str, str]:
         """Compile one frozen A/G plan into the five DesignAgent prompt seams."""
         from ..prototyping.ag_extractor import extract_ag_graph
@@ -1568,11 +1574,15 @@ class Orchestrator:
             "the ordinary architecture around them and do not create competing "
             "owners, response concepts, or timing origins.\n"
         )
+        behavior_guidance = (
+            behavior_plan.render_for_prompt()
+            if behavior_plan is not None else "\n".join(behavior_lines)
+        )
         return {
             "architecture": prefix + "\n".join(component_lines),
             "parts": prefix + "\n".join(component_lines),
             "interfaces": prefix + "\n".join(interface_lines),
-            "behavior": prefix + "\n".join(behavior_lines),
+            "behavior": prefix + behavior_guidance,
             "assembly": prefix + "\n".join(assembly_lines),
         }
 
@@ -1591,6 +1601,9 @@ class Orchestrator:
             return None
 
         from ..prototyping.ag_chains import select_ag_chains
+        from ..prototyping.ag_behavior_plan import (
+            compile_behavior_obligation_plan,
+        )
         from ..prototyping.ag_emitter import emit_ag_package
         from ..prototyping.ag_extractor import extract_ag_graph
         from ..prototyping.ag_planning import (
@@ -1667,6 +1680,21 @@ class Orchestrator:
             guidance_packages.append(guidance_package)
             planning_reports.append(planning_report.to_dict())
 
+        authored_mode = (
+            self.r2_generation_mode == R2_LLM_AUTHORED_GENERATION_MODE
+        )
+        # Free-form authored packages have a separate authority boundary.  They
+        # cannot be losslessly reconstructed from the reviewed candidate spec,
+        # so ModelPlan-v2 attachment is limited to deterministic/decided modes.
+        behavior_plan = (
+            None if authored_mode
+            else compile_behavior_obligation_plan(planned_specs)
+        )
+        if behavior_plan is not None and behavior_plan.status != "PASS":
+            raise RuntimeError(
+                "R2-BBAG typed behavior obligation compilation failed closed: "
+                f"{behavior_plan.status}"
+            )
         return {
             "stage": "PRE_GENERATION_A_G_PLANNING",
             "mode": self.r2_generation_mode,
@@ -1677,13 +1705,16 @@ class Orchestrator:
             "packages": planning_packages,
             "guidance_packages": guidance_packages,
             "planning_reports": planning_reports,
+            "behavior_plan": behavior_plan,
+            "behavior_plan_artifact": (
+                behavior_plan.to_dict()
+                if behavior_plan is not None else None
+            ),
             "guidance_by_step": self._ag_guidance_for_specs(
                 planned_specs,
                 guidance_packages,
-                authored_mode=(
-                    self.r2_generation_mode
-                    == R2_LLM_AUTHORED_GENERATION_MODE
-                ),
+                authored_mode=authored_mode,
+                behavior_plan=behavior_plan,
             ),
         }
 
@@ -1775,6 +1806,9 @@ class Orchestrator:
             model_text,
             self._active_ag_generation_plan["specs"],
             system_package=system_package,
+            behavior_plan=self._active_ag_generation_plan.get(
+                "behavior_plan"
+            ),
         )
         self.last_ag_binding_report = result.report.to_dict()
         return result.model_text
@@ -2186,8 +2220,8 @@ class Orchestrator:
         terminal_model.metadata["terminal_consistency"] = consistency
         return terminal_model, final_score, sim_result, consistency
 
-    @staticmethod
     def _enforce_terminal_generation_plan(
+        self,
         model: SysMLModel,
         model_text: str,
     ) -> tuple[str, Optional[Dict[str, Any]]]:
@@ -2203,6 +2237,35 @@ class Orchestrator:
 
         plan = ModelGenerationPlan.from_dict(raw_plan)
         planned_text, conformance = apply_generation_plan(model_text, plan)
+        if plan.behavior_obligations:
+            from ..prototyping.ag_behavior_plan import (
+                BehaviorObligationPlan,
+                check_owned_behavior_obligation_conformance,
+                materialize_behavior_obligations,
+            )
+
+            behavior_plan = BehaviorObligationPlan(
+                plan.behavior_obligations
+            )
+            canonical_fragment, _step4_gate = (
+                materialize_behavior_obligations("", behavior_plan)
+            )
+            planned_text, restored = (
+                self.design_agent._inject_missing_ag_obligation_defs(
+                    planned_text,
+                    canonical_fragment,
+                    behavior_plan,
+                )
+            )
+            behavior_gate = (
+                check_owned_behavior_obligation_conformance(
+                    planned_text, behavior_plan
+                )
+            )
+            conformance["behavior_obligation_conformance"] = behavior_gate
+            conformance["restored_behavior_elements"] = restored
+            if behavior_gate["status"] != "PASS":
+                conformance["status"] = "FAIL"
         model.metadata["generation_plan_conformance"] = conformance
         return planned_text, conformance
 
@@ -5272,7 +5335,15 @@ class Orchestrator:
             # ── Simulation inner loop ── re-run simulation on the accepted
             # candidate and attempt up to MAX_SIM_INNER_ITERS targeted fixes
             # before handing the model back to the outer loop.
-            return self._sim_refinement_loop(candidate, requirements, max_iters=3)
+            refined = self._sim_refinement_loop(
+                candidate, requirements, max_iters=3
+            )
+            if getattr(refined, "metadata", None) is None:
+                refined.metadata = {}
+            refined.metadata["_accepted_refinement_rule_score"] = (
+                candidate_eval.weighted_total
+            )
+            return refined
         print(
             f"  ⚠ Refinement regression detected "
             f"(rule: {rule_score:.3f} → {candidate_eval.weighted_total:.3f}), "
@@ -5584,6 +5655,23 @@ class Orchestrator:
                     dse_best_config=dse_best_config,
                     connectivity_floor=connectivity_floor,
                 )
+                accepted_score = (
+                    getattr(current_model, "metadata", {}) or {}
+                ).pop("_accepted_refinement_rule_score", None)
+                if (
+                    isinstance(accepted_score, (int, float))
+                    and float(accepted_score) > best_score
+                ):
+                    # The last allowed iteration has no next pass in which to
+                    # promote an accepted candidate. Record it immediately,
+                    # paired with simulation from the exact returned text.
+                    candidate_sim = self._run_simulation(
+                        get_sysml_text(current_model), current_model.name
+                    )
+                    best_model = current_model
+                    best_score = float(accepted_score)
+                    best_sim_result = candidate_sim
+                    last_sim_result = candidate_sim
 
         return best_model, best_score, best_sim_result or last_sim_result
 

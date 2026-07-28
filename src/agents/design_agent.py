@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from .base_agent import AgentResult, BaseAgent
 from ..llm.chain_of_thought import ChainOfThoughtPrompter
@@ -495,6 +495,12 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 context=context,
                 verbose=verbose,
                 platform_profile=task.get("platform_profile"),
+                semantic_guidance_by_step=task.get(
+                    "semantic_guidance_by_step"
+                ),
+                ag_behavior_obligation_plan=task.get(
+                    "ag_behavior_obligation_plan"
+                ),
             )
 
         if not cot_result.extracted_sysml:
@@ -647,6 +653,12 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             )
 
         untraced = self._apply_requirement_traceability(model, requirements)
+        for key in (
+            "whole_model_generation_plan",
+            "generation_plan_conformance",
+        ):
+            if generation_metadata.get(key) is not None:
+                model.metadata[key] = generation_metadata[key]
 
         result = AgentResult(
             agent_name=self.name,
@@ -672,17 +684,18 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         system_name: str,
         requirements: List[str],
         context: str,
+        semantic_guidance: str,
         metadata: Dict[str, Any],
         verbose: bool,
     ):
-        """Step 1: architecture decomposition (plain structured text).
+        """Step 1: architecture decomposition into a typed whole-model plan.
 
         RAG is intentionally skipped: the corpus is exclusively `.sysml`
         grammar examples and RAGRetriever wraps every retrieved snippet in
         ```sysml fences, which (1) is the wrong knowledge type for
         decomposition planning — we want domain subsystem patterns, not SysML
         syntax; (2) primes the LLM to emit code blocks against this step's
-        "plain text only" instruction; and (3) wastes tokens — Steps 2-4
+        JSON-only instruction; and (3) wastes tokens — Steps 2-4
         retrieve targeted SysML examples for their own tasks.  The fence-strip
         guard below is retained as defence-in-depth.
         Returns ``(step1_result, architecture_text)``.
@@ -690,32 +703,73 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         if verbose:
             print(f"\n  [DEBUG] Step 1 — RAG skipped (corpus is SysML-only, "
                   f"would prime LLM to emit code blocks)")
+        planning_context = "\n\n".join(
+            item for item in (context, semantic_guidance) if item
+        )
         step1 = self.cot.decompose_architecture(
             system_name=system_name,
             requirements=requirements,
-            context=context,   # caller-supplied context only, no RAG
+            context=planning_context,
         )
-        architecture_text = step1.final_answer
-        metadata["step1_rag_skipped"] = True
+        # Deferred because src.prototyping.__init__ imports pipeline, which
+        # imports this agent through the orchestrator.
+        from ..prototyping.generation_plan import ModelGenerationPlan
 
-        # Guard: Step 1 must produce plain text only — no SysML.
-        # If the LLM appended a ```sysml (or generic ```) code block, strip
-        # everything from the first fence onward.  The structured component
-        # list always precedes any code block, so this keeps the useful part.
-        _fence_pos = architecture_text.find("```")
-        if _fence_pos != -1:
-            architecture_text = architecture_text[:_fence_pos].rstrip()
-            metadata["degraded_steps"].append(
-                "step1_architecture: SysML code block found and stripped"
+        metadata["step1_rag_skipped"] = True
+        if isinstance(step1.extracted_json, Mapping):
+            generation_plan = ModelGenerationPlan.from_payload(
+                step1.extracted_json,
+                requirements=requirements,
+                source="LLM_TYPED_JSON",
             )
-            if verbose:
-                print(
-                    f"\n  [DEBUG] Step 1 — Stripped trailing SysML code block "
-                    f"(kept {len(architecture_text)} chars of plain-text plan)"
+            if generation_plan.status != "PASS":
+                retry_context = "\n\n".join(item for item in (
+                    planning_context,
+                    "Your previous typed whole-model plan was rejected. Return a "
+                    "complete replacement JSON object that fixes every issue:\n"
+                    + "\n".join(f"- {issue}" for issue in generation_plan.issues),
+                ) if item)
+                step1 = self.cot.decompose_architecture(
+                    system_name=system_name,
+                    requirements=requirements,
+                    context=retry_context,
                 )
+                metadata["step1_plan_retries"] = 1
+                if isinstance(step1.extracted_json, Mapping):
+                    generation_plan = ModelGenerationPlan.from_payload(
+                        step1.extracted_json,
+                        requirements=requirements,
+                        source="LLM_TYPED_JSON_RETRY",
+                    )
+                if generation_plan.status != "PASS":
+                    raise RuntimeError(
+                        "Typed whole-model generation plan remained invalid after "
+                        "one bounded retry: "
+                        + "; ".join(generation_plan.issues)
+                    )
+        else:
+            # Compatibility for archived providers/test doubles.  New provider
+            # calls are instructed to return the typed JSON schema above.
+            legacy_text = step1.final_answer
+            _fence_pos = legacy_text.find("```")
+            if _fence_pos != -1:
+                legacy_text = legacy_text[:_fence_pos].rstrip()
+            generation_plan = ModelGenerationPlan.from_legacy_text(
+                legacy_text,
+                requirements=requirements,
+            )
+            metadata["degraded_steps"].append(
+                "step1_architecture: typed JSON absent; legacy plan parser used"
+            )
+        architecture_text = generation_plan.render_for_prompt()
+        metadata["whole_model_generation_plan"] = generation_plan.to_dict()
 
         metadata["generation_steps_completed"] = 1
         metadata["architecture_length"] = len(architecture_text)
+        if semantic_guidance:
+            metadata.setdefault("semantic_guidance_by_step", {})[
+                "architecture"
+            ] = semantic_guidance
 
         if verbose:
             print(f"\n  {'─'*60}")
@@ -730,6 +784,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         architecture_text: str,
         requirements: List[str],
         step_context,
+        semantic_guidance: str,
         metadata: Dict[str, Any],
         verbose: bool,
     ):
@@ -740,7 +795,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         Returns ``(step2_result, parts_fragment)``.
         """
         ctx2 = step_context("parts")
-        semantic_guidance = ""
         step2 = self.cot.generate_part_definitions(
             system_name=system_name,
             architecture=architecture_text,
@@ -799,6 +853,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         parts_fragment: str,
         requirements: List[str],
         step_context,
+        semantic_guidance: str,
         metadata: Dict[str, Any],
         verbose: bool,
     ):
@@ -807,7 +862,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         when no code block was extracted (degraded, not fatal)."""
         intf_reqs = [r for r in requirements if "-INTF-" in r]
         ctx3 = step_context("interfaces")
-        semantic_guidance = ""
         step3 = self.cot.generate_interfaces_and_flows(
             system_name=system_name,
             architecture=architecture_text,
@@ -848,8 +902,10 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         requirements: List[str],
         platform_profile,
         step_context,
+        contract_pattern_guidance: str,
         metadata: Dict[str, Any],
         verbose: bool,
+        behavior_obligation_plan=None,
     ):
         """Step 4: behavioral model — runs only when FUNC/SAFE/OPER
         requirements exist (the RAG call is skipped entirely otherwise).
@@ -868,7 +924,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             return None, ""
 
         ctx4 = step_context("behavior")
-        contract_pattern_guidance = ""
         step4 = self.cot.generate_behavior(
             system_name=system_name,
             architecture=architecture_text,
@@ -885,8 +940,27 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             metadata["degraded_steps"].append(
                 "step4_behavior: no SysML code block extracted, falling back to raw text"
             )
+        if behavior_obligation_plan is not None:
+            from ..prototyping.ag_behavior_plan import (
+                materialize_behavior_obligations,
+            )
+
+            behavior_fragment, conformance = materialize_behavior_obligations(
+                behavior_fragment, behavior_obligation_plan
+            )
+            metadata["ag_behavior_obligation_conformance"] = conformance
+            if conformance["status"] != "PASS":
+                raise RuntimeError(
+                    "[A_G_BEHAVIOR_GENERATION_ERROR] Step 4 failed the frozen "
+                    "behavior obligation gate: "
+                    + "; ".join(conformance["issues"])
+                )
         metadata["generation_steps_completed"] = 4
         metadata["behavior_fragment_length"] = len(behavior_fragment)
+        if contract_pattern_guidance:
+            metadata.setdefault("semantic_guidance_by_step", {})[
+                "behavior"
+            ] = contract_pattern_guidance
 
         if verbose:
             print(f"\n  {'─'*60}")
@@ -901,6 +975,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         parts_fragment: str,
         interfaces_fragment: str,
         behavior_fragment: str,
+        generation_plan: Optional[ModelGenerationPlan],
         metadata: Dict[str, Any],
         verbose: bool,
     ):
@@ -954,6 +1029,50 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
 
+        # --- enforce exact owner-qualified A/G state/invariant realizations ---
+        if (
+            behavior_fragment
+            and step5.extracted_sysml
+            and generation_plan is not None
+            and generation_plan.behavior_obligations
+        ):
+            from ..prototyping.ag_behavior_plan import (
+                BehaviorObligationPlan,
+                check_owned_behavior_obligation_conformance,
+            )
+
+            owned_behavior_plan = BehaviorObligationPlan(
+                generation_plan.behavior_obligations
+            )
+            assembled_text, injected_obligations = (
+                self._inject_missing_ag_obligation_defs(
+                    step5.extracted_sysml,
+                    behavior_fragment,
+                    owned_behavior_plan,
+                )
+            )
+            if injected_obligations:
+                metadata["injected_ag_behavior_obligations"] = (
+                    injected_obligations
+                )
+                step5 = dataclasses.replace(
+                    step5, extracted_sysml=assembled_text
+                )
+            terminal_behavior_gate = (
+                check_owned_behavior_obligation_conformance(
+                    assembled_text, owned_behavior_plan
+                )
+            )
+            metadata["ag_owned_behavior_conformance"] = (
+                terminal_behavior_gate
+            )
+            if terminal_behavior_gate["status"] != "PASS":
+                raise RuntimeError(
+                    "[A_G_ASSEMBLY_ERROR] assembled model changed or dropped "
+                    "a frozen behavior obligation: "
+                    + "; ".join(terminal_behavior_gate["issues"])
+                )
+
         # --- inject any item defs / typed port defs the LLM dropped ---
         if interfaces_fragment and step5.extracted_sysml:
             assembled_text, injected_items = self._inject_missing_item_defs(
@@ -1001,6 +1120,27 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=normalised)
 
+        # --- materialise the typed connection plan deterministically ---
+        if step5.extracted_sysml and generation_plan is not None:
+            from ..prototyping.generation_plan import apply_generation_plan
+
+            planned_text, conformance = apply_generation_plan(
+                step5.extracted_sysml, generation_plan
+            )
+            metadata["generation_plan_conformance"] = conformance
+            if planned_text != step5.extracted_sysml:
+                step5 = dataclasses.replace(
+                    step5, extracted_sysml=planned_text
+                )
+            if verbose:
+                print(
+                    "\n  [DEBUG] Step 5 — Typed plan conformance: "
+                    f"{conformance['status']}; "
+                    f"{conformance['realized_connection_count']}/"
+                    f"{conformance['planned_connection_count']} planned "
+                    "connections realized"
+                )
+
         # --- connect semantic validation ---
         if step5.extracted_sysml:
             suspicious = self._validate_connections(step5.extracted_sysml)
@@ -1019,10 +1159,12 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         context: str = "",
         verbose: bool = False,
         platform_profile=None,
+        semantic_guidance_by_step: Optional[Mapping[str, str]] = None,
+        ag_behavior_obligation_plan: Optional[Mapping[str, Any]] = None,
     ) -> Tuple[Any, Dict[str, Any]]:
         """
-        4-step generation pipeline:
-          1. Architecture Decomposition  (structured text plan)
+        5-step generation pipeline:
+          1. Architecture Decomposition  (typed whole-model JSON plan)
           2. Part Definitions            (SysML structural fragment)
           3. Behavioral Model            (SysML behavioral fragment, FUNC/SAFE only)
           4. Integration / Assembly      (complete SysML package)
@@ -1038,6 +1180,16 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             "generation_steps_completed": 0,
             "degraded_steps": [],
         }
+        guidance = {
+            str(key): str(value)
+            for key, value in dict(semantic_guidance_by_step or {}).items()
+            if str(value).strip()
+        }
+        from ..prototyping.ag_behavior_plan import BehaviorObligationPlan
+        from ..prototyping.generation_plan import (
+            ModelGenerationPlan,
+            attach_ag_behavior_obligations,
+        )
 
         # Helper: fetch RAG context for a step and merge with any caller-supplied context.
         def _step_context(step: str) -> str:
@@ -1054,31 +1206,55 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
 
         # --- Step 1: Architecture Decomposition ---
         step1, architecture_text = self._step1_architecture(
-            system_name, requirements, context, metadata, verbose
+            system_name, requirements, context,
+            guidance.get("architecture", ""), metadata, verbose,
         )
+        generation_plan = ModelGenerationPlan.from_dict(
+            metadata.get("whole_model_generation_plan")
+        )
+        behavior_plan = (
+            BehaviorObligationPlan.from_dict(ag_behavior_obligation_plan)
+            if ag_behavior_obligation_plan is not None else None
+        )
+        if behavior_plan is not None:
+            generation_plan = attach_ag_behavior_obligations(
+                generation_plan, behavior_plan
+            )
+            metadata["whole_model_generation_plan"] = (
+                generation_plan.to_dict()
+            )
+            metadata["ag_behavior_obligation_plan"] = behavior_plan.to_dict()
+            architecture_text = generation_plan.render_for_prompt()
+            if generation_plan.status != "PASS":
+                raise RuntimeError(
+                    "[A_G_MODEL_PLAN_ERROR] whole-model plan conflicts with "
+                    "the frozen A/G behavior obligations: "
+                    + "; ".join(generation_plan.issues)
+                )
 
         # --- Step 2: Part Definitions (structural fragment) ---
         step2, parts_fragment = self._step2_parts(
             system_name, architecture_text, requirements, _step_context,
-            metadata, verbose,
+            guidance.get("parts", ""), metadata, verbose,
         )
 
         # --- Step 3: Interface & Flow Definitions (item def / typed port def) ---
         step3, interfaces_fragment = self._step3_interfaces(
             system_name, architecture_text, parts_fragment, requirements,
-            _step_context, metadata, verbose,
+            _step_context, guidance.get("interfaces", ""), metadata, verbose,
         )
 
         # --- Step 4: Behavioral Model (only if FUNC or SAFE requirements exist) ---
         step4, behavior_fragment = self._step4_behavior(
             system_name, architecture_text, parts_fragment, requirements,
-            platform_profile, _step_context, metadata, verbose,
+            platform_profile, _step_context, guidance.get("behavior", ""),
+            metadata, verbose, behavior_plan,
         )
 
         # --- Step 5: Integration / Assembly ---
         # No separate RAG call for assembly — the prompt focuses on wiring together
         # the fragments already produced, not on new SysML constructs.
-        assembly_guidance = ""
+        assembly_guidance = guidance.get("assembly", "")
         step5 = self.cot.assemble_model(
             system_name=system_name,
             parts_fragment=parts_fragment,
@@ -1103,7 +1279,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         # --- Post-assembly: deterministic repair chain ---
         step5 = self._postprocess_assembly(
             step5, parts_fragment, interfaces_fragment, behavior_fragment,
-            metadata, verbose,
+            generation_plan, metadata, verbose,
         )
 
         if verbose:
@@ -1400,6 +1576,184 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             injected_names.append(name)
 
         return result, injected_names
+
+    @classmethod
+    def _inject_missing_ag_obligation_defs(
+        cls,
+        assembled: str,
+        behavior_fragment: str,
+        behavior_plan,
+    ) -> Tuple[str, List[str]]:
+        """Restore each frozen realization into its exact owning part.
+
+        Unlike the legacy state safety net, this check is owner-qualified and
+        also supports ``assert constraint`` invariant realizations.
+        """
+        result = str(assembled)
+        injected: List[str] = []
+        from ..prototyping.ag_behavior_plan import (
+            BehaviorObligationPlan,
+            check_behavior_obligation_conformance,
+        )
+        trigger_types = sorted({
+            transition.trigger
+            for obligation in behavior_plan.obligations
+            for transition in obligation.transitions
+            if transition.trigger and transition.trigger != "continuous"
+        })
+        missing_trigger_types = [
+            trigger for trigger in trigger_types
+            if re.search(
+                rf"\battribute\s+def\s+{re.escape(trigger)}\b", result
+            ) is None
+        ]
+        if missing_trigger_types:
+            package_match = re.search(r"\bpackage\s+\w+\s*\{", result)
+            if package_match is not None:
+                package_open = result.find("{", package_match.start())
+                declarations = "".join(
+                    f"\n    attribute def {trigger};"
+                    for trigger in missing_trigger_types
+                )
+                result = (
+                    result[:package_open + 1]
+                    + declarations
+                    + result[package_open + 1:]
+                )
+                injected.extend(
+                    f"signal::{trigger}" for trigger in missing_trigger_types
+                )
+        for obligation in behavior_plan.obligations:
+            keyword = (
+                r"assert\s+constraint"
+                if obligation.realization_kind == "INVARIANT"
+                else r"state\s+def"
+            )
+            source_match = re.search(
+                rf"\b{keyword}\s+"
+                rf"{re.escape(obligation.stable_behavior_id)}\s*\{{",
+                behavior_fragment,
+            )
+            if source_match is None:
+                continue
+            source_open = behavior_fragment.find("{", source_match.start())
+            source_close = find_block_end(behavior_fragment, source_open)
+            if source_close == -1:
+                continue
+            source_block = behavior_fragment[
+                source_match.start():source_close + 1
+            ]
+
+            owner_match = re.search(
+                rf"\bpart\s+def\s+"
+                rf"{re.escape(obligation.owner_def)}\s*\{{",
+                result,
+            )
+            if owner_match is None:
+                continue
+            owner_open = result.find("{", owner_match.start())
+            owner_close = find_block_end(result, owner_open)
+            if owner_close == -1:
+                continue
+            owner_block = result[owner_open:owner_close + 1]
+            realization_match = re.search(
+                rf"\b{keyword}\s+"
+                rf"{re.escape(obligation.stable_behavior_id)}\s*\{{",
+                owner_block,
+            )
+            realization_present = realization_match is not None
+            if realization_match is not None:
+                local_open = owner_block.find(
+                    "{", realization_match.start()
+                )
+                local_close = find_block_end(owner_block, local_open)
+                existing_block = (
+                    owner_block[
+                        realization_match.start():local_close + 1
+                    ]
+                    if local_close != -1 else ""
+                )
+                conformance = (
+                    check_behavior_obligation_conformance(
+                        existing_block,
+                        BehaviorObligationPlan((obligation,)),
+                    )
+                    if local_close != -1 else {"status": "FAIL"}
+                )
+                if (
+                    local_close != -1
+                    and conformance["status"] != "PASS"
+                ):
+                    absolute_start = (
+                        owner_open + realization_match.start()
+                    )
+                    absolute_end = owner_open + local_close + 1
+                    result = (
+                        result[:absolute_start]
+                        + source_block
+                        + result[absolute_end:]
+                    )
+                    injected.append(
+                        f"replaced::{obligation.owner_def}::"
+                        f"{obligation.stable_behavior_id}"
+                    )
+                    owner_match = re.search(
+                        rf"\bpart\s+def\s+"
+                        rf"{re.escape(obligation.owner_def)}\s*\{{",
+                        result,
+                    )
+                    owner_open = result.find(
+                        "{", owner_match.start()
+                    )
+                    owner_close = find_block_end(result, owner_open)
+                    owner_block = result[owner_open:owner_close + 1]
+                    realization_present = True
+
+            concepts = tuple(dict.fromkeys(
+                (*obligation.assumptions, *obligation.guarantees)
+            ))
+            missing_concepts = [
+                concept for concept in concepts
+                if re.fullmatch(r"[A-Za-z_]\w*", concept)
+                and re.search(
+                    rf"\battribute\s+{re.escape(concept)}\b", owner_block
+                ) is None
+            ]
+            attribute_lines = "".join(
+                f"\n        attribute {concept} : Boolean;"
+                for concept in missing_concepts
+            )
+            if realization_present and not attribute_lines:
+                continue
+
+            indented = "\n".join(
+                "        " + line if line.strip() else line
+                for line in source_block.splitlines()
+            )
+            realization_lines = (
+                ""
+                if realization_present else
+                "\n        // (materialized from frozen A/G obligation)\n"
+                + indented
+            )
+            result = (
+                result[:owner_close]
+                + attribute_lines
+                + realization_lines
+                + "\n    "
+                + result[owner_close:]
+            )
+            if missing_concepts:
+                injected.extend(
+                    f"{obligation.owner_def}::{concept}"
+                    for concept in missing_concepts
+                )
+            if not realization_present:
+                injected.append(
+                    f"{obligation.owner_def}::"
+                    f"{obligation.stable_behavior_id}"
+                )
+        return result, injected
 
     # ──────────────────────────────────────────────────────────────────────
     # Item-def / port-def injection (Step 3 safety net)

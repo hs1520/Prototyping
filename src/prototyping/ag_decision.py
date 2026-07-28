@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .ag_chains import (
@@ -33,6 +34,7 @@ from .ag_chains import (
     AGInvariantSpec,
     AGPrioritySpec,
 )
+from ..utils.sysml_text_utils import find_block_end
 
 #: Invariant source kinds. Whether an invariant is stated by the stakeholder or
 #: derived by the designer changes the evaluator's denominators, so it is a
@@ -49,6 +51,93 @@ KNOWN_PATTERNS = (
 
 class DecisionError(ValueError):
     """The decisions are missing, malformed, or internally inconsistent."""
+
+
+class DecisionFailureDisposition(str, Enum):
+    """What the bounded generator may scientifically do after validation fails."""
+
+    RETRYABLE_VALIDATION_ERROR = "RETRYABLE_VALIDATION_ERROR"
+    NEEDS_ARCHITECTURE_INPUT = "NEEDS_ARCHITECTURE_INPUT"
+
+
+class ArchitectureInputRequired(RuntimeError):
+    """The decision cannot be completed without an unpublished architecture fact."""
+
+    def __init__(self, decision_error: DecisionError):
+        self.decision_error = decision_error
+        super().__init__(str(decision_error))
+
+
+def classify_decision_failure(
+    error: DecisionError | str,
+) -> DecisionFailureDisposition:
+    """Classify a validator failure without weakening validation.
+
+    Most failures are repairs of the model's own JSON or consistency choices and
+    can be retried using the already-published boundary. A singleton timed
+    response set is different: the stakeholder requirement and architecture
+    boundary do not enumerate the competing safety responses. Asking the model to
+    add a second member would therefore reward invention (the measured
+    ``OTHER_RESPONSE`` failure), not repair.
+
+    Keep this intentionally narrow. New errors remain retryable until evidence
+    establishes that they require a fact absent from the supplied inputs.
+    """
+    if str(error) in {
+        "priority.members needs at least two responses",
+        "priority response catalog has fewer than two provenance-backed responses",
+    }:
+        return DecisionFailureDisposition.NEEDS_ARCHITECTURE_INPUT
+    return DecisionFailureDisposition.RETRYABLE_VALIDATION_ERROR
+
+
+def extract_runtime_response_catalog(model_text: str) -> Dict[str, Any]:
+    """Extract selectable safety responses from committed arbiter behavior.
+
+    The catalog is gold-blind: entries are calls made by state entry actions in an
+    existing state definition whose role is arbitration. A port, Boolean
+    guarantee, or invented enum member is not a response merely because its name
+    sounds plausible. This keeps the response vocabulary tied to executable
+    design elements already present in the generated model.
+    """
+    entries: List[Dict[str, str]] = []
+    for definition in re.finditer(
+        r"\bstate\s+def\s+([A-Za-z_]\w*Arbiter\w*)\s*\{",
+        model_text,
+        re.IGNORECASE,
+    ):
+        outer_brace = model_text.index("{", definition.start())
+        outer_end = find_block_end(model_text, outer_brace)
+        if outer_end == -1:
+            continue
+        body = model_text[outer_brace + 1:outer_end]
+        for state in re.finditer(r"\bstate\s+([A-Za-z_]\w*)\s*\{", body):
+            state_brace = body.index("{", state.start())
+            state_end = find_block_end(body, state_brace)
+            if state_end == -1:
+                continue
+            state_body = body[state_brace + 1:state_end]
+            for action in re.finditer(
+                r"\bentry\s+action\s+([A-Za-z_]\w*)\s*:\s*"
+                r"([A-Za-z_]\w*)\s*;",
+                state_body,
+            ):
+                entries.append({
+                    "response_id": action.group(2),
+                    "source_kind": "EXISTING_MODEL_BEHAVIOR",
+                    "source_id": (
+                        f"{definition.group(1)}.{state.group(1)}."
+                        f"{action.group(1)}"
+                    ),
+                })
+    deduplicated = {
+        item["response_id"]: item for item in entries
+    }
+    return {
+        "artifact_role": "RUNTIME_RESPONSE_CATALOG",
+        "source": "COMMITTED_SYSML_BEHAVIOR",
+        "entries": list(deduplicated.values()),
+    }
 
 
 def extract_decisions(raw: str) -> Dict[str, Any]:
@@ -391,6 +480,27 @@ def validate_decisions(
             raise DecisionError("a timed pattern needs a priority decision")
         members = [str(item) for item in priority.get("members", ())]
         selected = str(priority.get("selected_response") or "")
+        catalog = boundary.get("response_catalog")
+        if isinstance(catalog, Mapping):
+            catalog_entries = [
+                item for item in (catalog.get("entries") or ())
+                if isinstance(item, Mapping) and item.get("response_id")
+            ]
+            catalog_members = {
+                str(item["response_id"]) for item in catalog_entries
+            }
+            if len(catalog_members) < 2:
+                raise DecisionError(
+                    "priority response catalog has fewer than two "
+                    "provenance-backed responses"
+                )
+            unknown = sorted(set(members) - catalog_members)
+            omitted = sorted(catalog_members - set(members))
+            if unknown or omitted:
+                raise DecisionError(
+                    "priority.members must exactly match the provenance-backed "
+                    f"response catalog; unknown={unknown}, omitted={omitted}"
+                )
         if len(members) < 2:
             raise DecisionError("priority.members needs at least two responses")
         if selected not in members:
@@ -556,6 +666,18 @@ def build_spec_from_decisions(
     if isinstance(decided_priority, Mapping):
         members = tuple(str(item) for item in decided_priority.get("members", ()))
         selected = str(decided_priority.get("selected_response"))
+        catalog = boundary.get("response_catalog")
+        provenance_by_member = {
+            str(item.get("response_id")): (
+                str(item.get("source_kind") or ""),
+                str(item.get("source_id") or ""),
+            )
+            for item in (
+                catalog.get("entries", ())
+                if isinstance(catalog, Mapping) else ()
+            )
+            if isinstance(item, Mapping) and item.get("response_id")
+        }
         priority = AGPrioritySpec(
             response_set_id=_identifier(
                 decided_priority.get("response_set_id") or "RESPONSE_SET_V1",
@@ -571,6 +693,11 @@ def build_spec_from_decisions(
             selected_response=selected,
             source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",
             source_id=f"{requirement}_PRIORITY",
+            member_provenance=tuple(
+                (member, *provenance_by_member[member])
+                for member in members
+                if member in provenance_by_member
+            ),
         )
 
     deadline = decisions.get("deadline_seconds")

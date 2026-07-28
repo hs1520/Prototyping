@@ -102,8 +102,13 @@ def test_r2_raw_gate_rejects_a_broken_deterministic_package(monkeypatch):
     )
     orch = Orchestrator(_NoCallLLM(), revised_experiment_arm="R2-BBAG")
 
-    with pytest.raises(RuntimeError, match="A/G package failed the raw syntax gate"):
+    with pytest.raises(
+        RuntimeError, match="A/G package failed the raw syntax gate"
+    ) as caught:
         orch._apply_ag_contract_layer(_BASE_MODEL, _REQS)
+    message = str(caught.value)
+    assert "diagnostics:" in message
+    assert "parser L" in message
 
 
 def test_a_warning_on_the_base_model_does_not_fail_the_arm_closed(monkeypatch):
@@ -154,6 +159,10 @@ def test_emitted_chain_round_trips_to_a_checker_pass():
     } == {"parachuteDeploymentCommand", "parachuteResponseSelected"}
     prediction = report.to_dict()["graph"]
     assert prediction["timing"]["origin"] == "criticalPropulsionFailureDetected"
+    assert {
+        item["response"]
+        for item in prediction["priority"]["member_provenance"]
+    } == set(REQ_SAFE_005_CHAIN.priority.members)
     assert prediction["priority"]["arbitration_topology"][
         "parachute_transition_reachable"
     ] is True
@@ -168,6 +177,79 @@ def test_emitted_chain_round_trips_to_a_checker_pass():
     assert unguarded_prediction["priority"]["arbitration_topology"][
         "parachute_transition_reachable"
     ] is False
+
+
+def test_priority_topology_is_structural_not_bound_to_reviewed_element_names():
+    """Equivalent authored names must not become a checker false positive."""
+    sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
+    authored_names = (
+        sysml
+        .replace(
+            "CriticalPropulsionFailureDetectedSignal",
+            "criticalPropulsionFailureDetectedSignal",
+        )
+        .replace("parachuteDeploymentSelected", "ParachuteDeployment")
+        .replace(
+            "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand",
+            "setparachuteResponseSelected",
+        )
+        .replace(
+            "then CONTROLLED_BATTERY_LANDING;",
+            "then ControlledBatteryLanding;",
+        )
+        .replace(
+            "state CONTROLLED_BATTERY_LANDING;",
+            "state ControlledBatteryLanding;",
+        )
+    )
+    topology = extract_ag_graph(authored_names).priority[
+        "arbitration_topology"
+    ]
+
+    assert topology["parachute_transition_reachable"] is True
+    assert topology["selection_action_connected"] is True
+    assert {
+        item["response"]
+        for item in topology["competing_transition_guards"]
+    } >= {"CONTROLLED_BATTERY_LANDING"}
+
+
+def test_wiring_is_checked_independently_of_an_incomplete_response_vocabulary():
+    """A blocked enum-vocabulary fault must not manufacture a wiring fault."""
+    sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
+    bare_enum_literals = sysml
+    for member in REQ_SAFE_005_CHAIN.priority.members:
+        bare_enum_literals = bare_enum_literals.replace(
+            f"enum {member};", f"{member};"
+        )
+    graph = extract_ag_graph(bare_enum_literals)
+    topology = graph.priority["arbitration_topology"]
+    report = check_ag_graph(graph)
+    priority = next(
+        item for item in report.errors()
+        if item.code == "PRIORITY_TOPOLOGY_INCOMPLETE"
+    )
+    unsatisfied = set(priority.provenance["unsatisfied_obligations"])
+
+    assert graph.priority["members"] == []
+    assert topology["parachute_transition_reachable"] is True
+    assert topology["selection_action_connected"] is True
+    assert "response_set_members" in unsatisfied
+    assert "selected_transition_reachable" not in unsatisfied
+    assert "selection_action_connected" not in unsatisfied
+
+
+def test_priority_extractor_holds_no_reviewed_transition_or_action_names():
+    import inspect
+    from src.prototyping import ag_extractor
+
+    source = inspect.getsource(ag_extractor._extract_priority).lower()
+    for reviewed_name in (
+        "criticalpropulsionfailuredetectedsignal",
+        "parachutedeploymentselected",
+        "parachutedeploymentcommand",
+    ):
+        assert reviewed_name not in source
 
 
 def test_runtime_checker_fails_closed_when_priority_semantics_are_removed():
@@ -195,6 +277,26 @@ def test_runtime_checker_fails_closed_when_priority_semantics_are_removed():
     assert "PRIORITY_TOPOLOGY_INCOMPLETE" in {
         diagnostic.code for diagnostic in report.diagnostics
     }
+
+
+def test_current_checker_requires_priority_provenance_but_archive_replay_can_opt_out():
+    sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
+    without_provenance = "\n".join(
+        line for line in sysml.splitlines()
+        if "response_member=" not in line
+    )
+    graph = extract_ag_graph(without_provenance, revision=1)
+    strict = check_ag_graph(graph)
+    assert strict.verdict == "FAIL"
+    assert any(
+        "response_member_provenance"
+        in diagnostic.provenance.get("unsatisfied_obligations", ())
+        for diagnostic in strict.diagnostics
+    )
+    historical = check_ag_graph(
+        graph, require_priority_member_provenance=False
+    )
+    assert historical.verdict == "PASS"
 
 
 @pytest.mark.parametrize(

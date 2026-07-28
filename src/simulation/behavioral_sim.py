@@ -828,8 +828,28 @@ def _run_accept_nominal_scenario(
         return r
 
     seq = [{"__accept__": None}] * 2
-    for cmd in cmds:
-        seq += [{"__accept__": cmd}, {"__accept__": None}]
+    source = sm.initial_state
+    for cmd, target in longest_path:
+        command_input: Dict[str, Any] = {"__accept__": cmd}
+        transition = next(
+            (
+                item for item in sm.transitions
+                if (
+                    not item.is_initial
+                    and item.source == source
+                    and item.target == target
+                    and item.accept_trigger == cmd
+                )
+            ),
+            None,
+        )
+        for guard in transition.guards if transition is not None else ():
+            if guard.kind == "bool_true":
+                command_input[guard.attribute] = True
+            elif guard.kind == "bool_false":
+                command_input[guard.attribute] = False
+        seq += [command_input, {"__accept__": None}]
+        source = target
 
     inst = StateMachineInstance(sm)
     for t, v in enumerate(seq):
@@ -904,7 +924,15 @@ def _run_accept_emergency_scenario(
     seq = [{"__accept__": None}] * 2
     for cmd in nav_cmds:
         seq += [{"__accept__": cmd}, {"__accept__": None}]
-    seq += [{"__accept__": emrg_tr.accept_trigger}, {"__accept__": None}]
+    emergency_input: Dict[str, Any] = {
+        "__accept__": emrg_tr.accept_trigger
+    }
+    for guard in emrg_tr.guards:
+        if guard.kind == "bool_true":
+            emergency_input[guard.attribute] = True
+        elif guard.kind == "bool_false":
+            emergency_input[guard.attribute] = False
+    seq += [emergency_input, {"__accept__": None}]
     seq += [{"__accept__": None}] * 2
 
     inst = StateMachineInstance(sm)
@@ -947,9 +975,15 @@ def _run_accept_machine_scenarios(sm: StateMachineDef) -> List[BehavioralScenari
     graph = _build_nominal_multigraph(nominal_trs)
     longest_path = _longest_nominal_path(graph, sm.initial_state)
 
-    results: List[BehavioralScenarioResult] = [
-        _run_accept_nominal_scenario(sm, longest_path)
-    ]
+    # An accept machine may legitimately be emergency-only: a recovery mechanism
+    # remains in its safe initial state until a failsafe command arrives. State
+    # persistence is its nominal behaviour; inventing a self-loop merely to create
+    # a command-driven "nominal path" would make the model worse. Only require and
+    # execute a nominal scenario when the model actually declares a nominal
+    # transition. Emergency branches are still exercised individually below.
+    results: List[BehavioralScenarioResult] = []
+    if nominal_trs:
+        results.append(_run_accept_nominal_scenario(sm, longest_path))
     for emrg_tr in emergency_trs:
         results.append(
             _run_accept_emergency_scenario(sm, graph, longest_path, emrg_tr)

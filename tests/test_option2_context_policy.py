@@ -213,14 +213,13 @@ def test_the_archive_offered_no_context_failure_to_learn_from():
 def test_the_repair_slice_carries_what_an_omission_fault_needs():
     """§17 risk row "context selection omits a necessary dependency", measured.
 
-    The dependency-closed slicer closes over symbols the sliced elements
-    REFERENCE, which is the wrong direction for an omission fault: the element to
-    restore is absent, so nothing references it and the closure cannot reach it.
-    On a real committed model, deleting one transition leaves the injured state
-    machine in the slice and drops
-    `attribute def ParachuteDeploymentCommandSignal;` — the declaration the fix
-    has to name. An agent that cannot see it invents a signal name, which is an
-    undeclared reference: the failure class that cost the authored mode every seed.
+    The dependency-closed slicer normally closes over symbols the sliced elements
+    reference, which can run in the wrong direction for an omission fault. The
+    actionable trigger diagnostic now names complete-concept signal candidates,
+    so that name may itself pull an existing declaration into the base slice.
+    The invariant is not which of the two context builders found it; it is that
+    the final repair context always carries the declaration and contract facts
+    needed to restore the omitted edge.
 
     `ag_repair._ag_context_supplement` adds the two A/G facts the diagnostic
     implies — the contract being realized and the package's declared signals — and
@@ -269,9 +268,6 @@ def test_the_repair_slice_carries_what_an_omission_fault_needs():
 
     declaration = f"attribute def {signal};"
     assert declaration in injured, "the declaration still exists in the model"
-    assert declaration not in sliced.text, (
-        "if the closure already reached it this test no longer measures anything"
-    )
 
     supplemented = sliced.text + _ag_context_supplement(
         injured, str(failure.get("contract") or "")

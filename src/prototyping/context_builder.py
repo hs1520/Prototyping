@@ -422,10 +422,12 @@ class ContextBuilder:
                 or _contains_evaluator_only_material(record.payload)
             ):
                 raise ValueError("evaluator gold cannot enter a ContextEnvelope")
+            if record.topic == "design.ag_generation_plan":
+                continue
             if record.topic != "requirements.authoritative":
                 raise ValueError(
-                    "design requirements must come from the authoritative "
-                    "typed source publication"
+                    "design context must come from authoritative requirements "
+                    "or the frozen A/G generation-plan publication"
                 )
             requirements.extend(
                 str(item) for item in record.payload.get("requirements", ())

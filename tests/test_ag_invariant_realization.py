@@ -1,6 +1,7 @@
 import pytest
 
 from src.prototyping.ag_binding import bind_ag_contracts_to_model
+from src.prototyping.ag_assurance import check_safety_pattern_conformance
 from src.prototyping.ag_contracts import check_ag_graph
 from src.prototyping.ag_emitter import (
     AGAssumptionSpec,
@@ -91,6 +92,13 @@ def test_terminal_binder_binds_a_continuous_guarantee_to_real_constraint():
     )
     assert link["realization_kind"] == "INVARIANT"
     assert link["status"] == "PASS"
+    graph = extract_ag_graph(result.model_text)
+    pattern = check_safety_pattern_conformance(graph, report)
+    invariant_case = next(
+        item for item in pattern["cases"]
+        if item["contract"] == "PowerContract"
+    )
+    assert invariant_case["status"] == "PASS", invariant_case
 
 
 @pytest.mark.skipif(

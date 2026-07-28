@@ -11,17 +11,23 @@ from enum import Enum
 
 LEGACY_EXPERIMENT_NAMESPACE = "LEGACY_EXTERNAL_CONTRACT_V1"
 REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v1"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
-    "r2-bbag-deterministic-spec-emitter-v1"
+    "r2-bbag-whole-model-guided-deterministic-v3"
 )
-# LLM-authored A/G is a SEPARATE frozen intervention (design §15 line 1089): the
-# LLM authors the bounded A/G decomposition instead of the deterministic emitter,
-# so scoring against frozen gold becomes a real generation-accuracy measure rather
-# than round-trip fidelity. Its results must never be pooled with the deterministic
-# configuration — the readiness manifest binds a run's mode/version to its config.
+# LLM-authored A/G is a SEPARATE intervention (design §15): the LLM authors the
+# bounded A/G decomposition instead of the deterministic emitter. Version 7
+# freezes that decomposition before ordinary architecture/behavior generation;
+# its response vocabulary is therefore a design input implemented downstream,
+# rather than being inferred post-hoc from already-generated arbiter behavior.
+# It retains the fixed authoring and post-commit repair budgets.
+# The post-commit repair budget remains fixed and independently audited.
+# It must never be pooled with authored-v1/v2 or the deterministic mode.
 R2_LLM_AUTHORED_GENERATION_MODE = "LLM_AUTHORED_AG"
-R2_LLM_AUTHORED_INTERVENTION_VERSION = "r2-bbag-llm-authored-v1"
+R2_LLM_AUTHORED_INTERVENTION_VERSION = (
+    "r2-bbag-whole-model-guided-authored-v8"
+)
 
 # LLM-decided specs are a THIRD frozen intervention. The LLM emits the engineering
 # decisions — pattern, timing origin and apportionment, discharge wiring, response
@@ -32,7 +38,9 @@ R2_LLM_AUTHORED_INTERVENTION_VERSION = "r2-bbag-llm-authored-v1"
 # construction and only the decisions are judged. Separate frozen config; never
 # pooled with either other mode.
 R2_LLM_DECIDED_GENERATION_MODE = "LLM_DECIDED_SPEC"
-R2_LLM_DECIDED_INTERVENTION_VERSION = "r2-bbag-llm-decided-spec-v1"
+R2_LLM_DECIDED_INTERVENTION_VERSION = (
+    "r2-bbag-whole-model-guided-decided-v5"
+)
 
 R2_GENERATION_MODES = (
     R2_DETERMINISTIC_GENERATION_MODE,
@@ -123,6 +131,7 @@ def revised_arm_metadata(
         "configuration": arm.value,
         "implemented": arm.implemented,
         "evaluation_ready": arm.evaluation_ready,
+        "common_generation_pipeline_version": COMMON_GENERATION_PIPELINE_VERSION,
         "blackboard_context_intervention": arm.uses_blackboard,
         "semantic_assurance_intervention": arm is RevisedExperimentArm.SEMANTIC_ASSURANCE,
         "global_long_session_diagnostic": (

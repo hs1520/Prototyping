@@ -263,17 +263,48 @@ For each requirement category, identify which subsystems are responsible:
           (If REQ-OPER-001 is present, name the owning component and list its mode attribute
           e.g. "FlightController owns flightMode : FlightMode")
 
-Output a numbered component list. For each component write exactly:
-  <N>. <ComponentName> — <one-sentence primary responsibility>
-     Addresses: <comma-separated REQ IDs>
-     Ports needed: <comma-separated port names with direction (in/out/inout)>
-     Key attributes: <comma-separated attribute names with SI units>
+Return exactly one JSON object in a ```json block using this schema:
+{{
+  "components": [
+    {{
+      "name": "<PascalCase SysML identifier>",
+      "responsibility": "<one sentence>",
+      "requirements": ["REQ_CATEGORY_NNN"],
+      "ports": [
+        {{
+          "name": "<camelCase SysML identifier>",
+          "direction": "in|out|inout",
+          "type": "<shared PortDef identifier>",
+          "external": false
+        }}
+      ],
+      "attributes": [
+        {{"name": "<camelCase identifier>", "unit": "<SI unit>"}}
+      ]
+    }}
+  ],
+  "connections": [
+    {{
+      "source": {{"component": "<component name>", "port": "<out/inout port>"}},
+      "target": {{"component": "<component name>", "port": "<in/inout port>"}},
+      "item_type": "<the identical PortDef used by both endpoints>",
+      "requirements": ["REQ_CATEGORY_NNN"]
+    }}
+  ]
+}}
 
 Rules:
 - Component names MUST be PascalCase (no spaces, no hyphens).
-- Every REQ ID must appear in at least one "Addresses:" line.
-- Aim for 3–7 top-level components; avoid micro-splitting single responsibilities.
-- Do not write any SysML syntax yet — plain structured text only.
+- Every REQ ID must appear in at least one component's `requirements` array.
+- Aim for 3–12 top-level components; avoid micro-splitting single responsibilities.
+- Every non-external `in` port must have exactly one connection source.
+- Every non-external `out` port must have at least one connection consumer.
+- A connection's source/target port types must be identical.
+- Mark a port `external=true` only when it crosses the system boundary and
+  legitimately has no internal producer or consumer.
+- Include the causal signal paths needed by every FUNC, SAFE, OPER, and INTF
+  requirement, not only protocol-facing interfaces.
+- Do not write SysML syntax or prose outside the JSON block.
 - Safety interconnect ports (MANDATORY when these component types appear):
     • If a SafetyMonitor (or similar safety-enforcement component) is listed:
         – The main controller/autopilot component MUST include `in overrideCmd` in its port list.
@@ -1192,7 +1223,7 @@ class ChainOfThoughtPrompter:
         requirements: List[str],
         context: str = "",
     ) -> CoTResult:
-        """Step 1: Produce a structured component list (plain text, no SysML)."""
+        """Step 1: Produce a typed whole-model JSON generation plan."""
         req_text = "\n".join(f"  {r}" for r in requirements)
         context_block = (
             f"\nRelevant domain context:\n{context}\n"

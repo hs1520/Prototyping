@@ -80,6 +80,10 @@ class AGPrioritySpec:
     # "all other safety responses" and does not enumerate them.
     source_kind: str
     source_id: str
+    #: Per-member provenance: (response id, source kind, source element id).
+    #: Runtime-generated catalogs use EXISTING_MODEL_BEHAVIOR; reviewed specs may
+    #: retain their independently approved source for backward compatibility.
+    member_provenance: Tuple[Tuple[str, str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -127,6 +131,10 @@ def _sysml_identifier(value: str) -> str:
     if not token or token[0].isdigit():
         token = f"id_{token}"
     return token
+
+
+def _capitalise(value: str) -> str:
+    return value[:1].upper() + value[1:] if value else value
 
 
 def _dedup(concepts: Iterable[str]) -> list[str]:
@@ -268,6 +276,17 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             "        doc /* bounded A/G evaluator semantic auxiliary; "
             f"response_set_id={priority.response_set_id} */"
         )
+        member_provenance = priority.member_provenance or tuple(
+            (member, priority.source_kind, priority.source_id)
+            for member in priority.members
+        )
+        for member, source_kind, source_id in member_provenance:
+            out.append(
+                "        doc /* response_member="
+                f"{_sysml_identifier(member)}; source_kind="
+                f"{_sysml_identifier(source_kind)}; source_id="
+                f"{_sysml_identifier(source_id)} */"
+            )
         out.append(f"        attribute {priority.trigger} : Boolean;")
         out.append(f"        attribute selectedResponse : {enum_name};")
         out.append(
@@ -291,7 +310,26 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         # The arbitration behavior itself consumes this signal.  It therefore
         # needs a package-level definition even when a component spec names the
         # same trigger but delegates its behavior to this shared topology.
-        out.append("    attribute def CriticalPropulsionFailureDetectedSignal;")
+        # LLM-decided priority is a runtime catalog even when the architecture
+        # boundary has no pre-existing member provenance.  The reviewed
+        # deterministic fixture remains on its historical topology so independent
+        # evaluator gold is not silently rewritten to follow an implementation
+        # change.  The previous check used only ``priority.member_provenance`` and
+        # therefore sent a valid decided spec down the legacy hard-coded
+        # parachute path: its enum selected ``parachuteResponseSelected`` while
+        # behavior targeted ``parachuteDeploymentSelected``.
+        runtime_catalog_bound = (
+            bool(priority.member_provenance)
+            or priority.source_kind == "STUDENT_DERIVED_DESIGN_CONSTRAINT"
+        )
+        trigger_signal = (
+            f"{_capitalise(priority.trigger)}Signal"
+            if runtime_catalog_bound
+            else "CriticalPropulsionFailureDetectedSignal"
+        )
+        out.append(
+            f"    attribute def {_sysml_identifier(trigger_signal)};"
+        )
         for lower in (edge[1] for edge in priority.edges):
             out.append(
                 f"    attribute def {_sysml_identifier(lower.title())}RequestSignal;"
@@ -300,11 +338,34 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         out.append(f"        attribute {priority.trigger} : Boolean;")
         out.append("        entry; then awaitingResponse;")
         out.append("        state awaitingResponse;")
+        selected_token = (
+            _sysml_identifier(priority.selected_response)
+            if runtime_catalog_bound
+            else "parachuteDeploymentSelected"
+        )
+        arbiter = next(
+            (
+                component for component in spec.components
+                if component.behavior == "SafetyResponseArbitration"
+            ),
+            None,
+        )
+        selected_action = (
+            arbiter.response_action
+            if arbiter is not None
+            else f"set{_capitalise(priority.selected_response)}"
+        )
+        selection_transition_name = (
+            f"select{_capitalise(_sysml_identifier(priority.selected_response))}"
+            if runtime_catalog_bound
+            else "selectParachute"
+        )
         out.append(
-            "        transition selectParachute first awaitingResponse "
-            "accept CriticalPropulsionFailureDetectedSignal "
+            f"        transition {selection_transition_name} "
+            "first awaitingResponse "
+            f"accept {_sysml_identifier(trigger_signal)} "
             f"if {priority.trigger} "
-            "then parachuteDeploymentSelected;"
+            f"then {selected_token};"
         )
         for _higher, lower in priority.edges:
             lower_token = _sysml_identifier(lower)
@@ -315,9 +376,8 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 f"if not {priority.trigger} then {lower_token};"
             )
         out.append(
-            "        state parachuteDeploymentSelected "
-            "{ entry action "
-            "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand; }"
+            f"        state {selected_token} "
+            f"{{ entry action {_sysml_identifier(selected_action)}; }}"
         )
         for _higher, lower in priority.edges:
             out.append(f"        state {_sysml_identifier(lower)};")
