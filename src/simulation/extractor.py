@@ -124,7 +124,33 @@ def _decode_conn_end(end_feature) -> Optional[str]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
+def _qualified_name(element) -> str:
+    """Return Syside's namespace-qualified identity when it is available."""
+    qualified = getattr(element, "qualified_name", None)
+    if qualified is not None:
+        value = str(qualified)
+        if value:
+            return value
+    return str(getattr(element, "name", "") or "")
+
+
+def _owning_package_name(element) -> Optional[str]:
+    """Return the nearest owning SysML package name for *element*."""
+    current = element
+    for _ in range(24):
+        current = getattr(current, "owner", None)
+        if current is None:
+            return None
+        if type(current).__name__ == "Package":
+            return str(getattr(current, "name", "") or "") or None
+    return None
+
+
+def extract_behavioral_graph(
+    sysml_text: str,
+    *,
+    root_package: Optional[str] = None,
+) -> BehavioralGraph:
     """
     Parse *sysml_text* with syside and return a BehavioralGraph.
 
@@ -139,6 +165,21 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
         model, _diags = _syside.try_load_model(sysml_source=sysml_text)
     except Exception:
         return bg
+
+    # A generated file may contain the system package plus auxiliary A/G,
+    # verification, or analysis packages.  Those packages are not additional
+    # components of the simulated system.  Apply the requested scope only when
+    # the package is actually present so legacy callers that pass a display
+    # model_name rather than a package name retain their historical behaviour.
+    available_packages = {
+        str(getattr(package, "name", "") or "")
+        for package in model.elements(_syside.Package)
+    }
+    scoped_package = (
+        str(root_package)
+        if root_package and str(root_package) in available_packages
+        else None
+    )
 
     # ── Step 1: PartDefinition → port map + satisfy-requirement map ────────────
     # def_name → {port_name: direction_str}
@@ -172,7 +213,8 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
                             ports[feat.name] = _port_dir(feat.direction)
                 except Exception as exc:
                     record_suppressed("simulation.extractor.inherited_ports", exc)
-            def_ports[pd.name] = ports
+            definition_id = _qualified_name(pd)
+            def_ports[definition_id] = ports
 
             # Collect satisfy-requirement names for this PartDefinition
             reqs: List[str] = []
@@ -187,7 +229,7 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
                                 reqs.append(rname)
                     except Exception as exc:
                         record_suppressed("simulation.extractor.def_satisfy", exc)
-            def_reqs[pd.name] = reqs
+            def_reqs[definition_id] = reqs
     except Exception as exc:
         record_suppressed("simulation.extractor.part_defs", exc)
 
@@ -218,14 +260,27 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
             usage_name = pu.name
             if not usage_name:
                 continue
+            if (
+                scoped_package is not None
+                and _owning_package_name(pu) != scoped_package
+            ):
+                continue
             if _in_analysis_scope(pu):       # trade-study analysis parts ≠ system assembly
                 continue
 
             defs = list(pu.definitions)
-            def_name = defs[0].name if defs else usage_name
+            definition = defs[0] if defs else None
+            def_name = (
+                str(getattr(definition, "name", "") or usage_name)
+                if definition is not None else usage_name
+            )
+            definition_id = (
+                _qualified_name(definition)
+                if definition is not None else usage_name
+            )
 
             port_ids: List[str] = []
-            for port_name, direction in def_ports.get(def_name, {}).items():
+            for port_name, direction in def_ports.get(definition_id, {}).items():
                 pid = f"{usage_name}.{port_name}"
                 bg.ports[pid] = PortNode(
                     id=pid,
@@ -239,7 +294,7 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
                 id=usage_name,
                 def_name=def_name,
                 port_ids=port_ids,
-                satisfied_reqs=list(def_reqs.get(def_name, [])),
+                satisfied_reqs=list(def_reqs.get(definition_id, [])),
             )
     except Exception as exc:
         record_suppressed("simulation.extractor.part_usages", exc)
@@ -247,6 +302,11 @@ def extract_behavioral_graph(sysml_text: str) -> BehavioralGraph:
     # ── Step 3: ConnectionUsage → ConnectionEdge ────────────────────────────
     try:
         for conn in model.elements(_syside.ConnectionUsage):
+            if (
+                scoped_package is not None
+                and _owning_package_name(conn) != scoped_package
+            ):
+                continue
             ends = list(conn.owned_end_features)
             if len(ends) < 2:
                 continue

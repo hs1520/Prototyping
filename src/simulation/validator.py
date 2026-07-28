@@ -139,7 +139,10 @@ class SimulationValidator:
         # extract_behavioral_graph parses the text internally via syside;
         # syntax errors are handled upstream by the orchestrator's syntax gate.
         try:
-            bg = extract_behavioral_graph(sysml_text)
+            bg = extract_behavioral_graph(
+                sysml_text,
+                root_package=model_name,
+            )
         except Exception as e:
             result.issues.append(f"Behavioral extraction failed: {e}")
             log.error("Extraction error: %s", e)
