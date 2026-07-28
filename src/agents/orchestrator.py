@@ -653,6 +653,13 @@ class Orchestrator:
                 system_name,
             )
         )
+        semantic_fidelity_report = (
+            self._validate_terminal_semantic_obligations(
+                final_model,
+                final_sysml,
+                system_name,
+            )
+        )
         model_qualification = build_model_qualification(
             model_text=final_sysml,
             requirements=requirements,
@@ -664,6 +671,7 @@ class Orchestrator:
             simulation_result=final_sim,
             terminal_consistency=terminal_consistency,
             structural_obligation_report=structural_obligation_report,
+            semantic_fidelity_report=semantic_fidelity_report,
             generation_plan_conformance=generation_plan_conformance,
             ag_contract_graph=collaboration_artifacts.get("ag_contract_graph"),
             pattern_conformance_report=collaboration_artifacts.get(
@@ -674,6 +682,9 @@ class Orchestrator:
             ag_expected=self._active_ag_generation_plan is not None,
             generation_plan_expected=(
                 self._active_model_generation_plan is not None
+            ),
+            semantic_fidelity_expected=bool(
+                (semantic_fidelity_report or {}).get("total")
             ),
         )
         self.state.current_model = final_model
@@ -732,6 +743,7 @@ class Orchestrator:
                 "generation_plan_conformance"
             ),
             "structural_obligation_report": structural_obligation_report,
+            "semantic_fidelity_report": semantic_fidelity_report,
             "ag_binding_report": self.last_ag_binding_report,
             "ag_non_degradation": self.last_ag_non_degradation,
             "functional_closure": dict(self.last_functional_closure or {}),
@@ -1060,6 +1072,13 @@ class Orchestrator:
                 self.state.system_name,
             )
         )
+        semantic_fidelity_report = (
+            self._validate_terminal_semantic_obligations(
+                final_model,
+                final_sysml,
+                self.state.system_name,
+            )
+        )
         model_qualification = build_model_qualification(
             model_text=final_sysml,
             requirements=requirements,
@@ -1071,6 +1090,7 @@ class Orchestrator:
             simulation_result=final_sim,
             terminal_consistency=terminal_consistency,
             structural_obligation_report=structural_obligation_report,
+            semantic_fidelity_report=semantic_fidelity_report,
             generation_plan_conformance=generation_plan_conformance,
             ag_contract_graph=collaboration_artifacts.get("ag_contract_graph"),
             pattern_conformance_report=collaboration_artifacts.get(
@@ -1081,6 +1101,9 @@ class Orchestrator:
             ag_expected=self._active_ag_generation_plan is not None,
             generation_plan_expected=(
                 self._active_model_generation_plan is not None
+            ),
+            semantic_fidelity_expected=bool(
+                (semantic_fidelity_report or {}).get("total")
             ),
         )
         self.state.current_model = final_model
@@ -1121,6 +1144,7 @@ class Orchestrator:
                 "generation_plan_conformance"
             ),
             "structural_obligation_report": structural_obligation_report,
+            "semantic_fidelity_report": semantic_fidelity_report,
             "ag_binding_report": self.last_ag_binding_report,
             "ag_non_degradation": self.last_ag_non_degradation,
             "functional_closure": dict(self.last_functional_closure or {}),
@@ -2336,6 +2360,37 @@ class Orchestrator:
             plan.structural_obligations,
             model_name=model_name,
         )
+
+    def _validate_terminal_semantic_obligations(
+        self,
+        model: SysMLModel,
+        model_text: str,
+        model_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Check source-derived numeric semantics on the terminal revision."""
+        metadata = dict(getattr(model, "metadata", None) or {})
+        raw_plan = metadata.get("whole_model_generation_plan")
+        if not isinstance(raw_plan, Mapping):
+            raw_plan = getattr(
+                self,
+                "_active_model_generation_plan",
+                None,
+            )
+        if not isinstance(raw_plan, Mapping):
+            return None
+        from ..prototyping.generation_plan import ModelGenerationPlan
+        from ..prototyping.requirement_semantics import (
+            validate_requirement_semantic_obligations,
+        )
+
+        plan = ModelGenerationPlan.from_dict(raw_plan)
+        report = validate_requirement_semantic_obligations(
+            model_text,
+            plan.semantic_obligations,
+            model_name=model_name,
+        )
+        model.metadata["semantic_fidelity_report"] = report
+        return report
 
     def _restore_generation_plan_metadata(self, model: SysMLModel) -> None:
         """Keep the frozen typed plan across reparsing/refinement objects."""

@@ -470,6 +470,16 @@ class ModelGenerationPlan:
                 "FROZEN REQUIREMENT SEMANTIC OBLIGATIONS "
                 "(model fidelity only; not physical proof):"
             )
+            lines.extend([
+                "- Represent each subject as a typed item feature delivered "
+                "through a planned input port to the satisfying part.",
+                "- Bind the constrained runtime attribute to that port item "
+                "feature; a numeric literal placeholder is not a measurement.",
+                "- Emit an assert constraint that preserves the exact "
+                "operator, threshold, and unit shown below.",
+                "- Any avoidance/maintenance transition must activate before "
+                "the frozen boundary is violated.",
+            ])
             for obligation in self.semantic_obligations:
                 subject = "/".join(obligation.subject_terms)
                 lines.append(

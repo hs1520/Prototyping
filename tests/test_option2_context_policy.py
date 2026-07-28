@@ -266,7 +266,7 @@ def test_the_repair_slice_carries_what_an_omission_fault_needs():
     )
     assert sliced is not None
 
-    declaration = f"attribute def {signal};"
+    declaration = f"action def {signal} {{}}"
     assert declaration in injured, "the declaration still exists in the model"
 
     supplemented = sliced.text + _ag_context_supplement(

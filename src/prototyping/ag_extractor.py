@@ -53,7 +53,7 @@ _BOOL_ATTR_RE = re.compile(
     re.I,
 )
 _EVENT_DEF_RE = re.compile(
-    r"\b(?:action|attribute)\s+def\s+(\w+)\s*(?:\{\s*\}|;)"
+    r"\b(?:action|attribute|item)\s+def\s+(\w+)\s*(?:\{\s*\}|;)"
 )
 _ASSUME_RE = re.compile(r"\bassume\s+constraint\s+(\w+)?\s*\{([^{}]*)\}")
 _REQUIRE_RE = re.compile(r"\brequire\s+constraint\s+(\w+)?\s*\{([^{}]*)\}")

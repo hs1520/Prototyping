@@ -1604,7 +1604,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         missing_trigger_types = [
             trigger for trigger in trigger_types
             if re.search(
-                rf"\b(?:action|attribute)\s+def\s+"
+                rf"\b(?:action|attribute|item)\s+def\s+"
                 rf"{re.escape(trigger)}\b",
                 result,
             ) is None

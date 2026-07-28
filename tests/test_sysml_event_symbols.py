@@ -56,7 +56,24 @@ def test_missing_event_definition_is_materialized_as_an_action_definition():
     assert "attribute def FaultSignal" not in materialized
 
 
-def test_ag_extractor_reads_canonical_and_legacy_event_definitions():
+def test_existing_item_event_definition_is_reused_without_cross_kind_duplicate():
+    fragment = """item def FaultSignal;
+state def ControllerBehavior {
+    entry; then idle;
+    state idle;
+    state responding { entry action setResponse; }
+    transition realize1 first idle accept FaultSignal then responding;
+}"""
+
+    materialized, report = materialize_behavior_obligations(fragment, _plan())
+
+    assert report["status"] == "PASS"
+    assert materialized.count("item def FaultSignal") == 1
+    assert "action def FaultSignal" not in materialized
+    assert "attribute def FaultSignal" not in materialized
+
+
+def test_ag_extractor_reads_all_supported_event_definition_kinds():
     canonical = """package AG {
     action def FaultSignal {}
     requirement def SystemContract {
@@ -69,11 +86,17 @@ def test_ag_extractor_reads_canonical_and_legacy_event_definitions():
     legacy = canonical.replace(
         "action def FaultSignal {}", "attribute def FaultSignal;"
     )
+    item_typed = canonical.replace(
+        "action def FaultSignal {}", "item def FaultSignal;"
+    )
 
     assert extract_ag_graph(canonical).declared_event_signals == (
         "FaultSignal",
     )
     assert extract_ag_graph(legacy).declared_event_signals == ("FaultSignal",)
+    assert extract_ag_graph(item_typed).declared_event_signals == (
+        "FaultSignal",
+    )
 
 
 def test_one_action_event_definition_has_no_namespace_warning():

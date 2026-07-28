@@ -103,7 +103,7 @@ def _behavior_tokens(model_text: str, behavior: str) -> set[tuple[str, str]]:
 
 _EVENT_DEF_RE = re.compile(
     r"^\s*(?:action\s+def\s+\w+\s*\{\s*\}|"
-    r"attribute\s+def\s+\w+\s*;)\s*$",
+    r"(?:attribute|item)\s+def\s+\w+\s*;)\s*$",
     re.M,
 )
 

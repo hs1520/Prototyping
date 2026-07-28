@@ -411,6 +411,9 @@ class PrototypingPipeline:
             "structural_obligation_report": result.get(
                 "structural_obligation_report"
             ),
+            "semantic_fidelity_report": result.get(
+                "semantic_fidelity_report"
+            ),
             "ag_binding_report": result.get("ag_binding_report"),
             "ag_non_degradation": result.get("ag_non_degradation"),
         }

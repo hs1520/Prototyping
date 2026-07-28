@@ -34,6 +34,7 @@ def build_model_qualification(
     simulation_result: Any,
     terminal_consistency: Mapping[str, Any],
     structural_obligation_report: Mapping[str, Any] | None = None,
+    semantic_fidelity_report: Mapping[str, Any] | None = None,
     generation_plan_conformance: Mapping[str, Any] | None = None,
     ag_contract_graph: Mapping[str, Any] | None = None,
     pattern_conformance_report: Mapping[str, Any] | None = None,
@@ -41,6 +42,7 @@ def build_model_qualification(
     ag_non_degradation: Mapping[str, Any] | None = None,
     ag_expected: bool = False,
     generation_plan_expected: bool = False,
+    semantic_fidelity_expected: bool = False,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
 
@@ -135,6 +137,24 @@ def build_model_qualification(
             "REQUIREMENT_STRUCTURAL_OBLIGATIONS",
             False if generation_plan_expected else None,
             {"reason": "no frozen structural obligation report"},
+        )
+    if semantic_fidelity_report is None:
+        add(
+            "REQUIREMENT_MODEL_SEMANTIC_FIDELITY",
+            False if semantic_fidelity_expected else None,
+            {"reason": "no frozen semantic fidelity report"},
+        )
+    elif semantic_fidelity_report.get("status") == "UNVERIFIED":
+        add(
+            "REQUIREMENT_MODEL_SEMANTIC_FIDELITY",
+            None,
+            semantic_fidelity_report,
+        )
+    else:
+        add(
+            "REQUIREMENT_MODEL_SEMANTIC_FIDELITY",
+            semantic_fidelity_report.get("status") == "PASS",
+            semantic_fidelity_report,
         )
     scenarios = list(
         getattr(simulation_result, "scenario_results", ()) or ()
