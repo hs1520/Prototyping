@@ -28,11 +28,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-# ag-bounded-5: the checker became gold-blind. Comparisons against reviewed
-# per-requirement answers (pattern profile, REQ_SAFE_005 response set/ordering,
-# literal element names) moved to the evaluator, which already scored them.
-# Verdicts are NOT comparable with ag-bounded-4 evidence.
-AG_CHECKER_VERSION = "ag-bounded-5"
+# ag-bounded-8: priority response members must carry provenance in committed
+# SysML. The checker still knows no reviewed response names; it checks only that
+# each declared member says whether it came from existing model behavior or an
+# approved/derived design source. Verdicts therefore remain gold-blind, but differ
+# from v7 and may not be pooled.
+AG_CHECKER_VERSION = "ag-bounded-8"
 
 # Completeness states (§6.3).
 READY = "READY"
@@ -43,6 +44,10 @@ UNSUPPORTED = "UNSUPPORTED"
 # downstream router can map them without re-deriving intent.
 CODE_CONTRACT_INCOMPLETE = "CONTRACT_INCOMPLETE"
 CODE_CONTRACT_UNSUPPORTED = "CONTRACT_UNSUPPORTED"
+CODE_COMPONENT_GUARANTEE_NONATOMIC = "COMPONENT_GUARANTEE_NONATOMIC"
+CODE_SYSTEM_OBSERVATION_BINDING_MISSING = (
+    "SYSTEM_OBSERVATION_BINDING_MISSING"
+)
 CODE_GUARANTEE_NO_OWNER = "GUARANTEE_NO_OWNER"
 CODE_GUARANTEE_MULTIPLE_OWNERS = "GUARANTEE_MULTIPLE_OWNERS"
 CODE_ASSUMPTION_UNDISCHARGED = "ASSUMPTION_UNDISCHARGED"
@@ -115,6 +120,11 @@ PATTERN_INVARIANT_ROLES: Mapping[str, Tuple[str, ...]] = {
 }
 _INVARIANT_SOURCE_KINDS = {
     "STAKEHOLDER",
+    "STUDENT_DERIVED_DESIGN_CONSTRAINT",
+}
+_PRIORITY_MEMBER_SOURCE_KINDS = {
+    "EXISTING_MODEL_BEHAVIOR",
+    "STUDENT_APPROVED_DECOMPOSITION",
     "STUDENT_DERIVED_DESIGN_CONSTRAINT",
 }
 # REQ_SAFE_005's reviewed response set and precedence ordering used to be pinned
@@ -224,6 +234,14 @@ class BehaviorRealization:
 
 
 @dataclass(frozen=True)
+class InvariantRealization:
+    name: str
+    expression: str
+    element_id: Optional[str] = None
+    span: Optional[Span] = None
+
+
+@dataclass(frozen=True)
 class AGDiagnostic:
     code: str
     message: str
@@ -252,11 +270,13 @@ class AGGraph:
     model_digest: Optional[str] = None
     parse_diagnostics: Tuple[AGDiagnostic, ...] = ()
     behaviors: Tuple[BehaviorRealization, ...] = ()
+    invariant_realizations: Tuple[InvariantRealization, ...] = ()
     verification_targets: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
     source_requirement_ids: Tuple[str, ...] = ()
     priority: Mapping[str, Any] = field(default_factory=dict)
     invariants: Tuple[Mapping[str, Any], ...] = ()
     selected_model_elements: Tuple[str, ...] = ()
+    declared_event_signals: Tuple[str, ...] = ()
 
     def all_contracts(self) -> Tuple[Contract, ...]:
         return ((self.system,) if self.system else ()) + tuple(self.components)
@@ -356,6 +376,34 @@ def _classify_completeness(
     reasons: List[str] = []
     if not contract.guarantees:
         reasons.append("no guarantee (require constraint)")
+    if contract.role == "component":
+        non_atomic = [
+            guarantee
+            for guarantee in contract.guarantees
+            if (
+                guarantee.kind == "boolean"
+                and (
+                    not isinstance(guarantee.ast, Mapping)
+                    or guarantee.ast.get("node") != "Identifier"
+                )
+            )
+        ]
+        for guarantee in non_atomic:
+            diags.append(AGDiagnostic(
+                CODE_COMPONENT_GUARANTEE_NONATOMIC,
+                f"{contract.name} component guarantee "
+                f"{guarantee.constraint_name or guarantee.concept} is compound; "
+                "component guarantees must be one atomic Boolean concept so a "
+                "realizing action can establish it",
+                contract=contract.name,
+                subject=guarantee.constraint_name or guarantee.concept,
+                severity="warning",
+                provenance=prov,
+            ))
+        if non_atomic:
+            reasons.append(
+                f"{len(non_atomic)} non-atomic component guarantee(s)"
+            )
     pure_system_invariant = (
         contract.role == "system"
         and contract.declared_pattern in {
@@ -376,6 +424,27 @@ def _classify_completeness(
         reasons.append("no responsible owner (satisfy relationship)")
     if contract.role == "system" and contract.observation is None:
         reasons.append("no system observation concept")
+    if (
+        contract.role == "system"
+        and any(
+            guarantee.constraint_name is not None
+            for guarantee in contract.guarantees
+        )
+        and not any(
+            guarantee.constraint_name == "g_observed"
+            for guarantee in contract.guarantees
+        )
+    ):
+        reasons.append("no `g_observed` system observation constraint")
+        diags.append(AGDiagnostic(
+            CODE_SYSTEM_OBSERVATION_BINDING_MISSING,
+            f"{contract.name} has no distinct `require constraint g_observed "
+            "{ <observation> }`; invariant or differently named constraints do "
+            "not bind the system observation",
+            contract=contract.name,
+            severity="warning",
+            provenance=prov,
+        ))
     if contract.role == "system" and contract.source_requirement is None:
         reasons.append("no immutable source-requirement provenance")
         diags.append(AGDiagnostic(
@@ -722,6 +791,9 @@ def _check_realization(
     diags: List[AGDiagnostic] = []
     links: List[Dict[str, Any]] = []
     behaviors = {item.name: item for item in graph.behaviors}
+    invariant_realizations = {
+        item.name: item for item in graph.invariant_realizations
+    }
     system_triggers = {
         _norm(a.concept, aliases) for a in (graph.system.assumptions if graph.system else ())
         if a.kind == "boolean"
@@ -731,14 +803,51 @@ def _check_realization(
             edge for edge in graph.edges
             if edge.kind == "realized_by" and edge.src == comp.name
         ]
-        if len(realization_edges) != 1 or realization_edges[0].dst not in behaviors:
+        if len(realization_edges) != 1:
             diags.append(AGDiagnostic(
                 CODE_REALIZATION_MISSING,
-                f"{comp.name} has no unique state-behavior realization dependency",
+                f"{comp.name} has no unique realization dependency",
                 contract=comp.name,
             ))
             continue
-        behavior = behaviors[realization_edges[0].dst]
+        realization_name = realization_edges[0].dst
+        invariant = invariant_realizations.get(realization_name)
+        if invariant is not None:
+            expected = {
+                _flat_token(item.concept)
+                for item in comp.guarantees
+                if item.kind == "boolean"
+            }
+            expression = _flat_token(invariant.expression)
+            missing = sorted(
+                token for token in expected
+                if token and token not in expression
+            )
+            if missing:
+                diags.append(AGDiagnostic(
+                    CODE_REALIZATION_ACTION_MISSING,
+                    f"{comp.name} invariant realization does not reference "
+                    f"guarantees {missing}",
+                    contract=comp.name,
+                ))
+            links.append({
+                "contract": comp.name,
+                "owner": comp.owners[0] if len(comp.owners) == 1 else None,
+                "behavior": invariant.name,
+                "realization_kind": "INVARIANT",
+                "invariant_expression": invariant.expression,
+                "continuous_guarantee": True,
+                "status": "PASS" if not missing else "FAIL",
+            })
+            continue
+        if realization_name not in behaviors:
+            diags.append(AGDiagnostic(
+                CODE_REALIZATION_MISSING,
+                f"{comp.name} realization target {realization_name} is absent",
+                contract=comp.name,
+            ))
+            continue
+        behavior = behaviors[realization_name]
         adjacency: Dict[str, List[BehaviorTransition]] = {}
         for transition in behavior.transitions:
             adjacency.setdefault(transition.source, []).append(transition)
@@ -761,6 +870,37 @@ def _check_realization(
             any(expected and expected in _flat_token(t.trigger)
                 for expected in expected_triggers)
             for t in used_transitions
+        )
+        expected_trigger_concepts = sorted({
+            a.concept for a in comp.assumptions if a.kind == "boolean"
+        } | {
+            a.concept
+            for a in (graph.system.assumptions if graph.system else ())
+            if a.kind == "boolean"
+        })
+        expected_signal_examples = [
+            f"{concept[:1].upper()}{concept[1:]}Signal"
+            for concept in expected_trigger_concepts
+            if concept
+        ]
+        compatible_declared_signals = sorted(
+            signal for signal in graph.declared_event_signals
+            if any(
+                expected and expected in _flat_token(signal)
+                for expected in expected_triggers
+            )
+        )
+        component_trigger_tokens = {
+            _flat_token(a.concept)
+            for a in comp.assumptions
+            if a.kind == "boolean"
+        }
+        scoped_repair_compatible_signals = sorted(
+            signal for signal in graph.declared_event_signals
+            if any(
+                expected and expected in _flat_token(signal)
+                for expected in component_trigger_tokens
+            )
         )
 
         guarantee_tokens = {
@@ -798,8 +938,16 @@ def _check_realization(
             diags.append(AGDiagnostic(
                 CODE_REALIZATION_TRIGGER_MISSING,
                 f"{comp.name} realization has no reachable trigger compatible "
-                "with its/system assumptions",
+                "with its/system assumptions; an accepted signal name must "
+                "contain one complete assumption concept, for example one of "
+                f"{expected_signal_examples}",
                 contract=comp.name,
+                provenance={
+                    "expected_trigger_concepts": expected_trigger_concepts,
+                    "compatible_declared_signals": compatible_declared_signals,
+                    "scoped_repair_compatible_signals":
+                        scoped_repair_compatible_signals,
+                },
             ))
         if not reachable or (
             not used_transitions
@@ -810,6 +958,12 @@ def _check_realization(
                 CODE_REALIZATION_UNREACHABLE,
                 f"{comp.name} realization has no reachable trigger-response path",
                 contract=comp.name,
+                provenance={
+                    "expected_trigger_concepts": expected_trigger_concepts,
+                    "compatible_declared_signals": compatible_declared_signals,
+                    "scoped_repair_compatible_signals":
+                        scoped_repair_compatible_signals,
+                },
             ))
         if not action_matches:
             # Name the concept the action must carry. The message used to say only
@@ -830,6 +984,7 @@ def _check_realization(
             "contract": comp.name,
             "owner": comp.owners[0] if len(comp.owners) == 1 else None,
             "behavior": behavior.name,
+            "realization_kind": "STATE_MACHINE",
             "initial_state": behavior.initial_state,
             "reachable_states": sorted(reachable),
             "trigger_ok": trigger_ok,
@@ -1147,10 +1302,10 @@ def _startup_inhibit_roles(graph: AGGraph) -> Dict[str, Any]:
     return roles
 
 
-def _startup_inhibit_topology_ok(
+def _startup_inhibit_topology_obligations(
     graph: AGGraph,
     realization_links: List[Dict[str, Any]],
-) -> bool:
+) -> Tuple[Dict[str, bool], Optional[str]]:
     """Does the model latch inhibition on failure and clear it only on a pass?
 
     Judged against the chain's own invariants, so a conforming model may name its
@@ -1160,7 +1315,7 @@ def _startup_inhibit_topology_ok(
     roles = _startup_inhibit_roles(graph)
     latch = roles.get("latch")
     if not latch:
-        return False
+        return {"latch_role_present": False}, None
 
     behavior = next(
         (
@@ -1170,8 +1325,17 @@ def _startup_inhibit_topology_ok(
         ),
         None,
     )
-    if behavior is None or not behavior.initial_state:
-        return False
+    if behavior is None:
+        return {
+            "latch_role_present": True,
+            "latch_behavior_present": False,
+        }, None
+    if not behavior.initial_state:
+        return {
+            "latch_role_present": True,
+            "latch_behavior_present": True,
+            "initial_state_present": False,
+        }, behavior.name
 
     set_token, clear_token = _flat_token(f"set{latch}"), _flat_token(f"clear{latch}")
     inhibit_states = {
@@ -1182,11 +1346,17 @@ def _startup_inhibit_topology_ok(
         state for state, action in behavior.entry_actions.items()
         if _flat_token(action) == clear_token
     }
+    obligations: Dict[str, bool] = {
+        "latch_role_present": True,
+        "latch_behavior_present": True,
+        "initial_state_present": True,
+        "single_inhibit_state": len(inhibit_states) == 1,
+        "reset_state_present": bool(reset_states),
+    }
     if len(inhibit_states) != 1 or not reset_states:
-        return False
+        return obligations, behavior.name
     inhibit_state = next(iter(inhibit_states))
-    if inhibit_state == behavior.initial_state:
-        return False
+    obligations["inhibit_not_initial"] = inhibit_state != behavior.initial_state
 
     # inhibition and the pass that clears it must be alternatives of the same
     # decision point, or the latch is not a self-test outcome at all
@@ -1198,8 +1368,7 @@ def _startup_inhibit_topology_ok(
         transition.source for transition in behavior.transitions
         if transition.target in reset_states
     }
-    if not entering or not (entering & clearing):
-        return False
+    obligations["common_decision_source"] = bool(entering and (entering & clearing))
     # A latch that is released by the very event that set it is not a latch. The
     # triggers leaving the inhibited state must differ from the ones that reach it,
     # or the failure signal both inhibits and clears.
@@ -1207,24 +1376,24 @@ def _startup_inhibit_topology_ok(
         transition.trigger for transition in behavior.transitions
         if transition.target == inhibit_state
     }
-    if any(
+    obligations["distinct_latch_and_reset_triggers"] = not any(
         transition.trigger in latching_triggers
         for transition in behavior.transitions
         if transition.source == inhibit_state
-    ):
-        return False
+    )
     # and nothing may transition into a state the invariants forbid
     forbidden = {_flat_token(item) for item in roles.get("forbidden") or ()}
-    return not any(
+    obligations["forbidden_states_unreachable"] = not any(
         _flat_token(transition.target) in forbidden
         for transition in behavior.transitions
     )
+    return obligations, behavior.name
 
 
-def _locked_release_topology_ok(
+def _locked_release_topology_obligations(
     graph: AGGraph,
     realization_links: List[Dict[str, Any]],
-) -> bool:
+) -> Tuple[Dict[str, bool], Optional[str]]:
     """Does the model instantiate de-energise-to-lock, judged against its own
     invariants rather than against REQ_SAFE_008's spellings?
 
@@ -1238,7 +1407,10 @@ def _locked_release_topology_ok(
     locked = roles.get("locked")
     authorisation = roles.get("authorisation")
     if not locked or not authorisation:
-        return False
+        return {
+            "locked_role_present": bool(locked),
+            "authorisation_role_present": bool(authorisation),
+        }, None
 
     mechanism = next(
         (
@@ -1248,8 +1420,19 @@ def _locked_release_topology_ok(
         ),
         None,
     )
-    if mechanism is None or not mechanism.initial_state:
-        return False
+    if mechanism is None:
+        return {
+            "locked_role_present": True,
+            "authorisation_role_present": True,
+            "lock_behavior_present": False,
+        }, None
+    if not mechanism.initial_state:
+        return {
+            "locked_role_present": True,
+            "authorisation_role_present": True,
+            "lock_behavior_present": True,
+            "initial_state_present": False,
+        }, mechanism.name
 
     # the event that authorises release, named by the profile's signal convention
     signal = f"{authorisation[:1].upper()}{authorisation[1:]}Signal"
@@ -1257,21 +1440,27 @@ def _locked_release_topology_ok(
         transition for transition in mechanism.transitions
         if transition.trigger == signal
     ]
+    obligations: Dict[str, bool] = {
+        "locked_role_present": True,
+        "authorisation_role_present": True,
+        "lock_behavior_present": True,
+        "initial_state_present": True,
+        "authorised_unlock_transition": bool(unlock_transitions),
+    }
     if not unlock_transitions:
-        return False
+        return obligations, mechanism.name
     unlocked_states = {transition.target for transition in unlock_transitions}
+    obligations["single_unlocked_state"] = len(unlocked_states) == 1
     if len(unlocked_states) != 1:
-        return False
+        return obligations, mechanism.name
     unlocked_state = next(iter(unlocked_states))
-    if unlocked_state == mechanism.initial_state:
-        return False
+    obligations["unlocked_not_initial"] = unlocked_state != mechanism.initial_state
 
     # nothing else may reach the unlocked state: authorisation is the only way out
-    if any(
+    obligations["authorisation_is_only_unlock_path"] = not any(
         transition.target == unlocked_state and transition.trigger != signal
         for transition in mechanism.transitions
-    ):
-        return False
+    )
     # Losing power must return to the default-safe state, on an event distinct from
     # the one that energises it. Without the distinctness a model can satisfy the
     # return edge with the power-on signal itself, so the same event both energises
@@ -1280,23 +1469,27 @@ def _locked_release_topology_ok(
         transition.trigger for transition in mechanism.transitions
         if transition.source == mechanism.initial_state
     }
-    if not any(
+    obligations["power_loss_returns_to_locked"] = any(
         transition.source == unlocked_state
         and transition.target == mechanism.initial_state
         and transition.trigger not in energising
         for transition in mechanism.transitions
-    ):
-        return False
-    # the default state must actually establish the locked guarantee
-    return _flat_token(locked) in _flat_token(
-        mechanism.entry_actions.get(mechanism.initial_state, "")
     )
+    # the default state must actually establish the locked guarantee
+    obligations["initial_state_establishes_locked"] = (
+        _flat_token(locked) in _flat_token(
+        mechanism.entry_actions.get(mechanism.initial_state, "")
+        )
+    )
+    return obligations, mechanism.name
 
 
 def _check_profile_semantics(
     graph: AGGraph,
     realization_links: List[Dict[str, Any]],
     observation_links: List[Dict[str, Any]],
+    *,
+    require_priority_member_provenance: bool,
 ) -> List[AGDiagnostic]:
     """Check bounded-profile facts extracted only from committed SysML.
 
@@ -1349,6 +1542,19 @@ def _check_profile_semantics(
             ))
             return diagnostics
         members = {str(item) for item in (priority.get("members") or ())}
+        member_provenance = [
+            item for item in (priority.get("member_provenance") or ())
+            if isinstance(item, Mapping)
+        ]
+        provenance_members = {
+            str(item.get("response") or "")
+            for item in member_provenance
+            if (
+                str(item.get("source_kind") or "")
+                in _PRIORITY_MEMBER_SOURCE_KINDS
+                and str(item.get("source_id") or "")
+            )
+        }
         edges = {
             (str(item.get("higher") or ""), str(item.get("lower") or ""))
             for item in (priority.get("edges") or ())
@@ -1395,15 +1601,32 @@ def _check_profile_semantics(
             ),
             {},
         )
-        # the arbiter is whichever contract the arbitration behaviour realizes
+        # The arbiter is whichever contract the published arbitration behavior
+        # realizes. Keep the actual behavior as structured provenance too: the
+        # failure router needs an existing state-def target before it may
+        # authorize dependency-closed repair.
+        arbitration_behavior = next(
+            (
+                behavior
+                for item in graph.components
+                if (
+                    (behavior := _behavior_for_contract(
+                        graph, realization_links, item.name
+                    ))
+                    and behavior.name == "SafetyResponseArbitration"
+                )
+            ),
+            None,
+        )
         arbiter_guarantees = {
             concept
             for item in graph.components
-            if _behavior_for_contract(graph, realization_links, item.name)
-            and (
-                _behavior_for_contract(
+            if (
+                (behavior := _behavior_for_contract(
                     graph, realization_links, item.name
-                ).name == "SafetyResponseArbitration"
+                ))
+                and arbitration_behavior is not None
+                and behavior.name == arbitration_behavior.name
             )
             for concept in item.boolean_guarantee_concepts()
         }
@@ -1436,6 +1659,29 @@ def _check_profile_semantics(
             observation_links
             and all(item.get("status") == "PASS" for item in observation_links)
         )
+        arbitration_elements = (
+            [arbitration_behavior.name] if arbitration_behavior else []
+        )
+        boundary_behavior_elements = [
+            behavior.name
+            for component in boundary_components
+            if (
+                behavior := _behavior_for_contract(
+                    graph, realization_links, component.name
+                )
+            )
+        ]
+        observation_behavior_elements = [
+            str(observing_link.get("behavior"))
+        ] if observing_link.get("behavior") else []
+        obligation_affected_elements = {
+            "selection_guarded_by_trigger": arbitration_elements,
+            "competing_transitions_guarded": arbitration_elements,
+            "selected_transition_reachable": arbitration_elements,
+            "selection_action_connected": arbitration_elements,
+            "recovery_power_available_at_boundary": boundary_behavior_elements,
+            "deployment_action_connected": observation_behavior_elements,
+        }
         # Each obligation is named so a failure says *which* fact is wrong. A
         # diagnostic that lumps fourteen conditions under one message is not
         # actionable — an author (human or LLM) cannot tell what to repair.
@@ -1449,6 +1695,11 @@ def _check_profile_semantics(
         # very facts the LLM-authored arm exists to measure.
         edge_endpoints = {name for edge in edges for name in edge}
         obligations = (
+            ("response_member_provenance",
+             (
+                 not require_priority_member_provenance
+                 or (bool(members) and provenance_members == members)
+             )),
             ("response_set_members",
              bool(members) and edge_endpoints <= members),
             ("precedence_edges",
@@ -1490,6 +1741,14 @@ def _check_profile_semantics(
                 f"internally inconsistent; unsatisfied: {', '.join(unmet)}",
                 contract=system.name,
                 subject=trigger or None,
+                provenance={
+                    "unsatisfied_obligations": list(unmet),
+                    "obligation_affected_elements": {
+                        name: list(obligation_affected_elements.get(name, ()))
+                        for name in unmet
+                        if name in obligation_affected_elements
+                    },
+                },
             ))
     elif effective_pattern in _INVARIANT_PATTERNS:
         if not graph.invariants:
@@ -1501,27 +1760,35 @@ def _check_profile_semantics(
         else:
             selected_elements = set(graph.selected_model_elements)
             ids: set[str] = set()
-            invalid = False
-            by_id = {
-                str(item.get("invariant_id") or ""): item
-                for item in graph.invariants
-                if isinstance(item, Mapping)
-            }
+            invalid_items: List[Dict[str, Any]] = []
             for invariant in graph.invariants:
                 invariant_id = str(invariant.get("invariant_id") or "")
                 identifiers = (
                     _ast_identifiers(invariant.get("trigger_or_antecedent_ast"))
                     | _ast_identifiers(invariant.get("required_consequent_ast"))
                 )
-                invalid = invalid or any((
-                    not invariant_id,
-                    invariant_id in ids,
-                    invariant.get("scope") != system.name,
-                    invariant.get("source_kind") not in _INVARIANT_SOURCE_KINDS,
-                    not str(invariant.get("source_id") or ""),
-                    not identifiers,
-                    not identifiers.issubset(selected_elements),
-                ))
+                reasons = []
+                if not invariant_id:
+                    reasons.append("missing_invariant_id")
+                if invariant_id in ids:
+                    reasons.append("duplicate_invariant_id")
+                if invariant.get("scope") != system.name:
+                    reasons.append("wrong_system_scope")
+                if invariant.get("source_kind") not in _INVARIANT_SOURCE_KINDS:
+                    reasons.append("invalid_source_kind")
+                if not str(invariant.get("source_id") or ""):
+                    reasons.append("missing_source_id")
+                if not identifiers:
+                    reasons.append("empty_boolean_ast")
+                undeclared = sorted(identifiers - selected_elements)
+                if undeclared:
+                    reasons.append("undeclared_model_elements")
+                if reasons:
+                    invalid_items.append({
+                        "invariant_id": invariant_id or None,
+                        "reasons": reasons,
+                        "undeclared_model_elements": undeclared,
+                    })
                 ids.add(invariant_id)
             # WHICH invariants a requirement ought to state is an accuracy
             # question the evaluator answers against frozen gold. What the pattern
@@ -1532,24 +1799,45 @@ def _check_profile_semantics(
             # Removing the per-requirement table without this lost detection
             # outright: deleting a required invariant passed.
             needed = PATTERN_INVARIANT_ROLES.get(effective_pattern)
+            roles: Dict[str, Any] = {}
+            missing_roles: List[str] = []
             if needed:
                 roles = (
                     _startup_inhibit_roles(graph)
                     if effective_pattern == "STARTUP_INHIBIT"
                     else _invariant_roles(graph)
                 )
-                invalid = invalid or any(not roles.get(name) for name in needed)
-            if invalid:
+                missing_roles = [
+                    name for name in needed if not roles.get(name)
+                ]
+            if invalid_items or missing_roles:
+                unsatisfied = [
+                    *(
+                        f"invariant:{item.get('invariant_id') or '<missing>'}:"
+                        + ",".join(item["reasons"])
+                        for item in invalid_items
+                    ),
+                    *(f"missing_role:{name}" for name in missing_roles),
+                ]
                 diagnostics.append(AGDiagnostic(
                     CODE_INVARIANT_SEMANTICS_INVALID,
-                    f"{system.name} invariant AST/provenance/model-element binding "
-                    "is incomplete or inconsistent",
+                    f"{system.name} invariant semantics are incomplete or "
+                    f"inconsistent; unsatisfied: {', '.join(unsatisfied)}",
                     contract=system.name,
+                    provenance={
+                        "unsatisfied_obligations": unsatisfied,
+                        "invalid_invariants": invalid_items,
+                        "missing_roles": missing_roles,
+                        "derived_roles": {
+                            name: sorted(value) if isinstance(value, set) else value
+                            for name, value in roles.items()
+                        },
+                    },
                 ))
-        topology_ok = (
-            _startup_inhibit_topology_ok(graph, realization_links)
+        topology_obligations, topology_behavior = (
+            _startup_inhibit_topology_obligations(graph, realization_links)
             if effective_pattern == "STARTUP_INHIBIT"
-            else _locked_release_topology_ok(graph, realization_links)
+            else _locked_release_topology_obligations(graph, realization_links)
         )
         if effective_pattern == "LOCKED_UNTIL_AUTHORISED_RELEASE":
             # "Default safe" means the locking component holds its guarantee
@@ -1568,18 +1856,36 @@ def _check_profile_semantics(
                 ),
                 None,
             )
-            topology_ok = topology_ok and bool(
-                mechanism
-                and not mechanism.assumptions
-                and len(mechanism.boolean_guarantee_concepts()) >= 3
-            )
-        if not topology_ok:
+            topology_obligations.update({
+                "default_safe_mechanism_present": bool(mechanism),
+                "default_safe_no_assumptions": bool(
+                    mechanism and not mechanism.assumptions
+                ),
+                "default_safe_responsibility_complete": bool(
+                    mechanism
+                    and len(mechanism.boolean_guarantee_concepts()) >= 3
+                ),
+            })
+        unsatisfied_topology = [
+            name
+            for name, satisfied in topology_obligations.items()
+            if not satisfied
+        ]
+        if unsatisfied_topology:
+            affected = [topology_behavior] if topology_behavior else []
             diagnostics.append(AGDiagnostic(
                 CODE_PATTERN_TOPOLOGY_INCOMPLETE,
-                f"{system.name} {effective_pattern} state/transition topology is "
-                "missing, unauthorised, or inconsistent with the bounded profile",
+                f"{system.name} {effective_pattern} topology is incomplete; "
+                f"unsatisfied: {', '.join(unsatisfied_topology)}",
                 contract=system.name,
                 subject=effective_pattern,
+                provenance={
+                    "unsatisfied_obligations": unsatisfied_topology,
+                    "obligation_affected_elements": {
+                        name: list(affected)
+                        for name in unsatisfied_topology
+                    },
+                },
             ))
     return diagnostics
 
@@ -1665,7 +1971,10 @@ def _check_sufficiency(
 
 
 def check_ag_graph(
-    graph: AGGraph, *, aliases: Optional[Mapping[str, str]] = None
+    graph: AGGraph,
+    *,
+    aliases: Optional[Mapping[str, str]] = None,
+    require_priority_member_provenance: bool = True,
 ) -> AGReport:
     """Run the bounded compositional A/G checks (§9) over an extracted graph."""
     alias_map = {k.strip().lower(): v.strip().lower() for k, v in (aliases or {}).items()}
@@ -1723,7 +2032,12 @@ def check_ag_graph(
     diagnostics.extend(observation_diags)
     diagnostics.extend(
         _check_profile_semantics(
-            graph, realization_links, observation_links
+            graph,
+            realization_links,
+            observation_links,
+            require_priority_member_provenance=(
+                require_priority_member_provenance
+            ),
         )
     )
 

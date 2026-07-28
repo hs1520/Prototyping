@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 from .ag_emitter import AGChainSpec
+from .ag_behavior_plan import (
+    BehaviorObligationPlan,
+    INVARIANT,
+    compile_behavior_obligation_plan,
+)
 from .ag_planning import emit_ag_planning_package
 from ..utils.sysml_text_utils import find_block_end
 
@@ -27,6 +32,7 @@ class ComponentBinding:
     owner_usage: str
     behavior: str
     status: str
+    realization_kind: str = "STATE_MACHINE"
     issues: Tuple[str, ...] = ()
 
     def to_dict(self) -> Dict[str, Any]:
@@ -35,6 +41,7 @@ class ComponentBinding:
             "owner_definition": self.owner_definition,
             "owner_usage": self.owner_usage,
             "behavior": self.behavior,
+            "realization_kind": self.realization_kind,
             "status": self.status,
             "issues": list(self.issues),
         }
@@ -112,6 +119,7 @@ def bind_ag_contracts_to_model(
     specs: Iterable[AGChainSpec],
     *,
     system_package: str,
+    behavior_plan: BehaviorObligationPlan | None = None,
 ) -> AGBindingResult:
     """Replace planning/shadow packages with contracts bound to real elements.
 
@@ -121,6 +129,10 @@ def bind_ag_contracts_to_model(
     turn a missing realization into fabricated evidence.
     """
     specs = tuple(specs)
+    behavior_plan = behavior_plan or compile_behavior_obligation_plan(specs)
+    obligations = {
+        item.contract_id: item for item in behavior_plan.obligations
+    }
     if not _SYSIDE_OK:
         report = AGBindingReport(
             status="FAIL",
@@ -155,6 +167,10 @@ def bind_ag_contracts_to_model(
         _qualified_name(item): item
         for item in model.elements(_syside.StateDefinition)
     }
+    constraints = {
+        _qualified_name(item): item
+        for item in model.elements(_syside.AssertConstraintUsage)
+    }
 
     all_bindings: List[ComponentBinding] = []
     bound_packages: List[str] = []
@@ -167,18 +183,31 @@ def bind_ag_contracts_to_model(
         behavior_by_contract: Dict[str, str] = {}
 
         for component in spec.components:
+            obligation = obligations.get(component.name)
             definition_path = (
                 f"{system_package}::{component.owner_def}"
             )
             usage_path = f"{system_package}::{component.owner_usage}"
+            realization_id = (
+                obligation.stable_behavior_id
+                if obligation is not None else component.behavior
+            )
+            realization_kind = (
+                obligation.realization_kind
+                if obligation is not None else "STATE_MACHINE"
+            )
             behavior_path = (
                 f"{system_package}::{component.owner_def}::"
-                f"{component.behavior}"
+                f"{realization_id}"
             )
             issues: List[str] = []
             definition = definitions.get(definition_path)
             usage = usages.get(usage_path)
-            behavior = states.get(behavior_path)
+            behavior = (
+                constraints.get(behavior_path)
+                if realization_kind == INVARIANT
+                else states.get(behavior_path)
+            )
             if definition is None:
                 issues.append(
                     f"missing owner definition {definition_path}"
@@ -195,7 +224,14 @@ def bind_ag_contracts_to_model(
                         f"{usage_path} is not typed by {definition_path}"
                     )
             if behavior is None:
-                issues.append(f"missing realizing behavior {behavior_path}")
+                issues.append(
+                    (
+                        "missing realizing behavior "
+                        if realization_kind != INVARIANT
+                        else "missing invariant realization "
+                    )
+                    + behavior_path
+                )
 
             status = "PASS" if not issues else "FAIL"
             all_bindings.append(ComponentBinding(
@@ -203,6 +239,7 @@ def bind_ag_contracts_to_model(
                 owner_definition=definition_path,
                 owner_usage=usage_path,
                 behavior=behavior_path,
+                realization_kind=realization_kind,
                 status=status,
                 issues=tuple(issues),
             ))
@@ -221,9 +258,9 @@ def bind_ag_contracts_to_model(
                 imports.append(f"private import {behavior_path};")
                 relationships.append(
                     f"dependency realize{component.name} "
-                    f"from {component.name} to {component.behavior};"
+                    f"from {component.name} to {realization_id};"
                 )
-                behavior_by_contract[component.name] = component.behavior
+                behavior_by_contract[component.name] = realization_id
 
         if spec.priority is not None:
             priority_owner = next(

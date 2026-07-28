@@ -37,6 +37,7 @@ from .ag_contracts import (
     BehaviorTransition,
     Contract,
     Guarantee,
+    InvariantRealization,
     Span,
 )
 from .blackboard import text_digest
@@ -51,6 +52,7 @@ _BOOL_ATTR_RE = re.compile(
     r"\battribute\s+(\w+)\s*:\s*Boolean\s*=\s*(true|false)\s*;",
     re.I,
 )
+_ATTRIBUTE_DEF_RE = re.compile(r"\battribute\s+def\s+(\w+)\s*;")
 _ASSUME_RE = re.compile(r"\bassume\s+constraint\s+(\w+)?\s*\{([^{}]*)\}")
 _REQUIRE_RE = re.compile(r"\brequire\s+constraint\s+(\w+)?\s*\{([^{}]*)\}")
 _DEP_RE = re.compile(
@@ -60,6 +62,9 @@ _SATISFY_RE = re.compile(
     r"\bsatisfy\s+requirement\s+\w+\s*:\s*(\w+)\s+by\s+(\w+)\s*;"
 )
 _STATE_DEF_RE = re.compile(r"\bstate\s+def\s+(\w+)\s*\{")
+_ASSERT_CONSTRAINT_RE = re.compile(
+    r"\bassert\s+constraint\s+(\w+)\s*\{([^{}]*)\}"
+)
 _TRANSITION_RE = re.compile(
     r"\btransition\s+\w+\s+first\s+(\w+)\s+accept\s+(\w+)"
     r"(?:\s+if\s+(.+?))?\s+then\s+(\w+)\s*;",
@@ -335,6 +340,27 @@ def _extract_priority(text: str) -> Dict[str, object]:
         contract,
     )
     edges = [{"higher": selected, "lower": lower} for lower in lower_members]
+    member_provenance = [
+        {
+            "response": match.group(1),
+            "source_kind": match.group(2),
+            "source_id": match.group(3),
+        }
+        for match in re.finditer(
+            r"response_member\s*=\s*(\w+)\s*;\s*"
+            r"source_kind\s*=\s*(\w+)\s*;\s*"
+            r"source_id\s*=\s*(\w+)",
+            contract,
+        )
+    ]
+    # Wiring can be judged from the selection/precedence contract even when the
+    # enum vocabulary itself is malformed or incomplete. Coupling these made a
+    # blocked response-set defect manufacture repairable transition/action faults.
+    known_responses = list(dict.fromkeys([
+        *members,
+        selected,
+        *lower_members,
+    ]))
     transitions = tuple(
         BehaviorTransition(
             match.group(1),
@@ -344,9 +370,27 @@ def _extract_priority(text: str) -> Dict[str, object]:
         )
         for match in _TRANSITION_RE.finditer(state)
     )
+
+    def name_key(value: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", value.lower())
+
+    def response_member(state_name: str) -> Optional[str]:
+        """Map an authored state name to its declared enum member structurally."""
+        state_key = name_key(state_name)
+        matches = [
+            member
+            for member in known_responses
+            if (
+                name_key(member) == state_key
+                or name_key(member) in state_key
+                or state_key in name_key(member)
+            )
+        ]
+        return matches[0] if len(matches) == 1 else None
+
     guards = [
         {
-            "response": transition.target,
+            "response": response_member(transition.target) or transition.target,
             "guard_ast": {
                 "node": "Not",
                 "expr": {
@@ -358,21 +402,78 @@ def _extract_priority(text: str) -> Dict[str, object]:
         for transition in transitions
         if transition.guard == f"not {trigger_match.group(1)}"
     ]
-    selected_transition = any(
-        transition.trigger == "CriticalPropulsionFailureDetectedSignal"
-        and transition.target == "parachuteDeploymentSelected"
-        and transition.guard == trigger_match.group(1)
+    initial_match = re.search(r"\bentry\s*;\s*then\s+(\w+)\s*;", state)
+    reachable_states = {initial_match.group(1)} if initial_match else set()
+    changed = True
+    while changed:
+        changed = False
+        for transition in transitions:
+            if (
+                transition.source in reachable_states
+                and transition.target not in reachable_states
+            ):
+                reachable_states.add(transition.target)
+                changed = True
+    selection_transitions = [
+        transition
         for transition in transitions
+        if (
+            transition.guard == trigger_match.group(1)
+            and response_member(transition.target) == selected
+        )
+    ]
+    selected_transition = any(
+        transition.source in reachable_states
+        for transition in selection_transitions
     )
-    selection_state = re.search(
-        r"\bstate\s+parachuteDeploymentSelected\s*\{([^{}]*)\}",
-        state,
+    selected_targets = {
+        transition.target for transition in selection_transitions
+    }
+
+    # The response-selection guarantee is derived from the contract that realizes
+    # this arbitration behavior. It is not a reviewed state/signal/action name.
+    realizing_contracts = re.findall(
+        r"\bdependency\s+\w+\s+from\s+(\w+)\s+to\s+"
+        r"SafetyResponseArbitration\s*;",
+        text,
     )
+    selection_guarantees: set[str] = set()
+    for contract_name in realizing_contracts:
+        realized_match = re.search(
+            rf"\brequirement\s+def\s+{re.escape(contract_name)}\s*\{{",
+            text,
+        )
+        if not realized_match:
+            continue
+        realized_brace = text.index("{", realized_match.start())
+        realized_end = find_block_end(text, realized_brace)
+        if realized_end == -1:
+            continue
+        realized_body = text[realized_brace + 1:realized_end]
+        for _constraint_name, expression in _REQUIRE_RE.findall(realized_body):
+            concept = expression.strip()
+            if re.fullmatch(r"[A-Za-z_]\w*", concept) and "selected" in name_key(
+                concept
+            ):
+                selection_guarantees.add(concept)
+
+    target_actions: List[str] = []
+    for state_match_item in re.finditer(r"\bstate\s+(\w+)\s*\{", state):
+        if state_match_item.group(1) not in selected_targets:
+            continue
+        brace = state.find("{", state_match_item.start())
+        end = find_block_end(state, brace)
+        if end == -1:
+            continue
+        action = re.search(r"\bentry\s+action\s+(\w+)", state[brace + 1:end])
+        if action:
+            target_actions.append(action.group(1))
     selection_action_connected = bool(
-        selection_state
-        and re.search(
-            r"\bentry\s+action\s+\w*ParachuteDeploymentCommand\b",
-            selection_state.group(1),
+        selection_guarantees
+        and any(
+            name_key(guarantee) in name_key(action)
+            for guarantee in selection_guarantees
+            for action in target_actions
         )
     )
     selected_elements = set(members)
@@ -385,11 +486,13 @@ def _extract_priority(text: str) -> Dict[str, object]:
         "members": members,
         "edges": edges,
         "trigger": trigger_match.group(1),
+        "member_provenance": member_provenance,
         "arbitration_topology": {
             "response_set_id": response_set_id,
             "members": members,
             "edges": edges,
             "trigger": trigger_match.group(1),
+            "member_provenance": member_provenance,
             "selection": {
                 "when": trigger_match.group(1),
                 "selected_response": selected,
@@ -409,9 +512,18 @@ _INVARIANT_NAME_RE = re.compile(
 )
 
 
-def _extract_invariants(text: str) -> Tuple[Mapping[str, object], ...]:
+def _extract_invariants(
+    text: str,
+    *,
+    system_contract: str | None = None,
+) -> Tuple[Mapping[str, object], ...]:
     result: List[Mapping[str, object]] = []
     for requirement in _REQ_DEF_RE.finditer(text):
+        if (
+            system_contract is not None
+            and requirement.group(1) != system_contract
+        ):
+            continue
         brace = text.index("{", requirement.start())
         end = find_block_end(text, brace)
         if end == -1:
@@ -569,6 +681,15 @@ def extract_ag_graph(
             behaviors.append(_parse_behavior(
                 match.group(1), text[brace + 1:end], Span(brace + 1, end)
             ))
+    invariant_realizations = tuple(
+        InvariantRealization(
+            name=match.group(1),
+            expression=" ".join(match.group(2).split()),
+            element_id=match.group(1),
+            span=Span(match.start(2), match.end(2)),
+        )
+        for match in _ASSERT_CONSTRAINT_RE.finditer(text)
+    )
 
     verification_targets: Dict[str, Tuple[str, ...]] = {}
     for match in _VERIFICATION_DEF_RE.finditer(text):
@@ -666,13 +787,17 @@ def extract_ag_graph(
         model_digest=digest,
         parse_diagnostics=tuple(parse_diags),
         behaviors=tuple(behaviors),
+        invariant_realizations=invariant_realizations,
         verification_targets=verification_targets,
         source_requirement_ids=tuple(dict.fromkeys(all_requirement_ids)),
         priority=_extract_priority(text),
-        invariants=_extract_invariants(text),
+        invariants=_extract_invariants(text, system_contract=system_name),
         selected_model_elements=tuple(sorted({
             match.group(1) for match in re.finditer(
                 r"\battribute\s+(\w+)\s*:", text
             )
         })),
+        declared_event_signals=tuple(dict.fromkeys(
+            match.group(1) for match in _ATTRIBUTE_DEF_RE.finditer(text)
+        )),
     )
