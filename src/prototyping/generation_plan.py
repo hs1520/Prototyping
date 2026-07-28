@@ -15,6 +15,10 @@ from .ag_behavior_plan import (
     BehaviorObligation,
     BehaviorObligationPlan,
 )
+from .structural_obligations import (
+    StructuralObligation,
+    compile_structural_obligations,
+)
 from ..utils.req_id import normalise_req_id
 
 
@@ -94,6 +98,7 @@ class ConnectionPlan:
 class ModelGenerationPlan:
     components: tuple[ComponentPlan, ...] = ()
     connections: tuple[ConnectionPlan, ...] = ()
+    structural_obligations: tuple[StructuralObligation, ...] = ()
     behavior_obligations: tuple[BehaviorObligation, ...] = ()
     source: str = "LLM_TYPED_JSON"
     issues: tuple[str, ...] = ()
@@ -107,15 +112,16 @@ class ModelGenerationPlan:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": (
-                "2.0" if self.behavior_obligations else self.schema_version
-            ),
+            "schema_version": self.schema_version,
             "artifact_role": "WHOLE_MODEL_GENERATION_PLAN",
             "semantic_authority": "GENERATION_INPUT_ONLY_COMMITTED_SYSML_WINS",
             "source": self.source,
             "status": self.status,
             "components": [item.to_dict() for item in self.components],
             "connections": [item.to_dict() for item in self.connections],
+            "structural_obligations": [
+                item.to_dict() for item in self.structural_obligations
+            ],
             "behavior_obligations": [
                 item.to_dict() for item in self.behavior_obligations
             ],
@@ -315,16 +321,25 @@ class ModelGenerationPlan:
             for item in (payload.get("behavior_obligations") or ())
             if isinstance(item, Mapping)
         )
+        structural_obligations, structural_issues = (
+            compile_structural_obligations(
+                components,
+                connections,
+                allocated_requirements=allocated_requirements,
+            )
+        )
+        issues.extend(structural_issues)
         return cls(
             components=tuple(components),
             connections=tuple(connections),
+            structural_obligations=structural_obligations,
             behavior_obligations=behavior_obligations,
             source=source,
             issues=tuple(dict.fromkeys(issues)),
             schema_version=(
-                "2.0" if behavior_obligations else str(
-                    payload.get("schema_version") or "1.0"
-                )
+                "3.0"
+                if structural_obligations
+                else str(payload.get("schema_version") or "1.0")
             ),
         )
 
@@ -416,6 +431,19 @@ class ModelGenerationPlan:
                 f"{connection.target_component}.{connection.target_port} : "
                 f"{connection.item_type}{trace}"
             )
+        if self.structural_obligations:
+            lines.append("")
+            lines.append(
+                "FROZEN REQUIREMENT STRUCTURAL OBLIGATIONS "
+                "(validation input; do not add unrelated paths):"
+            )
+            for obligation in self.structural_obligations:
+                path = " -> ".join(obligation.required_components)
+                lines.append(
+                    f"- {obligation.obligation_id} "
+                    f"[{obligation.requirement_id}]: {path} "
+                    f"({obligation.entry_kind})"
+                )
         if self.behavior_obligations:
             lines.append("")
             lines.append(
@@ -480,7 +508,7 @@ def attach_ag_behavior_obligations(
         plan,
         behavior_obligations=behavior_plan.obligations,
         issues=tuple(dict.fromkeys(issues)),
-        schema_version="2.0",
+        schema_version="3.0",
     )
 
 

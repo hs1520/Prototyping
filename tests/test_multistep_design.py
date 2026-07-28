@@ -378,7 +378,11 @@ class TestMultistepGeneratePipeline:
                 "source": {"component": "Controller", "port": "status"},
                 "target": {"component": "SafetyMonitor", "port": "status"},
                 "item_type": "StatusPort",
-                "requirements": ["REQ_FUNC_001", "REQ_SAFE_001"],
+                "requirements": [
+                    "REQ_FUNC_001",
+                    "REQ_SAFE_001",
+                    "REQ_INTF_001",
+                ],
             }],
         }
         responses = [
