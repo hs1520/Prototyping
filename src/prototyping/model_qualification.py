@@ -55,9 +55,24 @@ def build_model_qualification(
         })
 
     syntax_errors = int(syntax_result.total_errors())
+    syntax_warnings = list(getattr(syntax_result, "warnings", ()) or ())
     add("SYSML_SYNTAX_AND_SEMANTICS", syntax_errors == 0, {
         "error_count": syntax_errors,
+        "warning_count": len(syntax_warnings),
+        "warning_codes": sorted({
+            str(item.get("code") or "unknown")
+            for item in syntax_warnings
+            if isinstance(item, Mapping)
+        }),
     })
+    from .namespace_integrity import check_user_namespace_integrity
+
+    namespace_integrity = check_user_namespace_integrity(model_text)
+    add(
+        "USER_NAMESPACE_INTEGRITY",
+        namespace_integrity["status"] == "PASS",
+        namespace_integrity,
+    )
 
     digest_values = {
         terminal_consistency.get("model_digest"),
