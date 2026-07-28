@@ -40,6 +40,7 @@ def build_model_qualification(
     ag_binding_report: Mapping[str, Any] | None = None,
     ag_non_degradation: Mapping[str, Any] | None = None,
     ag_expected: bool = False,
+    generation_plan_expected: bool = False,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
 
@@ -96,9 +97,11 @@ def build_model_qualification(
     )
 
     if generation_plan_conformance is None:
-        add("TYPED_GENERATION_PLAN_CONFORMANCE", None, {
-            "reason": "no typed whole-model plan attached",
-        })
+        add(
+            "TYPED_GENERATION_PLAN_CONFORMANCE",
+            False if generation_plan_expected else None,
+            {"reason": "no typed whole-model plan attached"},
+        )
     else:
         add(
             "TYPED_GENERATION_PLAN_CONFORMANCE",
@@ -113,9 +116,11 @@ def build_model_qualification(
             structural_obligation_report,
         )
     else:
-        add("REQUIREMENT_STRUCTURAL_OBLIGATIONS", None, {
-            "reason": "no frozen structural obligation report",
-        })
+        add(
+            "REQUIREMENT_STRUCTURAL_OBLIGATIONS",
+            False if generation_plan_expected else None,
+            {"reason": "no frozen structural obligation report"},
+        )
     scenarios = list(
         getattr(simulation_result, "scenario_results", ()) or ()
     )

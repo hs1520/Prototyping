@@ -73,6 +73,12 @@ def test_terminal_validation_uses_frozen_requirement_path():
     assert report["scenario_set_fixed"] is True
     assert report["passed"] == report["total"] == 1
     assert report["results"][0]["requirement_id"] == "REQ_FUNC_001"
+    assert report["results"][0]["observed_path"] == [
+        "source",
+        "source.signal",
+        "sink.signal",
+        "sink",
+    ]
 
 
 def test_missing_planned_edge_fails_the_named_obligation():

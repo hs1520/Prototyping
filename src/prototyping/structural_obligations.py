@@ -222,14 +222,12 @@ def validate_structural_obligations(
     model_name: str,
 ) -> dict[str, Any]:
     """Validate frozen structural obligations against one terminal SysML model."""
-    from ..simulation.exec_graph import build_exec_graph, shortest_path
     from ..simulation.extractor import extract_behavioral_graph
 
     graph = extract_behavioral_graph(
         model_text,
         root_package=model_name,
     )
-    execution = build_exec_graph(graph)
     usages_by_definition: dict[str, list[str]] = {}
     for usage_name, part in graph.parts.items():
         usages_by_definition.setdefault(part.def_name, []).append(usage_name)
@@ -295,18 +293,21 @@ def validate_structural_obligations(
                 for item in missing_connections
             )
 
-        source_usage = resolved.get(obligation.source_component)
-        target_usage = resolved.get(obligation.target_component)
         observed_path: list[str] = []
-        if source_usage is not None and target_usage is not None:
-            observed_path = shortest_path(
-                execution,
-                source_usage,
-                target_usage,
-            ) or []
-            if not observed_path:
-                issues.append(
-                    f"no directed path from {source_usage} to {target_usage}"
+        if not missing_connections and not issues:
+            for index, connection in enumerate(
+                obligation.required_connections
+            ):
+                source = resolved[connection.source_component]
+                target = resolved[connection.target_component]
+                segment = [
+                    source,
+                    f"{source}.{connection.source_port}",
+                    f"{target}.{connection.target_port}",
+                    target,
+                ]
+                observed_path.extend(
+                    segment if index == 0 else segment[1:]
                 )
 
         results.append({

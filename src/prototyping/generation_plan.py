@@ -524,28 +524,71 @@ def apply_generation_plan(
         validate_connects,
     )
     from ..simulation.extractor import extract_behavioral_graph
+    from ..simulation.port_fixer import (
+        PortAdd,
+        collect_port_defs,
+        merge_port_additions,
+        validate_port_additions,
+    )
 
     directory = build_port_directory(model_text)
-    existing = parse_connects(model_text)
     instances_by_type: dict[str, list[str]] = {}
     for instance, component_type in directory.instance_type.items():
         instances_by_type.setdefault(component_type, []).append(instance)
 
     issues = list(plan.issues)
+    resolved_usages: dict[str, str | None] = {}
     candidate_lines: list[str] = []
     expected_keys: list[tuple[str, str, str, str]] = []
 
     def resolve(component: str) -> str | None:
+        if component in resolved_usages:
+            return resolved_usages[component]
         candidates = instances_by_type.get(component, ())
         if len(candidates) == 1:
-            return candidates[0]
-        conventional = component[:1].lower() + component[1:]
-        if conventional in candidates:
-            return conventional
-        issues.append(
-            f"cannot uniquely resolve usage for component {component}"
-        )
-        return None
+            resolved = candidates[0]
+        else:
+            conventional = component[:1].lower() + component[1:]
+            if conventional in candidates:
+                resolved = conventional
+            else:
+                issues.append(
+                    f"cannot uniquely resolve usage for component {component}"
+                )
+                resolved = None
+        resolved_usages[component] = resolved
+        return resolved
+
+    planned_port_additions: list[PortAdd] = []
+    for component in plan.components:
+        usage = resolve(component.name)
+        if usage is None:
+            continue
+        existing_ports = directory.instances.get(usage, {})
+        for port in component.ports:
+            if port.name not in existing_ports:
+                planned_port_additions.append(PortAdd(
+                    part_def=component.name,
+                    direction=port.direction,
+                    name=port.name,
+                    port_type=port.port_type,
+                ))
+    port_validation = validate_port_additions(
+        planned_port_additions,
+        directory,
+        collect_port_defs(model_text),
+    )
+    port_merge = merge_port_additions(
+        model_text,
+        port_validation.accepted,
+    )
+    issues.extend(
+        f"planned port rejected: {line}: {reason}"
+        for line, reason in port_validation.rejected
+    )
+    working_text = port_merge.merged_text
+    directory = build_port_directory(working_text)
+    existing = parse_connects(working_text)
 
     for connection in plan.connections:
         source = resolve(connection.source_component)
@@ -566,7 +609,7 @@ def apply_generation_plan(
             )
 
     validation = validate_connects(candidate_lines, directory, existing)
-    merged = merge_connects(model_text, validation.accepted)
+    merged = merge_connects(working_text, validation.accepted)
     final_directory = build_port_directory(merged.merged_text)
     package_match = re.search(r"\bpackage\s+([A-Za-z_]\w*)\s*\{", model_text)
     root_package = package_match.group(1) if package_match else None
@@ -723,6 +766,9 @@ def apply_generation_plan(
         "planned_connection_count": len(plan.connections),
         "realized_connection_count": len(expected_keys) - len(missing),
         "deterministically_added_connections": list(merged.added_lines),
+        "deterministically_added_ports": list(
+            port_merge.added_descriptions
+        ),
         "missing_connections": missing,
         "unplanned_connections": unplanned_connections,
         "missing_components": missing_components,

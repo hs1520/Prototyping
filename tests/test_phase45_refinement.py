@@ -42,6 +42,7 @@ from src.sysml.model import PartDefinition, SysMLModel
 from src.sysml.lite_model import build_lite_model
 from src.simulation.validator import SimulationResult
 from src.prototyping.blackboard import text_digest
+from src.prototyping.generation_plan import ModelGenerationPlan
 from src.utils.sysml_text_utils import get_sysml_text
 
 
@@ -330,6 +331,176 @@ class TestTerminalConsistencyGate:
             consistency["simulation_source_model_digest"],
             consistency["evaluation_source_model_digest"],
         } == {digest}
+
+
+class TestPlanAwareStructuralGates:
+
+    def test_frozen_structural_report_overrides_heuristic_failures(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        orch = _make_orch()
+        model = _make_model()
+        simulation = SimpleNamespace(
+            behavioral_result=None,
+            failed_scenarios=lambda: [SimpleNamespace()],
+        )
+        monkeypatch.setattr(
+            orch,
+            "_validate_terminal_structural_obligations",
+            lambda *_args: {"status": "PASS"},
+        )
+
+        behavioral, structural, syntax = orch._early_exit_gates(
+            simulation,
+            SimpleNamespace(has_errors=False),
+            [],
+            model,
+        )
+
+        assert behavioral is True
+        assert structural is True
+        assert syntax is True
+
+    def test_plan_conformant_model_never_invokes_free_connectivity_generation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        payload = {
+            "components": [
+                {
+                    "name": "Source",
+                    "responsibility": "Produces a signal.",
+                    "requirements": ["REQ_FUNC_001"],
+                    "ports": [{
+                        "name": "signal",
+                        "direction": "out",
+                        "type": "SignalPort",
+                        "external": False,
+                    }],
+                },
+                {
+                    "name": "Sink",
+                    "responsibility": "Consumes a signal.",
+                    "requirements": ["REQ_FUNC_001"],
+                    "ports": [{
+                        "name": "signal",
+                        "direction": "in",
+                        "type": "SignalPort",
+                        "external": False,
+                    }],
+                },
+            ],
+            "connections": [{
+                "source": {"component": "Source", "port": "signal"},
+                "target": {"component": "Sink", "port": "signal"},
+                "item_type": "SignalPort",
+                "requirements": ["REQ_FUNC_001"],
+            }],
+        }
+        plan = ModelGenerationPlan.from_payload(
+            payload,
+            requirements=["REQ_FUNC_001: propagate signal"],
+        )
+        text = """package P {
+            port def SignalPort;
+            part def Source { out port signal : SignalPort; }
+            part def Sink { in port signal : SignalPort; }
+            part source : Source;
+            part sink : Sink;
+            connect source.signal to sink.signal;
+        }"""
+        model = build_lite_model(text, model_name="P")
+        model.metadata["whole_model_generation_plan"] = plan.to_dict()
+        orch = _make_orch()
+        monkeypatch.setattr(
+            orch,
+            "_fix_stuck_transitions",
+            lambda candidate: candidate,
+        )
+        calls_before = orch.llm._call_count
+
+        result = orch._sim_refinement_loop(
+            model,
+            ["REQ_FUNC_001: propagate signal"],
+            max_iters=2,
+        )
+
+        assert result is model
+        assert orch.llm._call_count == calls_before
+        assert (
+            model.metadata["structural_obligation_report"]["status"]
+            == "PASS"
+        )
+
+    def test_refinement_with_unplanned_port_is_rejected_before_fixer(
+        self,
+    ):
+        payload = {
+            "components": [
+                {
+                    "name": "Source",
+                    "responsibility": "Produces a signal.",
+                    "requirements": ["REQ_FUNC_001"],
+                    "ports": [{
+                        "name": "signal",
+                        "direction": "out",
+                        "type": "SignalPort",
+                        "external": False,
+                    }],
+                },
+                {
+                    "name": "Sink",
+                    "responsibility": "Consumes a signal.",
+                    "requirements": ["REQ_FUNC_001"],
+                    "ports": [{
+                        "name": "signal",
+                        "direction": "in",
+                        "type": "SignalPort",
+                        "external": False,
+                    }],
+                },
+            ],
+            "connections": [{
+                "source": {"component": "Source", "port": "signal"},
+                "target": {"component": "Sink", "port": "signal"},
+                "item_type": "SignalPort",
+                "requirements": ["REQ_FUNC_001"],
+            }],
+        }
+        plan = ModelGenerationPlan.from_payload(
+            payload,
+            requirements=["REQ_FUNC_001: propagate signal"],
+        )
+        candidate = build_lite_model(
+            """package P {
+                port def SignalPort;
+                part def Source {
+                    out port signal : SignalPort;
+                    out port invented : SignalPort;
+                }
+                part def Sink { in port signal : SignalPort; }
+                part source : Source;
+                part sink : Sink;
+                connect source.signal to sink.signal;
+            }""",
+            model_name="P",
+        )
+        candidate.metadata["whole_model_generation_plan"] = plan.to_dict()
+        orch = _make_orch()
+        orch.evaluator = FakeEvaluator([
+            FakeEvalResult(weighted_total=1.0),
+        ])
+
+        accepted = orch._accept_refinement_candidate(
+            candidate=candidate,
+            current_sysml="package P {}",
+            rule_score=0.5,
+            dse_best_config=None,
+            requirements=["REQ_FUNC_001: propagate signal"],
+            connectivity_floor=False,
+        )
+
+        assert accepted is None
+        assert orch.evaluator.call_count == 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

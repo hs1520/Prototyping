@@ -218,6 +218,32 @@ def test_external_plan_port_cannot_be_silently_internalized():
     ]
 
 
+def test_missing_planned_port_and_connection_are_restored_from_plan_only():
+    plan = ModelGenerationPlan.from_payload(
+        _PAYLOAD,
+        requirements=["REQ_FUNC_001: propagate status."],
+    )
+    incomplete = """package P {
+        port def DataPort;
+        part def Producer { out port status : DataPort; }
+        part def Consumer { }
+        part producer : Producer;
+        part consumer : Consumer;
+    }"""
+
+    repaired, report = apply_generation_plan(incomplete, plan)
+
+    assert report["status"] == "PASS"
+    assert report["deterministically_added_ports"] == [
+        "Consumer.status (in:DataPort)"
+    ]
+    assert report["deterministically_added_connections"] == [
+        "connect producer.status to consumer.status;"
+    ]
+    assert "in port status : DataPort;" in repaired
+    assert "connect producer.status to consumer.status;" in repaired
+
+
 def test_terminal_qualification_is_independent_of_continuous_score():
     model_text = """package P {
         requirement def REQ_FUNC_001 { doc /* propagate status */ }
@@ -244,3 +270,29 @@ def test_terminal_qualification_is_independent_of_continuous_score():
 
     assert qualification["status"] == "NOT_QUALIFIED"
     assert "BOUNDED_A_G_ASSURANCE" in qualification["failed_checks"]
+
+
+def test_expected_generation_plan_is_fail_closed_when_metadata_is_lost():
+    model_text = """package P {
+        requirement def REQ_FUNC_001 { doc /* propagate status */ }
+        part def Producer { satisfy requirement REQ_FUNC_001; }
+    }"""
+    qualification = build_model_qualification(
+        model_text=model_text,
+        requirements=["REQ_FUNC_001: propagate status."],
+        syntax_result=SimpleNamespace(total_errors=lambda: 0),
+        simulation_result=SimulationResult(model_name="P"),
+        terminal_consistency={
+            "status": "PASS",
+            "model_digest": "same",
+            "simulation_source_model_digest": "same",
+            "evaluation_source_model_digest": "same",
+        },
+        generation_plan_expected=True,
+    )
+
+    assert qualification["status"] == "NOT_QUALIFIED"
+    assert qualification["failed_checks"] == [
+        "TYPED_GENERATION_PLAN_CONFORMANCE",
+        "REQUIREMENT_STRUCTURAL_OBLIGATIONS",
+    ]

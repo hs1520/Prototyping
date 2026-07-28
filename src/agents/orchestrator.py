@@ -429,6 +429,7 @@ class Orchestrator:
         # The same plan guides architecture/parts/interfaces/behaviour/assembly
         # without materialising fictional implementation elements.
         self._active_ag_generation_plan: Optional[Dict[str, Any]] = None
+        self._active_model_generation_plan: Optional[Dict[str, Any]] = None
         self.last_ag_binding_report: Optional[Dict[str, Any]] = None
         self.last_ag_non_degradation: Optional[Dict[str, Any]] = None
         self.task_session_max_turns = int(task_session_max_turns)
@@ -530,6 +531,7 @@ class Orchestrator:
         reset_suppressed()
         self.last_verification_anchor_attempts = []
         self.last_requirement_input = {}
+        self._active_model_generation_plan = None
 
         self.state = PrototypingState(
             system_name=system_name,
@@ -572,6 +574,11 @@ class Orchestrator:
             platform_profile=platform_profile,
         )
         self.state.current_model = model
+        raw_model_plan = (
+            getattr(model, "metadata", None) or {}
+        ).get("whole_model_generation_plan")
+        if isinstance(raw_model_plan, Mapping):
+            self._active_model_generation_plan = dict(raw_model_plan)
         print(f"  ✓ Generated model with {len(model.part_definitions)} part definitions\n")
 
         # ── Phase 3: Iterative Refinement (no MCTS) ───────────────────────────
@@ -606,6 +613,7 @@ class Orchestrator:
         # First close the ordinary generated model, then snapshot it.  Terminal
         # A/G binding is evaluated as a separate transaction so it cannot hide
         # damage to the executable architecture behind an aggregate score.
+        self._restore_generation_plan_metadata(final_model)
         pre_ag_sysml, generation_plan_conformance = (
             self._enforce_terminal_generation_plan(
                 final_model, get_sysml_text(final_model)
@@ -664,6 +672,9 @@ class Orchestrator:
             ag_binding_report=self.last_ag_binding_report,
             ag_non_degradation=self.last_ag_non_degradation,
             ag_expected=self._active_ag_generation_plan is not None,
+            generation_plan_expected=(
+                self._active_model_generation_plan is not None
+            ),
         )
         self.state.current_model = final_model
         print(f"  ✓ Final design score: {final_score:.3f}\n")
@@ -1007,6 +1018,7 @@ class Orchestrator:
 
         # Snapshot the ordinary generated model before terminal A/G binding.
         pre_terminal_score = final_score
+        self._restore_generation_plan_metadata(final_model)
         pre_ag_sysml, generation_plan_conformance = (
             self._enforce_terminal_generation_plan(
                 final_model, get_sysml_text(final_model)
@@ -1067,6 +1079,9 @@ class Orchestrator:
             ag_binding_report=self.last_ag_binding_report,
             ag_non_degradation=self.last_ag_non_degradation,
             ag_expected=self._active_ag_generation_plan is not None,
+            generation_plan_expected=(
+                self._active_model_generation_plan is not None
+            ),
         )
         self.state.current_model = final_model
 
@@ -2246,6 +2261,12 @@ class Orchestrator:
         """Re-materialise and check the typed plan before the terminal commit."""
         metadata = dict(getattr(model, "metadata", None) or {})
         raw_plan = metadata.get("whole_model_generation_plan")
+        if (
+            not isinstance(raw_plan, Mapping)
+            and isinstance(self._active_model_generation_plan, Mapping)
+        ):
+            raw_plan = self._active_model_generation_plan
+            model.metadata["whole_model_generation_plan"] = dict(raw_plan)
         if not isinstance(raw_plan, Mapping):
             return model_text, None
         from ..prototyping.generation_plan import (
@@ -2287,8 +2308,8 @@ class Orchestrator:
         model.metadata["generation_plan_conformance"] = conformance
         return planned_text, conformance
 
-    @staticmethod
     def _validate_terminal_structural_obligations(
+        self,
         model: SysMLModel,
         model_text: str,
         model_name: str,
@@ -2296,6 +2317,12 @@ class Orchestrator:
         """Check the terminal model against its frozen requirement paths."""
         metadata = dict(getattr(model, "metadata", None) or {})
         raw_plan = metadata.get("whole_model_generation_plan")
+        if not isinstance(raw_plan, Mapping):
+            raw_plan = getattr(
+                self,
+                "_active_model_generation_plan",
+                None,
+            )
         if not isinstance(raw_plan, Mapping):
             return None
         from ..prototyping.generation_plan import ModelGenerationPlan
@@ -2308,6 +2335,17 @@ class Orchestrator:
             model_text,
             plan.structural_obligations,
             model_name=model_name,
+        )
+
+    def _restore_generation_plan_metadata(self, model: SysMLModel) -> None:
+        """Keep the frozen typed plan across reparsing/refinement objects."""
+        if not isinstance(self._active_model_generation_plan, Mapping):
+            return
+        if getattr(model, "metadata", None) is None:
+            model.metadata = {}
+        model.metadata.setdefault(
+            "whole_model_generation_plan",
+            dict(self._active_model_generation_plan),
         )
 
     def _append_session_message(
@@ -4983,6 +5021,7 @@ class Orchestrator:
                 candidate = build_lite_model(
                     repaired.merged_text, model_name=model_name
                 )
+                self._restore_generation_plan_metadata(candidate)
                 cand_syntax = check_syntax(repaired.merged_text)
                 cand_sim = self._run_simulation(repaired.merged_text, model_name)
                 cand_eval = self.evaluator.evaluate(
@@ -5117,6 +5156,7 @@ class Orchestrator:
 
         anchor_model = build_lite_model(
             anchored.merged_text, model_name=current_model.name)
+        self._restore_generation_plan_metadata(anchor_model)
         anchor_sim = self._run_simulation(
             anchored.merged_text, current_model.name)
         anchor_eval = self.evaluator.evaluate(
@@ -5185,8 +5225,13 @@ class Orchestrator:
             score = rule_score
         return score, llm_overall, cot_eval, veto_fired
 
-    @staticmethod
-    def _early_exit_gates(sim_result, syntax_result, requirements: List[str]):
+    def _early_exit_gates(
+        self,
+        sim_result,
+        syntax_result,
+        requirements: List[str],
+        model: Optional[SysMLModel] = None,
+    ):
         """Hard gates that must all pass before the quality-threshold early
         exit: behavioral state machines, scenario reachability, sema errors.
         A high rule-score can coexist with state-machine failures or
@@ -5205,7 +5250,18 @@ class Orchestrator:
                 and _br.sim_score >= 1.0
             )
         )
-        reachability_ok = not sim_result.failed_scenarios()
+        structural_report = None
+        if model is not None:
+            structural_report = self._validate_terminal_structural_obligations(
+                model,
+                get_sysml_text(model),
+                model.name,
+            )
+        reachability_ok = (
+            structural_report.get("status") == "PASS"
+            if structural_report is not None
+            else not sim_result.failed_scenarios()
+        )
         sema_ok = syntax_result is None or not syntax_result.has_errors
         return behavioral_ok, reachability_ok, sema_ok
 
@@ -5300,9 +5356,19 @@ class Orchestrator:
             )
             if surgical is not None:
                 print(f"  ✓ Surgical refinement: {surgical.summary()}", flush=True)
-                return build_lite_model(
+                candidate = build_lite_model(
                     surgical.merged_text, model_name=current_model.name
                 )
+                raw_plan = (
+                    getattr(current_model, "metadata", None) or {}
+                ).get("whole_model_generation_plan")
+                if isinstance(raw_plan, Mapping):
+                    if getattr(candidate, "metadata", None) is None:
+                        candidate.metadata = {}
+                    candidate.metadata["whole_model_generation_plan"] = dict(
+                        raw_plan
+                    )
+                return candidate
             print("  ⚠ Surgical refinement not applicable — "
                   "falling back to full rewrite", flush=True)
 
@@ -5316,7 +5382,21 @@ class Orchestrator:
         })
         if (refine_result.success
                 and isinstance(refine_result.output, _SysMLModelTypes)):
-            return refine_result.output
+            candidate = refine_result.output
+            raw_plan = (
+                getattr(current_model, "metadata", None) or {}
+            ).get("whole_model_generation_plan")
+            if (
+                isinstance(raw_plan, Mapping)
+                and "whole_model_generation_plan"
+                not in (getattr(candidate, "metadata", None) or {})
+            ):
+                if getattr(candidate, "metadata", None) is None:
+                    candidate.metadata = {}
+                candidate.metadata["whole_model_generation_plan"] = dict(
+                    raw_plan
+                )
+            return candidate
         return None
 
     def _accept_refinement_candidate(
@@ -5343,6 +5423,30 @@ class Orchestrator:
         Returns the accepted candidate (after the simulation inner loop) or
         None when rejected."""
         cand_sysml = get_sysml_text(candidate)
+        raw_plan = (
+            getattr(candidate, "metadata", None) or {}
+        ).get("whole_model_generation_plan")
+        if isinstance(raw_plan, Mapping):
+            from ..prototyping.generation_plan import (
+                ModelGenerationPlan,
+                apply_generation_plan,
+            )
+
+            planned_candidate, conformance = apply_generation_plan(
+                cand_sysml,
+                ModelGenerationPlan.from_dict(raw_plan),
+            )
+            if conformance.get("status") != "PASS":
+                print(
+                    "  ⚠ Refinement violates the frozen typed structure "
+                    f"({len(conformance.get('issues', ())) or 1} issue(s)) "
+                    "— rejected before simulation repair",
+                    flush=True,
+                )
+                return None
+            if planned_candidate != cand_sysml:
+                cand_sysml = planned_candidate
+                self._sync_model_text(candidate, cand_sysml)
         cand_syntax = check_syntax(cand_sysml)
         cand_sim = self._run_simulation(cand_sysml, candidate.name)
         candidate_eval = self.evaluator.evaluate(
@@ -5599,7 +5703,7 @@ class Orchestrator:
                 # are all clean.  A high rule-score can coexist with state-machine
                 # failures or connectivity gaps — those must be resolved first.
                 behavioral_ok, reachability_ok, sema_ok = self._early_exit_gates(
-                    sim_result, syntax_result, requirements
+                    sim_result, syntax_result, requirements, current_model
                 )
 
                 if behavioral_ok and reachability_ok and sema_ok:
@@ -6176,6 +6280,110 @@ class Orchestrator:
         # transition fixer.  This complements connectivity_fixer which only
         # handles port-level reachability, not state-machine semantics.
         current = self._fix_stuck_transitions(current)
+
+        raw_plan = (
+            getattr(current, "metadata", None) or {}
+        ).get("whole_model_generation_plan")
+        if isinstance(raw_plan, Mapping):
+            from ..prototyping.generation_plan import (
+                ModelGenerationPlan,
+                apply_generation_plan,
+            )
+            from ..prototyping.structural_obligations import (
+                validate_structural_obligations,
+            )
+
+            plan = ModelGenerationPlan.from_dict(raw_plan)
+            before_text = get_sysml_text(current)
+            before_report = validate_structural_obligations(
+                before_text,
+                plan.structural_obligations,
+                model_name=current.name,
+            )
+            repaired_text, conformance = apply_generation_plan(
+                before_text,
+                plan,
+            )
+            after_report = validate_structural_obligations(
+                repaired_text,
+                plan.structural_obligations,
+                model_name=current.name,
+            )
+            before_passed = {
+                item["obligation_id"]
+                for item in before_report["results"]
+                if item["status"] == "PASS"
+            }
+            after_passed = {
+                item["obligation_id"]
+                for item in after_report["results"]
+                if item["status"] == "PASS"
+            }
+            fixed_set_preserved = before_passed <= after_passed
+            syntax_ok = not check_syntax(
+                repaired_text,
+                fail_closed=True,
+                filter_stdlib_diagnostics=True,
+            ).has_errors
+            behavior_preserved = True
+            if repaired_text != before_text and syntax_ok:
+                from .verification_audit import behavioral_result_regressed
+
+                behavior_preserved = not behavioral_result_regressed(
+                    self._run_simulation(before_text, current.name),
+                    self._run_simulation(repaired_text, current.name),
+                )
+            if (
+                repaired_text != before_text
+                and fixed_set_preserved
+                and syntax_ok
+                and behavior_preserved
+            ):
+                self._sync_model_text(current, repaired_text)
+                print(
+                    "  │  ✓ restored plan-authorized ports/connections; "
+                    f"fixed obligations remain {len(after_passed)}/"
+                    f"{len(after_report['results'])}",
+                    flush=True,
+                )
+            elif repaired_text != before_text:
+                conformance["status"] = "FAIL"
+                conformance.setdefault("issues", []).append(
+                    "plan-authorized repair rejected: syntax, behavior, or "
+                    "frozen structural obligation regression"
+                )
+                after_report = before_report
+
+            if getattr(current, "metadata", None) is None:
+                current.metadata = {}
+            current.metadata["generation_plan_conformance"] = conformance
+            current.metadata["structural_obligation_report"] = after_report
+            if (
+                conformance.get("status") == "PASS"
+                and after_report.get("status") == "PASS"
+            ):
+                print(
+                    "  └─ Frozen requirement structural obligations fully "
+                    "resolved ✓; heuristic role scenarios remain advisory",
+                    flush=True,
+                )
+                return current
+
+            current.metadata["structural_repair_blocked"] = {
+                "reason": (
+                    "no plan-authorized structural repair can satisfy the "
+                    "terminal plan"
+                ),
+                "generation_plan_conformance": conformance,
+                "structural_obligation_report": after_report,
+            }
+            print(
+                "  └─ ⚠ structural repair blocked: remaining issue requires "
+                "a validated plan revision; unrestricted port/connect "
+                "generation was not invoked",
+                flush=True,
+            )
+            return current
 
         for sim_iter in range(max_iters):
             sysml = get_sysml_text(current)
