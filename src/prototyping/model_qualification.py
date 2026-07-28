@@ -33,6 +33,7 @@ def build_model_qualification(
     syntax_result: Any,
     simulation_result: Any,
     terminal_consistency: Mapping[str, Any],
+    structural_obligation_report: Mapping[str, Any] | None = None,
     generation_plan_conformance: Mapping[str, Any] | None = None,
     ag_contract_graph: Mapping[str, Any] | None = None,
     pattern_conformance_report: Mapping[str, Any] | None = None,
@@ -105,24 +106,30 @@ def build_model_qualification(
             generation_plan_conformance,
         )
 
+    if structural_obligation_report is not None:
+        add(
+            "REQUIREMENT_STRUCTURAL_OBLIGATIONS",
+            structural_obligation_report.get("status") == "PASS",
+            structural_obligation_report,
+        )
+    else:
+        add("REQUIREMENT_STRUCTURAL_OBLIGATIONS", None, {
+            "reason": "no frozen structural obligation report",
+        })
     scenarios = list(
         getattr(simulation_result, "scenario_results", ()) or ()
     )
     passed_scenarios = list(simulation_result.passed_scenarios())
-    if scenarios:
-        add(
-            "STRUCTURAL_REACHABILITY",
-            len(passed_scenarios) == len(scenarios),
-            {
-                "passed": len(passed_scenarios),
-                "total": len(scenarios),
-                "reachability_score": simulation_result.reachability_score,
-            },
-        )
-    else:
-        add("STRUCTURAL_REACHABILITY", None, {
-            "reason": "no applicable structural scenarios",
-        })
+    checks.append({
+        "name": "HEURISTIC_STRUCTURAL_DIAGNOSTIC",
+        "status": "ADVISORY",
+        "evidence": {
+            "passed": len(passed_scenarios),
+            "total": len(scenarios),
+            "reachability_score": simulation_result.reachability_score,
+            "qualification_effect": "NONE",
+        },
+    })
 
     behavioral = getattr(simulation_result, "behavioral_result", None)
     extracted = int(getattr(behavioral, "extracted_sm_count", 0) or 0)

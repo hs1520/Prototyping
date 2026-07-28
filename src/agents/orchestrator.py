@@ -638,6 +638,13 @@ class Orchestrator:
                 pre_ag_sim, final_sim
             )
         from ..prototyping.model_qualification import build_model_qualification
+        structural_obligation_report = (
+            self._validate_terminal_structural_obligations(
+                final_model,
+                final_sysml,
+                system_name,
+            )
+        )
         model_qualification = build_model_qualification(
             model_text=final_sysml,
             requirements=requirements,
@@ -648,6 +655,7 @@ class Orchestrator:
             ),
             simulation_result=final_sim,
             terminal_consistency=terminal_consistency,
+            structural_obligation_report=structural_obligation_report,
             generation_plan_conformance=generation_plan_conformance,
             ag_contract_graph=collaboration_artifacts.get("ag_contract_graph"),
             pattern_conformance_report=collaboration_artifacts.get(
@@ -712,6 +720,7 @@ class Orchestrator:
             "generation_plan_conformance": final_model.metadata.get(
                 "generation_plan_conformance"
             ),
+            "structural_obligation_report": structural_obligation_report,
             "ag_binding_report": self.last_ag_binding_report,
             "ag_non_degradation": self.last_ag_non_degradation,
             "functional_closure": dict(self.last_functional_closure or {}),
@@ -1032,6 +1041,13 @@ class Orchestrator:
                 pre_ag_sim, final_sim
             )
         from ..prototyping.model_qualification import build_model_qualification
+        structural_obligation_report = (
+            self._validate_terminal_structural_obligations(
+                final_model,
+                final_sysml,
+                self.state.system_name,
+            )
+        )
         model_qualification = build_model_qualification(
             model_text=final_sysml,
             requirements=requirements,
@@ -1042,6 +1058,7 @@ class Orchestrator:
             ),
             simulation_result=final_sim,
             terminal_consistency=terminal_consistency,
+            structural_obligation_report=structural_obligation_report,
             generation_plan_conformance=generation_plan_conformance,
             ag_contract_graph=collaboration_artifacts.get("ag_contract_graph"),
             pattern_conformance_report=collaboration_artifacts.get(
@@ -1088,6 +1105,7 @@ class Orchestrator:
             "generation_plan_conformance": final_model.metadata.get(
                 "generation_plan_conformance"
             ),
+            "structural_obligation_report": structural_obligation_report,
             "ag_binding_report": self.last_ag_binding_report,
             "ag_non_degradation": self.last_ag_non_degradation,
             "functional_closure": dict(self.last_functional_closure or {}),
@@ -2268,6 +2286,29 @@ class Orchestrator:
                 conformance["status"] = "FAIL"
         model.metadata["generation_plan_conformance"] = conformance
         return planned_text, conformance
+
+    @staticmethod
+    def _validate_terminal_structural_obligations(
+        model: SysMLModel,
+        model_text: str,
+        model_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Check the terminal model against its frozen requirement paths."""
+        metadata = dict(getattr(model, "metadata", None) or {})
+        raw_plan = metadata.get("whole_model_generation_plan")
+        if not isinstance(raw_plan, Mapping):
+            return None
+        from ..prototyping.generation_plan import ModelGenerationPlan
+        from ..prototyping.structural_obligations import (
+            validate_structural_obligations,
+        )
+
+        plan = ModelGenerationPlan.from_dict(raw_plan)
+        return validate_structural_obligations(
+            model_text,
+            plan.structural_obligations,
+            model_name=model_name,
+        )
 
     def _append_session_message(
         self,

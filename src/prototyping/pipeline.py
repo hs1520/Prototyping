@@ -408,6 +408,9 @@ class PrototypingPipeline:
             "generation_plan_conformance": result.get(
                 "generation_plan_conformance"
             ),
+            "structural_obligation_report": result.get(
+                "structural_obligation_report"
+            ),
             "ag_binding_report": result.get("ag_binding_report"),
             "ag_non_degradation": result.get("ag_non_degradation"),
         }

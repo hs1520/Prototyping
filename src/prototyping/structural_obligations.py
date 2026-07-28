@@ -9,6 +9,7 @@ new scenario set from candidate-specific names or ports.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Any, Iterable, Sequence
 
 
@@ -212,3 +213,126 @@ def compile_structural_obligations(
             ))
 
     return tuple(obligations), tuple(issues)
+
+
+def validate_structural_obligations(
+    model_text: str,
+    obligations: Sequence[StructuralObligation],
+    *,
+    model_name: str,
+) -> dict[str, Any]:
+    """Validate frozen structural obligations against one terminal SysML model."""
+    from ..simulation.exec_graph import build_exec_graph, shortest_path
+    from ..simulation.extractor import extract_behavioral_graph
+
+    graph = extract_behavioral_graph(
+        model_text,
+        root_package=model_name,
+    )
+    execution = build_exec_graph(graph)
+    usages_by_definition: dict[str, list[str]] = {}
+    for usage_name, part in graph.parts.items():
+        usages_by_definition.setdefault(part.def_name, []).append(usage_name)
+    for usages in usages_by_definition.values():
+        usages.sort()
+
+    def resolve(component: str) -> tuple[str | None, str | None]:
+        usages = usages_by_definition.get(component, ())
+        conventional = component[:1].lower() + component[1:]
+        if conventional in usages:
+            return conventional, None
+        if len(usages) == 1:
+            return usages[0], None
+        if not usages:
+            return None, f"component definition {component} has no system usage"
+        return None, (
+            f"component definition {component} has ambiguous usages: "
+            f"{', '.join(usages)}"
+        )
+
+    actual_connections = {
+        (
+            connection.source.split(".", 1)[0],
+            connection.source.split(".", 1)[1],
+            connection.target.split(".", 1)[0],
+            connection.target.split(".", 1)[1],
+        )
+        for connection in graph.connections
+        if "." in connection.source and "." in connection.target
+    }
+    results: list[dict[str, Any]] = []
+
+    for obligation in obligations:
+        issues: list[str] = []
+        resolved: dict[str, str] = {}
+        for component in obligation.required_components:
+            usage, issue = resolve(component)
+            if issue:
+                issues.append(issue)
+            elif usage is not None:
+                resolved[component] = usage
+
+        missing_connections: list[str] = []
+        for connection in obligation.required_connections:
+            source = resolved.get(connection.source_component)
+            target = resolved.get(connection.target_component)
+            if source is None or target is None:
+                continue
+            key = (
+                source,
+                connection.source_port,
+                target,
+                connection.target_port,
+            )
+            if key not in actual_connections:
+                missing_connections.append(
+                    f"{source}.{connection.source_port} -> "
+                    f"{target}.{connection.target_port}"
+                )
+        if missing_connections:
+            issues.extend(
+                f"missing required connection {item}"
+                for item in missing_connections
+            )
+
+        source_usage = resolved.get(obligation.source_component)
+        target_usage = resolved.get(obligation.target_component)
+        observed_path: list[str] = []
+        if source_usage is not None and target_usage is not None:
+            observed_path = shortest_path(
+                execution,
+                source_usage,
+                target_usage,
+            ) or []
+            if not observed_path:
+                issues.append(
+                    f"no directed path from {source_usage} to {target_usage}"
+                )
+
+        results.append({
+            **obligation.to_dict(),
+            "status": "PASS" if not issues else "FAIL",
+            "resolved_usages": resolved,
+            "observed_path": observed_path,
+            "missing_connections": missing_connections,
+            "issues": list(dict.fromkeys(issues)),
+        })
+
+    passed = sum(item["status"] == "PASS" for item in results)
+    if not obligations:
+        status = "UNVERIFIED"
+    else:
+        status = "PASS" if passed == len(results) else "FAIL"
+    return {
+        "schema_version": "1.0",
+        "artifact_role": "REQUIREMENT_STRUCTURAL_OBLIGATION_VALIDATION",
+        "status": status,
+        "scenario_set_fixed": True,
+        "model_name": model_name,
+        "source_model_digest": hashlib.sha256(
+            (model_text or "").encode("utf-8")
+        ).hexdigest(),
+        "passed": passed,
+        "total": len(results),
+        "results": results,
+    }
