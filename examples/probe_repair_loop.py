@@ -2,21 +2,18 @@
 
 DIAGNOSTIC ONLY — no manifest, no digest binding, not evidence.
 
-Why it exists: automatic surgical repair is a single-chain capability by design
-(§15), and every pilot now selects three chains, so `_build_multichain_ag_trace`
-runs with `allow_repair=False` and every authorised model-semantic failure is
-routed to a BLOCKED task. The consequence is easy to miss — **the Increment 3 exit
-gate ("one authorised model-semantic failure is automatically routed, attempted,
-and rechecked against the committed revision") is not exercised by the current
-pilot configuration at all.** It was, when REQ_SAFE_005 was the only selected
-chain.
+Why it exists: a single chain is the cheapest way to inspect one bounded surgical
+repair turn in isolation. The production multi-chain controller now runs the same
+repair as a fixpoint, but a full arm also pays for base-model and three-chain A/G
+generation before that one turn. This probe reuses an already generated model so
+the repair mechanism can be diagnosed without repeating those calls.
 
-So this drives that gate deliberately: take one chain out of a real committed
-model, injure it in a way that routes to DEPENDENCY_CLOSED_SURGICAL_REPAIR, and run
-the real path — route, envelope, bounded session, provider call, surgical merge,
-preservation gates, target-diagnostic removal, re-extraction of the committed
-revision. The provider is real; the injury is deliberate, which is why this is a
-diagnostic and not an experiment (§13 excludes error injection from the core).
+By default this drives that gate deliberately: take one chain out of a real
+committed model and inject one model-semantic fault. With ``--no-inject`` it
+instead uses an existing, naturally generated failure from the supplied model.
+Both paths run route, envelope, bounded session, provider call, surgical merge,
+preservation gates, target-diagnostic removal, and committed-revision recheck.
+They remain diagnostics rather than experiment evidence.
 
     .venv/bin/python examples/probe_repair_loop.py --confirm-external-call
 """
@@ -83,6 +80,11 @@ def main() -> int:
     parser.add_argument("--requirement", default="REQ_SAFE_005")
     parser.add_argument("--provider", default="vertex")
     parser.add_argument("--model-name", default="gemini-3.1-pro-preview")
+    parser.add_argument(
+        "--no-inject",
+        action="store_true",
+        help="repair the first naturally generated authorised failure",
+    )
     parser.add_argument("--confirm-external-call", action="store_true")
     args = parser.parse_args()
     if not args.confirm_external_call:
@@ -90,9 +92,16 @@ def main() -> int:
 
     load_dotenv()
     chain = _single_chain(Path(args.model).read_text(), args.requirement)
-    injured, removed_action = _injure(chain)
-    print(f"single chain: {args.requirement} "
-          f"({len(chain.splitlines())} lines); removed `{removed_action}`")
+    if args.no_inject:
+        injured = chain
+        print(
+            f"single chain: {args.requirement} "
+            f"({len(chain.splitlines())} lines); no fault injected"
+        )
+    else:
+        injured, removed_action = _injure(chain)
+        print(f"single chain: {args.requirement} "
+              f"({len(chain.splitlines())} lines); removed `{removed_action}`")
 
     report = check_ag_graph(extract_ag_graph(injured))
     print(f"verdict after injury: {report.verdict} "

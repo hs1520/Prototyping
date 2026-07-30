@@ -55,6 +55,12 @@ def main() -> int:
     parser.add_argument("--model", default="gemini-3.1-pro-preview")
     parser.add_argument("--max-iterations", type=int, default=1)
     parser.add_argument("--r2-generation-mode", default="LLM_DECIDED_SPEC")
+    parser.add_argument(
+        "--r2-authored-syntax-max-attempts",
+        type=int,
+        default=3,
+        help="bounded notation-only attempts per authored A/G chain",
+    )
     parser.add_argument("--llm-timeout-seconds", type=float, default=420.0)
     parser.add_argument(
         "--confirm-external-call", action="store_true",
@@ -84,6 +90,9 @@ def main() -> int:
         r2_intervention_version=R2_INTERVENTION_VERSION_BY_MODE[
             args.r2_generation_mode
         ],
+        r2_authored_syntax_max_attempts=(
+            args.r2_authored_syntax_max_attempts
+        ),
     )
     frozen = config.frozen_requirements()
     out.mkdir(parents=True)
@@ -113,14 +122,67 @@ def main() -> int:
         verbose=False,
         revised_experiment_arm=args.arm,
         r2_generation_mode=args.r2_generation_mode,
+        r2_authored_syntax_max_attempts=config.r2_authored_syntax_max_attempts,
         task_session_max_turns=config.task_session_max_turns,
         task_session_max_tokens=config.task_session_max_tokens,
     )
-    result = pipeline.orchestrator.generate(
-        system_name=config.system_name,
-        system_description=config.system_description,
-        frozen_requirements=frozen,
-    )
+    try:
+        result = pipeline.orchestrator.generate(
+            system_name=config.system_name,
+            system_description=config.system_description,
+            frozen_requirements=frozen,
+        )
+    except Exception as exc:
+        attempts = list(
+            pipeline.orchestrator.last_ag_authoring_attempts
+        )
+        step1_attempts = list(
+            getattr(exc, "plan_attempts", ()) or ()
+        )
+        (out / "ag_authoring_attempts.json").write_text(
+            json.dumps({
+                "schema_version": "1.0",
+                "artifact_role": "R2_AUTHORED_SYNTAX_ATTEMPTS",
+                "feedback_scope": "SYNTAX_ONLY",
+                "maximum_attempts_per_chain": (
+                    config.r2_authored_syntax_max_attempts
+                ),
+                "attempts": attempts,
+            }, indent=2),
+            encoding="utf-8",
+        )
+        (out / "probe_failure.json").write_text(
+            json.dumps({
+                "artifact_role": "DIAGNOSTIC_PROBE_FAILURE",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "r2_generation_mode": args.r2_generation_mode,
+                "r2_authored_syntax_max_attempts": (
+                    config.r2_authored_syntax_max_attempts
+                ),
+                "authoring_attempt_count": len(attempts),
+                "step1_plan_attempt_count": len(step1_attempts),
+            }, indent=2),
+            encoding="utf-8",
+        )
+        if step1_attempts:
+            (out / "step1_plan_attempts.json").write_text(
+                json.dumps({
+                    "schema_version": "1.0",
+                    "artifact_role": "TYPED_MODEL_PLAN_ATTEMPTS",
+                    "maximum_attempts": 3,
+                    "retry_policy": (
+                        "ONE_FORMAT_RECOVERY_PLUS_ONE_SEMANTIC_CORRECTION"
+                    ),
+                    "attempts": step1_attempts,
+                }, indent=2),
+                encoding="utf-8",
+            )
+        print(
+            f"  diagnostic failure artifacts written to {out}",
+            flush=True,
+        )
+        raise
     report = pipeline.build_run_report(result)
     # the pilot's own validation, so a defect it would reject is rejected here
     _validate_run_result(
