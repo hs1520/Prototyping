@@ -54,7 +54,7 @@ class PrototypingPipeline:
         revised_experiment_arm: Optional[Any] = None,
         r2_generation_mode: Optional[str] = None,
         task_session_max_turns: int = 12,
-        task_session_max_tokens: int = 150000,
+        task_session_max_tokens: int = 600000,
         r2_authored_syntax_max_attempts: int = 3,
         maximum_ag_repair_attempts: int = 3,
     ):

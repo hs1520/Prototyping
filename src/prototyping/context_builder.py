@@ -159,6 +159,17 @@ REQUIRED_CONTEXT_BY_ROLE: Mapping[str, Tuple[ContextRequirement, ...]] = {
             _has_source_requirements,
         ),
     ),
+    "AGPlanningAgent": (
+        ContextRequirement(
+            "authoritative_source_requirements",
+            "raises",
+            "build_ag_planning_context without the authoritative SOURCE record "
+            "raises 'required typed publications are missing from context': the "
+            "A/G decisions are derived from the requirement text, and there is "
+            "no committed model revision to fall back on at planning time",
+            _has_source_requirements,
+        ),
+    ),
     "RepairAgent": (
         ContextRequirement(
             "typed_diagnostic_records",
@@ -437,6 +448,54 @@ class ContextBuilder:
             agent_role="DesignAgent",
             objective=f"Generate the initial SysML v2 model for {system_name}",
             allowed_operation="CREATE_INITIAL_MODEL",
+            source_requirements=requirements,
+            protected_elements=("requirement_ids", "requirement_source_text"),
+            included_record_ids=source_ids,
+            token_budget=token_budget,
+        )
+
+    def build_ag_planning_context(
+        self,
+        *,
+        task_id: str,
+        system_name: str,
+        source_record_ids: Iterable[str],
+        token_budget: int = 12000,
+    ) -> ContextEnvelope:
+        """Envelope for the A/G planning task, which runs before any model exists.
+
+        The A/G decisions are made from the stakeholder requirements and the
+        frozen architecture boundary alone, so this envelope deliberately
+        carries no model slice: there is no committed revision to slice yet.
+        """
+        source_ids = tuple(str(item) for item in source_record_ids)
+        requirements: list[str] = []
+        for record_id in source_ids:
+            record = self.board.record(record_id)
+            if (
+                record.topic.lower().startswith("gold.")
+                or _contains_evaluator_only_material(record.payload)
+            ):
+                raise ValueError("evaluator gold cannot enter a ContextEnvelope")
+            if record.topic != "requirements.authoritative":
+                raise ValueError(
+                    "A/G planning context must come from authoritative "
+                    "requirements"
+                )
+            requirements.extend(
+                str(item) for item in record.payload.get("requirements", ())
+            )
+        if not requirements:
+            raise ValueError(
+                "required typed publications are missing from context"
+            )
+        return self.build(
+            task_id=task_id,
+            agent_role="AGPlanningAgent",
+            objective=(
+                f"Decide the bounded A/G decomposition for {system_name}"
+            ),
+            allowed_operation="FREEZE_AG_GENERATION_PLAN",
             source_requirements=requirements,
             protected_elements=("requirement_ids", "requirement_source_text"),
             included_record_ids=source_ids,

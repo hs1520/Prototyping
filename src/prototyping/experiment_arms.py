@@ -11,7 +11,12 @@ from enum import Enum
 
 LEGACY_EXPERIMENT_NAMESPACE = "LEGACY_EXTERNAL_CONTRACT_V1"
 REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v9"
+# v10: the five generation steps run as ONE bounded multi-turn conversation
+# instead of five independent single-turn calls, so every step sees the earlier
+# fragments as the model's own turns. This changes generation for R0, R1 and R2
+# alike — it is a common-pipeline change, not an intervention — so no v9 result
+# may be pooled with a v10 one, in any arm.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v10"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"
@@ -24,9 +29,13 @@ R2_DETERMINISTIC_INTERVENTION_VERSION = (
 # It retains the fixed authoring and post-commit repair budgets.
 # The post-commit repair budget remains fixed and independently audited.
 # It must never be pooled with authored-v1/v2 or the deterministic mode.
+# v9 changes the retry seam, not the budgets: the structured-decision turns are a
+# real multi-turn conversation, so a rejected decision object comes back as the
+# model's own assistant turn instead of being paraphrased into a fresh prompt.
+# That changes what the model sees on every retry, so v8 and v9 are not pooled.
 R2_LLM_AUTHORED_GENERATION_MODE = "LLM_AUTHORED_AG"
 R2_LLM_AUTHORED_INTERVENTION_VERSION = (
-    "r2-bbag-whole-model-guided-authored-v8"
+    "r2-bbag-whole-model-guided-authored-v9"
 )
 
 # LLM-decided specs are a THIRD frozen intervention. The LLM emits the engineering
@@ -37,9 +46,15 @@ R2_LLM_AUTHORED_INTERVENTION_VERSION = (
 # the notation rather than to the engineering. Here conformance holds by
 # construction and only the decisions are judged. Separate frozen config; never
 # pooled with either other mode.
+# v6 makes the bounded validation retry a real multi-turn conversation: the
+# rejected decision object is resent as the model's own assistant turn, so
+# "keep everything that was already valid" refers to something it can read. The
+# 9/9 evidence was produced under v5, where every retry was a fresh single-turn
+# prompt carrying only a paraphrase of the rejection. v5 and v6 must never be
+# pooled, and a v6 claim requires its own runs.
 R2_LLM_DECIDED_GENERATION_MODE = "LLM_DECIDED_SPEC"
 R2_LLM_DECIDED_INTERVENTION_VERSION = (
-    "r2-bbag-whole-model-guided-decided-v5"
+    "r2-bbag-whole-model-guided-decided-v6"
 )
 
 R2_GENERATION_MODES = (

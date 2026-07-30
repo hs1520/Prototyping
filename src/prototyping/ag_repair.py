@@ -340,7 +340,7 @@ def attempt_dependency_closed_ag_repair(
         base_model_digest=task.base_model_digest,
         context_envelope_id=envelope.envelope_id,
         max_turns=2,
-        max_tokens=30000,
+        max_tokens=120000,
     )
     before_graph = _extract_routed_ag_graph(
         board.current_model.model_text,

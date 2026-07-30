@@ -206,17 +206,40 @@ def test_prompt_states_the_notation_conventions_but_not_the_reviewed_answers():
 
 
 class _SequenceLLM:
-    """Returns a fixed sequence of packages across successive chat() calls."""
+    """Returns a fixed sequence of packages across successive provider calls.
+
+    The authored mode's free-form turn uses ``chat()``; its structured-decision
+    turns run through a multi-turn ``Conversation`` and therefore arrive at
+    ``complete()``. Both consume the same sequence, so ``_calls`` still counts
+    provider calls regardless of which seam produced them.
+    """
 
     def __init__(self, packages):
         self._packages = list(packages)
         self._calls = 0
+        self.prompts = []
 
-    def chat(self, prompt, system_prompt=None):
-        self.last_prompt = prompt
+    def _next(self):
         pkg = self._packages[min(self._calls, len(self._packages) - 1)]
         self._calls += 1
         return pkg
+
+    def chat(self, prompt, system_prompt=None):
+        self.last_prompt = prompt
+        self.prompts.append(prompt)
+        return self._next()
+
+    def complete(self, messages, **kw):
+        from src.llm.interface import LLMResponse
+        self.last_prompt = next(
+            (
+                message.content for message in reversed(messages)
+                if message.role == "user"
+            ),
+            "",
+        )
+        self.prompts.append(self.last_prompt)
+        return LLMResponse(content=self._next(), model="stub")
 
 
 def test_production_authored_path_uses_precommit_gold_blind_ag_feedback():
@@ -251,8 +274,12 @@ def test_production_authored_path_uses_precommit_gold_blind_ag_feedback():
     report = check_ag_graph(extract_ag_graph(merged))
 
     assert llm._calls == 3
-    assert "structured decisions" in llm.last_prompt
-    assert "DISCHARGE_EDGE_MISSING" in llm.last_prompt
+    # The structured-decision turn carries the gold-blind A/G feedback. Its
+    # follow-up no longer repeats that text — the conversation already holds it
+    # — so the assertion names the opening turn instead of the last one.
+    structured_prompt = llm.prompts[1]
+    assert "structured decisions" in structured_prompt
+    assert "DISCHARGE_EDGE_MISSING" in structured_prompt
     assert report.verdict == "PASS"
     assert [
         item["syntax_ok"] for item in orch.last_ag_authoring_attempts

@@ -50,7 +50,7 @@ class TaskSession:
     base_model_digest: str
     context_envelope_ids: list[str] = field(default_factory=list)
     max_turns: int = 12
-    max_tokens: int = 150000
+    max_tokens: int = 600000
     status: SessionStatus = SessionStatus.OPEN
     messages: list[SessionMessage] = field(default_factory=list)
     output_record_ids: list[str] = field(default_factory=list)
@@ -165,7 +165,7 @@ class TaskSessionRegistry:
         base_model_digest: str,
         context_envelope_id: str,
         max_turns: int = 12,
-        max_tokens: int = 150000,
+        max_tokens: int = 600000,
         rebased_from_session_id: Optional[str] = None,
     ) -> TaskSession:
         task_key = str(task_id)

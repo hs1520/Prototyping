@@ -214,3 +214,129 @@ def test_authored_guidance_uses_authored_behavior_not_reviewed_realization_gold(
     )
     assert "AuthoredArbitration" in guidance["behavior"]
     assert "SafetyResponseArbitration" not in guidance["behavior"]
+
+
+def test_ag_planning_is_a_board_task_with_its_own_archived_session():
+    """§5.3 rule 1, applied to the role that actually makes the A/G decisions.
+
+    Freezing the plan used to happen before the board existed, so the only LLM
+    work in the run whose engineering is judged had no envelope, no session and
+    no transcript — the one thing §5.3 says every result must record.
+    """
+    import json
+
+    from src.llm.interface import LLMInterface, LLMResponse
+    from src.prototyping.task_session import SessionStatus
+
+    class _RealisticDecisionLLM(LLMInterface):
+        """Carries the real observer machinery, so archiving is exercised."""
+
+        def _complete_impl(self, messages, temperature, max_tokens):
+            return LLMResponse(content=json.dumps(_CORRECT), model="stub")
+
+    orchestrator = Orchestrator(
+        _RealisticDecisionLLM(),
+        revised_experiment_arm="R2-BBAG",
+        r2_generation_mode="LLM_DECIDED_SPEC",
+    )
+    orchestrator.last_requirement_input = {
+        "mode": "frozen", "requirement_set_digest": "d"
+    }
+    assert orchestrator._open_collaboration_board("DeliveryUAV", _REQS) is True
+    orchestrator._prepare_ag_guided_generation(_REQS)
+
+    sessions = orchestrator.task_sessions.snapshot(
+        include_messages=True
+    )["sessions"]
+    planning = [
+        item for item in sessions
+        if item["agent_role"] == "AGPlanningAgent"
+    ]
+    assert len(planning) == 1, "one bounded session for the planning task"
+    assert planning[0]["status"] == SessionStatus.COMPLETED.value
+    # the decision turns are archived, not merely counted
+    roles = [message["role"] for message in planning[0]["messages"]]
+    assert "assistant" in roles and "user" in roles
+
+    results = orchestrator.blackboard.records(
+        topic="agent.ag_planning.result"
+    )
+    assert len(results) == 1
+    payload = results[0].payload
+    assert payload["transcript_digest"] == planning[0]["transcript_digest"]
+    assert payload["context_envelope_digest"]
+
+
+def test_planning_and_design_never_share_a_session():
+    """Rule 6: one permanent session shared by all Agents is prohibited."""
+    orchestrator = Orchestrator(
+        _DecisionLLM(_CORRECT),
+        revised_experiment_arm="R2-BBAG",
+        r2_generation_mode="LLM_DECIDED_SPEC",
+    )
+    orchestrator.last_requirement_input = {
+        "mode": "frozen", "requirement_set_digest": "d"
+    }
+    orchestrator._open_collaboration_board("DeliveryUAV", _REQS)
+    orchestrator._active_ag_generation_plan = (
+        orchestrator._prepare_ag_guided_generation(_REQS)
+    )
+    orchestrator._prepare_design_handoff("DeliveryUAV", _REQS)
+
+    sessions = orchestrator.task_sessions.snapshot()["sessions"]
+    roles = sorted(item["agent_role"] for item in sessions)
+    assert roles == ["AGPlanningAgent", "DesignAgent"]
+    assert len({item["session_id"] for item in sessions}) == 2
+    assert len({item["task_id"] for item in sessions}) == 2
+
+
+def test_generation_drafts_are_archived_on_the_board_but_never_authority():
+    """The board now sees the intermediate drafts — as evidence, not as input.
+
+    Before this, nothing was published between the DesignAgent task opening and
+    the finished model being committed, so no knowledge source could subscribe
+    to a step's output and no coordination metric covered generation. Making
+    them records fixes that; letting a later stage *build from* them would
+    recreate the external-authority design that was removed, so the
+    ContextBuilder must refuse the topic.
+    """
+    from src.agents.orchestrator import Orchestrator
+    from src.prototyping.blackboard import RecordType
+
+    orchestrator = _orchestrator()
+    orchestrator.last_requirement_input = {"mode": "frozen",
+                                           "requirement_set_digest": "d"}
+    orchestrator._open_collaboration_board("DeliveryUAV", _REQS)
+    task = orchestrator.blackboard.create_task(
+        "INITIAL_MODEL_GENERATION", "DesignAgent",
+        required_topics=("requirements.authoritative",),
+    )
+    handoff = {"task": task, "session": None, "captured_llm_calls": 1}
+    orchestrator._publish_generation_fragment(handoff, {
+        "label": "parts",
+        "conversation_id": "conv-x",
+        "new_message_offset": 3,
+        "response": {"content": "part def FlightController;",
+                     "completion_tokens": 7},
+    })
+
+    records = orchestrator.blackboard.records(
+        topic=Orchestrator.GENERATION_FRAGMENT_TOPIC
+    )
+    assert len(records) == 1
+    payload = records[0].payload
+    assert records[0].record_type is RecordType.ANALYSIS
+    assert payload["stage"] == "parts"
+    assert payload["multi_turn"] is True
+    assert payload["fragment"] == "part def FlightController;"
+    assert payload["fragment_digest"]
+    # the record announces that it decides nothing
+    assert payload["authority"] == "NONE_ARCHIVAL_ONLY"
+
+    # and the ContextBuilder refuses to let a later stage build from it
+    with pytest.raises(ValueError, match="authoritative requirements"):
+        orchestrator.context_builder.build_design_context(
+            task_id=task.task_id,
+            system_name="DeliveryUAV",
+            source_record_ids=(records[0].record_id,),
+        )

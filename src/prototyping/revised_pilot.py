@@ -77,7 +77,7 @@ class RevisedPilotConfig:
     quality_threshold: float = 0.75
     llm_timeout_seconds: float = 300.0
     task_session_max_turns: int = 12
-    task_session_max_tokens: int = 150000
+    task_session_max_tokens: int = 600000
     context_token_budget: int = 12000
     ag_checker_version: str = AG_CHECKER_VERSION
     pattern_profile_version: str = "bounded-ag-safety-profile-2.0"

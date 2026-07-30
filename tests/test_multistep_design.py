@@ -110,7 +110,11 @@ class QueuedMockLLM:
         messages: List[Message],
         temperature: float = 0.7,
         max_tokens: int = 20480,
+        **kwargs,
     ) -> LLMResponse:
+        # **kwargs absorbs the multi-turn transcript bookkeeping
+        # (conversation_id / new_message_offset), which does not change what a
+        # provider is asked to produce.
         self.call_count += 1
         self.messages.append(list(messages))
         content = self._queue.popleft() if self._queue else "fallback response"
@@ -445,6 +449,77 @@ class TestMultistepGeneratePipeline:
 
         assert result.success
         assert agent.llm.call_count == 5
+
+    def test_the_authoring_steps_are_one_conversation_and_planning_is_not(
+        self, monkeypatch
+    ):
+        """Steps 2-5 share a conversation; step 1 must NOT join it.
+
+        A measured probe run showed why. Step 1 runs under a system prompt that
+        forbids what the authoring prompt requires — "one JSON object, no SysML,
+        no prose" against "show your reasoning, follow SysML v2 syntax" — and one
+        conversation carries one system message. Inside the conversation, step 1
+        lost its compiler instruction to a user preamble and its plan failed
+        validation on the first attempt where it had passed first time before.
+        """
+        import src.agents.design_agent as da_module
+        from src.sysml.model import SysMLModel, PartDefinition
+
+        step1 = "Architecture plan text with component list"
+        responses = [
+            step1,
+            _SYSML_FRAGMENT,
+            _INTERFACE_FRAGMENT,
+            _BEHAVIOR_FRAGMENT,
+            _ASSEMBLED_MODEL,
+        ]
+        agent = self._make_agent(responses, monkeypatch)
+        dummy_model = SysMLModel(name="DroneSystem", description="test")
+        dummy_model.part_definitions.append(
+            PartDefinition(name="FlightController", short_description="x")
+        )
+        monkeypatch.setattr(
+            da_module, "build_lite_model", lambda *a, **kw: dummy_model
+        )
+
+        agent.run({
+            "system_name": "DroneSystem",
+            "requirements": self._REQUIREMENTS,
+        })
+
+        planning, *authoring = agent.llm.messages
+        # step 1 keeps its own compiler system prompt and starts fresh
+        assert len(planning) == 2
+        assert "typed model-planning compiler" in planning[0].content
+        assert "expert in Model Based Systems Engineering" not in (
+            planning[0].content
+        )
+        # steps 2-5 share one conversation under the authoring role instruction
+        # (DesignAgent installs its own, so match on what it actually says)
+        assert len({turns[0].content for turns in authoring}) == 1
+        assert "SysML v2" in authoring[0][0].content
+        assert "typed model-planning compiler" not in authoring[0][0].content
+        # its history grows by one user + one assistant turn per step
+        assert [len(turns) for turns in authoring] == [2, 4, 6, 8]
+        # and it really is the model's own words coming back, not a paraphrase
+        assert authoring[1][2].role == "assistant"
+        assert authoring[1][2].content == _SYSML_FRAGMENT
+        # the planning turn never leaks into the authoring conversation
+        assert all(
+            step1 not in message.content
+            for turns in authoring for message in turns
+        )
+
+    def test_refinement_does_not_join_the_generation_conversation(
+        self, monkeypatch
+    ):
+        """Refinement is a different role with a different system instruction,
+        so it must not inherit generation's turns (§5.3 rules 1 and 6)."""
+        agent = self._make_agent(["irrelevant"], monkeypatch)
+        assert agent.cot._conversation is None
+        with agent.cot.generation_conversation():
+            assert agent.cot._conversation is not None
+        assert agent.cot._conversation is None
 
     def test_invalid_typed_plan_gets_one_bounded_retry(self, monkeypatch):
         invalid = {

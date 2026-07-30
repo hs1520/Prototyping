@@ -13,7 +13,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .interface import LLMInterface, Message
+from contextlib import contextmanager
+
+from .interface import (
+    DEFAULT_MAX_TOKENS,
+    Conversation,
+    LLMInterface,
+    Message,
+)
 
 
 SYSML_EXPERT_SYSTEM_PROMPT = """You are an expert in Model Based Systems Engineering (MBSE) 
@@ -1312,6 +1319,62 @@ class ChainOfThoughtPrompter:
     def __init__(self, llm: LLMInterface):
         self.llm = llm
         self.system_prompt = SYSML_EXPERT_SYSTEM_PROMPT
+        self._conversation: Optional[Conversation] = None
+
+    @contextmanager
+    def generation_conversation(self):
+        """Bind the multi-step generation calls into one bounded conversation.
+
+        §5.3: one session belongs to one Agent role and one bounded task. The
+        five generation steps are that task, so each step sees the fragments it
+        must stay consistent with as the model's *own* earlier turns rather than
+        as a re-pasted summary. Evaluation and refinement are different roles
+        with different system instructions and stay outside.
+
+        The conversation carries the role instruction as its system message;
+        a step whose own system prompt differs passes it to ``_ask`` and it
+        becomes a preamble on that turn instead of a second system message.
+        """
+        previous = self._conversation
+        self._conversation = Conversation(
+            self.llm, system_prompt=self.system_prompt
+        )
+        try:
+            yield self._conversation
+        finally:
+            self._conversation = previous
+
+    def _ask(
+        self,
+        prompt: str,
+        *,
+        temperature: float,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        system_prompt: Optional[str] = None,
+        stage: Optional[str] = None,
+    ) -> str:
+        """One turn — continuing the open conversation when there is one.
+
+        ``stage`` names the pipeline step for transcript/board archiving only;
+        it never reaches the provider.
+        """
+        if self._conversation is not None:
+            return self._conversation.send(
+                f"{system_prompt}\n\n{prompt}" if system_prompt else prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                label=stage,
+            )
+        messages = [
+            Message(
+                role="system", content=system_prompt or self.system_prompt
+            ),
+            Message(role="user", content=prompt),
+        ]
+        return self.llm.complete(
+            messages, temperature=temperature, max_tokens=max_tokens,
+            label=stage,
+        ).content
 
     def extract_requirements(
         self,
@@ -1458,12 +1521,13 @@ class ChainOfThoughtPrompter:
             requirements=req_text,
             context_block=context_block,
         )
-        messages = [
-            Message(role="system", content=TYPED_MODEL_PLAN_SYSTEM_PROMPT),
-            Message(role="user", content=prompt),
-        ]
-        response = self.llm.complete(messages, temperature=0.7)
-        return self._parse_cot_response(response.content)
+        content = self._ask(
+            prompt,
+            temperature=0.7,
+            system_prompt=TYPED_MODEL_PLAN_SYSTEM_PROMPT,
+            stage="architecture",
+        )
+        return self._parse_cot_response(content)
 
     def generate_part_definitions(
         self,
@@ -1487,12 +1551,9 @@ class ChainOfThoughtPrompter:
             semantic_guidance=semantic_guidance,
             context_block=context_block,
         )
-        messages = [
-            Message(role="system", content=self.system_prompt),
-            Message(role="user", content=prompt),
-        ]
-        response = self.llm.complete(messages, temperature=0.3)
-        return self._parse_cot_response(response.content)
+        return self._parse_cot_response(
+            self._ask(prompt, temperature=0.3, stage="parts")
+        )
 
     def generate_behavior(
         self,
@@ -1515,12 +1576,9 @@ class ChainOfThoughtPrompter:
             platform_profile_block=profile_block,
             contract_pattern_guidance=contract_pattern_guidance,
         )
-        messages = [
-            Message(role="system", content=self.system_prompt),
-            Message(role="user", content=prompt),
-        ]
-        response = self.llm.complete(messages, temperature=0.4)
-        return self._parse_cot_response(response.content)
+        return self._parse_cot_response(
+            self._ask(prompt, temperature=0.4, stage="behavior")
+        )
 
     def generate_interfaces_and_flows(
         self,
@@ -1546,12 +1604,9 @@ class ChainOfThoughtPrompter:
             semantic_guidance=semantic_guidance,
             context_block=context_block,
         )
-        messages = [
-            Message(role="system", content=self.system_prompt),
-            Message(role="user", content=prompt),
-        ]
-        response = self.llm.complete(messages, temperature=0.3)
-        return self._parse_cot_response(response.content)
+        return self._parse_cot_response(
+            self._ask(prompt, temperature=0.3, stage="interfaces")
+        )
 
     def assemble_model(
         self,
@@ -1574,12 +1629,11 @@ class ChainOfThoughtPrompter:
             semantic_guidance=semantic_guidance,
             package_name=package_name,
         )
-        messages = [
-            Message(role="system", content=self.system_prompt),
-            Message(role="user", content=prompt),
-        ]
-        response = self.llm.complete(messages, temperature=0.2, max_tokens=65536)
-        return self._parse_cot_response(response.content)
+        return self._parse_cot_response(
+            self._ask(
+                prompt, temperature=0.2, max_tokens=65536, stage="assembly"
+            )
+        )
 
     #TODO 检查是否需要
     def self_consistency_generate(

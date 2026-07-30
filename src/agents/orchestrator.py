@@ -339,7 +339,7 @@ class Orchestrator:
         phase9_hifi: Optional[str] = None,
         revised_experiment_arm: Optional[Any] = None,
         task_session_max_turns: int = 12,
-        task_session_max_tokens: int = 150000,
+        task_session_max_tokens: int = 600000,
         r2_generation_mode: Optional[str] = None,
         r2_authored_syntax_max_attempts: int = 3,
         maximum_ag_repair_attempts: int = 3,
@@ -401,6 +401,7 @@ class Orchestrator:
         self.context_builder = None
         self.task_sessions = None
         self._active_design_handoff = None
+        self._active_ag_planning_handoff = None
         from ..prototyping.experiment_arms import (
             R2_DETERMINISTIC_GENERATION_MODE,
             R2_GENERATION_MODES,
@@ -559,6 +560,11 @@ class Orchestrator:
             )
             print(f"  ✓ Extracted {len(requirements)} requirements")
         self.state.requirements = requirements
+        # Board first: A/G planning makes real LLM decisions, so it is an Agent
+        # task and needs a typed task, an envelope, and an archived session like
+        # every other one. Freezing the plan before the board existed left those
+        # turns unrecorded, which §5.3 does not permit.
+        self._open_collaboration_board(system_name, requirements)
         self._active_ag_generation_plan = self._prepare_ag_guided_generation(
             requirements
         )
@@ -1511,32 +1517,8 @@ class Orchestrator:
 
             def archive_call(event: Mapping[str, Any]) -> None:
                 handoff["captured_llm_calls"] += 1
-                for message in event.get("messages", ()):
-                    self._append_session_message(
-                        session,
-                        str(message.get("role", "user")),
-                        str(message.get("content", "")),
-                    )
-                response = event.get("response", {})
-                prompt_tokens = int(response.get("prompt_tokens", 0) or 0)
-                completion_tokens = int(
-                    response.get("completion_tokens", 0) or 0
-                )
-                if prompt_tokens + completion_tokens == 0:
-                    prompt_chars = sum(
-                        len(str(item.get("content", "")))
-                        for item in event.get("messages", ())
-                    )
-                    prompt_tokens = max(1, prompt_chars // 4)
-                    completion_tokens = max(
-                        1, len(str(response.get("content", ""))) // 4
-                    )
-                self._append_session_message(
-                    session,
-                    "assistant",
-                    str(response.get("content", "")),
-                    token_count=prompt_tokens + completion_tokens,
-                )
+                self._archive_provider_call(session, event)
+                self._publish_generation_fragment(handoff, event)
 
             observer_id = add_observer(archive_call)
         try:
@@ -1689,17 +1671,135 @@ class Orchestrator:
         self, requirements: List[str]
     ) -> Optional[Dict[str, Any]]:
         """Freeze R2 A/G decisions before any architecture or behavior is generated."""
-        from ..prototyping.experiment_arms import (
-            R2_DETERMINISTIC_GENERATION_MODE,
-            R2_LLM_AUTHORED_GENERATION_MODE,
-            R2_LLM_DECIDED_GENERATION_MODE,
-            RevisedExperimentArm,
-        )
+        from ..prototyping.experiment_arms import RevisedExperimentArm
 
         if self.revised_experiment_arm is not RevisedExperimentArm.SEMANTIC_ASSURANCE:
             return None
 
         from ..prototyping.ag_chains import select_ag_chains
+
+        selected = list(select_ag_chains(requirements))
+        if not selected:
+            raise RuntimeError(
+                "R2-BBAG failed closed: no bounded A/G chain was selected"
+            )
+        self.last_ag_authoring_attempts = []
+        self.ag_input_dispositions = {}
+        planning_session = self._open_ag_planning_session(requirements)
+        try:
+            return self._compile_ag_generation_plan(selected, requirements)
+        finally:
+            self._close_ag_planning_session(planning_session)
+
+    def _open_ag_planning_session(self, requirements: List[str]) -> Optional[Any]:
+        """Open the board task/session that archives the A/G decision turns.
+
+        Without this the decision conversation would be the only LLM work in the
+        run whose transcript is not application-owned — and §5.3 requires every
+        result to record what the model actually saw.
+        """
+        if (
+            self.blackboard is None
+            or self.context_builder is None
+            or self.task_sessions is None
+        ):
+            return None
+        from ..prototyping.blackboard import TaskStatus
+
+        source = None
+        for record in self.blackboard.records(topic="requirements.authoritative"):
+            source = record
+        if source is None:
+            return None
+        state = getattr(self, "state", None)
+        system_name = (
+            state.system_name if state is not None and state.system_name
+            else "System"
+        )
+        task = self.blackboard.create_task(
+            "AG_GENERATION_PLANNING",
+            "AGPlanningAgent",
+            required_topics=("requirements.authoritative",),
+        )
+        self.blackboard.transition_task(task.task_id, TaskStatus.ACTIVE)
+        envelope = self.context_builder.build_ag_planning_context(
+            task_id=task.task_id,
+            system_name=system_name,
+            source_record_ids=(source.record_id,),
+        )
+        session = self.task_sessions.open(
+            task_id=task.task_id,
+            agent_role="AGPlanningAgent",
+            base_model_revision=task.base_model_revision,
+            base_model_digest=task.base_model_digest,
+            context_envelope_id=envelope.envelope_id,
+            max_turns=self.task_session_max_turns,
+            max_tokens=self.task_session_max_tokens,
+        )
+        observer_id = None
+        add_observer = getattr(self.llm, "add_call_observer", None)
+        if callable(add_observer):
+            def archive_call(event: Mapping[str, Any]) -> None:
+                self._archive_provider_call(session, event)
+
+            observer_id = add_observer(archive_call)
+        self._active_ag_planning_handoff = {
+            "task": task, "envelope": envelope, "session": session,
+            "observer_id": observer_id,
+        }
+        return self._active_ag_planning_handoff
+
+    def _close_ag_planning_session(self, handoff: Optional[Any]) -> None:
+        """Publish the typed planning result and close the session."""
+        if not handoff:
+            return
+        from ..prototyping.blackboard import RecordType, TaskStatus
+        from ..prototyping.task_session import SessionStatus
+
+        remove_observer = getattr(self.llm, "remove_call_observer", None)
+        if handoff.get("observer_id") is not None and callable(remove_observer):
+            remove_observer(handoff["observer_id"])
+        task, session, envelope = (
+            handoff["task"], handoff["session"], handoff["envelope"]
+        )
+        record = self.blackboard.publish(
+            RecordType.RESULT,
+            "agent.ag_planning.result",
+            "AGPlanningAgent",
+            {
+                "success": True,
+                "context_envelope_id": envelope.envelope_id,
+                "context_envelope_digest": envelope.envelope_digest,
+                "transcript_digest": session.transcript_digest,
+                "included_record_ids": list(envelope.included_record_ids),
+                "decision_attempts": len(self.last_ag_authoring_attempts),
+                "accepted_status": "ACCEPTED",
+            },
+            task_id=task.task_id,
+            session_id=session.session_id,
+        )
+        if task.status is TaskStatus.ACTIVE:
+            self.blackboard.transition_task(
+                task.task_id,
+                TaskStatus.COMPLETED,
+                producer="AGPlanningAgent",
+                result_record_ids=(record.record_id,),
+            )
+        if session.status is SessionStatus.OPEN:
+            session.close(
+                SessionStatus.COMPLETED,
+                output_record_ids=(record.record_id,),
+            )
+        self._active_ag_planning_handoff = None
+
+    def _compile_ag_generation_plan(
+        self, selected: List[Any], requirements: List[str]
+    ) -> Dict[str, Any]:
+        from ..prototyping.experiment_arms import (
+            R2_DETERMINISTIC_GENERATION_MODE,
+            R2_LLM_AUTHORED_GENERATION_MODE,
+            R2_LLM_DECIDED_GENERATION_MODE,
+        )
         from ..prototyping.ag_behavior_plan import (
             compile_behavior_obligation_plan,
         )
@@ -1711,13 +1811,6 @@ class Orchestrator:
             strip_ag_implementation,
         )
 
-        selected = list(select_ag_chains(requirements))
-        if not selected:
-            raise RuntimeError(
-                "R2-BBAG failed closed: no bounded A/G chain was selected"
-            )
-        self.last_ag_authoring_attempts = []
-        self.ag_input_dispositions = {}
         planning_model = self._requirement_planning_model(requirements)
         planned_specs: List[Any] = []
         planning_packages: List[str] = []
@@ -1912,30 +2005,36 @@ class Orchestrator:
         self.last_ag_binding_report = result.report.to_dict()
         return result.model_text
 
-    def _prepare_design_handoff(
+    def _open_collaboration_board(
         self, system_name: str, requirements: List[str]
-    ) -> None:
-        """Create the first typed RequirementsAgent -> DesignAgent handoff.
+    ) -> bool:
+        """Open the board and publish the authoritative source, before any task.
 
-        This is the R1-BBCTX intervention.  The envelope is derived only from
-        run-time source/model records; evaluator gold has no API into it.
+        A/G planning makes real LLM decisions, so under §5.3 it is an Agent task
+        and needs a board, a typed task, and an archived session like any other.
+        That is only possible if the board exists before the plan is frozen —
+        hence this step is separate from, and earlier than, the design handoff.
+
+        Returns False for an arm that does not use the blackboard at all.
         """
+        from ..prototyping.experiment_arms import RevisedExperimentArm  # noqa: F401
+        from ..prototyping.blackboard import Blackboard, RecordType
+        from ..prototyping.context_builder import ContextBuilder
+        from ..prototyping.task_session import TaskSessionRegistry
+
         arm = self.revised_experiment_arm
+        self._active_design_handoff = None
+        self._active_ag_planning_handoff = None
         if arm is None or not arm.uses_blackboard:
             self.blackboard = None
             self.context_builder = None
             self.task_sessions = None
-            self._active_design_handoff = None
-            return
-
-        from ..prototyping.blackboard import Blackboard, RecordType, TaskStatus
-        from ..prototyping.context_builder import ContextBuilder
-        from ..prototyping.task_session import TaskSessionRegistry
+            return False
 
         self.blackboard = Blackboard(system_name)
         self.context_builder = ContextBuilder(self.blackboard)
         self.task_sessions = TaskSessionRegistry()
-        source_record = self.blackboard.publish(
+        self.blackboard.publish(
             RecordType.SOURCE,
             "requirements.authoritative",
             "RequirementsAgent",
@@ -1948,6 +2047,43 @@ class Orchestrator:
                 "gold_access": False,
             },
         )
+        return True
+
+    def _prepare_design_handoff(
+        self, system_name: str, requirements: List[str]
+    ) -> None:
+        """Create the first typed RequirementsAgent -> DesignAgent handoff.
+
+        This is the R1-BBCTX intervention.  The envelope is derived only from
+        run-time source/model records; evaluator gold has no API into it.
+        """
+        from ..prototyping.blackboard import RecordType, TaskStatus
+
+        # Direct callers (and any path that did not open the board first) still
+        # get a board here; generate() opens it earlier so A/G planning is a
+        # board-mediated Agent task rather than work done before the board exists.
+        if self.blackboard is None:
+            if not self._open_collaboration_board(system_name, requirements):
+                return
+        source_record = None
+        for record in self.blackboard.records(topic="requirements.authoritative"):
+            source_record = record
+        if source_record is None:
+            source_record = self.blackboard.publish(
+                RecordType.SOURCE,
+                "requirements.authoritative",
+                "RequirementsAgent",
+                {
+                    "requirements": list(requirements),
+                    "requirement_input_mode": self.last_requirement_input.get(
+                        "mode"
+                    ),
+                    "requirement_set_digest": self.last_requirement_input.get(
+                        "requirement_set_digest"
+                    ),
+                    "gold_access": False,
+                },
+            )
         source_record_ids = [source_record.record_id]
         if self._active_ag_generation_plan is not None:
             plan_record = self.blackboard.publish(
@@ -2498,6 +2634,91 @@ class Orchestrator:
         model.metadata.setdefault(
             "whole_model_generation_plan",
             dict(self._active_model_generation_plan),
+        )
+
+    #: Topic carrying per-step generation drafts. Deliberately its own topic so
+    #: it is easy to see — and easy to refuse. `ContextBuilder` accepts only
+    #: `requirements.authoritative` and `design.ag_generation_plan` as design
+    #: sources, so a draft can never become the input a later stage builds from.
+    GENERATION_FRAGMENT_TOPIC = "generation.fragment"
+
+    def _publish_generation_fragment(
+        self, handoff: Mapping[str, Any], event: Mapping[str, Any]
+    ) -> None:
+        """Record one generation step's draft on the board — ARCHIVAL ONLY.
+
+        Before this, the board saw nothing between the DesignAgent task opening
+        and the finished model being committed: the five intermediate drafts
+        existed only as session-transcript turns, with no topic, so no knowledge
+        source could subscribe to them and no coordination metric covered them.
+
+        It is emphatically not a second authority. Element identity is carried
+        by the validated, digest-bound `ModelGenerationPlan` and enforced at
+        terminal compilation; reading names out of a raw draft would be the
+        external-JSON-authority design §1 deliberately removed. Hence
+        `authority: NONE_ARCHIVAL_ONLY`, and a ContextBuilder that refuses this
+        topic as a source.
+        """
+        if self.blackboard is None:
+            return
+        from ..prototyping.blackboard import RecordType, text_digest
+
+        response = event.get("response", {}) or {}
+        fragment = str(response.get("content", ""))
+        task = handoff.get("task")
+        session = handoff.get("session")
+        self.blackboard.publish(
+            RecordType.ANALYSIS,
+            self.GENERATION_FRAGMENT_TOPIC,
+            "DesignAgent",
+            {
+                "artifact_role": "GENERATION_DRAFT_FRAGMENT",
+                "authority": "NONE_ARCHIVAL_ONLY",
+                "measurement_boundary": "INTERVENTION",
+                "stage": event.get("label"),
+                "call_index": int(handoff.get("captured_llm_calls", 0)),
+                "conversation_id": event.get("conversation_id"),
+                "multi_turn": bool(event.get("new_message_offset")),
+                "fragment_digest": text_digest(fragment),
+                "fragment_chars": len(fragment),
+                "fragment": fragment,
+                "completion_tokens": int(
+                    response.get("completion_tokens", 0) or 0
+                ),
+            },
+            task_id=getattr(task, "task_id", None),
+            session_id=getattr(session, "session_id", None),
+        )
+
+    def _archive_provider_call(self, session: Any, event: Mapping[str, Any]) -> None:
+        """Archive one provider call into a task session, each turn charged once.
+
+        A multi-turn call resends its earlier turns, so the provider's
+        ``prompt_tokens`` covers content this session has already recorded.
+        Charging that figure per call makes the session budget grow
+        quadratically while the transcript grows linearly — the budget would
+        then measure resends rather than accumulated context, and §13 defines
+        session growth as what the session accumulates.  Each turn is therefore
+        charged for its own content once; the real (cumulative, billed) provider
+        cost stays in the TokenLedger, where cost belongs.
+        """
+        offset = int(event.get("new_message_offset", 0) or 0)
+        for message in list(event.get("messages", ()))[offset:]:
+            content = str(message.get("content", ""))
+            self._append_session_message(
+                session,
+                str(message.get("role", "user")),
+                content,
+                token_count=max(1, len(content) // 4),
+            )
+        response = event.get("response", {})
+        reply = str(response.get("content", ""))
+        completion_tokens = int(response.get("completion_tokens", 0) or 0)
+        self._append_session_message(
+            session,
+            "assistant",
+            reply,
+            token_count=completion_tokens or max(1, len(reply) // 4),
         )
 
     def _append_session_message(
@@ -3509,10 +3730,19 @@ class Orchestrator:
         # what is incoherent, and the model only has to repair that field. The
         # validator still decides — a decision set that never becomes coherent
         # fails closed, it is never patched here.
+        #
+        # The retry is a real multi-turn conversation (§2 reasoning continuity):
+        # the rejected decision object stays in the transcript as the model's own
+        # assistant turn, so "keep everything that was already valid" refers to
+        # something it can actually see. The turns are application-owned, so what
+        # each turn saw remains reproducible and digest-recordable.
+        from ..llm.interface import Conversation
+
+        conversation = Conversation(self.llm, system_prompt=system_prompt)
         attempt_prompt = prompt
         last: Optional[DecisionError] = None
         for attempt in range(max_decision_attempts):
-            raw = str(self.llm.chat(attempt_prompt, system_prompt=system_prompt))
+            raw = str(conversation.send(attempt_prompt))
             try:
                 decided_spec = build_spec_from_decisions(
                     extract_decisions(raw), boundary
@@ -3569,8 +3799,11 @@ class Orchestrator:
                     is DecisionFailureDisposition.NEEDS_ARCHITECTURE_INPUT
                 ):
                     raise ArchitectureInputRequired(exc) from exc
+                # The requirement, architecture and schema are already in the
+                # conversation, so the follow-up turn carries only what is new.
+                # Repasting the whole prompt would re-state them as if unsaid.
                 attempt_prompt = (
-                    f"{prompt}\n\nYour previous decisions were rejected: {exc}\n"
+                    f"Your previous decisions were rejected: {exc}\n"
                     "Return the corrected JSON decision object, keeping everything "
                     "that was already valid."
                 )

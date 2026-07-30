@@ -105,6 +105,12 @@ class _DecisionLLM:
     def chat(self, prompt, system_prompt=None):
         return f"```json\n{json.dumps(self._payload)}\n```"
 
+    def complete(self, messages, **kw):
+        from src.llm.interface import LLMResponse
+        return LLMResponse(
+            content=f"```json\n{json.dumps(self._payload)}\n```", model="stub"
+        )
+
 
 def test_decisions_render_to_a_model_that_passes_by_construction():
     report = check_ag_graph(extract_ag_graph(_render(_CORRECT)))
@@ -259,15 +265,40 @@ def test_orchestrator_decided_mode_renders_a_passing_package():
 
 
 class _SequenceDecisionLLM:
+    """Stands in for a provider, and records the exact turn list of every call.
+
+    ``seen_messages`` is what makes the multi-turn property assertable: a
+    stateless provider only knows what the caller resent, so the earlier turns
+    have to be visible here or they were never sent at all.
+    """
+
     def __init__(self, payloads):
         self._payloads = list(payloads)
         self._calls = 0
+        self.seen_messages = []
 
-    def chat(self, prompt, system_prompt=None):
-        self.last_prompt = prompt
+    def _next(self):
         payload = self._payloads[min(self._calls, len(self._payloads) - 1)]
         self._calls += 1
         return json.dumps(payload)
+
+    def chat(self, prompt, system_prompt=None):
+        self.last_prompt = prompt
+        return self._next()
+
+    def complete(self, messages, **kw):
+        from src.llm.interface import LLMResponse
+        self.seen_messages.append(
+            [(message.role, message.content) for message in messages]
+        )
+        self.last_prompt = next(
+            (
+                message.content for message in reversed(messages)
+                if message.role == "user"
+            ),
+            "",
+        )
+        return LLMResponse(content=self._next(), model="stub")
 
 
 def test_singleton_priority_stops_for_architecture_input_without_guessing():
@@ -317,6 +348,137 @@ def test_retryable_decision_error_gets_bounded_feedback():
     assert emit_ag_package(decided)
     assert llm._calls == 2
     assert "not in members" in llm.last_prompt
+
+
+def test_the_retry_shows_the_model_its_own_rejected_answer():
+    """§2 reasoning continuity, as an actual property rather than a claim.
+
+    The provider is stateless, so the second turn can only see the first if the
+    caller resent it. "Keep everything that was already valid" is otherwise an
+    instruction about a document the model cannot read.
+    """
+    inconsistent = json.loads(json.dumps(_CATALOG_CORRECT))
+    inconsistent["priority"]["selected_response"] = "NOT_A_MEMBER"
+    llm = _SequenceDecisionLLM([inconsistent, _CATALOG_CORRECT])
+    orch = Orchestrator(llm, revised_experiment_arm="R2-BBAG",
+                        r2_generation_mode="LLM_DECIDED_SPEC")
+    orch._generate_llm_decided_ag_spec(
+        REQ_SAFE_005_CHAIN, _BASE_WITH_RESPONSE_CATALOG,
+        max_decision_attempts=2,
+    )
+
+    first, second = llm.seen_messages
+    assert [role for role, _ in first] == ["system", "user"]
+    # the rejected object comes back as the model's own turn, verbatim
+    assert ("assistant", json.dumps(inconsistent)) in second
+    assert [role for role, _ in second] == [
+        "system", "user", "assistant", "user"
+    ]
+    # and the follow-up carries only what is new, not a re-paste of the schema
+    # and architecture the conversation already holds
+    assert "Approved architecture" not in second[-1][1]
+    assert "timing_segment_required" not in second[-1][1]
+    assert "not in members" in second[-1][1]
+
+
+def test_one_conversation_turn_is_archived_exactly_once():
+    """Resending history must not re-archive it.
+
+    Without the offset, a 3-turn conversation would record 1+2+3 turns, inflating
+    the transcript digest and the §13 session-growth metric it feeds.
+    """
+    from src.llm.interface import Conversation, LLMInterface, LLMResponse
+
+    class _Echo(LLMInterface):
+        def _complete_impl(self, messages, temperature, max_tokens):
+            return LLMResponse(content=f"reply-{len(messages)}", model="stub")
+
+    archived = []
+    llm = _Echo()
+    llm.add_call_observer(lambda event: archived.extend(
+        [
+            (m["role"], m["content"])
+            for m in event["messages"][int(event["new_message_offset"]):]
+        ]
+        + [("assistant", event["response"]["content"])]
+    ))
+
+    conversation = Conversation(llm, system_prompt="sys")
+    conversation.send("first")
+    conversation.send("second")
+    conversation.send("third")
+
+    assert [content for role, content in archived if role == "user"] == [
+        "first", "second", "third"
+    ], "each user turn archived exactly once"
+    assert sum(1 for role, _ in archived if role == "system") == 1
+    assert conversation.assistant_turn_count == 3
+    # the stub echoes how many messages it received, so this is direct evidence
+    # that the history really grew at the provider: 2 -> 4 -> 6, not 2 -> 2 -> 2
+    assert [content for role, content in archived if role == "assistant"] == [
+        "reply-2", "reply-4", "reply-6"
+    ]
+
+
+def test_a_session_is_charged_for_each_turn_once_not_for_every_resend():
+    """A real probe run died here, so the rule is pinned.
+
+    The provider's ``prompt_tokens`` covers the whole resent history, so
+    charging it per call makes the session budget grow quadratically while the
+    transcript grows linearly. The budget would then measure resends rather than
+    accumulated context. Real cumulative cost is the TokenLedger's job.
+    """
+    from types import SimpleNamespace
+
+    from src.agents.orchestrator import Orchestrator
+
+    charged = []
+
+    class _Session:
+        def append(self, role, content, *, token_count=0, **_stamp):
+            charged.append((role, token_count))
+
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.blackboard = None
+    session = _Session()
+
+    reply = "y" * 400
+    # the offsets Conversation.send actually produces: everything the previous
+    # call sent is already archived (0, then system+u+a=3, then +u+a=5)
+    for turn, offset in enumerate((0, 3, 5)):
+        history = [
+            {"role": "system", "content": "s" * 400},
+            *[
+                item
+                for index in range(turn)
+                for item in (
+                    {"role": "user", "content": "u" * 400},
+                    {"role": "assistant", "content": reply},
+                )
+            ],
+            {"role": "user", "content": "u" * 400},
+        ]
+        orch._archive_provider_call(session, {
+            "messages": history,
+            "new_message_offset": offset,
+            # the resent history is already counted in prompt_tokens; it must
+            # not be charged to the session again
+            "response": {
+                "content": reply,
+                "prompt_tokens": 1000 * (turn + 1) ** 2,
+                "completion_tokens": 100,
+            },
+        })
+
+    # turn 1 archives system+user+assistant; turns 2 and 3 archive user+assistant
+    assert [role for role, _ in charged] == [
+        "system", "user", "assistant",
+        "user", "assistant",
+        "user", "assistant",
+    ]
+    # linear in the number of turns, and independent of the quadratic
+    # prompt_tokens the provider reported
+    assert [count for _, count in charged] == [100, 100, 100, 100, 100, 100, 100]
 
 
 def test_decisions_that_never_become_coherent_still_fail_closed():
@@ -382,7 +544,7 @@ def test_the_pipeline_hands_the_mode_to_the_orchestrator():
     )["revised_experiment"]
     assert reported["r2_generation_mode"] == "LLM_DECIDED_SPEC"
     assert reported["r2_intervention_version"] == (
-        "r2-bbag-whole-model-guided-decided-v5"
+        "r2-bbag-whole-model-guided-decided-v6"
     )
 
 
@@ -412,7 +574,18 @@ def test_the_r2_assurance_path_produces_all_three_pillars_and_artifacts(tmp_path
 
         def complete(self, messages, **kw):
             from src.llm.interface import LLMResponse
-            return LLMResponse(content="package Repair {}", model="stub")
+            # The decided-spec loop is a real conversation, so it arrives here
+            # rather than through chat(); the repair loop also uses complete().
+            asking_for_decisions = any(
+                "JSON decision object" in message.content for message in messages
+            )
+            return LLMResponse(
+                content=(
+                    f"```json\n{json.dumps(_CATALOG_CORRECT)}\n```"
+                    if asking_for_decisions else "package Repair {}"
+                ),
+                model="stub",
+            )
 
     orch = Orchestrator(_StubLLM(), revised_experiment_arm="R2-BBAG",
                         r2_generation_mode="LLM_DECIDED_SPEC")
@@ -462,6 +635,16 @@ def _decision_prompt_text() -> str:
         def chat(self, prompt, system_prompt=None):
             captured["text"] = f"{system_prompt or ''}\n{prompt}"
             return json.dumps(_CORRECT)
+
+        def complete(self, messages, **kw):
+            from src.llm.interface import LLMResponse
+            # Capture the opening turn only: later turns are follow-ups that
+            # deliberately no longer repeat the schema (the conversation holds
+            # it), so asserting against them would test the wrong thing.
+            captured.setdefault(
+                "text", "\n".join(message.content for message in messages)
+            )
+            return LLMResponse(content=json.dumps(_CORRECT), model="stub")
 
     orch = Orchestrator(_Capture(), revised_experiment_arm="R2-BBAG",
                         r2_generation_mode="LLM_DECIDED_SPEC")

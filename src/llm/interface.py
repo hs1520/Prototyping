@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import random
 import time
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
@@ -181,9 +182,21 @@ class LLMInterface(ABC):
         temperature: float,
         max_tokens: int,
         retries: int,
+        conversation_id: Optional[str] = None,
+        new_message_offset: int = 0,
+        label: Optional[str] = None,
     ) -> None:
         event = {
             "messages": [message.to_dict() for message in messages],
+            # Which pipeline stage issued this call, when the caller says so.
+            # Observers archive by stage; nothing about the request depends on it.
+            "label": label,
+            # A multi-turn call resends every earlier turn.  Observers that
+            # archive transcripts must append only what is new, or one bounded
+            # conversation would be recorded O(n^2) times.  Offset 0 (the
+            # default, and every single-turn call) means "all of it is new".
+            "new_message_offset": int(new_message_offset),
+            "conversation_id": conversation_id,
             "response": {
                 "role": "assistant",
                 "content": response.content,
@@ -212,8 +225,17 @@ class LLMInterface(ABC):
         messages: List[Message],
         temperature: Optional[float] = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        *,
+        conversation_id: Optional[str] = None,
+        new_message_offset: int = 0,
+        label: Optional[str] = None,
     ) -> LLMResponse:
-        """Generate a completion with unified retry, timeout, and accounting."""
+        """Generate a completion with unified retry, timeout, and accounting.
+
+        ``conversation_id``/``new_message_offset`` are transcript bookkeeping
+        for multi-turn callers (see :class:`Conversation`); they do not change
+        what is sent to the provider, which is always the full ``messages``.
+        """
         resolved_temp = DEFAULT_TEMPERATURE if temperature is None else temperature
         delays = list(self.RETRY_DELAYS)
         retries = 0
@@ -230,6 +252,9 @@ class LLMInterface(ABC):
                     temperature=resolved_temp,
                     max_tokens=max_tokens,
                     retries=retries,
+                    conversation_id=conversation_id,
+                    new_message_offset=new_message_offset,
+                    label=label,
                 )
                 return response
             except Exception as exc:
@@ -324,6 +349,82 @@ class LLMInterface(ABC):
             messages, validate, temperatures=temperatures, max_tokens=max_tokens
         )
         return response.content, ok
+
+
+class Conversation:
+    """A bounded multi-turn conversation over a stateless provider API.
+
+    The provider APIs used here (Vertex/Gemini ``generateContent``, the GitHub
+    Models chat endpoint) keep no server-side session: continuity exists only
+    because the caller resends the earlier turns.  This object owns those turns
+    so the exact bytes the model saw stay application-owned, reproducible, and
+    digest-recordable — the property §5.3 requires and a provider conversation
+    id could not give.
+
+    One instance belongs to one Agent role and one bounded task, mirroring the
+    TaskSession rules.  It is deliberately not shared across roles or tasks.
+    """
+
+    def __init__(
+        self,
+        llm: "LLMInterface",
+        system_prompt: str = "",
+        *,
+        conversation_id: Optional[str] = None,
+    ):
+        self._llm = llm
+        self._system_prompt = str(system_prompt or "")
+        self._turns: List[Message] = []
+        self.conversation_id = str(
+            conversation_id or f"conv-{uuid.uuid4().hex[:12]}"
+        )
+
+    @property
+    def turns(self) -> Tuple[Message, ...]:
+        """The ordered user/assistant turns, excluding the system prompt."""
+        return tuple(self._turns)
+
+    @property
+    def assistant_turn_count(self) -> int:
+        return sum(1 for message in self._turns if message.role == "assistant")
+
+    def _rendered(self) -> List[Message]:
+        head = (
+            [Message(role="system", content=self._system_prompt)]
+            if self._system_prompt else []
+        )
+        return head + list(self._turns)
+
+    def send(
+        self,
+        user_message: str,
+        temperature: Optional[float] = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        label: Optional[str] = None,
+    ) -> str:
+        """Append a user turn, send the whole conversation, keep the reply.
+
+        The assistant reply is retained, so the next ``send`` shows the model
+        its own previous answer rather than a paraphrase of it.
+        """
+        # What an observer has already archived is everything the *previous*
+        # call sent.  On the opening turn that is nothing — the system prompt
+        # has not been recorded yet, so the offset must be 0 or it would be
+        # dropped from the transcript entirely.
+        offset = len(self._rendered()) if self._turns else 0
+        self._turns.append(Message(role="user", content=str(user_message)))
+        response = self._llm.complete(
+            self._rendered(),
+            temperature=temperature,
+            max_tokens=max_tokens,
+            conversation_id=self.conversation_id,
+            new_message_offset=offset,
+            label=label,
+        )
+        self._turns.append(
+            Message(role="assistant", content=str(response.content))
+        )
+        return response.content
 
 
 def _split_gemini_messages(
