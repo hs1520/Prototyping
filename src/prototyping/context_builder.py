@@ -74,17 +74,42 @@ class ContextEnvelope:
             result.pop("source_requirements", None)
         return result
 
+    #: Envelope fields that identify bookkeeping rather than content. They are
+    #: archived, never rendered — see :meth:`render_for_prompt`.
+    _PROMPT_EXCLUDED_RECORD_KEYS = ("record_id", "task_id", "session_id")
+
     def render_for_prompt(self) -> str:
+        """The prompt text for this envelope.
+
+        Deliberately omits the monotonic bookkeeping identifiers — ``task_id``,
+        per-record ``record_id``/``session_id``, and the envelope digest. They
+        tell the model nothing, and including them made every generation prompt
+        sensitive to unrelated board activity: adding one upstream publication
+        shifted every downstream counter, changing the prompt bytes and so the
+        sampled output, with no semantic change at all. That turned "we added a
+        board record" and "we changed generation" into indistinguishable
+        interventions. The identifiers remain in the archived envelope and in
+        ``envelope_digest``, which is where provenance belongs.
+
+        ``model_revision`` and ``model_digest`` stay: they are content-derived,
+        stable for identical content, and they are what pins the envelope to a
+        revision.
+        """
         requirements = "\n".join(f"- {item}" for item in self.source_requirements)
         protected = ", ".join(self.protected_elements) or "(none declared)"
         model_section = self.model_context or "(no committed model yet)"
         typed_records = json.dumps(
-            list(self.record_context), ensure_ascii=False, sort_keys=True, indent=2,
-            default=str,
+            [
+                {
+                    key: value for key, value in dict(record).items()
+                    if key not in self._PROMPT_EXCLUDED_RECORD_KEYS
+                }
+                for record in self.record_context
+            ],
+            ensure_ascii=False, sort_keys=True, indent=2, default=str,
         )
         return (
             "BLACKBOARD CONTEXT ENVELOPE (revision-pinned; not evaluator gold)\n"
-            f"task_id: {self.task_id}\n"
             f"agent_role: {self.agent_role}\n"
             f"objective: {self.objective}\n"
             f"allowed_operation: {self.allowed_operation}\n"
@@ -96,8 +121,7 @@ class ContextEnvelope:
             "typed_blackboard_records:\n"
             f"{typed_records}\n"
             "relevant_model_context:\n"
-            f"```sysml\n{model_section}\n```\n"
-            f"context_envelope_digest: {self.envelope_digest}"
+            f"```sysml\n{model_section}\n```"
         )
 
 
