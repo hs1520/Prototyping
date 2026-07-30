@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-TRACEABILITY_SCHEMA_VERSION = "1.0"
+TRACEABILITY_SCHEMA_VERSION = "1.1"
 
 #: The links checked for every requirement, in dependency order. A requirement is
 #: fully traced only when all of them hold.
@@ -57,28 +57,75 @@ def trace_requirement(graph: Any, realization_links: Sequence[Mapping[str, Any]]
     """Traceability of one extracted chain, keyed by its source requirement."""
     system = getattr(graph, "system", None)
     components = list(getattr(graph, "components", ()) or ())
+    edges = list(getattr(graph, "edges", ()) or ())
     requirement = getattr(system, "source_requirement", None) if system else None
 
-    owned = sum(1 for item in components if getattr(item, "owners", ()))
+    guarantees = [
+        guarantee
+        for item in components
+        for guarantee in getattr(item, "guarantees", ())
+    ]
+    owned = sum(
+        len(getattr(item, "guarantees", ()))
+        for item in components
+        if len(set(getattr(item, "owners", ()))) == 1
+    )
+    decomposed = sum(
+        1
+        for item in components
+        if system is not None
+        and sum(
+            getattr(edge, "kind", "") == "decomposes"
+            and getattr(edge, "src", "") == system.name
+            and getattr(edge, "dst", "") == item.name
+            for edge in edges
+        ) == 1
+    )
     assumptions = [
         assumption
         for item in components
         for assumption in getattr(item, "assumptions", ())
     ]
-    produced = {
-        concept
+    produced_by = {
+        str(concept).strip().lower(): item.name
         for item in components
         for concept in item.boolean_guarantee_concepts()
     }
+    explicit_discharge = {
+        (
+            str(getattr(edge, "src", "")),
+            str(getattr(edge, "dst", "")),
+            str(getattr(edge, "subject", "") or "").strip().lower(),
+        )
+        for edge in edges
+        if getattr(edge, "kind", "") == "discharges"
+    }
     discharged = sum(
-        1 for assumption in assumptions
-        if getattr(assumption, "is_environment", False)
-        or assumption.concept in produced
+        1
+        for item in components
+        for assumption in getattr(item, "assumptions", ())
+        if (
+            getattr(assumption, "is_environment", False)
+            or (
+                (
+                    produced_by.get(
+                        str(assumption.concept).strip().lower()
+                    ),
+                    item.name,
+                    str(assumption.concept).strip().lower(),
+                )
+                in explicit_discharge
+            )
+        )
     )
     realized_names = {
         str(link.get("contract"))
         for link in realization_links
-        if isinstance(link, Mapping) and link.get("behavior")
+        if (
+            isinstance(link, Mapping)
+            and link.get("behavior")
+            and link.get("status") == "PASS"
+        )
     }
     realized = sum(1 for item in components if item.name in realized_names)
     # The link is the observe EDGE, not the presence of a verification element:
@@ -88,14 +135,17 @@ def trace_requirement(graph: Any, realization_links: Sequence[Mapping[str, Any]]
     verification_targets = dict(getattr(graph, "verification_targets", None) or {})
     observation_linked = any(
         getattr(edge, "kind", "") == "observed_by"
-        and getattr(edge, "dst", "") in verification_targets
-        for edge in (getattr(graph, "edges", ()) or ())
+        and getattr(edge, "src", "") == getattr(system, "name", None)
+        and getattr(system, "name", None)
+        in verification_targets.get(getattr(edge, "dst", ""), ())
+        for edge in edges
     )
 
     links: Dict[str, Any] = {
         "contract_present": system is not None,
-        "decomposed_to_components": bool(components),
-        "guarantees_owned": _fraction(owned, len(components)),
+        "decomposed_to_components": bool(components)
+        and decomposed == len(components),
+        "guarantees_owned": _fraction(owned, len(guarantees)),
         "assumptions_discharged": _fraction(discharged, len(assumptions)),
         "behaviours_realized": _fraction(realized, len(components)),
         "observation_linked": observation_linked,

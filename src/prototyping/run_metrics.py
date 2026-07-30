@@ -13,23 +13,19 @@ Honesty notes carried in the output:
 - handoff-based metrics have a denominator of two migrated handoffs in the MVP
   (RequirementsAgent→DesignAgent, DesignAgent→VerificationAgent) — a bounded
   subset, still reported as illustrative rather than a pipeline-wide rate (§13).
-- ``irrelevant_context_ratio`` (§13) is deliberately NOT computed, and no proxy
-  is reported in its place. Its definition — envelope elements outside the
-  dependency closure of the task target — has no operational meaning here: the
-  ContextBuilder does not derive a closure, it carries exactly the record ids its
-  caller passes. Defining "in closure" as "was included" makes the ratio 0 by
-  construction; defining it as "is a required topic" misclassifies legitimate
-  context, since repair envelopes properly carry prior attempts. Either number
-  would look like evidence and be none. Computing it honestly needs an
-  independent per-task dependency oracle over model elements, which does not
-  exist. ``envelope_composition`` and ``envelope_truncation`` are reported
-  instead, as descriptions rather than as a quality ratio.
+- event ordering is part of every handoff/context verdict: a topic published by
+  another task or after consumer activation cannot satisfy the metric;
+- model-dependent session turns carry revision/digest/event stamps, so use of a
+  superseded revision is measured at the turn rather than inferred from whether
+  the revision still exists in history;
+- ``irrelevant_context_ratio`` uses the explicit record dependency closure:
+  required task topics plus diagnostic/evidence/previous-attempt records.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional
 
-METRICS_SCHEMA_VERSION = "1.0"
+METRICS_SCHEMA_VERSION = "1.1"
 
 
 def _ratio(num: int, den: int) -> Optional[float]:
@@ -61,11 +57,26 @@ def compute_coordination_metrics(
     committed = {
         (int(r.get("revision")), r.get("model_digest")) for r in revisions
     }
+    records_by_id = {
+        str(record.get("record_id")): record for record in records
+    }
+    context_events = {
+        str((record.get("payload") or {}).get("envelope_id")): record
+        for record in records
+        if record.get("topic") == "context.created"
+    }
 
-    # context-revision consistency: every envelope pins a real committed revision.
+    # The context must match the board revision at the context.created event, not
+    # merely any historical revision that still exists in the revision log.
     env_consistent = sum(
         1 for e in envelopes
-        if (int(e.get("model_revision", -1)), e.get("model_digest")) in committed
+        if (
+            (event := context_events.get(str(e.get("envelope_id")))) is not None
+            and int(e.get("model_revision", -1))
+            == int(event.get("model_revision", -2))
+            and e.get("model_digest") == event.get("model_digest")
+            and str(e.get("task_id")) == str(event.get("task_id"))
+        )
     )
 
     # required-context coverage, §13: required categories present in the envelope
@@ -92,17 +103,58 @@ def compute_coordination_metrics(
         if coverage is None
     })
 
-    # cross-agent handoff completeness: every required topic of a migrated task
-    # was published as a typed record (illustrative — one handoff in the MVP).
-    published_topics = {r.get("topic") for r in records}
+    # A handoff is complete only when the SAME task's envelope consumes every
+    # required typed publication from the same revision before activation.
     handoff_tasks = [t for t in tasks if t.get("required_topics")]
-    handoff_complete = sum(
-        1 for t in handoff_tasks
-        if all(topic in published_topics for topic in t.get("required_topics", ()))
-    )
+    handoff_complete = 0
+    handoff_failures: List[dict] = []
+    for task in handoff_tasks:
+        task_id = str(task.get("task_id"))
+        envelope = next(
+            (item for item in envelopes if str(item.get("task_id")) == task_id),
+            None,
+        )
+        event = (
+            context_events.get(str(envelope.get("envelope_id")))
+            if envelope else None
+        )
+        included = set(envelope.get("included_record_ids") or ()) if envelope else set()
+        missing: List[str] = []
+        for topic in task.get("required_topics") or ():
+            matching = [
+                records_by_id[record_id]
+                for record_id in included
+                if record_id in records_by_id
+                and records_by_id[record_id].get("topic") == topic
+            ]
+            valid = bool(event) and any(
+                int(record.get("sequence", 10**18))
+                < int(event.get("sequence", -1))
+                and int(record.get("model_revision", -1))
+                == int(envelope.get("model_revision", -2))
+                and record.get("model_digest") == envelope.get("model_digest")
+                for record in matching
+            )
+            if not valid:
+                missing.append(str(topic))
+        if not missing:
+            handoff_complete += 1
+        else:
+            handoff_failures.append({
+                "task_id": task_id,
+                "missing_or_late_topics": missing,
+            })
 
     # session lifecycle.
-    stale_sessions = sum(1 for s in sessions if s.get("status") == "STALE")
+    stale_session_ids = {
+        str(s.get("session_id"))
+        for s in sessions if s.get("status") == "STALE"
+    }
+    stale_sessions = len(stale_session_ids)
+    rebased_stale_ids = {
+        str(s.get("rebased_from_session_id"))
+        for s in sessions if s.get("rebased_from_session_id")
+    } & stale_session_ids
     commits = max(0, len(revisions) - 1)
     # A model-dependent turn on a superseded base without rebasing is prevented by
     # TaskSession.assert_current; a completed session that carries a rebase pointer
@@ -112,6 +164,7 @@ def compute_coordination_metrics(
     tasks_by_id = {str(t.get("task_id")): t for t in (board.get("tasks") or ())}
     envelope_items = 0
     envelope_required_items = 0
+    irrelevant_items = 0
     for envelope in envelopes:
         required = {
             str(topic)
@@ -127,17 +180,88 @@ def compute_coordination_metrics(
             envelope_items += 1
             if str(item.get("topic")) in required:
                 envelope_required_items += 1
+        explicit_dependency_ids = {
+            str(record_id)
+            for field in (
+                "diagnostic_record_ids",
+                "evidence_record_ids",
+                "previous_attempt_record_ids",
+            )
+            for record_id in (envelope.get(field) or ())
+        }
+        for record_id in envelope.get("included_record_ids") or ():
+            record = records_by_id.get(str(record_id))
+            if record is None:
+                continue
+            if (
+                str(record.get("topic")) not in required
+                and str(record_id) not in explicit_dependency_ids
+            ):
+                irrelevant_items += 1
 
     stale_access = dict(board.get("stale_access") or {})
     stale_rejected = int(stale_access.get("rejected") or 0)
     stale_permitted = int(stale_access.get("permitted") or 0)
     stale_attempted = stale_rejected + stale_permitted
-    stale_revision_use = sum(
+    # Revision current at a message event: revision 0 until the first commit,
+    # then the latest model.committed record whose sequence is not after the turn.
+    initial = next(
+        (item for item in revisions if int(item.get("revision", -1)) == 0),
+        None,
+    )
+    commit_events = sorted(
+        (
+            int(record.get("sequence", 0)),
+            int(record.get("model_revision", -1)),
+            record.get("model_digest"),
+        )
+        for record in records if record.get("topic") == "model.committed"
+    )
+
+    def current_at(sequence: int) -> tuple[int, Any]:
+        current = (
+            int((initial or {}).get("revision", -1)),
+            (initial or {}).get("model_digest"),
+        )
+        for event_sequence, revision, digest in commit_events:
+            if event_sequence > sequence:
+                break
+            current = (revision, digest)
+        return current
+
+    stale_turns: List[dict] = []
+    for session in sessions:
+        for message in session.get("messages") or ():
+            if message.get("role") != "assistant":
+                continue
+            if message.get("board_sequence") is None:
+                continue
+            expected = current_at(int(message["board_sequence"]))
+            observed = (
+                int(message.get("model_revision", -1)),
+                message.get("model_digest"),
+            )
+            if observed != expected:
+                stale_turns.append({
+                    "session_id": session.get("session_id"),
+                    "message_sequence": message.get("sequence"),
+                    "board_sequence": message.get("board_sequence"),
+                    "observed_revision": observed[0],
+                    "expected_revision": expected[0],
+                })
+    # Backward-compatible detection for legacy snapshots that contain no stamped
+    # turns and cite a base that never existed at all.
+    invalid_unstamped_sessions = sum(
         1 for s in sessions
         if s.get("status") == "COMPLETED"
         and (int(s.get("base_model_revision", -1)), s.get("base_model_digest"))
         not in committed
+        and not any(
+            message.get("board_sequence") is not None
+            for message in (s.get("messages") or ())
+        )
     )
+    stale_revision_use = len(stale_turns) + invalid_unstamped_sessions
     # cross-role contamination: an R1 session owns exactly one role/task by
     # construction; contamination is only possible in the R1-LONG shared session.
     role_task_pairs = [(s.get("agent_role"), s.get("task_id")) for s in sessions]
@@ -187,7 +311,10 @@ def compute_coordination_metrics(
             "consistent": env_consistent,
             "total": len(envelopes),
             "value": _ratio(env_consistent, len(envelopes)),
-            "note": "enforced: envelopes are revision-pinned to a committed model",
+            "note": (
+                "compared with the revision current at context.created; a merely "
+                "historical committed revision does not count"
+            ),
         },
         "required_context_coverage": {
             "envelopes_scored": len(scored),
@@ -209,15 +336,21 @@ def compute_coordination_metrics(
             "total": len(handoff_tasks),
             "value": _ratio(handoff_complete, len(handoff_tasks)),
             "illustrative_single_handoff": len(handoff_tasks) <= 1,
+            "failures": handoff_failures,
         },
         "stale_session_detection": {
             "stale_sessions": stale_sessions,
             "commits_observed": commits,
+            "closed_or_rebased": stale_sessions,
+            "rebased": len(rebased_stale_ids),
+            "value": _ratio(stale_sessions, stale_sessions),
         },
         "stale_revision_use": {
             "count": stale_revision_use,
             "target": 0,
-            "note": "enforced by TaskSession.assert_current",
+            "stale_turns": stale_turns,
+            "legacy_invalid_base_sessions": invalid_unstamped_sessions,
+            "note": "measured from per-turn revision/digest/event stamps",
         },
         # §13: rejected / attempted operations against a superseded revision. A
         # rejection raises, so it is counted at the guard rather than recovered
@@ -258,10 +391,18 @@ def compute_coordination_metrics(
         },
         "session_context_growth": growth,
         "envelope_truncation": {"truncated": truncated, "total": len(envelopes)},
-        # Descriptive stand-in for irrelevant_context_ratio, which is deliberately
-        # NOT computed (see the module docstring). This reports what the envelopes
-        # actually contained — required-topic items versus supplementary ones — and
-        # makes no claim that the supplementary items were unnecessary.
+        "irrelevant_context_ratio": {
+            "irrelevant_items": irrelevant_items,
+            "total_record_items": envelope_items,
+            "value": _ratio(irrelevant_items, envelope_items),
+            "dependency_closure": (
+                "task.required_topics plus diagnostic/evidence/"
+                "previous-attempt record ids"
+            ),
+        },
+        # Descriptive companion to the operational ratio above: this preserves the
+        # raw required-topic/supplementary composition without grading every
+        # supplementary record as irrelevant.
         "envelope_composition": {
             "items": envelope_items,
             "required_topic_items": envelope_required_items,
@@ -276,7 +417,6 @@ def compute_coordination_metrics(
             "handoff/role metrics have a denominator of two migrated handoffs "
             "(Requirements->Design, Design->Verification); a bounded subset, not "
             "a pipeline-wide rate (§13)",
-            "irrelevant_context_ratio needs a dependency oracle and is not computed",
             "invariant metrics read 1.0/0 because R1 enforces them; R0 has no "
             "blackboard mechanism to enforce or measure them",
         ],

@@ -74,6 +74,21 @@ def test_req_safe_005_chain_extracts_and_passes():
     ] == "discharged"
 
 
+def test_compound_component_guarantee_is_incomplete_not_an_action_target():
+    compound = REQ_SAFE_005_SYSML.replace(
+        "require constraint g_parachuteResponseSelected "
+        "{ parachuteResponseSelected }",
+        "require constraint g_parachuteResponseSelected "
+        "{ parachuteResponseSelected and airborne }",
+    )
+    report = check_ag_graph(extract_ag_graph(compound))
+    assert (
+        report.component_completeness["SafetyResponseArbiterContract"]
+        == INCOMPLETE
+    )
+    assert "COMPONENT_GUARANTEE_NONATOMIC" in _codes(report)
+
+
 def test_exactly_one_owner_per_component_guarantee():
     # §16: every component guarantee has exactly one responsible owner.
     graph = extract_ag_graph(REQ_SAFE_005_SYSML)

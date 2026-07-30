@@ -104,14 +104,15 @@ def test_a_commit_on_a_superseded_digest_is_counted():
     assert _metrics(board)["rejected"] == 1
 
 
-def test_envelope_composition_is_descriptive_not_an_irrelevance_ratio():
-    """`irrelevant_context_ratio` is deliberately not computed: the builder carries
-    the ids its caller passes, so "in closure" cannot be derived here. What is
-    reported must therefore describe the envelope, not grade it."""
+def test_irrelevance_uses_the_explicit_record_dependency_closure():
+    """The ratio is now operational: required topics plus explicitly linked
+    diagnostics/evidence/previous attempts form the record dependency closure."""
     out = compute_coordination_metrics(
         {"blackboard": _board().snapshot(), "contexts": [], "task_sessions": []}
     )
-    assert "irrelevant_context_ratio" not in out
+    ratio = out["irrelevant_context_ratio"]
+    assert ratio["value"] is None
+    assert "task.required_topics" in ratio["dependency_closure"]
     composition = out["envelope_composition"]
     assert set(composition) >= {
         "items", "required_topic_items", "supplementary_items", "note"

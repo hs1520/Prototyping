@@ -14,8 +14,10 @@ from src.prototyping.ag_contracts import AG_CHECKER_VERSION
 from src.prototyping.revised_pilot import (
     RevisedPilotConfig,
     _contains_evaluator_only_material,
+    _validate_run_result,
     run_revised_pilot,
 )
+from src.prototyping.blackboard import text_digest
 
 
 _REQS = (
@@ -43,6 +45,15 @@ class _FakeLLM:
         self.seed = seed
 
 
+class _FakeSimulation:
+    reachability_score = 0.0
+    scenario_results = ()
+
+    @staticmethod
+    def passed_scenarios():
+        return []
+
+
 class _FakePipeline:
     fail = None
 
@@ -62,9 +73,30 @@ class _FakePipeline:
         score = 0.8 + self.llm.seed / 100 + (
             ("R0-CURRENT", "R1-BBCTX", "R2-BBAG").index(self.arm) / 1000
         )
+        model_sysml = f"package Synthetic_{self.llm.seed}_{self.arm.replace('-', '_')} {{}}"
+        digest = text_digest(model_sysml)
+        terminal_consistency = {
+            "schema_version": "1.0",
+            "status": "PASS",
+            "model_digest": digest,
+            "simulation_source_model_digest": digest,
+            "evaluation_source_model_digest": digest,
+            "score_kind": "DETERMINISTIC_TERMINAL_RULE_SCORE",
+            "final_score": score,
+            "pre_terminal_iteration_score": score,
+            "syntax_error_count": 0,
+            "simulation": {
+                "reachability_score": 0.0,
+                "scenarios_passed": 0,
+                "scenarios_total": 0,
+            },
+        }
         result = {
             "system_name": system_name,
             "final_score": score,
+            "model_sysml": model_sysml,
+            "simulation_result": _FakeSimulation(),
+            "terminal_consistency": terminal_consistency,
             "requirements": list(frozen_requirements["requirements"]),
             "requirement_input": dict(frozen_requirements),
             "revised_experiment": revised,
@@ -88,6 +120,13 @@ class _FakePipeline:
             "configuration": revised["configuration"],
             "revised_experiment": revised,
             "llm_usage": result["llm_usage"],
+            "terminal_consistency": result["terminal_consistency"],
+            "simulation": {
+                **result["terminal_consistency"]["simulation"],
+                "source_model_digest": result["terminal_consistency"][
+                    "simulation_source_model_digest"
+                ],
+            },
         }
 
 
@@ -103,6 +142,8 @@ def test_config_freezes_exact_three_seed_three_arm_protocol():
         "seed-0:R2-BBAG", "seed-1:R2-BBAG", "seed-2:R2-BBAG",
     ]
     assert manifest["r2_generation_mode"] == R2_DETERMINISTIC_GENERATION_MODE
+    assert manifest["r2_authored_syntax_max_attempts"] == 3
+    assert manifest["maximum_ag_repair_attempts"] == 3
     assert (
         manifest["r2_intervention_version"]
         == R2_DETERMINISTIC_INTERVENTION_VERSION
@@ -115,6 +156,10 @@ def test_config_freezes_exact_three_seed_three_arm_protocol():
         _config(arms=("R0-CURRENT", "R2-BBAG", "R1-BBCTX"))
     with pytest.raises(ValueError, match="absent from the frozen requirement set"):
         _config(selected_ag_chain_ids=("REQ_SAFE_008",))
+    with pytest.raises(ValueError, match="syntax attempts must be positive"):
+        _config(r2_authored_syntax_max_attempts=0)
+    with pytest.raises(ValueError, match="repair attempts must be positive"):
+        _config(maximum_ag_repair_attempts=0)
     # Each R2 generation mode is its own frozen intervention. The runner used to be
     # pinned to the deterministic mode, which kept the other interventions from
     # ever executing; the red line is now the mode->version binding itself, so a
@@ -168,6 +213,39 @@ def test_pilot_rejects_nested_evaluator_material_and_role_variants():
     assert not _contains_evaluator_only_material(
         {"payload": {"runtime_ag_verdict": "PASS"}}
     )
+
+
+def test_pilot_rejects_terminal_evidence_from_a_different_model_revision():
+    frozen = {
+        "requirements": list(_REQS),
+        "requirement_set_digest": "req-digest",
+    }
+    pipeline = _FakePipeline(
+        llm=_FakeLLM(1, 0),
+        max_iterations=1,
+        verbose=False,
+        revised_experiment_arm="R2-BBAG",
+    )
+    result = pipeline.generate(
+        system_name="Synthetic",
+        system_description="",
+        frozen_requirements=frozen,
+    )
+    report = pipeline.build_run_report(result)
+    result["model_sysml"] += "\n// a later revision"
+
+    with pytest.raises(ValueError, match="source digests do not match"):
+        _validate_run_result(
+            result,
+            report,
+            arm="R2-BBAG",
+            requirement_set_digest="req-digest",
+            ag_checker_version=AG_CHECKER_VERSION,
+            r2_generation_mode=result["revised_experiment"]["r2_generation_mode"],
+            r2_intervention_version=result["revised_experiment"][
+                "r2_intervention_version"
+            ],
+        )
 
 
 def test_complete_pilot_archives_nine_isolated_runs_and_descriptive_summary(tmp_path):

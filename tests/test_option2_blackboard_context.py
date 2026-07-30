@@ -470,7 +470,9 @@ def test_r2_controller_records_rejected_repair_without_changing_revision():
 
     arts = orch._build_collaboration_artifacts(broken)
 
-    assert llm.calls == 1
+    # First named obligation, its bounded feedback retry, then the next named
+    # repairable obligation in the fixed run-level budget.
+    assert llm.calls == 3
     assert orch.blackboard.current_revision == 1
     assert arts["ag_contract_graph"]["verdict"] != "PASS"
     assert any(
@@ -481,6 +483,11 @@ def test_r2_controller_records_rejected_repair_without_changing_revision():
     assert any(
         item["kind"] == "A_G_SURGICAL_REPAIR"
         and item["status"] == "REJECTED"
+        for item in tasks
+    )
+    assert not any(
+        item["kind"] == "A_G_SURGICAL_REPAIR"
+        and item["status"] == "PENDING"
         for item in tasks
     )
 

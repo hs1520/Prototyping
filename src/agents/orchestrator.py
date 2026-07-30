@@ -666,7 +666,7 @@ class Orchestrator:
             syntax_result=check_syntax(
                 final_sysml,
                 fail_closed=True,
-                filter_stdlib_diagnostics=True,
+                filter_stdlib_diagnostics=False,
             ),
             simulation_result=final_sim,
             terminal_consistency=terminal_consistency,
@@ -705,8 +705,26 @@ class Orchestrator:
             f"  Model qualification:      "
             f"{model_qualification['status']}"
         )
-        print(f"  Simulation reachability:  {final_sim.reachability_score:.3f} "
-              f"({len(final_sim.passed_scenarios())}/{len(final_sim.scenario_results)} scenarios)")
+        if final_sim.requirement_reachability_score is not None:
+            print(
+                "  Requirement reachability: "
+                f"{final_sim.requirement_reachability_score:.3f} "
+                f"({final_sim.requirement_scenarios_passed}/"
+                f"{final_sim.requirement_scenarios_total} frozen paths)"
+            )
+            print(
+                "  Advisory role scenarios: "
+                f"{final_sim.reachability_score:.3f} "
+                f"({len(final_sim.passed_scenarios())}/"
+                f"{len(final_sim.scenario_results)} scenarios)"
+            )
+        else:
+            print(
+                f"  Simulation reachability:  "
+                f"{final_sim.reachability_score:.3f} "
+                f"({len(final_sim.passed_scenarios())}/"
+                f"{len(final_sim.scenario_results)} scenarios)"
+            )
         print(f"  Part definitions: {len(final_model.part_definitions)}")
         print(f"  Requirements:     {len(requirements)}")
         if sim_warnings:
@@ -741,6 +759,12 @@ class Orchestrator:
             ),
             "generation_plan_conformance": final_model.metadata.get(
                 "generation_plan_conformance"
+            ),
+            "step1_plan_attempts": final_model.metadata.get(
+                "step1_plan_attempts"
+            ),
+            "step1_plan_retries": final_model.metadata.get(
+                "step1_plan_retries", 0
             ),
             "structural_obligation_report": structural_obligation_report,
             "semantic_fidelity_report": semantic_fidelity_report,
@@ -859,8 +883,26 @@ class Orchestrator:
         print(f"{'='*60}")
         print("Exploration Complete!")
         print(f"  Final score:              {final_score:.3f}")
-        print(f"  Simulation reachability:  {final_sim.reachability_score:.3f} "
-              f"({len(final_sim.passed_scenarios())}/{len(final_sim.scenario_results)} scenarios)")
+        if final_sim.requirement_reachability_score is not None:
+            print(
+                "  Requirement reachability: "
+                f"{final_sim.requirement_reachability_score:.3f} "
+                f"({final_sim.requirement_scenarios_passed}/"
+                f"{final_sim.requirement_scenarios_total} frozen paths)"
+            )
+            print(
+                "  Advisory role scenarios: "
+                f"{final_sim.reachability_score:.3f} "
+                f"({len(final_sim.passed_scenarios())}/"
+                f"{len(final_sim.scenario_results)} scenarios)"
+            )
+        else:
+            print(
+                f"  Simulation reachability:  "
+                f"{final_sim.reachability_score:.3f} "
+                f"({len(final_sim.passed_scenarios())}/"
+                f"{len(final_sim.scenario_results)} scenarios)"
+            )
         print(f"  Part definitions: {len(final_model.part_definitions)}")
         print(f"  Best config:      {best_config.parameters}")
         if sim_warnings:
@@ -1085,7 +1127,7 @@ class Orchestrator:
             syntax_result=check_syntax(
                 final_sysml,
                 fail_closed=True,
-                filter_stdlib_diagnostics=True,
+                filter_stdlib_diagnostics=False,
             ),
             simulation_result=final_sim,
             terminal_consistency=terminal_consistency,
@@ -2272,6 +2314,21 @@ class Orchestrator:
                 "reachability_score": sim_result.reachability_score,
                 "scenarios_passed": len(sim_result.passed_scenarios()),
                 "scenarios_total": len(sim_result.scenario_results),
+                "requirement_reachability_score": (
+                    sim_result.requirement_reachability_score
+                ),
+                "requirement_scenarios_passed": (
+                    sim_result.requirement_scenarios_passed
+                ),
+                "requirement_scenarios_total": (
+                    sim_result.requirement_scenarios_total
+                ),
+                "role_scenarios_advisory": (
+                    sim_result.requirement_reachability_score is not None
+                ),
+                "advisory_diagnostic": (
+                    sim_result.advisory_structural_evidence()
+                ),
             },
         }
         terminal_model.metadata["terminal_consistency"] = consistency
@@ -2293,40 +2350,79 @@ class Orchestrator:
             model.metadata["whole_model_generation_plan"] = dict(raw_plan)
         if not isinstance(raw_plan, Mapping):
             return model_text, None
+        if getattr(model, "metadata", None) is None:
+            model.metadata = {}
         from ..prototyping.generation_plan import (
+            PLAN_APPLICATION_HISTORY_KEY,
             ModelGenerationPlan,
+            append_plan_application_history,
             apply_generation_plan,
         )
 
         plan = ModelGenerationPlan.from_dict(raw_plan)
+        previous_conformance = metadata.get(
+            "generation_plan_conformance"
+        )
         planned_text, conformance = apply_generation_plan(model_text, plan)
+        history = metadata.get(PLAN_APPLICATION_HISTORY_KEY)
+        if not isinstance(history, list):
+            history = []
+        if isinstance(previous_conformance, Mapping):
+            archived = previous_conformance.get(
+                PLAN_APPLICATION_HISTORY_KEY
+            )
+            if not history and isinstance(archived, list):
+                history = [
+                    dict(item)
+                    for item in archived
+                    if isinstance(item, Mapping)
+                ]
+        model.metadata[PLAN_APPLICATION_HISTORY_KEY] = history
+        history = append_plan_application_history(
+            model.metadata,
+            conformance,
+            stage="TERMINAL",
+        )
+        conformance[PLAN_APPLICATION_HISTORY_KEY] = history
+        legacy_semantic_history: list[dict[str, Any]] = []
+        if isinstance(previous_conformance, Mapping):
+            legacy_semantic_history.extend(
+                dict(item)
+                for item in (
+                    previous_conformance.get(
+                        "semantic_binding_materialization_history"
+                    ) or ()
+                )
+                if isinstance(item, Mapping)
+            )
+        legacy_semantic_history.extend(
+            item for item in history
+            if item.get("semantic_changes")
+        )
+        conformance["semantic_binding_materialization_history"] = (
+            legacy_semantic_history
+        )
         if plan.behavior_obligations:
             from ..prototyping.ag_behavior_plan import (
                 BehaviorObligationPlan,
-                check_owned_behavior_obligation_conformance,
-                materialize_behavior_obligations,
+                materialize_owned_behavior_obligations,
             )
 
             behavior_plan = BehaviorObligationPlan(
                 plan.behavior_obligations
             )
-            canonical_fragment, _step4_gate = (
-                materialize_behavior_obligations("", behavior_plan)
-            )
-            planned_text, restored = (
-                self.design_agent._inject_missing_ag_obligation_defs(
+            planned_text, behavior_gate = (
+                materialize_owned_behavior_obligations(
                     planned_text,
-                    canonical_fragment,
                     behavior_plan,
-                )
-            )
-            behavior_gate = (
-                check_owned_behavior_obligation_conformance(
-                    planned_text, behavior_plan
+                    event_symbols=plan.planned_event_symbols,
                 )
             )
             conformance["behavior_obligation_conformance"] = behavior_gate
-            conformance["restored_behavior_elements"] = restored
+            conformance["restored_behavior_elements"] = (
+                list(behavior_gate["materialized"])
+                + list(behavior_gate["replaced_inconsistent"])
+            )
             if behavior_gate["status"] != "PASS":
                 conformance["status"] = "FAIL"
         model.metadata["generation_plan_conformance"] = conformance
@@ -2388,6 +2484,7 @@ class Orchestrator:
             model_text,
             plan.semantic_obligations,
             model_name=model_name,
+            bindings=plan.semantic_bindings,
         )
         model.metadata["semantic_fidelity_report"] = report
         return report
@@ -2639,28 +2736,18 @@ class Orchestrator:
                         f"{spec.source_requirement}; A/G emission cannot invent it"
                     )
 
-            # The generated base model has already passed the legacy syntax gate.
+            # The generated base model has already passed the syntax gate.
             # Re-check it here so a later terminal mutation cannot smuggle a new
             # parser/reference error into R2.  This gate uses the same narrowly
-            # scoped standard-library diagnostic allowlist as R0/R1: Syside's
-            # single-source loader reports official implicit/standard constructs
-            # such as ``transition initial`` and SI unit symbols as unresolved.
-            # Those diagnostics are not caused by the A/G intervention.
+            # final source policy. No state-machine spelling is allowlisted.
             base_gate = check_syntax(
                 model_text,
                 fail_closed=True,
-                filter_stdlib_diagnostics=True,
+                filter_stdlib_diagnostics=False,
             )
-            # Errors only. A warning is not a syntax failure, and gating on the
-            # score made one warning enough to fail an entire arm closed on a model
-            # with zero parser and zero sema errors — a measured seed lost its R2
-            # evidence to exactly that, its diagnostic reading "failed the shared
-            # syntax gate: ✓ no syntax errors (score=0.950)". The same defect was
-            # already removed from the A/G authoring loop (b9b5cdc); this copy of
-            # the gate survived it.
-            if base_gate.has_errors:
+            if base_gate.has_errors or base_gate.warnings:
                 raise RuntimeError(
-                    "committed base model failed the shared syntax gate: "
+                    "committed base model failed the strict shared syntax gate: "
                     f"{base_gate.short_summary()} (score={base_gate.score:.3f})"
                 )
 
@@ -2731,11 +2818,9 @@ class Orchestrator:
             merged_gate = check_syntax(
                 merged,
                 fail_closed=True,
-                filter_stdlib_diagnostics=True,
+                filter_stdlib_diagnostics=False,
             )
-            if merged_gate.has_errors or (
-                not llm_authored and merged_gate.score != 1.0
-            ):
+            if merged_gate.has_errors or merged_gate.warnings:
                 raise RuntimeError(
                     "R2-BBAG A/G contract layer failed the merged syntax gate: "
                     f"{merged_gate.short_summary()} "
@@ -2870,10 +2955,10 @@ class Orchestrator:
             gate = check_syntax(
                 package_text,
                 fail_closed=True,
-                filter_stdlib_diagnostics=True,
+                filter_stdlib_diagnostics=False,
             )
             last_gate = gate
-            syntax_ok = not gate.has_errors
+            syntax_ok = not gate.has_errors and not gate.warnings
             attempt_record = {
                 "schema_version": "1.0",
                 "artifact_role": "R2_AUTHORED_QUALITY_ATTEMPT",
@@ -3032,18 +3117,18 @@ class Orchestrator:
                 gate = check_syntax(
                     package_text,
                     fail_closed=True,
-                    filter_stdlib_diagnostics=True,
+                    filter_stdlib_diagnostics=False,
                 )
                 last_gate = gate
                 attempt_record.update({
-                    "syntax_ok": not gate.has_errors,
+                    "syntax_ok": not gate.has_errors and not gate.warnings,
                     "parser_error_count": len(gate.parser_errors),
                     "semantic_reference_error_count": len(gate.sema_errors),
                     "syntax_summary": gate.short_summary(),
                     "diagnostics": self._syntax_gate_diagnostic_lines(gate),
                     "package_text": package_text,
                 })
-                if gate.has_errors:
+                if gate.has_errors or gate.warnings:
                     structured_feedback = gate.format_for_llm()
                     continue
 
@@ -3526,12 +3611,12 @@ class Orchestrator:
             attempts.append(authored)
             merged = model_text.rstrip() + "\n\n" + authored + "\n"
             gate = check_syntax(
-                authored, fail_closed=True, filter_stdlib_diagnostics=True
+                authored, fail_closed=True, filter_stdlib_diagnostics=False
             )
             # errors only — a warning-depressed score is not a syntax failure, and
             # rejecting on it discarded valid packages and fed back a defect list
             # for a model that had none, destabilising the next round
-            if gate.has_errors:
+            if gate.has_errors or gate.warnings:
                 history.append({
                     "iteration": iteration, "syntax_ok": False,
                     "verdict": None, "error_count": None,
@@ -5423,6 +5508,15 @@ class Orchestrator:
                     candidate.metadata["whole_model_generation_plan"] = dict(
                         raw_plan
                     )
+                    history = (
+                        getattr(current_model, "metadata", None) or {}
+                    ).get("plan_application_history")
+                    if isinstance(history, list):
+                        candidate.metadata["plan_application_history"] = [
+                            dict(item)
+                            for item in history
+                            if isinstance(item, Mapping)
+                        ]
                 return candidate
             print("  ⚠ Surgical refinement not applicable — "
                   "falling back to full rewrite", flush=True)
@@ -5451,6 +5545,17 @@ class Orchestrator:
                 candidate.metadata["whole_model_generation_plan"] = dict(
                     raw_plan
                 )
+            history = (
+                getattr(current_model, "metadata", None) or {}
+            ).get("plan_application_history")
+            if isinstance(history, list):
+                if getattr(candidate, "metadata", None) is None:
+                    candidate.metadata = {}
+                candidate.metadata["plan_application_history"] = [
+                    dict(item)
+                    for item in history
+                    if isinstance(item, Mapping)
+                ]
             return candidate
         return None
 
@@ -5483,7 +5588,9 @@ class Orchestrator:
         ).get("whole_model_generation_plan")
         if isinstance(raw_plan, Mapping):
             from ..prototyping.generation_plan import (
+                PLAN_APPLICATION_HISTORY_KEY,
                 ModelGenerationPlan,
+                append_plan_application_history,
                 apply_generation_plan,
             )
 
@@ -5532,6 +5639,18 @@ class Orchestrator:
                 f"({delta_str})",
                 flush=True,
             )
+            if isinstance(raw_plan, Mapping):
+                if getattr(candidate, "metadata", None) is None:
+                    candidate.metadata = {}
+                history = append_plan_application_history(
+                    candidate.metadata,
+                    conformance,
+                    stage="ACCEPTED_REFINEMENT",
+                )
+                conformance[PLAN_APPLICATION_HISTORY_KEY] = history
+                candidate.metadata["generation_plan_conformance"] = (
+                    conformance
+                )
             # ── Simulation inner loop ── re-run simulation on the accepted
             # candidate and attempt up to MAX_SIM_INNER_ITERS targeted fixes
             # before handing the model back to the outer loop.
@@ -5716,9 +5835,29 @@ class Orchestrator:
                 "rule_score": rule_score,
                 "llm_score": llm_overall,
                 "issues": eval_result.issues,
-                "sim_score": sim_result.reachability_score,
-                "sim_passed": len(sim_result.passed_scenarios()),
-                "sim_total": len(sim_result.scenario_results),
+                "sim_score": (
+                    sim_result.requirement_reachability_score
+                    if sim_result.requirement_reachability_score is not None
+                    else sim_result.reachability_score
+                ),
+                "sim_score_kind": (
+                    "FROZEN_REQUIREMENT_CAUSAL_PATHS"
+                    if sim_result.requirement_reachability_score is not None
+                    else "ADAPTIVE_ROLE_SCENARIOS"
+                ),
+                "sim_passed": (
+                    sim_result.requirement_scenarios_passed
+                    if sim_result.requirement_reachability_score is not None
+                    else len(sim_result.passed_scenarios())
+                ),
+                "sim_total": (
+                    sim_result.requirement_scenarios_total
+                    if sim_result.requirement_reachability_score is not None
+                    else len(sim_result.scenario_results)
+                ),
+                "advisory_role_scenario_score": (
+                    sim_result.reachability_score
+                ),
                 "weights_used": getattr(eval_result, "weights_used", {}),
                 "verdict_robustness": verdict_rob,
             })
@@ -6040,13 +6179,33 @@ class Orchestrator:
             icon = score_icon(v)
             print(f"  {icon} {label}  {bar(v)}  {v:.3f}")
 
-        # ── Structural reachability block ─────────────────────────────────
+        # ── Structural evidence block ─────────────────────────────────────
         sim_passed = len(sim_result.passed_scenarios())
         sim_total  = len(sim_result.scenario_results)
         sim_score  = sim_result.reachability_score
-        sim_icon   = score_icon(sim_score)
         print(f"  {'-'*W}")
-        print(f"  [STRUCTURAL]  {sim_icon} {sim_score:.3f}  ({sim_passed}/{sim_total} scenarios)")
+        requirement_score = getattr(
+            sim_result, "requirement_reachability_score", None
+        )
+        if requirement_score is not None:
+            req_passed = sim_result.requirement_scenarios_passed
+            req_total = sim_result.requirement_scenarios_total
+            print(
+                f"  [STRUCTURAL-REQUIREMENT]  "
+                f"{score_icon(requirement_score)} "
+                f"{requirement_score:.3f}  "
+                f"({req_passed}/{req_total} frozen causal paths)"
+            )
+            print(
+                f"  [STRUCTURAL-ADVISORY]     "
+                f"{score_icon(sim_score)} {sim_score:.3f}  "
+                f"({sim_passed}/{sim_total} role scenarios)"
+            )
+        else:
+            print(
+                f"  [STRUCTURAL]  {score_icon(sim_score)} "
+                f"{sim_score:.3f}  ({sim_passed}/{sim_total} scenarios)"
+            )
 
         # Show paths for safety/emergency passing scenarios
         for r in sim_result.passed_scenarios():
@@ -6341,7 +6500,9 @@ class Orchestrator:
         ).get("whole_model_generation_plan")
         if isinstance(raw_plan, Mapping):
             from ..prototyping.generation_plan import (
+                PLAN_APPLICATION_HISTORY_KEY,
                 ModelGenerationPlan,
+                append_plan_application_history,
                 apply_generation_plan,
             )
             from ..prototyping.structural_obligations import (
@@ -6378,7 +6539,7 @@ class Orchestrator:
             syntax_ok = not check_syntax(
                 repaired_text,
                 fail_closed=True,
-                filter_stdlib_diagnostics=True,
+                filter_stdlib_diagnostics=False,
             ).has_errors
             behavior_preserved = True
             if repaired_text != before_text and syntax_ok:
@@ -6411,6 +6572,15 @@ class Orchestrator:
 
             if getattr(current, "metadata", None) is None:
                 current.metadata = {}
+            history = append_plan_application_history(
+                current.metadata,
+                conformance,
+                stage="FUNCTIONAL_CLOSURE",
+            )
+            conformance[PLAN_APPLICATION_HISTORY_KEY] = history
+            conformance["semantic_binding_materialization_history"] = [
+                item for item in history if item["semantic_changes"]
+            ]
             current.metadata["generation_plan_conformance"] = conformance
             current.metadata["structural_obligation_report"] = after_report
             if (
@@ -7172,9 +7342,67 @@ class Orchestrator:
         return working_sysml, working_model, latest_result
 
     def _run_simulation(self, sysml_text: str, model_name: str) -> SimulationResult:
-        """Run behavioral reachability simulation on raw SysML text."""
+        """Run simulation and attach fixed requirement-path evidence."""
         try:
-            return self.sim_validator.validate(sysml_text, model_name=model_name)
+            result = self.sim_validator.validate(
+                sysml_text, model_name=model_name
+            )
+            raw_plan = getattr(
+                self, "_active_model_generation_plan", None
+            )
+            if isinstance(raw_plan, Mapping):
+                from ..prototyping.generation_plan import ModelGenerationPlan
+                from ..prototyping.structural_obligations import (
+                    validate_structural_obligations,
+                )
+
+                plan = ModelGenerationPlan.from_dict(raw_plan)
+                report = validate_structural_obligations(
+                    sysml_text,
+                    plan.structural_obligations,
+                    model_name=model_name,
+                )
+                result.structural_obligation_report = report
+                result.requirement_scenarios_passed = int(
+                    report.get("passed") or 0
+                )
+                result.requirement_scenarios_total = int(
+                    report.get("total") or 0
+                )
+                if result.requirement_scenarios_total:
+                    result.requirement_reachability_score = (
+                        result.requirement_scenarios_passed
+                        / result.requirement_scenarios_total
+                    )
+                behavioral = getattr(result, "behavioral_result", None)
+                if behavioral is not None:
+                    requirement_behaviors = {
+                        item.behavior_name
+                        for item in plan.structural_obligations
+                        if item.realization_kind == "LOCAL_BEHAVIOR"
+                        and item.behavior_name
+                    }
+                    ag_behaviors = {
+                        item.stable_behavior_id
+                        for item in plan.behavior_obligations
+                        if item.stable_behavior_id
+                    }
+                    for scenario in behavioral.scenario_results:
+                        identity = str(scenario.state_machine or "")
+                        if any(
+                            name in identity for name in ag_behaviors
+                        ):
+                            if "ag_behavior" not in scenario.tags:
+                                scenario.tags.append("ag_behavior")
+                        elif any(
+                            name in identity
+                            for name in requirement_behaviors
+                        ):
+                            if "requirement_behavior" not in scenario.tags:
+                                scenario.tags.append(
+                                    "requirement_behavior"
+                                )
+            return result
         except Exception as e:
             from ..simulation.validator import SimulationResult
             r = SimulationResult(model_name=model_name)
@@ -7185,33 +7413,44 @@ class Orchestrator:
                             requirements: Optional[List[str]] = None) -> List[str]:
         """Convert failed simulation scenarios into LLM-readable issue strings."""
         issues: List[str] = []
-
-        # Isolated parts are the most actionable issue — report first
-        if sim_result.isolated_parts:
-            issues.append(
-                f"ISOLATED PARTS — the following parts have zero connect statements "
-                f"and are architecturally dead (no signal in or out): "
-                f"{', '.join(sim_result.isolated_parts)}. "
-                f"For each, add `connect <part>.<outPort> to <target>.<inPort>;` "
-                f"in the system assembly section."
-            )
-
-        for r in sim_result.failed_scenarios():
-            tgt = ", ".join(r.unreachable_targets) if r.unreachable_targets else "unknown"
-            entry = r.scenario_name.split("_to_")[0] if "_to_" in r.scenario_name else "?"
-            # Annotate if the source itself is isolated (helps LLM prioritise)
-            isolated_tag = (
-                " [entry part is isolated — no connections at all]"
-                if entry in sim_result.isolated_parts else ""
-            )
-            issues.append(
-                f"Scenario '{r.scenario_name}': no signal path from '{entry}' to '{tgt}'."
-                f"{isolated_tag} "
-                + (r.issues[0] if r.issues else "")
-            )
-        for rec in sim_result.recommendations:
-            if "only input ports" in rec or "Isolated" in rec:
-                issues.append(rec)
+        structural_report = getattr(
+            sim_result, "structural_obligation_report", None
+        )
+        fixed_structural = (
+            isinstance(structural_report, Mapping)
+            and bool(structural_report.get("total"))
+        )
+        if fixed_structural:
+            for result in structural_report.get("results") or ():
+                if result.get("status") == "PASS":
+                    continue
+                detail = "; ".join(result.get("issues") or ())
+                issues.append(
+                    f"FROZEN CAUSAL PATH {result.get('obligation_id')} "
+                    f"[{result.get('requirement_id')}] failed: {detail}"
+                )
+        else:
+            # Legacy models without a typed plan retain the role heuristic.
+            if sim_result.isolated_parts:
+                issues.append(
+                    "ISOLATED PARTS — the following parts have zero connect "
+                    "statements and are architecturally dead (no signal in or "
+                    f"out): {', '.join(sim_result.isolated_parts)}."
+                )
+            for scenario in sim_result.failed_scenarios():
+                target = (
+                    ", ".join(scenario.unreachable_targets)
+                    if scenario.unreachable_targets else "unknown"
+                )
+                entry = (
+                    scenario.scenario_name.split("_to_")[0]
+                    if "_to_" in scenario.scenario_name else "?"
+                )
+                issues.append(
+                    f"Scenario '{scenario.scenario_name}': no signal path "
+                    f"from '{entry}' to '{target}'. "
+                    + (scenario.issues[0] if scenario.issues else "")
+                )
 
         # ── Behavioral state machine violations ───────────────────────────────
         br = getattr(sim_result, "behavioral_result", None)
@@ -7255,9 +7494,30 @@ class Orchestrator:
         print(f"\n  ╔{'═'*W}╗")
         print(f"  ║  FINAL SIMULATION REPORT  ─  {sim_result.model_name:<29}║")
         print(f"  ╠{'═'*W}╣")
-        print(f"  ║  Reachability score : {sim_result.reachability_score:.3f}  "
-              f"{bar(sim_result.reachability_score, 20)}  "
-              f"{passed}/{total} scenarios{' '*(4-len(str(total)))}║")
+        requirement_score = getattr(
+            sim_result, "requirement_reachability_score", None
+        )
+        if requirement_score is not None:
+            req_passed = sim_result.requirement_scenarios_passed
+            req_total = sim_result.requirement_scenarios_total
+            print(
+                f"  ║  Requirement paths : {requirement_score:.3f}  "
+                f"{bar(requirement_score, 20)}  "
+                f"{req_passed}/{req_total} frozen{' '*(6-len(str(req_total)))}║"
+            )
+            print(
+                f"  ║  Role diagnostic   : "
+                f"{sim_result.reachability_score:.3f}  "
+                f"{bar(sim_result.reachability_score, 20)}  "
+                f"{passed}/{total} advisory{' '*(4-len(str(total)))}║"
+            )
+        else:
+            print(
+                f"  ║  Reachability score : "
+                f"{sim_result.reachability_score:.3f}  "
+                f"{bar(sim_result.reachability_score, 20)}  "
+                f"{passed}/{total} scenarios{' '*(4-len(str(total)))}║"
+            )
         print(f"  ║  Graph              : {sim_result.num_parts} parts · "
               f"{sim_result.num_ports} ports · "
               f"{sim_result.num_connections} connections{' '*10}║")

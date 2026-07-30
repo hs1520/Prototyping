@@ -58,14 +58,32 @@ def build_model_qualification(
 
     syntax_errors = int(syntax_result.total_errors())
     syntax_warnings = list(getattr(syntax_result, "warnings", ()) or ())
-    add("SYSML_SYNTAX_AND_SEMANTICS", syntax_errors == 0, {
+    parser_errors = list(
+        getattr(syntax_result, "parser_errors", ()) or ()
+    )
+    semantic_errors = list(
+        getattr(syntax_result, "sema_errors", ()) or ()
+    )
+    add(
+        "SYSML_SYNTAX_AND_SEMANTICS",
+        syntax_errors == 0 and not syntax_warnings,
+        {
         "error_count": syntax_errors,
+        "parser_error_count": len(parser_errors),
+        "semantic_error_count": len(semantic_errors),
         "warning_count": len(syntax_warnings),
         "warning_codes": sorted({
             str(item.get("code") or "unknown")
             for item in syntax_warnings
             if isinstance(item, Mapping)
         }),
+        "parser_errors": parser_errors,
+        "semantic_errors": semantic_errors,
+        "warnings": syntax_warnings,
+        "policy": (
+            "fail closed on every parser error, semantic error, and warning "
+            "reported for the committed user model"
+        ),
     })
     from .namespace_integrity import check_user_namespace_integrity
 
@@ -125,6 +143,42 @@ def build_model_qualification(
             generation_plan_conformance.get("status") == "PASS",
             generation_plan_conformance,
         )
+        reserved_identity = generation_plan_conformance.get(
+            "ag_reserved_identity_conformance"
+        )
+        if (
+            isinstance(reserved_identity, Mapping)
+            and reserved_identity.get("status") != "NOT_APPLICABLE"
+        ):
+            add(
+                "A_G_RESERVED_IDENTITY_CONFORMANCE",
+                reserved_identity.get("status") == "PASS",
+                reserved_identity,
+            )
+        else:
+            add(
+                "A_G_RESERVED_IDENTITY_CONFORMANCE",
+                None,
+                {"reason": "no applicable frozen A/G identities"},
+            )
+        event_symbols = generation_plan_conformance.get(
+            "planned_event_symbol_conformance"
+        )
+        if (
+            isinstance(event_symbols, Mapping)
+            and event_symbols.get("status") != "NOT_APPLICABLE"
+        ):
+            add(
+                "PLANNED_EVENT_SYMBOL_CONFORMANCE",
+                event_symbols.get("status") == "PASS",
+                event_symbols,
+            )
+        else:
+            add(
+                "PLANNED_EVENT_SYMBOL_CONFORMANCE",
+                None,
+                {"reason": "no applicable frozen event identities"},
+            )
 
     if structural_obligation_report is not None:
         add(
@@ -160,6 +214,19 @@ def build_model_qualification(
         getattr(simulation_result, "scenario_results", ()) or ()
     )
     passed_scenarios = list(simulation_result.passed_scenarios())
+    advisory_evidence_factory = getattr(
+        simulation_result, "advisory_structural_evidence", None
+    )
+    advisory_evidence = (
+        advisory_evidence_factory()
+        if callable(advisory_evidence_factory) else {
+            "evidence_kind": "LEGACY_ADVISORY",
+            "qualification_effect": "NONE",
+            "role_assignments": {},
+            "weakly_connected_components": [],
+            "scenarios": [],
+        }
+    )
     checks.append({
         "name": "HEURISTIC_STRUCTURAL_DIAGNOSTIC",
         "status": "ADVISORY",
@@ -167,7 +234,7 @@ def build_model_qualification(
             "passed": len(passed_scenarios),
             "total": len(scenarios),
             "reachability_score": simulation_result.reachability_score,
-            "qualification_effect": "NONE",
+            **advisory_evidence,
         },
     })
 
@@ -176,7 +243,88 @@ def build_model_qualification(
     behavioral_scenarios = list(
         getattr(behavioral, "scenario_results", ()) or ()
     )
-    if behavioral is not None and extracted:
+    activated_constraint_report = (
+        generation_plan_conformance.get(
+            "activated_constraint_conformance"
+        )
+        if isinstance(generation_plan_conformance, Mapping)
+        else None
+    )
+    plan_aware_behavior = isinstance(
+        activated_constraint_report, Mapping
+    )
+
+    def tagged(tag: str) -> list[Any]:
+        return [
+            item for item in behavioral_scenarios
+            if tag in (getattr(item, "tags", ()) or ())
+        ]
+
+    def add_execution_check(name: str, selected: Sequence[Any]) -> None:
+        if not selected:
+            add(name, None, {"reason": "no applicable planned scenarios"})
+            return
+        failed_items = [
+            item for item in selected if not getattr(item, "passed", False)
+        ]
+        add(name, not failed_items, {
+            "passed": len(selected) - len(failed_items),
+            "total": len(selected),
+            "failed_scenarios": [
+                str(getattr(item, "name", "unknown"))
+                for item in failed_items
+            ],
+        })
+
+    if plan_aware_behavior:
+        requirement_scenarios = tagged("requirement_behavior")
+        ag_scenarios = tagged("ag_behavior")
+        design_scenarios = [
+            item for item in tagged("design_constraint")
+            if item not in requirement_scenarios
+            and item not in ag_scenarios
+        ]
+        add_execution_check(
+            "REQUIREMENT_BEHAVIOR_EXECUTION",
+            requirement_scenarios,
+        )
+        add_execution_check("A_G_BEHAVIOR_EXECUTION", ag_scenarios)
+        add_execution_check(
+            "DESIGN_CONSTRAINT_CONSISTENCY",
+            design_scenarios,
+        )
+        readiness = activated_constraint_report.get(
+            "external_verification_readiness"
+        )
+        if (
+            isinstance(readiness, Mapping)
+            and readiness.get("status") != "NOT_APPLICABLE"
+        ):
+            add(
+                "EXTERNAL_VERIFICATION_READINESS",
+                readiness.get("status") == "PASS",
+                readiness,
+            )
+        else:
+            add("EXTERNAL_VERIFICATION_READINESS", None, {
+                "reason": "no external-analysis constraint is planned",
+            })
+        checks.append({
+            "name": "BEHAVIORAL_EXECUTION",
+            "status": "ADVISORY",
+            "evidence": {
+                "extracted_state_machines": extracted,
+                "passed": sum(
+                    1 for item in behavioral_scenarios
+                    if getattr(item, "passed", False)
+                ),
+                "total": len(behavioral_scenarios),
+                "qualification_effect": (
+                    "NONE; replaced by provenance-specific checks"
+                ),
+            },
+        })
+    elif behavioral is not None and extracted:
         failed_behavioral = (
             list(behavioral.failed_scenarios())
             if callable(getattr(behavioral, "failed_scenarios", None))

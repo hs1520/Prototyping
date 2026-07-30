@@ -141,6 +141,58 @@ def _dedup(concepts: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(c for c in concepts if c))
 
 
+def ag_event_signals(spec: AGChainSpec) -> Tuple[str, ...]:
+    """Return every event type accepted by the standalone A/G behaviors.
+
+    The list is the shared authority for standalone declaration and terminal
+    canonical import. It deliberately contains event *types*, never executable
+    response actions.
+    """
+    signals: list[str] = []
+    if spec.priority is not None:
+        priority = spec.priority
+        runtime_catalog_bound = (
+            bool(priority.member_provenance)
+            or priority.source_kind == "STUDENT_DERIVED_DESIGN_CONSTRAINT"
+        )
+        signals.append(
+            f"{_capitalise(priority.trigger)}Signal"
+            if runtime_catalog_bound
+            else "CriticalPropulsionFailureDetectedSignal"
+        )
+        signals.extend(
+            f"{_sysml_identifier(lower.title())}RequestSignal"
+            for _higher, lower in priority.edges
+        )
+    for component in spec.components:
+        if component.behavior == "SafetyResponseArbitration":
+            continue
+        if component.name == "ReleaseCommandGatewayContract":
+            signals.extend((
+                "ReceivedReleaseCommandSignal",
+                "PowerOnSignal",
+                "PowerLostSignal",
+            ))
+        elif component.name == "SelfTestStatusLatchContract":
+            signals.extend((
+                "PowerOnSignal",
+                "SensorFailureReportedSignal",
+                "SelfTestPassedSignal",
+                "PowerCycleSignal",
+            ))
+        elif component.name == "PayloadLockMechanismContract":
+            signals.extend((
+                "PowerOnSignal",
+                "PowerLostSignal",
+                "AuthorisedReleaseCommandReceivedSignal",
+            ))
+        elif component.trigger_signal:
+            signals.append(component.trigger_signal)
+    return tuple(dict.fromkeys(
+        _sysml_identifier(signal) for signal in signals if signal
+    ))
+
+
 def _render_ast(node: Mapping[str, Any]) -> str:
     kind = node.get("node")
     if kind == "Identifier":
@@ -328,12 +380,12 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             else "CriticalPropulsionFailureDetectedSignal"
         )
         out.append(
-            f"    action def {_sysml_identifier(trigger_signal)} {{}}"
+            f"    item def {_sysml_identifier(trigger_signal)};"
         )
         for lower in (edge[1] for edge in priority.edges):
             out.append(
-                f"    action def "
-                f"{_sysml_identifier(lower.title())}RequestSignal {{}}"
+                f"    item def "
+                f"{_sysml_identifier(lower.title())}RequestSignal;"
             )
         out.append("    state def SafetyResponseArbitration {")
         out.append(f"        attribute {priority.trigger} : Boolean;")
@@ -414,7 +466,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 "PowerLostSignal",
             ):
                 if signal not in emitted_signal_defs:
-                    out.append(f"    action def {signal} {{}}")
+                    out.append(f"    item def {signal};")
                     emitted_signal_defs.add(signal)
             out.extend([
                 f"    state def {comp.behavior} {{",
@@ -442,7 +494,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 "PowerCycleSignal",
             ):
                 if signal not in emitted_signal_defs:
-                    out.append(f"    action def {signal} {{}}")
+                    out.append(f"    item def {signal};")
                     emitted_signal_defs.add(signal)
             out.extend([
                 f"    state def {comp.behavior} {{",
@@ -471,7 +523,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 "AuthorisedReleaseCommandReceivedSignal",
             ):
                 if signal not in emitted_signal_defs:
-                    out.append(f"    action def {signal} {{}}")
+                    out.append(f"    item def {signal};")
                     emitted_signal_defs.add(signal)
             out.extend([
                 f"    state def {comp.behavior} {{",
@@ -502,7 +554,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             ])
             continue
         if comp.trigger_signal not in emitted_signal_defs:
-            out.append(f"    action def {comp.trigger_signal} {{}}")
+            out.append(f"    item def {comp.trigger_signal};")
             emitted_signal_defs.add(comp.trigger_signal)
         out.append(f"    state def {comp.behavior} {{")
         out.append(f"        entry; then {comp.initial_state};")

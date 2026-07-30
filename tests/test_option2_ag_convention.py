@@ -113,6 +113,29 @@ def test_published_syntax_agrees_with_the_emitter():
         )
 
 
+def test_trigger_compatibility_rule_states_the_full_concept_naming_duty():
+    """The checker performs lexical compatibility, so merely saying
+    "compatible" leaves the author unable to infer the accept-signal name.
+    """
+    rendered = render_authoring_rules()
+    assert "`<Concept>Signal`" in rendered
+    assert "`SensorFailureReportedSignal`" in rendered
+    assert "not `SensorFailureSignal`" in rendered
+
+
+def test_hidden_extractor_conventions_are_published_exactly():
+    rendered = render_authoring_rules()
+    assert "discharge<Concept>__to__<ConsumerContract>" in rendered
+    assert "inv__<invariant_id>__source__<source_id>__kind__<source_kind>" in rendered
+    assert "INSIDE the system contract" in rendered
+    assert "enum <MEMBER>;" in rendered
+    assert "lifecycle/interface input" in rendered
+    assert "one atomic Boolean identifier" in rendered
+    assert "require constraint g_observed" in rendered
+    assert "common source" in rendered
+    assert "distinct power-loss event" in rendered
+
+
 def test_guard_concepts_are_declared_in_their_own_state_def():
     """Across every encoded chain the emitter declares each guard concept as an
     attribute of the state def that uses it — a state machine cannot see the

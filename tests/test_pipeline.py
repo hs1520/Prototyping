@@ -172,6 +172,38 @@ def test_build_run_report_is_json_serialisable():
     json.dumps(report)  # must not raise
 
 
+def test_build_run_report_carries_terminal_evidence_digest():
+    class Sim:
+        reachability_score = 0.5
+        scenario_results = ()
+
+        @staticmethod
+        def passed_scenarios():
+            return []
+
+    consistency = {
+        "status": "PASS",
+        "model_digest": "digest",
+        "simulation_source_model_digest": "digest",
+        "evaluation_source_model_digest": "digest",
+        "final_score": 0.7,
+        "simulation": {
+            "reachability_score": 0.5,
+            "scenarios_passed": 0,
+            "scenarios_total": 0,
+        },
+    }
+    report = orchestration_module.PrototypingPipeline.build_run_report({
+        "requirements": [],
+        "final_score": 0.7,
+        "simulation_result": Sim(),
+        "terminal_consistency": consistency,
+    })
+
+    assert report["terminal_consistency"] == consistency
+    assert report["simulation"]["source_model_digest"] == "digest"
+
+
 def test_build_run_report_preserves_revised_collaboration_provenance():
     revised = {
         "experiment_namespace": "BLACKBOARD_AG_V1",

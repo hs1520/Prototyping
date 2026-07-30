@@ -525,6 +525,12 @@ def _configuration_problems(config: Mapping[str, Any]) -> list[str]:
     for field in ("provider", "model", "code_revision", "ag_checker_version"):
         if not str(config.get(field) or "").strip():
             problems.append(f"experiment config {field} must be set")
+    syntax_attempts = config.get("r2_authored_syntax_max_attempts")
+    if not isinstance(syntax_attempts, int) or syntax_attempts <= 0:
+        problems.append(
+            "experiment config r2_authored_syntax_max_attempts must be "
+            "a positive integer"
+        )
     return problems
 
 

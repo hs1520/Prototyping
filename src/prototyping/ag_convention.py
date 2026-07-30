@@ -46,6 +46,12 @@ SPEC_VALUED = "SPEC_VALUED"
 CORE = "CORE"
 REFINEMENT = "REFINEMENT"
 
+#: Failure scope for the named obligations inside the aggregate priority check.
+#: This belongs beside the obligation itself: the router must not maintain a
+#: second list that can drift from what the checker and prompt call the rule.
+PRIORITY_INPUT_OR_CONTRACT = "PRIORITY_INPUT_OR_CONTRACT"
+PRIORITY_MODEL_WIRING = "PRIORITY_MODEL_WIRING"
+
 
 @dataclass(frozen=True)
 class Obligation:
@@ -62,12 +68,24 @@ class Obligation:
     #: refines an already-well-formed one (REFINEMENT). Lets rule-set size be
     #: ablated instead of assumed.
     tier: str = CORE
+    #: Optional routing scope. Priority obligations use it to distinguish a
+    #: missing/contradictory contract or response vocabulary (BLOCKED) from
+    #: topology already authorised inside an existing behavior definition
+    #: (dependency-closed surgical repair).
+    failure_scope: str | None = None
 
     def __post_init__(self) -> None:
         if self.category not in (CONVENTION, SPEC_VALUED):
             raise ValueError(f"unknown category {self.category!r}")
         if self.tier not in (CORE, REFINEMENT):
             raise ValueError(f"unknown tier {self.tier!r}")
+        if self.failure_scope not in (
+            None, PRIORITY_INPUT_OR_CONTRACT, PRIORITY_MODEL_WIRING
+        ):
+            raise ValueError(
+                f"{self.obligation_id}: unknown failure scope "
+                f"{self.failure_scope!r}"
+            )
         if self.category == CONVENTION and not self.authoring_rule:
             raise ValueError(
                 f"{self.obligation_id}: a CONVENTION must state its rule, or an "
@@ -235,8 +253,26 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
         "CONTRACT_INCOMPLETE", CONVENTION,
         "Every contract declares each concept it uses as `attribute <name> : "
-        "Boolean;`, one `assume constraint <n> { <concept> }` per consumed input "
-        "and one `require constraint <n> { <concept> }` per produced guarantee.",
+        "Boolean;`. Write one `assume constraint <n> { <concept> }` per CONTRACT "
+        "assumption and one `require constraint <n> { <concept> }` per produced "
+        "guarantee. A lifecycle/interface input used only to trigger behavior is "
+        "not automatically a contract assumption.",
+    ),
+    Obligation(
+        "SYSTEM_OBSERVATION_BINDING_MISSING", CONVENTION,
+        "The SYSTEM's observed guarantee "
+        "is a separate constraint named exactly `require constraint g_observed "
+        "{ <observation> }`; invariant constraints do not replace it. The checker "
+        "uses `g_observed` to decompose a compound observation into the positive "
+        "concepts component guarantees must support.",
+    ),
+    Obligation(
+        "COMPONENT_GUARANTEE_NONATOMIC", CONVENTION,
+        "Every COMPONENT `require constraint` must be one atomic Boolean "
+        "identifier, for example `require constraint g_locked { locked }`. Put "
+        "each produced concept in its own constraint. Compound Boolean formulas "
+        "belong on the system contract as observations or invariants, not in a "
+        "component guarantee whose realizing action must establish one concept.",
     ),
     Obligation(
         "CONTRACT_UNSUPPORTED", CONVENTION,
@@ -275,8 +311,10 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
         "DISCHARGE_EDGE_MISSING", CONVENTION,
         "A matching upstream guarantee is not enough: state the discharge "
-        "explicitly as `dependency discharge<X> from <ProducerContract> to "
-        "<ConsumerContract>;`, using element names only, never dotted members.",
+        "explicitly as `dependency discharge<Concept>__to__<ConsumerContract> "
+        "from <ProducerContract> to <ConsumerContract>;`, where `<Concept>` is "
+        "the COMPLETE discharged assumption concept with only its first character "
+        "capitalized. Use element names only, never dotted members.",
     ),
     Obligation(
         "CIRCULAR_ASSUMPTION", CONVENTION,
@@ -316,8 +354,14 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
         "REALIZATION_TRIGGER_MISSING", CONVENTION,
         "A realizing state machine must accept a trigger compatible with the "
-        "contract's assumptions. Declare each accepted event as its own "
-        "`attribute def <Signal>;`, then write transitions in exactly this form — "
+        "contract's assumptions. Compatibility is lexical and uses the COMPLETE "
+        "assumption concept: for assumption `<concept>`, name the event "
+        "`<Concept>Signal` (capitalize only its first character), so assumption "
+        "`sensorFailureReported` is accepted as "
+        "`SensorFailureReportedSignal`, not `SensorFailureSignal`. Declare each "
+        "accepted event as its own package-level `item def <Signal>;`. Keep "
+        "response behaviors as separately named `action def` elements. Then write "
+        "transitions in exactly this form — "
         "the guard clause is `if <boolean-expression>` and is written between "
         "`accept` and `then`, never as `guard`:\n"
         "   `transition <n> first <source> accept <Signal> then <target>;`\n"
@@ -358,15 +402,30 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     ),
     Obligation(
         "PATTERN_TOPOLOGY_INCOMPLETE", CONVENTION,
-        "The declared pattern's state/transition topology must be present and "
-        "conform to the bounded profile: the states, the guarded transitions, and "
-        "the initial state the pattern requires.",
+        "The declared pattern's state/transition topology must satisfy these "
+        "gold-blind structural duties. STARTUP_INHIBIT: the component producing "
+        "the latch has an initial decision state, exactly one non-initial state "
+        "whose entry action is `set<Latch>`, at least one reset state whose entry "
+        "action is `clear<Latch>`, latching and clearing are alternatives from a "
+        "common source, reset uses a different trigger from latch, and no "
+        "transition reaches a state the invariant forbids. "
+        "LOCKED_UNTIL_AUTHORISED_RELEASE: the lock component has an initial state "
+        "whose entry action establishes the locked concept, exactly one unlocked "
+        "state is reached by `<AuthorisationConcept>Signal`, no other trigger "
+        "reaches it, and a distinct power-loss event returns it to the initial "
+        "locked state. The default-safe lock component has no assumptions and "
+        "owns the locked, authorised-only, and de-energise-to-lock guarantees.",
            tier=REFINEMENT,
     ),
     Obligation(
         "INVARIANT_SEMANTICS_MISSING", CONVENTION,
-        "An invariant pattern must state its invariant as constraints in the "
-        "committed model; an invariant absent from SysML does not exist.",
+        "An invariant pattern must state every invariant as a `require constraint` "
+        "INSIDE the system contract. Its exact name is "
+        "`inv__<invariant_id>__source__<source_id>__kind__<source_kind>`, where "
+        "`source_kind` is `STAKEHOLDER` or "
+        "`STUDENT_DERIVED_DESIGN_CONSTRAINT`. An invariant absent from SysML, "
+        "placed in a separate requirement def, or lacking this provenance name "
+        "does not exist.",
            tier=REFINEMENT,
     ),
     Obligation(
@@ -380,7 +439,8 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
         "PRIORITY_TOPOLOGY_MISSING", CONVENTION,
         "A TRIGGERED_TIMED_FAILSAFE_RESPONSE must model its arbitration "
-        "explicitly, using these fixed element names: `enum def <RESPONSE_SET>`, "
+        "explicitly, using these fixed element names: `enum def <RESPONSE_SET> "
+        "{ enum <MEMBER>; ... }` (each member uses the `enum` keyword), "
         "`requirement def SafetyResponsePriorityContract` carrying "
         "`doc /* bounded A/G evaluator semantic auxiliary; "
         "response_set_id=<RESPONSE_SET> */`, `attribute selectedResponse : "
@@ -408,11 +468,22 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
 #: category, because several compare against REQ_SAFE_005's reviewed answer.
 PRIORITY_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
+        "response_member_provenance", CONVENTION,
+        "Every response-set enum member must have a provenance doc in the "
+        "priority contract: `response_member=<member>; "
+        "source_kind=<EXISTING_MODEL_BEHAVIOR or approved/derived design kind>; "
+        "source_id=<element-or-design-id>`. Interface signals and guarantees do "
+        "not become selectable responses merely by being placed in the enum.",
+           tier=REFINEMENT,
+           failure_scope=PRIORITY_INPUT_OR_CONTRACT,
+    ),
+    Obligation(
         "response_set_members", CONVENTION,
         "The response set must be non-empty and must contain every response named "
         "by a precedence constraint — no edge may reference a member you did not "
         "declare in the `enum def`.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_INPUT_OR_CONTRACT,
     ),
     Obligation(
         "precedence_edges", CONVENTION,
@@ -420,35 +491,41 @@ PRIORITY_OBLIGATIONS: Tuple[Obligation, ...] = (
         "constraint for every other member of the response set, so the winner "
         "outranks all of them and none is left unordered.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_INPUT_OR_CONTRACT,
     ),
     Obligation(
         "single_highest_response", CONVENTION,
         "Exactly one response may sit at the top of the ordering; two responses "
         "both outranking others is not a precedence the checker can interpret.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_INPUT_OR_CONTRACT,
     ),
     Obligation(
         "selected_response", CONVENTION,
         "The response named by `selectHighestPriority` must be one of the members "
         "declared in the response-set `enum def`.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_INPUT_OR_CONTRACT,
     ),
     Obligation(
         "trigger_concept", CONVENTION,
         "The arbitration trigger must be one of the system contract's own "
         "assumption concepts, not a concept introduced only in the arbitration.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_INPUT_OR_CONTRACT,
     ),
     Obligation(
         "trigger_matches_timing_origin", CONVENTION,
         "The arbitration trigger must be the same concept the provenance line "
         "declares as `timing_origin=`.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_INPUT_OR_CONTRACT,
     ),
     Obligation(
         "selection_guarded_by_trigger", CONVENTION,
         "The selection transition must be guarded by the trigger concept.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_MODEL_WIRING,
     ),
     Obligation(
         "competing_transitions_guarded", CONVENTION,
@@ -456,24 +533,30 @@ PRIORITY_OBLIGATIONS: Tuple[Obligation, ...] = (
         "carrying the guard `if not <TRIGGER>`, so it cannot fire while the "
         "trigger holds. A response with no such transition is unguarded.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_MODEL_WIRING,
     ),
     Obligation(
         "selected_transition_reachable", CONVENTION,
         "The transition selecting the winning response must be reachable from the "
-        "arbitration state machine's initial state.",
+        "arbitration state machine's initial state. In the bounded A/G convention "
+        "the initial edge is written `entry; then <awaiting-state>;`; preserve that "
+        "form and make the selection transition's source reachable from it.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_MODEL_WIRING,
     ),
     Obligation(
         "selection_action_connected", CONVENTION,
         "The selecting transition's action must set the response selection "
         "guarantee, not merely enter a state.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_MODEL_WIRING,
     ),
     Obligation(
         "arbiter_guarantees", CONVENTION,
         "The arbiter contract must produce both the command it issues and the "
         "response-selected guarantee, so the selection is observable downstream.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_INPUT_OR_CONTRACT,
     ),
     Obligation(
         "recovery_power_available_at_boundary", CONVENTION,
@@ -481,18 +564,21 @@ PRIORITY_OBLIGATIONS: Tuple[Obligation, ...] = (
         "segment) is realized by a single initial state named after that "
         "guarantee, with no transitions and an `entry action set<Concept>;`.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_MODEL_WIRING,
     ),
     Obligation(
         "deployment_action_connected", CONVENTION,
         "The component realizing the system observation must perform the action "
         "that establishes it, named `set<ObservationConcept>`.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_MODEL_WIRING,
     ),
     Obligation(
         "observation_connected", CONVENTION,
         "The verification observation link must itself be satisfied, not merely "
         "declared.",
            tier=REFINEMENT,
+           failure_scope=PRIORITY_INPUT_OR_CONTRACT,
     ),
 )
 
@@ -515,9 +601,10 @@ GATE_OBLIGATIONS: Tuple[Obligation, ...] = (
     ),
     Obligation(
         "declared_accept_signals", CONVENTION,
-        "Declare every event accepted in a transition as its own `action def "
-        "<Signal> {}` inside the package before it is used. Do not also declare "
-        "an `attribute def` with the same package member name.",
+        "Declare every event accepted in a transition as exactly one package-level "
+        "`item def <Signal>;` before it is used. Never declare an `action def`, "
+        "`attribute def`, or other definition with the same package member name; "
+        "executable responses use separately named `action def` elements.",
     ),
     Obligation(
         "bounded_construct_set", CONVENTION,
@@ -526,7 +613,8 @@ GATE_OBLIGATIONS: Tuple[Obligation, ...] = (
         "... by ...`, `state def` containing `entry; then <state>;` / `state "
         "<s>;` / `state <s> { entry action <a>; }` / `transition <n> first <s> "
         "accept <Signal> [if <expr>] then <t>;`, `enum def`, `verification def`, "
-        "and `dependency`. Invent no new keywords — in particular there is no "
+        "`enum def <E> { enum <MEMBER>; }`, and `dependency`. Invent no new "
+        "keywords — in particular there is no "
         "`guard` keyword: a transition guard is written `if <expr>`.",
     ),
 )

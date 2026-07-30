@@ -5,13 +5,16 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
-from .ag_emitter import AGChainSpec
+from .ag_emitter import AGChainSpec, ag_event_signals
 from .ag_behavior_plan import (
     BehaviorObligationPlan,
     INVARIANT,
     compile_behavior_obligation_plan,
 )
-from .ag_planning import emit_ag_planning_package
+from .ag_planning import (
+    emit_ag_planning_package,
+    strip_ag_local_event_definitions,
+)
 from ..utils.sysml_text_utils import find_block_end
 
 try:
@@ -26,6 +29,27 @@ TERMINAL_REALIZATION = "TERMINAL_REALIZATION"
 
 
 @dataclass(frozen=True)
+class FeatureTypeBinding:
+    concept: str
+    owner_feature: str
+    observed_kind: str
+    observed_type: str
+    status: str
+    issues: Tuple[str, ...] = ()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "concept": self.concept,
+            "owner_feature": self.owner_feature,
+            "observed_kind": self.observed_kind,
+            "observed_type": self.observed_type,
+            "expected_semantics": "BOOLEAN_BEHAVIOR_OPERAND",
+            "status": self.status,
+            "issues": list(self.issues),
+        }
+
+
+@dataclass(frozen=True)
 class ComponentBinding:
     contract: str
     owner_definition: str
@@ -33,6 +57,7 @@ class ComponentBinding:
     behavior: str
     status: str
     realization_kind: str = "STATE_MACHINE"
+    feature_type_bindings: Tuple[FeatureTypeBinding, ...] = ()
     issues: Tuple[str, ...] = ()
 
     def to_dict(self) -> Dict[str, Any]:
@@ -42,6 +67,29 @@ class ComponentBinding:
             "owner_usage": self.owner_usage,
             "behavior": self.behavior,
             "realization_kind": self.realization_kind,
+            "feature_type_bindings": [
+                item.to_dict() for item in self.feature_type_bindings
+            ],
+            "status": self.status,
+            "issues": list(self.issues),
+        }
+
+
+@dataclass(frozen=True)
+class EventTypeBinding:
+    package: str
+    event: str
+    canonical_type: str
+    expected_kind: str
+    status: str
+    issues: Tuple[str, ...] = ()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "package": self.package,
+            "event": self.event,
+            "canonical_type": self.canonical_type,
+            "expected_kind": self.expected_kind,
             "status": self.status,
             "issues": list(self.issues),
         }
@@ -53,6 +101,7 @@ class AGBindingReport:
     system_package: str
     profile: str
     bindings: Tuple[ComponentBinding, ...]
+    event_type_bindings: Tuple[EventTypeBinding, ...] = ()
     issues: Tuple[str, ...] = ()
 
     def to_dict(self) -> Dict[str, Any]:
@@ -62,6 +111,9 @@ class AGBindingReport:
             "status": self.status,
             "system_package": self.system_package,
             "bindings": [item.to_dict() for item in self.bindings],
+            "event_type_bindings": [
+                item.to_dict() for item in self.event_type_bindings
+            ],
             "issues": list(self.issues),
         }
 
@@ -112,6 +164,177 @@ def _insert_package_members(
         f"\n    {line}" for line in relationships
     )
     return text[:closing] + relationship_lines + "\n" + text[closing:]
+
+
+def _definition_paths(usage: Any) -> set[str]:
+    return {
+        _qualified_name(item)
+        for item in getattr(usage, "definitions", ())
+    }
+
+
+def _resolve_owner_usage(
+    usages: Mapping[str, Any],
+    *,
+    system_package: str,
+    owner_usage: str,
+    definition_path: str,
+) -> tuple[str | None, Any | None, tuple[str, ...]]:
+    """Resolve one frozen local usage identity to its exact terminal path."""
+    candidates = sorted(
+        [
+            (path, usage)
+            for path, usage in usages.items()
+            if path.startswith(f"{system_package}::")
+            and path.rsplit("::", 1)[-1] == owner_usage
+            and definition_path in _definition_paths(usage)
+        ],
+        key=lambda item: item[0],
+    )
+    if len(candidates) == 1:
+        path, usage = candidates[0]
+        return path, usage, ()
+    expected = f"{system_package}::{owner_usage}"
+    if not candidates:
+        return None, None, (f"missing owner usage {expected}",)
+    paths = ", ".join(path for path, _ in candidates)
+    return (
+        None,
+        None,
+        (
+            f"ambiguous owner usage {expected}; typed candidates: {paths}",
+        ),
+    )
+
+
+_BOOLEAN_WORDS = {"and", "or", "not", "true", "false"}
+
+
+def _behavior_boolean_concepts(obligation: Any) -> tuple[str, ...]:
+    """Return only concepts actually used as Boolean behavior operands."""
+    expressions: list[str] = []
+    if obligation is None:
+        return ()
+    if obligation.invariant_expression:
+        expressions.append(obligation.invariant_expression)
+    expressions.extend(
+        transition.guard
+        for transition in obligation.transitions
+        if transition.guard
+    )
+    allowed = set(obligation.assumptions) | set(obligation.guarantees)
+    return tuple(dict.fromkeys(
+        token
+        for expression in expressions
+        for token in re.findall(r"\b[A-Za-z_]\w*\b", expression)
+        if token not in _BOOLEAN_WORDS and token in allowed
+    ))
+
+
+def _declared_attribute_type(attribute: Any, model_text: str) -> str:
+    for item in getattr(attribute, "types", ()):
+        qualified = _qualified_name(item)
+        if qualified and "placeholder" not in qualified:
+            if qualified not in {"Base::DataValue", "Base::Anything"}:
+                return qualified
+    node = getattr(attribute, "cst_node", None)
+    if node is not None:
+        try:
+            source = str(node.text(model_text))
+        except Exception:
+            source = ""
+        match = re.search(
+            r"\battribute\s+[A-Za-z_]\w*\s*:\s*"
+            r"([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)",
+            source,
+        )
+        if match is not None:
+            return match.group(1)
+    return "UNRESOLVED"
+
+
+def _feature_type_bindings(
+    definition: Any,
+    obligation: Any,
+    *,
+    model_text: str,
+) -> tuple[FeatureTypeBinding, ...]:
+    """Validate actual features used as Boolean A/G behavior operands."""
+    attributes = {
+        str(getattr(item, "name", "") or ""): item
+        for item in getattr(definition, "owned_attributes", ())
+    }
+    ports = {
+        str(getattr(item, "name", "") or ""): item
+        for item in getattr(definition, "owned_ports", ())
+    }
+    bindings: list[FeatureTypeBinding] = []
+    for concept in _behavior_boolean_concepts(obligation):
+        attribute = attributes.get(concept)
+        port = ports.get(concept)
+        issues: list[str] = []
+        if attribute is not None and port is not None:
+            observed_kind = "AMBIGUOUS"
+            observed_type = "MULTIPLE"
+            owner_feature = (
+                f"{_qualified_name(definition)}::{concept}"
+            )
+            issues.append(
+                f"Boolean behavior concept {concept} resolves to both an "
+                "attribute and a port"
+            )
+        elif attribute is not None:
+            observed_kind = "attribute"
+            observed_type = _declared_attribute_type(
+                attribute, model_text
+            )
+            owner_feature = _qualified_name(attribute)
+            if observed_type not in {
+                "Boolean",
+                "ScalarValues::Boolean",
+            }:
+                issues.append(
+                    f"Boolean behavior concept {owner_feature} is declared "
+                    f"as {observed_type}, expected Boolean"
+                )
+        elif port is not None:
+            # A directed signal feature can carry the truth concept used by the
+            # bounded profile. Its payload semantics remain structural evidence;
+            # a contradictory scalar attribute declaration is never accepted.
+            observed_kind = "port"
+            observed_type = next(
+                (
+                    _qualified_name(item)
+                    for item in getattr(port, "types", ())
+                    if _qualified_name(item)
+                    not in {
+                        "Ports::Port",
+                        "Objects::Object",
+                        "Occurrences::Occurrence",
+                        "Base::Anything",
+                    }
+                ),
+                "UNRESOLVED",
+            )
+            owner_feature = _qualified_name(port)
+        else:
+            observed_kind = "MISSING"
+            observed_type = "UNRESOLVED"
+            owner_feature = (
+                f"{_qualified_name(definition)}::{concept}"
+            )
+            issues.append(
+                f"Boolean behavior concept {owner_feature} has no owner feature"
+            )
+        bindings.append(FeatureTypeBinding(
+            concept=concept,
+            owner_feature=owner_feature,
+            observed_kind=observed_kind,
+            observed_type=observed_type,
+            status="PASS" if not issues else "FAIL",
+            issues=tuple(issues),
+        ))
+    return tuple(bindings)
 
 
 def bind_ag_contracts_to_model(
@@ -171,8 +394,13 @@ def bind_ag_contracts_to_model(
         _qualified_name(item): item
         for item in model.elements(_syside.AssertConstraintUsage)
     }
+    item_definitions = {
+        _qualified_name(item): item
+        for item in model.elements(_syside.ItemDefinition)
+    }
 
     all_bindings: List[ComponentBinding] = []
+    event_type_bindings: List[EventTypeBinding] = []
     bound_packages: List[str] = []
     aggregate_issues: List[str] = []
     cleaned_model = str(model_text)
@@ -182,12 +410,43 @@ def bind_ag_contracts_to_model(
         relationships: List[str] = []
         behavior_by_contract: Dict[str, str] = {}
 
+        for event_name in ag_event_signals(spec):
+            canonical_type = f"{system_package}::{event_name}"
+            event_issues: List[str] = []
+            if canonical_type not in item_definitions:
+                event_issues.append(
+                    f"missing canonical item definition {canonical_type}"
+                )
+            else:
+                imports.append(f"private import {canonical_type};")
+            event_binding = EventTypeBinding(
+                package=spec.package,
+                event=event_name,
+                canonical_type=canonical_type,
+                expected_kind="item def",
+                status="PASS" if not event_issues else "FAIL",
+                issues=tuple(event_issues),
+            )
+            event_type_bindings.append(event_binding)
+            aggregate_issues.extend(
+                f"{spec.package}::{event_name}: {issue}"
+                for issue in event_issues
+            )
+
         for component in spec.components:
             obligation = obligations.get(component.name)
             definition_path = (
                 f"{system_package}::{component.owner_def}"
             )
-            usage_path = f"{system_package}::{component.owner_usage}"
+            usage_path, usage, usage_issues = _resolve_owner_usage(
+                usages,
+                system_package=system_package,
+                owner_usage=component.owner_usage,
+                definition_path=definition_path,
+            )
+            reported_usage_path = (
+                usage_path or f"{system_package}::{component.owner_usage}"
+            )
             realization_id = (
                 obligation.stable_behavior_id
                 if obligation is not None else component.behavior
@@ -202,7 +461,6 @@ def bind_ag_contracts_to_model(
             )
             issues: List[str] = []
             definition = definitions.get(definition_path)
-            usage = usages.get(usage_path)
             behavior = (
                 constraints.get(behavior_path)
                 if realization_kind == INVARIANT
@@ -212,16 +470,14 @@ def bind_ag_contracts_to_model(
                 issues.append(
                     f"missing owner definition {definition_path}"
                 )
-            if usage is None:
-                issues.append(f"missing owner usage {usage_path}")
-            elif definition is not None:
-                resolved_definitions = {
-                    _qualified_name(item)
-                    for item in getattr(usage, "definitions", ())
-                }
-                if definition_path not in resolved_definitions:
+            issues.extend(usage_issues)
+            if usage is not None:
+                if definition is None:
+                    pass
+                elif definition_path not in _definition_paths(usage):
                     issues.append(
-                        f"{usage_path} is not typed by {definition_path}"
+                        f"{reported_usage_path} is not typed by "
+                        f"{definition_path}"
                     )
             if behavior is None:
                 issues.append(
@@ -232,14 +488,28 @@ def bind_ag_contracts_to_model(
                     )
                     + behavior_path
                 )
+            feature_bindings = (
+                _feature_type_bindings(
+                    definition,
+                    obligation,
+                    model_text=str(model_text),
+                )
+                if definition is not None else ()
+            )
+            issues.extend(
+                issue
+                for binding in feature_bindings
+                for issue in binding.issues
+            )
 
             status = "PASS" if not issues else "FAIL"
             all_bindings.append(ComponentBinding(
                 contract=component.name,
                 owner_definition=definition_path,
-                owner_usage=usage_path,
+                owner_usage=reported_usage_path,
                 behavior=behavior_path,
                 realization_kind=realization_kind,
+                feature_type_bindings=feature_bindings,
                 status=status,
                 issues=tuple(issues),
             ))
@@ -248,7 +518,7 @@ def bind_ag_contracts_to_model(
             )
 
             if usage is not None:
-                imports.append(f"private import {usage_path};")
+                imports.append(f"private import {reported_usage_path};")
                 label = component.name[:1].lower() + component.name[1:]
                 relationships.append(
                     f"satisfy requirement {label} : {component.name} "
@@ -281,8 +551,12 @@ def bind_ag_contracts_to_model(
                     f"to {priority_owner.behavior};"
                 )
 
-        package = _insert_package_members(
+        terminal_package = strip_ag_local_event_definitions(
             emit_ag_planning_package(spec),
+            spec,
+        )
+        package = _insert_package_members(
+            terminal_package,
             imports=imports,
             relationships=relationships,
         )
@@ -296,11 +570,16 @@ def bind_ag_contracts_to_model(
             "PASS"
             if all_bindings
             and all(item.status == "PASS" for item in all_bindings)
+            and all(
+                item.status == "PASS" for item in event_type_bindings
+            )
+            and not aggregate_issues
             else "FAIL"
         ),
         system_package=system_package,
         profile=TERMINAL_REALIZATION,
         bindings=tuple(all_bindings),
+        event_type_bindings=tuple(event_type_bindings),
         issues=tuple(aggregate_issues),
     )
     return AGBindingResult(merged, tuple(bound_packages), report)

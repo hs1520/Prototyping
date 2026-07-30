@@ -7,7 +7,7 @@ from typing import Any
 
 from .ag_assurance import FailureRoute, check_safety_pattern_conformance
 from .ag_contracts import check_ag_graph
-from .ag_extractor import extract_ag_graph
+from .ag_extractor import extract_ag_graphs
 from .blackboard import Blackboard, RecordType, TaskStatus
 from .context_builder import ContextBuilder
 from .task_session import SessionStatus, TaskSessionRegistry
@@ -61,18 +61,29 @@ def _publish_decision(
 
 class _CapturingChat:
     """Archive the exact surgical-repair chat turn without provider sessions."""
-    def __init__(self, llm: Any, session: Any):
+    def __init__(self, llm: Any, session: Any, board: Blackboard):
         self._llm = llm
         self._session = session
+        self._board = board
+
+    def _append(self, role: str, content: str, *, token_count: int = 0) -> None:
+        self._session.append(
+            role,
+            content,
+            token_count=token_count,
+            model_revision=self._board.current_revision,
+            model_digest=self._board.current_model.model_digest,
+            board_sequence=self._board.event_sequence,
+        )
 
     def chat(self, prompt: str, *, system_prompt: str = "", **kwargs: Any) -> str:
         if system_prompt:
-            self._session.append("system", system_prompt)
-        self._session.append("user", prompt, token_count=max(1, len(prompt) // 4))
+            self._append("system", system_prompt)
+        self._append("user", prompt, token_count=max(1, len(prompt) // 4))
         response = str(self._llm.chat(
             prompt, system_prompt=system_prompt, **kwargs
         ))
-        self._session.append(
+        self._append(
             "assistant", response, token_count=max(1, len(response) // 4)
         )
         return response
@@ -116,7 +127,7 @@ def _ag_context_supplement(model_text: str, contract: str) -> str:
     element to restore is absent, so nothing references it and the closure cannot
     reach it. Measured on a real committed model — delete one transition and the
     slice keeps the injured state machine but loses
-    `action def ParachuteDeploymentCommandSignal {}`, the declaration the fix has
+    `item def ParachuteDeploymentCommandSignal;`, the declaration the fix has
     to name. An agent that cannot see it either invents a signal name (an
     undeclared reference — the failure class that cost the authored mode every
     seed) or guesses from the diagnostic text.
@@ -176,6 +187,71 @@ def _repair_feedback(diagnostic_code: str) -> str:
         "follows the convention below."
         + (f"\nThe convention for this defect: {rule}" if rule else "")
     )
+
+
+def _diagnostic_obligations(diagnostic: Any) -> set[str]:
+    """Named sub-obligations carried by an aggregate checker diagnostic."""
+    provenance = getattr(diagnostic, "provenance", {}) or {}
+    values = provenance.get("unsatisfied_obligations", ())
+    if isinstance(values, (list, tuple)):
+        result = {
+            str(item).strip() for item in values if str(item).strip()
+        }
+        if result:
+            return result
+    message = str(getattr(diagnostic, "message", "") or "")
+    match = re.search(r"\bunsatisfied\s*:\s*([^;]+)", message)
+    return {
+        item.strip() for item in match.group(1).split(",") if item.strip()
+    } if match else set()
+
+
+def _matching_diagnostic_obligations(
+    report: Any,
+    target: tuple[Any, Any, Any],
+) -> set[str]:
+    """Named obligations currently carried by one aggregate diagnostic."""
+    code, contract, subject = target
+    obligations: set[str] = set()
+    for diagnostic in report.errors():
+        if (
+            diagnostic.code,
+            diagnostic.contract,
+            diagnostic.subject,
+        ) == (code, contract, subject):
+            obligations.update(_diagnostic_obligations(diagnostic))
+    return obligations
+
+
+def _extract_routed_ag_graph(
+    model_text: str,
+    source_requirement: str,
+    *,
+    revision: int | None = None,
+    model_digest: str | None = None,
+):
+    """Select exactly the routed chain; never pool a multi-chain repair gate."""
+    normalized = source_requirement.upper().replace("-", "_")
+    matches = [
+        graph
+        for graph in extract_ag_graphs(
+            model_text,
+            revision=revision,
+            model_digest=model_digest,
+        )
+        if (
+            graph.system is not None
+            and str(graph.system.source_requirement or "").upper().replace(
+                "-", "_"
+            ) == normalized
+        )
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"repair gate requires exactly one A/G graph for "
+            f"{source_requirement}, found {len(matches)}"
+        )
+    return matches[0]
 
 
 def attempt_dependency_closed_ag_repair(
@@ -266,8 +342,9 @@ def attempt_dependency_closed_ag_repair(
         max_turns=2,
         max_tokens=30000,
     )
-    before_graph = extract_ag_graph(
+    before_graph = _extract_routed_ag_graph(
         board.current_model.model_text,
+        source_requirement,
         revision=board.current_revision,
         model_digest=board.current_model.model_digest,
     )
@@ -276,7 +353,7 @@ def attempt_dependency_closed_ag_repair(
     audit = SurgicalAudit()
     try:
         outcome = attempt_surgical_refinement(
-            _CapturingChat(llm, session),
+            _CapturingChat(llm, session, board),
             board.current_model.model_text,
             [issue],
             feedback=_repair_feedback(str(failure.get("diagnostic_code") or "")),
@@ -351,13 +428,37 @@ def attempt_dependency_closed_ag_repair(
         )
         return decision
 
-    after_graph = extract_ag_graph(outcome.merged_text)
+    after_graph = _extract_routed_ag_graph(
+        outcome.merged_text,
+        source_requirement,
+    )
     after = check_ag_graph(after_graph)
     after_ids = {(d.code, d.contract, d.subject) for d in after.errors()}
     target = (
         failure.get("diagnostic_code"), failure.get("contract"), failure.get("subject")
     )
-    target_removed = target not in after_ids
+    priority_obligation = str(
+        failure.get("priority_obligation") or ""
+    ).strip() or None
+    if priority_obligation is not None:
+        # PRIORITY_TOPOLOGY_INCOMPLETE is deliberately one checker diagnostic for
+        # comparability, but routing is per named obligation. A correct scoped
+        # repair may remove its wiring obligation while an unrepairable response-
+        # vocabulary obligation keeps the aggregate code alive. Judge the actual
+        # routed target, not the container diagnostic.
+        before_obligations = _matching_diagnostic_obligations(before, target)
+        after_obligations = _matching_diagnostic_obligations(after, target)
+        target_removed = priority_obligation not in after_obligations
+        # Regression means an obligation appeared that was not present before.
+        # Keeping the routed target is already reported by target_removed=False;
+        # counting that same unchanged target as a new regression made the audit
+        # claim two different failures for one fact.
+        new_priority_obligations = after_obligations - before_obligations
+        permitted_after = before_ids
+    else:
+        target_removed = target not in after_ids
+        new_priority_obligations = set()
+        permitted_after = before_ids - {target}
     # Every realizing state def named by the routed failure, identified by BEING a
     # state def rather than by ending in "Behavior". The suffix filter silently
     # exempted the one state def the emitter names differently
@@ -378,8 +479,11 @@ def attempt_dependency_closed_ag_repair(
         <= _behavior_tokens(outcome.merged_text, behavior)
         for behavior in affected_behaviors
     )
+    new_diagnostic_ids = after_ids - permitted_after
     regression_free = (
-        not (after_ids - (before_ids - {target})) and behavior_preserved
+        not new_diagnostic_ids
+        and not new_priority_obligations
+        and behavior_preserved
     )
     # A SCOPED repair is judged for regression, not for finishing the chain. The
     # gate demanded `pattern verdict == PASS` outright, so a repair could clear the
@@ -418,14 +522,24 @@ def attempt_dependency_closed_ag_repair(
                 # pattern conformance.
                 "gate": {
                     "target": [item for item in target],
+                    "target_obligation": priority_obligation,
                     "target_removed": target_removed,
                     "regression_free": regression_free,
                     "behavior_preserved": behavior_preserved,
                     "pattern_verdict": pattern["verdict"],
                     "new_diagnostics": sorted(
-                        f"{code}:{contract}"
-                        for code, contract, _subject
-                        in after_ids - (before_ids - {target})
+                        [
+                            *(
+                                f"{code}:{contract}"
+                                for code, contract, _subject in new_diagnostic_ids
+                            ),
+                            *(
+                                f"{failure.get('diagnostic_code')}:"
+                                f"{failure.get('contract')}:"
+                                f"obligation={obligation}"
+                                for obligation in new_priority_obligations
+                            ),
+                        ]
                     ),
                     "remaining_diagnostics": sorted(
                         f"{code}:{contract}" for code, contract, _subject in after_ids

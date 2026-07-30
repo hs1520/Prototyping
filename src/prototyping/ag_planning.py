@@ -27,7 +27,7 @@ from .ag_contracts import (
     _check_timing,
     _classify_completeness,
 )
-from .ag_emitter import AGChainSpec, emit_ag_package
+from .ag_emitter import AGChainSpec, ag_event_signals, emit_ag_package
 from ..utils.sysml_text_utils import find_block_end
 
 
@@ -98,6 +98,26 @@ def strip_ag_implementation(
 def emit_ag_planning_package(spec: AGChainSpec) -> str:
     """Render contract decisions without fictional owners or realizations."""
     return strip_ag_implementation(emit_ag_package(spec), spec)
+
+
+def strip_ag_local_event_definitions(
+    package_text: str,
+    spec: AGChainSpec,
+) -> str:
+    """Remove standalone event types before terminal canonical imports.
+
+    A terminal A/G package imports the exact system event classifiers and must
+    not retain package-local classifiers with merely equal simple names.
+    """
+    text = str(package_text)
+    for event_name in ag_event_signals(spec):
+        text = re.sub(
+            rf"(?m)^\s*item\s+def\s+"
+            rf"{re.escape(event_name)}\s*;\s*\n?",
+            "",
+            text,
+        )
+    return text
 
 
 @dataclass(frozen=True)

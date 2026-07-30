@@ -105,6 +105,33 @@ def test_terminal_binder_binds_a_continuous_guarantee_to_real_constraint():
     not extractor._SYSIDE_OK,
     reason="Syside is required for terminal binding",
 )
+def test_terminal_binder_rejects_non_boolean_invariant_operand():
+    result = bind_ag_contracts_to_model(
+        _MAIN.replace(
+            "attribute airborne : Boolean = false;",
+            "attribute airborne : Real = 0.0;",
+        ),
+        [_SPEC],
+        system_package="System",
+    )
+
+    assert result.report.status == "FAIL"
+    binding = result.report.bindings[0]
+    airborne = next(
+        item for item in binding.feature_type_bindings
+        if item.concept == "airborne"
+    )
+    assert airborne.status == "FAIL"
+    assert airborne.observed_type == "Real"
+    assert any(
+        "expected Boolean" in issue for issue in result.report.issues
+    )
+
+
+@pytest.mark.skipif(
+    not extractor._SYSIDE_OK,
+    reason="Syside is required for terminal binding",
+)
 def test_terminal_binder_fails_closed_when_invariant_is_missing():
     result = bind_ag_contracts_to_model(
         _MAIN.replace(

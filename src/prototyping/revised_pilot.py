@@ -83,6 +83,8 @@ class RevisedPilotConfig:
     pattern_profile_version: str = "bounded-ag-safety-profile-2.0"
     r2_generation_mode: str = R2_DETERMINISTIC_GENERATION_MODE
     r2_intervention_version: str = R2_DETERMINISTIC_INTERVENTION_VERSION
+    r2_authored_syntax_max_attempts: int = 3
+    maximum_ag_repair_attempts: int = 3
     system_name: str = "DeliveryUAV"
     system_description: str = (
         "An autonomous delivery UAV with ballistic parachute recovery and "
@@ -110,6 +112,10 @@ class RevisedPilotConfig:
             or self.context_token_budget <= 0
         ):
             raise ValueError("all frozen execution budgets must be positive")
+        if self.r2_authored_syntax_max_attempts <= 0:
+            raise ValueError("R2 authored syntax attempts must be positive")
+        if self.maximum_ag_repair_attempts <= 0:
+            raise ValueError("A/G repair attempts must be positive")
         if not self.provider.strip() or not self.model.strip():
             raise ValueError("provider and model must be explicit")
         if not self.code_revision.strip():
@@ -175,6 +181,10 @@ class RevisedPilotConfig:
             "pattern_profile_version": self.pattern_profile_version,
             "r2_generation_mode": self.r2_generation_mode,
             "r2_intervention_version": self.r2_intervention_version,
+            "r2_authored_syntax_max_attempts": (
+                self.r2_authored_syntax_max_attempts
+            ),
+            "maximum_ag_repair_attempts": self.maximum_ag_repair_attempts,
             "code_revision": self.code_revision,
             "system_name": self.system_name,
             "system_description": self.system_description,
@@ -235,6 +245,8 @@ def _validate_run_result(
     r2_generation_mode: str,
     r2_intervention_version: str,
 ) -> None:
+    from .blackboard import text_digest
+
     revised = result.get("revised_experiment") or {}
     if (
         revised.get("experiment_namespace") != REVISED_EXPERIMENT_NAMESPACE
@@ -262,6 +274,58 @@ def _validate_run_result(
         raise ValueError("run report is missing the revised experiment namespace")
     if report.get("configuration") != arm:
         raise ValueError("run report configuration does not match frozen arm")
+    consistency = result.get("terminal_consistency") or {}
+    report_consistency = report.get("terminal_consistency") or {}
+    model_text = result.get("model_sysml")
+    if not isinstance(model_text, str) or not model_text:
+        raise ValueError("run result is missing terminal SysML text")
+    terminal_digest = text_digest(model_text)
+    if consistency.get("status") != "PASS":
+        raise ValueError("run result is missing a passing terminal consistency gate")
+    if report_consistency != consistency:
+        raise ValueError("run report terminal consistency metadata does not match result")
+    if any(
+        consistency.get(key) != terminal_digest
+        for key in (
+            "model_digest",
+            "simulation_source_model_digest",
+            "evaluation_source_model_digest",
+        )
+    ):
+        raise ValueError(
+            "terminal model, simulation, and evaluation source digests do not match"
+        )
+    if report.get("final_score") != consistency.get("final_score"):
+        raise ValueError("run report score does not match terminal evaluation")
+    qualification = result.get("model_qualification")
+    if qualification is not None:
+        if report.get("model_qualification") != qualification:
+            raise ValueError(
+                "run report model qualification does not match result"
+            )
+        if (
+            result.get("model_acceptance_status")
+            != qualification.get("status")
+            or report.get("model_acceptance_status")
+            != qualification.get("status")
+        ):
+            raise ValueError(
+                "model acceptance status does not match qualification gate"
+            )
+    report_sim = report.get("simulation") or {}
+    consistency_sim = consistency.get("simulation") or {}
+    if (
+        report_sim.get("source_model_digest") != terminal_digest
+        or any(
+            report_sim.get(key) != consistency_sim.get(key)
+            for key in (
+                "reachability_score",
+                "scenarios_passed",
+                "scenarios_total",
+            )
+        )
+    ):
+        raise ValueError("run report simulation does not match terminal simulation")
     if (
         _contains_evaluator_only_material(result)
         or _contains_evaluator_only_material(report)
@@ -377,11 +441,18 @@ def run_revised_pilot(
                 "pattern_profile_version": config.pattern_profile_version,
                 "r2_generation_mode": config.r2_generation_mode,
                 "r2_intervention_version": config.r2_intervention_version,
+                "r2_authored_syntax_max_attempts": (
+                    config.r2_authored_syntax_max_attempts
+                ),
+                "maximum_ag_repair_attempts": (
+                    config.maximum_ag_repair_attempts
+                ),
                 "started_at": started_at,
                 "gold_access": False,
                 "formal_ag_proof": False,
                 "physical_verification": False,
             }
+            pipeline = None
             try:
                 llm = llm_factory(
                     provider=config.provider,
@@ -401,6 +472,12 @@ def run_revised_pilot(
                     # without this the run executed the default mode while the
                     # manifest recorded the configured one
                     r2_generation_mode=config.r2_generation_mode,
+                    r2_authored_syntax_max_attempts=(
+                        config.r2_authored_syntax_max_attempts
+                    ),
+                    maximum_ag_repair_attempts=(
+                        config.maximum_ag_repair_attempts
+                    ),
                     task_session_max_turns=config.task_session_max_turns,
                     task_session_max_tokens=config.task_session_max_tokens,
                 )
@@ -448,6 +525,66 @@ def run_revised_pilot(
                     "artifact_files": sorted(str(key) for key in written),
                 }
             except Exception as exc:
+                failed_artifacts: list[str] = []
+                attempts = list(
+                    getattr(
+                        getattr(pipeline, "orchestrator", None),
+                        "last_ag_authoring_attempts",
+                        (),
+                    )
+                )
+                if attempts:
+                    _write_json(
+                        run_dir / "ag_authoring_attempts.json",
+                        {
+                            "schema_version": "1.0",
+                            "artifact_role": "R2_AUTHORED_QUALITY_ATTEMPTS",
+                            "feedback_policy": (
+                                "ONE_FREEFORM_THEN_ADAPTIVE_GOLD_BLIND_STRUCTURED"
+                            ),
+                            "maximum_attempts_per_chain": (
+                                config.r2_authored_syntax_max_attempts
+                            ),
+                            "attempt_count": len(attempts),
+                            "authoring_retry_count": sum(
+                                1
+                                for item in attempts
+                                if int(item.get("attempt", 1)) > 1
+                            ),
+                            "syntax_feedback_retry_count": sum(
+                                item.get("feedback_received_scope")
+                                == "SYNTAX_ONLY"
+                                for item in attempts
+                            ),
+                            "ag_feedback_retry_count": sum(
+                                item.get("feedback_received_scope")
+                                == "AG_SEMANTIC"
+                                for item in attempts
+                            ),
+                            "freeform_sysml_attempt_count": sum(
+                                item.get("generation_strategy")
+                                == "FREEFORM_SYSML"
+                                for item in attempts
+                            ),
+                            "structured_emitter_attempt_count": sum(
+                                item.get("generation_strategy")
+                                == "STRUCTURED_DECISIONS_DETERMINISTIC_EMITTER"
+                                for item in attempts
+                            ),
+                            "retryable_decision_rejection_count": sum(
+                                item.get("decision_failure_disposition")
+                                == "RETRYABLE_VALIDATION_ERROR"
+                                for item in attempts
+                            ),
+                            "architecture_input_required_count": sum(
+                                item.get("decision_failure_disposition")
+                                == "NEEDS_ARCHITECTURE_INPUT"
+                                for item in attempts
+                            ),
+                            "attempts": attempts,
+                        },
+                    )
+                    failed_artifacts.append("ag_authoring_attempts")
                 row = {
                     **base,
                     "status": "FAILED",
@@ -455,6 +592,7 @@ def run_revised_pilot(
                     "elapsed_seconds": time.monotonic() - started,
                     "error_type": type(exc).__name__,
                     "error_message": str(exc),
+                    "artifact_files": failed_artifacts,
                 }
             _write_json(run_dir / "run_manifest.json", row)
             rows.append(row)

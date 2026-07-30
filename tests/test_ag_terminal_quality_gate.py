@@ -58,6 +58,27 @@ def test_ag_non_degradation_requires_topology_to_remain_unchanged():
     assert report["topology_unchanged"] is False
 
 
+def test_role_scenario_loss_is_advisory_when_frozen_paths_are_stable():
+    before = _Simulation([("role_guess", True)], [("behavior", True)])
+    after = _Simulation([("role_guess", False)], [("behavior", True)])
+    fixed = {
+        "total": 1,
+        "results": [{
+            "obligation_id": "STRUCT_REQ_SAFE_001_001",
+            "status": "PASS",
+        }],
+    }
+    before.structural_obligation_report = fixed
+    after.structural_obligation_report = fixed
+
+    report = build_ag_non_degradation_report(before, after)
+
+    assert report["status"] == "PASS"
+    assert report["role_scenarios_advisory"] is True
+    assert report["lost_structural_scenarios"] == ["role_guess"]
+    assert report["lost_requirement_structural_obligations"] == []
+
+
 def test_qualification_fails_closed_when_expected_ag_binding_is_missing():
     simulation = _Simulation(
         [("structure", True)], [("behavior", True)]

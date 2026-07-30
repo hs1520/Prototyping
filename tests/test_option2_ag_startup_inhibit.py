@@ -49,6 +49,122 @@ def test_startup_inhibit_chain_is_valid_sysml_and_passes_the_ag_trace():
     assert len(report.discharge_edges) == 4
 
 
+def test_compound_system_observation_uses_the_published_g_observed_name():
+    renamed = _model().replace(
+        "require constraint g_observed",
+        "require constraint sys_observed",
+    )
+    report = check_ag_graph(extract_ag_graph(renamed, revision=1))
+    assert "SYSTEM_OBSERVATION_BINDING_MISSING" in {
+        diagnostic.code for diagnostic in report.diagnostics
+    }
+
+
+def test_trigger_diagnostic_names_an_actionable_full_concept_signal():
+    """A shortened event name is declared and syntactically valid, but it does
+    not identify the assumption concept the bounded realization check consumes.
+    The diagnostic must tell a repair agent the exact convention it missed.
+    """
+    broken = _model().replace(
+        "SensorFailureReportedSignal", "SensorFailureSignal"
+    )
+    report = check_ag_graph(extract_ag_graph(broken, revision=1))
+    diagnostic = next(
+        item for item in report.diagnostics
+        if item.code == "REALIZATION_TRIGGER_MISSING"
+        and item.contract == "SelfTestStatusLatchContract"
+    )
+    assert "complete assumption concept" in diagnostic.message
+    assert "SensorFailureReportedSignal" in diagnostic.message
+    routed = route_failure_diagnostics(
+        (diagnostic,),
+        source_requirement=report.source_requirement,
+        realization_links=report.realization_links,
+    )
+    failure = routed["failures"][0]
+    assert failure["repair_authorized"] is False
+    assert (
+        failure["routing_basis"]
+        == "REALIZATION_WITHOUT_DECLARED_COMPATIBLE_SIGNAL"
+    )
+
+
+def test_trigger_repair_is_authorized_when_a_compatible_signal_already_exists():
+    """Moving the declaration across the edit boundary changes the route: an
+    existing compatible signal lets a behavior-only patch repair the accept edge.
+    """
+    broken = _model().replace(
+        "accept SensorFailureReportedSignal", "accept SensorFailureSignal"
+    )
+    report = check_ag_graph(extract_ag_graph(broken, revision=1))
+    diagnostic = next(
+        item for item in report.diagnostics
+        if item.code == "REALIZATION_TRIGGER_MISSING"
+        and item.contract == "SelfTestStatusLatchContract"
+    )
+    assert diagnostic.provenance["compatible_declared_signals"] == [
+        "SensorFailureReportedSignal"
+    ]
+    routed = route_failure_diagnostics(
+        (diagnostic,),
+        source_requirement=report.source_requirement,
+        realization_links=report.realization_links,
+    )
+    failure = routed["failures"][0]
+    assert failure["repair_authorized"] is True
+    assert failure["route"] == "DEPENDENCY_CLOSED_SURGICAL_REPAIR"
+
+
+def test_unreachable_repair_respects_the_same_signal_declaration_boundary():
+    transition = (
+        "        transition onStartupInhibitActiveSignal first preArm "
+        "accept StartupInhibitActiveSignal then armingInhibited;\n"
+    )
+    broken_with_signal = _model().replace(transition, "")
+    report = check_ag_graph(extract_ag_graph(broken_with_signal, revision=1))
+    diagnostic = next(
+        item for item in report.diagnostics
+        if item.code == "REALIZATION_UNREACHABLE"
+        and item.contract == "ArmingAuthorityContract"
+    )
+    with_signal = route_failure_diagnostics(
+        (diagnostic,),
+        source_requirement=report.source_requirement,
+        realization_links=report.realization_links,
+    )["failures"][0]
+    assert with_signal["repair_authorized"] is True
+
+    broken_without_signal = broken_with_signal.replace(
+        "    attribute def StartupInhibitActiveSignal;\n", ""
+    ).replace(
+        "    attribute def SensorFailureReportedSignal;\n", ""
+    ).replace(
+        "    action def StartupInhibitActiveSignal {}\n", ""
+    ).replace(
+        "    action def SensorFailureReportedSignal {}\n", ""
+    ).replace(
+        "    item def StartupInhibitActiveSignal;\n", ""
+    ).replace(
+        "    item def SensorFailureReportedSignal;\n", ""
+    )
+    report = check_ag_graph(extract_ag_graph(broken_without_signal, revision=1))
+    diagnostic = next(
+        item for item in report.diagnostics
+        if item.code == "REALIZATION_UNREACHABLE"
+        and item.contract == "ArmingAuthorityContract"
+    )
+    without_signal = route_failure_diagnostics(
+        (diagnostic,),
+        source_requirement=report.source_requirement,
+        realization_links=report.realization_links,
+    )["failures"][0]
+    assert without_signal["repair_authorized"] is False
+    assert (
+        without_signal["routing_basis"]
+        == "REALIZATION_WITHOUT_DECLARED_COMPATIBLE_SIGNAL"
+    )
+
+
 def test_startup_inhibit_pattern_conformance_passes_without_a_timing_criterion():
     report = check_ag_graph(extract_ag_graph(_model(), revision=1))
     pattern = check_safety_pattern_conformance(
@@ -154,6 +270,12 @@ def test_startup_inhibit_checker_rejects_unauthorised_direct_transition():
     assert "PATTERN_TOPOLOGY_INCOMPLETE" in {
         diagnostic.code for diagnostic in report.diagnostics
     }
+    diagnostic = next(
+        item for item in report.diagnostics
+        if item.code == "PATTERN_TOPOLOGY_INCOMPLETE"
+    )
+    assert diagnostic.provenance["unsatisfied_obligations"]
+    assert "unsatisfied:" in diagnostic.message
 
 
 def test_startup_inhibit_checker_requires_each_approved_invariant_not_just_a_label():
@@ -166,6 +288,12 @@ def test_startup_inhibit_checker_requires_each_approved_invariant_not_just_a_lab
     assert "INVARIANT_SEMANTICS_INVALID" in {
         diagnostic.code for diagnostic in report.diagnostics
     }
+    diagnostic = next(
+        item for item in report.diagnostics
+        if item.code == "INVARIANT_SEMANTICS_INVALID"
+    )
+    assert diagnostic.provenance["missing_roles"]
+    assert "missing_role:" in diagnostic.message
 
 
 def test_startup_inhibit_runtime_checker_requires_invariant_semantics():
@@ -178,5 +306,22 @@ def test_startup_inhibit_runtime_checker_requires_invariant_semantics():
     )
     assert report.verdict == "FAIL"
     assert "INVARIANT_SEMANTICS_MISSING" in {
+        diagnostic.code for diagnostic in report.diagnostics
+    }
+
+
+def test_invariant_provenance_constraint_must_live_on_the_system_contract():
+    model = _model()
+    invariant_line = next(
+        line for line in model.splitlines()
+        if "inv__SAFE004_STARTUP_INHIBIT" in line
+    )
+    moved = model.replace(invariant_line + "\n", "") + (
+        "\npackage MisplacedInvariant { requirement def SeparateInvariant {\n"
+        + invariant_line
+        + "\n} }\n"
+    )
+    report = check_ag_graph(extract_ag_graph(moved, revision=1))
+    assert "INVARIANT_SEMANTICS_INVALID" in {
         diagnostic.code for diagnostic in report.diagnostics
     }

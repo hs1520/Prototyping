@@ -11,7 +11,11 @@ import pytest
 from src.agents.orchestrator import Orchestrator
 from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN, select_ag_chains
 from src.prototyping.ag_contracts import check_ag_graph
-from src.prototyping.ag_emitter import emit_ag_package, merge_ag_contracts
+from src.prototyping.ag_emitter import (
+    ag_event_signals,
+    emit_ag_package,
+    merge_ag_contracts,
+)
 from src.prototyping.ag_extractor import extract_ag_graph
 from src.prototyping.blackboard import Blackboard
 from src.prototyping.context_builder import ContextBuilder
@@ -46,18 +50,18 @@ def test_emitted_chain_passes_the_syside_gate():
     assert "private import ISQ::*;" in emitted
     assert "private import SI::*;" in emitted
     assert "attribute maxLatency : DurationValue = 0.5 [s];" in emitted
+    for event_name in ag_event_signals(REQ_SAFE_005_CHAIN):
+        assert f"item def {event_name};" in emitted
+        assert f"action def {event_name}" not in emitted
 
 
-def test_r2_accepts_real_generated_base_shape_but_keeps_emitter_raw_gate():
-    """The R2 gate must not reclassify R0/R1 stdlib-loader false positives.
-
-    Real LLM models commonly use official ``transition initial`` and SI unit
-    syntax without explicitly importing every standard namespace.  The shared
-    generated-model gate allowlists only those known Syside diagnostics, while
-    the deterministic A/G package remains subject to the unfiltered raw gate.
-    """
+def test_r2_accepts_strict_generated_base_shape_and_keeps_raw_gate():
+    """The R2 base and deterministic package use the same strict policy."""
     generated_shape = """
 package Drone {
+    private import ScalarValues::*;
+    private import ISQ::*;
+    private import SI::*;
     requirement def REQ_SAFE_005 {
         doc /* The system shall deploy the parachute within 0.5 s. */
     }
@@ -66,7 +70,7 @@ package Drone {
         state def Monitor {
             state nominal;
             state failed;
-            transition initial then nominal;
+            entry; then nominal;
             transition detect first nominal then failed;
         }
     }
@@ -77,7 +81,8 @@ package Drone {
         fail_closed=True,
         filter_stdlib_diagnostics=False,
     )
-    assert raw.has_errors is True
+    assert raw.has_errors is False
+    assert raw.warnings == []
 
     orch = Orchestrator(_NoCallLLM(), revised_experiment_arm="R2-BBAG")
     merged = orch._apply_ag_contract_layer(generated_shape, _REQS)
@@ -85,7 +90,7 @@ package Drone {
     shared_gate = check_syntax(
         merged,
         fail_closed=True,
-        filter_stdlib_diagnostics=True,
+        filter_stdlib_diagnostics=False,
     )
     assert shared_gate.has_errors is False
     assert shared_gate.score == 1.0
@@ -111,15 +116,8 @@ def test_r2_raw_gate_rejects_a_broken_deterministic_package(monkeypatch):
     assert "parser L" in message
 
 
-def test_a_warning_on_the_base_model_does_not_fail_the_arm_closed(monkeypatch):
-    """A warning is not a syntax failure.
-
-    The base-model gate rejected on `score != 1.0`, so a single warning — 0.05 of
-    score, zero parser errors, zero sema errors — was enough to fail a whole arm
-    closed. A measured seed lost its R2 evidence to it, with the self-contradicting
-    diagnostic "failed the shared syntax gate: ✓ no syntax errors (score=0.950)".
-    The same defect was removed from the A/G authoring loop once already.
-    """
+def test_a_warning_on_the_base_model_fails_the_arm_closed(monkeypatch):
+    """A committed user-model warning is a release failure."""
     import src.agents.orchestrator as orchestrator_module
     from src.simulation.syntax_checker import SyntaxCheckResult
 
@@ -142,8 +140,8 @@ def test_a_warning_on_the_base_model_does_not_fail_the_arm_closed(monkeypatch):
     monkeypatch.setattr(orchestrator_module, "check_syntax", _warned)
     orch = Orchestrator(_NoCallLLM(), revised_experiment_arm="R2-BBAG")
 
-    merged = orch._apply_ag_contract_layer(_BASE_MODEL, _REQS)
-    assert "package REQ_SAFE_005_AG" in merged
+    with pytest.raises(RuntimeError, match="strict shared syntax gate"):
+        orch._apply_ag_contract_layer(_BASE_MODEL, _REQS)
 
 
 def test_emitted_chain_round_trips_to_a_checker_pass():

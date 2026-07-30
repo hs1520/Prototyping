@@ -9,6 +9,7 @@ separate from the post-hoc evaluator boundary.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -136,11 +137,50 @@ def write_revised_run_artifacts(
             cp = out / f"ag_contract_graph.{req}.json"
             _write_json(cp, chain)
             record(f"ag_contract_graph.{req}", cp)
+        if model_sysml is not None and ag_graph.get("chains"):
+            terminal_text = str(model_sysml)
+            terminal_digest = hashlib.sha256(
+                terminal_text.encode("utf-8")
+            ).hexdigest()
+            bundles: list[dict[str, str]] = []
+            for chain in ag_graph.get("chains", ()) or ():
+                requirement = str(
+                    chain.get("source_requirement") or "UNKNOWN"
+                )
+                safe_requirement = re.sub(
+                    r"[^A-Za-z0-9_]+", "_", requirement
+                )
+                bundle_path = out / f"ag_replay_bundle.{safe_requirement}.sysml"
+                # A replay bundle is a complete immutable terminal snapshot,
+                # rather than an under-specified package fragment. This keeps
+                # canonical DeliveryUAV event types, owner definitions and the
+                # selected A/G package in one independently parseable source.
+                bundle_path.write_text(terminal_text, encoding="utf-8")
+                key = f"ag_replay_bundle.{safe_requirement}"
+                record(key, bundle_path)
+                bundles.append({
+                    "source_requirement": requirement,
+                    "path": bundle_path.name,
+                    "source_model_digest": terminal_digest,
+                    "content_scope": "COMPLETE_TERMINAL_MODEL_SNAPSHOT",
+                })
+            manifest = {
+                "schema_version": "1.0",
+                "artifact_role": "A_G_REPLAY_BUNDLE_MANIFEST",
+                "source_model_digest": terminal_digest,
+                "canonical_event_authority": "DeliveryUAV",
+                "bundles": bundles,
+            }
+            manifest_path = out / "ag_replay_manifest.json"
+            _write_json(manifest_path, manifest)
+            record("ag_replay_manifest", manifest_path)
 
     for key, filename in (
+        ("step1_plan_attempts", "step1_plan_attempts.json"),
         ("pattern_conformance_report", "pattern_conformance_report.json"),
         ("failure_diagnostics", "failure_diagnostics.json"),
         ("repair_decisions", "repair_decisions.json"),
+        ("ag_authoring_attempts", "ag_authoring_attempts.json"),
         ("verification_plan", "verification_plan.json"),
         ("control_agenda", "control_agenda.json"),
     ):

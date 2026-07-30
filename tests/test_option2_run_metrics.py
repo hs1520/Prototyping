@@ -76,6 +76,19 @@ def test_write_revised_run_artifacts_serialises_the_producible_views(tmp_path):
     assert report["pattern_conformance_report"]["verdict"] == "PASS"
     assert report["failure_diagnostics"]["failures"] == []
     assert report["repair_decisions"]["decisions"] == []
+    assert report["ag_authoring_attempts"]["attempts"] == []
+    assert report["ag_authoring_attempts"]["attempt_count"] == 0
+    assert report["ag_authoring_attempts"]["authoring_retry_count"] == 0
+    assert report["ag_authoring_attempts"]["syntax_feedback_retry_count"] == 0
+    assert report["ag_authoring_attempts"]["ag_feedback_retry_count"] == 0
+    assert report["ag_authoring_attempts"]["freeform_sysml_attempt_count"] == 0
+    assert report["ag_authoring_attempts"]["structured_emitter_attempt_count"] == 0
+    assert report["ag_authoring_attempts"][
+        "retryable_decision_rejection_count"
+    ] == 0
+    assert report["ag_authoring_attempts"][
+        "architecture_input_required_count"
+    ] == 0
     written = write_revised_run_artifacts(result, tmp_path)
 
     # the producible §14 subset is on disk
@@ -83,7 +96,8 @@ def test_write_revised_run_artifacts_serialises_the_producible_views(tmp_path):
         "shared_model_final", "blackboard_snapshot", "model_revision_log",
         "blackboard_event_log", "context_envelopes", "task_sessions",
         "ag_contract_graph", "pattern_conformance_report",
-        "failure_diagnostics", "repair_decisions", "coordination_metrics",
+        "failure_diagnostics", "repair_decisions", "ag_authoring_attempts",
+        "coordination_metrics",
     ):
         assert name in written
         assert (tmp_path / written[name].split("/")[-1]).exists()
@@ -97,6 +111,8 @@ def test_write_revised_run_artifacts_serialises_the_producible_views(tmp_path):
     assert pattern["verdict"] == "PASS"
     failures = json.loads((tmp_path / "failure_diagnostics.json").read_text())
     assert failures["failures"] == []
+    authoring = json.loads((tmp_path / "ag_authoring_attempts.json").read_text())
+    assert authoring["attempts"] == []
     metrics = json.loads((tmp_path / "coordination_metrics.json").read_text())
     # two sessions: the DesignAgent handoff and the VerificationAgent handoff
     assert metrics["counts"]["sessions"] == 2
@@ -179,3 +195,97 @@ def test_contamination_is_reported_as_a_property_not_as_a_measured_rate():
                         "stale_session_detection"):
         assert falsifiable in metrics
         assert metrics[falsifiable].get("kind") != "ARCHITECTURAL_PROPERTY"
+
+
+def test_context_consistency_uses_revision_at_creation_not_revision_history():
+    collaboration = {
+        "blackboard": {
+            "semantic_authority": "COMMITTED_SYSML_MODEL",
+            "model_revisions": [
+                {"revision": 0, "model_digest": "d0"},
+                {"revision": 1, "model_digest": "d1"},
+            ],
+            "tasks": [],
+            "records": [{
+                "record_id": "r1", "sequence": 3, "topic": "context.created",
+                "task_id": "t1", "model_revision": 1, "model_digest": "d1",
+                "payload": {"envelope_id": "e1"},
+            }],
+        },
+        "contexts": {"envelopes": [{
+            "envelope_id": "e1", "task_id": "t1", "agent_role": "DesignAgent",
+            "model_revision": 0, "model_digest": "d0",
+        }]},
+        "task_sessions": {"sessions": []},
+    }
+    metrics = compute_coordination_metrics(collaboration)
+    assert metrics["context_revision_consistency"]["value"] == 0.0
+
+
+def test_handoff_requires_same_envelope_and_pre_activation_publication():
+    collaboration = {
+        "blackboard": {
+            "semantic_authority": "COMMITTED_SYSML_MODEL",
+            "model_revisions": [{"revision": 0, "model_digest": "d0"}],
+            "tasks": [{
+                "task_id": "t1", "required_topics": ["needed.topic"],
+            }],
+            "records": [
+                {
+                    "record_id": "unrelated", "sequence": 1,
+                    "topic": "needed.topic", "task_id": "other",
+                    "model_revision": 0, "model_digest": "d0", "payload": {},
+                },
+                {
+                    "record_id": "ctx", "sequence": 2,
+                    "topic": "context.created", "task_id": "t1",
+                    "model_revision": 0, "model_digest": "d0",
+                    "payload": {"envelope_id": "e1"},
+                },
+                {
+                    "record_id": "late", "sequence": 3,
+                    "topic": "needed.topic", "task_id": "t1",
+                    "model_revision": 0, "model_digest": "d0", "payload": {},
+                },
+            ],
+        },
+        "contexts": {"envelopes": [{
+            "envelope_id": "e1", "task_id": "t1", "agent_role": "DesignAgent",
+            "model_revision": 0, "model_digest": "d0",
+            "included_record_ids": ["late"],
+        }]},
+        "task_sessions": {"sessions": []},
+    }
+    metrics = compute_coordination_metrics(collaboration)
+    handoff = metrics["cross_agent_handoff_completeness"]
+    assert handoff["value"] == 0.0
+    assert handoff["failures"][0]["missing_or_late_topics"] == ["needed.topic"]
+
+
+def test_stale_revision_use_is_measured_at_the_message_event():
+    board = Blackboard("stale-turn")
+    registry = TaskSessionRegistry()
+    session = registry.open(
+        task_id="t1", agent_role="DesignAgent",
+        base_model_revision=0, base_model_digest=board.current_model.model_digest,
+        context_envelope_id="e1",
+    )
+    old_digest = board.current_model.model_digest
+    board.commit_model(
+        "package P {}", base_revision=0, base_digest=old_digest, producer="test"
+    )
+    session.append(
+        "assistant", "used old model",
+        model_revision=0, model_digest=old_digest,
+        board_sequence=board.event_sequence,
+    )
+    collaboration = {
+        "blackboard": board.snapshot(),
+        "contexts": {"envelopes": []},
+        "task_sessions": registry.snapshot(include_messages=True),
+    }
+    metrics = compute_coordination_metrics(collaboration)
+    assert metrics["stale_revision_use"]["count"] == 1
+    assert metrics["stale_revision_use"]["stale_turns"][0][
+        "expected_revision"
+    ] == 1

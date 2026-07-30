@@ -1,9 +1,9 @@
 """User-defined namespace integrity checks for generated SysML v2.
 
 Syside reports namespace-distinguishability warnings, but a blanket warning gate
-also catches unrelated standard-library shadowing.  This module checks the
-unambiguous defect we own: two definitions with the same name in the same
-user-defined namespace.  Definitions in different owning scopes remain legal.
+also catches unrelated standard-library shadowing. This module checks the
+unambiguous defect we own: same-named definitions or direct features in the same
+user-defined namespace. Definitions in different owning scopes remain legal.
 """
 from __future__ import annotations
 
@@ -20,6 +20,15 @@ _DEFINITION_RE = re.compile(
     r"(?:action|attribute|constraint|enum|item|part|port|requirement|state|"
     r"verification)\s+def"
     r")\s+(?P<name>[A-Za-z_]\w*)"
+)
+_DIRECT_FEATURE_RE = re.compile(
+    r"\b(?P<kind>"
+    r"assert\s+constraint|"
+    r"attribute|"
+    r"(?:in|out|inout)\s+port|port|"
+    r"item"
+    r")\s+"
+    r"(?!def\b)(?P<name>[A-Za-z_]\w*)"
 )
 
 
@@ -100,8 +109,12 @@ def _scan_namespace(
         match for match in _DEFINITION_RE.finditer(masked)
         if depths[match.start()] == 0
     ]
+    direct_features = [
+        match for match in _DIRECT_FEATURE_RE.finditer(masked)
+        if depths[match.start()] == 0
+    ]
     by_name: dict[str, list[re.Match[str]]] = {}
-    for match in direct:
+    for match in (*direct, *direct_features):
         by_name.setdefault(match.group("name"), []).append(match)
 
     for name, matches in sorted(by_name.items()):
@@ -131,7 +144,7 @@ def _scan_namespace(
 
 
 def check_user_namespace_integrity(model_text: str) -> dict[str, Any]:
-    """Reject duplicate definition names in the same user-owned scope."""
+    """Reject non-distinguishable direct members in a user-owned scope."""
     text = str(model_text or "")
     findings: list[dict[str, Any]] = []
     _scan_namespace(
@@ -149,3 +162,39 @@ def check_user_namespace_integrity(model_text: str) -> dict[str, Any]:
         ).hexdigest(),
         "duplicate_members": findings,
     }
+
+
+def collect_package_definitions(
+    model_text: str,
+) -> list[dict[str, str]]:
+    """Return direct user definitions in the root package (or a fragment).
+
+    The generation-plan checker needs declaration *kinds*, not only usages.
+    Keeping this scanner beside the namespace gate ensures both checks use the
+    same comment/string masking and brace-depth rules.
+    """
+    source = str(model_text or "")
+    masked = _mask_comments_and_strings(source)
+    package = next(
+        (
+            match for match in _DEFINITION_RE.finditer(masked)
+            if match.group("kind") == "package"
+        ),
+        None,
+    )
+    if package is not None:
+        opening = masked.find("{", package.end())
+        closing = find_block_end(masked, opening) if opening != -1 else -1
+        if opening != -1 and closing != -1:
+            source = source[opening + 1:closing]
+            masked = masked[opening + 1:closing]
+    depths = _depths(masked)
+    return [
+        {
+            "kind": match.group("kind"),
+            "name": match.group("name"),
+        }
+        for match in _DEFINITION_RE.finditer(masked)
+        if depths[match.start()] == 0
+        and match.group("kind") != "package"
+    ]

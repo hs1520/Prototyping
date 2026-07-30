@@ -47,11 +47,11 @@ _SPEC = AGChainSpec(
 _MAIN = """package DeliveryUAV {
     private import ScalarValues::*;
     requirement def REQ_SAFE_001 { doc /* issue a response after a fault */ }
-    attribute def FaultSignal;
+    item def FaultSignal;
     part def Controller {
         state def ControllerBehavior {
             state idle;
-            transition initial then idle;
+            entry; then idle;
             transition respond first idle accept FaultSignal then responding;
             state responding { entry action setResponseIssued; }
         }
@@ -81,14 +81,89 @@ def test_terminal_binder_uses_real_owner_and_behavior_without_shadow_defs():
         "private import DeliveryUAV::Controller::ControllerBehavior;"
         in package
     )
+    assert "private import DeliveryUAV::FaultSignal;" in package
+    assert "item def FaultSignal" not in package
+    assert "action def FaultSignal" not in package
+    assert result.report.event_type_bindings[0].canonical_type == (
+        "DeliveryUAV::FaultSignal"
+    )
+    assert result.report.event_type_bindings[0].status == "PASS"
     assert "by controller;" in package
     assert "to ControllerBehavior;" in package
     syntax = check_syntax(
         result.model_text,
         fail_closed=True,
-        filter_stdlib_diagnostics=True,
+        filter_stdlib_diagnostics=False,
     )
     assert not syntax.has_errors, syntax.short_summary()
+    assert not [
+        warning for warning in syntax.warnings
+        if warning.get("code") == "namespace-distinguishability"
+    ]
+
+
+@pytest.mark.skipif(
+    not extractor._SYSIDE_OK,
+    reason="Syside is required for terminal binding",
+)
+def test_terminal_binder_resolves_one_typed_owner_inside_an_assembly_usage():
+    nested = _MAIN.replace(
+        "    part controller : Controller;",
+        """    part deliverySystem {
+        part controller : Controller;
+    }""",
+    )
+
+    result = bind_ag_contracts_to_model(
+        nested,
+        [_SPEC],
+        system_package="DeliveryUAV",
+    )
+
+    assert result.report.status == "PASS", result.report.to_dict()
+    binding = result.report.bindings[0]
+    assert binding.owner_usage == (
+        "DeliveryUAV::deliverySystem::controller"
+    )
+    assert (
+        "private import DeliveryUAV::deliverySystem::controller;"
+        in result.packages[0]
+    )
+    syntax = check_syntax(
+        result.model_text,
+        fail_closed=True,
+        filter_stdlib_diagnostics=False,
+    )
+    assert not syntax.has_errors, syntax.short_summary()
+    assert not syntax.warnings
+
+
+@pytest.mark.skipif(
+    not extractor._SYSIDE_OK,
+    reason="Syside is required for terminal binding",
+)
+def test_terminal_binder_fails_closed_on_ambiguous_typed_owner_usages():
+    ambiguous = _MAIN.replace(
+        "    part controller : Controller;",
+        """    part primarySystem {
+        part controller : Controller;
+    }
+    part backupSystem {
+        part controller : Controller;
+    }""",
+    )
+
+    result = bind_ag_contracts_to_model(
+        ambiguous,
+        [_SPEC],
+        system_package="DeliveryUAV",
+    )
+
+    assert result.report.status == "FAIL"
+    assert any(
+        "ambiguous owner usage DeliveryUAV::controller" in issue
+        for issue in result.report.issues
+    )
 
 
 @pytest.mark.skipif(
@@ -108,6 +183,26 @@ def test_terminal_binder_fails_closed_when_real_behavior_is_missing():
         for issue in result.report.issues
     )
     assert "state def ControllerBehavior" not in result.packages[0]
+
+
+@pytest.mark.skipif(
+    not extractor._SYSIDE_OK,
+    reason="Syside is required for terminal binding",
+)
+def test_terminal_binder_fails_closed_without_canonical_event_item():
+    result = bind_ag_contracts_to_model(
+        _MAIN.replace("item def FaultSignal;", "action def FaultSignal {}"),
+        [_SPEC],
+        system_package="DeliveryUAV",
+    )
+
+    assert result.report.status == "FAIL"
+    assert result.report.event_type_bindings[0].status == "FAIL"
+    assert result.report.event_type_bindings[0].issues == (
+        "missing canonical item definition DeliveryUAV::FaultSignal",
+    )
+    assert "item def FaultSignal" not in result.packages[0]
+    assert "action def FaultSignal" not in result.packages[0]
 
 
 @pytest.mark.skipif(

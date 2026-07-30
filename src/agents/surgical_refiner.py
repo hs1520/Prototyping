@@ -65,15 +65,15 @@ KEY CONSTRUCT RULES (same as generation):
   state def <Name> {
       state nominal;
       state fault { entry action stop : emergencyStop; }
-      transition initial then nominal;
+      entry; then nominal;
       transition <name>Fault first nominal if <condition> then fault;
   }
   // Bounded A/G state defs use `entry; then <state>;` for their initial edge.
   // If the supplied block uses that form, preserve it; never translate it to
-  // the legacy `transition initial then <state>;` form.
+  // never the legacy `transition initial then <state>;` form.
   // Initialization/default-state requirements are NOT fault monitors:
   // - declare the required initial state and a consistent Boolean attribute;
-  // - a single-state invariant may contain only `transition initial`;
+  // - a single-state invariant may contain only `entry; then <state>;`;
   // - if multiple states are declared, every state MUST be reachable through
   //   real guarded/accept transitions (never add an empty Locked/Unlocked shell);
   // - connect state entry actions to the required actuator/default response.

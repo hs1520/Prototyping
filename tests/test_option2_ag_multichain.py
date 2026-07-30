@@ -18,6 +18,7 @@ from src.prototyping.ag_extractor import extract_ag_graph, extract_ag_graphs
 from src.prototyping.ag_chains import REQ_SAFE_004_CHAIN, REQ_SAFE_005_CHAIN
 from src.prototyping.ag_emitter import emit_ag_package
 from src.prototyping.run_artifacts import write_revised_run_artifacts
+from src.simulation.syntax_checker import check_syntax
 from src.utils.sysml_text_utils import get_sysml_text
 from src.sysml.lite_model import build_lite_model
 
@@ -124,6 +125,23 @@ def test_multichain_run_writes_per_chain_graph_artifacts(tmp_path):
     )
     assert per_chain["source_requirement"] == "REQ_SAFE_004"
     assert per_chain["verdict"] == "PASS"
+    manifest = json.loads(
+        (tmp_path / "ag_replay_manifest.json").read_text()
+    )
+    assert manifest["artifact_role"] == "A_G_REPLAY_BUNDLE_MANIFEST"
+    assert {
+        item["source_requirement"] for item in manifest["bundles"]
+    } == {"REQ_SAFE_004", "REQ_SAFE_005"}
+    for item in manifest["bundles"]:
+        bundle = tmp_path / item["path"]
+        assert bundle.read_text() == result["model_sysml"]
+        gate = check_syntax(
+            bundle.read_text(),
+            fail_closed=True,
+            filter_stdlib_diagnostics=False,
+        )
+        assert not gate.has_errors
+        assert not gate.warnings
 
 
 class _FixingLLM:
@@ -136,6 +154,21 @@ class _FixingLLM:
     def chat(self, _prompt, system_prompt="", **_kwargs):
         self.calls += 1
         return f"```sysml\n{self._replacement}\n```"
+
+    def complete(self, *_a, **_k):  # pragma: no cover
+        raise AssertionError("repair uses chat()")
+
+
+class _SequenceLLM:
+    def __init__(self, replacements):
+        self._replacements = iter(replacements)
+        self.calls = 0
+        self.prompts = []
+
+    def chat(self, prompt, system_prompt="", **_kwargs):
+        self.calls += 1
+        self.prompts.append(prompt)
+        return f"```sysml\n{next(self._replacements)}\n```"
 
     def complete(self, *_a, **_k):  # pragma: no cover
         raise AssertionError("repair uses chat()")
@@ -209,9 +242,19 @@ def test_repair_now_runs_inside_a_multi_chain_run():
     assert graph["verdict"] == "PASS", "the repaired chain now passes"
 
 
-def test_the_repair_budget_is_one_attempt_across_all_chains():
-    """The budget is per run, not per chain: a second authorised failure reports
-    budget exhaustion rather than silently getting another attempt."""
+def test_repair_gate_extracts_only_the_routed_chain_from_a_multichain_model():
+    from src.prototyping.ag_repair import _extract_routed_ag_graph
+
+    model = _two_chain_model()
+    safe_004 = _extract_routed_ag_graph(model, "REQ_SAFE_004")
+    safe_005 = _extract_routed_ag_graph(model, "REQ_SAFE_005")
+
+    assert safe_004.system.source_requirement == "REQ_SAFE_004"
+    assert safe_005.system.source_requirement == "REQ_SAFE_005"
+    assert safe_004.system.name != safe_005.system.name
+
+
+def test_the_repair_budget_is_fixed_and_audited_across_all_chains():
     injured, _healthy = _injured_two_chain_model()
     # a patch that changes nothing is refused, spending the single attempt
     llm = _FixingLLM("state def ArmingAuthorityBehavior { entry; then idle; }")
@@ -227,6 +270,58 @@ def test_the_repair_budget_is_one_attempt_across_all_chains():
     artifacts = orch._build_collaboration_artifacts(injured)
 
     decisions = artifacts["repair_decisions"]["decisions"]
-    assert sum(1 for item in decisions if item["status"] != "BLOCKED") <= 1, (
-        "at most one attempt may be spent per run"
+    assert sum(
+        1 for item in decisions
+        if item["status"] in {"ACCEPTED", "REJECTED"}
+    ) <= orch.maximum_ag_repair_attempts
+
+
+def test_rejected_chain_does_not_orphan_or_suppress_the_next_chain():
+    """A rejected candidate is local: the next independent chain is attempted."""
+    from src.agents.surgical_refiner import _find_def_span
+
+    healthy = _two_chain_model()
+    injured, _ = _injured_two_chain_model()
+    injured = injured.replace(
+        "state deployed { entry action setParachuteDeployed; }",
+        "state deployed;",
+    )
+    recovery_span = _find_def_span(
+        injured, "state", "RecoverySystemBehavior"
+    )
+    arming_span = _find_def_span(
+        healthy, "state", "ArmingAuthorityBehavior"
+    )
+    assert recovery_span is not None and arming_span is not None
+    # First answer repeats the broken slice and is rejected. The second repairs
+    # the other chain and must still be attempted.
+    llm = _SequenceLLM([
+        injured[recovery_span[0]:recovery_span[1]],
+        injured[recovery_span[0]:recovery_span[1]],
+        healthy[arming_span[0]:arming_span[1]],
+    ])
+    orch = Orchestrator(
+        llm,
+        revised_experiment_arm="R2-BBAG",
+        maximum_ag_repair_attempts=3,
+    )
+    orch.last_requirement_input = {"mode": "frozen", "requirement_set_digest": "d"}
+    orch._prepare_design_handoff("DeliveryUAV", _REQS)
+    orch._finalize_design_handoff(
+        SimpleNamespace(success=True, reasoning="generated", metadata={}),
+        build_lite_model(_BASE_MODEL, model_name="DeliveryUAV"),
+    )
+    orch._commit_terminal_model(injured, producer="test")
+    artifacts = orch._build_collaboration_artifacts(injured)
+
+    decisions = artifacts["repair_decisions"]["decisions"]
+    assert any(item["status"] == "REJECTED" for item in decisions)
+    assert any(item["status"] == "ACCEPTED" for item in decisions)
+    assert llm.calls == 3
+    assert "Previous bounded repair was rejected" in llm.prompts[1]
+    assert "target_removed=False" in llm.prompts[1]
+    assert all(
+        task["status"] != "PENDING"
+        for task in artifacts["collaboration"]["blackboard"]["tasks"]
+        if task["kind"] == "A_G_SURGICAL_REPAIR"
     )

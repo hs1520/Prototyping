@@ -8,7 +8,7 @@ import pytest
 
 from src.agents.orchestrator import Orchestrator
 from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
-from src.prototyping.ag_emitter import emit_ag_package
+from src.prototyping.ag_emitter import ag_event_signals, emit_ag_package
 from src.sysml.lite_model import build_lite_model
 from src.utils.sysml_text_utils import get_sysml_text
 from tests.test_option2_ag_decision import _CORRECT, _DecisionLLM
@@ -89,10 +89,18 @@ def test_terminal_reconciliation_reuses_the_frozen_plan_without_reauthoring():
 
     orchestrator._apply_ag_contract_layer = forbidden
     orchestrator.state = SimpleNamespace(system_name="DeliveryUAV")
-    final = orchestrator._reconcile_guided_ag_contract_layer(
+    event_definitions = "\n".join(
+        f"            item def {name};"
+        for name in ag_event_signals(REQ_SAFE_005_CHAIN)
+    )
+    terminal_model = (
         """
         package DeliveryUAV {
+"""
+        + event_definitions
+        + """
             part def SafetyResponseArbiter {
+                attribute criticalPropulsionFailureDetected : Boolean = false;
                 state def SafetyResponseArbitration { state idle; }
             }
             part safetyResponseArbiter : SafetyResponseArbiter;
@@ -109,7 +117,10 @@ def test_terminal_reconciliation_reuses_the_frozen_plan_without_reauthoring():
             }
             part recoverySystem : RecoverySystem;
         }
-        """,
+        """
+    )
+    final = orchestrator._reconcile_guided_ag_contract_layer(
+        terminal_model,
         _REQS,
     )
     assert "package REQ_SAFE_005_AG" in final

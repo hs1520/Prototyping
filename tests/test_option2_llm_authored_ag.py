@@ -13,6 +13,7 @@ unchanged and remains the default.
 """
 from __future__ import annotations
 
+import json
 import pytest
 
 from src.agents.orchestrator import Orchestrator
@@ -126,6 +127,31 @@ def test_setup_c_prompt_gives_complete_interfaces_but_not_the_discharge_answer()
     assert "discharge from" not in prompt.lower()
 
 
+def test_authored_prompt_distinguishes_assumptions_from_lifecycle_inputs():
+    from src.prototyping.ag_chains import REQ_SAFE_008_CHAIN
+
+    captured = {}
+
+    class _Capture:
+        def chat(self, prompt, system_prompt=None):
+            captured["prompt"] = prompt
+            captured["system"] = system_prompt or ""
+            return emit_ag_package(REQ_SAFE_008_CHAIN)
+
+    orch = Orchestrator(
+        _Capture(),
+        revised_experiment_arm="R2-BBAG",
+        r2_generation_mode="LLM_AUTHORED_AG",
+    )
+    orch._generate_llm_authored_ag_package(REQ_SAFE_008_CHAIN, _BASE)
+    prompt = captured["prompt"]
+    assert "receivedReleaseCommand [ENVIRONMENT]" in prompt
+    assert "powerOnEvent" in prompt
+    assert "behavior triggers only" in prompt
+    assert "do NOT turn these into assumptions" in prompt
+    assert "env_<concept>" in prompt
+
+
 def test_prompt_states_the_notation_conventions_but_not_the_reviewed_answers():
     """The checker's conventions are properties of the notation, so stating them
     is fair (the deterministic emitter has them by construction). The *safety
@@ -193,6 +219,149 @@ class _SequenceLLM:
         return pkg
 
 
+def test_production_authored_path_uses_precommit_gold_blind_ag_feedback():
+    """One free-form call is followed by bounded, audited structured repair."""
+    correct = emit_ag_package(REQ_SAFE_005_CHAIN)
+    semantic_failure = "\n".join(
+        line for line in correct.splitlines()
+        if "dependency discharge" not in line.lower()
+    )
+    from tests.test_option2_ag_decision import (
+        _BASE_WITH_RESPONSE_CATALOG,
+        _CATALOG_CORRECT,
+    )
+
+    inconsistent = json.loads(json.dumps(_CATALOG_CORRECT))
+    inconsistent["priority"]["selected_response"] = "NOT_A_MEMBER"
+    llm = _SequenceLLM([
+        semantic_failure,
+        json.dumps(inconsistent),
+        json.dumps(_CATALOG_CORRECT),
+    ])
+    orch = Orchestrator(
+        llm,
+        revised_experiment_arm="R2-BBAG",
+        r2_generation_mode="LLM_AUTHORED_AG",
+        r2_authored_syntax_max_attempts=3,
+    )
+
+    merged = orch._apply_ag_contract_layer(
+        _BASE_WITH_RESPONSE_CATALOG, _REQS
+    )
+    report = check_ag_graph(extract_ag_graph(merged))
+
+    assert llm._calls == 3
+    assert "structured decisions" in llm.last_prompt
+    assert "DISCHARGE_EDGE_MISSING" in llm.last_prompt
+    assert report.verdict == "PASS"
+    assert [
+        item["syntax_ok"] for item in orch.last_ag_authoring_attempts
+    ] == [True, None, True]
+    assert [
+        item["feedback_received_scope"]
+        for item in orch.last_ag_authoring_attempts
+    ] == ["NONE", "AG_SEMANTIC", "DECISION_VALIDATION"]
+    assert orch.last_ag_authoring_attempts[1][
+        "decision_failure_disposition"
+    ] == "RETRYABLE_VALIDATION_ERROR"
+    assert orch.last_ag_authoring_attempts[-1]["generation_strategy"] == (
+        "STRUCTURED_DECISIONS_DETERMINISTIC_EMITTER"
+    )
+    assert orch.last_ag_authoring_attempts[-1]["selected"] is True
+
+
+def test_production_authored_syntax_retry_is_bounded_and_audited():
+    llm = _SequenceLLM(["this is not valid SysML"])
+    orch = Orchestrator(
+        llm,
+        revised_experiment_arm="R2-BBAG",
+        r2_generation_mode="LLM_AUTHORED_AG",
+        r2_authored_syntax_max_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError, match="after 2 bounded authoring attempts"):
+        orch._apply_ag_contract_layer(_BASE, _REQS)
+
+    assert llm._calls == 2
+    assert len(orch.last_ag_authoring_attempts) == 2
+    assert orch.last_ag_authoring_attempts[0]["syntax_ok"] is False
+    assert orch.last_ag_authoring_attempts[1]["syntax_ok"] is None
+    assert orch.last_ag_authoring_attempts[0]["package_text"]
+    assert orch.last_ag_authoring_attempts[1]["generation_strategy"] == (
+        "STRUCTURED_DECISIONS_DETERMINISTIC_EMITTER"
+    )
+    assert orch.last_ag_authoring_attempts[1]["decision_error"]
+
+
+def test_missing_architecture_input_stops_without_spending_the_third_call():
+    correct = emit_ag_package(REQ_SAFE_005_CHAIN)
+    semantic_failure = "\n".join(
+        line for line in correct.splitlines()
+        if "dependency discharge" not in line.lower()
+    )
+    from tests.test_option2_ag_decision import _CORRECT
+
+    thin = json.loads(json.dumps(_CORRECT))
+    thin["priority"]["members"] = ["PARACHUTE_DEPLOYMENT"]
+    llm = _SequenceLLM([
+        semantic_failure,
+        json.dumps(thin),
+        json.dumps(_CORRECT),  # must not be consumed: it would invent the fact
+    ])
+    orch = Orchestrator(
+        llm,
+        revised_experiment_arm="R2-BBAG",
+        r2_generation_mode="LLM_AUTHORED_AG",
+        r2_authored_syntax_max_attempts=3,
+    )
+    merged = orch._apply_ag_contract_layer(_BASE, _REQS)
+    assert "SystemParachuteContract" in merged
+    assert llm._calls == 2
+    selected = [
+        item for item in orch.last_ag_authoring_attempts if item["selected"]
+    ]
+    assert len(selected) == 1
+    assert selected[0]["attempt"] == 1
+    assert selected[0]["stop_reason"] == (
+        "needs_architecture_input_best_syntax_valid_candidate"
+    )
+    assert selected[0]["terminal_quality_disposition"] == (
+        "NEEDS_ARCHITECTURE_INPUT"
+    )
+    assert orch.last_ag_authoring_attempts[-1]["stop_reason"] == (
+        "needs_architecture_input"
+    )
+    audit = orch._build_collaboration_artifacts(merged)[
+        "ag_authoring_attempts"
+    ]
+    assert audit["attempt_count"] == 2
+    assert audit["structured_emitter_attempt_count"] == 1
+    assert audit["architecture_input_required_count"] == 1
+    assert audit["retryable_decision_rejection_count"] == 0
+
+
+def test_missing_response_input_dominates_dependent_wiring_repair_route():
+    orch = _llm_orch("unused")
+    orch.ag_input_dispositions["REQ_SAFE_005"] = {
+        "disposition": "NEEDS_ARCHITECTURE_INPUT",
+        "reason": "catalog incomplete",
+    }
+    failures = {"failures": [{
+        "diagnostic_code": "PRIORITY_TOPOLOGY_INCOMPLETE",
+        "classification": "MODEL_SEMANTIC_FAULT",
+        "route": "DEPENDENCY_CLOSED_SURGICAL_REPAIR",
+        "repair_authorized": True,
+    }]}
+    orch._apply_ag_input_disposition(failures, "REQ_SAFE_005")
+    routed = failures["failures"][0]
+    assert routed["classification"] == "CONTRACT_INCOMPLETENESS"
+    assert routed["route"] == "CLARIFICATION_OR_BLOCKED"
+    assert routed["repair_authorized"] is False
+    assert routed["routing_basis"] == (
+        "UPSTREAM_RESPONSE_CATALOG_INPUT_DISPOSITION"
+    )
+
+
 def test_feedback_loop_converges_to_pass_under_the_ag_check():
     """The A/G check gates each round; a broken first attempt is regenerated on
     the checker's diagnostics until the merged model is verified PASS."""
@@ -217,14 +386,8 @@ def test_feedback_loop_converges_to_pass_under_the_ag_check():
     assert "DISCHARGE" in llm.last_prompt.upper()  # the checker's actual defect code
 
 
-def test_a_benign_warning_is_not_treated_as_a_syntax_failure():
-    """A package with warnings but no errors must be accepted.
-
-    The gate rejected on `score != 1.0`, but the score is also depressed by
-    warnings — naming a state `done` shadows a stdlib member and costs 0.05. Valid
-    packages were discarded and fed back as "SYNTAX ERRORS", wasting the round and
-    destabilising the next one.
-    """
+def test_a_user_package_warning_is_treated_as_a_syntax_failure():
+    """A warning in authored user source cannot enter the terminal model."""
     from src.simulation.syntax_checker import check_syntax
 
     correct = emit_ag_package(REQ_SAFE_005_CHAIN)
@@ -238,8 +401,8 @@ def test_a_benign_warning_is_not_treated_as_a_syntax_failure():
                         r2_generation_mode="LLM_AUTHORED_AG")
     result = orch._author_llm_ag_with_feedback(
         REQ_SAFE_005_CHAIN, _BASE, max_iterations=1)
-    assert result["history"][0]["syntax_ok"] is True
-    assert result["history"][0]["error_count"] is not None
+    assert result["history"][0]["syntax_ok"] is False
+    assert result["history"][0]["error_count"] is None
 
 
 def test_feedback_loop_reports_the_verdict_of_the_package_it_returns():

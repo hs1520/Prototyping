@@ -72,6 +72,29 @@ def test_a_missing_link_is_named_not_just_counted():
     assert requirement["trace_completeness"] < 1.0
 
 
+def test_matching_guarantee_does_not_fake_an_explicit_discharge_edge():
+    """A concept produced somewhere is not a discharge relationship."""
+    without_discharge = "\n".join(
+        line for line in _FULL.splitlines()
+        if "dependency discharge" not in line
+    )
+    out = _trace(without_discharge)
+    requirement = out["per_requirement"][0]
+    assert "assumptions_discharged" in requirement["missing_links"]
+    assert requirement["fully_traced"] is False
+
+
+def test_a_failed_realization_link_does_not_count_as_implemented_behavior():
+    links = [dict(item) for item in _links(_FULL)]
+    links[0]["status"] = "FAIL"
+    out = compute_traceability(
+        extract_ag_graphs(_FULL),
+        realization_links=links,
+        declared_requirements=["REQ_SAFE_005"],
+    )
+    assert "behaviours_realized" in out["per_requirement"][0]["missing_links"]
+
+
 def test_a_chain_without_provenance_is_unattributed_and_kept_in_full():
     """Provenance is load-bearing: a chain that never cites a requirement cannot
     be traced to it however complete it is. The detail must survive, or a score of

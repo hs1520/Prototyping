@@ -1,9 +1,9 @@
 """Non-degradation evidence for terminal A/G binding.
 
 The A/G layer is allowed to add assurance relationships, but it must not
-change the executable architecture or make an already-passing simulation
-scenario fail.  This comparison is deliberately set-based so a new failing
-scenario cannot be hidden by an unchanged aggregate score.
+change the executable architecture or make an already-passing frozen causal
+obligation fail. Role-derived scenarios remain diagnostic. This comparison is
+deliberately set-based so a regression cannot be hidden by an aggregate score.
 """
 from __future__ import annotations
 
@@ -27,13 +27,28 @@ def _behavioral_passes(result: Any) -> set[str]:
     }
 
 
+def _requirement_structural_passes(result: Any) -> tuple[set[str], bool]:
+    report = getattr(result, "structural_obligation_report", None)
+    if not isinstance(report, dict) or not report.get("total"):
+        return set(), False
+    return {
+        str(item.get("obligation_id"))
+        for item in (report.get("results") or ())
+        if item.get("status") == "PASS"
+    }, True
+
+
 def build_ag_non_degradation_report(before: Any, after: Any) -> dict[str, Any]:
     """Compare the exact pre-binding and post-binding simulation evidence."""
     before_structural = _structural_passes(before)
     after_structural = _structural_passes(after)
+    before_requirement, before_fixed = _requirement_structural_passes(before)
+    after_requirement, after_fixed = _requirement_structural_passes(after)
     before_behavioral = _behavioral_passes(before)
     after_behavioral = _behavioral_passes(after)
     lost_structural = sorted(before_structural - after_structural)
+    fixed_structural_evidence = before_fixed and after_fixed
+    lost_requirement = sorted(before_requirement - after_requirement)
     lost_behavioral = sorted(before_behavioral - after_behavioral)
 
     topology_fields = (
@@ -61,7 +76,11 @@ def build_ag_non_degradation_report(before: Any, after: Any) -> dict[str, Any]:
         state_machines_before == state_machines_after
     )
     passed = (
-        not lost_structural
+        not (
+            lost_requirement
+            if fixed_structural_evidence
+            else lost_structural
+        )
         and not lost_behavioral
         and topology_unchanged
         and state_machine_count_unchanged
@@ -69,7 +88,14 @@ def build_ag_non_degradation_report(before: Any, after: Any) -> dict[str, Any]:
     return {
         "artifact_role": "A_G_NON_DEGRADATION",
         "status": "PASS" if passed else "FAIL",
+        "structural_evidence_kind": (
+            "FROZEN_REQUIREMENT_CAUSAL_PATHS"
+            if fixed_structural_evidence
+            else "ADAPTIVE_ROLE_SCENARIOS_LEGACY"
+        ),
+        "lost_requirement_structural_obligations": lost_requirement,
         "lost_structural_scenarios": lost_structural,
+        "role_scenarios_advisory": fixed_structural_evidence,
         "lost_behavioral_scenarios": lost_behavioral,
         "structural_passed_before": len(before_structural),
         "structural_passed_after": len(after_structural),

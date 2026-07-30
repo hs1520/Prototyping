@@ -87,7 +87,16 @@ def measure_model(
     # (DECOMPOSITION_MISSING, GUARANTEE_NO_OWNER, REALIZATION_MISSING,
     # ASSUMPTION_UNDISCHARGED) — every one of them an artefact of the pooling. The
     # run verdict is the conjunction, as it is everywhere else.
-    reports = [check_ag_graph(graph) for graph in graphs]
+    # This report replays historical archives whose checker version predates the
+    # v8 response-provenance convention. Requiring a field that did not exist at
+    # their frozen code revision would rewrite rather than reproduce the recorded
+    # measurement. Current pipeline assurance uses the strict default.
+    reports = [
+        check_ag_graph(
+            graph, require_priority_member_provenance=False
+        )
+        for graph in graphs
+    ]
     traceability = compute_traceability(
         graphs,
         realization_links=[

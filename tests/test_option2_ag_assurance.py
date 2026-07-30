@@ -10,7 +10,12 @@ from src.prototyping.ag_assurance import (
     route_failure_diagnostics,
 )
 from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
-from src.prototyping.ag_contracts import check_ag_graph
+from src.prototyping.ag_contracts import AGDiagnostic, check_ag_graph
+from src.prototyping.ag_convention import (
+    PRIORITY_INPUT_OR_CONTRACT,
+    PRIORITY_MODEL_WIRING,
+    PRIORITY_OBLIGATIONS,
+)
 from src.prototyping.ag_emitter import emit_ag_package
 from src.prototyping.ag_extractor import extract_ag_graph
 from src.prototyping.ag_repair import attempt_dependency_closed_ag_repair
@@ -98,6 +103,224 @@ def test_typed_failure_routing_distinguishes_model_integration_and_verifier():
     assert verifier["repair_authorized"] is False
 
 
+def test_nonatomic_component_guarantee_is_blocked_contract_work():
+    routed = route_failure_diagnostics(
+        (
+            AGDiagnostic(
+                "COMPONENT_GUARANTEE_NONATOMIC",
+                "component guarantee is compound",
+                contract="RecoveryContract",
+                subject="g_response",
+            ),
+        ),
+        source_requirement="REQ_SAFE_005",
+    )
+    failure = routed["failures"][0]
+    assert failure["classification"] == (
+        FailureClass.CONTRACT_INCOMPLETENESS.value
+    )
+    assert failure["route"] == FailureRoute.CLARIFICATION_OR_BLOCKED.value
+    assert failure["repair_authorized"] is False
+
+
+def test_itemized_pattern_topology_routes_to_its_existing_behavior():
+    diagnostic = AGDiagnostic(
+        "PATTERN_TOPOLOGY_INCOMPLETE",
+        "startup topology incomplete; unsatisfied: reset_state_present",
+        contract="SystemContract",
+        subject="STARTUP_INHIBIT",
+        provenance={
+            "unsatisfied_obligations": ["reset_state_present"],
+            "obligation_affected_elements": {
+                "reset_state_present": ["LatchBehavior"]
+            },
+        },
+    )
+    routed = route_failure_diagnostics(
+        (diagnostic,),
+        source_requirement="REQ_SAFE_004",
+        realization_links=(),
+    )
+    failure = routed["failures"][0]
+    assert failure["route"] == (
+        FailureRoute.DEPENDENCY_CLOSED_SURGICAL_REPAIR.value
+    )
+    assert failure["repair_authorized"] is True
+    assert "LatchBehavior" in failure["affected_elements"]
+
+
+def test_model_fault_without_existing_behavior_target_fails_closed():
+    """The merge policy replaces existing definitions; it cannot satisfy a
+    REALIZATION_MISSING fault by inventing the absent state definition.
+    """
+    routed = route_failure_diagnostics(
+        (
+            AGDiagnostic(
+                "REALIZATION_MISSING",
+                "ComponentContract has no realization",
+                contract="ComponentContract",
+            ),
+        ),
+        source_requirement="REQ_SAFE_005",
+        realization_links=(),
+    )
+    failure = routed["failures"][0]
+    assert failure["repair_authorized"] is False
+    assert failure["route"] == FailureRoute.CLARIFICATION_OR_BLOCKED.value
+    assert failure["routing_basis"] == "MODEL_FAULT_WITHOUT_BEHAVIOR_TARGET"
+
+
+def test_every_priority_obligation_has_the_reviewed_routing_scope():
+    """Moving an obligation across the repair boundary must fail loudly.
+
+    The aggregate checker code is not a routing unit. These are the individual
+    facts it reports. Only topology that can be restored inside an existing state
+    definition is authorised; changing the response vocabulary, contract facts,
+    or verification boundary remains blocked.
+    """
+    expected_wiring = {
+        "selection_guarded_by_trigger",
+        "competing_transitions_guarded",
+        "selected_transition_reachable",
+        "selection_action_connected",
+        "recovery_power_available_at_boundary",
+        "deployment_action_connected",
+    }
+    expected_blocked = {
+        "response_member_provenance",
+        "response_set_members",
+        "precedence_edges",
+        "single_highest_response",
+        "selected_response",
+        "trigger_concept",
+        "trigger_matches_timing_origin",
+        "arbiter_guarantees",
+        "observation_connected",
+    }
+    by_scope = {
+        PRIORITY_MODEL_WIRING: {
+            item.obligation_id
+            for item in PRIORITY_OBLIGATIONS
+            if item.failure_scope == PRIORITY_MODEL_WIRING
+        },
+        PRIORITY_INPUT_OR_CONTRACT: {
+            item.obligation_id
+            for item in PRIORITY_OBLIGATIONS
+            if item.failure_scope == PRIORITY_INPUT_OR_CONTRACT
+        },
+    }
+    assert by_scope[PRIORITY_MODEL_WIRING] == expected_wiring
+    assert by_scope[PRIORITY_INPUT_OR_CONTRACT] == expected_blocked
+    assert set.union(*by_scope.values()) == {
+        item.obligation_id for item in PRIORITY_OBLIGATIONS
+    }
+
+
+def test_priority_routing_splits_wiring_from_input_semantics():
+    diagnostic = AGDiagnostic(
+        "PRIORITY_TOPOLOGY_INCOMPLETE",
+        "priority topology is incomplete; unsatisfied: response_set_members, "
+        "selection_action_connected",
+        contract="SystemParachuteContract",
+        subject="criticalPropulsionFailureDetected",
+        provenance={
+            "unsatisfied_obligations": [
+                "response_set_members",
+                "selection_action_connected",
+            ],
+            "obligation_affected_elements": {
+                "selection_action_connected": ["SafetyResponseArbitration"],
+            },
+        },
+    )
+    routed = route_failure_diagnostics(
+        [diagnostic],
+        source_requirement="REQ_SAFE_005",
+    )
+    assert len(routed["failures"]) == 2
+    by_obligation = {
+        item["priority_obligation"]: item for item in routed["failures"]
+    }
+
+    blocked = by_obligation["response_set_members"]
+    assert blocked["classification"] == FailureClass.CONTRACT_INCOMPLETENESS.value
+    assert blocked["route"] == FailureRoute.CLARIFICATION_OR_BLOCKED.value
+    assert blocked["repair_authorized"] is False
+
+    repairable = by_obligation["selection_action_connected"]
+    assert repairable["classification"] == FailureClass.MODEL_SEMANTIC_FAULT.value
+    assert (
+        repairable["route"]
+        == FailureRoute.DEPENDENCY_CLOSED_SURGICAL_REPAIR.value
+    )
+    assert repairable["repair_authorized"] is True
+    assert "SafetyResponseArbitration" in repairable["affected_elements"]
+    assert "selection_action_connected" in repairable["message"]
+    assert repairable["routing_basis"] == "NAMED_PRIORITY_OBLIGATION"
+
+
+def test_unknown_priority_obligation_fails_closed():
+    routed = route_failure_diagnostics(
+        [AGDiagnostic(
+            "PRIORITY_TOPOLOGY_INCOMPLETE",
+            "unsatisfied: future_obligation",
+            contract="SystemParachuteContract",
+            provenance={"unsatisfied_obligations": ["future_obligation"]},
+        )],
+        source_requirement="REQ_SAFE_005",
+    )
+    failure = routed["failures"][0]
+    assert failure["priority_obligation"] == "future_obligation"
+    assert failure["repair_authorized"] is False
+    assert failure["route"] == FailureRoute.CLARIFICATION_OR_BLOCKED.value
+
+
+def test_wiring_obligation_without_an_existing_behavior_target_fails_closed():
+    routed = route_failure_diagnostics(
+        [AGDiagnostic(
+            "PRIORITY_TOPOLOGY_INCOMPLETE",
+            "unsatisfied: recovery_power_available_at_boundary",
+            contract="SystemParachuteContract",
+            provenance={
+                "unsatisfied_obligations": [
+                    "recovery_power_available_at_boundary"
+                ],
+                "obligation_affected_elements": {
+                    "recovery_power_available_at_boundary": [],
+                },
+            },
+        )],
+        source_requirement="REQ_SAFE_005",
+    )
+    failure = routed["failures"][0]
+
+    assert failure["repair_authorized"] is False
+    assert failure["classification"] == FailureClass.CONTRACT_INCOMPLETENESS.value
+    assert failure["route"] == FailureRoute.CLARIFICATION_OR_BLOCKED.value
+    assert failure["routing_basis"] == (
+        "NAMED_PRIORITY_OBLIGATION_WITHOUT_BEHAVIOR_TARGET"
+    )
+
+
+def test_checker_binds_repairable_priority_obligation_to_its_state_def():
+    injured = GOOD.replace(
+        "entry action "
+        "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand;",
+        "",
+    )
+    _graph, report = _check(injured)
+    diagnostic = next(
+        item for item in report.errors()
+        if item.code == "PRIORITY_TOPOLOGY_INCOMPLETE"
+    )
+    assert "selection_action_connected" in diagnostic.provenance[
+        "unsatisfied_obligations"
+    ]
+    assert "SafetyResponseArbitration" in diagnostic.provenance[
+        "obligation_affected_elements"
+    ]["selection_action_connected"]
+
+
 class _RepairLLM:
     def __init__(self, response: str):
         self.response = response
@@ -161,6 +384,149 @@ def test_board_mediated_dependency_closed_repair_accepts_only_targeted_fix():
     assert llm.calls == 1
     assert "requirement def REQ_SAFE_005" in board.current_model.model_text
     assert check_ag_graph(extract_ag_graph(board.current_model.model_text)).verdict == "PASS"
+
+
+def test_priority_wiring_repair_can_succeed_while_input_obligation_stays_blocked():
+    """The routed sub-obligation, not its aggregate diagnostic, is the target."""
+    precedence = (
+        "        require constraint "
+        "precedence_PARACHUTE_DEPLOYMENT_over_LOW_BATTERY_RETURN_TO_BASE "
+        "{ not criticalPropulsionFailureDetected or selectedResponse != "
+        "FLIGHT_RESPONSES_V1::LOW_BATTERY_RETURN_TO_BASE }\n"
+    )
+    action = (
+        "entry action "
+        "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand;"
+    )
+    injured = GOOD.replace(precedence, "").replace(action, "")
+    graph, report = _check(injured)
+    priority = next(
+        item for item in report.errors()
+        if item.code == "PRIORITY_TOPOLOGY_INCOMPLETE"
+    )
+    assert {
+        "precedence_edges", "selection_action_connected"
+    } <= set(priority.provenance["unsatisfied_obligations"])
+    routed = route_failure_diagnostics(
+        report.diagnostics,
+        source_requirement=report.source_requirement,
+        realization_links=report.realization_links,
+    )
+    failure = next(
+        item for item in routed["failures"]
+        if item.get("priority_obligation") == "selection_action_connected"
+    )
+    assert failure["repair_authorized"] is True
+
+    board = Blackboard("Drone")
+    board.commit_model(
+        injured,
+        base_revision=0,
+        base_digest=board.current_model.model_digest,
+        producer="test",
+    )
+    analysis = board.publish(
+        RecordType.ANALYSIS,
+        "analysis.ag_trace",
+        "AGChecker",
+        {"diagnostics": [item.as_dict() for item in report.diagnostics]},
+    )
+    failure_record = board.publish(
+        RecordType.ANALYSIS,
+        "diagnostic.failure",
+        "AGFailureRouter",
+        failure,
+    )
+    repaired_behavior = _definition(
+        GOOD, "state", "SafetyResponseArbitration"
+    )
+    decision = attempt_dependency_closed_ag_repair(
+        llm=_RepairLLM(f"```sysml\n{repaired_behavior}\n```"),
+        board=board,
+        context_builder=ContextBuilder(board),
+        sessions=TaskSessionRegistry(),
+        failure_record_id=failure_record.record_id,
+        analysis_record_id=analysis.record_id,
+    )
+    assert decision.status == "ACCEPTED", decision.reason
+    assert decision.target_diagnostic_removed is True
+    after = check_ag_graph(extract_ag_graph(board.current_model.model_text))
+    remaining = next(
+        item for item in after.errors()
+        if item.code == "PRIORITY_TOPOLOGY_INCOMPLETE"
+    )
+    assert "selection_action_connected" not in remaining.provenance[
+        "unsatisfied_obligations"
+    ]
+    assert "precedence_edges" in remaining.provenance[
+        "unsatisfied_obligations"
+    ]
+
+
+def test_priority_repair_rejects_a_new_obligation_hidden_under_the_same_code():
+    """Replacing one named defect with another is a regression, not a repair."""
+    action = (
+        "entry action "
+        "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand;"
+    )
+    injured = GOOD.replace(action, "")
+    graph, report = _check(injured)
+    routed = route_failure_diagnostics(
+        report.diagnostics,
+        source_requirement=report.source_requirement,
+        realization_links=report.realization_links,
+    )
+    failure = next(
+        item for item in routed["failures"]
+        if item.get("priority_obligation") == "selection_action_connected"
+    )
+
+    board = Blackboard("Drone")
+    board.commit_model(
+        injured,
+        base_revision=0,
+        base_digest=board.current_model.model_digest,
+        producer="test",
+    )
+    analysis = board.publish(
+        RecordType.ANALYSIS,
+        "analysis.ag_trace",
+        "AGChecker",
+        {"diagnostics": [item.as_dict() for item in report.diagnostics]},
+    )
+    failure_record = board.publish(
+        RecordType.ANALYSIS,
+        "diagnostic.failure",
+        "AGFailureRouter",
+        failure,
+    )
+    regressing_behavior = _definition(
+        GOOD, "state", "SafetyResponseArbitration"
+    ).replace(
+        "if not criticalPropulsionFailureDetected then "
+        "CONTROLLED_BATTERY_LANDING;",
+        "if criticalPropulsionFailureDetected then "
+        "CONTROLLED_BATTERY_LANDING;",
+    )
+    decision = attempt_dependency_closed_ag_repair(
+        llm=_RepairLLM(f"```sysml\n{regressing_behavior}\n```"),
+        board=board,
+        context_builder=ContextBuilder(board),
+        sessions=TaskSessionRegistry(),
+        failure_record_id=failure_record.record_id,
+        analysis_record_id=analysis.record_id,
+    )
+    assert decision.status == "REJECTED"
+    assert decision.target_diagnostic_removed is True
+    assert decision.regression_free is False
+    published = next(
+        item.payload for item in reversed(board.records(topic="repair.decision"))
+    )
+    assert any(
+        "obligation=competing_transitions_guarded" in item
+        for item in published["gate"]["new_diagnostics"]
+    )
+    assert board.current_revision == 1
 
 
 @pytest.mark.parametrize(
@@ -316,6 +682,9 @@ def test_the_repair_prompt_states_the_rules_its_gate_enforces():
     assert "prefixed with `set`" in feedback
     # and an unknown code still gets the scope rules, just no convention line
     assert "adding a new definition" in _repair_feedback("SOMETHING_ELSE")
+    from src.agents.surgical_refiner import SURGICAL_SYSTEM_PROMPT
+    assert "never translate it" in SURGICAL_SYSTEM_PROMPT
+    assert "entry; then <state>;" in SURGICAL_SYSTEM_PROMPT
 
 
 def test_preservation_guards_every_realizing_state_def_not_just_named_behaviors():
@@ -381,7 +750,7 @@ def test_preservation_guards_every_realizing_state_def_not_just_named_behaviors(
     import re as _re
 
     transition = _re.search(
-        r"\n\s*transition selectParachute [^;]+;", arbitration
+        r"\n\s*transition select\w+ [^;]+;", arbitration
     )
     assert transition, "the reference arbitration must carry the selection transition"
     lossy = arbitration.replace(transition.group(0), "")
