@@ -450,17 +450,17 @@ class TestMultistepGeneratePipeline:
         assert result.success
         assert agent.llm.call_count == 5
 
-    def test_the_authoring_steps_are_one_conversation_and_planning_is_not(
+    def test_generation_steps_are_independent_calls_not_one_conversation(
         self, monkeypatch
     ):
-        """Steps 2-5 share a conversation; step 1 must NOT join it.
+        """Each step is its own single-turn call. This was measured, not assumed.
 
-        A measured probe run showed why. Step 1 runs under a system prompt that
-        forbids what the authoring prompt requires — "one JSON object, no SysML,
-        no prose" against "show your reasoning, follow SysML v2 syntax" — and one
-        conversation carries one system message. Inside the conversation, step 1
-        lost its compiler instruction to a user preamble and its plan failed
-        validation on the first attempt where it had passed first time before.
+        Sharing one conversation across the steps took paired-seed qualification
+        from 3/3 to 0/3 at 2.1x the prompt cost, failing a different check each
+        seed. Each step is already handed what it needs in curated form, so the
+        history added a second uncurated copy plus stale earlier instructions.
+        A future change that reintroduces a shared conversation here should have
+        to argue with that measurement first.
         """
         import src.agents.design_agent as da_module
         from src.sysml.model import SysMLModel, PartDefinition
@@ -488,27 +488,23 @@ class TestMultistepGeneratePipeline:
         })
 
         planning, *authoring = agent.llm.messages
-        # step 1 keeps its own compiler system prompt and starts fresh
-        assert len(planning) == 2
+        # every call is [system, user] — no assistant turn is ever resent
+        assert all(len(turns) == 2 for turns in agent.llm.messages)
+        assert not any(
+            message.role == "assistant"
+            for turns in agent.llm.messages for message in turns
+        )
+        # step 1 keeps its own compiler system prompt
         assert "typed model-planning compiler" in planning[0].content
         assert "expert in Model Based Systems Engineering" not in (
             planning[0].content
         )
-        # steps 2-5 share one conversation under the authoring role instruction
-        # (DesignAgent installs its own, so match on what it actually says)
+        # the authoring steps run under the authoring role instruction
         assert len({turns[0].content for turns in authoring}) == 1
         assert "SysML v2" in authoring[0][0].content
         assert "typed model-planning compiler" not in authoring[0][0].content
-        # its history grows by one user + one assistant turn per step
-        assert [len(turns) for turns in authoring] == [2, 4, 6, 8]
-        # and it really is the model's own words coming back, not a paraphrase
-        assert authoring[1][2].role == "assistant"
-        assert authoring[1][2].content == _SYSML_FRAGMENT
-        # the planning turn never leaks into the authoring conversation
-        assert all(
-            step1 not in message.content
-            for turns in authoring for message in turns
-        )
+        # what each step needs reaches it through the curated prompt, not history
+        assert "FlightController" in authoring[1][1].content
 
     def test_refinement_does_not_join_the_generation_conversation(
         self, monkeypatch

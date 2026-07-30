@@ -2678,7 +2678,9 @@ class Orchestrator:
                 "stage": event.get("label"),
                 "call_index": int(handoff.get("captured_llm_calls", 0)),
                 "conversation_id": event.get("conversation_id"),
-                "multi_turn": bool(event.get("new_message_offset")),
+                # membership of a conversation, not position in it: the opening
+                # turn has offset 0 and is still part of one
+                "multi_turn": event.get("conversation_id") is not None,
                 "fragment_digest": text_digest(fragment),
                 "fragment_chars": len(fragment),
                 "fragment": fragment,

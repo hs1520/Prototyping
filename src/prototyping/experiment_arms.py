@@ -11,12 +11,15 @@ from enum import Enum
 
 LEGACY_EXPERIMENT_NAMESPACE = "LEGACY_EXTERNAL_CONTRACT_V1"
 REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
-# v10: the five generation steps run as ONE bounded multi-turn conversation
-# instead of five independent single-turn calls, so every step sees the earlier
-# fragments as the model's own turns. This changes generation for R0, R1 and R2
-# alike — it is a common-pipeline change, not an intervention — so no v9 result
-# may be pooled with a v10 one, in any arm.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v10"
+# v10 ran the five generation steps as one shared conversation. Measured on
+# three paired seeds it took qualification from 3/3 to 0/3 at 2.1x the prompt
+# cost, failing a different check each seed, and was reverted. v11 restores v9's
+# independent single-turn generation calls; what it adds over v9 is board
+# instrumentation only (an A/G-planning session, archived generation drafts,
+# per-turn token accounting), none of which changes what the model is asked to
+# produce. The three archived v10 runs are a negative result and must not be
+# pooled with either neighbour.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v11"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"

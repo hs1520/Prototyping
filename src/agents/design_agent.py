@@ -1634,47 +1634,54 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             metadata.get("whole_model_generation_plan")
         )
 
-        # Steps 2-5 are the bounded SysML-authoring conversation; step 1 is not
-        # part of it.  Step 1 is a planning *compiler* call under a system prompt
-        # that forbids exactly what the authoring prompt requires ("only one JSON
-        # object, no SysML, no prose" against "show your reasoning, follow SysML
-        # v2 syntax"), and one conversation carries one system message.  Its
-        # result also reaches later steps as a validated ModelGenerationPlan
-        # already, so conversation history would add cost and no information.
-        with self.cot.generation_conversation():
-            # --- Step 2: Part Definitions (structural fragment) ---
-            step2, parts_fragment = self._step2_parts(
-                system_name, architecture_text, requirements, _step_context,
-                guidance.get("parts", ""), metadata, verbose,
-                generation_plan,
-            )
+        # The generation steps are deliberately independent single-turn calls,
+        # NOT one shared conversation.  Running them as a conversation was tried
+        # and measured: qualification went from 3/3 to 0/3 across paired seeds at
+        # 2.1x the prompt cost, failing a different check each time (terminal A/G
+        # binding, then A/G assurance, then syntax + namespace integrity) — the
+        # signature of general degradation rather than one repairable defect.
+        #
+        # The mechanism is that each step is already handed exactly what it needs
+        # in curated form (architecture_text, parts_fragment, ...).  Conversation
+        # history therefore adds a second, uncurated copy of the same content plus
+        # the previous steps' now-stale instructions: context dilution, not
+        # context enrichment.  Multi-turn earns its keep where the model would
+        # otherwise have no way to see something — the A/G decision retry seeing
+        # its own rejected answer — and not here.
 
-            # --- Step 3: Interface & Flow Definitions (item/typed port def) ---
-            step3, interfaces_fragment = self._step3_interfaces(
-                system_name, architecture_text, parts_fragment, requirements,
-                _step_context, guidance.get("interfaces", ""), metadata, verbose,
-                generation_plan,
-            )
+        # --- Step 2: Part Definitions (structural fragment) ---
+        step2, parts_fragment = self._step2_parts(
+            system_name, architecture_text, requirements, _step_context,
+            guidance.get("parts", ""), metadata, verbose,
+            generation_plan,
+        )
 
-            # --- Step 4: Behavioral Model (only if FUNC or SAFE reqs exist) ---
-            step4, behavior_fragment = self._step4_behavior(
-                system_name, architecture_text, parts_fragment, requirements,
-                platform_profile, _step_context, guidance.get("behavior", ""),
-                metadata, verbose, behavior_plan, generation_plan,
-            )
+        # --- Step 3: Interface & Flow Definitions (item def / typed port def) ---
+        step3, interfaces_fragment = self._step3_interfaces(
+            system_name, architecture_text, parts_fragment, requirements,
+            _step_context, guidance.get("interfaces", ""), metadata, verbose,
+            generation_plan,
+        )
 
-            # --- Step 5: Integration / Assembly ---
-            # No separate RAG call for assembly — the prompt focuses on wiring
-            # together the fragments already produced, not on new constructs.
-            assembly_guidance = guidance.get("assembly", "")
-            step5 = self.cot.assemble_model(
-                system_name=system_name,
-                parts_fragment=parts_fragment,
-                interfaces_fragment=interfaces_fragment,
-                behavior_fragment=behavior_fragment,
-                requirements=requirements,
-                semantic_guidance=assembly_guidance,
-            )
+        # --- Step 4: Behavioral Model (only if FUNC or SAFE requirements exist) ---
+        step4, behavior_fragment = self._step4_behavior(
+            system_name, architecture_text, parts_fragment, requirements,
+            platform_profile, _step_context, guidance.get("behavior", ""),
+            metadata, verbose, behavior_plan, generation_plan,
+        )
+
+        # --- Step 5: Integration / Assembly ---
+        # No separate RAG call for assembly — the prompt focuses on wiring together
+        # the fragments already produced, not on new SysML constructs.
+        assembly_guidance = guidance.get("assembly", "")
+        step5 = self.cot.assemble_model(
+            system_name=system_name,
+            parts_fragment=parts_fragment,
+            interfaces_fragment=interfaces_fragment,
+            behavior_fragment=behavior_fragment,
+            requirements=requirements,
+            semantic_guidance=assembly_guidance,
+        )
         if assembly_guidance:
             metadata.setdefault("semantic_guidance_by_step", {})[
                 "assembly"
