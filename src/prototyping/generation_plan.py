@@ -7,6 +7,7 @@ this object is generation input and an auditable conformance expectation only.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Mapping, Sequence
@@ -14,20 +15,319 @@ from typing import Any, Iterable, Mapping, Sequence
 from .ag_behavior_plan import (
     BehaviorObligation,
     BehaviorObligationPlan,
+    materialize_owned_behavior_obligations,
+    reserved_behavior_identities,
+)
+from .event_symbols import (
+    collect_planned_event_symbols,
+    materialize_planned_event_symbols,
+    validate_planned_event_symbols,
 )
 from .structural_obligations import (
+    RequirementRealizationPlan,
     StructuralObligation,
     compile_structural_obligations,
+    compile_source_anchored_structural_obligations,
 )
 from .requirement_semantics import (
     RequirementSemanticObligation,
+    SemanticBindingPlan,
     compile_requirement_semantic_obligations,
+    materialize_semantic_bindings,
+    quantity_type_for_unit,
+    semantic_binding_matches_subject,
+)
+from .namespace_integrity import collect_package_definitions
+from .activated_constraint_plan import (
+    AttributePlan,
+    ConstraintPlan,
+    materialize_planned_attributes,
+    materialize_planned_constraints,
+    validate_constraint_plan,
+)
+from .planned_behavior import (
+    PlannedBehavior,
+    materialize_owned_planned_behaviors,
+    validate_planned_behaviors,
 )
 from ..utils.req_id import normalise_req_id
+from ..utils.sysml_text_utils import find_block_end
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_]\w*$")
+_QUALIFIED_TYPE = re.compile(
+    r"^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*$"
+)
 _REQ_ID = re.compile(r"\bREQ[-_][A-Za-z]+[-_]\d+\b", re.IGNORECASE)
+_GENERIC_PORT_TYPES = {"DataPort", "StatusPort", "CommandPort"}
+PLAN_APPLICATION_HISTORY_KEY = "plan_application_history"
+_STANDARD_LIBRARY_TYPES = {
+    "ScalarValues": {
+        "Boolean",
+        "Complex",
+        "Integer",
+        "Rational",
+        "Real",
+        "String",
+    },
+    "ISQ": {
+        "AccelerationValue",
+        "AngleValue",
+        "AngularMeasureValue",
+        "ChargeValue",
+        "CurrentValue",
+        "DurationValue",
+        "EnergyValue",
+        "ForceValue",
+        "FrequencyValue",
+        "LengthValue",
+        "MassValue",
+        "PowerValue",
+        "SpeedValue",
+        "TemperatureValue",
+        "ThermodynamicTemperatureValue",
+        "TimeValue",
+        "VelocityValue",
+        "VoltageValue",
+    },
+}
+_SI_UNIT_NAMES = {
+    "A", "C", "Hz", "J", "K", "N", "Pa", "V", "W",
+    "cm", "deg", "g", "h", "kg", "km", "m", "min", "mm", "ms", "rad", "s",
+}
+
+
+def materialize_standard_library_imports(
+    model_text: str,
+) -> tuple[str, dict[str, Any]]:
+    """Close standard-library dependencies in the first/root package."""
+    text = str(model_text)
+    package = re.search(r"\bpackage\s+([A-Za-z_]\w*)\s*\{", text)
+    if package is None:
+        return text, {
+            "artifact_role": "STANDARD_LIBRARY_IMPORT_CLOSURE",
+            "status": "FAIL",
+            "root_package": None,
+            "required_packages": [],
+            "added_imports": [],
+            "issues": ["terminal model has no root package"],
+        }
+    opening = text.find("{", package.start(), package.end())
+    closing = find_block_end(text, opening)
+    if opening == -1 or closing == -1:
+        return text, {
+            "artifact_role": "STANDARD_LIBRARY_IMPORT_CLOSURE",
+            "status": "FAIL",
+            "root_package": package.group(1),
+            "required_packages": [],
+            "added_imports": [],
+            "issues": ["root package body cannot be parsed"],
+        }
+    body = text[opening + 1:closing]
+    used_types = set(re.findall(
+        r":\s*([A-Za-z_]\w*)"
+        r"(?!\s*::)",
+        body,
+    ))
+    required: dict[str, set[str]] = {
+        namespace: used_types & names
+        for namespace, names in _STANDARD_LIBRARY_TYPES.items()
+    }
+    unit_tokens = {
+        token
+        for bracket in re.findall(r"\[([^\]]+)\]", body)
+        for token in re.findall(r"[A-Za-z_]\w*", bracket)
+    }
+    if unit_tokens & _SI_UNIT_NAMES:
+        required["SI"] = unit_tokens & _SI_UNIT_NAMES
+    required = {
+        namespace: names for namespace, names in required.items() if names
+    }
+
+    additions: list[str] = []
+    for namespace, names in sorted(required.items()):
+        imported = set(re.findall(
+            rf"\b(?:private|public)\s+import\s+"
+            rf"{re.escape(namespace)}::([A-Za-z_]\w*|\*{{1,2}})\s*;",
+            body,
+        ))
+        if "*" in imported or "**" in imported or names <= imported:
+            continue
+        additions.append(f"private import {namespace}::*;")
+    if additions:
+        insertion = "".join(f"\n    {line}" for line in additions) + "\n"
+        text = text[:opening + 1] + insertion + text[opening + 1:]
+    return text, {
+        "artifact_role": "STANDARD_LIBRARY_IMPORT_CLOSURE",
+        "status": "PASS",
+        "root_package": package.group(1),
+        "required_packages": sorted(required),
+        "added_imports": additions,
+        "issues": [],
+    }
+
+
+def append_plan_application_history(
+    metadata: dict[str, Any],
+    conformance: Mapping[str, Any],
+    *,
+    stage: str,
+) -> list[dict[str, Any]]:
+    """Append one immutable plan-application event to model metadata."""
+    history = [
+        dict(item)
+        for item in metadata.get(PLAN_APPLICATION_HISTORY_KEY, ())
+        if isinstance(item, Mapping)
+    ]
+    semantic = conformance.get("semantic_binding_conformance")
+    semantic_changes = (
+        list(semantic.get("deterministic_changes") or ())
+        if isinstance(semantic, Mapping)
+        else []
+    )
+    event = {
+        "stage": stage,
+        "status": str(conformance.get("status") or "UNKNOWN"),
+        "input_model_digest": conformance.get("input_model_digest"),
+        "output_model_digest": conformance.get("output_model_digest"),
+        "semantic_changes": semantic_changes,
+        "added_ports": list(
+            conformance.get("deterministically_added_ports") or ()
+        ),
+        "added_connections": list(
+            conformance.get("deterministically_added_connections") or ()
+        ),
+    }
+    key = (
+        event["stage"],
+        event["input_model_digest"],
+        event["output_model_digest"],
+        tuple(event["semantic_changes"]),
+        tuple(event["added_ports"]),
+        tuple(event["added_connections"]),
+    )
+    existing_keys = {
+        (
+            item.get("stage"),
+            item.get("input_model_digest"),
+            item.get("output_model_digest"),
+            tuple(item.get("semantic_changes") or ()),
+            tuple(item.get("added_ports") or ()),
+            tuple(item.get("added_connections") or ()),
+        )
+        for item in history
+    }
+    if key not in existing_keys:
+        history.append(event)
+    metadata[PLAN_APPLICATION_HISTORY_KEY] = history
+    return history
+
+
+def validate_part_definition_fragment(
+    fragment: str,
+    plan: "ModelGenerationPlan",
+) -> dict[str, Any]:
+    """Check that Step 2 emits exactly the plan's component definitions."""
+    expected = {item.name for item in plan.components}
+    observed_list = [
+        item["name"]
+        for item in collect_package_definitions(fragment)
+        if item["kind"] == "part def"
+    ]
+    observed = set(observed_list)
+    duplicates = sorted({
+        name for name in observed_list if observed_list.count(name) > 1
+    })
+    missing = sorted(expected - observed)
+    unplanned = sorted(observed - expected)
+    return {
+        "status": (
+            "PASS"
+            if not missing and not unplanned and not duplicates
+            else "FAIL"
+        ),
+        "missing_part_definitions": missing,
+        "unplanned_part_definitions": unplanned,
+        "duplicate_part_definitions": duplicates,
+    }
+
+
+def _is_planned_assembly_container(
+    model_text: str,
+    definition_name: str,
+    planned_components: set[str],
+) -> bool:
+    """Allow an unplanned wrapper only when it contains planned part usages."""
+    match = re.search(
+        rf"\bpart\s+def\s+{re.escape(definition_name)}\s*\{{",
+        model_text,
+    )
+    if match is None:
+        return False
+    opening = model_text.find("{", match.start(), match.end())
+    closing = find_block_end(model_text, opening)
+    if closing == -1:
+        return False
+    usage_types = {
+        item.group(1)
+        for item in re.finditer(
+            r"\bpart\s+[A-Za-z_]\w*\s*:\s*([A-Za-z_]\w*)\s*;",
+            model_text[opening + 1:closing],
+        )
+    }
+    return bool(usage_types) and usage_types <= planned_components
+
+
+def _definition_contract_report(
+    model_text: str,
+    plan: "ModelGenerationPlan",
+) -> dict[str, Any]:
+    """Validate plan-owned definition names and their SysML declaration kind."""
+    definitions = collect_package_definitions(model_text)
+    by_name: dict[str, list[str]] = {}
+    for item in definitions:
+        by_name.setdefault(item["name"], []).append(item["kind"])
+
+    planned_components = {item.name for item in plan.components}
+    expected: dict[str, str] = {
+        name: "part def" for name in planned_components
+    }
+    for binding in plan.semantic_bindings:
+        expected[binding.item_type] = "item def"
+        expected[binding.port_type] = "port def"
+
+    missing: list[str] = []
+    conflicts: list[str] = []
+    for name, expected_kind in sorted(expected.items()):
+        observed = by_name.get(name, [])
+        if expected_kind not in observed:
+            missing.append(f"{expected_kind} {name}")
+        wrong = sorted(kind for kind in observed if kind != expected_kind)
+        if wrong:
+            conflicts.append(
+                f"{name}: expected {expected_kind}, found "
+                + ", ".join(wrong)
+            )
+
+    unplanned = sorted(
+        name
+        for name, kinds in by_name.items()
+        if "part def" in kinds
+        and name not in planned_components
+        and not _is_planned_assembly_container(
+            model_text, name, planned_components
+        )
+    )
+    return {
+        "status": (
+            "PASS"
+            if not missing and not conflicts and not unplanned
+            else "FAIL"
+        ),
+        "missing_definitions": missing,
+        "definition_kind_conflicts": conflicts,
+        "unplanned_part_definitions": unplanned,
+    }
 
 
 def _req_ids(values: Iterable[str]) -> tuple[str, ...]:
@@ -62,7 +362,7 @@ class ComponentPlan:
     responsibility: str
     requirements: tuple[str, ...]
     ports: tuple[PortPlan, ...]
-    attributes: tuple[dict[str, str], ...] = ()
+    attributes: tuple[AttributePlan, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -70,7 +370,7 @@ class ComponentPlan:
             "responsibility": self.responsibility,
             "requirements": list(self.requirements),
             "ports": [item.to_dict() for item in self.ports],
-            "attributes": [dict(item) for item in self.attributes],
+            "attributes": [item.to_dict() for item in self.attributes],
         }
 
 
@@ -102,9 +402,15 @@ class ConnectionPlan:
 class ModelGenerationPlan:
     components: tuple[ComponentPlan, ...] = ()
     connections: tuple[ConnectionPlan, ...] = ()
+    requirement_realizations: tuple[RequirementRealizationPlan, ...] = ()
     structural_obligations: tuple[StructuralObligation, ...] = ()
     semantic_obligations: tuple[RequirementSemanticObligation, ...] = ()
+    semantic_bindings: tuple[SemanticBindingPlan, ...] = ()
+    constraint_plans: tuple[ConstraintPlan, ...] = ()
+    planned_behaviors: tuple[PlannedBehavior, ...] = ()
     behavior_obligations: tuple[BehaviorObligation, ...] = ()
+    behavior_identity_reconciliations: tuple[str, ...] = ()
+    constraint_identity_reconciliations: tuple[str, ...] = ()
     source: str = "LLM_TYPED_JSON"
     issues: tuple[str, ...] = ()
     schema_version: str = "1.0"
@@ -115,6 +421,14 @@ class ModelGenerationPlan:
             return "INCOMPLETE"
         return "PASS" if not self.issues else "INVALID"
 
+    @property
+    def planned_event_symbols(self):
+        return collect_planned_event_symbols(
+            self.planned_behaviors,
+            self.behavior_obligations,
+            self.components,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
@@ -124,15 +438,36 @@ class ModelGenerationPlan:
             "status": self.status,
             "components": [item.to_dict() for item in self.components],
             "connections": [item.to_dict() for item in self.connections],
+            "requirement_realizations": [
+                item.to_dict() for item in self.requirement_realizations
+            ],
             "structural_obligations": [
                 item.to_dict() for item in self.structural_obligations
             ],
             "semantic_obligations": [
                 item.to_dict() for item in self.semantic_obligations
             ],
+            "semantic_bindings": [
+                item.to_dict() for item in self.semantic_bindings
+            ],
+            "constraints": [
+                item.to_dict() for item in self.constraint_plans
+            ],
+            "behaviors": [
+                item.to_dict() for item in self.planned_behaviors
+            ],
             "behavior_obligations": [
                 item.to_dict() for item in self.behavior_obligations
             ],
+            "planned_event_symbols": [
+                item.to_dict() for item in self.planned_event_symbols
+            ],
+            "behavior_identity_reconciliations": list(
+                self.behavior_identity_reconciliations
+            ),
+            "constraint_identity_reconciliations": list(
+                self.constraint_identity_reconciliations
+            ),
             "issues": list(self.issues),
         }
 
@@ -149,6 +484,8 @@ class ModelGenerationPlan:
         *,
         requirements: Sequence[str] = (),
         source: str = "LLM_TYPED_JSON",
+        require_source_anchored_paths: bool = False,
+        ag_behavior_plan: BehaviorObligationPlan | None = None,
     ) -> "ModelGenerationPlan":
         raw_components = payload.get("components")
         raw_connections = payload.get("connections")
@@ -200,13 +537,30 @@ class ModelGenerationPlan:
             port_names = [item.name for item in ports]
             if len(set(port_names)) != len(port_names):
                 issues.append(f"{name} port names must be unique")
-            attributes: list[dict[str, str]] = []
+            attributes: list[AttributePlan] = []
             for attribute in raw.get("attributes") or ():
                 if isinstance(attribute, Mapping) and attribute.get("name"):
-                    attributes.append({
-                        "name": str(attribute["name"]),
-                        "unit": str(attribute.get("unit") or "1"),
-                    })
+                    planned_attribute = AttributePlan.from_dict(
+                        attribute,
+                        requirements=requirements,
+                    )
+                    if not _IDENTIFIER.fullmatch(planned_attribute.name):
+                        issues.append(
+                            f"{name} attribute name "
+                            f"{planned_attribute.name!r} is not a SysML identifier"
+                        )
+                        continue
+                    attributes.append(planned_attribute)
+            attribute_names = [item.name for item in attributes]
+            if len(set(attribute_names)) != len(attribute_names):
+                issues.append(f"{name} attribute names must be unique")
+            for member_name in sorted(
+                set(port_names) & set(attribute_names)
+            ):
+                issues.append(
+                    f"{name} direct member {member_name!r} cannot be both "
+                    "a port and an attribute"
+                )
             components.append(ComponentPlan(
                 name=name,
                 responsibility=responsibility,
@@ -293,6 +647,11 @@ class ModelGenerationPlan:
         allocated_requirements = {
             req_id for component in components for req_id in component.requirements
         }
+        allocated_component_requirements = {
+            (component.name, requirement)
+            for component in components
+            for requirement in component.requirements
+        }
         for req_id in sorted(declared_requirements - allocated_requirements):
             issues.append(f"{req_id} has no responsible component")
         if declared_requirements:
@@ -329,6 +688,13 @@ class ModelGenerationPlan:
             for item in (payload.get("behavior_obligations") or ())
             if isinstance(item, Mapping)
         )
+        behavior_identity_reconciliations = tuple(
+            str(item)
+            for item in (
+                payload.get("behavior_identity_reconciliations") or ()
+            )
+            if str(item).strip()
+        )
         archived_semantic_obligations = tuple(
             RequirementSemanticObligation.from_dict(dict(item))
             for item in (payload.get("semantic_obligations") or ())
@@ -338,24 +704,519 @@ class ModelGenerationPlan:
             compile_requirement_semantic_obligations(requirements)
             if requirements else archived_semantic_obligations
         )
-        structural_obligations, structural_issues = (
-            compile_structural_obligations(
-                components,
-                connections,
-                allocated_requirements=allocated_requirements,
+        raw_semantic_bindings = payload.get("semantic_bindings")
+        if not isinstance(raw_semantic_bindings, Sequence) or isinstance(
+            raw_semantic_bindings, (str, bytes)
+        ):
+            raw_semantic_bindings = ()
+            if semantic_obligations:
+                issues.append(
+                    "semantic_bindings must contain one typed binding for "
+                    "each semantic obligation"
+                )
+        semantic_bindings: list[SemanticBindingPlan] = []
+        obligations_by_id = {
+            item.obligation_id: item for item in semantic_obligations
+        }
+        seen_binding_ids: set[str] = set()
+        port_payloads: dict[str, tuple[str, str]] = {}
+        item_features: dict[
+            tuple[str, str], tuple[str, str]
+        ] = {}
+        for index, raw in enumerate(raw_semantic_bindings):
+            if not isinstance(raw, Mapping):
+                issues.append(
+                    f"semantic_bindings[{index}] must be an object"
+                )
+                continue
+            binding = SemanticBindingPlan.from_dict(raw)
+            semantic_bindings.append(binding)
+            prefix = f"semantic_bindings[{index}]"
+            obligation = obligations_by_id.get(binding.obligation_id)
+            if obligation is None:
+                issues.append(
+                    f"{prefix} references unknown obligation "
+                    f"{binding.obligation_id!r}"
+                )
+            elif binding.requirement_id != obligation.requirement_id:
+                issues.append(
+                    f"{prefix} requirement_id does not match "
+                    f"{binding.obligation_id}"
+                )
+            if binding.obligation_id in seen_binding_ids:
+                issues.append(
+                    f"duplicate semantic binding for "
+                    f"{binding.obligation_id}"
+                )
+            seen_binding_ids.add(binding.obligation_id)
+
+            identifier_fields = {
+                "source.component": binding.source_component,
+                "source.port": binding.source_port,
+                "target.component": binding.target_component,
+                "target.port": binding.target_port,
+                "payload.port_type": binding.port_type,
+                "payload.port_feature": binding.port_feature,
+                "payload.item_type": binding.item_type,
+                "payload.item_feature": binding.item_feature,
+                "target.runtime_attribute": binding.runtime_attribute,
+                "constraint.threshold_attribute": (
+                    binding.threshold_attribute
+                ),
+                "constraint.name": binding.constraint_name,
+            }
+            for field_name, field_value in identifier_fields.items():
+                if not _IDENTIFIER.fullmatch(field_value):
+                    issues.append(
+                        f"{prefix}.{field_name} is not a SysML identifier"
+                    )
+            if not _QUALIFIED_TYPE.fullmatch(binding.value_type):
+                issues.append(
+                    f"{prefix}.payload.value_type is not a SysML type"
+                )
+            expected_quantity_type = quantity_type_for_unit(binding.unit)
+            if expected_quantity_type is None:
+                issues.append(
+                    f"{prefix}.payload.unit {binding.unit!r} has no supported "
+                    "SysML v2 ISQ quantity-type mapping"
+                )
+            elif binding.value_type != expected_quantity_type:
+                issues.append(
+                    f"{prefix}.payload.value_type must be "
+                    f"{expected_quantity_type} for [{binding.unit}]"
+                )
+            source_port = port_lookup.get((
+                binding.source_component,
+                binding.source_port,
+            ))
+            target_port = port_lookup.get((
+                binding.target_component,
+                binding.target_port,
+            ))
+            if source_port is None or target_port is None:
+                issues.append(
+                    f"{prefix} references an undeclared semantic endpoint"
+                )
+            else:
+                if (
+                    source_port.port_type != binding.port_type
+                    or target_port.port_type != binding.port_type
+                ):
+                    issues.append(
+                        f"{prefix}.payload.port_type does not match both "
+                        "planned endpoints"
+                    )
+                if (
+                    binding.source_component,
+                    binding.source_port,
+                    binding.target_component,
+                    binding.target_port,
+                ) not in connection_keys:
+                    issues.append(
+                        f"{prefix} endpoints are not a planned connection"
+                    )
+            if binding.port_type in _GENERIC_PORT_TYPES:
+                issues.append(
+                    f"{prefix} must use a requirement-relevant dedicated "
+                    f"port type, not generic {binding.port_type}"
+                )
+            component_names = {item.name for item in components}
+            if binding.item_type in component_names:
+                issues.append(
+                    f"{prefix}.payload.item_type collides with planned "
+                    f"component {binding.item_type}"
+                )
+            if binding.port_type in component_names:
+                issues.append(
+                    f"{prefix}.payload.port_type collides with planned "
+                    f"component {binding.port_type}"
+                )
+            if binding.item_type == binding.port_type:
+                issues.append(
+                    f"{prefix} cannot use the same definition name for "
+                    "item_type and port_type"
+                )
+            if (
+                binding.target_component,
+                binding.requirement_id,
+            ) not in allocated_component_requirements:
+                issues.append(
+                    f"{prefix} target component is not allocated "
+                    f"{binding.requirement_id}"
+                )
+            if obligation is not None:
+                if binding.unit != obligation.unit:
+                    issues.append(
+                        f"{prefix}.payload.unit does not preserve "
+                        f"{obligation.unit}"
+                    )
+                if not semantic_binding_matches_subject(binding, obligation):
+                    issues.append(
+                        f"{prefix} feature/attribute names do not preserve "
+                        "the frozen subject"
+                    )
+            if binding.runtime_attribute == binding.threshold_attribute:
+                issues.append(
+                    f"{prefix} runtime and threshold attributes must differ"
+                )
+            payload_key = (
+                binding.item_type,
+                binding.port_feature,
             )
+            prior_payload = port_payloads.setdefault(
+                binding.port_type, payload_key
+            )
+            if prior_payload != payload_key:
+                issues.append(
+                    f"port type {binding.port_type} has conflicting "
+                    "semantic payload plans"
+                )
+            feature_key = (
+                binding.value_type,
+                binding.unit,
+            )
+            prior_feature = item_features.setdefault(
+                (binding.item_type, binding.item_feature),
+                feature_key,
+            )
+            if prior_feature != feature_key:
+                issues.append(
+                    f"item feature {binding.item_type}."
+                    f"{binding.item_feature} has conflicting type/unit plans"
+                )
+        for obligation_id in sorted(
+            set(obligations_by_id) - seen_binding_ids
+        ):
+            issues.append(
+                f"{obligation_id} has no typed semantic binding"
+            )
+
+        # Source-derived semantic bindings own the typed data chain.  The
+        # activated-constraint plan is the sole constraint writer. Reconcile
+        # both views by semantic identity rather than by LLM-chosen names.
+        explicit_constraints = [
+            ConstraintPlan.from_dict(item, requirements=requirements)
+            for item in (payload.get("constraints") or ())
+            if isinstance(item, Mapping)
+        ]
+        semantic_by_id = {
+            item.obligation_id: item for item in semantic_obligations
+        }
+        constraint_reconciliations: list[str] = []
+        derived_constraints: list[ConstraintPlan] = []
+        derived_attributes: dict[str, list[AttributePlan]] = {}
+        explicit_by_semantics: dict[
+            tuple[str, str, str, str, str], list[ConstraintPlan]
+        ] = {}
+        for constraint in explicit_constraints:
+            semantic_key = (
+                constraint.source_requirement_id or "",
+                constraint.owner,
+                constraint.lhs,
+                constraint.operator,
+                constraint.rhs,
+            )
+            explicit_by_semantics.setdefault(semantic_key, []).append(
+                constraint
+            )
+        for semantic_key, matches in explicit_by_semantics.items():
+            if len(matches) > 1:
+                issues.append(
+                    "duplicate semantic constraint identity "
+                    + "::".join(semantic_key)
+                    + ": "
+                    + ", ".join(item.constraint_id for item in matches)
+                )
+
+        reconciled_bindings: list[SemanticBindingPlan] = []
+        for binding in semantic_bindings:
+            obligation = semantic_by_id.get(binding.obligation_id)
+            if obligation is None:
+                reconciled_bindings.append(binding)
+                continue
+            derived_attributes.setdefault(
+                binding.target_component, []
+            ).extend([
+                AttributePlan(
+                    name=binding.runtime_attribute,
+                    value_type=binding.value_type,
+                    unit=binding.unit,
+                    role="RUNTIME_MEASUREMENT",
+                    input_binding=binding.source_path,
+                    provenance="FROZEN_REQUIREMENT",
+                    source_requirement_id=binding.requirement_id,
+                    source_digest=obligation.source_digest,
+                ),
+                AttributePlan(
+                    name=binding.threshold_attribute,
+                    value_type=binding.value_type,
+                    unit=binding.unit,
+                    role="FROZEN_THRESHOLD",
+                    initial_value=(
+                        f"{obligation.threshold:g} [{obligation.unit}]"
+                    ),
+                    provenance="FROZEN_REQUIREMENT",
+                    source_requirement_id=binding.requirement_id,
+                    source_digest=obligation.source_digest,
+                ),
+            ])
+            semantic_key = (
+                binding.requirement_id,
+                binding.target_component,
+                binding.runtime_attribute,
+                obligation.operator,
+                binding.threshold_attribute,
+            )
+            matches = explicit_by_semantics.get(semantic_key, [])
+            if len(matches) == 1:
+                canonical = matches[0]
+                if (
+                    obligation.activation_kind == "CONTEXTUAL"
+                    and canonical.activation_kind != "STATE_ACTIVE"
+                ):
+                    issues.append(
+                        f"{binding.obligation_id} preserves contextual clause "
+                        f"{obligation.activation_clause!r} but its canonical "
+                        "constraint is not STATE_ACTIVE"
+                    )
+                if binding.constraint_name != canonical.constraint_id:
+                    constraint_reconciliations.append(
+                        f"{binding.target_component}."
+                        f"{binding.constraint_name} -> "
+                        f"{canonical.constraint_id} "
+                        f"({binding.obligation_id})"
+                    )
+                    binding = replace(
+                        binding,
+                        constraint_name=canonical.constraint_id,
+                    )
+            elif not matches:
+                if obligation.activation_kind == "CONTEXTUAL":
+                    issues.append(
+                        f"{binding.obligation_id} contextual bound "
+                        f"{obligation.activation_clause!r} requires exactly "
+                        "one matching STATE_ACTIVE constraint"
+                    )
+                else:
+                    derived_constraints.append(ConstraintPlan(
+                        constraint_id=binding.constraint_name,
+                        owner=binding.target_component,
+                        lhs=binding.runtime_attribute,
+                        operator=obligation.operator,
+                        rhs=binding.threshold_attribute,
+                        activation_kind="ALWAYS",
+                        provenance="FROZEN_REQUIREMENT",
+                        verification_tier="PARAMETRIC_SWEEP",
+                        source_requirement_id=binding.requirement_id,
+                        source_digest=obligation.source_digest,
+                    ))
+            reconciled_bindings.append(binding)
+        semantic_bindings = reconciled_bindings
+        if derived_attributes:
+            enriched_components: list[ComponentPlan] = []
+            for component in components:
+                by_name = {
+                    item.name: item for item in component.attributes
+                }
+                for item in derived_attributes.get(component.name, ()):
+                    by_name[item.name] = item
+                enriched_components.append(replace(
+                    component,
+                    attributes=tuple(by_name.values()),
+                ))
+            components = enriched_components
+        constraint_plans = tuple([
+            *explicit_constraints,
+            *derived_constraints,
+        ])
+        issues.extend(validate_constraint_plan(
+            constraint_plans,
+            components,
+            requirements,
+        ))
+        raw_behaviors = payload.get("behaviors")
+        archived_schema = str(payload.get("schema_version") or "").strip()
+        legacy_behavior_schema = archived_schema in {
+            "1.0", "3.0", "5.0", "6.0", "7.0", "8.0",
+        }
+        if not isinstance(raw_behaviors, Sequence) or isinstance(
+            raw_behaviors, (str, bytes)
+        ):
+            raw_behaviors = ()
+            if any(
+                item.activation_kind == "STATE_ACTIVE"
+                for item in constraint_plans
+            ) and not legacy_behavior_schema:
+                issues.append(
+                    "behaviors must declare the typed state machine for "
+                    "every STATE_ACTIVE constraint"
+                )
+        planned_behaviors = tuple(
+            PlannedBehavior.from_dict(item, requirements=requirements)
+            for item in raw_behaviors
+            if isinstance(item, Mapping)
         )
+        issues.extend(validate_planned_behaviors(
+            planned_behaviors,
+            component_names={item.name for item in components},
+            component_port_names={
+                item.name: {port.name for port in item.ports}
+                for item in components
+            },
+            requirements=requirements,
+            state_active_constraints=tuple(
+                item for item in constraint_plans
+                if item.activation_kind == "STATE_ACTIVE"
+            ) if not legacy_behavior_schema else (),
+            require_executable_responses=not legacy_behavior_schema,
+        ))
+        ordinary_event_symbols = collect_planned_event_symbols(
+            planned_behaviors,
+            components=components,
+        )
+        issues.extend(validate_planned_event_symbols(
+            ordinary_event_symbols,
+            planned_behaviors,
+        ))
+        raw_realizations = payload.get("requirement_realizations")
+        if not isinstance(raw_realizations, Sequence) or isinstance(
+            raw_realizations, (str, bytes)
+        ):
+            raw_realizations = ()
+            if require_source_anchored_paths:
+                issues.append("requirement_realizations must be a list")
+        requirement_realizations = tuple(
+            RequirementRealizationPlan.from_dict(item)
+            for item in raw_realizations
+            if isinstance(item, Mapping)
+        )
+        if requirements and requirement_realizations:
+            requirement_source_by_id: dict[str, str] = {}
+            for requirement in requirements:
+                source_text = str(requirement or "").strip()
+                for req_id in _req_ids((source_text,)):
+                    requirement_source_by_id[req_id] = source_text
+            requirement_realizations = tuple(
+                replace(
+                    item,
+                    source_digest=hashlib.sha256(
+                        requirement_source_by_id[item.requirement_id].encode(
+                            "utf-8"
+                        )
+                    ).hexdigest(),
+                )
+                if item.requirement_id in requirement_source_by_id
+                else item
+                for item in requirement_realizations
+            )
+        if requirement_realizations or require_source_anchored_paths:
+            structural_obligations, structural_issues = (
+                compile_source_anchored_structural_obligations(
+                    requirement_realizations,
+                    components,
+                    connections,
+                    requirements=requirements,
+                    require_complete=require_source_anchored_paths,
+                    planned_behaviors=planned_behaviors,
+                    behavior_obligations=(
+                        ag_behavior_plan.obligations
+                        if ag_behavior_plan is not None
+                        else behavior_obligations
+                    ),
+                )
+            )
+        else:
+            # Compatibility for archived plans and test doubles created before
+            # schema 6.0. New provider calls must declare source anchors.
+            structural_obligations, structural_issues = (
+                compile_structural_obligations(
+                    components,
+                    connections,
+                    allocated_requirements=allocated_requirements,
+                )
+            )
+        realization_by_requirement = {
+            item.requirement_id: item
+            for item in requirement_realizations
+        }
+        for binding in semantic_bindings:
+            realization = realization_by_requirement.get(
+                binding.requirement_id
+            )
+            if realization is None:
+                continue
+            prefix = (
+                f"source-derived semantic realization "
+                f"{binding.requirement_id}"
+            )
+            if (
+                realization.realization_kind != "CAUSAL_PATH"
+                or not realization.connection_path
+            ):
+                issues.append(
+                    f"{prefix} must be a CAUSAL_PATH aligned with "
+                    f"{binding.obligation_id}"
+                )
+                continue
+            first = realization.connection_path[0]
+            last = realization.connection_path[-1]
+            actual_source = (
+                first.source_component,
+                first.source_port,
+            )
+            expected_source = (
+                binding.source_component,
+                binding.source_port,
+            )
+            if actual_source != expected_source:
+                issues.append(
+                    f"{prefix} must start at semantic binding source "
+                    f"{binding.source_component}.{binding.source_port}, "
+                    f"found {first.source_component}.{first.source_port}"
+                )
+            actual_target = (
+                last.target_component,
+                last.target_port,
+            )
+            expected_target = (
+                binding.target_component,
+                binding.target_port,
+            )
+            if actual_target != expected_target:
+                issues.append(
+                    f"{prefix} must end at semantic binding target "
+                    f"{binding.target_component}.{binding.target_port}, "
+                    f"found {last.target_component}.{last.target_port}"
+                )
         issues.extend(structural_issues)
         return cls(
             components=tuple(components),
             connections=tuple(connections),
+            requirement_realizations=requirement_realizations,
             structural_obligations=structural_obligations,
             semantic_obligations=semantic_obligations,
+            semantic_bindings=tuple(semantic_bindings),
+            constraint_plans=constraint_plans,
+            planned_behaviors=planned_behaviors,
             behavior_obligations=behavior_obligations,
+            behavior_identity_reconciliations=(
+                behavior_identity_reconciliations
+            ),
+            constraint_identity_reconciliations=tuple(
+                constraint_reconciliations
+            ),
             source=source,
             issues=tuple(dict.fromkeys(issues)),
             schema_version=(
-                "4.0"
+                archived_schema
+                if planned_behaviors and archived_schema == "8.0"
+                else "9.0"
+                if planned_behaviors
+                else "7.0"
+                if constraint_plans
+                else "6.0"
+                if requirement_realizations
+                else "5.0"
                 if semantic_obligations
                 else "3.0"
                 if structural_obligations
@@ -435,7 +1296,17 @@ class ModelGenerationPlan:
                 ),
                 "   Key attributes: " + (
                     ", ".join(
-                        f"{item['name']} [{item['unit']}]"
+                        f"{item.name} : {item.value_type} "
+                        f"[{item.unit}] role={item.role} "
+                        f"source={item.provenance}"
+                        + (
+                            f" initial={item.initial_value}"
+                            if item.initial_value else ""
+                        )
+                        + (
+                            f" binding={item.input_binding}"
+                            if item.input_binding else ""
+                        )
                         for item in component.attributes
                     ) or "(derive from allocated requirements)"
                 ),
@@ -454,15 +1325,23 @@ class ModelGenerationPlan:
         if self.structural_obligations:
             lines.append("")
             lines.append(
-                "FROZEN REQUIREMENT STRUCTURAL OBLIGATIONS "
+                "FROZEN SOURCE-ANCHORED CAUSAL OBLIGATIONS "
                 "(validation input; do not add unrelated paths):"
             )
             for obligation in self.structural_obligations:
                 path = " -> ".join(obligation.required_components)
+                behavior = (
+                    f"; behavior={obligation.behavior_kind} "
+                    f"{obligation.behavior_name}"
+                    if obligation.realization_kind == "LOCAL_BEHAVIOR"
+                    else ""
+                )
                 lines.append(
                     f"- {obligation.obligation_id} "
                     f"[{obligation.requirement_id}]: {path} "
-                    f"({obligation.entry_kind})"
+                    f"({obligation.entry_kind}); trigger="
+                    f"{obligation.trigger_concept!r}; effect="
+                    f"{obligation.effect_concept!r}{behavior}"
                 )
         if self.semantic_obligations:
             lines.append("")
@@ -475,8 +1354,9 @@ class ModelGenerationPlan:
                 "through a planned input port to the satisfying part.",
                 "- Bind the constrained runtime attribute to that port item "
                 "feature; a numeric literal placeholder is not a measurement.",
-                "- Emit an assert constraint that preserves the exact "
-                "operator, threshold, and unit shown below.",
+                "- Emit the canonical planned assert constraint at part scope "
+                "for ALWAYS, or inside the referenced state body for "
+                "STATE_ACTIVE; preserve the exact operator, threshold, and unit.",
                 "- Any avoidance/maintenance transition must activate before "
                 "the frozen boundary is violated.",
             ])
@@ -488,12 +1368,109 @@ class ModelGenerationPlan:
                     f"{obligation.operator} {obligation.threshold:g} "
                     f"[{obligation.unit}]"
                 )
+        if self.semantic_bindings:
+            lines.append("")
+            lines.append(
+                "FROZEN TYPED SEMANTIC BINDINGS "
+                "(emit exactly; deterministic closure will enforce them):"
+            )
+            for binding in self.semantic_bindings:
+                lines.extend([
+                    f"- {binding.obligation_id}: "
+                    f"{binding.source_component}.{binding.source_port} -> "
+                    f"{binding.target_component}.{binding.target_port}",
+                    f"  payload {binding.port_type}."
+                    f"{binding.port_feature} : {binding.item_type}; "
+                    f"{binding.item_type}.{binding.item_feature} : "
+                    f"{binding.value_type} [{binding.unit}]",
+                    f"  bind {binding.target_component}."
+                    f"{binding.runtime_attribute} = {binding.source_path}; "
+                    f"threshold {binding.threshold_attribute}; "
+                    f"constraint {binding.constraint_name}",
+                ])
+        if self.constraint_plans:
+            lines.append("")
+            lines.append(
+                "TYPED ACTIVATED CONSTRAINT PLAN "
+                "(emit each item once at its declared activation scope; "
+                "never invent another assert):"
+            )
+            for constraint in self.constraint_plans:
+                source = (
+                    f"; source={constraint.source_requirement_id}"
+                    if constraint.source_requirement_id else ""
+                )
+                lines.append(
+                    f"- {constraint.owner}.{constraint.constraint_id}: "
+                    f"{constraint.expression}; "
+                    f"activation={constraint.activation_kind}"
+                    + (
+                        f"({constraint.activation_ref})"
+                        if constraint.activation_ref else ""
+                    )
+                    + f"; provenance={constraint.provenance}; "
+                    f"verification={constraint.verification_tier}{source}"
+                )
+        if self.planned_behaviors:
+            lines.append("")
+            lines.append(
+                "TYPED BEHAVIOR IDENTITY PLAN "
+                "(compiler-owned SysML v2 member identities; emit exactly):"
+            )
+            for behavior in self.planned_behaviors:
+                lines.append(
+                    f"- owner={behavior.owner}; behavior="
+                    f"{behavior.behavior_id}; initial="
+                    f"{behavior.initial_state}; source="
+                    f"{behavior.source_requirement_id or behavior.provenance}"
+                )
+                for state in behavior.states:
+                    lines.append(
+                        f"  state {behavior.behavior_id}::"
+                        f"{state.state_id}; role={state.role}"
+                        + (
+                            f"; entry_action={state.entry_action}"
+                            if state.entry_action else ""
+                        )
+                        + (
+                            f"; do_action={state.do_action}"
+                            if state.do_action else ""
+                        )
+                    )
+                for transition in behavior.transitions:
+                    lines.append(
+                        f"  transition {transition.transition_id}: "
+                        f"{transition.source} -> {transition.target}; "
+                        f"{transition.trigger_kind} "
+                        f"{transition.trigger}"
+                    )
         if self.behavior_obligations:
             lines.append("")
             lines.append(
                 BehaviorObligationPlan(
                     self.behavior_obligations
                 ).render_for_prompt()
+            )
+        if self.planned_event_symbols:
+            lines.append("")
+            lines.append(
+                "PLANNED EVENT SYMBOLS "
+                "(package-level, compiler-owned, exact SysML v2 kind):"
+            )
+            lines.extend(
+                f"- {symbol.name}: item def"
+                for symbol in self.planned_event_symbols
+            )
+            lines.append(
+                "Transitions may accept these event item types. Do not "
+                "declare action/attribute/port/state definitions with these "
+                "names; executable entry/do responses use separate action "
+                "definitions."
+            )
+            lines.append(
+                "An ACCEPT transition must reference one of these exact item "
+                "classifier names. Never use an owner port name as an accept "
+                "target; ports carry structure, not event-type identity."
             )
         if self.issues:
             lines.append("Plan validation issues (must be resolved; do not hide them):")
@@ -548,12 +1525,118 @@ def attach_ag_behavior_obligations(
         issues.append(
             f"A/G behavior obligation plan is {behavior_plan.status}"
         )
+    reserved = {
+        (item["owner_def"], item["name"]): item
+        for item in reserved_behavior_identities(behavior_plan)
+    }
+    for behavior in plan.planned_behaviors:
+        identity = reserved.get((behavior.owner, behavior.behavior_id))
+        if identity is not None and identity["kind"] != "state def":
+            issues.append(
+                "ordinary planned behavior "
+                f"{behavior.owner}::{behavior.behavior_id} collides with "
+                "frozen A/G reserved identity "
+                f"(expected {identity['kind']})"
+            )
+    combined_event_symbols = collect_planned_event_symbols(
+        plan.planned_behaviors,
+        behavior_plan.obligations,
+        plan.components,
+    )
+    issues.extend(validate_planned_event_symbols(
+        combined_event_symbols,
+        plan.planned_behaviors,
+        behavior_plan.obligations,
+    ))
+
+    # A source-anchored LOCAL_BEHAVIOR and an A/G state-machine obligation for
+    # the same requirement and owner identify one model element, not two
+    # independently named behaviors.  The A/G plan is frozen before ordinary
+    # generation, so its stable id is the canonical identity.  Reconcile that
+    # notation deterministically and keep an explicit audit record.
+    reconciliations = list(plan.behavior_identity_reconciliations)
+    canonical_names: dict[tuple[str, str], str] = {}
+    for obligation in behavior_plan.obligations:
+        if obligation.realization_kind != "STATE_MACHINE":
+            continue
+        key = (
+            normalise_req_id(obligation.requirement_id),
+            obligation.owner_def,
+        )
+        prior = canonical_names.setdefault(
+            key, obligation.stable_behavior_id
+        )
+        if prior != obligation.stable_behavior_id:
+            issues.append(
+                f"ambiguous A/G behavior identity for {key[0]} "
+                f"at {key[1]}: {prior}, "
+                f"{obligation.stable_behavior_id}"
+            )
+
+    realization_names: dict[tuple[str, str], str] = {}
+    reconciled_realizations: list[RequirementRealizationPlan] = []
+    for realization in plan.requirement_realizations:
+        key = (
+            normalise_req_id(realization.requirement_id),
+            realization.owner_component,
+        )
+        canonical = canonical_names.get(key)
+        if (
+            realization.realization_kind == "LOCAL_BEHAVIOR"
+            and realization.behavior_kind == "STATE_DEF"
+            and canonical
+        ):
+            realization_names[key] = canonical
+            if realization.behavior_name != canonical:
+                reconciliations.append(
+                    f"{key[0]}::{key[1]}::{realization.behavior_name} -> "
+                    f"{canonical}"
+                )
+                realization = replace(
+                    realization,
+                    behavior_name=canonical,
+                )
+        reconciled_realizations.append(realization)
+
+    reconciled_structural: list[StructuralObligation] = []
+    for obligation in plan.structural_obligations:
+        key = (
+            normalise_req_id(obligation.requirement_id),
+            obligation.source_component,
+        )
+        canonical = realization_names.get(key)
+        if (
+            obligation.realization_kind == "LOCAL_BEHAVIOR"
+            and obligation.behavior_kind == "STATE_DEF"
+            and canonical
+        ):
+            obligation = replace(
+                obligation,
+                behavior_name=canonical,
+            )
+        reconciled_structural.append(obligation)
+
     return replace(
         plan,
+        requirement_realizations=tuple(reconciled_realizations),
+        structural_obligations=tuple(reconciled_structural),
         behavior_obligations=behavior_plan.obligations,
+        behavior_identity_reconciliations=tuple(dict.fromkeys(
+            reconciliations
+        )),
         issues=tuple(dict.fromkeys(issues)),
         schema_version=(
-            "4.0" if plan.semantic_obligations else "3.0"
+            plan.schema_version
+            if plan.planned_behaviors and plan.schema_version == "8.0"
+            else "9.0"
+            if plan.planned_behaviors
+            else "7.0"
+            if plan.constraint_plans
+            else "6.0"
+            if plan.requirement_realizations
+            else "5.0"
+            if plan.semantic_obligations
+            else "3.0"
         ),
     )
 
@@ -577,12 +1660,33 @@ def apply_generation_plan(
         validate_port_additions,
     )
 
-    directory = build_port_directory(model_text)
+    semantic_text, semantic_binding_conformance = (
+        materialize_semantic_bindings(
+            model_text,
+            plan.semantic_bindings,
+            plan.semantic_obligations,
+        )
+    )
+    semantic_text, attribute_conformance = materialize_planned_attributes(
+        semantic_text,
+        plan.components,
+    )
+    directory = build_port_directory(semantic_text)
     instances_by_type: dict[str, list[str]] = {}
     for instance, component_type in directory.instance_type.items():
         instances_by_type.setdefault(component_type, []).append(instance)
 
     issues = list(plan.issues)
+    if semantic_binding_conformance["status"] == "FAIL":
+        issues.extend(
+            "semantic binding: " + item
+            for item in semantic_binding_conformance["issues"]
+        )
+    if attribute_conformance["status"] == "FAIL":
+        issues.extend(
+            "planned attribute: " + item
+            for item in attribute_conformance["missing_attributes"]
+        )
     resolved_usages: dict[str, str | None] = {}
     candidate_lines: list[str] = []
     expected_keys: list[tuple[str, str, str, str]] = []
@@ -622,10 +1726,10 @@ def apply_generation_plan(
     port_validation = validate_port_additions(
         planned_port_additions,
         directory,
-        collect_port_defs(model_text),
+        collect_port_defs(semantic_text),
     )
     port_merge = merge_port_additions(
-        model_text,
+        semantic_text,
         port_validation.accepted,
     )
     issues.extend(
@@ -656,11 +1760,97 @@ def apply_generation_plan(
 
     validation = validate_connects(candidate_lines, directory, existing)
     merged = merge_connects(working_text, validation.accepted)
-    final_directory = build_port_directory(merged.merged_text)
-    package_match = re.search(r"\bpackage\s+([A-Za-z_]\w*)\s*\{", model_text)
+    behavior_text, planned_behavior_conformance = (
+        materialize_owned_planned_behaviors(
+            merged.merged_text,
+            plan.planned_behaviors,
+            event_symbols=plan.planned_event_symbols,
+        )
+        if plan.planned_behaviors
+        else (
+            merged.merged_text,
+            {
+                "artifact_role": "OWNED_PLANNED_BEHAVIOR_CONFORMANCE",
+                "status": "NOT_APPLICABLE",
+                "checked": [],
+                "issues": [],
+                "materialized": [],
+            },
+        )
+    )
+    if planned_behavior_conformance["status"] == "FAIL":
+        issues.extend(
+            "planned behavior: " + item
+            for item in planned_behavior_conformance["issues"]
+        )
+    constraint_text, constraint_conformance = materialize_planned_constraints(
+        behavior_text,
+        plan.constraint_plans,
+    )
+    if constraint_conformance["status"] != "PASS":
+        issues.extend(
+            "activated constraint: " + item
+            for item in (
+                constraint_conformance["missing_constraints"]
+                + constraint_conformance["activation_issues"]
+            )
+        )
+    if plan.behavior_obligations:
+        final_text, ag_behavior_conformance = (
+            materialize_owned_behavior_obligations(
+                constraint_text,
+                BehaviorObligationPlan(plan.behavior_obligations),
+                event_symbols=plan.planned_event_symbols,
+            )
+        )
+    else:
+        final_text = constraint_text
+        ag_behavior_conformance = {
+            "artifact_role": "A_G_OWNED_BEHAVIOR_MATERIALIZATION",
+            "status": "NOT_APPLICABLE",
+            "issues": [],
+            "checked": [],
+            "materialized": [],
+            "replaced_inconsistent": [],
+            "removed_kind_conflicts": [],
+            "reserved_identity_conformance": {
+                "artifact_role": "A_G_RESERVED_IDENTITY_CONFORMANCE",
+                "status": "NOT_APPLICABLE",
+                "checked": [],
+                "issues": [],
+            },
+        }
+    if ag_behavior_conformance["status"] == "FAIL":
+        issues.extend(
+            "A/G reserved behavior: " + item
+            for item in ag_behavior_conformance["issues"]
+        )
+    final_text, event_symbol_conformance = (
+        materialize_planned_event_symbols(
+            final_text,
+            plan.planned_event_symbols,
+        )
+    )
+    if event_symbol_conformance["status"] == "FAIL":
+        issues.extend(
+            "planned event symbol: " + item
+            for item in event_symbol_conformance["issues"]
+        )
+    final_text, standard_import_conformance = (
+        materialize_standard_library_imports(final_text)
+    )
+    if standard_import_conformance["status"] == "FAIL":
+        issues.extend(
+            "standard library import: " + item
+            for item in standard_import_conformance["issues"]
+        )
+    final_directory = build_port_directory(final_text)
+    package_match = re.search(
+        r"\bpackage\s+([A-Za-z_]\w*)\s*\{", semantic_text
+    )
     root_package = package_match.group(1) if package_match else None
     scoped_graph = extract_behavioral_graph(
-        merged.merged_text,
+        final_text,
         root_package=root_package,
     )
     scoped_instances = set(scoped_graph.parts)
@@ -673,7 +1863,7 @@ def apply_generation_plan(
     }
     final_connections = {
         item.key()
-        for item in parse_connects(merged.merged_text)
+        for item in parse_connects(final_text)
         if (
             item.src_inst in scoped_instances
             and item.tgt_inst in scoped_instances
@@ -800,9 +1990,31 @@ def apply_generation_plan(
         f"external boundary violation: {item}"
         for item in internalized_external_ports
     )
+    definition_contract = _definition_contract_report(
+        final_text,
+        plan,
+    )
+    issues.extend(
+        f"planned definition missing: {item}"
+        for item in definition_contract["missing_definitions"]
+    )
+    issues.extend(
+        f"definition kind conflict: {item}"
+        for item in definition_contract["definition_kind_conflicts"]
+    )
+    issues.extend(
+        f"unplanned part definition: {item}"
+        for item in definition_contract["unplanned_part_definitions"]
+    )
     report = {
-        "schema_version": "2.0",
+        "schema_version": "4.0",
         "artifact_role": "GENERATION_PLAN_CONFORMANCE",
+        "input_model_digest": hashlib.sha256(
+            str(model_text or "").encode("utf-8")
+        ).hexdigest(),
+        "output_model_digest": hashlib.sha256(
+            final_text.encode("utf-8")
+        ).hexdigest(),
         "status": (
             "PASS"
             if plan.status == "PASS" and not issues and not missing
@@ -815,6 +2027,22 @@ def apply_generation_plan(
         "deterministically_added_ports": list(
             port_merge.added_descriptions
         ),
+        "semantic_binding_conformance": (
+            semantic_binding_conformance
+        ),
+        "planned_attribute_conformance": attribute_conformance,
+        "planned_behavior_conformance": planned_behavior_conformance,
+        "activated_constraint_conformance": constraint_conformance,
+        "ag_behavior_conformance": ag_behavior_conformance,
+        "ag_reserved_identity_conformance": (
+            ag_behavior_conformance[
+                "reserved_identity_conformance"
+            ]
+        ),
+        "planned_event_symbol_conformance": event_symbol_conformance,
+        "standard_library_import_conformance": (
+            standard_import_conformance
+        ),
         "missing_connections": missing,
         "unplanned_connections": unplanned_connections,
         "missing_components": missing_components,
@@ -823,6 +2051,7 @@ def apply_generation_plan(
         "missing_ports": missing_ports,
         "unplanned_ports": unplanned_ports,
         "internalized_external_ports": internalized_external_ports,
+        "definition_contract": definition_contract,
         "issues": list(dict.fromkeys(issues)),
     }
-    return merged.merged_text, report
+    return final_text, report

@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Tuple
+from typing import Any, Iterable, Mapping, Sequence, Tuple
 
 from ..utils.sysml_text_utils import find_block_end
 
 from .ag_emitter import AGChainSpec, AGComponentSpec
+from .event_symbols import (
+    PlannedEventSymbol,
+    collect_planned_event_symbols,
+    materialize_planned_event_symbols,
+)
 
 
 STATE_MACHINE = "STATE_MACHINE"
@@ -179,6 +184,11 @@ class BehaviorObligationPlan:
                     f"  assert constraint {item.stable_behavior_id} "
                     f"{{ {item.invariant_expression} }}"
                 )
+            lines.append(
+                "  RESERVED IDENTITY: ordinary generation must not declare "
+                "this owner-qualified name with a different element kind; "
+                "the frozen A/G topology is authoritative."
+            )
             lines.append(
                 "  establishes: " + ", ".join(item.guarantees)
             )
@@ -420,6 +430,176 @@ def _definition_block(
     return text[match.start():closing + 1]
 
 
+_RESERVED_BEHAVIOR_KINDS = (
+    "state def",
+    "assert constraint",
+    "action def",
+    "constraint def",
+)
+
+
+def reserved_behavior_identities(
+    plan: BehaviorObligationPlan,
+) -> tuple[dict[str, str], ...]:
+    """Return the owner-qualified identities exclusively owned by A/G."""
+    return tuple({
+        "owner_def": obligation.owner_def,
+        "name": obligation.stable_behavior_id,
+        "kind": (
+            "assert constraint"
+            if obligation.realization_kind == INVARIANT
+            else "state def"
+        ),
+        "contract_id": obligation.contract_id,
+    } for obligation in plan.obligations)
+
+
+def _definition_blocks(
+    text: str,
+    kind: str,
+    stable_id: str,
+) -> list[tuple[int, int]]:
+    kind_pattern = r"\s+".join(
+        re.escape(token) for token in kind.split()
+    )
+    pattern = re.compile(
+        rf"\b{kind_pattern}\s+{re.escape(stable_id)}\s*\{{"
+    )
+    spans: list[tuple[int, int]] = []
+    for match in pattern.finditer(text):
+        opening = text.find("{", match.start())
+        closing = find_block_end(text, opening)
+        if opening != -1 and closing != -1:
+            spans.append((match.start(), closing + 1))
+    return spans
+
+
+def _owner_span(text: str, owner_def: str) -> tuple[int, int] | None:
+    match = re.search(
+        rf"\bpart\s+def\s+{re.escape(owner_def)}\s*\{{",
+        text,
+    )
+    if match is None:
+        return None
+    opening = text.find("{", match.start())
+    closing = find_block_end(text, opening)
+    if opening == -1 or closing == -1:
+        return None
+    return opening + 1, closing
+
+
+def canonicalize_reserved_identity_conflicts(
+    model_text: str,
+    plan: BehaviorObligationPlan,
+    *,
+    owned: bool,
+) -> tuple[str, dict[str, Any]]:
+    """Remove wrong-kind declarations for compiler-owned A/G identities.
+
+    ``owned=False`` applies to the Step-4 behavior fragment. ``owned=True``
+    limits each operation to the exact owning ``part def`` in the assembled
+    model, preserving legal same-name declarations in unrelated namespaces.
+    """
+    text = str(model_text)
+    removed: list[dict[str, str]] = []
+    for identity in reserved_behavior_identities(plan):
+        scope = (
+            _owner_span(text, identity["owner_def"])
+            if owned else (0, len(text))
+        )
+        if scope is None:
+            continue
+        scope_start, scope_end = scope
+        scoped_text = text[scope_start:scope_end]
+        spans: list[tuple[int, int, str]] = []
+        for kind in _RESERVED_BEHAVIOR_KINDS:
+            if kind == identity["kind"]:
+                continue
+            spans.extend(
+                (scope_start + start, scope_start + end, kind)
+                for start, end in _definition_blocks(
+                    scoped_text, kind, identity["name"]
+                )
+            )
+        for start, end, kind in sorted(spans, reverse=True):
+            text = text[:start] + text[end:]
+            removed.append({
+                "owner_def": identity["owner_def"],
+                "name": identity["name"],
+                "removed_kind": kind,
+                "expected_kind": identity["kind"],
+            })
+    return text, {
+        "artifact_role": "A_G_RESERVED_IDENTITY_CANONICALIZATION",
+        "status": "PASS",
+        "removed_conflicts": list(reversed(removed)),
+    }
+
+
+def check_reserved_identity_conformance(
+    model_text: str,
+    plan: BehaviorObligationPlan,
+    *,
+    owned: bool,
+) -> dict[str, Any]:
+    """Require exactly one correct-kind declaration and no wrong-kind alias."""
+    checked: list[dict[str, Any]] = []
+    issues: list[str] = []
+    text = str(model_text)
+    for identity in reserved_behavior_identities(plan):
+        scope = (
+            _owner_span(text, identity["owner_def"])
+            if owned else (0, len(text))
+        )
+        if scope is None:
+            item_issues = [
+                f"missing owner part def {identity['owner_def']}"
+            ]
+        else:
+            scope_start, scope_end = scope
+            scoped_text = text[scope_start:scope_end]
+            counts = {
+                kind: len(_definition_blocks(
+                    scoped_text, kind, identity["name"]
+                ))
+                for kind in _RESERVED_BEHAVIOR_KINDS
+            }
+            item_issues = []
+            expected_count = counts[identity["kind"]]
+            if expected_count != 1:
+                item_issues.append(
+                    f"expected exactly one {identity['kind']}, found "
+                    f"{expected_count}"
+                )
+            wrong = {
+                kind: count for kind, count in counts.items()
+                if kind != identity["kind"] and count
+            }
+            if wrong:
+                item_issues.append(
+                    "wrong-kind declarations: "
+                    + ", ".join(
+                        f"{kind}={count}"
+                        for kind, count in sorted(wrong.items())
+                    )
+                )
+        checked.append({
+            **identity,
+            "status": "PASS" if not item_issues else "FAIL",
+            "issues": item_issues,
+        })
+        issues.extend(
+            f"{identity['owner_def']}::{identity['name']}: {issue}"
+            for issue in item_issues
+        )
+    return {
+        "artifact_role": "A_G_RESERVED_IDENTITY_CONFORMANCE",
+        "status": "PASS" if plan.status == "PASS" and not issues else "FAIL",
+        "checked": checked,
+        "issues": issues,
+    }
+
+
 def _transition_is_present(
     block: str, transition: TransitionObligation
 ) -> bool:
@@ -598,6 +778,8 @@ def _emit_obligation(obligation: BehaviorObligation) -> str:
 def materialize_behavior_obligations(
     fragment: str,
     plan: BehaviorObligationPlan,
+    *,
+    event_symbols: Sequence[PlannedEventSymbol] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Materialize the frozen obligations, then enforce a deterministic gate.
 
@@ -605,28 +787,19 @@ def materialize_behavior_obligations(
     this plan are compiler-owned, however: an inconsistent same-name definition
     is replaced in place instead of accepted or duplicated.
     """
-    text = str(fragment).rstrip()
+    text, canonicalization = canonicalize_reserved_identity_conflicts(
+        str(fragment).rstrip(), plan, owned=False
+    )
     materialized: list[str] = []
     replaced: list[str] = []
-    trigger_types = sorted({
-        transition.trigger
-        for obligation in plan.obligations
-        for transition in obligation.transitions
-        if transition.trigger and transition.trigger != "continuous"
-    })
-    missing_trigger_defs = [
-        trigger for trigger in trigger_types
-        if re.search(
-            rf"\b(?:action|attribute|item)\s+def\s+"
-            rf"{re.escape(trigger)}\b",
-            text,
-        ) is None
-    ]
-    if missing_trigger_defs:
-        prefix = "\n".join(
-            f"action def {trigger} {{}}" for trigger in missing_trigger_defs
+    symbols = tuple(
+        event_symbols
+        if event_symbols is not None
+        else collect_planned_event_symbols(
+            behavior_obligations=plan.obligations
         )
-        text = (prefix + "\n\n" + text).rstrip()
+    )
+    text, event_report = materialize_planned_event_symbols(text, symbols)
     for obligation in plan.obligations:
         kind = (
             "assert constraint"
@@ -648,7 +821,131 @@ def materialize_behavior_obligations(
             text = text.replace(existing, replacement, 1)
             replaced.append(obligation.stable_behavior_id)
     report = check_behavior_obligation_conformance(text, plan)
+    reserved_report = check_reserved_identity_conformance(
+        text, plan, owned=False
+    )
+    if reserved_report["status"] != "PASS":
+        report["status"] = "FAIL"
+        report["issues"].extend(reserved_report["issues"])
     report["materialized"] = materialized
     report["replaced_inconsistent"] = replaced
-    report["materialized_trigger_types"] = missing_trigger_defs
+    report["materialized_trigger_types"] = event_report["materialized"]
+    report["event_symbol_conformance"] = event_report
+    if event_report["status"] == "FAIL":
+        report["status"] = "FAIL"
+        report["issues"].extend(event_report["issues"])
+    report["reserved_identity_conformance"] = reserved_report
+    report["removed_kind_conflicts"] = canonicalization[
+        "removed_conflicts"
+    ]
     return text.strip() + "\n", report
+
+
+def materialize_owned_behavior_obligations(
+    model_text: str,
+    plan: BehaviorObligationPlan,
+    *,
+    event_symbols: Sequence[PlannedEventSymbol] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Compile frozen A/G realizations into their exact owner scopes."""
+    text, canonicalization = canonicalize_reserved_identity_conflicts(
+        model_text, plan, owned=True
+    )
+    materialized: list[str] = []
+    replaced: list[str] = []
+    symbols = tuple(
+        event_symbols
+        if event_symbols is not None
+        else collect_planned_event_symbols(
+            behavior_obligations=plan.obligations
+        )
+    )
+    text, event_report = materialize_planned_event_symbols(text, symbols)
+    for obligation in plan.obligations:
+        owner_span = _owner_span(text, obligation.owner_def)
+        if owner_span is None:
+            continue
+        owner_start, owner_end = owner_span
+        owner_text = text[owner_start:owner_end]
+        kind = (
+            "assert constraint"
+            if obligation.realization_kind == INVARIANT
+            else "state def"
+        )
+        blocks = _definition_blocks(
+            owner_text, kind, obligation.stable_behavior_id
+        )
+        emitted = _emit_obligation(obligation)
+        if not blocks:
+            indented = "\n".join(
+                "    " + line if line.strip() else line
+                for line in emitted.splitlines()
+                if not line.startswith("// OWNER:")
+            )
+            text = (
+                text[:owner_end]
+                + "\n" + indented + "\n"
+                + text[owner_end:]
+            )
+            materialized.append(
+                f"{obligation.owner_def}::{obligation.stable_behavior_id}"
+            )
+            continue
+        start, end = blocks[0]
+        existing = owner_text[start:end]
+        conformance = check_behavior_obligation_conformance(
+            existing, BehaviorObligationPlan((obligation,))
+        )
+        if conformance["status"] != "PASS" or len(blocks) != 1:
+            if len(blocks) > 1:
+                for duplicate_start, duplicate_end in reversed(blocks[1:]):
+                    absolute_duplicate_start = owner_start + duplicate_start
+                    absolute_duplicate_end = owner_start + duplicate_end
+                    text = (
+                        text[:absolute_duplicate_start]
+                        + text[absolute_duplicate_end:]
+                    )
+            absolute_start = owner_start + start
+            absolute_end = owner_start + end
+            replacement = "\n".join(
+                "    " + line if line.strip() else line
+                for line in emitted.splitlines()
+                if not line.startswith("// OWNER:")
+            )
+            text = (
+                text[:absolute_start]
+                + replacement
+                + text[absolute_end:]
+            )
+            replaced.append(
+                f"{obligation.owner_def}::{obligation.stable_behavior_id}"
+            )
+    semantic_report = check_owned_behavior_obligation_conformance(text, plan)
+    reserved_report = check_reserved_identity_conformance(
+        text, plan, owned=True
+    )
+    issues = list(dict.fromkeys(
+        list(semantic_report["issues"])
+        + list(reserved_report["issues"])
+        + list(event_report["issues"])
+    ))
+    return text, {
+        "artifact_role": "A_G_OWNED_BEHAVIOR_MATERIALIZATION",
+        "status": (
+            "PASS"
+            if semantic_report["status"] == "PASS"
+            and reserved_report["status"] == "PASS"
+            and event_report["status"] in {"PASS", "NOT_APPLICABLE"}
+            else "FAIL"
+        ),
+        "issues": issues,
+        "checked": semantic_report["checked"],
+        "materialized": materialized,
+        "replaced_inconsistent": replaced,
+        "removed_kind_conflicts": canonicalization[
+            "removed_conflicts"
+        ],
+        "materialized_trigger_types": event_report["materialized"],
+        "event_symbol_conformance": event_report,
+        "reserved_identity_conformance": reserved_report,
+    }

@@ -136,6 +136,107 @@ def test_one_plan_for_const_rhs():
     ok("swept_a", plans[0].swept_var == "a")
 
 
+def test_unresolved_engineering_threshold_has_no_driver_plan():
+    guard = GuardCondition(
+        kind="comparison",
+        operator="<=",
+        attribute="currentSeparation",
+        lhs=VarRef("currentSeparation"),
+        rhs=BinOp("+", VarRef("minimumSeparation"), Const(5.0)),
+    )
+    sm = _sm_with_guard(guard, initial_values={})
+
+    assert _build_driver_plans(sm) == []
+
+
+def test_unresolved_engineering_threshold_fails_closed_in_simulation():
+    if not _SYSIDE_OK:
+        return
+    sysml = """\
+package T {
+    part def Mon {
+        attribute currentSeparation : Real = 20 [m];
+        attribute minimumSeparation : Real;
+        action def onF { }
+        state def Beh {
+            state Nominal;
+            state Fault { entry action ea : onF; }
+            transition initial then Nominal;
+            transition f first Nominal
+                if currentSeparation <= minimumSeparation + 5.0
+                then Fault;
+        }
+    }
+}
+"""
+
+    simulation = run_behavioral_simulation(sysml, model_name="T")
+    scenario = next(
+        item for item in simulation.scenario_results
+        if item.name == "Beh"
+    )
+
+    assert not scenario.passed
+    assert scenario.violations == [
+        "Could not resolve guard threshold from declared numeric initial "
+        "values; simulation did not assume 0.0 for: minimumSeparation"
+    ]
+
+
+def test_quantity_default_resolves_arithmetic_guard_threshold():
+    if not _SYSIDE_OK:
+        return
+    sysml = """\
+package T {
+    item def ObstacleData {
+        attribute separation : Real = 0.0 [m];
+    }
+    port def ObstaclePort {
+        item payload : ObstacleData;
+    }
+    part def Mon {
+        in port obstacleData : ObstaclePort;
+        attribute currentSeparation : Real =
+            obstacleData.payload.separation;
+        attribute minimumSeparation : Real = 5 [m];
+        action def onF { }
+        state def Beh {
+            state Nominal;
+            state Fault { entry action ea : onF; }
+            transition initial then Nominal;
+            transition f first Nominal
+                if currentSeparation <= minimumSeparation + 5.0
+                then Fault;
+        }
+    }
+}
+"""
+    machines = extract_state_machines(sysml)
+    assert len(machines) == 1
+    machine = machines[0]
+    assert machine.initial_values["minimumSeparation"] == 5.0
+    assert "currentSeparation" not in machine.initial_values
+
+    plans = _build_driver_plans(machine)
+    assert len(plans) == 1
+    assert machine.fault_transitions()[0].guards[0].threshold == 10.0
+    assert all(
+        step["minimumSeparation"] == 5.0
+        for step in plans[0].sequence
+    )
+
+    simulation = run_behavioral_simulation(sysml, model_name="T")
+    scenario = next(
+        item for item in simulation.scenario_results
+        if item.name == "Beh"
+    )
+    assert scenario.passed
+    assert any(
+        "threshold: <= 10.0" in line
+        for line in scenario.timeline
+    )
+
+
 # ---------------------------------------------------------------------------
 # T4 — bool / compound back-compat
 # ---------------------------------------------------------------------------
@@ -150,6 +251,54 @@ def test_bool_compat():
     # _build_test_sequence shim still returns the first sequence
     seq = _build_test_sequence(sm)
     ok("shim_returns_seq", len(seq) == 20, f"len={len(seq)}")
+
+
+def test_bool_false_driver_crosses_from_true_to_false():
+    guard = GuardCondition(kind="bool_false", attribute="systemSafe")
+    sm = _sm_with_guard(guard, initial_values={"systemSafe": True})
+
+    plans = _build_driver_plans(sm)
+
+    assert len(plans) == 1
+    assert plans[0].name == "flip_bool_false"
+    assert plans[0].sequence[0] == {"systemSafe": True}
+    assert plans[0].sequence[-1] == {"systemSafe": False}
+
+
+def test_mixed_comparison_and_negated_boolean_guard_executes():
+    if not _SYSIDE_OK:
+        return
+    sysml = """\
+package T {
+    part def PayloadManager {
+        attribute waypointDistance : Real = 10.0;
+        attribute abortActive : Boolean = false;
+        action def releasePayload {}
+        state def ReleaseMachine {
+            state locked;
+            state released {
+                entry action release : releasePayload;
+            }
+            transition initial then locked;
+            transition release first locked
+                if waypointDistance <= 1.0 and not abortActive
+                then released;
+        }
+    }
+}
+"""
+
+    simulation = run_behavioral_simulation(sysml, model_name="T")
+    scenario = next(
+        item for item in simulation.scenario_results
+        if item.name == "ReleaseMachine"
+    )
+
+    assert scenario.passed
+    assert any(
+        "abortActive=False" in line
+        for line in scenario.timeline
+    ) or scenario.fired_actions
 
 
 # ---------------------------------------------------------------------------

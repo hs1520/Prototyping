@@ -9,6 +9,7 @@ from src.prototyping.ag_behavior_plan import (
     check_owned_behavior_obligation_conformance,
     compile_behavior_obligation_plan,
     materialize_behavior_obligations,
+    materialize_owned_behavior_obligations,
 )
 from src.prototyping.ag_chains import (
     REQ_SAFE_004_CHAIN,
@@ -181,6 +182,53 @@ def test_step4_replaces_an_incorrect_exact_definition_without_a_duplicate():
         f"state def {obligation.stable_behavior_id}"
     ) == 1
     assert "wrongInitial" not in materialized
+
+
+def test_step4_removes_wrong_kind_collision_for_reserved_invariant_identity():
+    original = compile_behavior_obligation_plan((REQ_SAFE_005_CHAIN,))
+    invariant = next(
+        item for item in original.obligations
+        if item.realization_kind == INVARIANT
+    )
+    plan = BehaviorObligationPlan((invariant,))
+    fragment = (
+        f"state def {invariant.stable_behavior_id} {{ state idle; }}"
+    )
+
+    materialized, report = materialize_behavior_obligations(fragment, plan)
+
+    assert report["status"] == "PASS", report
+    assert f"state def {invariant.stable_behavior_id}" not in materialized
+    assert materialized.count(
+        f"assert constraint {invariant.stable_behavior_id}"
+    ) == 1
+    assert report["removed_kind_conflicts"][0]["removed_kind"] == "state def"
+
+
+def test_owned_materializer_enforces_one_owner_qualified_reserved_kind():
+    original = compile_behavior_obligation_plan((REQ_SAFE_005_CHAIN,))
+    invariant = next(
+        item for item in original.obligations
+        if item.realization_kind == INVARIANT
+    )
+    plan = BehaviorObligationPlan((invariant,))
+    assembled = f"""package P {{
+    part def {invariant.owner_def} {{
+        state def {invariant.stable_behavior_id} {{ state idle; }}
+        assert constraint {invariant.stable_behavior_id} {{ false }}
+    }}
+}}"""
+
+    compiled, report = materialize_owned_behavior_obligations(
+        assembled, plan
+    )
+
+    assert report["status"] == "PASS", report
+    assert f"state def {invariant.stable_behavior_id}" not in compiled
+    assert compiled.count(
+        f"assert constraint {invariant.stable_behavior_id}"
+    ) == 1
+    assert invariant.invariant_expression in compiled
 
 
 def test_assembled_gate_requires_realization_inside_the_exact_owner():

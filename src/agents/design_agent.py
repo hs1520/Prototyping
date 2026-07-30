@@ -8,6 +8,7 @@ from requirements using Chain of Thought prompting and RAG.
 from __future__ import annotations
 
 import dataclasses
+import json
 import re
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -45,6 +46,19 @@ class StructuralGenerationError(RuntimeError):
         self.diagnostics = diagnostics
         self.generation_metadata = generation_metadata
         self.parser_metadata = parser_metadata
+
+
+class TypedModelPlanError(RuntimeError):
+    """Step 1 exhausted its bounded typed-plan attempts."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        plan_attempts: List[Dict[str, Any]],
+    ) -> None:
+        super().__init__(message)
+        self.plan_attempts = [dict(item) for item in plan_attempts]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -216,7 +230,7 @@ Key constructs (same as generation):
   state def <Name> {
       state nominal;
       state fault { entry action stop : emergencyStop; }
-      transition initial then nominal;
+      entry; then nominal;
       transition <name>Fault first nominal if <condition> then fault;
   }
 
@@ -289,19 +303,23 @@ STATE DEF NAMING — every state inside every state def must have a globally uni
 
 Requirement category → mandatory SysML construct:
   FUNC  → part def + action def (the functional behavior)
-  PERF  → attribute with numeric value and SI unit (the measurable bound)
+  PERF  → a typed attribute only when its value/unit are grounded in the
+          frozen requirement or recorded explicitly as a design decision
   SAFE  → state def with explicit fault-entry transition + emergency action def;
           satisfy link MUST target the dedicated safety/monitoring/sensor part
           (e.g., SafetyMonitor, FaultManager, SensorSuite, HealthMonitor).
           Do NOT put SAFE satisfy links on a generic structural container such
           as Airframe, Chassis, MainUnit, or Body — those are for CONS/FUNC.
   INTF  → port def with direction + connect usage linking two components
-  CONS  → doc annotation or attribute constraint capturing the imposed limit
+  CONS  → a source-grounded plan constraint or a doc annotation; never invent
+          a numeric limit
 
 Every part def MUST have:
   • ≥ 1 port with direction (in / out / inout)
-  • ≥ 1 attribute with numeric value and unit
   • ≥ 1 satisfy link:  satisfy requirement <REQ_ID>;   (REQ_ID uses underscores)
+
+Numeric attributes and `assert constraint` usages are plan-owned. A part with
+no grounded numeric property is valid; do not fabricate one for completeness.
 
 STANDARD SAFETY ATTRIBUTE NAMES — use these EXACT names when the concept applies.
 Downstream SITL parameter mapping looks them up by name; non-standard names
@@ -334,10 +352,15 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         self,
         llm: LLMInterface,
         rag_retriever: Optional[RAGRetriever] = None,
+        *,
+        allow_legacy_architecture_plan: bool = False,
     ):
         super().__init__("DesignAgent", llm, rag_retriever)
         self.cot = ChainOfThoughtPrompter(llm)
         self.cot.system_prompt = self.SYSTEM_PROMPT
+        self.allow_legacy_architecture_plan = bool(
+            allow_legacy_architecture_plan
+        )
 
     def _run_refinement(
         self,
@@ -501,6 +524,12 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 ag_behavior_obligation_plan=task.get(
                     "ag_behavior_obligation_plan"
                 ),
+                allow_legacy_architecture_plan=bool(
+                    task.get(
+                        "allow_legacy_architecture_plan",
+                        self.allow_legacy_architecture_plan,
+                    )
+                ),
             )
 
         if not cot_result.extracted_sysml:
@@ -656,6 +685,11 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         for key in (
             "whole_model_generation_plan",
             "generation_plan_conformance",
+            "plan_application_history",
+            "step1_plan_attempts",
+            "step1_plan_retries",
+            "step1_format_retries",
+            "step1_semantic_retries",
         ):
             if generation_metadata.get(key) is not None:
                 model.metadata[key] = generation_metadata[key]
@@ -687,6 +721,8 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         semantic_guidance: str,
         metadata: Dict[str, Any],
         verbose: bool,
+        behavior_plan=None,
+        allow_legacy_architecture_plan: Optional[bool] = None,
     ):
         """Step 1: architecture decomposition into a typed whole-model plan.
 
@@ -703,63 +739,246 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         if verbose:
             print(f"\n  [DEBUG] Step 1 — RAG skipped (corpus is SysML-only, "
                   f"would prime LLM to emit code blocks)")
-        planning_context = "\n\n".join(
-            item for item in (context, semantic_guidance) if item
+        from ..prototyping.requirement_semantics import (
+            compile_requirement_semantic_obligations,
+            render_semantic_binding_planning_guidance,
         )
-        step1 = self.cot.decompose_architecture(
-            system_name=system_name,
-            requirements=requirements,
-            context=planning_context,
+
+        semantic_binding_guidance = (
+            render_semantic_binding_planning_guidance(
+                compile_requirement_semantic_obligations(requirements)
+            )
+        )
+        planning_context = "\n\n".join(
+            item
+            for item in (
+                context,
+                semantic_guidance,
+                semantic_binding_guidance,
+            )
+            if item
         )
         # Deferred because src.prototyping.__init__ imports pipeline, which
         # imports this agent through the orchestrator.
-        from ..prototyping.generation_plan import ModelGenerationPlan
+        from ..prototyping.generation_plan import (
+            ModelGenerationPlan,
+            attach_ag_behavior_obligations,
+        )
 
+        if allow_legacy_architecture_plan is None:
+            allow_legacy_architecture_plan = (
+                self.allow_legacy_architecture_plan
+            )
         metadata["step1_rag_skipped"] = True
-        if isinstance(step1.extracted_json, Mapping):
-            generation_plan = ModelGenerationPlan.from_payload(
-                step1.extracted_json,
+        attempts: List[Dict[str, Any]] = []
+        generation_plan = None
+        step1 = None
+        attempt_context = planning_context
+        format_retries_used = 0
+        semantic_retries_used = 0
+        last_valid_payload: Optional[Dict[str, Any]] = None
+        previous_attempt_issues: Tuple[str, ...] = ()
+        previous_failure_kind: Optional[str] = None
+        while len(attempts) < 3:
+            attempt_index = len(attempts)
+            step1 = self.cot.decompose_architecture(
+                system_name=system_name,
                 requirements=requirements,
-                source="LLM_TYPED_JSON",
+                context=attempt_context,
             )
-            if generation_plan.status != "PASS":
-                retry_context = "\n\n".join(item for item in (
-                    planning_context,
-                    "Your previous typed whole-model plan was rejected. Return a "
-                    "complete replacement JSON object that fixes every issue:\n"
-                    + "\n".join(f"- {issue}" for issue in generation_plan.issues),
-                ) if item)
-                step1 = self.cot.decompose_architecture(
-                    system_name=system_name,
+            parse_diagnostic = dict(
+                step1.metadata.get("json_parse") or {}
+            )
+            attempt_issues: List[str] = []
+            legacy_used = False
+            failure_kind = "NONE"
+            generation_plan = None
+
+            if isinstance(step1.extracted_json, Mapping):
+                last_valid_payload = dict(step1.extracted_json)
+                generation_plan = ModelGenerationPlan.from_payload(
+                    step1.extracted_json,
                     requirements=requirements,
-                    context=retry_context,
+                    source=(
+                        "LLM_TYPED_JSON"
+                        if attempt_index == 0
+                        else "LLM_TYPED_JSON_RETRY"
+                    ),
+                    require_source_anchored_paths=True,
+                    ag_behavior_plan=behavior_plan,
                 )
-                metadata["step1_plan_retries"] = 1
-                if isinstance(step1.extracted_json, Mapping):
-                    generation_plan = ModelGenerationPlan.from_payload(
-                        step1.extracted_json,
-                        requirements=requirements,
-                        source="LLM_TYPED_JSON_RETRY",
+                if behavior_plan is not None:
+                    generation_plan = attach_ag_behavior_obligations(
+                        generation_plan, behavior_plan
                     )
+                attempt_issues.extend(generation_plan.issues)
                 if generation_plan.status != "PASS":
-                    raise RuntimeError(
-                        "Typed whole-model generation plan remained invalid after "
-                        "one bounded retry: "
-                        + "; ".join(generation_plan.issues)
+                    failure_kind = "SEMANTIC_PLAN_INVALID"
+            elif allow_legacy_architecture_plan:
+                legacy_text = step1.final_answer
+                fence_pos = legacy_text.find("```")
+                if fence_pos != -1:
+                    legacy_text = legacy_text[:fence_pos].rstrip()
+                generation_plan = ModelGenerationPlan.from_legacy_text(
+                    legacy_text,
+                    requirements=requirements,
+                )
+                if behavior_plan is not None:
+                    generation_plan = attach_ag_behavior_obligations(
+                        generation_plan, behavior_plan
                     )
-        else:
-            # Compatibility for archived providers/test doubles.  New provider
-            # calls are instructed to return the typed JSON schema above.
-            legacy_text = step1.final_answer
-            _fence_pos = legacy_text.find("```")
-            if _fence_pos != -1:
-                legacy_text = legacy_text[:_fence_pos].rstrip()
-            generation_plan = ModelGenerationPlan.from_legacy_text(
-                legacy_text,
-                requirements=requirements,
+                    attempt_issues.extend(generation_plan.issues)
+                legacy_used = True
+                metadata["degraded_steps"].append(
+                    "step1_architecture: typed JSON absent; explicit legacy "
+                    "plan compatibility used"
+                )
+            else:
+                failure_kind = "FORMAT_UNAVAILABLE"
+                parse_status = str(
+                    parse_diagnostic.get("status")
+                    or "JSON_BLOCK_ABSENT"
+                )
+                attempt_issues.append(
+                    f"typed generation-plan JSON unavailable: {parse_status}"
+                )
+                error_message = parse_diagnostic.get("error_message")
+                if error_message:
+                    attempt_issues.append(
+                        f"JSON parse error: {error_message} at "
+                        f"line {parse_diagnostic.get('error_line')}, "
+                        f"column {parse_diagnostic.get('error_column')}"
+                    )
+
+            unique_issues = tuple(dict.fromkeys(attempt_issues))
+            if attempt_index == 0:
+                correction_outcome = "INITIAL_ATTEMPT"
+            elif failure_kind == "NONE":
+                correction_outcome = "RESOLVED"
+            elif set(unique_issues) & set(previous_attempt_issues):
+                correction_outcome = "UNRESOLVED"
+            elif (
+                previous_failure_kind == "FORMAT_UNAVAILABLE"
+                and failure_kind != "FORMAT_UNAVAILABLE"
+            ):
+                correction_outcome = "FORMAT_RECOVERED_WITH_REMAINING_ISSUES"
+            else:
+                correction_outcome = "REGRESSED_NEW_ISSUE"
+            attempt_record = {
+                "attempt": attempt_index + 1,
+                "response_digest": parse_diagnostic.get(
+                    "response_digest"
+                ),
+                "response_excerpt": " ".join(
+                    (step1.final_answer or "").split()
+                )[:800],
+                "json_parse": parse_diagnostic,
+                "legacy_compatibility_used": legacy_used,
+                "failure_kind": failure_kind,
+                "plan_status": (
+                    generation_plan.status
+                    if generation_plan is not None else "UNAVAILABLE"
+                ),
+                "issues": list(unique_issues),
+                "correction_outcome": correction_outcome,
+                "resolved_previous_issues": sorted(
+                    set(previous_attempt_issues) - set(unique_issues)
+                ),
+                "introduced_new_issues": sorted(
+                    set(unique_issues) - set(previous_attempt_issues)
+                ) if attempt_index else [],
+            }
+            attempts.append(attempt_record)
+            metadata["step1_plan_attempts"] = [
+                dict(item) for item in attempts
+            ]
+
+            if legacy_used:
+                if behavior_plan is not None and (
+                    generation_plan is None
+                    or generation_plan.status != "PASS"
+                ):
+                    break
+                break
+            if (
+                generation_plan is not None
+                and generation_plan.status == "PASS"
+            ):
+                break
+            if len(attempts) >= 3:
+                break
+
+            if failure_kind == "FORMAT_UNAVAILABLE":
+                format_retries_used += 1
+                retry_heading = (
+                    "TYPED MODEL PLAN FORMAT CORRECTION — the previous "
+                    "response did not contain a parseable JSON object."
+                )
+            elif failure_kind == "SEMANTIC_PLAN_INVALID":
+                semantic_retries_used += 1
+                retry_heading = (
+                    "TYPED MODEL PLAN SEMANTIC CORRECTION — the previous "
+                    "JSON parsed successfully but violated the frozen plan."
+                )
+            else:
+                break
+
+            metadata["step1_plan_retries"] = (
+                format_retries_used + semantic_retries_used
             )
-            metadata["degraded_steps"].append(
-                "step1_architecture: typed JSON absent; legacy plan parser used"
+            metadata["step1_format_retries"] = format_retries_used
+            metadata["step1_semantic_retries"] = (
+                semantic_retries_used
+            )
+            repair_base = (
+                "PREVIOUS PARSEABLE PLAN — use this as the repair base. "
+                "Preserve every field not implicated by an issue:\n"
+                "```json\n"
+                + json.dumps(last_valid_payload, indent=2)
+                + "\n```"
+                if last_valid_payload is not None else ""
+            )
+            attempt_context = "\n\n".join(
+                item for item in (
+                    planning_context,
+                    retry_heading
+                    + "\nReturn exactly one complete replacement JSON object "
+                    "in a ```json block and no prose. Do not emit SysML. "
+                    "Change only fields required by the issues; preserve all "
+                    "other valid identities, components, ports, connections, "
+                    "bindings, and constraints.\n"
+                    + "VALIDATION ISSUES:\n"
+                    + "\n".join(
+                        f"- {issue}"
+                        for issue in attempt_record["issues"]
+                    ),
+                    repair_base,
+                )
+                if item
+            )
+            previous_attempt_issues = unique_issues
+            previous_failure_kind = failure_kind
+
+        assert step1 is not None
+        if generation_plan is None or (
+            not allow_legacy_architecture_plan
+            and generation_plan.status != "PASS"
+        ) or (
+            behavior_plan is not None
+            and generation_plan.status != "PASS"
+        ):
+            final_issues = attempts[-1]["issues"] if attempts else []
+            raise TypedModelPlanError(
+                "[TYPED_MODEL_PLAN_UNAVAILABLE] typed whole-model plan "
+                f"remained unavailable or invalid after {len(attempts)} "
+                "bounded attempts: "
+                + "; ".join(final_issues),
+                plan_attempts=attempts,
+            )
+
+        if behavior_plan is not None:
+            metadata["ag_behavior_obligation_plan"] = (
+                behavior_plan.to_dict()
             )
         architecture_text = generation_plan.render_for_prompt()
         metadata["whole_model_generation_plan"] = generation_plan.to_dict()
@@ -787,6 +1006,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         semantic_guidance: str,
         metadata: Dict[str, Any],
         verbose: bool,
+        generation_plan: Optional[Any] = None,
     ):
         """Step 2: part definitions (structural fragment) with one bounded
         retry — a structural fragment without a single part definition cannot
@@ -810,22 +1030,93 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 "step2_parts: no SysML code block extracted, falling back to raw text"
             )
 
-        if not re.search(r"\bpart\s+def\s+\w+\s*\{", parts_fragment):
+        from ..prototyping.generation_plan import (
+            validate_part_definition_fragment,
+        )
+
+        part_gate = (
+            validate_part_definition_fragment(
+                parts_fragment, generation_plan
+            )
+            if (
+                generation_plan is not None
+                and generation_plan.status == "PASS"
+            )
+            else {
+                "status": (
+                    "PASS"
+                    if re.search(
+                        r"\bpart\s+def\s+\w+\s*\{", parts_fragment
+                    )
+                    else "FAIL"
+                ),
+                "missing_part_definitions": [],
+                "unplanned_part_definitions": [],
+                "duplicate_part_definitions": [],
+            }
+        )
+        metadata["step2_definition_contract"] = part_gate
+        if part_gate["status"] != "PASS":
             metadata["step2_part_retries"] = 1
+            correction = ""
+            if (
+                generation_plan is not None
+                and generation_plan.status == "PASS"
+            ):
+                expected = ", ".join(
+                    item.name for item in generation_plan.components
+                )
+                correction = (
+                    "\n\nSTEP 2 DEFINITION-KIND CORRECTION (MANDATORY):\n"
+                    f"Emit exactly these part def names once each: {expected}.\n"
+                    "Names used by semantic_bindings as item_type or port_type "
+                    "are interface definitions, never part def names."
+                )
             retry_step2 = self.cot.generate_part_definitions(
                 system_name=system_name,
                 architecture=architecture_text,
                 requirements=requirements,
                 context=ctx2,
-                semantic_guidance=semantic_guidance,
+                semantic_guidance=semantic_guidance + correction,
             )
             retry_fragment = (
                 retry_step2.extracted_sysml or retry_step2.final_answer or ""
             )
-            if not re.search(r"\bpart\s+def\s+\w+\s*\{", retry_fragment):
+            retry_gate = (
+                validate_part_definition_fragment(
+                    retry_fragment, generation_plan
+                )
+                if (
+                    generation_plan is not None
+                    and generation_plan.status == "PASS"
+                )
+                else {
+                    "status": (
+                        "PASS"
+                        if re.search(
+                            r"\bpart\s+def\s+\w+\s*\{", retry_fragment
+                        )
+                        else "FAIL"
+                    ),
+                    "missing_part_definitions": [],
+                    "unplanned_part_definitions": [],
+                    "duplicate_part_definitions": [],
+                }
+            )
+            metadata["step2_definition_contract"] = retry_gate
+            if retry_gate["status"] != "PASS":
+                if (
+                    generation_plan is None
+                    or generation_plan.status != "PASS"
+                ):
+                    raise RuntimeError(
+                        "[STRUCTURAL_GENERATION_ERROR] Step 2 produced no part "
+                        "definitions after one targeted retry."
+                    )
                 raise RuntimeError(
-                    "[STRUCTURAL_GENERATION_ERROR] Step 2 produced no part "
-                    "definitions after one targeted retry."
+                    "[STRUCTURAL_GENERATION_ERROR] Step 2 violated the frozen "
+                    "definition-kind contract after one targeted retry: "
+                    + str(retry_gate)
                 )
             step2 = retry_step2
             parts_fragment = retry_fragment
@@ -856,11 +1147,33 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         semantic_guidance: str,
         metadata: Dict[str, Any],
         verbose: bool,
+        generation_plan: Optional[Any] = None,
     ):
         """Step 3: interface & flow definitions (item def / typed port def).
         Returns ``(step3_result, interfaces_fragment)``; the fragment is empty
         when no code block was extracted (degraded, not fatal)."""
-        intf_reqs = [r for r in requirements if "-INTF-" in r]
+        semantic_requirement_ids = {
+            item.requirement_id
+            for item in (
+                generation_plan.semantic_obligations
+                if generation_plan is not None else ()
+            )
+        }
+        intf_reqs = [
+            requirement
+            for requirement in requirements
+            if "-INTF-" in requirement
+            or any(
+                requirement_id.replace("_", "-") in requirement.replace(
+                    "_", "-"
+                )
+                for requirement_id in semantic_requirement_ids
+            )
+        ]
+        if semantic_requirement_ids:
+            metadata["semantic_interface_requirement_ids"] = sorted(
+                semantic_requirement_ids
+            )
         ctx3 = step_context("interfaces")
         step3 = self.cot.generate_interfaces_and_flows(
             system_name=system_name,
@@ -906,6 +1219,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         metadata: Dict[str, Any],
         verbose: bool,
         behavior_obligation_plan=None,
+        generation_plan=None,
     ):
         """Step 4: behavioral model — runs only when FUNC/SAFE/OPER
         requirements exist (the RAG call is skipped entirely otherwise).
@@ -940,13 +1254,36 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             metadata["degraded_steps"].append(
                 "step4_behavior: no SysML code block extracted, falling back to raw text"
             )
+        if generation_plan is not None and generation_plan.planned_behaviors:
+            from ..prototyping.planned_behavior import (
+                materialize_planned_behaviors,
+            )
+
+            behavior_fragment, conformance = materialize_planned_behaviors(
+                behavior_fragment,
+                generation_plan.planned_behaviors,
+                event_symbols=generation_plan.planned_event_symbols,
+            )
+            metadata["planned_behavior_conformance"] = conformance
+            if conformance["status"] != "PASS":
+                raise RuntimeError(
+                    "[PLANNED_BEHAVIOR_GENERATION_ERROR] Step 4 failed "
+                    "the typed behavior identity gate: "
+                    + "; ".join(conformance["issues"])
+                )
         if behavior_obligation_plan is not None:
             from ..prototyping.ag_behavior_plan import (
                 materialize_behavior_obligations,
             )
 
             behavior_fragment, conformance = materialize_behavior_obligations(
-                behavior_fragment, behavior_obligation_plan
+                behavior_fragment,
+                behavior_obligation_plan,
+                event_symbols=(
+                    generation_plan.planned_event_symbols
+                    if generation_plan is not None
+                    else None
+                ),
             )
             metadata["ag_behavior_obligation_conformance"] = conformance
             if conformance["status"] != "PASS":
@@ -1029,39 +1366,76 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
 
-        # --- enforce exact owner-qualified A/G state/invariant realizations ---
+        # --- compile exact ordinary plan-owned behavior into its owner ---
         if (
             behavior_fragment
             and step5.extracted_sysml
+            and generation_plan is not None
+            and generation_plan.planned_behaviors
+        ):
+            from ..prototyping.planned_behavior import (
+                materialize_owned_planned_behaviors,
+            )
+
+            assembled_text, behavior_conformance = (
+                materialize_owned_planned_behaviors(
+                    step5.extracted_sysml,
+                    generation_plan.planned_behaviors,
+                    event_symbols=generation_plan.planned_event_symbols,
+                )
+            )
+            metadata["owned_planned_behavior_conformance"] = (
+                behavior_conformance
+            )
+            step5 = dataclasses.replace(
+                step5, extracted_sysml=assembled_text
+            )
+            if behavior_conformance["status"] != "PASS":
+                raise RuntimeError(
+                    "[PLANNED_BEHAVIOR_ASSEMBLY_ERROR] assembled model "
+                    "changed or dropped a typed behavior identity: "
+                    + "; ".join(behavior_conformance["issues"])
+                )
+
+        # --- enforce exact owner-qualified A/G state/invariant realizations ---
+        if (
+            step5.extracted_sysml
             and generation_plan is not None
             and generation_plan.behavior_obligations
         ):
             from ..prototyping.ag_behavior_plan import (
                 BehaviorObligationPlan,
-                check_owned_behavior_obligation_conformance,
+                materialize_owned_behavior_obligations,
             )
 
             owned_behavior_plan = BehaviorObligationPlan(
                 generation_plan.behavior_obligations
             )
-            assembled_text, injected_obligations = (
-                self._inject_missing_ag_obligation_defs(
+            assembled_text, terminal_behavior_gate = (
+                materialize_owned_behavior_obligations(
                     step5.extracted_sysml,
-                    behavior_fragment,
                     owned_behavior_plan,
+                    event_symbols=generation_plan.planned_event_symbols,
                 )
+            )
+            injected_obligations = (
+                list(terminal_behavior_gate["materialized"])
+                + list(terminal_behavior_gate["replaced_inconsistent"])
+                + [
+                    "removed-conflict::"
+                    f"{item['owner_def']}::{item['name']}::"
+                    f"{item['removed_kind']}"
+                    for item in terminal_behavior_gate[
+                        "removed_kind_conflicts"
+                    ]
+                ]
             )
             if injected_obligations:
                 metadata["injected_ag_behavior_obligations"] = (
                     injected_obligations
                 )
-                step5 = dataclasses.replace(
-                    step5, extracted_sysml=assembled_text
-                )
-            terminal_behavior_gate = (
-                check_owned_behavior_obligation_conformance(
-                    assembled_text, owned_behavior_plan
-                )
+            step5 = dataclasses.replace(
+                step5, extracted_sysml=assembled_text
             )
             metadata["ag_owned_behavior_conformance"] = (
                 terminal_behavior_gate
@@ -1087,6 +1461,29 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                         f"{', '.join(injected_items)}"
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
+
+        # --- restore one canonical package-level item type per planned event ---
+        if step5.extracted_sysml and generation_plan is not None:
+            from ..prototyping.event_symbols import (
+                materialize_planned_event_symbols,
+            )
+
+            assembled_text, event_symbol_gate = (
+                materialize_planned_event_symbols(
+                    step5.extracted_sysml,
+                    generation_plan.planned_event_symbols,
+                )
+            )
+            metadata["planned_event_symbol_conformance"] = event_symbol_gate
+            step5 = dataclasses.replace(
+                step5, extracted_sysml=assembled_text
+            )
+            if event_symbol_gate["status"] == "FAIL":
+                raise RuntimeError(
+                    "[EVENT_SYMBOL_ASSEMBLY_ERROR] assembled model uses a "
+                    "frozen event identity with an incompatible definition: "
+                    + "; ".join(event_symbol_gate["issues"])
+                )
 
         # --- strip invalid `requirement <name> : <Type> = "...";` lines ---
         if step5.extracted_sysml:
@@ -1122,11 +1519,24 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
 
         # --- materialise the typed connection plan deterministically ---
         if step5.extracted_sysml and generation_plan is not None:
-            from ..prototyping.generation_plan import apply_generation_plan
+            from ..prototyping.generation_plan import (
+                PLAN_APPLICATION_HISTORY_KEY,
+                append_plan_application_history,
+                apply_generation_plan,
+            )
 
             planned_text, conformance = apply_generation_plan(
                 step5.extracted_sysml, generation_plan
             )
+            history = append_plan_application_history(
+                metadata,
+                conformance,
+                stage="POST_ASSEMBLY",
+            )
+            conformance[PLAN_APPLICATION_HISTORY_KEY] = history
+            conformance["semantic_binding_materialization_history"] = [
+                item for item in history if item["semantic_changes"]
+            ]
             metadata["generation_plan_conformance"] = conformance
             if planned_text != step5.extracted_sysml:
                 step5 = dataclasses.replace(
@@ -1161,6 +1571,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         platform_profile=None,
         semantic_guidance_by_step: Optional[Mapping[str, str]] = None,
         ag_behavior_obligation_plan: Optional[Mapping[str, Any]] = None,
+        allow_legacy_architecture_plan: bool = False,
     ) -> Tuple[Any, Dict[str, Any]]:
         """
         5-step generation pipeline:
@@ -1188,7 +1599,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         from ..prototyping.ag_behavior_plan import BehaviorObligationPlan
         from ..prototyping.generation_plan import (
             ModelGenerationPlan,
-            attach_ag_behavior_obligations,
         )
 
         # Helper: fetch RAG context for a step and merge with any caller-supplied context.
@@ -1204,51 +1614,43 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             parts = [p for p in (context, rag) if p]
             return "\n\n".join(parts)
 
-        # --- Step 1: Architecture Decomposition ---
-        step1, architecture_text = self._step1_architecture(
-            system_name, requirements, context,
-            guidance.get("architecture", ""), metadata, verbose,
-        )
-        generation_plan = ModelGenerationPlan.from_dict(
-            metadata.get("whole_model_generation_plan")
-        )
         behavior_plan = (
             BehaviorObligationPlan.from_dict(ag_behavior_obligation_plan)
             if ag_behavior_obligation_plan is not None else None
         )
-        if behavior_plan is not None:
-            generation_plan = attach_ag_behavior_obligations(
-                generation_plan, behavior_plan
-            )
-            metadata["whole_model_generation_plan"] = (
-                generation_plan.to_dict()
-            )
-            metadata["ag_behavior_obligation_plan"] = behavior_plan.to_dict()
-            architecture_text = generation_plan.render_for_prompt()
-            if generation_plan.status != "PASS":
-                raise RuntimeError(
-                    "[A_G_MODEL_PLAN_ERROR] whole-model plan conflicts with "
-                    "the frozen A/G behavior obligations: "
-                    + "; ".join(generation_plan.issues)
-                )
+
+        # --- Step 1: Architecture Decomposition ---
+        step1, architecture_text = self._step1_architecture(
+            system_name, requirements, context,
+            guidance.get("architecture", ""), metadata, verbose,
+            behavior_plan=behavior_plan,
+            allow_legacy_architecture_plan=(
+                allow_legacy_architecture_plan
+            ),
+        )
+        generation_plan = ModelGenerationPlan.from_dict(
+            metadata.get("whole_model_generation_plan")
+        )
 
         # --- Step 2: Part Definitions (structural fragment) ---
         step2, parts_fragment = self._step2_parts(
             system_name, architecture_text, requirements, _step_context,
             guidance.get("parts", ""), metadata, verbose,
+            generation_plan,
         )
 
         # --- Step 3: Interface & Flow Definitions (item def / typed port def) ---
         step3, interfaces_fragment = self._step3_interfaces(
             system_name, architecture_text, parts_fragment, requirements,
             _step_context, guidance.get("interfaces", ""), metadata, verbose,
+            generation_plan,
         )
 
         # --- Step 4: Behavioral Model (only if FUNC or SAFE requirements exist) ---
         step4, behavior_fragment = self._step4_behavior(
             system_name, architecture_text, parts_fragment, requirements,
             platform_profile, _step_context, guidance.get("behavior", ""),
-            metadata, verbose, behavior_plan,
+            metadata, verbose, behavior_plan, generation_plan,
         )
 
         # --- Step 5: Integration / Assembly ---
@@ -1614,7 +2016,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             if package_match is not None:
                 package_open = result.find("{", package_match.start())
                 declarations = "".join(
-                    f"\n    action def {trigger} {{}}"
+                    f"\n    item def {trigger};"
                     for trigger in missing_trigger_types
                 )
                 result = (

@@ -157,6 +157,86 @@ def _make_model(name: str = "TestSystem") -> SysMLModel:
     return m
 
 
+def test_terminal_plan_conformance_preserves_materialization_history():
+    plan = ModelGenerationPlan.from_payload({
+        "components": [
+            {
+                "name": "Source",
+                "responsibility": "Produces data.",
+                "requirements": [],
+                "ports": [{
+                    "name": "data",
+                    "direction": "out",
+                    "type": "DataPort",
+                    "external": False,
+                }],
+            },
+            {
+                "name": "Sink",
+                "responsibility": "Consumes data.",
+                "requirements": [],
+                "ports": [{
+                    "name": "data",
+                    "direction": "in",
+                    "type": "DataPort",
+                    "external": False,
+                }],
+            },
+        ],
+        "connections": [{
+            "source": {"component": "Source", "port": "data"},
+            "target": {"component": "Sink", "port": "data"},
+            "item_type": "DataPort",
+            "requirements": [],
+        }],
+    })
+    text = """package P {
+        port def DataPort;
+        part def Source { out port data : DataPort; }
+        part def Sink { in port data : DataPort; }
+        part source : Source;
+        part sink : Sink;
+        connect source.data to sink.data;
+    }"""
+    model = build_lite_model(text, model_name="P")
+    model.metadata["whole_model_generation_plan"] = plan.to_dict()
+    history_entry = {
+        "stage": "POST_ASSEMBLY",
+        "input_model_digest": "before",
+        "output_model_digest": "after",
+        "deterministic_changes": ["item feature Data.value"],
+    }
+    model.metadata["generation_plan_conformance"] = {
+        "status": "PASS",
+        "semantic_binding_materialization_history": [history_entry],
+    }
+    plan_history_entry = {
+        "stage": "POST_ASSEMBLY",
+        "status": "PASS",
+        "input_model_digest": "input",
+        "output_model_digest": "output",
+        "semantic_changes": ["item feature Data.value"],
+        "added_ports": [],
+        "added_connections": [],
+    }
+    model.metadata["plan_application_history"] = [plan_history_entry]
+
+    _, conformance = _make_orch()._enforce_terminal_generation_plan(
+        model,
+        text,
+    )
+
+    assert conformance is not None
+    assert conformance[
+        "semantic_binding_materialization_history"
+    ][0] == history_entry
+    assert conformance["plan_application_history"][0] == plan_history_entry
+    assert conformance["plan_application_history"][-1]["stage"] == "TERMINAL"
+    assert model.metadata["plan_application_history"] == conformance[
+        "plan_application_history"
+    ]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # P0 — Best-model tracking
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import sys
 from types import SimpleNamespace
 from types import ModuleType
@@ -18,7 +19,10 @@ if "pinecone" not in sys.modules:
 from src.prototyping.generation_plan import (
     ModelGenerationPlan,
     apply_generation_plan,
+    materialize_standard_library_imports,
+    validate_part_definition_fragment,
 )
+from src.simulation.syntax_checker import check_syntax
 from src.prototyping.model_qualification import build_model_qualification
 from src.simulation.validator import SimulationResult
 
@@ -86,6 +90,47 @@ def test_typed_plan_validates_and_deterministically_materialises_connections():
     assert "connect producer.status to consumer.status;" in updated
 
 
+def test_terminal_compiler_closes_root_standard_library_imports():
+    model = """package P {
+        part def Controller {
+            attribute enabled : Boolean = true;
+            attribute separation : LengthValue = 5 [m];
+        }
+        part controller : Controller;
+    }"""
+
+    updated, report = materialize_standard_library_imports(model)
+
+    assert report["status"] == "PASS"
+    assert report["added_imports"] == [
+        "private import ISQ::*;",
+        "private import SI::*;",
+        "private import ScalarValues::*;",
+    ]
+    strict = check_syntax(
+        updated,
+        fail_closed=True,
+        filter_stdlib_diagnostics=False,
+    )
+    assert not strict.has_errors, strict.short_summary()
+    assert not strict.warnings
+
+
+def test_terminal_compiler_does_not_duplicate_sufficient_member_imports():
+    model = """package P {
+        private import ScalarValues::Boolean;
+        part def Controller {
+            attribute enabled : Boolean = true;
+        }
+        part controller : Controller;
+    }"""
+
+    updated, report = materialize_standard_library_imports(model)
+
+    assert updated == model
+    assert report["added_imports"] == []
+
+
 def test_typed_plan_rejects_multiple_drivers_before_sysml_generation():
     payload = {
         **_PAYLOAD,
@@ -116,6 +161,39 @@ def test_typed_plan_rejects_multiple_drivers_before_sysml_generation():
 
     assert plan.status == "INVALID"
     assert any("more than one planned driver" in item for item in plan.issues)
+
+
+def test_step1_plan_rejects_owner_port_as_accept_event_classifier():
+    payload = copy.deepcopy(_PAYLOAD)
+    payload["schema_version"] = "9.0"
+    payload["behaviors"] = [{
+        "owner": "Consumer",
+        "behavior_id": "ConsumerBehavior",
+        "initial_state": "idle",
+        "states": [
+            {"state_id": "idle", "role": "INITIAL"},
+            {
+                "state_id": "responding",
+                "role": "RESPONSE",
+                "entry_action": "respond",
+            },
+        ],
+        "transitions": [{
+            "transition_id": "receive",
+            "source": "idle",
+            "target": "responding",
+            "trigger_kind": "ACCEPT",
+            "trigger": "status",
+        }],
+        "provenance": {"kind": "DESIGN_DECISION"},
+    }]
+
+    plan = ModelGenerationPlan.from_payload(payload)
+
+    assert plan.status == "INVALID"
+    assert any(
+        "not an owner port usage" in issue for issue in plan.issues
+    )
 
 
 def test_typed_plan_rejects_item_type_that_disagrees_with_endpoints():
@@ -161,6 +239,60 @@ def test_terminal_conformance_rejects_unplanned_ports_and_connections():
     assert report["unplanned_connections"] == [
         "producer.invented -> consumer.invented"
     ]
+
+
+def test_step2_definition_contract_rejects_unplanned_part_definition():
+    plan = ModelGenerationPlan.from_payload(_PAYLOAD)
+    report = validate_part_definition_fragment(
+        """part def Producer {}
+        part def Consumer {}
+        part def StatusData {}""",
+        plan,
+    )
+
+    assert report["status"] == "FAIL"
+    assert report["unplanned_part_definitions"] == ["StatusData"]
+
+
+def test_plan_rejects_port_attribute_member_name_collision():
+    payload = copy.deepcopy(_PAYLOAD)
+    payload["components"][0]["attributes"] = [{
+        "name": "status",
+        "value_type": "Boolean",
+        "unit": "1",
+    }]
+
+    plan = ModelGenerationPlan.from_payload(payload)
+
+    assert plan.status == "INVALID"
+    assert (
+        "Producer direct member 'status' cannot be both a port "
+        "and an attribute"
+    ) in plan.issues
+
+
+def test_plan_allows_same_feature_name_on_different_components():
+    assert ModelGenerationPlan.from_payload(_PAYLOAD).status == "PASS"
+
+
+def test_terminal_conformance_rejects_unplanned_non_container_part_def():
+    plan = ModelGenerationPlan.from_payload(_PAYLOAD)
+    model = """package P {
+        port def DataPort;
+        part def Producer { out port status : DataPort; }
+        part def Consumer { in port status : DataPort; }
+        part def StatusData { attribute value : Real; }
+        part producer : Producer;
+        part consumer : Consumer;
+        connect producer.status to consumer.status;
+    }"""
+
+    _, report = apply_generation_plan(model, plan)
+
+    assert report["status"] == "FAIL"
+    assert report["definition_contract"][
+        "unplanned_part_definitions"
+    ] == ["StatusData"]
 
 
 def test_external_plan_port_cannot_be_silently_internalized():

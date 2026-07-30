@@ -7,6 +7,7 @@ LLMs through complex MBSE design reasoning tasks.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -38,6 +39,20 @@ SysML v2 key constructs:
 - `satisfy`: links design elements to requirements
 - `refine`: indicates a more concrete model element elaborates an abstract one
 - `enum def`: named enumeration type; values accessed as `EnumName::Value` (ALWAYS `::`, never `.`); always declared at package scope; use when a component has distinct named operational modes (e.g. IDLE, ARMED, HOVER)
+"""
+
+TYPED_MODEL_PLAN_SYSTEM_PROMPT = """You are a typed model-planning compiler.
+Your only output is one complete JSON object representing a generation plan.
+
+Strict output contract:
+- Return exactly one JSON object inside one ```json code block.
+- Do not emit SysML, prose, analysis, headings, or a second code block.
+- Preserve frozen requirement text, identifiers, numeric bounds, units, and
+  explicitly planned SysML v2 element identities.
+- A qualified SysML v2 membership identity uses `::`, never `.`.
+- When correcting a prior plan, preserve every valid field not named by the
+  validation issues and change only what is required to satisfy those issues.
+- Never weaken or omit a validation issue merely to make the JSON parse.
 """
 
 REQUIREMENTS_COT_TEMPLATE = """Analyze the following system description and extract a complete set of structured requirements.
@@ -130,9 +145,9 @@ Work through these steps before writing the model:
    Every INTF requirement must map to at least one named port def and one connect statement.
 
 3. ATTRIBUTES & CONSTRAINTS
-   For each component, list measurable properties with types, values, and SI units.
-   Every PERF requirement must map to a numeric attribute with an explicit bound and unit.
-   Every CONS requirement must appear as a doc annotation or attribute constraint.
+   Add a measurable property only when it is grounded in a frozen requirement,
+   an explicit design decision, or an observed runtime input. Preserve its provenance.
+   Do not invent a numeric property merely to make a part look complete.
 
 4. BEHAVIOR
    For every FUNC requirement: define an action def in the responsible component.
@@ -145,7 +160,7 @@ Work through these steps before writing the model:
 
 Pre-write verification checklist:
   □ Every part def has ≥ 1 port with direction
-  □ Every part def has ≥ 1 attribute with numeric value and unit
+  □ Every numeric attribute has an explicit engineering source and role
   □ Every SAFE requirement has a corresponding state def with fault transitions
   □ Every INTF requirement has a named port def and at least one connect usage
   □ Every REQ ID (underscored form) appears in exactly one satisfy statement
@@ -199,21 +214,22 @@ Work through these steps before writing the model:
      inside the responsible part def body. Use underscore form, not hyphens.
      NEVER use `satisfy REQ_X by PartName;` — that form breaks the parser.
    - Missing port: add `<direction> port <name> : <Type>;` with in/out/inout.
-   - Missing numeric attribute: add `attribute <name> : Real = <value> [<unit>];`
+   - Missing grounded attribute: restore it from the frozen generation plan;
+     never invent a value during repair.
    - SAFE req without fault behavior: add inside the responsible part def:
        action def emergencyStop {{ }}    // top-level action def in the part body
        state def <Name>Monitor {{
            state nominal;               // nominal state has NO entry action
            state fault {{ entry action stop : emergencyStop; }}
-           transition initial then nominal;   // ALWAYS point to nominal, never fault
+           entry; then nominal;               // ALWAYS enter nominal, never fault
            transition <name>Fault
                first nominal
                if <faultCondition>     // <faultCondition> MUST be declared as attribute in this part
                then fault;
        }}
      SAFETY MONITOR RULES (violations cause dead state machines — check before writing):
-       ✓ transition initial then nominal;    // initial → nominal (no entry action)
-       ✗ transition initial then fault;      // WRONG — machine stuck in fault at start, transition can never fire
+       ✓ entry; then nominal;                // entry → nominal (no entry action)
+       ✗ entry; then fault;                  // WRONG — machine starts in fault
        ✓ if batteryCharge < 15.0            // OK — 'batteryCharge' declared as attribute in owner part
        ✗ if distanceToWaypoint > 1.0        // WRONG — if 'distanceToWaypoint' not declared as attribute,
                                             // syside rejects it and the simulator cannot drive it
@@ -224,8 +240,8 @@ Work through these steps before writing the model:
        ✓ entry action <localName> : <ExistingActionDef>;                 (entry references an action def)
        ✗ entry action def emergencyStop {{ }}                              (NOT canonical — define action def
                                                                           at part-def top level, then reference)
-       ✓ transition initial then <state>;                                (canonical initial pseudo-transition)
-       ✗ transition <name>Init from entry to <state>;                    (use `transition initial then ...` instead)
+       ✓ entry; then <state>;                                             (canonical state entry succession)
+       ✗ transition <name>Init from entry to <state>;                     (use `entry; then ...` instead)
    - INTF req without connect: add `connect <partA>.<portA> to <partB>.<portB>;`
      at package level (outside part defs).  SysML v2 uses dot notation for
      connect endpoints, NOT `::` (which is the namespace-qualified-name operator).
@@ -233,7 +249,7 @@ Work through these steps before writing the model:
 3. CONSISTENCY CHECK
    After applying fixes, verify:
    □ Every part def still has ≥ 1 port with direction
-   □ Every part def still has ≥ 1 attribute with numeric value and unit
+   □ Every numeric attribute is still plan-owned and source-grounded
    □ Every SAFE requirement maps to a state def with fault transition
    □ Every INTF requirement maps to a port def and a connect usage
    □ Every REQ ID (underscore form) appears in exactly one satisfy statement
@@ -279,7 +295,16 @@ Return exactly one JSON object in a ```json block using this schema:
         }}
       ],
       "attributes": [
-        {{"name": "<camelCase identifier>", "unit": "<SI unit>"}}
+        {{
+          "name": "<camelCase identifier>",
+          "value_type": "<SysML value type, normally Real or an ISQ type>",
+          "unit": "<source unit, or 1 when dimensionless>",
+          "role": "RUNTIME_MEASUREMENT|FROZEN_THRESHOLD|DESIGN_PARAMETER|LOCAL_STATE",
+          "initial_value": "<source-grounded literal, or empty>",
+          "input_binding": "<planned port feature path for external measurements, or empty>",
+          "provenance": "FROZEN_REQUIREMENT|DESIGN_DECISION",
+          "source_requirement_id": "<REQ_CATEGORY_NNN, or empty for a design decision>"
+        }}
       ]
     }}
   ],
@@ -290,6 +315,101 @@ Return exactly one JSON object in a ```json block using this schema:
       "item_type": "<the identical PortDef used by both endpoints>",
       "requirements": ["REQ_CATEGORY_NNN"]
     }}
+  ],
+  "requirement_realizations": [
+    {{
+      "requirement_id": "REQ_FUNC_SAFE_INTF_OR_OPER_NNN",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "<exact causal trigger phrase copied from the requirement>",
+      "effect_concept": "<exact required effect phrase copied from the requirement>",
+      "owner_component": "<LOCAL_BEHAVIOR owner; empty for CAUSAL_PATH>",
+      "behavior_kind": "<STATE_DEF|ACTION_DEF for LOCAL_BEHAVIOR; otherwise empty>",
+      "behavior_name": "<planned behavior identifier for LOCAL_BEHAVIOR; otherwise empty>",
+      "connection_path": [
+        {{
+          "source_component": "<component>",
+          "source_port": "<port>",
+          "target_component": "<component>",
+          "target_port": "<port>",
+          "item_type": "<the exact shared PortDef>"
+        }}
+      ]
+    }}
+  ],
+  "semantic_bindings": [
+    {{
+      "obligation_id": "SEM_REQ_CATEGORY_NNN_001",
+      "requirement_id": "REQ_CATEGORY_NNN",
+      "source": {{
+        "component": "<measurement-producing component>",
+        "port": "<planned out port>"
+      }},
+      "target": {{
+        "component": "<requirement-owning component>",
+        "port": "<planned in port>",
+        "runtime_attribute": "<current measured quantity>"
+      }},
+      "payload": {{
+        "port_type": "<dedicated PortDef used by both endpoints>",
+        "port_feature": "payload",
+        "item_type": "<requirement-relevant ItemDef>",
+        "item_feature": "<measured quantity>",
+        "value_type": "<ISQ quantity type, e.g. LengthValue>",
+        "unit": "<canonical SI unit from the obligation>"
+      }},
+      "constraint": {{
+        "name": "<descriptive constraint name>",
+        "threshold_attribute": "<design threshold attribute>"
+      }}
+    }}
+  ],
+  "constraints": [
+    {{
+      "constraint_id": "<camelCase SysML identifier>",
+      "owner": "<planned component>",
+      "expression": {{
+        "lhs": "<planned owner attribute>",
+        "operator": "<=|>=|<|>|==",
+        "rhs": "<planned owner attribute or numeric literal>"
+      }},
+      "activation": {{
+        "kind": "ALWAYS|STATE_ACTIVE",
+        "state": "<BehaviorId::StateId for STATE_ACTIVE, otherwise empty>"
+      }},
+      "provenance": {{
+        "kind": "FROZEN_REQUIREMENT|A_G_GUARANTEE|DESIGN_DECISION",
+        "requirement_id": "<REQ_CATEGORY_NNN when source-grounded>"
+      }},
+      "verification_tier": "PARAMETRIC_SWEEP|STATE_EXECUTION|EXTERNAL_ANALYSIS|INSPECTION"
+    }}
+  ],
+  "behaviors": [
+    {{
+      "owner": "<planned component>",
+      "behavior_id": "<PascalCase state definition identifier>",
+      "initial_state": "<exact initial state usage identifier>",
+      "states": [
+        {{
+          "state_id": "<exact state usage identifier>",
+          "role": "INITIAL|NORMAL|RESPONSE|FAULT",
+          "entry_action": "<camelCase action identifier or null>",
+          "do_action": "<camelCase action identifier or null>"
+        }}
+      ],
+      "transitions": [
+        {{
+          "transition_id": "<camelCase transition identifier>",
+          "source": "<declared source state_id>",
+          "target": "<declared target state_id>",
+          "trigger_kind": "ACCEPT|GUARD",
+          "trigger": "<event definition identifier or guard expression>"
+        }}
+      ],
+      "provenance": {{
+        "kind": "FROZEN_REQUIREMENT|A_G_GUARANTEE|DESIGN_DECISION",
+        "requirement_id": "<REQ_CATEGORY_NNN when source-grounded>"
+      }}
+    }}
   ]
 }}
 
@@ -297,6 +417,8 @@ Rules:
 - Component names MUST be PascalCase (no spaces, no hyphens).
 - Every REQ ID must appear in at least one component's `requirements` array.
 - Aim for 3–12 top-level components; avoid micro-splitting single responsibilities.
+- Within one component, every direct member name must be unique across ports and
+  attributes. A port and an attribute MUST NOT share a name.
 - Every non-external `in` port must have exactly one connection source.
 - Every non-external `out` port must have at least one connection consumer.
 - A connection's source/target port types must be identical.
@@ -304,6 +426,82 @@ Rules:
   legitimately has no internal producer or consumer.
 - Include the causal signal paths needed by every FUNC, SAFE, OPER, and INTF
   requirement, not only protocol-facing interfaces.
+- Do not add an attribute or constraint solely to ensure every component has
+  one. Numeric values and units must be copied from a frozen requirement or
+  identified honestly as a DESIGN_DECISION.
+- RUNTIME_MEASUREMENT attributes require an `input_binding`; never initialize
+  an external measurement with an invented numeric literal.
+- `assert constraint` is an invariant. Use activation `ALWAYS` only when the
+  expression must hold in every lifecycle state and is true at the planned
+  initial state. Use `STATE_ACTIVE` plus `STATE_EXECUTION` for phase-specific
+  properties. Step 4 must serialize those exactly once as an `assert
+  constraint` owned by the referenced state, never as a part-scope invariant.
+- A `STATE_ACTIVE` state is a planned SysML v2 identity and MUST use the exact
+  `BehaviorId::StateId` form. Both identifiers are commitments that Step 4
+  must emit unchanged. `AvoidingObstacle` and
+  `FlightController.AvoidingObstacle` are invalid;
+  `FlightControllerBehavior::AvoidingObstacle` is valid.
+- `behaviors` is mandatory for every `STATE_ACTIVE` constraint. Declare the
+  referenced behavior and state there, including exactly one initial state and
+  a real transition path from that initial state to the activation state.
+  The constraint activation reference MUST exactly equal the corresponding
+  `behavior_id::state_id`; do not add prefixes, abbreviations, underscores, or
+  aliases in either place.
+- Every `RESPONSE` or `FAULT` state, and every state referenced by a
+  `STATE_ACTIVE` constraint, must declare at least one executable
+  `entry_action` or `do_action`. Use `entry_action` for a one-shot response on
+  state entry and `do_action` for behavior sustained while the state is
+  active. A declared state with both fields null is not an implementation.
+- Keep this behavior IR minimal and requirement-driven. Do not add a behavior
+  merely because a component exists. Every declared transition must preserve
+  the frozen trigger/effect semantics or be marked honestly as a design
+  decision.
+- `requirement_realizations` is mandatory. Include exactly one primary
+  realization for every FUNC, SAFE, OPER, and INTF requirement.
+- Use CAUSAL_PATH when the requirement crosses component boundaries. Use
+  LOCAL_BEHAVIOR only when both trigger handling and required effect genuinely
+  occur inside one allocated component; then set `owner_component`,
+  `behavior_kind`, and `behavior_name`, and return an empty `connection_path`.
+  Never invent a connection solely to represent an internal state machine or
+  action.
+- Default-state, power-on initialization, and de-energized safe-position
+  requirements are normally LOCAL_BEHAVIOR when the trigger and effect occur
+  inside the same owner. For example, `"upon power-on"` followed by
+  `"default to the mechanically locked state"` should name the owning state
+  definition and use an empty `connection_path`; do not turn an authorization
+  command connection into the power-on trigger.
+- `trigger_concept` and `effect_concept` must each be an exact, non-empty phrase
+  copied from that frozen requirement. Do not infer either phrase from component
+  names or graph topology.
+- Each `connection_path` must be ordered and component-contiguous. Every edge
+  must exactly reuse one entry in `connections`, including its `item_type`, and
+  that connection must trace the same requirement ID.
+- The first path endpoint must represent the copied trigger; the final endpoint
+  must represent the copied effect. Do not add unrelated connections merely to
+  make the architecture globally connected.
+- If SOURCE-DERIVED SEMANTIC BINDINGS REQUIRED IN PLAN appears in the context,
+  `semantic_bindings` is mandatory and must contain exactly one entry per listed
+  obligation. Otherwise return an empty `semantic_bindings` array.
+- Each semantic binding MUST reuse one exact connection in `connections`.
+  Its target component must own the requirement and its target port must be `in`
+  or `inout`.
+- For a requirement with a semantic binding, its primary CAUSAL_PATH must start
+  at that binding's exact source component/port and end at its exact target
+  component/port. Treat later actuator commands as supporting connections, not
+  as the terminal point of the measured requirement realization.
+- A semantic binding MUST use a requirement-relevant dedicated port type and
+  item type (for example `ObstacleSeparationPort` and
+  `ObstacleSeparationData`). Do not use `DataPort`, `StatusPort`, or
+  `CommandPort` for a source-derived measured quantity.
+- The item feature and runtime attribute names must preserve the frozen subject
+  term (for example `separation` and `currentSeparation`).
+- A unit-bearing semantic value MUST use the corresponding SysML v2 ISQ
+  quantity type, not `Real`. For example, [m] uses `LengthValue` and [s] uses
+  `DurationValue`. The implementation derives and verifies this type from the
+  frozen unit.
+- Do not invent thresholds or units: copy the exact obligation identifier,
+  requirement identifier, subject, and canonical unit from the supplied
+  source-derived guidance.
 - Do not write SysML syntax or prose outside the JSON block.
 - Safety interconnect ports (MANDATORY when these component types appear):
     • If a SafetyMonitor (or similar safety-enforcement component) is listed:
@@ -331,11 +529,17 @@ Requirements (structural focus — PERF and INTF):
 {context_block}
 Rules:
 - One part def per component listed in the architecture plan.
+- Emit exactly the listed component names as `part def`; do not introduce any
+  additional part definition. Names appearing only as semantic-binding
+  `item_type` or `port_type` are interface definitions owned by Step 3 and MUST
+  NOT be emitted as `part def`.
 - Every part def MUST have:
     • ≥ 1 port with explicit direction (in / out / inout)
-    • ≥ 1 attribute with numeric default value and SI unit
+- Emit only attributes listed in the typed plan. A part with no grounded
+  attribute is valid and must remain without a fabricated numeric property.
 - Port names must match those listed in the architecture plan.
-- PERF requirements must appear as attributes with numeric bounds and units.
+- A PERF requirement becomes an attribute only when its frozen text contains
+  the bound and unit, or the plan marks the value as a DESIGN_DECISION.
 - INTF requirements must appear as port definitions with matching data types.
   For INTF requirements that name a specific external protocol, use a protocol-derived port
   type name (NOT DataPort) so Step 3 can define the matching typed port def:
@@ -365,9 +569,9 @@ Rules:
         – PerceptionSystem MUST declare `out port sensorStatus : DataPort;`
         – SafetyMonitor MUST declare `in port sensorStatus : DataPort;`
 
-RUNTIME STATE VARIABLE RULE (MANDATORY):
-  Attributes fall into two distinct categories — keep them clearly separated by
-  NAMING CONVENTION (do NOT use a `readonly` keyword — it is not valid here):
+RUNTIME STATE VARIABLE RULE (MANDATORY WHEN THE PLAN CONTAINS ATTRIBUTES):
+  Preserve the role recorded in the typed plan (do NOT use a `readonly`
+  keyword — it is not valid here):
 
   (a) Design-limit parameters: fixed limits set at design time, never change at
       runtime.  Name them with a max/min/limit/threshold prefix or suffix.
@@ -376,12 +580,19 @@ RUNTIME STATE VARIABLE RULE (MANDATORY):
         attribute controlFreq_Hz  : Real = 100.0 [Hz];
 
   (b) Runtime state variables: values that change during system operation.
-      Name them with a `current` prefix.  Initial value is the safe starting point.
+      Name them with a `current` prefix. Locally simulated runtime state may use
+      a safe literal initial value.
         attribute currentAltitude_m  : Real = 0.0   [m];
         attribute currentAirspeed    : Real = 0.0   [m_s];
 
-  For every performance/limit requirement, declare BOTH the design-limit parameter
-  AND its runtime counterpart so that assert constraints can link them:
+      Exception: a runtime attribute named by a FROZEN TYPED SEMANTIC BINDING
+      is a measured value, not locally invented state. Initialize it from the
+      exact target-port item feature path in the plan, never from a literal:
+        attribute currentSeparation : Real =
+            obstacleData.payload.separation;
+
+  Declare a design-limit/runtime pair only when BOTH attributes are present in
+  the typed plan. Do not infer a pair from naming conventions:
 
       attribute maxAltitude_m     : Real = 120.0 [m];   // limit (named max*)
       attribute currentAltitude_m : Real = 0.0   [m];   // runtime state (named current*)
@@ -405,7 +616,7 @@ Architecture plan:
 Structural fragment (for reference — ports already exist, do NOT repeat them):
 {parts_fragment}
 
-Interface requirements (INTF):
+Interface-relevant requirements (INTF plus source-derived semantic bindings):
 {intf_requirements}
 {semantic_guidance}
 {context_block}
@@ -421,6 +632,10 @@ Rules:
 - If an INTF requirement names a specific protocol (MAVLink, ADS-B, I2C, etc.),
   define an item def capturing that protocol's data payload.
 - Do NOT define more than one item def per logical data type — reuse where possible.
+- For every FROZEN TYPED SEMANTIC BINDING in the architecture plan, emit the
+  exact `item def`, typed feature, and `port def` payload declared by the plan.
+  These requirements are interface-relevant even when their category is FUNC
+  or SAFE. Do not replace them with an empty item def or a generic payload.
 - Item def names must NOT clash with part def names or requirement IDs.
 - The structural fragment may already reference protocol-derived port type names
   (e.g. `MAVLinkPort`, `ADSBOutPort`, `AES256Port`). Define a `port def` for EACH
@@ -496,7 +711,7 @@ PLATFORM PROFILE — {platform} (MANDATORY — overrides default naming):
 
 
 BEHAVIOR_TEMPLATE = """Generate the SysML v2 behavioral fragment for the system below.
-Write ONLY action definitions and state definitions — no part def, no port, no attribute, no connect, no satisfy yet.
+Write ONLY executable response action definitions and state definitions — no part def, no port, no attribute, no connect, no satisfy yet. Planned accepted-event item definitions are compiler-owned: reference their exact names in `accept`, but do not redeclare them as actions.
 
 System: {system_name}
 
@@ -609,8 +824,7 @@ When a mode machine is needed:
 
    Template:
 
-     // OWNER: package
-     action def <Name>To<MODE_B>Cmd {{}}   // command type — declared once at package scope
+     // <Name>To<MODE_B>Cmd is a compiler-owned package event item type.
 
      // OWNER: <PartName>
      state def <Name>ModeMachine {{
@@ -619,7 +833,7 @@ When a mode machine is needed:
          state <Name>EmergencyState {{
              entry action respond : <emergencyActionDef>;   // emergency response action
          }}
-         transition initial then <Name><MODE_A>State;
+         entry; then <Name><MODE_A>State;
          transition <name>ToB
              first <Name><MODE_A>State
              accept <Name>To<MODE_B>Cmd
@@ -677,7 +891,7 @@ SAFETY ARCHITECTURE RULE — Two-layer pattern for priority-ordered SAFE require
     state def BatteryRtbMonitor {{
         state RtbNominal;
         state RtbDetected;        // no entry action needed here — arbiter handles response
-        transition initial then RtbNominal;
+        entry; then RtbNominal;
         transition RtbNominal → RtbDetected if batterySoc <= 25.0;
     }}
 
@@ -685,7 +899,7 @@ SAFETY ARCHITECTURE RULE — Two-layer pattern for priority-ordered SAFE require
     state def BatteryLandMonitor {{
         state LandNominal;
         state LandDetected;
-        transition initial then LandNominal;
+        entry; then LandNominal;
         transition LandNominal → LandDetected if batterySoc < 15.0;
     }}
 
@@ -693,7 +907,7 @@ SAFETY ARCHITECTURE RULE — Two-layer pattern for priority-ordered SAFE require
     state def PropulsionFailureMonitor {{
         state PropNominal;
         state PropDetected;
-        transition initial then PropNominal;
+        entry; then PropNominal;
         transition PropNominal → PropDetected if propulsionCriticalFailure;
     }}
 
@@ -720,7 +934,7 @@ SAFETY ARCHITECTURE RULE — Two-layer pattern for priority-ordered SAFE require
             entry action onParachute : deployParachute;
         }}
 
-        transition initial then ArbNominal;
+        entry; then ArbNominal;
 
         // Highest priority first — guard has no exclusions
         transition ArbNominal → ArbParachuteMode
@@ -773,7 +987,15 @@ dead state machine.  Follow these rules exactly:
   actually depends on operating conditions; use a bare numeric literal only
   when the limit is a genuinely fixed constant.
     e.g. `batteryCharge <= returnEnergyRequired`   (limit depends on distance)
-         `commLossTime > heartbeatInterval + 5.0`  (limit derived from a param)
+         `commLossTime > heartbeatLossThreshold`   (named derived limit)
+  UNIT CONSISTENCY RULE — never add or subtract a bare numeric literal from a
+  unit-bearing engineering quantity. Prefer a named threshold attribute with an
+  explicit unit and guard directly against it:
+    ✓ `attribute avoidanceActivationDistance : Real = 10 [m];`
+      `if currentSeparation <= avoidanceActivationDistance`
+    ✗ `if currentSeparation <= minimumSeparation + 5.0`
+  Arithmetic with a literal is allowed only for dimensionless quantities, or
+  when every operand has compatible explicitly modelled units.
   NEVER compare a threshold against its own value
   (e.g. `rtbBatteryThreshold == 120.0` is meaningless — it is always true/false).
 - For a boolean fault flag, the fault fires when the flag is TRUE.  Name flags
@@ -788,10 +1010,11 @@ dead state machine.  Follow these rules exactly:
       if commLossTime > 10.0
       if sensorSelfTestFailed                   // boolean flag — fires when true
       if batteryCharge <= returnEnergyRequired  // dynamic threshold (RHS is an attribute)
-      if commLossTime > heartbeatInterval + 5.0 // arithmetic threshold
+      if commLossTime > heartbeatLossThreshold  // named, unit-compatible threshold
   ✗ WRONG guards:
       if batteryLevel == 15.0          // `==` on a swept value never fires
       if rtbBatteryThreshold == 120.0  // comparing a threshold to itself
+      if distance <= minimumDistance + 5.0 // bare literal has no distance unit
       if sensorStatus == false         // use an affirmative flag instead
       if flightMode == HOVER           // missing EnumType:: prefix — not recognised
       if flightMode == FlightMode::HOVER  // CIRCULAR — mode machine must not guard on
@@ -828,7 +1051,7 @@ examples corpus):
       state <Name>Fault {{
           entry action onFault : <name>EmergencyResponse;     // reference, not inline def
       }}
-      transition initial then <Name>Nominal;     // ALWAYS point to the NOMINAL state, NEVER the fault state
+      entry; then <Name>Nominal;                 // ALWAYS enter the NOMINAL state, NEVER the fault state
       transition <name>Fault                     // named fault transition
           first <Name>Nominal                    // source state (NOT `from`)
           if measuredVar < limitValue            // threshold-crossing guard (NOT `==`, NOT `when`)
@@ -837,8 +1060,8 @@ examples corpus):
 
 SAFETY MONITOR STRUCTURAL RULES (violations produce dead state machines):
   RULE 1 — Initial state MUST be the nominal state (no entry action).
-    ✓  transition initial then <Name>Nominal;     // Nominal has NO entry action
-    ✗  transition initial then <Name>Fault;       // WRONG — machine starts in fault, can never observe the transition
+    ✓  entry; then <Name>Nominal;                 // Nominal has NO entry action
+    ✗  entry; then <Name>Fault;                   // WRONG — machine starts in fault
     Rationale: the state machine is designed to DETECT a transition from normal to faulty.
     If it starts in the fault state, the fault transition has no source to fire from.
 
@@ -862,10 +1085,13 @@ are not SysML v2 standard):
   ✗  enum def FlightMode {{ FlightMode::IDLE; ... }}        // values inside enum def use plain names, not qualified form
   ✗  enum def FlightMode {{ IDLE = 0; ARMED = 1; }}         // no integer assignments in SysML v2 enum def
 
-PARAMETRIC CONSTRAINT RULE (MANDATORY):
-  For every (design-limit parameter, runtime state variable) pair in the structural
-  fragment, generate a matching `assert constraint` block INSIDE the owning part def body.
-  Place it after the action defs, before the state defs.
+PLAN-OWNED CONSTRAINT RULE (MANDATORY):
+  Emit only constraints listed in TYPED ACTIVATED CONSTRAINT PLAN.
+  An `ALWAYS` plan entry becomes one `assert constraint` at part scope.
+  A `STATE_ACTIVE` entry becomes one `assert constraint` inside the exact state
+  usage named by its `BehaviorId::StateId` activation reference. Never promote
+  a state-owned constraint to part scope, and never emit either constraint
+  twice.
 
   Pattern:
     // OWNER: <PartName>
@@ -876,21 +1102,24 @@ PARAMETRIC CONSTRAINT RULE (MANDATORY):
         <runtime_var> >= <limit_param>    // for minimum constraints
     }}
 
-  Required constraint pairs (generate ALL that apply — maximum bounds only):
-    currentAltitude_m   <= maxAltitude_m        (altitude fence)
-    actualReleaseTime_s <= releaseTime_s         (payload timing)
-    currentAirspeed     <= maxAirspeed           (speed envelope)
-    payloadMass         <= maxPayloadMass        (payload limit)
-    currentWeight       <= maxTakeoffWeight      (MTOW limit)
-
-  Example output:
+  Example for an explicitly planned ALWAYS entry:
     // OWNER: FlightController
     assert constraint altitudeBound {{
         currentAltitude_m <= maxAltitude_m
     }}
 
-  Do NOT generate constraints for safety guard variables (batteryCharge_pct,
-  commLossTime_s, etc.) — those are already constrained by state machine guards.
+  Example for an explicitly planned STATE_ACTIVE entry:
+    // OWNER: FlightController
+    state def FlightControllerBehavior {{
+        state AvoidingObstacle {{
+            assert constraint enforceMinSeparation {{
+                currentSeparation >= minSeparation
+            }}
+        }}
+    }}
+
+  Do NOT discover constraints by scanning for min/max/current names. Safety
+  guard variables are verified by state-machine execution.
 
   Do NOT generate `assert constraint` for these two categories — they are NOT
   structural invariants and will always fail at system initialisation:
@@ -912,14 +1141,8 @@ PARAMETRIC CONSTRAINT RULE (MANDATORY):
   For both categories, add a comment instead:
       // REQ-PERF-NNN: evaluated by its downstream fidelity tier — not an instantaneous invariant
 
-  SUMMARY — assert constraint IS appropriate for:
-    ✓  maximum bounds that must NEVER be exceeded at any time
-       (currentAltitude <= maxAltitude, currentAirspeed <= maxAirspeed,
-        payloadMass <= maxPayloadMass, currentWeight <= maxTakeoffWeight)
-  assert constraint is NOT appropriate for:
-    ✗  minimum endurance / throughput / range goals
-       (flightTime >= minFlightTime, currentOperationalRange >= minOperationalRange)
-    ✗  minimum speed during a specific flight phase (groundSpeed >= minGroundSpeed)
+  SUMMARY: the typed plan, its activation, provenance, and verification tier
+  decide whether a constraint is emitted. Names alone never authorize one.
 
 Output a single ```sysml code block containing ONLY the behavioral fragment (with OWNER comments).
 No prose after the block.
@@ -1016,7 +1239,7 @@ Pre-write checklist:
   □ All `// OWNER: package` enum defs from the behavioral fragment are declared at package scope
   □ Every `// ATTR OWNER: <Part>` attribute hint has been injected into the corresponding part def
   □ Every part def has ≥ 1 port (annotated with typed port def where available)
-  □ Every part def has ≥ 1 attribute with numeric value and unit
+  □ Every emitted attribute is present in the typed generation plan
   □ Every state def from the behavioral fragment is embedded in its owner part def (NONE dropped)
   □ Every SAFE requirement maps to a state def with fault transition inside the safety part def
   □ Every INTF requirement maps to a typed port def and a semantically consistent connect usage
@@ -1236,7 +1459,7 @@ class ChainOfThoughtPrompter:
             context_block=context_block,
         )
         messages = [
-            Message(role="system", content=self.system_prompt),
+            Message(role="system", content=TYPED_MODEL_PLAN_SYSTEM_PROMPT),
             Message(role="user", content=prompt),
         ]
         response = self.llm.complete(messages, temperature=0.7)
@@ -1391,6 +1614,9 @@ class ChainOfThoughtPrompter:
     def _parse_cot_response(self, response_text: str) -> CoTResult:
         """Parse an LLM response to extract CoT steps, SysML, and JSON."""
         result = CoTResult(final_answer=response_text)
+        response_digest = hashlib.sha256(
+            (response_text or "").encode("utf-8")
+        ).hexdigest()
 
         # Extract SysML code blocks
         sysml_pattern = r"```sysml\n(.*?)```"
@@ -1401,14 +1627,52 @@ class ChainOfThoughtPrompter:
             print("  ⚠ [TOKEN LIMIT] LLM response truncated before closing ``` — "
                   "increase max_tokens for this step.")
 
-        # Extract JSON code blocks
-        json_pattern = r"```json\n(.*?)```"
-        json_matches = re.findall(json_pattern, response_text, re.DOTALL)
-        if json_matches:
+        # Extract an explicitly delimited JSON response. Fence matching is
+        # intentionally tolerant of case, spaces, and CRLF, but we never scan
+        # arbitrary prose for a brace fragment because that can promote an
+        # explanatory example into the authoritative generation plan.
+        json_matches = re.findall(
+            r"```[ \t]*json[ \t]*\r?\n(.*?)```",
+            response_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        json_source = "FENCED_JSON" if json_matches else ""
+        json_candidate = json_matches[-1].strip() if json_matches else ""
+        if not json_candidate:
+            stripped = (response_text or "").strip()
+            if (
+                stripped.startswith("{") and stripped.endswith("}")
+            ) or (
+                stripped.startswith("[") and stripped.endswith("]")
+            ):
+                json_source = "RAW_JSON"
+                json_candidate = stripped
+
+        json_diagnostic: Dict[str, Any] = {
+            "response_digest": response_digest,
+            "source": json_source or "NONE",
+            "status": "JSON_BLOCK_ABSENT",
+        }
+        if json_candidate:
             try:
-                result.extracted_json = json.loads(json_matches[-1].strip())
-            except json.JSONDecodeError:
-                pass
+                decoded = json.loads(json_candidate)
+            except json.JSONDecodeError as exc:
+                json_diagnostic.update({
+                    "status": "JSON_DECODE_FAILED",
+                    "error_message": exc.msg,
+                    "error_line": exc.lineno,
+                    "error_column": exc.colno,
+                })
+            else:
+                if isinstance(decoded, dict):
+                    result.extracted_json = decoded
+                    json_diagnostic["status"] = "PASS"
+                else:
+                    json_diagnostic.update({
+                        "status": "JSON_ROOT_NOT_OBJECT",
+                        "root_type": type(decoded).__name__,
+                    })
+        result.metadata["json_parse"] = json_diagnostic
 
         # Extract numbered steps
         step_pattern = r"(\d+)\.\s+([A-Z][^:]+):\s*(.*?)(?=\n\d+\.|$)"
