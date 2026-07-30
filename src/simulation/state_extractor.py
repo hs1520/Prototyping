@@ -267,6 +267,8 @@ class StateNode:
     name: str
     entry_action: Optional[str] = None          # usage name, e.g. ``updatePlan``
     entry_action_def: Optional[str] = None      # invoked action def, e.g. ``reviseWaypointSequence``
+    do_action: Optional[str] = None             # sustained state action usage
+    do_action_def: Optional[str] = None         # invoked sustained action def
     sends: List[tuple] = field(default_factory=list)
     # [(cmd_type_name, port_name), ...]
     # populated when the entry action body contains `send X() to port;`
@@ -308,11 +310,24 @@ class StateMachineDef:
                 return s.entry_action
         return None
 
+    def do_action_for_state(self, state_name: str) -> Optional[str]:
+        for state in self.states:
+            if state.name == state_name:
+                return state.do_action
+        return None
+
+    def response_action_for_state(self, state_name: str) -> Optional[str]:
+        """Return the executable entry action, or otherwise the do action."""
+        return (
+            self.entry_action_for_state(state_name)
+            or self.do_action_for_state(state_name)
+        )
+
     def all_sends(self) -> List[tuple]:
         """Return [(state_name, cmd_type, port_name)] for every fault-state send."""
         out = []
         for s in self.states:
-            if s.entry_action:
+            if s.entry_action or s.do_action:
                 for cmd, port in s.sends:
                     out.append((s.name, cmd, port))
         return out
@@ -493,6 +508,34 @@ def _extract_guard(expr) -> Optional[GuardCondition]:
 # Initial attribute value extraction
 # ---------------------------------------------------------------------------
 
+def _numeric_default_value(expression) -> Optional[float]:
+    """Extract a numeric magnitude, including Syside quantity expressions."""
+    if expression is None:
+        return None
+    expression_type = type(expression).__name__
+    if expression_type in (
+        "LiteralRational",
+        "LiteralInteger",
+        "LiteralReal",
+    ):
+        try:
+            return float(expression.value)
+        except (TypeError, ValueError):
+            return None
+    if expression_type == "OperatorExpression":
+        operator = getattr(expression, "operator", None)
+        operator_name = str(getattr(operator, "name", "") or "")
+        operator_value = str(getattr(operator, "value", "") or "")
+        if operator_name == "Quantity" or operator_value == "[":
+            try:
+                arguments = list(expression.arguments)
+            except Exception:
+                return None
+            if arguments:
+                return _numeric_default_value(arguments[0])
+    return None
+
+
 def _extract_part_attrs(part_def) -> Dict[str, Any]:
     """
     Extract initial attribute values from a syside PartDefinition node.
@@ -508,11 +551,9 @@ def _extract_part_attrs(part_def) -> Dict[str, Any]:
             if fve is None:
                 continue
             fve_type = type(fve).__name__
-            if fve_type in ("LiteralRational", "LiteralInteger", "LiteralReal"):
-                try:
-                    result[name] = float(fve.value)
-                except (TypeError, ValueError):
-                    pass
+            numeric = _numeric_default_value(fve)
+            if numeric is not None:
+                result[name] = numeric
             elif fve_type == "LiteralBoolean":
                 result[name] = bool(fve.value)
             elif fve_type == "FeatureReferenceExpression":
@@ -725,16 +766,25 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
         for st in sd.owned_states:
             entry_name: Optional[str] = None
             entry_def_name: Optional[str] = None
+            do_name: Optional[str] = None
+            do_def_name: Optional[str] = None
             sends: List[tuple] = []
             ea = st.entry_action
             if ea:
                 entry_name = ea.name
                 entry_def_name = _extract_action_definition_name(ea)
                 sends = _extract_send_usages(ea)
+            da = st.do_action
+            if da:
+                do_name = da.name
+                do_def_name = _extract_action_definition_name(da)
+                sends.extend(_extract_send_usages(da))
             sm.states.append(StateNode(
                 name=st.name,
                 entry_action=entry_name,
                 entry_action_def=entry_def_name,
+                do_action=do_name,
+                do_action_def=do_def_name,
                 sends=sends,
             ))
 

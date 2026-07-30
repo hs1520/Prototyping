@@ -1024,7 +1024,14 @@ class DesignEvaluator:
         if sim is None:
             return 1.0
 
-        structural = float(getattr(sim, "reachability_score", 1.0))
+        requirement_structural = getattr(
+            sim, "requirement_reachability_score", None
+        )
+        structural = float(
+            requirement_structural
+            if requirement_structural is not None
+            else getattr(sim, "reachability_score", 1.0)
+        )
 
         br = getattr(sim, "behavioral_result", None)
         if br is not None and getattr(br, "extracted_sm_count", 0) > 0:

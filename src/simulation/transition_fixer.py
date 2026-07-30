@@ -69,8 +69,8 @@ class StateMachineInfo:
     transitions: List[TransitionInfo] = field(default_factory=list)
     # enum_type → ordered list of enum values, e.g. "DronePhaseMode" → ["POWER_ON", ...]
     enum_values: Dict[str, List[str]] = field(default_factory=dict)
-    # declared action defs (for accept command validation)
-    action_defs: "Set[str]" = field(default_factory=set)
+    # package-level item classifiers that may type accept triggers
+    event_item_defs: "Set[str]" = field(default_factory=set)
     block_start: int = -1   # char offset of the state def's opening `{`
     block_end: int = -1     # char offset of the matching `}`
 
@@ -218,15 +218,11 @@ def build_state_machine_summary(
         if values:
             info.enum_values[enum_name] = values
 
-    # Canonical action definitions plus legacy attribute-defined events. New
-    # models emit only action defs; archived models remain readable.
-    info.action_defs = {
-        m.group(1) for pattern in (
-            _ACTION_DEF_RE,
-            _LEGACY_EVENT_DEF_RE,
-            _ITEM_EVENT_DEF_RE,
-        )
-        for m in pattern.finditer(sysml_text)
+    # Accept triggers are typed by event classifiers. Executable action
+    # definitions are intentionally excluded: they are effects/responses, not
+    # accepted event identities.
+    info.event_item_defs = {
+        m.group(1) for m in _ITEM_EVENT_DEF_RE.finditer(sysml_text)
     }
 
     return info
@@ -420,10 +416,15 @@ def validate_transitions(
             else:
                 _accept_transition_to_result(stmt, raw, sm, result)
         else:
-            # Rule 4b: accept command type must be declared as action def
-            if sm.action_defs and stmt.accept_cmd not in sm.action_defs:
+            # Rule 4b: accept target must be a package item classifier.
+            if stmt.accept_cmd not in sm.event_item_defs:
                 result.rejected.append(
-                    (raw, f"accept 命令类型 '{stmt.accept_cmd}' 未声明为 action def"))
+                    (
+                        raw,
+                        f"accept 事件类型 '{stmt.accept_cmd}' "
+                        "未声明为 package-level item def",
+                    )
+                )
                 continue
             _accept_transition_to_result(stmt, raw, sm, result)
 

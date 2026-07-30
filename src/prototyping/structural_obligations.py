@@ -10,7 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-from typing import Any, Iterable, Sequence
+import re
+from typing import Any, Iterable, Mapping, Sequence
+
+from ..utils.req_id import normalise_req_id
+from ..utils.sysml_text_utils import find_block_end
 
 
 _STRUCTURAL_CATEGORIES = ("REQ_FUNC_", "REQ_SAFE_", "REQ_INTF_", "REQ_OPER_")
@@ -41,6 +45,100 @@ class StructuralConnectionRef:
             "item_type": self.item_type,
         }
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "StructuralConnectionRef":
+        source = value.get("source")
+        target = value.get("target")
+        source_value = source if isinstance(source, Mapping) else {}
+        target_value = target if isinstance(target, Mapping) else {}
+        return cls(
+            source_component=str(
+                source_value.get("component")
+                or value.get("source_component")
+                or ""
+            ).strip(),
+            source_port=str(
+                source_value.get("port")
+                or value.get("source_port")
+                or ""
+            ).strip(),
+            target_component=str(
+                target_value.get("component")
+                or value.get("target_component")
+                or ""
+            ).strip(),
+            target_port=str(
+                target_value.get("port")
+                or value.get("target_port")
+                or ""
+            ).strip(),
+            item_type=str(value.get("item_type") or "").strip(),
+        )
+
+
+@dataclass(frozen=True)
+class RequirementRealizationPlan:
+    """Source-anchored primary causal path for one frozen requirement."""
+
+    requirement_id: str
+    realization_kind: str
+    trigger_concept: str
+    effect_concept: str
+    connection_path: tuple[StructuralConnectionRef, ...]
+    owner_component: str = ""
+    behavior_kind: str = ""
+    behavior_name: str = ""
+    source_digest: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "requirement_id": self.requirement_id,
+            "realization_kind": self.realization_kind,
+            "trigger_concept": self.trigger_concept,
+            "effect_concept": self.effect_concept,
+            "connection_path": [
+                item.to_dict() for item in self.connection_path
+            ],
+            "owner_component": self.owner_component,
+            "behavior_kind": self.behavior_kind,
+            "behavior_name": self.behavior_name,
+            "source_digest": self.source_digest,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        value: Mapping[str, Any],
+    ) -> "RequirementRealizationPlan":
+        path = value.get("connection_path")
+        if not isinstance(path, Sequence) or isinstance(path, (str, bytes)):
+            path = ()
+        return cls(
+            requirement_id=normalise_req_id(
+                str(value.get("requirement_id") or "")
+            ),
+            realization_kind=str(
+                value.get("realization_kind") or ""
+            ).strip().upper(),
+            trigger_concept=str(value.get("trigger_concept") or "").strip(),
+            effect_concept=str(value.get("effect_concept") or "").strip(),
+            connection_path=tuple(
+                StructuralConnectionRef.from_dict(item)
+                for item in path
+                if isinstance(item, Mapping)
+            ),
+            owner_component=str(
+                value.get("owner_component") or ""
+            ).strip(),
+            behavior_kind=str(
+                value.get("behavior_kind") or ""
+            ).strip().upper(),
+            behavior_name=str(
+                value.get("behavior_name") or ""
+            ).strip(),
+            source_digest=str(value.get("source_digest") or "").strip(),
+        )
+
 
 @dataclass(frozen=True)
 class StructuralObligation:
@@ -51,6 +149,13 @@ class StructuralObligation:
     required_components: tuple[str, ...]
     required_connections: tuple[StructuralConnectionRef, ...]
     entry_kind: str
+    trigger_concept: str = ""
+    effect_concept: str = ""
+    source_digest: str = ""
+    provenance: str = "PLAN_TOPOLOGY"
+    realization_kind: str = "CAUSAL_PATH"
+    behavior_kind: str = ""
+    behavior_name: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,11 +168,460 @@ class StructuralObligation:
                 item.to_dict() for item in self.required_connections
             ],
             "entry_kind": self.entry_kind,
+            "trigger_concept": self.trigger_concept,
+            "effect_concept": self.effect_concept,
+            "source_digest": self.source_digest,
+            "provenance": self.provenance,
+            "realization_kind": self.realization_kind,
+            "behavior_kind": self.behavior_kind,
+            "behavior_name": self.behavior_name,
         }
 
 
 def requires_structural_path(requirement_id: str) -> bool:
     return str(requirement_id).upper().startswith(_STRUCTURAL_CATEGORIES)
+
+
+_CONCEPT_STOPWORDS = {
+    "a", "an", "and", "be", "by", "component", "current", "data",
+    "for", "from", "in", "into", "of", "on", "or", "shall", "signal",
+    "state", "status", "subsystem", "system", "the", "to", "when",
+}
+
+
+def _normalise_phrase(value: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", str(value).lower()))
+
+
+def _stem(value: str) -> str:
+    aliases = {
+        "avoidance": "avoid",
+        "collision": "collide",
+        "detection": "detect",
+        "failure": "fail",
+        "failures": "fail",
+        "navigation": "navigate",
+        "propulsive": "propulsion",
+    }
+    if value in aliases:
+        return aliases[value]
+    if len(value) > 5 and value.endswith("ing"):
+        return value[:-3]
+    if len(value) > 4 and value.endswith("ed"):
+        return value[:-2]
+    if len(value) > 4 and value.endswith("s"):
+        return value[:-1]
+    return value
+
+
+def _concept_terms(value: str) -> set[str]:
+    words = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(value))
+    return {
+        _stem(token)
+        for token in re.findall(r"[A-Za-z0-9]+", words.lower())
+        if token not in _CONCEPT_STOPWORDS
+    }
+
+
+def _is_initialization_trigger(value: str) -> bool:
+    """Recognise lifecycle triggers represented by a state-machine initial edge."""
+    phrase = _normalise_phrase(value)
+    return any(
+        marker in phrase
+        for marker in (
+            "upon power on",
+            "at power on",
+            "on power on",
+            "during power on",
+            "upon startup",
+            "at startup",
+            "on startup",
+            "upon initialization",
+            "upon initialisation",
+            "when initialized",
+            "when initialised",
+        )
+    )
+
+
+def _local_behavior_semantic_vocabulary(
+    realization: RequirementRealizationPlan,
+    planned_behaviors: Sequence[Any],
+    behavior_obligations: Sequence[Any],
+) -> tuple[set[str], set[str], bool]:
+    """Collect typed trigger/effect evidence for one local realization."""
+    trigger_terms: set[str] = set()
+    effect_terms: set[str] = set()
+    initialization_present = False
+    for behavior in planned_behaviors:
+        if (
+            getattr(behavior, "owner", "") != realization.owner_component
+            or getattr(behavior, "behavior_id", "") != realization.behavior_name
+        ):
+            continue
+        initial_state = str(getattr(behavior, "initial_state", "") or "")
+        initialization_present = bool(initial_state)
+        effect_terms.update(_concept_terms(initial_state))
+        for state in getattr(behavior, "states", ()) or ():
+            effect_terms.update(_concept_terms(
+                str(getattr(state, "state_id", "") or "")
+            ))
+            effect_terms.update(_concept_terms(
+                str(getattr(state, "entry_action", "") or "")
+            ))
+            effect_terms.update(_concept_terms(
+                str(getattr(state, "do_action", "") or "")
+            ))
+        for transition in getattr(behavior, "transitions", ()) or ():
+            trigger_terms.update(_concept_terms(
+                str(getattr(transition, "trigger", "") or "")
+            ))
+    for obligation in behavior_obligations:
+        if (
+            normalise_req_id(str(
+                getattr(obligation, "requirement_id", "") or ""
+            )) != realization.requirement_id
+            or getattr(obligation, "owner_def", "")
+            != realization.owner_component
+            or getattr(obligation, "realization_kind", "")
+            != "STATE_MACHINE"
+        ):
+            continue
+        initialization_present = bool(
+            getattr(obligation, "initial_state", None)
+        )
+        effect_terms.update(_concept_terms(str(
+            getattr(obligation, "stable_behavior_id", "") or ""
+        )))
+        effect_terms.update(_concept_terms(str(
+            getattr(obligation, "initial_state", "") or ""
+        )))
+        for transition in getattr(obligation, "transitions", ()) or ():
+            trigger_terms.update(_concept_terms(str(
+                getattr(transition, "trigger", "") or ""
+            )))
+            effect_terms.update(_concept_terms(str(
+                getattr(transition, "target", "") or ""
+            )))
+            effect_terms.update(_concept_terms(str(
+                getattr(transition, "action", "") or ""
+            )))
+    return trigger_terms, effect_terms, initialization_present
+
+
+def _requirement_map(requirements: Sequence[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for requirement in requirements:
+        source = str(requirement or "").strip()
+        match = re.search(
+            r"\bREQ[-_][A-Za-z]+[-_]\d+\b",
+            source,
+            re.IGNORECASE,
+        )
+        if match is not None:
+            result[normalise_req_id(match.group(0))] = source
+    return result
+
+
+def compile_source_anchored_structural_obligations(
+    realizations: Sequence[RequirementRealizationPlan],
+    components: Sequence[Any],
+    connections: Sequence[Any],
+    *,
+    requirements: Sequence[str] = (),
+    require_complete: bool = False,
+    planned_behaviors: Sequence[Any] = (),
+    behavior_obligations: Sequence[Any] = (),
+) -> tuple[tuple[StructuralObligation, ...], tuple[str, ...]]:
+    """Validate source-declared causal paths and freeze them as obligations.
+
+    Unlike graph root/sink inference, this compiler never guesses causality
+    from topology.  The trigger and effect must be copied from the frozen
+    requirement and the ordered path must reuse exact, requirement-traced
+    connections from the typed plan.
+    """
+    issues: list[str] = []
+    requirement_sources = _requirement_map(requirements)
+    structural_requirements = {
+        req_id
+        for req_id in requirement_sources
+        if requires_structural_path(req_id)
+    }
+    component_by_name = {
+        component.name: component for component in components
+    }
+    connection_by_key = {
+        (
+            item.source_component,
+            item.source_port,
+            item.target_component,
+            item.target_port,
+        ): item
+        for item in connections
+    }
+    seen: set[str] = set()
+    obligations: list[StructuralObligation] = []
+
+    for index, realization in enumerate(realizations):
+        prefix = f"requirement_realizations[{index}]"
+        req_id = realization.requirement_id
+        if not req_id:
+            issues.append(f"{prefix}.requirement_id is required")
+            continue
+        if req_id in seen:
+            issues.append(f"duplicate requirement realization for {req_id}")
+            continue
+        seen.add(req_id)
+        if realization.realization_kind not in {
+            "CAUSAL_PATH", "LOCAL_BEHAVIOR",
+        }:
+            issues.append(
+                f"{prefix}.realization_kind must be CAUSAL_PATH or "
+                "LOCAL_BEHAVIOR"
+            )
+        if requirements and req_id not in requirement_sources:
+            issues.append(f"{prefix} references undeclared {req_id}")
+        if not requires_structural_path(req_id):
+            issues.append(
+                f"{prefix} is not a FUNC, SAFE, INTF, or OPER requirement"
+            )
+
+        source_text = requirement_sources.get(req_id, "")
+        source_digest = (
+            hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+            if source_text else realization.source_digest
+        )
+        source_phrase = _normalise_phrase(source_text)
+        for field_name, concept in (
+            ("trigger_concept", realization.trigger_concept),
+            ("effect_concept", realization.effect_concept),
+        ):
+            normalised = _normalise_phrase(concept)
+            if not normalised:
+                issues.append(f"{prefix}.{field_name} is required")
+            elif source_text and normalised not in source_phrase:
+                issues.append(
+                    f"{prefix}.{field_name} must be an exact phrase copied "
+                    f"from {req_id}"
+                )
+
+        trigger_terms = _concept_terms(realization.trigger_concept)
+        effect_terms = _concept_terms(realization.effect_concept)
+        concept_valid = True
+        if not trigger_terms:
+            issues.append(
+                f"{prefix}.trigger_concept has no requirement-specific "
+                "semantic term"
+            )
+            concept_valid = False
+        if not effect_terms:
+            issues.append(
+                f"{prefix}.effect_concept has no requirement-specific "
+                "semantic term"
+            )
+            concept_valid = False
+
+        path = realization.connection_path
+        if realization.realization_kind == "LOCAL_BEHAVIOR":
+            local_valid = concept_valid
+            if path:
+                issues.append(
+                    f"{prefix}.connection_path must be empty for "
+                    "LOCAL_BEHAVIOR"
+                )
+                local_valid = False
+            owner = component_by_name.get(realization.owner_component)
+            if owner is None:
+                issues.append(
+                    f"{prefix}.owner_component is not a planned component"
+                )
+                local_valid = False
+            elif req_id not in owner.requirements:
+                issues.append(
+                    f"{prefix}.owner_component is not allocated {req_id}"
+                )
+                local_valid = False
+            if realization.behavior_kind not in {"STATE_DEF", "ACTION_DEF"}:
+                issues.append(
+                    f"{prefix}.behavior_kind must be STATE_DEF or ACTION_DEF"
+                )
+                local_valid = False
+            if not re.fullmatch(
+                r"[A-Za-z_]\w*", realization.behavior_name
+            ):
+                issues.append(
+                    f"{prefix}.behavior_name is not a SysML identifier"
+                )
+                local_valid = False
+            owner_vocabulary = " ".join((
+                realization.owner_component,
+                realization.behavior_name,
+                str(getattr(owner, "responsibility", "")),
+            ))
+            owner_terms = _concept_terms(owner_vocabulary)
+            (
+                typed_trigger_terms,
+                typed_effect_terms,
+                initialization_present,
+            ) = _local_behavior_semantic_vocabulary(
+                realization,
+                planned_behaviors,
+                behavior_obligations,
+            )
+            lifecycle_trigger = _is_initialization_trigger(
+                realization.trigger_concept
+            )
+            if (
+                lifecycle_trigger
+                and (
+                    realization.behavior_kind != "STATE_DEF"
+                    or not initialization_present
+                )
+            ):
+                issues.append(
+                    f"{prefix} lifecycle trigger "
+                    f"{realization.trigger_concept!r} requires a typed "
+                    "state behavior with an initial state"
+                )
+                local_valid = False
+            elif (
+                trigger_terms
+                and not lifecycle_trigger
+                and not (
+                    trigger_terms
+                    & (owner_terms | typed_trigger_terms)
+                )
+            ):
+                issues.append(
+                    f"{prefix} local behavior owner does not represent "
+                    f"trigger phrase {realization.trigger_concept!r}"
+                )
+                local_valid = False
+            if effect_terms and not (
+                effect_terms & (owner_terms | typed_effect_terms)
+            ):
+                issues.append(
+                    f"{prefix} local behavior owner does not represent "
+                    f"effect phrase {realization.effect_concept!r}"
+                )
+                local_valid = False
+            if local_valid:
+                obligations.append(StructuralObligation(
+                    obligation_id=f"STRUCT_{req_id}_001",
+                    requirement_id=req_id,
+                    source_component=realization.owner_component,
+                    target_component=realization.owner_component,
+                    required_components=(realization.owner_component,),
+                    required_connections=(),
+                    entry_kind="SOURCE_ANCHORED_LOCAL_BEHAVIOR",
+                    trigger_concept=realization.trigger_concept,
+                    effect_concept=realization.effect_concept,
+                    source_digest=source_digest,
+                    provenance="FROZEN_REQUIREMENT_REALIZATION",
+                    realization_kind="LOCAL_BEHAVIOR",
+                    behavior_kind=realization.behavior_kind,
+                    behavior_name=realization.behavior_name,
+                ))
+            continue
+
+        if not path:
+            issues.append(f"{prefix}.connection_path must not be empty")
+            continue
+        path_valid = concept_valid
+        for edge_index, edge in enumerate(path):
+            key = edge.key()
+            planned = connection_by_key.get(key)
+            if planned is None:
+                issues.append(
+                    f"{prefix}.connection_path[{edge_index}] is not an exact "
+                    "planned connection"
+                )
+                path_valid = False
+                continue
+            if edge.item_type != planned.item_type:
+                issues.append(
+                    f"{prefix}.connection_path[{edge_index}].item_type does "
+                    "not match the planned connection"
+                )
+                path_valid = False
+            if req_id not in planned.requirements:
+                issues.append(
+                    f"{prefix}.connection_path[{edge_index}] is not traced "
+                    f"to {req_id}"
+                )
+                path_valid = False
+            if edge_index and (
+                path[edge_index - 1].target_component
+                != edge.source_component
+            ):
+                issues.append(
+                    f"{prefix}.connection_path is not component-contiguous "
+                    f"at index {edge_index}"
+                )
+                path_valid = False
+
+        first = path[0]
+        last = path[-1]
+        source_component = component_by_name.get(first.source_component)
+        target_component = component_by_name.get(last.target_component)
+        source_vocabulary = " ".join((
+            first.source_component,
+            first.source_port,
+            first.item_type,
+            str(getattr(source_component, "responsibility", "")),
+        ))
+        target_vocabulary = " ".join((
+            last.target_component,
+            last.target_port,
+            last.item_type,
+            str(getattr(target_component, "responsibility", "")),
+        ))
+        if trigger_terms and not (
+            trigger_terms & _concept_terms(source_vocabulary)
+        ):
+            issues.append(
+                f"{prefix} causal source {first.source_component}."
+                f"{first.source_port} does not represent trigger phrase "
+                f"{realization.trigger_concept!r}"
+            )
+            path_valid = False
+        if effect_terms and not (
+            effect_terms & _concept_terms(target_vocabulary)
+        ):
+            issues.append(
+                f"{prefix} causal target {last.target_component}."
+                f"{last.target_port} does not represent effect phrase "
+                f"{realization.effect_concept!r}"
+            )
+            path_valid = False
+
+        if not path_valid:
+            continue
+        required_components = (
+            first.source_component,
+            *(item.target_component for item in path),
+        )
+        obligations.append(StructuralObligation(
+            obligation_id=f"STRUCT_{req_id}_001",
+            requirement_id=req_id,
+            source_component=first.source_component,
+            target_component=last.target_component,
+            required_components=tuple(required_components),
+            required_connections=tuple(path),
+            entry_kind="SOURCE_ANCHORED_CAUSAL_TRIGGER",
+            trigger_concept=realization.trigger_concept,
+            effect_concept=realization.effect_concept,
+            source_digest=source_digest,
+            provenance="FROZEN_REQUIREMENT_REALIZATION",
+            realization_kind="CAUSAL_PATH",
+        ))
+
+    if require_complete:
+        for req_id in sorted(structural_requirements - seen):
+            issues.append(
+                f"{req_id} has no source-anchored requirement realization"
+            )
+    return tuple(obligations), tuple(issues)
 
 
 def compile_structural_obligations(
@@ -270,6 +824,40 @@ def validate_structural_obligations(
             elif usage is not None:
                 resolved[component] = usage
 
+        missing_behavior_elements: list[str] = []
+        if obligation.realization_kind == "LOCAL_BEHAVIOR":
+            owner_match = re.search(
+                rf"\bpart\s+def\s+"
+                rf"{re.escape(obligation.source_component)}\s*\{{",
+                model_text,
+            )
+            owner_body = ""
+            if owner_match is not None:
+                opening = model_text.find(
+                    "{", owner_match.start(), owner_match.end()
+                )
+                closing = find_block_end(model_text, opening)
+                if closing != -1:
+                    owner_body = model_text[opening + 1:closing]
+            keyword = (
+                "state" if obligation.behavior_kind == "STATE_DEF"
+                else "action"
+            )
+            if not owner_body or re.search(
+                rf"\b{keyword}\s+def\s+"
+                rf"{re.escape(obligation.behavior_name)}\b",
+                owner_body,
+            ) is None:
+                missing_behavior_elements.append(
+                    f"{obligation.behavior_kind} "
+                    f"{obligation.source_component}."
+                    f"{obligation.behavior_name}"
+                )
+                issues.append(
+                    "missing required local behavior "
+                    + missing_behavior_elements[-1]
+                )
+
         missing_connections: list[str] = []
         for connection in obligation.required_connections:
             source = resolved.get(connection.source_component)
@@ -295,20 +883,27 @@ def validate_structural_obligations(
 
         observed_path: list[str] = []
         if not missing_connections and not issues:
-            for index, connection in enumerate(
-                obligation.required_connections
-            ):
-                source = resolved[connection.source_component]
-                target = resolved[connection.target_component]
-                segment = [
-                    source,
-                    f"{source}.{connection.source_port}",
-                    f"{target}.{connection.target_port}",
-                    target,
+            if obligation.realization_kind == "LOCAL_BEHAVIOR":
+                observed_path = [
+                    resolved[obligation.source_component],
+                    f"{obligation.behavior_kind} "
+                    f"{obligation.behavior_name}",
                 ]
-                observed_path.extend(
-                    segment if index == 0 else segment[1:]
-                )
+            else:
+                for index, connection in enumerate(
+                    obligation.required_connections
+                ):
+                    source = resolved[connection.source_component]
+                    target = resolved[connection.target_component]
+                    segment = [
+                        source,
+                        f"{source}.{connection.source_port}",
+                        f"{target}.{connection.target_port}",
+                        target,
+                    ]
+                    observed_path.extend(
+                        segment if index == 0 else segment[1:]
+                    )
 
         results.append({
             **obligation.to_dict(),
@@ -316,6 +911,7 @@ def validate_structural_obligations(
             "resolved_usages": resolved,
             "observed_path": observed_path,
             "missing_connections": missing_connections,
+            "missing_behavior_elements": missing_behavior_elements,
             "issues": list(dict.fromkeys(issues)),
         })
 
@@ -325,7 +921,7 @@ def validate_structural_obligations(
     else:
         status = "PASS" if passed == len(results) else "FAIL"
     return {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "artifact_role": "REQUIREMENT_STRUCTURAL_OBLIGATION_VALIDATION",
         "status": status,
         "scenario_set_fixed": True,

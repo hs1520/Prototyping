@@ -239,15 +239,21 @@ def diagnose(
             else graph.weakly_connected_components()
         )
         if len(comps) > 1:
-            comp_sizes = sorted((len(c) for c in comps), reverse=True)
+            component_members = sorted(
+                (sorted(str(member) for member in component) for component in comps),
+                key=lambda members: (-len(members), members),
+            )
+            comp_sizes = [len(component) for component in component_members]
             issues.append(
-                f"Connection graph has {len(comps)} disconnected components "
-                f"(sizes: {comp_sizes}) — parts of the system never exchange data"
+                "UNTRACED_ADVISORY: connection graph has "
+                f"{len(comps)} weakly connected components "
+                f"(sizes: {comp_sizes}; members: {component_members}). "
+                "Global connectedness is not a frozen requirement obligation."
             )
             recs.append(
-                "Connect all sub-systems into a single data-flow graph.  "
-                "Every part usage should appear in at least one connect statement "
-                "that traces back to the main controller."
+                "Review each weak component against frozen structural obligations "
+                "and declared external boundaries. Do not add a connection unless "
+                "it has requirement or explicit design-decision provenance."
             )
 
         # NOTE: feedback cycles are intentionally NOT reported.  A closed loop

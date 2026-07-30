@@ -20,11 +20,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .extractor import extract_behavioral_graph, BehavioralGraph, PartNode
 from .exec_graph import build_exec_graph
-from .scenarios import Scenario, DRONE_SCENARIOS, select_scenarios
+from .scenarios import (
+    Scenario,
+    DRONE_SCENARIOS,
+    classify_parts_by_role,
+    select_scenarios,
+)
 from .simulator import ScenarioSimulator, ScenarioResult
 from .behavioral_sim import run_behavioral_simulation, BehavioralSimResult
 
@@ -36,6 +41,12 @@ class SimulationResult:
     model_name: str
     scenario_results: List[ScenarioResult] = field(default_factory=list)
     reachability_score: float = 0.0   # 0–1, structural connectivity score
+    # Primary structural evidence when a typed generation plan is active.
+    # The role-derived scenario score above remains an advisory diagnostic.
+    requirement_reachability_score: Optional[float] = None
+    requirement_scenarios_passed: int = 0
+    requirement_scenarios_total: int = 0
+    structural_obligation_report: Optional[dict] = None
     behavioral_result: Optional["BehavioralSimResult"] = None  # state machine execution
     parse_errors: List[str] = field(default_factory=list)
     issues: List[str] = field(default_factory=list)
@@ -47,12 +58,65 @@ class SimulationResult:
     num_connections: int = 0
     num_actions: int = 0
     isolated_parts: List[str] = field(default_factory=list)  # parts with no connect statements
+    role_assignments: Dict[str, List[str]] = field(default_factory=dict)
+    weakly_connected_components: List[List[str]] = field(default_factory=list)
+    role_scenario_definitions: List[Dict[str, Any]] = field(
+        default_factory=list
+    )
 
     def passed_scenarios(self) -> List[ScenarioResult]:
         return [r for r in self.scenario_results if r.passed]
 
     def failed_scenarios(self) -> List[ScenarioResult]:
         return [r for r in self.scenario_results if not r.passed]
+
+    def advisory_structural_evidence(self) -> Dict[str, Any]:
+        """Return auditable evidence without promoting heuristics to requirements."""
+        results = {
+            item.scenario_name: item for item in self.scenario_results
+        }
+        scenarios: List[Dict[str, Any]] = []
+        definitions = self.role_scenario_definitions or [
+            {
+                "name": item.scenario_name,
+                "description": item.description,
+                "tags": list(item.tags),
+                "provenance": "LEGACY_ADVISORY",
+            }
+            for item in self.scenario_results
+        ]
+        for definition in definitions:
+            outcome = results.get(str(definition.get("name") or ""))
+            scenarios.append({
+                **definition,
+                "status": (
+                    "PASS"
+                    if outcome is not None and outcome.passed
+                    else "FAIL"
+                ),
+                "path": list(outcome.path) if outcome is not None else [],
+                "issues": (
+                    list(outcome.issues) if outcome is not None else [
+                        "scenario was selected but no outcome was recorded"
+                    ]
+                ),
+                "warnings": (
+                    list(outcome.warnings) if outcome is not None else []
+                ),
+            })
+        return {
+            "evidence_kind": "UNTRACED_ADVISORY",
+            "qualification_effect": "NONE",
+            "role_assignments": {
+                role: list(parts)
+                for role, parts in sorted(self.role_assignments.items())
+            },
+            "weakly_connected_components": [
+                list(component)
+                for component in self.weakly_connected_components
+            ],
+            "scenarios": scenarios,
+        }
 
     @property
     def behavioral_score(self) -> float:
@@ -63,16 +127,29 @@ class SimulationResult:
     @property
     def combined_score(self) -> float:
         """60% structural connectivity + 40% behavioral simulation."""
+        structural = (
+            self.requirement_reachability_score
+            if self.requirement_reachability_score is not None
+            else self.reachability_score
+        )
         if self.behavioral_result is None or self.behavioral_result.extracted_sm_count == 0:
-            return self.reachability_score
-        return 0.6 * self.reachability_score + 0.4 * self.behavioral_score
+            return structural
+        return 0.6 * structural + 0.4 * self.behavioral_score
 
     def summary(self) -> str:
         total = len(self.scenario_results)
         passed = len(self.passed_scenarios())
         lines = [
             f"=== Simulation Result: {self.model_name} ===",
-            f"  Structural Score:  {self.reachability_score:.3f}",
+            (
+                f"  Requirement Structural Score:  "
+                f"{self.requirement_reachability_score:.3f}"
+                f"  ({self.requirement_scenarios_passed}/"
+                f"{self.requirement_scenarios_total})"
+                if self.requirement_reachability_score is not None
+                else f"  Structural Score:  {self.reachability_score:.3f}"
+            ),
+            f"  Advisory Role-Scenario Score:  {self.reachability_score:.3f}",
         ]
         if self.isolated_parts:
             lines.append(f"  Isolated parts:  {', '.join(self.isolated_parts)}"
@@ -152,6 +229,8 @@ class SimulationValidator:
         result.num_ports      = len(bg.ports)
         result.num_connections = len(bg.connections)
         result.num_actions    = len(bg.actions)
+        result.role_assignments = classify_parts_by_role(bg)
+        result.weakly_connected_components = _part_components(bg)
 
         if result.num_parts == 0:
             result.issues.append("No part definitions found — cannot simulate")
@@ -187,8 +266,36 @@ class SimulationValidator:
         # Predefined scenarios are still accepted when callers pass them in.
         candidates: Optional[List[Scenario]] = self._predefined
         scenarios = select_scenarios(bg, predefined=candidates)
+        scenario_provenance = (
+            "PREDEFINED_ADVISORY"
+            if candidates is not None else "AUTO_ROLE_HEURISTIC"
+        )
+        result.role_scenario_definitions = [
+            {
+                "name": item.name,
+                "description": item.description,
+                "entry_nodes": list(item.entry_nodes),
+                "target_nodes": list(item.target_nodes),
+                "required_nodes": list(item.required_nodes),
+                "tags": list(item.tags),
+                "provenance": scenario_provenance,
+            }
+            for item in scenarios
+        ]
         if extra_scenarios:
             scenarios.extend(extra_scenarios)
+            result.role_scenario_definitions.extend(
+                {
+                    "name": item.name,
+                    "description": item.description,
+                    "entry_nodes": list(item.entry_nodes),
+                    "target_nodes": list(item.target_nodes),
+                    "required_nodes": list(item.required_nodes),
+                    "tags": list(item.tags),
+                    "provenance": "CALLER_ADVISORY",
+                }
+                for item in extra_scenarios
+            )
 
         if not scenarios:
             result.issues.append("No applicable scenarios found — check part names")
@@ -220,6 +327,37 @@ class SimulationValidator:
             log.warning("Behavioral simulation failed (non-fatal): %s", e)
 
         return result
+
+
+def _part_components(bg: BehavioralGraph) -> List[List[str]]:
+    """Compute deterministic part-only weak components for audit evidence."""
+    adjacency: Dict[str, set[str]] = {
+        part_name: set() for part_name in bg.parts
+    }
+    for connection in bg.connections:
+        source = connection.source.split(".", 1)[0]
+        target = connection.target.split(".", 1)[0]
+        if source not in adjacency or target not in adjacency:
+            continue
+        adjacency[source].add(target)
+        adjacency[target].add(source)
+
+    remaining = set(adjacency)
+    components: List[List[str]] = []
+    while remaining:
+        seed = min(remaining)
+        frontier = [seed]
+        component: set[str] = set()
+        while frontier:
+            node = frontier.pop()
+            if node in component:
+                continue
+            component.add(node)
+            frontier.extend(sorted(adjacency[node] - component))
+        remaining -= component
+        components.append(sorted(component))
+    return sorted(components, key=lambda item: (-len(item), item))
+
 
 # ---------------------------------------------------------------------------
 # Scoring and recommendation helpers

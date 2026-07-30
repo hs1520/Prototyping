@@ -38,9 +38,11 @@ _STDLIB_TYPE_NAMES = {
     "Real", "Integer", "Boolean", "String", "Rational", "Complex",
     "ScalarValue", "NumericalValue",
     # ISQ / SI units
-    "ISQ", "SI", "LengthValue", "MassValue", "TimeValue", "VelocityValue",
-    "AccelerationValue", "ForceValue", "EnergyValue", "PowerValue",
-    "FrequencyValue", "AngleValue", "TemperatureValue", "VoltageValue",
+    "ISQ", "SI", "LengthValue", "MassValue", "TimeValue", "DurationValue",
+    "SpeedValue", "VelocityValue", "AccelerationValue", "ForceValue",
+    "EnergyValue", "PowerValue", "FrequencyValue", "AngularMeasureValue",
+    "AngleValue", "ThermodynamicTemperatureValue", "TemperatureValue",
+    "VoltageValue",
     "CurrentValue", "ChargeValue",
     # SysML standard packages
     "SysML", "KerML", "ScalarValues", "Quantities",
@@ -93,7 +95,9 @@ _STDLIB_UNIT_NAMES = {
     "mm_hr", "m_s2", "rad_s",
     # SysML unit packages
     "SI", "ISQ",
-    # SysML v2 state machine pseudo-states / reserved feature names
+    # Archived/best-effort callers still parse legacy state spellings. Evidence
+    # and terminal paths always pass ``filter_stdlib_diagnostics=False`` and
+    # therefore cannot use this compatibility allowance.
     "initial", "final", "done", "accept",
 }
 

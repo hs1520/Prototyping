@@ -139,6 +139,18 @@ class TestMinimalSimulation:
         # auto-detected scenarios should find some path
         assert minimal_result.reachability_score >= 0.0
 
+    def test_advisory_evidence_preserves_roles_scenarios_and_components(
+        self, minimal_result
+    ):
+        evidence = minimal_result.advisory_structural_evidence()
+        assert evidence["evidence_kind"] == "UNTRACED_ADVISORY"
+        assert evidence["qualification_effect"] == "NONE"
+        assert evidence["role_assignments"]
+        assert evidence["weakly_connected_components"]
+        assert len(evidence["scenarios"]) == len(
+            minimal_result.scenario_results
+        )
+
 
 # ---------------------------------------------------------------------------
 # Disconnected model tests

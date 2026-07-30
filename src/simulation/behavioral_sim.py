@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .state_extractor import GuardCondition, StateMachineDef, VarRef, extract_state_machines
 from .state_executor import StateMachineInstance
 from .constraint_checker import extract_constraints, ParsedConstraint, eval_op
+from ..utils.sysml_text_utils import find_block_end
 
 
 # ---------------------------------------------------------------------------
@@ -172,13 +173,135 @@ def _guard_endpoints(guard: GuardCondition) -> Tuple[Optional[str], Optional[str
     return lhs_var, rhs_var
 
 
-def _resolve(env: Dict[str, Any], name: str, default: float = 0.0) -> float:
-    """Read a numeric attribute from env with a safe fallback."""
+def _resolve(env: Dict[str, Any], name: str) -> Optional[float]:
+    """Read a numeric attribute without inventing an engineering value."""
     v = env.get(name)
     try:
-        return float(v) if v is not None else default
+        return float(v) if v is not None else None
     except (TypeError, ValueError):
-        return default
+        return None
+
+
+def _build_comparison_driver_plans(
+    guard: GuardCondition,
+    initial_values: Dict[str, Any],
+) -> List[DriverPlan]:
+    """Build bounded trajectories for one numeric comparison guard."""
+    lhs_var, rhs_var = _guard_endpoints(guard)
+
+    if lhs_var and rhs_var:
+        lhs_init = _resolve(initial_values, lhs_var)
+        rhs_init = _resolve(initial_values, rhs_var)
+        plans: List[DriverPlan] = []
+        if rhs_init is not None:
+            plans.append(_swept_plan(
+                swept=lhs_var,
+                held={rhs_var: rhs_init},
+                operator=guard.operator,
+                threshold=rhs_init,
+                initial_values=initial_values,
+                name="drive_LHS",
+            ))
+        flipped = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}.get(
+            guard.operator, guard.operator,
+        )
+        if lhs_init is not None:
+            plans.append(_swept_plan(
+                swept=rhs_var,
+                held={lhs_var: lhs_init},
+                operator=flipped,
+                threshold=lhs_init,
+                initial_values=initial_values,
+                name="drive_RHS",
+            ))
+        return plans
+
+    if lhs_var:
+        effective_threshold = guard.resolve_threshold(initial_values)
+        if effective_threshold is None:
+            return []
+        guard.threshold = effective_threshold
+        held: Dict[str, float] = {}
+        if guard.rhs is not None:
+            for variable in guard.rhs.vars():
+                resolved = _resolve(initial_values, variable)
+                if resolved is None:
+                    return []
+                held[variable] = resolved
+        return [_swept_plan(
+            swept=lhs_var,
+            held=held,
+            operator=guard.operator,
+            threshold=effective_threshold,
+            initial_values=initial_values,
+            name="drive_LHS",
+        )]
+    return []
+
+
+def _flatten_and_operands(
+    guard: GuardCondition,
+) -> Optional[List[GuardCondition]]:
+    if guard.kind != "compound":
+        return [guard]
+    if guard.compound_op != "and":
+        return None
+    flattened: List[GuardCondition] = []
+    for operand in guard.operands:
+        nested = _flatten_and_operands(operand)
+        if nested is None:
+            return None
+        flattened.extend(nested)
+    return flattened
+
+
+def _build_bounded_and_plans(
+    guard: GuardCondition,
+    initial_values: Dict[str, Any],
+) -> List[DriverPlan]:
+    """Satisfy a bounded AND without introducing a general-purpose solver."""
+    operands = _flatten_and_operands(guard)
+    if not operands:
+        return []
+    boolean_targets: Dict[str, bool] = {}
+    comparisons: List[GuardCondition] = []
+    for operand in operands:
+        if operand.kind in {"bool_true", "bool_false"}:
+            target = operand.kind == "bool_true"
+            previous = boolean_targets.get(operand.attribute)
+            if previous is not None and previous is not target:
+                return []
+            boolean_targets[operand.attribute] = target
+        elif operand.kind == "comparison":
+            comparisons.append(operand)
+        else:
+            return []
+    if len(comparisons) > 1:
+        return []
+
+    if comparisons:
+        plans = _build_comparison_driver_plans(
+            comparisons[0], initial_values
+        )
+        for plan in plans:
+            for step in plan.sequence:
+                step.update(boolean_targets)
+            plan.name = f"{plan.name}_with_boolean_holds"
+        return plans
+
+    if not boolean_targets:
+        return []
+    target_state = dict(boolean_targets)
+    first_name = next(iter(target_state))
+    baseline = dict(target_state)
+    baseline[first_name] = not target_state[first_name]
+    sequence = [dict(baseline) for _ in range(5)]
+    sequence.extend(dict(target_state) for _ in range(15))
+    return [DriverPlan(
+        name="satisfy_bool_and",
+        sequence=sequence,
+        swept_var=first_name,
+    )]
 
 
 def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
@@ -209,60 +332,7 @@ def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
 
     # ── Comparison ────────────────────────────────────────────────────────
     if guard.kind == "comparison":
-        lhs_var, rhs_var = _guard_endpoints(guard)
-
-        # Both sides are variables → two-trajectory matrix
-        if lhs_var and rhs_var:
-            lhs_init = _resolve(init, lhs_var)
-            rhs_init = _resolve(init, rhs_var)
-
-            plans: List[DriverPlan] = []
-
-            # Plan A: drive LHS against the current RHS value
-            plans.append(_swept_plan(
-                swept=lhs_var,
-                held={rhs_var: rhs_init},
-                operator=guard.operator,
-                threshold=rhs_init,
-                initial_values=init,
-                name="drive_LHS",
-            ))
-
-            # Plan B: drive RHS so the relation reverses
-            # (`A < B` fires when LHS shrinks below RHS — equivalently when
-            # RHS GROWS above LHS, i.e. flipped operator on RHS).
-            flipped = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}.get(
-                guard.operator, guard.operator,
-            )
-            plans.append(_swept_plan(
-                swept=rhs_var,
-                held={lhs_var: lhs_init},
-                operator=flipped,
-                threshold=lhs_init,
-                initial_values=init,
-                name="drive_RHS",
-            ))
-            return plans
-
-        # LHS bare variable, RHS constant/arithmetic → original single sweep,
-        # but still emit RHS-side vars (if any) as held constants so the
-        # executor's full-env evaluator sees them.
-        if lhs_var:
-            held: Dict[str, float] = {}
-            if guard.rhs is not None:
-                for v in guard.rhs.vars():
-                    held[v] = _resolve(init, v)
-            return [_swept_plan(
-                swept=lhs_var,
-                held=held,
-                operator=guard.operator,
-                threshold=guard.threshold,
-                initial_values=init,
-                name="drive_LHS",
-            )]
-
-        # Neither side is a bare variable — no obvious driver, skip.
-        return []
+        return _build_comparison_driver_plans(guard, init)
 
     # ── Enum equality: `mode == EnumType::Value` (Layer 3) ───────────────
     # Walk ALL enum_eq fault transitions on the same attribute in sequence:
@@ -296,19 +366,18 @@ def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
         seq = [{attr: False}] * 5 + [{attr: True}] * 15
         return [DriverPlan(name="flip_bool", sequence=seq, swept_var=attr)]
 
-    # ── Compound AND of boolean flags ─────────────────────────────────────
-    if guard.kind == "compound" and guard.compound_op == "and":
-        bool_operands = [op for op in guard.operands if op.kind == "bool_true"]
-        if not bool_operands:
-            return []
-        seq: List[Dict[str, Any]] = []
-        state: Dict[str, Any] = {op.attribute: False for op in bool_operands}
-        for i in range(len(bool_operands) * 8 + 10):
-            idx = i // 8
-            for j, op in enumerate(bool_operands):
-                state[op.attribute] = (j <= idx and idx < len(bool_operands))
-            seq.append(dict(state))
-        return [DriverPlan(name="flip_bool_and", sequence=seq)]
+    if guard.kind == "bool_false":
+        attr = guard.attribute
+        seq = [{attr: True}] * 5 + [{attr: False}] * 15
+        return [DriverPlan(
+            name="flip_bool_false",
+            sequence=seq,
+            swept_var=attr,
+        )]
+
+    # ── Bounded compound AND ──────────────────────────────────────────────
+    if guard.kind == "compound":
+        return _build_bounded_and_plans(guard, init)
 
     return []
 
@@ -501,12 +570,34 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
     if not ft and not is_accept_machine:
         return run_initialization_scenario(sm)
 
+    primary_guard = ft[0].guards[0] if ft else None
     plans = _build_driver_plans(sm)
     if not plans:
-        result.violations.append("Could not generate test sequence for guard type")
+        unresolved: List[str] = []
+        if primary_guard is not None and primary_guard.kind == "comparison":
+            lhs_var, rhs_var = _guard_endpoints(primary_guard)
+            if lhs_var and rhs_var:
+                unresolved = [
+                    name for name in (lhs_var, rhs_var)
+                    if _resolve(sm.initial_values or {}, name) is None
+                ]
+            elif primary_guard.rhs is not None:
+                unresolved = [
+                    name for name in primary_guard.rhs.vars()
+                    if _resolve(sm.initial_values or {}, name) is None
+                ]
+        if unresolved:
+            result.violations.append(
+                "Could not resolve guard threshold from declared numeric "
+                "initial values; simulation did not assume 0.0 for: "
+                + ", ".join(dict.fromkeys(unresolved))
+            )
+        else:
+            result.violations.append(
+                "Could not generate test sequence for guard type"
+            )
         return result
 
-    primary_guard = ft[0].guards[0] if ft else None
     is_mode_machine = (primary_guard is not None and primary_guard.kind == "enum_eq")
 
     # ── Execute every plan; pass if ANY plan triggers the fault ──────────────
@@ -626,9 +717,18 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
                         if plan.start_val is not None else
                         f"{plan_label} Driving {plan.swept_var}"
                     )
+                elif primary_guard.kind in {"bool_true", "bool_false"}:
+                    trigger_value = fault_event.variables_snapshot.get(
+                        plan.swept_var
+                    )
+                    result.timeline.append(
+                        f"{plan_label} Flipping {plan.swept_var} to "
+                        f"{trigger_value} at t={int(fault_event.time)}"
+                    )
                 else:
                     result.timeline.append(
-                        f"{plan_label} Flipping {plan.swept_var} to True at t=5"
+                        f"{plan_label} Satisfying compound guard via "
+                        f"{plan.swept_var} at t={int(fault_event.time)}"
                     )
 
             result.timeline.append(fault_event.to_line())
@@ -736,6 +836,8 @@ def _classify_accept_transitions(sm: StateMachineDef):
             t.target,
             state.entry_action if state else None,
             state.entry_action_def if state else None,
+            state.do_action if state else None,
+            state.do_action_def if state else None,
         ))).lower()
         return any(marker in semantic_name for marker in emergency_markers)
 
@@ -953,7 +1055,7 @@ def _run_accept_emergency_scenario(
             f"Emergency transition to '{emrg_tr.target}' did not fire"
         )
     else:
-        entry_action = sm.entry_action_for_state(emrg_tr.target)
+        entry_action = sm.response_action_for_state(emrg_tr.target)
         if entry_action and entry_action not in inst.fired_actions:
             r.violations.append(
                 f"Emergency state '{emrg_tr.target}' entered but "
@@ -1123,7 +1225,10 @@ def _run_cross_component_scenario(
     else:
         target_state = inst_flight.current_state
         is_fault = target_state in fault_states_flight
-        entry = sm_flight.entry_action_for_state(target_state) if is_fault else None
+        entry = (
+            sm_flight.response_action_for_state(target_state)
+            if is_fault else None
+        )
         kind = "emergency" if is_fault else "nominal"
         r.timeline.append(
             f"{sm_flight.name} entered '{target_state}' [{kind}]"
@@ -1295,7 +1400,17 @@ def _run_parametric_constraint_scenario(
             f"{c.lhs} {c.operator} {c.rhs}"
         ),
         passed=False,
-        tags=["parametric_constraint"],
+        tags=[
+            "parametric_constraint",
+            f"constraint_provenance:{c.provenance}",
+            (
+                "requirement_behavior"
+                if c.provenance == "FROZEN_REQUIREMENT"
+                else "ag_behavior"
+                if c.provenance == "A_G_GUARANTEE"
+                else "design_constraint"
+            ),
+        ],
     )
 
     if lhs_init is None:
@@ -1371,6 +1486,208 @@ def _run_parametric_constraint_scenario(
     return result
 
 
+def _owner_part_body(sysml_text: str, owner: str) -> str:
+    match = re.search(
+        rf"\bpart\s+def\s+{re.escape(owner)}\s*\{{",
+        sysml_text,
+    )
+    if match is None:
+        return ""
+    opening = sysml_text.find("{", match.start(), match.end())
+    closing = find_block_end(sysml_text, opening)
+    return (
+        sysml_text[opening + 1:closing]
+        if closing != -1 else ""
+    )
+
+
+def _state_body_text(
+    owner_body: str,
+    behavior_name: str,
+    state_name: str,
+) -> str:
+    behavior = re.search(
+        rf"\bstate\s+def\s+{re.escape(behavior_name)}\s*\{{",
+        owner_body,
+    )
+    if behavior is None:
+        return ""
+    behavior_opening = owner_body.find(
+        "{", behavior.start(), behavior.end()
+    )
+    behavior_closing = find_block_end(owner_body, behavior_opening)
+    if behavior_closing == -1:
+        return ""
+    state = re.search(
+        rf"\bstate\s+(?!def\b){re.escape(state_name)}\s*\{{",
+        owner_body[behavior_opening + 1:behavior_closing],
+    )
+    if state is None:
+        return ""
+    state_start = behavior_opening + 1 + state.start()
+    state_opening = owner_body.find(
+        "{", state_start, behavior_opening + 1 + state.end()
+    )
+    state_closing = find_block_end(owner_body, state_opening)
+    return (
+        owner_body[state_opening + 1:state_closing]
+        if state_closing != -1 else ""
+    )
+
+
+def _run_state_active_constraint_scenario(
+    c: ParsedConstraint,
+    sysml_text: str,
+    state_machines: List[StateMachineDef],
+    all_initial_values: Dict[str, float],
+) -> BehavioralScenarioResult:
+    """Verify bounded execution evidence for a state-owned SysML constraint.
+
+    This proves model containment, reachability, response execution, typed
+    runtime binding, and a live numeric boundary. It deliberately does not
+    claim that the external environment will satisfy the bound.
+    """
+    result = BehavioralScenarioResult(
+        name=f"state_constraint_{c.name}",
+        state_machine=(
+            c.activation_ref
+            or f"{c.owner_part}::state_constraint"
+        ),
+        description=(
+            f"{c.owner_part}.{c.name}: execute STATE_ACTIVE constraint "
+            f"{c.lhs} {c.operator} {c.rhs}"
+        ),
+        passed=False,
+        tags=[
+            "state_active_constraint",
+            f"constraint_provenance:{c.provenance}",
+            (
+                "requirement_behavior"
+                if c.provenance == "FROZEN_REQUIREMENT"
+                else "ag_behavior"
+                if c.provenance == "A_G_GUARANTEE"
+                else "design_constraint"
+            ),
+        ],
+    )
+    if not c.activation_ref or "::" not in c.activation_ref:
+        result.violations.append(
+            "STATE_ACTIVE constraint has no BehaviorId::StateId reference"
+        )
+        return result
+    behavior_name, state_name = c.activation_ref.split("::", 1)
+    if (
+        c.containing_behavior != behavior_name
+        or c.containing_state != state_name
+    ):
+        result.violations.append(
+            f"Constraint is contained by "
+            f"{c.containing_behavior or '?'}::{c.containing_state or '?'}, "
+            f"expected {c.activation_ref}"
+        )
+        return result
+    machine = next(
+        (
+            item for item in state_machines
+            if item.owner_part == c.owner_part
+            and item.name == behavior_name
+        ),
+        None,
+    )
+    if machine is None:
+        result.violations.append(
+            f"Cannot extract activation behavior {behavior_name}"
+        )
+        return result
+    reachable = {machine.initial_state} if machine.initial_state else set()
+    changed = True
+    while changed:
+        changed = False
+        for transition in machine.transitions:
+            if (
+                transition.source in reachable
+                and transition.target
+                and transition.target not in reachable
+            ):
+                reachable.add(transition.target)
+                changed = True
+    if state_name not in reachable:
+        result.violations.append(
+            f"Activation state {c.activation_ref} is unreachable"
+        )
+    state = next(
+        (item for item in machine.states if item.name == state_name),
+        None,
+    )
+    owner_body = _owner_part_body(sysml_text, c.owner_part)
+    state_body = _state_body_text(
+        owner_body, behavior_name, state_name
+    )
+    has_do_action = bool(
+        (state and state.do_action)
+        or re.search(r"\bdo\s+action\b", state_body)
+    )
+    if state is None or (not state.entry_action and not has_do_action):
+        result.violations.append(
+            f"Activation state {c.activation_ref} has no executable "
+            "entry/do response"
+        )
+    runtime_binding = re.search(
+        rf"\battribute\s+{re.escape(c.lhs)}\s*:[^;=]+=\s*"
+        r"(?P<path>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\s*;",
+        owner_body,
+    )
+    if runtime_binding is None:
+        result.violations.append(
+            f"Runtime subject {c.lhs} is not bound to an input data path"
+        )
+    rhs_value = all_initial_values.get(c.rhs)
+    if rhs_value is None:
+        try:
+            rhs_value = float(c.rhs)
+        except (TypeError, ValueError):
+            result.violations.append(
+                f"Cannot resolve state constraint RHS {c.rhs}"
+            )
+    if rhs_value is not None:
+        epsilon = max(abs(float(rhs_value)) * 0.01, 0.01)
+        on_valid_side = (
+            float(rhs_value) + epsilon
+            if c.operator in {">=", ">"}
+            else float(rhs_value) - epsilon
+        )
+        on_invalid_side = (
+            float(rhs_value) - epsilon
+            if c.operator in {">=", ">"}
+            else float(rhs_value) + epsilon
+        )
+        if (
+            not eval_op(on_valid_side, c.operator, float(rhs_value))
+            or eval_op(on_invalid_side, c.operator, float(rhs_value))
+        ):
+            result.violations.append(
+                f"Constraint boundary {c.operator} {rhs_value:g} is not live"
+            )
+        else:
+            response_label = (
+                state.entry_action
+                if state and state.entry_action
+                else state.do_action
+                if state and state.do_action
+                else "do action"
+            )
+            result.timeline.append(
+                f"Reached {c.activation_ref}; state response "
+                f"{response_label} executes"
+            )
+            result.timeline.append(
+                f"Runtime input {c.lhs} evaluated at live boundary "
+                f"{c.operator} {rhs_value:g}"
+            )
+    result.passed = not result.violations
+    return result
+
+
 def _collect_constraint_scenarios(
     sysml_text: str,
     state_machines: List[StateMachineDef],
@@ -1382,6 +1699,9 @@ def _collect_constraint_scenarios(
     constraints = extract_constraints(sysml_text)
     if not constraints:
         return []
+    plan_owned_model = any(
+        item.plan_constraint_id is not None for item in constraints
+    )
 
     # Merge attribute values: full-text scan takes precedence over per-SM dicts
     all_initial_values: Dict[str, float] = {}
@@ -1410,6 +1730,28 @@ def _collect_constraint_scenarios(
 
     results: List[BehavioralScenarioResult] = []
     for c in constraints:
+        # Once the model carries compiler-owned constraint annotations, only
+        # those planned invariants may contribute executable evidence.
+        # Unannotated A/G prose invariants and LLM-authored assertions remain
+        # available to their dedicated checkers but cannot inflate or fail the
+        # parametric denominator.
+        if plan_owned_model and c.plan_constraint_id is None:
+            continue
+        if (
+            c.activation == "STATE_ACTIVE"
+            and c.verification_tier == "STATE_EXECUTION"
+        ):
+            results.append(_run_state_active_constraint_scenario(
+                c,
+                sysml_text,
+                state_machines,
+                all_initial_values,
+            ))
+            continue
+        if c.activation != "ALWAYS" or (
+            c.verification_tier != "PARAMETRIC_SWEEP"
+        ):
+            continue
         r = _run_parametric_constraint_scenario(
             c, all_initial_values, guard_variables, readonly_vars
         )

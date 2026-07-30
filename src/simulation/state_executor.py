@@ -123,7 +123,10 @@ class StateMachineInstance:
         old_state = self.current_state
         self.current_state = tr.target
 
-        entry = self.sm.entry_action_for_state(tr.target) if tr.target else None
+        entry = (
+            self.sm.response_action_for_state(tr.target)
+            if tr.target else None
+        )
         if entry:
             self.fired_actions.append(entry)
 
