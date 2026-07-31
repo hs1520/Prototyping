@@ -199,13 +199,20 @@ def _print_sysml_model_debug(
 
 
 #: Bounded attempts the typed whole-model plan gets before generation fails
-#: closed. Measured reason for the value: on the frozen four-requirement set,
-#: R1/R2 reach a valid plan on attempt 1, while R0 — which has no
-#: ContextEnvelope — exhausted three attempts on 2 of 3 seeds and could not
-#: complete the pilot at all. A budget that the baseline cannot finish within
-#: turns a measurable difference ("R0 needs more attempts") into a missing run,
-#: so the budget is set to let every arm complete and the attempt count is
-#: reported as evidence instead.
+#: closed, frozen per pilot and recorded in ``pilot_config.json``.
+#:
+#: Why it is 6 rather than 3 — and what that is NOT evidence of. One pilot came
+#: back INCOMPLETE because R0-CURRENT exhausted three attempts on 2 of 3 seeds.
+#: The obvious reading, that the baseline needs more attempts than the arms
+#: carrying a ContextEnvelope, did not survive: the very next pilot, whose only
+#: code difference was this ceiling, reached a valid plan on attempt 1 in all
+#: nine runs and never used the extra budget at all. The two failures were
+#: step-1 sampling variance (``R2_GENERATION_FINDINGS.md`` §7.2, Finding 3).
+#:
+#: The headroom is kept anyway, for the reason that survives: a budget tight
+#: enough to lose runs to sampling converts a recoverable retry into a missing
+#: run and an unusable pilot. Attempt counts are archived per run, so if a real
+#: per-arm difference exists it will show up as a count, not as a failure.
 DEFAULT_MAXIMUM_PLAN_ATTEMPTS = 6
 
 
