@@ -576,3 +576,55 @@ def test_qualification_uses_provenance_specific_behavior_denominators():
     assert checks["REQUIREMENT_BEHAVIOR_EXECUTION"]["status"] == "PASS"
     assert checks["BEHAVIORAL_EXECUTION"]["status"] == "ADVISORY"
     assert "REQUIREMENT_BEHAVIOR_EXECUTION" not in qualification["failed_checks"]
+
+
+def test_a_unit_suffixed_type_is_normalised_rather_than_duplicated():
+    """A real pilot run failed qualification on exactly this.
+
+    The model declared `attribute currentSeparation : LengthValue [m] = ...`.
+    The materialiser's attribute pattern did not accept a unit after the type,
+    found no match by that name, and appended its own declaration — leaving the
+    same attribute twice in one part def, which USER_NAMESPACE_INTEGRITY and the
+    Syside namespace-distinguishability warning both correctly rejected.
+
+    Normalising loses nothing: the project writes units on the value
+    (`= 5 [m]`), never on the type, and the quantity is carried by the type name
+    plus the separately tracked semantic binding.
+    """
+    from src.prototyping.activated_constraint_plan import (
+        materialize_planned_attributes,
+    )
+
+    model = (
+        "package S {\n"
+        "    part def Controller {\n"
+        "        in port signal : DataPort;\n"
+        "        attribute currentSeparation : LengthValue [m] = "
+        "signal.payload.separation;\n"
+        "        attribute minSeparationThreshold : LengthValue [m] = 5 [m];\n"
+        "    }\n"
+        "}\n"
+    )
+    component = SimpleNamespace(
+        name="Controller",
+        attributes=(
+            SimpleNamespace(
+                name="currentSeparation", value_type="LengthValue", unit="m",
+                initial_value="", input_binding="signal.payload.separation",
+            ),
+            SimpleNamespace(
+                name="minSeparationThreshold", value_type="LengthValue",
+                unit="m", initial_value="5", input_binding="",
+            ),
+        ),
+    )
+
+    text, report = materialize_planned_attributes(model, [component])
+
+    assert report["status"] == "PASS"
+    assert report["materialized_attributes"] == [], "nothing may be appended"
+    for name in ("currentSeparation", "minSeparationThreshold"):
+        assert text.count(f"attribute {name} :") == 1, f"{name} declared twice"
+    # normalised to the project's form: unit on the value, not on the type
+    assert "LengthValue [m]" not in text
+    assert "attribute minSeparationThreshold : LengthValue = 5 [m];" in text

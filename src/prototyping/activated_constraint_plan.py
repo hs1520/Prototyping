@@ -49,7 +49,13 @@ _COMPARISON = re.compile(
 )
 _ATTRIBUTE = re.compile(
     r"\battribute\s+(?P<name>[A-Za-z_]\w*)"
-    r"(?:\s*:\s*(?P<type>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*))?"
+    r"(?:\s*:\s*(?P<type>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)"
+    # A bracket suffix after the type — `LengthValue [m]` — is not how this
+    # project writes units (they go on the value: `= 5 [m]`), but generation
+    # produces it, and a pattern that cannot see such a declaration reports the
+    # attribute as absent and appends a second one. Matching it is what lets the
+    # existing replace branch normalise it instead of duplicating it.
+    r"(?P<type_suffix>\s*\[[^\]{}]*\])?)?"
     r"(?:\s*=\s*(?P<value>[^;{}]+))?\s*;"
 )
 _PLAN_COMMENT = re.compile(
