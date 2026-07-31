@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from .ag_behavior_plan import (
     BehaviorObligation,
     BehaviorObligationPlan,
+    behavior_boolean_concepts,
     materialize_owned_behavior_obligations,
     reserved_behavior_identities,
 )
@@ -1525,6 +1526,47 @@ def attach_ag_behavior_obligations(
         issues.append(
             f"A/G behavior obligation plan is {behavior_plan.status}"
         )
+    # An A/G concept used as a Boolean operand is typed by the contract, not by
+    # generation — a guard or invariant reading `not (airborne)` is meaningless
+    # over a Real. Nothing owned that type before: these concepts come from the
+    # frozen A/G decisions, so the typed plan never carried them and generation
+    # was free to write `attribute airborne : Real = 0.0;`. It did, in two
+    # measured runs, and the only thing left to catch it was the terminal gate,
+    # which could then only fail the whole run.
+    #
+    # Declaring them here puts them under the existing planned-attribute
+    # materialiser, so the type is enforced during generation and the terminal
+    # gate goes back to being a check that should never fire rather than the
+    # first line of defence. A concept the component already plans is left
+    # alone: the plan is authority for its own attributes.
+    boolean_by_owner: dict[str, set[str]] = {}
+    for obligation in behavior_plan.obligations:
+        for concept in behavior_boolean_concepts(obligation):
+            boolean_by_owner.setdefault(obligation.owner_def, set()).add(concept)
+    if boolean_by_owner:
+        components = []
+        for component in plan.components:
+            wanted = boolean_by_owner.get(component.name, set())
+            existing = {item.name for item in component.attributes}
+            missing = sorted(wanted - existing)
+            if not missing:
+                components.append(component)
+                continue
+            components.append(replace(component, attributes=(
+                *component.attributes,
+                *(
+                    AttributePlan(
+                        name=concept,
+                        value_type="Boolean",
+                        unit="1",
+                        role="LOCAL_STATE",
+                        provenance="DESIGN_DECISION",
+                    )
+                    for concept in missing
+                ),
+            )))
+        plan = replace(plan, components=tuple(components))
+
     reserved = {
         (item["owner_def"], item["name"]): item
         for item in reserved_behavior_identities(behavior_plan)

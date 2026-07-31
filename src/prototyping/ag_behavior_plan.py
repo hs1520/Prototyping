@@ -438,6 +438,36 @@ _RESERVED_BEHAVIOR_KINDS = (
 )
 
 
+_BOOLEAN_WORDS = {"and", "or", "not", "true", "false"}
+
+
+def behavior_boolean_concepts(obligation: Any) -> Tuple[str, ...]:
+    """Concepts an obligation actually uses as Boolean behavior operands.
+
+    Single definition on purpose. The typed plan declares these as Boolean so
+    generation cannot type them otherwise, and the terminal binder checks the
+    same set; two copies could drift and then the plan would enforce concepts
+    the gate does not check, or vice versa.
+    """
+    if obligation is None:
+        return ()
+    expressions: list[str] = []
+    if obligation.invariant_expression:
+        expressions.append(obligation.invariant_expression)
+    expressions.extend(
+        transition.guard
+        for transition in obligation.transitions
+        if transition.guard
+    )
+    allowed = set(obligation.assumptions) | set(obligation.guarantees)
+    return tuple(dict.fromkeys(
+        token
+        for expression in expressions
+        for token in re.findall(r"\b[A-Za-z_]\w*\b", expression)
+        if token not in _BOOLEAN_WORDS and token in allowed
+    ))
+
+
 def reserved_behavior_identities(
     plan: BehaviorObligationPlan,
 ) -> tuple[dict[str, str], ...]:

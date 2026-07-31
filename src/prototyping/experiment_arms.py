@@ -24,7 +24,14 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # declaration instead of normalising the existing one — the sole cause of
 # the one NOT_QUALIFIED run in pilot_v11b_20260731. Generation prompts are
 # unchanged; the terminal model is not, so v11 and v12 are not poolable.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v12"
+# v13 puts A/G Boolean concepts under the typed plan. They are typed by the
+# contract but were never planned attributes, so nothing owned their declared
+# type and generation was free to write `attribute airborne : Real = 0.0;` —
+# which it did in two measured runs, leaving the terminal gate as the first
+# thing to see it and able only to fail the run. The gate stays fail-closed;
+# what changes is that the existing planned-attribute materialiser now
+# enforces the type during generation. v12 and v13 are not poolable.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v13"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"

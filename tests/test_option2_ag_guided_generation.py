@@ -340,3 +340,78 @@ def test_generation_drafts_are_archived_on_the_board_but_never_authority():
             system_name="DeliveryUAV",
             source_record_ids=(records[0].record_id,),
         )
+
+
+
+def test_the_plan_owns_ag_boolean_concepts_so_generation_cannot_mistype_them():
+    """Two measured runs died on `attribute airborne : Real = 0.0;`.
+
+    These concepts are typed by the A/G contract, but they are not planned
+    attributes — they come from the frozen A/G decisions, so nothing owned their
+    declared type and the terminal gate was the first thing to see the
+    contradiction, by which point it could only fail the run.
+
+    Declaring them in the typed plan puts them under the existing
+    planned-attribute materialiser. The terminal gate is deliberately left
+    fail-closed: it goes back to being a check that should never fire.
+    """
+    from src.prototyping.ag_behavior_plan import (
+        behavior_boolean_concepts,
+        compile_behavior_obligation_plan,
+    )
+    from src.prototyping.activated_constraint_plan import (
+        materialize_planned_attributes,
+    )
+    from src.prototyping.generation_plan import (
+        ModelGenerationPlan,
+        attach_ag_behavior_obligations,
+    )
+
+    behavior_plan = compile_behavior_obligation_plan([REQ_SAFE_005_CHAIN])
+    expected = {
+        obligation.owner_def: set(behavior_boolean_concepts(obligation))
+        for obligation in behavior_plan.obligations
+    }
+    assert expected.get("RecoveryPowerSupply"), "fixture must exercise a concept"
+
+    plan = ModelGenerationPlan.from_payload({
+        "components": [
+            {
+                "name": obligation.owner_def,
+                "responsibility": "x",
+                "requirements": ["REQ_SAFE_005"],
+                "ports": [],
+            }
+            for obligation in behavior_plan.obligations
+        ],
+        "connections": [],
+    }, source="TEST", requirements=_REQS)
+    plan = attach_ag_behavior_obligations(plan, behavior_plan)
+
+    planned = {
+        component.name: {
+            item.name: item.value_type for item in component.attributes
+        }
+        for component in plan.components
+    }
+    for owner, concepts in expected.items():
+        for concept in concepts:
+            assert planned[owner].get(concept) == "Boolean", (
+                f"{owner}::{concept} must be planned Boolean"
+            )
+
+    # and the existing materialiser then corrects a mistyped declaration
+    component = next(
+        item for item in plan.components if item.name == "RecoveryPowerSupply"
+    )
+    text, report = materialize_planned_attributes(
+        "package S {\n"
+        "    part def RecoveryPowerSupply {\n"
+        "        attribute airborne : Real = 0.0;\n"
+        "    }\n"
+        "}\n",
+        [component],
+    )
+    assert "attribute airborne : Boolean;" in text
+    assert "Real" not in text
+    assert "RecoveryPowerSupply.airborne" in report["restored_attributes"]

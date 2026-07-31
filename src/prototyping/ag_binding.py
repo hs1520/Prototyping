@@ -9,6 +9,7 @@ from .ag_emitter import AGChainSpec, ag_event_signals
 from .ag_behavior_plan import (
     BehaviorObligationPlan,
     INVARIANT,
+    behavior_boolean_concepts as _behavior_boolean_concepts,
     compile_behavior_obligation_plan,
 )
 from .ag_planning import (
@@ -207,28 +208,6 @@ def _resolve_owner_usage(
     )
 
 
-_BOOLEAN_WORDS = {"and", "or", "not", "true", "false"}
-
-
-def _behavior_boolean_concepts(obligation: Any) -> tuple[str, ...]:
-    """Return only concepts actually used as Boolean behavior operands."""
-    expressions: list[str] = []
-    if obligation is None:
-        return ()
-    if obligation.invariant_expression:
-        expressions.append(obligation.invariant_expression)
-    expressions.extend(
-        transition.guard
-        for transition in obligation.transitions
-        if transition.guard
-    )
-    allowed = set(obligation.assumptions) | set(obligation.guarantees)
-    return tuple(dict.fromkeys(
-        token
-        for expression in expressions
-        for token in re.findall(r"\b[A-Za-z_]\w*\b", expression)
-        if token not in _BOOLEAN_WORDS and token in allowed
-    ))
 
 
 def _declared_attribute_type(attribute: Any, model_text: str) -> str:
