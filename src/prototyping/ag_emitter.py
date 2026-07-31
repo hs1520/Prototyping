@@ -84,6 +84,15 @@ class AGPrioritySpec:
     #: Runtime-generated catalogs use EXISTING_MODEL_BEHAVIOR; reviewed specs may
     #: retain their independently approved source for backward compatibility.
     member_provenance: Tuple[Tuple[str, str, str], ...] = ()
+    #: Arbitration element names used when no runtime response catalog is bound.
+    #: These were hard-coded to REQ_SAFE_005's names, which silently made the
+    #: unbound path single-chain: a second arbitrating chain rendered its own
+    #: trigger and response state under the parachute chain's identifiers, and
+    #: the selection transition then reached a state its arbiter never declared.
+    #: The defaults keep REQ_SAFE_005 and its frozen gold byte-identical.
+    trigger_signal: str = "CriticalPropulsionFailureDetectedSignal"
+    selected_state: str = "parachuteDeploymentSelected"
+    selection_transition: str = "selectParachute"
 
 
 @dataclass(frozen=True)
@@ -158,7 +167,7 @@ def ag_event_signals(spec: AGChainSpec) -> Tuple[str, ...]:
         signals.append(
             f"{_capitalise(priority.trigger)}Signal"
             if runtime_catalog_bound
-            else "CriticalPropulsionFailureDetectedSignal"
+            else priority.trigger_signal
         )
         signals.extend(
             f"{_sysml_identifier(lower.title())}RequestSignal"
@@ -377,7 +386,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         trigger_signal = (
             f"{_capitalise(priority.trigger)}Signal"
             if runtime_catalog_bound
-            else "CriticalPropulsionFailureDetectedSignal"
+            else priority.trigger_signal
         )
         out.append(
             f"    item def {_sysml_identifier(trigger_signal)};"
@@ -394,7 +403,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         selected_token = (
             _sysml_identifier(priority.selected_response)
             if runtime_catalog_bound
-            else "parachuteDeploymentSelected"
+            else priority.selected_state
         )
         arbiter = next(
             (
@@ -411,7 +420,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         selection_transition_name = (
             f"select{_capitalise(_sysml_identifier(priority.selected_response))}"
             if runtime_catalog_bound
-            else "selectParachute"
+            else priority.selection_transition
         )
         out.append(
             f"        transition {selection_transition_name} "

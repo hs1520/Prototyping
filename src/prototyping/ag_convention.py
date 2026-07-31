@@ -185,7 +185,10 @@ DECISION_FIELD_OBLIGATIONS: Tuple[Tuple[str, str], ...] = (
         "the boundary (a supply that is already on, not something that gets "
         "triggered) sets it false: it is realised as one steady state that "
         "establishes its guarantee, and a trigger-response machine cannot be "
-        "built for it.",
+        "built for it. This reading is the same under both triggered patterns — "
+        "it says whether the component REACTS, not whether a deadline is being "
+        "apportioned. So under THRESHOLD_TRIGGERED_RESPONSE a reacting component "
+        "still sets it true, and pairs that with a null latency_budget_seconds.",
     ),
     (
         "lifecycle_events",
@@ -198,10 +201,14 @@ DECISION_FIELD_OBLIGATIONS: Tuple[Tuple[str, str], ...] = (
     ),
     (
         "latency_budget_seconds",
-        "null exactly when timing_segment_required is false — a component that "
-        "consumes no time on the path owns no part of the deadline. The budgets "
-        "that are set must fit inside deadline_seconds once composed: they "
-        "apportion the system deadline, they do not each restate it.",
+        "under TRIGGERED_TIMED_FAILSAFE_RESPONSE, null exactly when "
+        "timing_segment_required is false — a component that consumes no time on "
+        "the path owns no part of the deadline. The budgets that are set must fit "
+        "inside deadline_seconds once composed: they apportion the system "
+        "deadline, they do not each restate it. Under THRESHOLD_TRIGGERED_"
+        "RESPONSE it is ALWAYS null, for every component including the reacting "
+        "ones: that pattern states no deadline, so there is nothing to apportion "
+        "and a budget would be a number the requirement does not contain.",
     ),
     (
         "timing_segment_group",
@@ -393,11 +400,16 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
         "PATTERN_DECLARATION_INCONSISTENT", CONVENTION,
         "Declare `safety_pattern=` on the provenance line as exactly one of "
-        "TRIGGERED_TIMED_FAILSAFE_RESPONSE, STARTUP_INHIBIT, "
-        "LOCKED_UNTIL_AUTHORISED_RELEASE, and classify the requirement yourself. "
-        "A timed pattern must carry a timing budget; an invariant pattern must "
-        "not. Whether your classification is the right one is scored by the "
-        "evaluator, not enforced here.",
+        "TRIGGERED_TIMED_FAILSAFE_RESPONSE, THRESHOLD_TRIGGERED_RESPONSE, "
+        "STARTUP_INHIBIT, LOCKED_UNTIL_AUTHORISED_RELEASE, and classify the "
+        "requirement yourself. Only TRIGGERED_TIMED_FAILSAFE_RESPONSE carries a "
+        "timing budget; the other three must not. Choose "
+        "THRESHOLD_TRIGGERED_RESPONSE when the requirement names a trigger, a "
+        "response, and a precedence relation to other responses but states NO "
+        "deadline — do not invent one to reach the timed pattern, and do not "
+        "state a trigger-response obligation as an invariant. Whether your "
+        "classification is the right one is scored by the evaluator, not "
+        "enforced here.",
            tier=REFINEMENT,
     ),
     Obligation(

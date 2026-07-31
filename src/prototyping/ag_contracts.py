@@ -33,7 +33,17 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 # each declared member says whether it came from existing model behavior or an
 # approved/derived design source. Verdicts therefore remain gold-blind, but differ
 # from v7 and may not be pooled.
-AG_CHECKER_VERSION = "ag-bounded-8"
+#
+# ag-bounded-9 admits THRESHOLD_TRIGGERED_RESPONSE: a triggered pattern that
+# states no deadline. It carries the timed pattern's arbitration obligations and
+# drops exactly the timing ones — no apportioned budget, and no
+# trigger_matches_timing_origin cross-check, which for an untimed chain would be
+# demanding the deadline the pattern exists to do without. A boundary component
+# also stops being mandatory where nothing is apportioned, while any that is
+# declared is still held to its obligation. The timed pattern's own obligations
+# are unchanged and separately pinned, but the set of accepted declarations and
+# the untimed verdicts differ, so v8 and v9 may not be pooled.
+AG_CHECKER_VERSION = "ag-bounded-9"
 
 # Completeness states (§6.3).
 READY = "READY"
@@ -97,11 +107,20 @@ _ERROR_CODES = frozenset({
 })
 
 _TIMED_PATTERN = "TRIGGERED_TIMED_FAILSAFE_RESPONSE"
+#: A trigger→response pattern that states no deadline. It shares the timed
+#: pattern's arbitration obligations and drops only the timing ones: the profile
+#: previously forced a requirement with a trigger, a response and a precedence
+#: relation but no deadline to be declared under a pattern that does not fit it.
+_THRESHOLD_PATTERN = "THRESHOLD_TRIGGERED_RESPONSE"
+_TRIGGERED_PATTERNS = {_TIMED_PATTERN, _THRESHOLD_PATTERN}
 _INVARIANT_PATTERNS = {
     "STARTUP_INHIBIT",
     "LOCKED_UNTIL_AUTHORISED_RELEASE",
 }
-_KNOWN_PATTERNS = {_TIMED_PATTERN, *_INVARIANT_PATTERNS}
+#: Every pattern that must not apportion a deadline — the untimed triggered
+#: pattern for the same reason the invariant ones do: it owns no interval.
+_UNTIMED_PATTERNS = {_THRESHOLD_PATTERN, *_INVARIANT_PATTERNS}
+_KNOWN_PATTERNS = {_TIMED_PATTERN, *_TRIGGERED_PATTERNS, *_INVARIANT_PATTERNS}
 
 #: The roles each invariant pattern is *defined* by. An invariant set that leaves
 #: one of them unfilled has not stated the pattern, whatever it names its
@@ -1520,7 +1539,7 @@ def _check_profile_semantics(
     if (
         (effective_pattern == _TIMED_PATTERN and system.timing_budget is None)
         or (
-            effective_pattern in _INVARIANT_PATTERNS
+            effective_pattern in _UNTIMED_PATTERNS
             and system.timing_budget is not None
         )
     ):
@@ -1531,13 +1550,13 @@ def _check_profile_semantics(
             subject=effective_pattern,
         ))
 
-    if effective_pattern == _TIMED_PATTERN:
+    if effective_pattern in _TRIGGERED_PATTERNS:
         priority = graph.priority
         if not isinstance(priority, Mapping) or not priority:
             diagnostics.append(AGDiagnostic(
                 CODE_PRIORITY_TOPOLOGY_MISSING,
-                f"{system.name} timed failsafe has no extracted priority "
-                "contract/topology",
+                f"{system.name} triggered response ({effective_pattern}) has no "
+                "extracted priority contract/topology",
                 contract=system.name,
             ))
             return diagnostics
@@ -1660,8 +1679,20 @@ def _check_profile_semantics(
                 _flat_token(entry) == _flat_token(f"set{concept}")
                 for concept in component.boolean_guarantee_concepts()
             )
-        recovery_power_available_at_boundary = bool(boundary_components) and all(
+        boundary_guarantees_established = all(
             _establishes_at_boundary(item) for item in boundary_components
+        )
+        # A timed chain apportions its deadline, so at least one participant must
+        # be excluded from that apportionment by being available at the boundary;
+        # its absence means every component was charged time and the composition
+        # is not the one the pattern describes. An untimed chain apportions
+        # nothing, so having no boundary component is an ordinary shape, not a
+        # defect — but any boundary component it does declare is held to the same
+        # obligation.
+        recovery_power_available_at_boundary = (
+            boundary_guarantees_established
+            if effective_pattern != _TIMED_PATTERN
+            else bool(boundary_components) and boundary_guarantees_established
         )
         deployment_action_connected = bool(observation) and any(
             _flat_token(action) == _flat_token(f"set{observation}")
@@ -1722,8 +1753,15 @@ def _check_profile_semantics(
             ("trigger_concept",
              bool(trigger)
              and trigger in {a.concept for a in system.assumptions}),
+            # Cross-check only where the trigger is declared twice. A timed chain
+            # states it in the priority contract AND as the system contract's
+            # interval origin, and the two must agree. An untimed chain declares
+            # no interval, so it states the trigger once; there is nothing to
+            # cross-check, and demanding a timing origin would be demanding the
+            # deadline the pattern exists to do without.
             ("trigger_matches_timing_origin",
-             trigger == (system.timing_origin or "")),
+             effective_pattern != _TIMED_PATTERN
+             or trigger == (system.timing_origin or "")),
             ("selection_guarded_by_trigger", selection_when == trigger),
             ("selected_transition_reachable", reachable),
             ("selection_action_connected", selection_action_connected),

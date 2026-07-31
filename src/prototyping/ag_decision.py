@@ -44,6 +44,29 @@ INVARIANT_SOURCE_KINDS = ("STAKEHOLDER", "STUDENT_DERIVED_DESIGN_CONSTRAINT")
 #: Patterns an author may choose between; the choice itself is the model's.
 KNOWN_PATTERNS = (
     "TRIGGERED_TIMED_FAILSAFE_RESPONSE",
+    "THRESHOLD_TRIGGERED_RESPONSE",
+    "STARTUP_INHIBIT",
+    "LOCKED_UNTIL_AUTHORISED_RELEASE",
+)
+
+#: Patterns whose obligation is a trigger→response transition with arbitration.
+#: Both carry a priority contract; only the timed one apportions a deadline.
+#:
+#: The untimed member exists because the profile had a structural gap: a
+#: requirement that names a trigger, a response, and a precedence relation but no
+#: deadline ("return to base at 25% state-of-charge, unless a higher-priority
+#: response is in progress") could be declared neither timed — the checker
+#: rejects a timed pattern with no budget — nor invariant, because a
+#: trigger→response transition is not a continuously held implication. Declaring
+#: one to get the other's checks would mean inventing a deadline the requirement
+#: does not state.
+TRIGGERED_PATTERNS = (
+    "TRIGGERED_TIMED_FAILSAFE_RESPONSE",
+    "THRESHOLD_TRIGGERED_RESPONSE",
+)
+
+#: Patterns whose obligation is stated as continuously held Boolean invariants.
+INVARIANT_PATTERNS = (
     "STARTUP_INHIBIT",
     "LOCKED_UNTIL_AUTHORISED_RELEASE",
 )
@@ -446,7 +469,7 @@ def validate_decisions(
             f"{sorted(known_components - seen)}"
         )
 
-    if pattern != "TRIGGERED_TIMED_FAILSAFE_RESPONSE":
+    if pattern in INVARIANT_PATTERNS:
         # an invariant pattern states its obligation as invariants and must carry
         # no timing budget — the two are mutually exclusive in the profile
         invariants = decisions.get("invariants")
@@ -472,12 +495,33 @@ def validate_decisions(
                     f"{list(INVARIANT_SOURCE_KINDS)}, got {kind!r}"
                 )
 
-    if pattern == "TRIGGERED_TIMED_FAILSAFE_RESPONSE":
-        if decisions.get("deadline_seconds") in (None, ""):
-            raise DecisionError("a timed pattern needs deadline_seconds")
+    if pattern in TRIGGERED_PATTERNS:
+        if pattern == "TRIGGERED_TIMED_FAILSAFE_RESPONSE":
+            if decisions.get("deadline_seconds") in (None, ""):
+                raise DecisionError("a timed pattern needs deadline_seconds")
+        else:
+            # An untimed triggered pattern apportions nothing: a stated deadline
+            # would make it a timed chain declared under the wrong name, and the
+            # composition check would then compose budgets against a deadline the
+            # requirement never set.
+            if decisions.get("deadline_seconds") not in (None, ""):
+                raise DecisionError(
+                    f"{pattern} is untimed and must not carry deadline_seconds"
+                )
+            budgeted = sorted(
+                str(entry.get("component_id"))
+                for entry in decided
+                if isinstance(entry, Mapping)
+                and entry.get("latency_budget_seconds") not in (None, "")
+            )
+            if budgeted:
+                raise DecisionError(
+                    f"{pattern} is untimed; no component may carry "
+                    f"latency_budget_seconds, got {budgeted}"
+                )
         priority = decisions.get("priority")
         if not isinstance(priority, Mapping):
-            raise DecisionError("a timed pattern needs a priority decision")
+            raise DecisionError(f"{pattern} needs a priority decision")
         members = [str(item) for item in priority.get("members", ())]
         selected = str(priority.get("selected_response") or "")
         catalog = boundary.get("response_catalog")
@@ -611,6 +655,14 @@ def build_spec_from_decisions(
             decisions, boundary_component, produces, entry.get("assumptions", ())
         )
         origin = str(decisions.get("timing_origin") or "")
+        if not origin:
+            # An untimed triggered pattern declares no interval, so it has no
+            # timing origin — but the arbitration still fires on something. That
+            # concept is the trigger the priority contract already names, and it
+            # is stated once rather than twice.
+            priority_decision = decisions.get("priority")
+            if isinstance(priority_decision, Mapping):
+                origin = str(priority_decision.get("trigger") or "")
         is_arbiter = name == arbiter
         if is_arbiter and origin:
             # the arbitration is triggered by the timing origin even though that
@@ -687,8 +739,12 @@ def build_spec_from_decisions(
             edges=tuple(
                 (selected, item) for item in members if item != selected
             ),
+            # A timed chain states the trigger as its interval origin; an untimed
+            # one has no interval and states it on the priority decision instead.
             trigger=_identifier(
-                decisions.get("timing_origin"), "timing_origin"
+                decisions.get("timing_origin")
+                or decided_priority.get("trigger"),
+                "timing_origin",
             ),
             selected_response=selected,
             source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",

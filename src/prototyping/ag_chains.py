@@ -3,13 +3,15 @@
 Each entry is an implementation candidate, not independent evaluator gold or a
 human-frozen architecture.  The student-approved decisions are recorded in
 ``docs/gold/STUDENT_DESIGN_DECISIONS.md`` and remain subject to independent review.
-Three chains are encoded, each a distinct bounded safety pattern:
+Four chains are encoded, each a distinct bounded safety pattern:
 REQ_SAFE_005 (critical propulsion failure → parachute deployment, a timed
 failsafe), REQ_SAFE_004 (power-on self-test → arming inhibit, a Boolean
-startup-inhibit invariant), and REQ_SAFE_008 (stakeholder power-on default lock
+startup-inhibit invariant), REQ_SAFE_008 (stakeholder power-on default lock
 plus student-derived authorised-unlock/de-energise rules — a
-locked-until-authorised-release invariant). Adding a chain is a controlled design activity; the emitter
-renders it into the model deterministically.
+locked-until-authorised-release invariant), and REQ_SAFE_002 (critical battery
+threshold → controlled descent, a threshold-triggered response: the timed
+failsafe's arbitration shape with no deadline). Adding a chain is a controlled
+design activity; the emitter renders it into the model deterministically.
 """
 from __future__ import annotations
 
@@ -414,10 +416,123 @@ REQ_SAFE_008_CHAIN = AGChainSpec(
     ),
 )
 
+# REQ_SAFE_002 — critical battery threshold → controlled descent. Structurally a
+# triggered response with arbitration, exactly like REQ_SAFE_005, and *without* a
+# deadline: the requirement names a trigger, a response, and a precedence relation
+# ("superseding any lower-priority contingency response") but no time bound.
+# Before THRESHOLD_TRIGGERED_RESPONSE existed this chain had nowhere to go — the
+# timed pattern rejects a chain with no budget, and stating a trigger→response
+# obligation as a continuously held invariant misdescribes it. Encoding it under
+# the timed pattern would have required inventing a deadline the stakeholder never
+# stated, which is the failure mode the pattern set exists to prevent.
+REQ_SAFE_002_CHAIN = AGChainSpec(
+    source_requirement="REQ_SAFE_002",
+    package="REQ_SAFE_002_AG",
+    system_contract="SystemControlledDescentContract",
+    system_assumptions=("airborne", "criticalBatteryThresholdReached"),
+    observation="controlledDescentEngaged",
+    deadline=None,
+    components=(
+        AGComponentSpec(
+            name="SafetyResponseArbiterContract",
+            owner_def="SafetyResponseArbiter",
+            owner_usage="safetyResponseArbiter",
+            guarantee="controlledDescentCommand",
+            behavior="SafetyResponseArbitration",
+            trigger_signal="CriticalBatteryThresholdReachedSignal",
+            initial_state="awaitingResponse",
+            response_state="controlledDescentSelected",
+            response_action=(
+                "setControlledDescentResponseSelectedAndIssue"
+                "ControlledDescentCommand"
+            ),
+            realization_paths=(
+                AGRealizationPathSpec(
+                    source="awaitingResponse",
+                    trigger="CriticalBatteryThresholdReachedSignal",
+                    target="controlledDescentSelected",
+                    action=(
+                        "setControlledDescentResponseSelectedAndIssue"
+                        "ControlledDescentCommand"
+                    ),
+                    guard="criticalBatteryThresholdReached",
+                ),
+            ),
+            additional_guarantees=("controlledDescentResponseSelected",),
+            assumptions=(
+                AGAssumptionSpec("airborne", environment=True),
+                AGAssumptionSpec(
+                    "criticalBatteryThresholdReached", environment=True
+                ),
+            ),
+            # Reacts to something upstream, so it consumes time — but the chain
+            # apportions none, because the requirement sets no deadline.
+            timing_segment_required=True,
+        ),
+        AGComponentSpec(
+            name="FlightControlSystemContract",
+            owner_def="FlightControlSystem",
+            owner_usage="flightControlSystem",
+            guarantee="controlledDescentEngaged",
+            behavior="FlightControlSystemBehavior",
+            trigger_signal="ControlledDescentCommandSignal",
+            initial_state="cruising",
+            response_state="descending",
+            response_action="setControlledDescentEngaged",
+            realization_paths=(
+                AGRealizationPathSpec(
+                    source="cruising",
+                    trigger="ControlledDescentCommandSignal",
+                    target="descending",
+                    action="setControlledDescentEngaged",
+                ),
+            ),
+            assumptions=(
+                AGAssumptionSpec("controlledDescentCommand"),
+            ),
+            timing_segment_required=True,
+        ),
+    ),
+    verification="ControlledDescentVerification",
+    pattern="THRESHOLD_TRIGGERED_RESPONSE",
+    # No timing_origin: the chain declares no interval, so the trigger is stated
+    # once, in the priority contract, rather than twice.
+    timing_origin=None,
+    priority=AGPrioritySpec(
+        response_set_id="FLIGHT_RESPONSES_V1",
+        # The selected member's name must be recoverable from its arbitration
+        # state name, which is how the extractor maps a state back to a response.
+        members=(
+            "CONTROLLED_DESCENT",
+            "COMMUNICATION_LOSS_SAFE_LANDING",
+            "LOW_BATTERY_RETURN_TO_BASE",
+        ),
+        edges=(
+            ("CONTROLLED_DESCENT", "COMMUNICATION_LOSS_SAFE_LANDING"),
+            ("CONTROLLED_DESCENT", "LOW_BATTERY_RETURN_TO_BASE"),
+        ),
+        trigger="criticalBatteryThresholdReached",
+        selected_response="CONTROLLED_DESCENT",
+        source_kind="STUDENT_APPROVED_DECOMPOSITION",
+        source_id="STUDENT_DESIGN_DECISIONS.md§4.3",
+        trigger_signal="CriticalBatteryThresholdReachedSignal",
+        selected_state="controlledDescentSelected",
+        selection_transition="selectControlledDescent",
+    ),
+    selected_model_elements=(
+        "airborne",
+        "criticalBatteryThresholdReached",
+        "controlledDescentCommand",
+        "controlledDescentEngaged",
+        "selectedResponse",
+    ),
+)
+
 _CHAIN_LIBRARY: Tuple[AGChainSpec, ...] = (
     REQ_SAFE_005_CHAIN,
     REQ_SAFE_004_CHAIN,
     REQ_SAFE_008_CHAIN,
+    REQ_SAFE_002_CHAIN,
 )
 
 _REQ_ID_RE = re.compile(r"^\s*(REQ[-_][A-Za-z]+[-_]\d+)")

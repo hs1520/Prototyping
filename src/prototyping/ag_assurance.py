@@ -35,6 +35,7 @@ class FailureRoute(str, Enum):
 
 
 _TIMED_FAILSAFE = "TRIGGERED_TIMED_FAILSAFE_RESPONSE"
+_THRESHOLD_TRIGGERED = "THRESHOLD_TRIGGERED_RESPONSE"
 _STARTUP_INHIBIT = "STARTUP_INHIBIT"
 _LOCKED_UNTIL_RELEASE = "LOCKED_UNTIL_AUTHORISED_RELEASE"
 
@@ -70,6 +71,12 @@ class PatternCase:
         # A triggered timed failsafe additionally requires a timing criterion.
         if self.pattern == _TIMED_FAILSAFE:
             return "PASS" if self.timing_criterion_present else "FAIL"
+        # A threshold-triggered response is the same trigger→response shape with
+        # no deadline, so the core is the whole obligation: requiring a timing
+        # criterion here would re-impose the deadline the pattern does without,
+        # and it carries none of the invariant patterns' extra duties.
+        if self.pattern == _THRESHOLD_TRIGGERED:
+            return "PASS"
         # A locked-until-authorised-release chain is a Boolean invariant with an
         # extra obligation the others do not carry: the power-on default state
         # must be the safe (locked) state, distinct from the guarded release

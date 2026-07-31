@@ -46,6 +46,23 @@ from src.prototyping.run_artifacts import (  # noqa: E402
 )
 
 
+#: Diagnostic-only extra chains. The pilot's frozen requirement set is its
+#: identity — it is digest-checked and the gold drafts cite its exact texts — so a
+#: new pattern is exercised by EXTENDING the probe here, never by editing
+#: `run_revised_experiment.FROZEN_REQUIREMENTS`. A run using these is diagnostic
+#: by construction: its requirement digest differs from the pilot's, so it can
+#: never be pooled with pilot arms even by accident.
+#:
+#: Text copied verbatim from `examples/drone_system_v2.py`.
+PROBE_ONLY_CHAINS = {
+    "REQ_SAFE_002": (
+        "REQ-SAFE-002: The system shall perform a controlled descent to the "
+        "nearest safe landing area when the battery state-of-charge falls below "
+        "15%, superseding any lower-priority contingency response."
+    ),
+}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, help="a directory that must not exist")
@@ -63,6 +80,13 @@ def main() -> int:
     )
     parser.add_argument("--llm-timeout-seconds", type=float, default=420.0)
     parser.add_argument(
+        "--include-chain", action="append", default=[],
+        choices=sorted(PROBE_ONLY_CHAINS),
+        help="add a diagnostic-only A/G chain and its requirement to this run; "
+             "the resulting requirement digest differs from the pilot's, so the "
+             "run can never be pooled with pilot arms",
+    )
+    parser.add_argument(
         "--confirm-external-call", action="store_true",
         help="confirm this invocation is authorised to call a paid provider",
     )
@@ -76,16 +100,36 @@ def main() -> int:
     # The config supplies the frozen requirement set, the chain selection and the
     # version bindings, so the arm runs exactly as it would inside a pilot. Its
     # seed tuple is the protocol's three; the one actually executed is --seed.
+    extra_chains = tuple(dict.fromkeys(args.include_chain))
+    requirements = FROZEN_REQUIREMENTS + tuple(
+        PROBE_ONLY_CHAINS[chain_id] for chain_id in extra_chains
+    )
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+    ).stdout.strip() or "unknown"
+    # A diagnostic probe does not demand a clean worktree — but recording a
+    # revision that does not contain the code under test is a provenance defect,
+    # so an uncommitted tree is marked rather than silently reported as its HEAD.
+    # Fail towards marking: a `git status` that did not run cleanly says nothing
+    # about the tree, and reporting a bare HEAD on no evidence is the defect this
+    # guards. The first run of this probe hit exactly that — status raced a
+    # concurrent commit, returned empty, and the run recorded a revision that did
+    # not contain the code under test.
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], capture_output=True, text=True,
+    )
+    if status.returncode != 0 or status.stdout.strip():
+        revision = f"{revision}-dirty"
     config = RevisedPilotConfig(
         provider=args.provider,
         model=args.model,
         seeds=(0, 1, 2),
         max_iterations=args.max_iterations,
-        code_revision=subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-        ).stdout.strip() or "unknown",
-        requirements=FROZEN_REQUIREMENTS,
-        selected_ag_chain_ids=("REQ_SAFE_004", "REQ_SAFE_005", "REQ_SAFE_008"),
+        code_revision=revision,
+        requirements=requirements,
+        selected_ag_chain_ids=(
+            "REQ_SAFE_004", "REQ_SAFE_005", "REQ_SAFE_008", *extra_chains
+        ),
         r2_generation_mode=args.r2_generation_mode,
         r2_intervention_version=R2_INTERVENTION_VERSION_BY_MODE[
             args.r2_generation_mode
