@@ -19,7 +19,12 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # per-turn token accounting), none of which changes what the model is asked to
 # produce. The three archived v10 runs are a negative result and must not be
 # pooled with either neighbour.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v11"
+# v12 fixes the attribute materialiser, which could not see a
+# unit-suffixed type (`: LengthValue [m]`) and appended a duplicate
+# declaration instead of normalising the existing one — the sole cause of
+# the one NOT_QUALIFIED run in pilot_v11b_20260731. Generation prompts are
+# unchanged; the terminal model is not, so v11 and v12 are not poolable.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v12"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"
@@ -38,7 +43,7 @@ R2_DETERMINISTIC_INTERVENTION_VERSION = (
 # That changes what the model sees on every retry, so v8 and v9 are not pooled.
 R2_LLM_AUTHORED_GENERATION_MODE = "LLM_AUTHORED_AG"
 R2_LLM_AUTHORED_INTERVENTION_VERSION = (
-    "r2-bbag-whole-model-guided-authored-v9"
+    "r2-bbag-whole-model-guided-authored-v10"
 )
 
 # LLM-decided specs are a THIRD frozen intervention. The LLM emits the engineering
@@ -57,7 +62,7 @@ R2_LLM_AUTHORED_INTERVENTION_VERSION = (
 # pooled, and a v6 claim requires its own runs.
 R2_LLM_DECIDED_GENERATION_MODE = "LLM_DECIDED_SPEC"
 R2_LLM_DECIDED_INTERVENTION_VERSION = (
-    "r2-bbag-whole-model-guided-decided-v6"
+    "r2-bbag-whole-model-guided-decided-v7"
 )
 
 R2_GENERATION_MODES = (
