@@ -854,8 +854,11 @@ class TestMultistepGeneratePipeline:
                 "P", [], "", "", metadata, False
             )
 
-        assert agent.llm.call_count == 3
-        assert len(captured.value.plan_attempts) == 3
+        # the budget is a frozen configuration value, not a literal: it is set
+        # so every arm can complete, and the baseline needs more attempts than
+        # the blackboard arms
+        assert agent.llm.call_count == agent.maximum_plan_attempts
+        assert len(captured.value.plan_attempts) == agent.maximum_plan_attempts
         assert all(
             item["json_parse"]["status"] == "JSON_BLOCK_ABSENT"
             for item in captured.value.plan_attempts

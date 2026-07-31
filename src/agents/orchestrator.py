@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from .design_agent import DesignAgent
+from .design_agent import DEFAULT_MAXIMUM_PLAN_ATTEMPTS, DesignAgent
 from .requirements_agent import RequirementsAgent
 from ..dse.design_space import DesignConfiguration, DesignParameter, DesignSpace, ParameterType
 from ..dse.evaluator import DesignEvaluator
@@ -343,6 +343,7 @@ class Orchestrator:
         r2_generation_mode: Optional[str] = None,
         r2_authored_syntax_max_attempts: int = 3,
         maximum_ag_repair_attempts: int = 3,
+        maximum_plan_attempts: int = DEFAULT_MAXIMUM_PLAN_ATTEMPTS,
     ):
         self.llm = llm
         self.rag = rag_retriever
@@ -455,7 +456,9 @@ class Orchestrator:
 
         # Initialize specialized agents
         self.requirements_agent = RequirementsAgent(llm, rag_retriever)
-        self.design_agent = DesignAgent(llm, rag_retriever)
+        self.design_agent = DesignAgent(
+            llm, rag_retriever, maximum_plan_attempts=maximum_plan_attempts
+        )
         # Pass quality_threshold so the evaluator's veto cap is consistent with
         # the orchestrator's refinement gate (cap = threshold − 0.05).
         self.evaluator = DesignEvaluator(quality_threshold=quality_threshold)

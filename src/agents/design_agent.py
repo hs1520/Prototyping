@@ -198,6 +198,17 @@ def _print_sysml_model_debug(
         print(f"  ✓ Parse diagnostics: none")
 
 
+#: Bounded attempts the typed whole-model plan gets before generation fails
+#: closed. Measured reason for the value: on the frozen four-requirement set,
+#: R1/R2 reach a valid plan on attempt 1, while R0 — which has no
+#: ContextEnvelope — exhausted three attempts on 2 of 3 seeds and could not
+#: complete the pilot at all. A budget that the baseline cannot finish within
+#: turns a measurable difference ("R0 needs more attempts") into a missing run,
+#: so the budget is set to let every arm complete and the attempt count is
+#: reported as evidence instead.
+DEFAULT_MAXIMUM_PLAN_ATTEMPTS = 6
+
+
 class DesignAgent(BaseAgent):
     """
     Agent responsible for architectural design generation.
@@ -354,6 +365,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         rag_retriever: Optional[RAGRetriever] = None,
         *,
         allow_legacy_architecture_plan: bool = False,
+        maximum_plan_attempts: int = DEFAULT_MAXIMUM_PLAN_ATTEMPTS,
     ):
         super().__init__("DesignAgent", llm, rag_retriever)
         self.cot = ChainOfThoughtPrompter(llm)
@@ -361,6 +373,9 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         self.allow_legacy_architecture_plan = bool(
             allow_legacy_architecture_plan
         )
+        if int(maximum_plan_attempts) < 1:
+            raise ValueError("maximum_plan_attempts must be at least 1")
+        self.maximum_plan_attempts = int(maximum_plan_attempts)
 
     def _run_refinement(
         self,
@@ -781,7 +796,8 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         last_valid_payload: Optional[Dict[str, Any]] = None
         previous_attempt_issues: Tuple[str, ...] = ()
         previous_failure_kind: Optional[str] = None
-        while len(attempts) < 3:
+        maximum_attempts = self.maximum_plan_attempts
+        while len(attempts) < maximum_attempts:
             attempt_index = len(attempts)
             step1 = self.cot.decompose_architecture(
                 system_name=system_name,
@@ -907,7 +923,7 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                 and generation_plan.status == "PASS"
             ):
                 break
-            if len(attempts) >= 3:
+            if len(attempts) >= maximum_attempts:
                 break
 
             if failure_kind == "FORMAT_UNAVAILABLE":

@@ -57,6 +57,7 @@ class PrototypingPipeline:
         task_session_max_tokens: int = 600000,
         r2_authored_syntax_max_attempts: int = 3,
         maximum_ag_repair_attempts: int = 3,
+        maximum_plan_attempts: Optional[int] = None,
     ):
         self.llm = llm
         self.parse_strict = parse_strict
@@ -87,6 +88,10 @@ class PrototypingPipeline:
             r2_generation_mode=r2_generation_mode,
             r2_authored_syntax_max_attempts=r2_authored_syntax_max_attempts,
             maximum_ag_repair_attempts=maximum_ag_repair_attempts,
+            **(
+                {"maximum_plan_attempts": maximum_plan_attempts}
+                if maximum_plan_attempts is not None else {}
+            ),
             task_session_max_turns=task_session_max_turns,
             task_session_max_tokens=task_session_max_tokens,
         )

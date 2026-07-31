@@ -23,6 +23,7 @@ from .experiment_arms import (
     R2_DETERMINISTIC_INTERVENTION_VERSION,
     R2_INTERVENTION_VERSION_BY_MODE,
 )
+from ..agents.design_agent import DEFAULT_MAXIMUM_PLAN_ATTEMPTS
 from .requirement_inputs import (
     build_frozen_requirement_set,
     normalise_requirement_id,
@@ -85,6 +86,11 @@ class RevisedPilotConfig:
     r2_intervention_version: str = R2_DETERMINISTIC_INTERVENTION_VERSION
     r2_authored_syntax_max_attempts: int = 3
     maximum_ag_repair_attempts: int = 3
+    #: Bounded typed-plan attempts, frozen per pilot. Set so every arm can
+    #: complete: the baseline needs more attempts than the blackboard arms,
+    #: and a budget it cannot finish within loses the run instead of
+    #: measuring the difference.
+    maximum_plan_attempts: int = DEFAULT_MAXIMUM_PLAN_ATTEMPTS
     system_name: str = "DeliveryUAV"
     system_description: str = (
         "An autonomous delivery UAV with ballistic parachute recovery and "
@@ -114,6 +120,8 @@ class RevisedPilotConfig:
             raise ValueError("all frozen execution budgets must be positive")
         if self.r2_authored_syntax_max_attempts <= 0:
             raise ValueError("R2 authored syntax attempts must be positive")
+        if self.maximum_plan_attempts <= 0:
+            raise ValueError("maximum_plan_attempts must be positive")
         if self.maximum_ag_repair_attempts <= 0:
             raise ValueError("A/G repair attempts must be positive")
         if not self.provider.strip() or not self.model.strip():
@@ -181,6 +189,7 @@ class RevisedPilotConfig:
             "pattern_profile_version": self.pattern_profile_version,
             "r2_generation_mode": self.r2_generation_mode,
             "r2_intervention_version": self.r2_intervention_version,
+            "maximum_plan_attempts": self.maximum_plan_attempts,
             "r2_authored_syntax_max_attempts": (
                 self.r2_authored_syntax_max_attempts
             ),
@@ -478,6 +487,7 @@ def run_revised_pilot(
                     maximum_ag_repair_attempts=(
                         config.maximum_ag_repair_attempts
                     ),
+                    maximum_plan_attempts=config.maximum_plan_attempts,
                     task_session_max_turns=config.task_session_max_turns,
                     task_session_max_tokens=config.task_session_max_tokens,
                 )
