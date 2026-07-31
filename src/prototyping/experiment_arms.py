@@ -31,7 +31,12 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # thing to see it and able only to fail the run. The gate stays fail-closed;
 # what changes is that the existing planned-attribute materialiser now
 # enforces the type during generation. v12 and v13 are not poolable.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v13"
+# v14 corrects v13: it planned every Boolean A/G concept as an attribute,
+# including the ones a component guarantees. Those are outputs, generation
+# realises them as directed ports, and one measured run then had
+# recoveryActuationPowerAvailable as both a port and an attribute. Only
+# consumed concepts are planned now. v13 and v14 are not poolable.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v14"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"

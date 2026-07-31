@@ -368,11 +368,21 @@ def test_the_plan_owns_ag_boolean_concepts_so_generation_cannot_mistype_them():
     )
 
     behavior_plan = compile_behavior_obligation_plan([REQ_SAFE_005_CHAIN])
+    # only what a component CONSUMES: a guarantee is an output, generation
+    # realises it as a directed port, and the terminal binder accepts a port as a
+    # carrier of the truth concept. Planning it as an attribute too made
+    # recoveryActuationPowerAvailable both at once in a measured run, which the
+    # binder correctly reports as AMBIGUOUS.
     expected = {
-        obligation.owner_def: set(behavior_boolean_concepts(obligation))
+        obligation.owner_def: (
+            set(behavior_boolean_concepts(obligation))
+            & (set(obligation.assumptions) - set(obligation.guarantees))
+        )
         for obligation in behavior_plan.obligations
     }
-    assert expected.get("RecoveryPowerSupply"), "fixture must exercise a concept"
+    assert expected.get("RecoveryPowerSupply") == {"airborne"}, (
+        "fixture must exercise a consumed concept and exclude the guarantee"
+    )
 
     plan = ModelGenerationPlan.from_payload({
         "components": [
@@ -399,6 +409,10 @@ def test_the_plan_owns_ag_boolean_concepts_so_generation_cannot_mistype_them():
             assert planned[owner].get(concept) == "Boolean", (
                 f"{owner}::{concept} must be planned Boolean"
             )
+    # the guarantee is deliberately NOT planned as an attribute
+    assert "recoveryActuationPowerAvailable" not in (
+        planned["RecoveryPowerSupply"]
+    )
 
     # and the existing materialiser then corrects a mistyped declaration
     component = next(
@@ -415,3 +429,48 @@ def test_the_plan_owns_ag_boolean_concepts_so_generation_cannot_mistype_them():
     assert "attribute airborne : Boolean;" in text
     assert "Real" not in text
     assert "RecoveryPowerSupply.airborne" in report["restored_attributes"]
+
+
+def test_a_planned_port_name_is_never_also_planned_as_an_attribute():
+    """The collision this guards against was introduced, measured, and removed.
+
+    A first version of the plan-ownership fix declared every Boolean A/G concept
+    as an attribute, including the ones a component guarantees. Those are
+    outputs, generation realises them as directed ports, and the run then failed
+    with `recoveryActuationPowerAvailable cannot be both a port and an attribute`
+    plus an AMBIGUOUS terminal binding — a defect created by the fix for another
+    defect.
+    """
+    from src.prototyping.ag_behavior_plan import compile_behavior_obligation_plan
+    from src.prototyping.generation_plan import (
+        ModelGenerationPlan,
+        attach_ag_behavior_obligations,
+    )
+
+    behavior_plan = compile_behavior_obligation_plan([REQ_SAFE_005_CHAIN])
+    plan = ModelGenerationPlan.from_payload({
+        "components": [
+            {
+                "name": obligation.owner_def,
+                "responsibility": "x",
+                "requirements": ["REQ_SAFE_005"],
+                # the guarantee, declared as the outgoing port it really is
+                "ports": [
+                    {"name": concept, "direction": "out",
+                     "type": "StatusPort", "external": False}
+                    for concept in obligation.guarantees
+                ],
+            }
+            for obligation in behavior_plan.obligations
+        ],
+        "connections": [],
+    }, source="TEST", requirements=_REQS)
+
+    plan = attach_ag_behavior_obligations(plan, behavior_plan)
+
+    for component in plan.components:
+        ports = {item.name for item in component.ports}
+        attributes = {item.name for item in component.attributes}
+        assert not (ports & attributes), (
+            f"{component.name}: {sorted(ports & attributes)} planned as both"
+        )

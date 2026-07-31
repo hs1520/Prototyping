@@ -1539,15 +1539,30 @@ def attach_ag_behavior_obligations(
     # gate goes back to being a check that should never fire rather than the
     # first line of defence. A concept the component already plans is left
     # alone: the plan is authority for its own attributes.
+    #
+    # Only what the component CONSUMES. A guarantee is an output: it flows to the
+    # component that assumes it, so generation realises it as a directed port,
+    # and the terminal binder accepts a port as a valid carrier of the truth
+    # concept. Planning it as an attribute as well produced exactly the collision
+    # the binder reports as AMBIGUOUS — one measured run had
+    # `recoveryActuationPowerAvailable` as both.
     boolean_by_owner: dict[str, set[str]] = {}
     for obligation in behavior_plan.obligations:
+        consumed = set(obligation.assumptions) - set(obligation.guarantees)
         for concept in behavior_boolean_concepts(obligation):
-            boolean_by_owner.setdefault(obligation.owner_def, set()).add(concept)
+            if concept in consumed:
+                boolean_by_owner.setdefault(
+                    obligation.owner_def, set()
+                ).add(concept)
     if boolean_by_owner:
         components = []
         for component in plan.components:
             wanted = boolean_by_owner.get(component.name, set())
-            existing = {item.name for item in component.attributes}
+            # a name the plan already uses for a port is that port's, not ours
+            existing = (
+                {item.name for item in component.attributes}
+                | {item.name for item in component.ports}
+            )
             missing = sorted(wanted - existing)
             if not missing:
                 components.append(component)
