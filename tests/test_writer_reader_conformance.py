@@ -7,6 +7,8 @@ the coverage test fails when a new public emitter has no conformance obligation.
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +42,7 @@ from src.sysml.model import PartDefinition, SysMLModel
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+GOLDEN = ROOT / "tests" / "golden" / "writer_emitter_outputs.json"
 
 
 @dataclass(frozen=True)
@@ -526,3 +529,17 @@ def test_legacy_transition_repair_reader_disagrees_with_syside_on_optional_guard
     summary = build_state_machine_summary(source, "ControllerBehavior")
     assert summary is not None
     assert summary.transitions == []
+
+
+def test_discovered_emitter_outputs_match_byte_golden():
+    expected = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    actual = {}
+    for emitter in DISCOVERED:
+        factory = globals().get(_case_name(emitter))
+        assert callable(factory), f"{emitter} has no fixed golden input"
+        payload = factory().emit().encode("utf-8")
+        actual[emitter] = {
+            "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    assert actual == expected
