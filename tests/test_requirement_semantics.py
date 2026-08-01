@@ -315,3 +315,41 @@ def test_semantic_realization_must_end_at_constraint_owner_not_actuator():
         "semantic binding target Controller.obstacleData, found "
         "PropulsionSystem.flightCommand"
     ) in plan.issues
+
+
+def test_an_existing_declaration_is_rebound_not_duplicated():
+    """Measured twice: `attribute currentSeparation : LengthValue [m] = ...`.
+
+    The existence check required an initializer and did not allow a unit suffix
+    after the type, so it could not see a declaration written either way and
+    appended a second one — a duplicate in the same part def, which
+    USER_NAMESPACE_INTEGRITY and Syside's namespace-distinguishability warning
+    both correctly rejected. This is the same blind spot that
+    `activated_constraint_plan` had; two independent materialisers write these
+    attributes, and fixing one left the other.
+    """
+    import re
+
+    def existing(name: str, body: str):
+        return re.search(
+            rf"\battribute\s+{re.escape(name)}"
+            rf"(?:\s*:\s*[A-Za-z_][\w:]*(?:\s*\[[^\]{{}}]*\])?)?"
+            rf"(?:\s*=\s*[^;{{}}]+)?\s*;",
+            body,
+        )
+
+    written_forms = [
+        "attribute currentSeparation : LengthValue = obstacle.payload.sep;",
+        "attribute currentSeparation : LengthValue [m] = obstacle.payload.sep;",
+        "attribute currentSeparation : LengthValue;",
+        "attribute currentSeparation;",
+    ]
+    for form in written_forms:
+        assert existing("currentSeparation", f"    {form}\n") is not None, (
+            f"an existing declaration written as {form!r} must be seen, "
+            "or it is appended a second time"
+        )
+    # and a different attribute is still not mistaken for this one
+    assert existing(
+        "currentSeparation", "    attribute minSeparationThreshold : Real = 5;\n"
+    ) is None

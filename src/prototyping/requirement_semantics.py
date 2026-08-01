@@ -1085,9 +1085,16 @@ def _ensure_owner_binding(
         (binding.threshold_attribute, threshold_statement),
     )
     for name, statement in statements:
+        # The type may carry a unit suffix (`: LengthValue [m]`) and the
+        # declaration may have no initializer at all. A pattern that requires
+        # neither form cannot see an existing declaration written that way, and
+        # then this appends a second one — a duplicate the namespace-integrity
+        # check correctly rejects, measured twice on real runs. Matching both
+        # routes the declaration into the rebinding branch below instead.
         match = re.search(
             rf"\battribute\s+{re.escape(name)}"
-            rf"(?:\s*:\s*[A-Za-z_][\w:]*)?\s*=\s*[^;{{}}]+;",
+            rf"(?:\s*:\s*[A-Za-z_][\w:]*(?:\s*\[[^\]{{}}]*\])?)?"
+            rf"(?:\s*=\s*[^;{{}}]+)?\s*;",
             body,
         )
         if match is None:

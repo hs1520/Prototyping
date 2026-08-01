@@ -36,7 +36,13 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # realises them as directed ports, and one measured run then had
 # recoveryActuationPowerAvailable as both a port and an attribute. Only
 # consumed concepts are planned now. v13 and v14 are not poolable.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v14"
+# v15 closes the second writer of the same attributes. Two independent
+# materialisers write the semantic-anchor attributes, and both decided
+# "already present?" with a pattern blind to a unit-suffixed type; v12
+# fixed one, and the duplicate came back through the other. The semantic
+# binder now also sees a declaration with no initializer. v14 and v15 are
+# not poolable.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v15"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"
