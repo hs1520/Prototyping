@@ -589,3 +589,9 @@ class ContextBuilder:
                 item.to_dict(include_content=True) for item in self._envelopes
             ],
         }
+
+    def get(self, envelope_id: str) -> ContextEnvelope:
+        for envelope in self._envelopes:
+            if envelope.envelope_id == str(envelope_id):
+                return envelope
+        raise KeyError(envelope_id)

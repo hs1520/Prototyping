@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .orchestrator_support import *
+from .pipeline_records import AGPlanningHandoffRecord
 
 
 def _shared_check_syntax(*args, **kwargs):
@@ -12,6 +13,15 @@ def _shared_check_syntax(*args, **kwargs):
 
 
 class AGAssuranceMixin:
+    AG_PLANNING_HANDOFF_TOPIC = "handoff.ag_planning.runtime"
+
+    def _ag_planning_handoff_objects(self, handoff):
+        return (
+            self.blackboard.task(handoff.task_id),
+            self.context_builder.get(handoff.envelope_id),
+            self.task_sessions.get(handoff.session_id),
+        )
+
     @staticmethod
     def _requirement_planning_model(requirements: List[str]) -> str:
         """Render immutable requirement inputs for pre-generation A/G planning."""
@@ -168,7 +178,7 @@ class AGAssuranceMixin:
             or self.task_sessions is None
         ):
             return None
-        from ..prototyping.blackboard import TaskStatus
+        from ..prototyping.blackboard import RecordType, TaskStatus
 
         source = None
         for record in self.blackboard.records(topic="requirements.authoritative"):
@@ -207,11 +217,28 @@ class AGAssuranceMixin:
                 self._archive_provider_call(session, event)
 
             observer_id = add_observer(archive_call)
-        self._active_ag_planning_handoff = {
-            "task": task, "envelope": envelope, "session": session,
-            "observer_id": observer_id,
-        }
-        return self._active_ag_planning_handoff
+        handoff = AGPlanningHandoffRecord(
+            task_id=task.task_id,
+            envelope_id=envelope.envelope_id,
+            session_id=session.session_id,
+            observer_id=observer_id,
+        )
+        self.blackboard.publish_typed(
+            RecordType.CONTROL,
+            self.AG_PLANNING_HANDOFF_TOPIC,
+            "Orchestrator",
+            {
+                "record_schema": "AGPlanningHandoffRecord",
+                "task_id": handoff.task_id,
+                "envelope_id": handoff.envelope_id,
+                "session_id": handoff.session_id,
+                "status": handoff.status,
+            },
+            handoff,
+            task_id=task.task_id,
+            session_id=session.session_id,
+        )
+        return handoff
 
 
     def _close_ag_planning_session(self, handoff: Optional[Any]) -> None:
@@ -222,11 +249,9 @@ class AGAssuranceMixin:
         from ..prototyping.task_session import SessionStatus
 
         remove_observer = getattr(self.llm, "remove_call_observer", None)
-        if handoff.get("observer_id") is not None and callable(remove_observer):
-            remove_observer(handoff["observer_id"])
-        task, session, envelope = (
-            handoff["task"], handoff["session"], handoff["envelope"]
-        )
+        if handoff.observer_id is not None and callable(remove_observer):
+            remove_observer(handoff.observer_id)
+        task, envelope, session = self._ag_planning_handoff_objects(handoff)
         record = self.blackboard.publish(
             RecordType.RESULT,
             "agent.ag_planning.result",
@@ -255,7 +280,7 @@ class AGAssuranceMixin:
                 SessionStatus.COMPLETED,
                 output_record_ids=(record.record_id,),
             )
-        self._active_ag_planning_handoff = None
+        handoff.status = "COMPLETED"
 
 
     def _compile_ag_generation_plan(

@@ -144,6 +144,7 @@ class Blackboard:
         ]
         self._records: list[BlackboardRecord] = []
         self._tasks: dict[str, BlackboardTask] = {}
+        self._typed_values: dict[str, Any] = {}
         self._protected_requirement_defs: dict[str, str] = {}
         # Stale-access accounting (§13 Group A). A rejection raises, so without
         # counting it here neither the numerator nor the denominator survives into
@@ -311,6 +312,42 @@ class Blackboard:
         )
         self._records.append(record)
         return record
+
+    def publish_typed(
+        self,
+        record_type: RecordType,
+        topic: str,
+        producer: str,
+        payload: Mapping[str, Any],
+        value: Any,
+        **kwargs: Any,
+    ) -> BlackboardRecord:
+        """Publish an auditable payload with an exact in-memory typed value.
+
+        The payload remains the serializable evidence boundary.  The value is
+        runtime coordination state associated with that record and is never
+        stringified into an artifact merely to move it between knowledge sources.
+        """
+        record = self.publish(
+            record_type, topic, producer, payload, **kwargs
+        )
+        self._typed_values[record.record_id] = value
+        return record
+
+    def typed_value(self, record_id: str, expected_type: type) -> Any:
+        value = self._typed_values[record_id]
+        if not isinstance(value, expected_type):
+            raise TypeError(
+                f"typed board record {record_id} carries "
+                f"{type(value).__name__}, expected {expected_type.__name__}"
+            )
+        return value
+
+    def latest_typed(self, topic: str, expected_type: type) -> Any:
+        for record in reversed(self._records):
+            if record.topic == str(topic) and record.record_id in self._typed_values:
+                return self.typed_value(record.record_id, expected_type)
+        raise KeyError(topic)
 
     def create_task(
         self,
