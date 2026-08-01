@@ -1,6 +1,8 @@
 """Board-backed runtime state compatibility for pipeline sources."""
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 from .pipeline_records import (
@@ -17,14 +19,65 @@ class PipelineStateMixin:
     def _init_pipeline_state(self) -> None:
         from ..prototyping.blackboard import Blackboard, RecordType
 
+        # Runtime-state retention is per generation run: keep every immutable
+        # revision within the current bounded pipeline so failures and retries
+        # have provenance, then replace the whole runtime board when the next
+        # generate() call starts.  This prevents cross-run log growth without
+        # discarding the history needed to audit one result.
         self._runtime_board = Blackboard("pipeline-runtime")
         self._runtime_board.publish_typed(
             RecordType.CONTROL,
             _RUNTIME_TOPIC,
             "Orchestrator",
-            {"record_schema": "PipelineRuntimeState", "status": "ACTIVE"},
+            {
+                "record_schema": "PipelineRuntimeState",
+                "status": "ACTIVE",
+                "runtime_revision": 0,
+                "parent_record_id": None,
+                "changed_field": None,
+            },
             PipelineRuntimeState(),
         )
+
+    def _publish_pipeline_state(self, field_name: str, value: Any) -> None:
+        from ..prototyping.blackboard import RecordType
+
+        previous = self._runtime_board.records(topic=_RUNTIME_TOPIC)[-1]
+        state = replace(
+            self._pipeline_state,
+            **{field_name: deepcopy(value)},
+        )
+        self._runtime_board.publish_typed(
+            RecordType.CONTROL,
+            _RUNTIME_TOPIC,
+            "Orchestrator",
+            {
+                "record_schema": "PipelineRuntimeState",
+                "status": "ACTIVE",
+                "runtime_revision": int(
+                    previous.payload.get("runtime_revision", 0)
+                ) + 1,
+                "parent_record_id": previous.record_id,
+                "changed_field": field_name,
+            },
+            state,
+        )
+
+    def _append_pipeline_state_list(self, field_name: str, value: Any) -> int:
+        values = deepcopy(list(getattr(self._pipeline_state, field_name)))
+        values.append(value)
+        self._publish_pipeline_state(field_name, values)
+        return len(values) - 1
+
+    def _replace_pipeline_state_list_item(
+        self,
+        field_name: str,
+        index: int,
+        value: Any,
+    ) -> None:
+        values = deepcopy(list(getattr(self._pipeline_state, field_name)))
+        values[index] = value
+        self._publish_pipeline_state(field_name, values)
 
     @property
     def _pipeline_state(self) -> PipelineRuntimeState:
@@ -39,9 +92,9 @@ class PipelineStateMixin:
 
     @_active_ag_generation_plan.setter
     def _active_ag_generation_plan(self, value) -> None:
-        self._pipeline_state.ag_generation_plan = (
+        self._publish_pipeline_state("ag_generation_plan", (
             None if value is None else AGGenerationPlanRecord(value)
-        )
+        ))
 
     @property
     def _active_model_generation_plan(self):
@@ -50,9 +103,9 @@ class PipelineStateMixin:
 
     @_active_model_generation_plan.setter
     def _active_model_generation_plan(self, value) -> None:
-        self._pipeline_state.model_generation_plan = (
+        self._publish_pipeline_state("model_generation_plan", (
             None if value is None else ModelGenerationPlanRecord(value)
-        )
+        ))
 
 
 _STATE_FIELDS = {
@@ -86,7 +139,7 @@ def _state_property(field_name: str) -> property:
         return getattr(instance._pipeline_state, field_name)
 
     def set_(instance: PipelineStateMixin, value: Any) -> None:
-        setattr(instance._pipeline_state, field_name, value)
+        instance._publish_pipeline_state(field_name, value)
 
     return property(get, set_)
 

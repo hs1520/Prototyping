@@ -793,7 +793,9 @@ class AGAssuranceMixin:
                 "package_text": package_text,
                 "response_catalog": runtime_response_catalog,
             }
-            self.last_ag_authoring_attempts.append(attempt_record)
+            record_index = self._append_pipeline_state_list(
+                "ag_authoring_attempts", attempt_record
+            )
             if not syntax_ok:
                 print(
                     f"  [R2-BBAG] {spec.source_requirement} authored package "
@@ -815,7 +817,13 @@ class AGAssuranceMixin:
             if passed:
                 attempt_record["selected"] = True
                 attempt_record["stop_reason"] = "first_gold_blind_quality_pass"
+                self._replace_pipeline_state_list_item(
+                    "ag_authoring_attempts", record_index, attempt_record
+                )
                 return package_text, gate
+            self._replace_pipeline_state_list_item(
+                "ag_authoring_attempts", record_index, attempt_record
+            )
 
             print(
                 f"  [R2-BBAG] {spec.source_requirement} authored package "
@@ -878,7 +886,7 @@ class AGAssuranceMixin:
                 }
                 if disposition == "NEEDS_ARCHITECTURE_INPUT":
                     record["stop_reason"] = "needs_architecture_input"
-                self.last_ag_authoring_attempts.append(record)
+                self._append_pipeline_state_list("ag_authoring_attempts", record)
 
             while structured_calls < structured_budget:
                 calls_before = structured_calls
@@ -917,12 +925,17 @@ class AGAssuranceMixin:
                             "decision_error": f"{type(exc).__name__}: {exc}",
                             "decision_response": "",
                         })
-                    self.last_ag_authoring_attempts[-1]["syntax_summary"] = (
+                    failed_record = dict(self.last_ag_authoring_attempts[-1])
+                    failed_record["syntax_summary"] = (
                         "structured decision generation failed"
+                    )
+                    self._replace_pipeline_state_list_item(
+                        "ag_authoring_attempts", -1, failed_record
                     )
                     break
 
-                attempt_record = self.last_ag_authoring_attempts[-1]
+                record_index = len(self.last_ag_authoring_attempts) - 1
+                attempt_record = dict(self.last_ag_authoring_attempts[record_index])
                 package_text = emit_ag_package(structured_spec)
                 gate = _shared_check_syntax(
                     package_text,
@@ -939,6 +952,9 @@ class AGAssuranceMixin:
                     "package_text": package_text,
                 })
                 if gate.has_errors or gate.warnings:
+                    self._replace_pipeline_state_list_item(
+                        "ag_authoring_attempts", record_index, attempt_record
+                    )
                     structured_feedback = gate.format_for_llm()
                     continue
 
@@ -951,14 +967,21 @@ class AGAssuranceMixin:
                     attempt_record["stop_reason"] = (
                         "structured_gold_blind_quality_pass"
                     )
+                    self._replace_pipeline_state_list_item(
+                        "ag_authoring_attempts", record_index, attempt_record
+                    )
                     return package_text, gate
+                self._replace_pipeline_state_list_item(
+                    "ag_authoring_attempts", record_index, attempt_record
+                )
                 # A valid decision set can still fail a gold-blind semantic gate.
                 # If one bounded call remains, feed those named defects into it.
                 structured_feedback = diagnostics
         if best is not None:
             _rank, package_text, gate, record_index = best
-            self.last_ag_authoring_attempts[record_index]["selected"] = True
-            self.last_ag_authoring_attempts[record_index]["stop_reason"] = (
+            best_record = dict(self.last_ag_authoring_attempts[record_index])
+            best_record["selected"] = True
+            best_record["stop_reason"] = (
                 (
                     "needs_architecture_input_best_syntax_valid_candidate"
                     if terminal_quality_disposition
@@ -966,9 +989,12 @@ class AGAssuranceMixin:
                     else "quality_budget_exhausted_best_syntax_valid_candidate"
                 )
             )
-            self.last_ag_authoring_attempts[record_index][
-                "terminal_quality_disposition"
-            ] = terminal_quality_disposition
+            best_record["terminal_quality_disposition"] = (
+                terminal_quality_disposition
+            )
+            self._replace_pipeline_state_list_item(
+                "ag_authoring_attempts", record_index, best_record
+            )
             return package_text, gate
         if terminal_quality_disposition == "NEEDS_ARCHITECTURE_INPUT":
             raise RuntimeError(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
+
+import pytest
 
 from src.agents.orchestrator import Orchestrator
 from src.agents.pipeline_records import (
@@ -19,16 +21,42 @@ class _NoCallLLM:
 
 def test_runtime_state_is_a_typed_board_record_not_orchestrator_attributes():
     orchestrator = Orchestrator(_NoCallLLM())
+    before = orchestrator._runtime_board.records(topic="pipeline.runtime.state")
+    orchestrator.last_functional_closure = {"status": "OPEN"}
     orchestrator.last_functional_closure = {"status": "CLOSED"}
 
     state = orchestrator._runtime_board.latest_typed(
         "pipeline.runtime.state", PipelineRuntimeState
     )
     assert state.functional_closure == {"status": "CLOSED"}
+    records = orchestrator._runtime_board.records(topic="pipeline.runtime.state")
+    assert len(records) == len(before) + 2
+    assert records[-1].payload["parent_record_id"] == records[-2].record_id
+    assert records[-1].payload["changed_field"] == "functional_closure"
+    open_state = orchestrator._runtime_board.typed_value(
+        records[-2].record_id, PipelineRuntimeState
+    )
+    assert open_state.functional_closure == {"status": "OPEN"}
+    with pytest.raises(FrozenInstanceError):
+        open_state.functional_closure = {"status": "MUTATED"}
     assert not [
         name for name in vars(orchestrator)
         if name.startswith("last_") or name.startswith("_active_")
     ]
+
+
+def test_runtime_state_history_is_bounded_to_one_generation_run():
+    orchestrator = Orchestrator(_NoCallLLM())
+    orchestrator.last_functional_closure = {"status": "CLOSED"}
+    previous_board = orchestrator._runtime_board
+
+    orchestrator._init_pipeline_state()
+
+    assert len(previous_board.records(topic="pipeline.runtime.state")) > 1
+    assert len(orchestrator._runtime_board.records(
+        topic="pipeline.runtime.state"
+    )) == 1
+    assert orchestrator.last_functional_closure is None
 
 
 def test_design_handoff_is_resolved_from_its_typed_board_record():

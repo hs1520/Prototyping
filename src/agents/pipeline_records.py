@@ -35,7 +35,7 @@ class ModelGenerationPlanRecord:
     plan: Mapping[str, Any]
 
 
-@dataclass
+@dataclass(frozen=True)
 class PipelineRuntimeState:
     recommended_design: Any = None
     pareto_designs: list[Any] = field(default_factory=list)

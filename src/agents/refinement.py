@@ -334,7 +334,7 @@ class RefinementMixin:
             allowed_req_ids=self._active_requirement_ids(),
         )
         if context is None:
-            self.last_verification_anchor_attempts.append({
+            self._append_pipeline_state_list("verification_anchor_attempts", {
                 "status": "BLOCKED",
                 "reason": "dependency_closed_context_unresolved",
                 "target_req_ids": self._gap_req_ids(verify_gaps),
@@ -360,7 +360,9 @@ class RefinementMixin:
             "context": context.to_dict(),
             "surgical_audit": surgical_audit.to_dict(),
         }
-        self.last_verification_anchor_attempts.append(attempt_record)
+        self._append_pipeline_state_list(
+            "verification_anchor_attempts", attempt_record
+        )
         if anchored is None:
             print("  ⚠ Anchor pass not applicable (LLM output failed "
                   "the surgical gates)", flush=True)
