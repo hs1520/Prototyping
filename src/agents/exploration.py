@@ -1,7 +1,22 @@
 """Methods mechanically extracted from agents.orchestrator."""
 from __future__ import annotations
 
-from .orchestrator_support import *
+import re
+from typing import Any, Dict, List, Optional, Tuple
+from .dse_injectors import (
+    apply_best_config_to_model as _apply_best_config_to_model,
+    apply_inject_attrs_to_sysml_text as _apply_inject_attrs_to_sysml_text,
+)
+from .orchestrator_support import PrototypingState, _chat_json, _public_realization
+from ..dse.design_space import (
+    DesignConfiguration,
+    DesignParameter,
+    DesignSpace,
+    ParameterType,
+)
+from ..simulation.syntax_checker import check_syntax
+from ..sysml.model import SysMLModel
+from ..utils.sysml_text_utils import get_sysml_text
 
 
 class ExplorationMixin:

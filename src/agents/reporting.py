@@ -1,7 +1,10 @@
 """Methods mechanically extracted from agents.orchestrator."""
 from __future__ import annotations
 
-from .orchestrator_support import *
+from typing import List
+from ..dse.design_space import DesignConfiguration, DesignSpace
+from ..simulation.validator import SimulationResult
+from ..sysml.model import SysMLModel
 
 
 class ReportingMixin:

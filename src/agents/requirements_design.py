@@ -1,7 +1,10 @@
 """RequirementsDesignMixin extracted from the orchestrator."""
 from __future__ import annotations
 
-from .orchestrator_support import *
+from typing import Any, Dict, List, Mapping, Optional
+from .orchestrator_support import _SysMLModelTypes
+from ..sysml.lite_model import build_lite_model
+from ..sysml.model import SysMLModel
 
 
 class RequirementsDesignMixin:

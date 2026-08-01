@@ -1,9 +1,9 @@
 """Board-driven knowledge sources for the complete generation pipeline."""
 from __future__ import annotations
 
-from typing import Any, Callable
-
-from .orchestrator_support import *
+from typing import Any, Callable, Mapping
+from ..simulation.syntax_checker import check_syntax
+from ..utils.sysml_text_utils import get_sysml_text
 from .pipeline_records import GenerationContext
 
 

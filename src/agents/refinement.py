@@ -1,7 +1,59 @@
 """Refinement, repair, simulation closure, and syntax-gate orchestration."""
 from __future__ import annotations
 
-from .orchestrator_support import *
+import re
+import time
+from typing import Any, Dict, List, Mapping, Optional, Tuple
+from .dse_injectors import (
+    build_dse_design_constraints as _build_dse_design_constraints,
+)
+from .orchestrator_support import (
+    _CONNECTIVITY_FIX_SYSTEM,
+    _PORT_FIX_SYSTEM,
+    _SURGICAL_FIX_SYSTEM,
+    _SysMLModelTypes,
+    _TRANSITION_FIX_SYSTEM,
+    _fix_keyword_item_names,
+    _inject_missing_guard_attrs,
+    _scenario_src_instance,
+    _strip_readonly_keyword,
+)
+from ..dse.design_space import DesignConfiguration
+from ..simulation.connect_auditor import audit_connects
+from ..simulation.connectivity_fixer import (
+    build_connectivity_prompt,
+    build_port_directory,
+    extract_connect_lines,
+    merge_connects,
+    parse_connects,
+    validate_connects,
+)
+from ..simulation.error_localizer import (
+    build_fix_prompt,
+    extract_error_context,
+    merge_fixed_chunk,
+    strip_code_fences,
+)
+from ..simulation.levenshtein_fixer import format_hints_for_llm, try_fix_sema_errors
+from ..simulation.port_fixer import (
+    build_port_fix_prompt,
+    collect_port_defs,
+    extract_port_additions,
+    merge_port_additions,
+    validate_port_additions,
+)
+from ..simulation.syntax_checker import SyntaxCheckResult, check_syntax
+from ..simulation.transition_fixer import (
+    build_state_machine_summary,
+    build_transition_prompt,
+    extract_transition_lines,
+    merge_transitions,
+    validate_transitions,
+)
+from ..simulation.validator import SimulationResult
+from ..sysml.lite_model import build_lite_model
+from ..sysml.model import SysMLModel
+from ..utils.sysml_text_utils import get_sysml_text
 
 
 class RefinementMixin:

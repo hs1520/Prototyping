@@ -1,71 +1,22 @@
-"""
-Multi-agent Orchestrator for MBSE prototyping.
+"""Shared helpers and run state for the orchestrator knowledge sources.
 
-Coordinates the different specialized agents to implement the
-full rapid prototyping pipeline, combining forward and backward
-inference with design space exploration.
+Defined here rather than in `orchestrator` so the knowledge-source modules
+can import them without importing the class that composes them.
 """
 
 from __future__ import annotations
 
 import re
-import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from .design_agent import DEFAULT_MAXIMUM_PLAN_ATTEMPTS, DesignAgent
-from .requirements_agent import RequirementsAgent
-from ..dse.design_space import DesignConfiguration, DesignParameter, DesignSpace, ParameterType
-from ..dse.evaluator import DesignEvaluator
-from ..llm.chain_of_thought import ChainOfThoughtPrompter
-from ..llm.interface import LLMInterface
-from ..rag.retriever import RAGRetriever
-from ..sysml.model import ElementRef, SysMLModel
-from ..sysml.lite_model import SysMLLiteModel, build_lite_model
+from ..dse.design_space import DesignSpace
+from ..sysml.model import SysMLModel
+from ..sysml.lite_model import SysMLLiteModel
+from ..utils.sysml_text_utils import find_block_end
 
 # Accept both model types wherever SysMLModel is checked
 _SysMLModelTypes = (SysMLModel, SysMLLiteModel)
-from ..simulation.validator import SimulationValidator, SimulationResult
-from ..simulation.syntax_checker import check_syntax, SyntaxCheckResult
-from ..simulation.levenshtein_fixer import (
-    try_fix_sema_errors,
-    format_hints_for_llm,
-)
-from ..simulation.error_localizer import (
-    extract_error_context,
-    merge_fixed_chunk,
-    build_fix_prompt,
-    strip_code_fences,
-)
-from ..simulation.connectivity_fixer import (
-    build_port_directory,
-    parse_connects,
-    validate_connects,
-    merge_connects,
-    build_connectivity_prompt,
-    extract_connect_lines,
-)
-from ..simulation.transition_fixer import (
-    build_state_machine_summary,
-    build_transition_prompt,
-    extract_transition_lines,
-    validate_transitions,
-    merge_transitions,
-)
-from ..simulation.port_fixer import (
-    collect_port_defs,
-    build_port_fix_prompt,
-    extract_port_additions,
-    validate_port_additions,
-    merge_port_additions,
-)
-from ..simulation.connect_auditor import audit_connects, AuditResult
-from ..utils.sysml_text_utils import find_block_end, get_sysml_text
-from .dse_injectors import (
-    apply_best_config_to_model as _apply_best_config_to_model,
-    apply_inject_attrs_to_sysml_text as _apply_inject_attrs_to_sysml_text,
-    build_dse_design_constraints as _build_dse_design_constraints,
-)
 
 # System prompt for surgical LLM syntax fixes
 _SURGICAL_FIX_SYSTEM = (
@@ -309,6 +260,26 @@ class PrototypingState:
     evaluation_history: List[Dict[str, Any]] = field(default_factory=list)
 
 
-
-
-__all__ = [name for name in globals() if not name.startswith('__')]
+__all__ = [
+    "PrototypingState",
+    "_ATTR_DECL_RE",
+    "_BOOL_GUARD_RE",
+    "_CONNECTIVITY_FIX_SYSTEM",
+    "_DRONE_KWS",
+    "_GUARD_VAR_RE",
+    "_INDUSTRIAL_KWS",
+    "_PART_DEF_BLOCK_RE",
+    "_PORT_FIX_SYSTEM",
+    "_READONLY_ATTR_RE",
+    "_ROBOT_KWS",
+    "_SCEN_TAG_PREFIXES",
+    "_SURGICAL_FIX_SYSTEM",
+    "_SysMLModelTypes",
+    "_TRANSITION_FIX_SYSTEM",
+    "_chat_json",
+    "_fix_keyword_item_names",
+    "_inject_missing_guard_attrs",
+    "_public_realization",
+    "_scenario_src_instance",
+    "_strip_readonly_keyword",
+]
