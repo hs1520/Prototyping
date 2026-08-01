@@ -18,6 +18,9 @@ except ModuleNotFoundError:
     _HAS_NX = False
 
 
+#: LEXICAL heuristic: identifies a sensor by the wording of its type name.
+#: No parser can answer "is this a sensor" — a sensor typed `ForwardUnit` is
+#: invisible here, and that is a property of the check, not of the model.
 _SENSOR_USAGE_RE = re.compile(
     r"\bpart\s+(\w+)\s*:\s*\w*"
     r"(?:Sensor|Perception|Detector|Camera|Lidar|IMU|GPS|Radar)\w*\s*;",
@@ -38,14 +41,16 @@ def _build_connection_graph(text: str):
     Self-loops are skipped.  Returns a networkx DiGraph when available,
     otherwise a pure-Python shim with the same interface.
     """
+    from src.simulation.connectivity_fixer import parse_connects
+
     edge_list: List[Tuple[str, str]] = []
-    for m in re.finditer(
-        r"\bconnect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)", text, re.IGNORECASE
-    ):
-        src = m.group(1)
-        tgt = m.group(3)
-        if src != tgt:
-            edge_list.append((src, tgt))
+    try:
+        statements = parse_connects(text)
+    except Exception:
+        statements = []
+    for stmt in statements:
+        if stmt.src_inst != stmt.tgt_inst:
+            edge_list.append((stmt.src_inst, stmt.tgt_inst))
 
     if _HAS_NX:
         g = nx.DiGraph()

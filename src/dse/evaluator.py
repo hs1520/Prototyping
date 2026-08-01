@@ -694,7 +694,11 @@ class DesignEvaluator:
             #     (`first` / `if` / `then` on separate lines) are matched via
             #     re.DOTALL with whitespace tolerance.
             voting_canonical = re.compile(
-                r"\btransition\s+\w+\s+first\s+\w+\s+if\s+([^;]+?)\s+then\s+\w+\s*;",
+                # the optional `accept` clause is legal and is what the A/G
+                # profile writes; without it the guard is invisible here
+                r"\btransition\s+\w+\s+first\s+\w+"
+                r"(?:\s+accept\s+[^;]+?)?"
+                r"\s+if\s+([^;]+?)\s+then\s+\w+\s*;",
                 re.IGNORECASE | re.DOTALL,
             )
             voting_legacy = re.compile(
@@ -828,6 +832,7 @@ class DesignEvaluator:
             )
 
             # (c) aggregator/voter part def exists
+            # LEXICAL: identifies the role by the wording of the type name.
             has_aggregator = bool(re.search(
                 r"\bpart\s+def\s+\w*"
                 r"(?:Aggregat|Voter|Fusion|Combiner|Arbiter|Merger|Selector)\w*",
@@ -1026,9 +1031,6 @@ class DesignEvaluator:
         _STRUCTURAL_KW = {"airframe", "chassis", "frame", "fuselage", "housing",
                           "enclosure", "structure", "hull"}
         part_usage_re = re.compile(r"\bpart\s+(\w+)\s*:\s*(\w+)\s*;")
-        connect_instance_re = re.compile(
-            r"\bconnect\s+(\w+)\.\w+\s+to\s+(\w+)\.\w+", re.IGNORECASE
-        )
         # Build instance→type map, exclude structural parts from denominator
         inst_type: Dict[str, str] = {}
         for m in part_usage_re.finditer(text):
@@ -1039,9 +1041,9 @@ class DesignEvaluator:
                        for kw in _STRUCTURAL_KW)
         }
         connected: set = set()
-        for m in connect_instance_re.finditer(text):
-            connected.add(m.group(1))
-            connected.add(m.group(2))
+        for stmt in _connections(text):
+            connected.add(stmt.src_inst)
+            connected.add(stmt.tgt_inst)
         instance_conn = (
             len(functional & connected) / max(len(functional), 1)
             if functional else 0.0

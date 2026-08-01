@@ -99,7 +99,16 @@ DESIGN_FIELD_FAMILY = {d.field: d.family for d in DESIGN_ONTOLOGY if d.family}  
 _INNER_LOOP_FIELDS = tuple(d.field for d in DESIGN_ONTOLOGY if d.layer == "inner")
 
 _NUM_UNIT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([A-Za-z/%°]+(?:\s*/\s*[A-Za-z]+)?)?")
-_ATTR_RE = re.compile(r"\battribute\s+(\w+)\s*(?::\s*\w+)?\s*=\s*([\d.]+)\s*(?:\[\s*'?([^\]']+)'?\s*\])?")
+#: `attribute <name> [: <Type>[::<Type>][ [unit] ]] = <number> [ [unit] ];`
+#: The type may be qualified (`ISQ::LengthValue`, which the A/G emitter writes)
+#: and may carry a unit suffix. A pattern accepting only a bare single-word type
+#: silently skipped both, which is the same blind spot found in four other
+#: modules: a legal spelling the check could not see.
+_ATTR_RE = re.compile(
+    r"\battribute\s+(\w+)"
+    r"(?:\s*:\s*\w+(?:::\w+)*(?:\s*\[[^\]]*\])?)?"
+    r"\s*=\s*([\d.]+)\s*(?:\[\s*'?([^\]']+)'?\s*\])?"
+)
 _REQ_ID_RE = re.compile(r"REQ[-_][A-Z]+[-_]\d+")
 
 

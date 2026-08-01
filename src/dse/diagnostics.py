@@ -332,7 +332,11 @@ def diagnose(
             # then Y;`) and the legacy form (`from X to Y when <guard>;`) —
             # mirrors _score_dse_fidelity so diagnosis and scoring agree.
             voting_canonical = re.compile(
-                r"\btransition\s+\w+\s+first\s+\w+\s+if\s+([^;]+?)\s+then\s+\w+\s*;",
+                # the optional `accept` clause is legal and is what the A/G
+                # profile writes; without it the guard is invisible here
+                r"\btransition\s+\w+\s+first\s+\w+"
+                r"(?:\s+accept\s+[^;]+?)?"
+                r"\s+if\s+([^;]+?)\s+then\s+\w+\s*;",
                 re.IGNORECASE | re.DOTALL,
             )
             voting_legacy = re.compile(
