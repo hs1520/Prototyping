@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional, Tuple
 
+from ..sysml.writer import EmissionMode
+
 
 @dataclass(frozen=True)
 class AGAssumptionSpec:
@@ -221,8 +223,13 @@ def _render_ast(node: Mapping[str, Any]) -> str:
     raise ValueError(f"unsupported invariant AST node {kind!r}")
 
 
-def emit_ag_package(spec: AGChainSpec) -> str:
+def emit_ag_package(
+    spec: AGChainSpec,
+    *,
+    mode: EmissionMode = EmissionMode.COMPLETE,
+) -> str:
     """Render one student-approved A/G chain candidate as valid SysML v2."""
+    include_implementation = mode is EmissionMode.COMPLETE
     out: list[str] = [f"package {spec.package} {{"]
     # Official release-corpus models explicitly import the standard-library
     # namespaces they use. Keeping these imports in every standalone package makes
@@ -396,10 +403,6 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 f"    item def "
                 f"{_sysml_identifier(lower.title())}RequestSignal;"
             )
-        out.append("    state def SafetyResponseArbitration {")
-        out.append(f"        attribute {priority.trigger} : Boolean;")
-        out.append("        entry; then awaitingResponse;")
-        out.append("        state awaitingResponse;")
         selected_token = (
             _sysml_identifier(priority.selected_response)
             if runtime_catalog_bound
@@ -422,42 +425,48 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             if runtime_catalog_bound
             else priority.selection_transition
         )
-        out.append(
-            f"        transition {selection_transition_name} "
-            "first awaitingResponse "
-            f"accept {_sysml_identifier(trigger_signal)} "
-            f"if {priority.trigger} "
-            f"then {selected_token};"
-        )
-        for _higher, lower in priority.edges:
-            lower_token = _sysml_identifier(lower)
+        if include_implementation:
+            out.append("    state def SafetyResponseArbitration {")
+            out.append(f"        attribute {priority.trigger} : Boolean;")
+            out.append("        entry; then awaitingResponse;")
+            out.append("        state awaitingResponse;")
             out.append(
-                f"        transition select{_sysml_identifier(lower.title())} "
+                f"        transition {selection_transition_name} "
                 "first awaitingResponse "
-                f"accept {_sysml_identifier(lower.title())}RequestSignal "
-                f"if not {priority.trigger} then {lower_token};"
+                f"accept {_sysml_identifier(trigger_signal)} "
+                f"if {priority.trigger} "
+                f"then {selected_token};"
             )
-        out.append(
-            f"        state {selected_token} "
-            f"{{ entry action {_sysml_identifier(selected_action)}; }}"
-        )
-        for _higher, lower in priority.edges:
-            out.append(f"        state {_sysml_identifier(lower)};")
-        out.append("    }")
-        out.append(
-            "    dependency realizeSafetyResponsePriority "
-            "from SafetyResponsePriorityContract to SafetyResponseArbitration;"
-        )
+            for _higher, lower in priority.edges:
+                lower_token = _sysml_identifier(lower)
+                out.append(
+                    f"        transition select{_sysml_identifier(lower.title())} "
+                    "first awaitingResponse "
+                    f"accept {_sysml_identifier(lower.title())}RequestSignal "
+                    f"if not {priority.trigger} then {lower_token};"
+                )
+            out.append(
+                f"        state {selected_token} "
+                f"{{ entry action {_sysml_identifier(selected_action)}; }}"
+            )
+            for _higher, lower in priority.edges:
+                out.append(f"        state {_sysml_identifier(lower)};")
+            out.append("    }")
+            out.append(
+                "    dependency realizeSafetyResponsePriority "
+                "from SafetyResponsePriorityContract to SafetyResponseArbitration;"
+            )
 
     # Explicit component owners and legal satisfaction relationships. Ownership
     # is never inferred from the name of a contract definition.
-    for comp in spec.components:
-        out.append(f"    part def {comp.owner_def};")
-        out.append(f"    part {comp.owner_usage} : {comp.owner_def};")
-        usage = comp.name[0].lower() + comp.name[1:]
-        out.append(
-            f"    satisfy requirement {usage} : {comp.name} by {comp.owner_usage};"
-        )
+    if include_implementation:
+        for comp in spec.components:
+            out.append(f"    part def {comp.owner_def};")
+            out.append(f"    part {comp.owner_usage} : {comp.owner_def};")
+            usage = comp.name[0].lower() + comp.name[1:]
+            out.append(
+                f"    satisfy requirement {usage} : {comp.name} by {comp.owner_usage};"
+            )
 
     # Reachable trigger -> response-state -> entry-action realizations.
     emitted_signal_defs: set[str] = (
@@ -465,7 +474,29 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         if spec.priority is not None
         else set()
     )
+    planning_first_post_owner_line = True
+    planning_signal_lines = 0
+    planning_pending_blank_lines = 0
+
+    def append_behavior_signal(signal: str) -> None:
+        nonlocal planning_first_post_owner_line, planning_signal_lines
+        indent = ""
+        if include_implementation or not planning_first_post_owner_line:
+            indent = "    "
+        out.append(f"{indent}item def {signal};")
+        planning_first_post_owner_line = False
+        planning_signal_lines += 1
+
+    def record_omitted_behavior(*, emitted_signal: bool) -> None:
+        nonlocal planning_pending_blank_lines
+        if emitted_signal:
+            out.extend(["    "] * (planning_pending_blank_lines + 1))
+            planning_pending_blank_lines = 0
+        else:
+            planning_pending_blank_lines += 1
+
     for comp in spec.components:
+        signals_before_component = planning_signal_lines
         if comp.behavior == "SafetyResponseArbitration":
             continue
         if comp.name == "ReleaseCommandGatewayContract":
@@ -475,8 +506,13 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 "PowerLostSignal",
             ):
                 if signal not in emitted_signal_defs:
-                    out.append(f"    item def {signal};")
+                    append_behavior_signal(signal)
                     emitted_signal_defs.add(signal)
+            if not include_implementation:
+                record_omitted_behavior(
+                    emitted_signal=planning_signal_lines > signals_before_component
+                )
+                continue
             out.extend([
                 f"    state def {comp.behavior} {{",
                 "        attribute authorisationDataValid : Boolean;",
@@ -503,8 +539,13 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 "PowerCycleSignal",
             ):
                 if signal not in emitted_signal_defs:
-                    out.append(f"    item def {signal};")
+                    append_behavior_signal(signal)
                     emitted_signal_defs.add(signal)
+            if not include_implementation:
+                record_omitted_behavior(
+                    emitted_signal=planning_signal_lines > signals_before_component
+                )
+                continue
             out.extend([
                 f"    state def {comp.behavior} {{",
                 "        entry; then poweredOff;",
@@ -532,8 +573,13 @@ def emit_ag_package(spec: AGChainSpec) -> str:
                 "AuthorisedReleaseCommandReceivedSignal",
             ):
                 if signal not in emitted_signal_defs:
-                    out.append(f"    item def {signal};")
+                    append_behavior_signal(signal)
                     emitted_signal_defs.add(signal)
+            if not include_implementation:
+                record_omitted_behavior(
+                    emitted_signal=planning_signal_lines > signals_before_component
+                )
+                continue
             out.extend([
                 f"    state def {comp.behavior} {{",
                 "        entry; then lockedUnpowered;",
@@ -554,6 +600,9 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             ])
             continue
         if comp.name == "RecoveryPowerSupplyContract":
+            if not include_implementation:
+                record_omitted_behavior(emitted_signal=False)
+                continue
             out.extend([
                 f"    state def {comp.behavior} {{",
                 "        entry; then recoveryPowerAvailable;",
@@ -563,8 +612,13 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             ])
             continue
         if comp.trigger_signal not in emitted_signal_defs:
-            out.append(f"    item def {comp.trigger_signal};")
+            append_behavior_signal(comp.trigger_signal)
             emitted_signal_defs.add(comp.trigger_signal)
+        if not include_implementation:
+            record_omitted_behavior(
+                emitted_signal=planning_signal_lines > signals_before_component
+            )
+            continue
         out.append(f"    state def {comp.behavior} {{")
         out.append(f"        entry; then {comp.initial_state};")
         out.append(f"        state {comp.initial_state};")
@@ -580,15 +634,23 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         out.append("    }")
 
     # Decomposition edges (unique names → no namespace-shadowing warning).
-    for comp in spec.components:
+    if not include_implementation:
+        out.extend(["    "] * planning_pending_blank_lines)
+        if spec.priority is not None and out[-1:] == ["    "]:
+            # The historical priority-realization removal consumed one of the
+            # indentation-only lines left by omitted component behaviors.
+            out.pop()
+    for index, comp in enumerate(spec.components):
+        indent = "    " if include_implementation or index == 0 else ""
         out.append(
-            f"    dependency decompose{comp.name} "
+            f"{indent}dependency decompose{comp.name} "
             f"from {spec.system_contract} to {comp.name};"
         )
-        out.append(
-            f"    dependency realize{comp.name} "
-            f"from {comp.name} to {comp.behavior};"
-        )
+        if include_implementation:
+            out.append(
+                f"    dependency realize{comp.name} "
+                f"from {comp.name} to {comp.behavior};"
+            )
 
     producers = {
         guarantee: comp.name
@@ -596,6 +658,7 @@ def emit_ag_package(spec: AGChainSpec) -> str:
         for guarantee in comp.guarantees
     }
     system_environment = set(spec.system_assumptions)
+    planning_unindent_next = not include_implementation
     for comp in spec.components:
         for assumption in comp.assumptions:
             if assumption.environment or assumption.concept in system_environment:
@@ -603,12 +666,15 @@ def emit_ag_package(spec: AGChainSpec) -> str:
             producer = producers.get(assumption.concept)
             if producer is not None:
                 subject = assumption.concept[0].upper() + assumption.concept[1:]
+                indent = "" if planning_unindent_next else "    "
                 out.append(
-                    f"    dependency discharge{subject}__to__{comp.name} "
+                    f"{indent}dependency discharge{subject}__to__{comp.name} "
                     f"from {producer} to {comp.name};"
                 )
+                planning_unindent_next = False
 
-    out.append(f"    verification def {spec.verification} {{")
+    verification_indent = "" if planning_unindent_next else "    "
+    out.append(f"{verification_indent}verification def {spec.verification} {{")
     out.append("        objective deploymentObservation {")
     out.append(
         f"            verify requirement observedContract : {spec.system_contract};"

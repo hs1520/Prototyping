@@ -28,6 +28,7 @@ from .ag_contracts import (
     _classify_completeness,
 )
 from .ag_emitter import AGChainSpec, ag_event_signals, emit_ag_package
+from ..sysml.writer import EmissionMode
 from ..utils.sysml_text_utils import find_block_end
 
 
@@ -53,7 +54,7 @@ def _remove_named_block(text: str, keyword: str, name: str) -> str:
 def strip_ag_implementation(
     package_text: str, spec: AGChainSpec
 ) -> str:
-    """Remove implementation claims from an emitted or authored A/G package."""
+    """Remove implementation claims from an authored A/G package."""
     text = str(package_text)
 
     # A planning artifact may describe the behavior obligation by name in the
@@ -97,7 +98,12 @@ def strip_ag_implementation(
 
 def emit_ag_planning_package(spec: AGChainSpec) -> str:
     """Render contract decisions without fictional owners or realizations."""
-    return strip_ag_implementation(emit_ag_package(spec), spec)
+    # A planning artifact may describe the behavior obligation by name in the
+    # typed AGChainSpec, but no concrete state definition exists until the main
+    # model has been generated. Realization edges would assert that the omitted
+    # behavior exists. The terminal binder recreates those edges against
+    # qualified main-model paths.
+    return emit_ag_package(spec, mode=EmissionMode.CONTRACTS_ONLY)
 
 
 def strip_ag_local_event_definitions(

@@ -6,17 +6,9 @@ from typing import Tuple
 
 from ..dse.physics_estimator import AVIONICS_POWER_W, USABLE
 from ..simulation.syntax_checker import check_syntax
+from ..sysml.writer import identifier
 from ..utils.sysml_text_utils import find_block_end
 from .closure import ClosureReport
-
-
-def _slug(text: str) -> str:
-    s = re.sub(r"[^A-Za-z0-9_]+", "_", text).strip("_")
-    if not s:
-        return "RealizedComponent"
-    if s[0].isdigit():
-        s = "_" + s
-    return s[:64]
 
 
 def emit_realization_package(report: ClosureReport,
@@ -37,10 +29,20 @@ def emit_realization_package(report: ClosureReport,
     c = report.chosen
     rd = c.rd
     metrics = c.metrics
-    combo_t = _slug(rd.combo.name)
-    pack_t = _slug(rd.pack.name)
-    frame_t = _slug(rd.frame.name)
-    integration_t = _slug(rd.integration_bundle.name)
+    combo_t = identifier(
+        rd.combo.name, fallback="RealizedComponent", max_length=64
+    )
+    pack_t = identifier(
+        rd.pack.name, fallback="RealizedComponent", max_length=64
+    )
+    frame_t = identifier(
+        rd.frame.name, fallback="RealizedComponent", max_length=64
+    )
+    integration_t = identifier(
+        rd.integration_bundle.name,
+        fallback="RealizedComponent",
+        max_length=64,
+    )
     avionics_a = AVIONICS_POWER_W / metrics.pack_voltage_v
     asserts = []
     satisfies = []
