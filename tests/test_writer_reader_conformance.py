@@ -10,15 +10,19 @@ import ast
 import hashlib
 import json
 import re
+import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
 import pytest
 
+from src.dse.design_space import DesignConfiguration
+from src.dse.diagnostics import diagnose
+from src.dse.evaluator import DesignEvaluator
 from src.dse.physics_estimator import DesignInputs
 from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
-from src.prototyping.ag_contracts import check_ag_graph
 from src.prototyping.ag_emitter import emit_ag_package
 from src.prototyping.ag_extractor import extract_ag_graph
 from src.prototyping.ag_planning import emit_ag_planning_package
@@ -37,7 +41,7 @@ from src.simulation.transition_fixer import (
     build_state_machine_summary,
 )
 from src.sysml.lite_model import build_lite_model
-from src.sysml.model import PartDefinition, SysMLModel
+from src.sysml.model import FeatureDirection, PartDefinition, SysMLModel
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,18 +103,25 @@ def _identity(text: str) -> str:
     return text
 
 
+def _wrap_ag(fragment: str) -> str:
+    """Supply the stakeholder requirement whose A/G layer consumes the text."""
+    return (
+        "package ConformanceInput { requirement def REQ_SAFE_005; "
+        "part def EvidenceOwner { satisfy requirement REQ_SAFE_005; } }\n"
+        + fragment
+    )
+
+
 def _ag_facts(text: str) -> object:
     graph = extract_ag_graph(text)
-    report = check_ag_graph(graph)
 
     def contract_facts(contract):
         if contract is None:
             return None
         return (
             contract.name,
-            contract.role,
-            tuple((item.concept, item.expr, item.kind) for item in contract.assumptions),
-            tuple((item.concept, item.expr, item.kind) for item in contract.guarantees),
+            tuple(item.concept for item in contract.assumptions),
+            tuple(item.concept for item in contract.guarantees),
             contract.timing_budget,
             contract.timing_unit,
             contract.timing_segment_required,
@@ -125,32 +136,49 @@ def _ag_facts(text: str) -> object:
     return (
         contract_facts(graph.system),
         tuple(contract_facts(component) for component in graph.components),
-        tuple((edge.kind, edge.src, edge.dst, edge.subject) for edge in graph.edges),
         tuple(
-            (
-                behavior.name,
-                behavior.initial_state,
-                tuple(
-                    (
-                        transition.source,
-                        transition.trigger,
-                        transition.target,
-                        None if transition.guard in {None, "true", "(true)"} else transition.guard,
-                    )
-                    for transition in behavior.transitions
-                ),
-                tuple(sorted(behavior.entry_actions.items())),
-            )
-            for behavior in graph.behaviors
+            (edge.src, edge.dst)
+            for edge in graph.edges
+            if edge.kind == "decomposes"
         ),
-        tuple(sorted(graph.verification_targets.items())),
-        graph.source_requirement_ids,
-        graph.priority,
-        graph.invariants,
-        graph.selected_model_elements,
-        graph.declared_event_signals,
-        report.verdict,
-        tuple(sorted(item.code for item in report.diagnostics)),
+    )
+
+
+def _expected_ag_facts(spec) -> object:
+    def component_facts(component):
+        return (
+            component.name,
+            tuple(item.concept for item in component.assumptions),
+            component.guarantees,
+            component.latency_budget,
+            "s" if component.latency_budget is not None else None,
+            component.timing_segment_required,
+            component.timing_segment_group,
+            None,
+            None,
+            (component.owner_usage,),
+            None,
+            None,
+        )
+
+    system = (
+        spec.system_contract,
+        spec.system_assumptions,
+        (spec.observation,),
+        spec.deadline,
+        "s" if spec.deadline is not None else None,
+        None,
+        None,
+        spec.timing_margin,
+        spec.observation,
+        (),
+        spec.source_requirement,
+        spec.pattern,
+    )
+    return (
+        system,
+        tuple(component_facts(item) for item in spec.components),
+        tuple((spec.system_contract, item.name) for item in spec.components),
     )
 
 
@@ -160,6 +188,73 @@ def _planning_facts(text: str) -> object:
         graph.system.name if graph.system else None,
         tuple(component.name for component in graph.components),
         tuple(behavior.name for behavior in graph.behaviors),
+    )
+
+
+def _expected_planning_facts(spec) -> object:
+    return (
+        spec.system_contract,
+        tuple(item.name for item in spec.components),
+        (),
+    )
+
+
+def _ag_attribute_facts(text: str) -> object:
+    """Declaration identities consumed by the A/G extractor's two patterns."""
+    from src.prototyping import ag_extractor
+
+    names = Counter(
+        match.group(1) for match in ag_extractor._ATTR_RE.finditer(text)
+    )
+    names.update(
+        match.group(1) for match in ag_extractor._BOOL_ATTR_RE.finditer(text)
+    )
+    return tuple(sorted(names.items()))
+
+
+def _expected_ag_attribute_facts(spec, *, include_implementation: bool = True) -> object:
+    names = Counter(dict.fromkeys((
+        *spec.system_assumptions,
+        *(spec.system_observation_concepts or (spec.observation,)),
+        *spec.selected_model_elements,
+    )).keys())
+    if spec.deadline is not None:
+        names["maxLatency"] += 1
+    if spec.timing_margin is not None:
+        names["timingMargin"] += 1
+    for component in spec.components:
+        names.update(dict.fromkeys((
+            *(item.concept for item in component.assumptions),
+            *component.interface_inputs,
+            *component.guarantees,
+        )).keys())
+        if component.latency_budget is not None:
+            names["latencyBudget"] += 1
+        if component.timing_segment_group is not None:
+            names["timingSegmentGroup"] += 1
+        if component.timing_segment_required is not None:
+            names["timingSegmentRequired"] += 1
+    if spec.priority is not None:
+        # The trigger is declared by both the auxiliary priority contract and
+        # its arbitration behavior; selectedResponse belongs to the contract.
+        names[spec.priority.trigger] += 1 + int(include_implementation)
+        names["selectedResponse"] += 1
+    return tuple(sorted(names.items()))
+
+
+def _evaluator_ag_facts(text: str) -> object:
+    model = build_lite_model(text)
+    evaluator = DesignEvaluator()
+    evaluator._syside_model = model._syside_model
+    return evaluator._score_requirement_coverage(
+        DesignConfiguration("writer-reader-conformance"), model, None
+    )
+
+
+def _diagnostics_ag_facts(text: str) -> object:
+    issues, _ = diagnose(build_lite_model(text), None)
+    return tuple(
+        issue for issue in issues if issue.startswith("Untraced requirements:")
     )
 
 
@@ -187,12 +282,37 @@ def _behavior_facts(text: str) -> object:
     )
 
 
+def _expected_behavior_facts(behavior: PlannedBehavior) -> object:
+    return ((
+        behavior.behavior_id,
+        tuple(
+            (state.state_id, state.entry_action, state.do_action)
+            for state in behavior.states
+        ),
+        tuple(
+            (
+                transition.transition_id,
+                transition.source,
+                transition.target,
+                transition.trigger if transition.trigger_kind == "ACCEPT" else None,
+                (),
+            )
+            for transition in behavior.transitions
+        ),
+    ),)
+
+
 def _lite_facts(text: str) -> object:
     model = build_lite_model(text)
     return (
         tuple(part.name for part in model.part_definitions),
         tuple(req.name for req in model.requirement_definitions),
     )
+
+
+def _realization_facts(text: str) -> object:
+    parts, requirements = _lite_facts(text)
+    return (tuple(name for name in parts if name != "RealizedDesign"), requirements)
 
 
 def _connect_facts(text: str) -> object:
@@ -222,18 +342,42 @@ def _port_facts(text: str) -> object:
 
 
 def case__src__prototyping__ag_emitter__emit_ag_package() -> EmitterCase:
-    expected = _ag_facts(emit_ag_package(REQ_SAFE_005_CHAIN))
     return EmitterCase(
-        lambda: emit_ag_package(REQ_SAFE_005_CHAIN), _identity,
-        {"ag_extractor": _ag_facts}, {"ag_extractor": expected},
+        lambda: emit_ag_package(REQ_SAFE_005_CHAIN), _wrap_ag,
+        {
+            "ag_extractor": _ag_facts,
+            "ag_attribute_reader": _ag_attribute_facts,
+            "dse_evaluator": _evaluator_ag_facts,
+            "dse_diagnostics": _diagnostics_ag_facts,
+        },
+        {
+            "ag_extractor": _expected_ag_facts(REQ_SAFE_005_CHAIN),
+            "ag_attribute_reader": _expected_ag_attribute_facts(REQ_SAFE_005_CHAIN),
+            "dse_evaluator": 1.0,
+            "dse_diagnostics": (),
+        },
     )
 
 
 def case__src__prototyping__ag_planning__emit_ag_planning_package() -> EmitterCase:
-    expected = _planning_facts(emit_ag_planning_package(REQ_SAFE_005_CHAIN))
     return EmitterCase(
-        lambda: emit_ag_planning_package(REQ_SAFE_005_CHAIN), _identity,
-        {"ag_extractor": _planning_facts}, {"ag_extractor": expected},
+        lambda: emit_ag_planning_package(REQ_SAFE_005_CHAIN), _wrap_ag,
+        {
+            "ag_extractor": _planning_facts,
+            "ag_attribute_reader": _ag_attribute_facts,
+            "dse_evaluator": _evaluator_ag_facts,
+            "dse_diagnostics": _diagnostics_ag_facts,
+        },
+        {
+            "ag_extractor": _expected_planning_facts(REQ_SAFE_005_CHAIN),
+            "ag_attribute_reader": _expected_ag_attribute_facts(
+                REQ_SAFE_005_CHAIN, include_implementation=False
+            ),
+            # Planning deliberately contains no state realization, so the SAFE
+            # implementation sub-score is absent while satisfy coverage remains.
+            "dse_evaluator": 0.6,
+            "dse_diagnostics": (),
+        },
     )
 
 
@@ -257,45 +401,77 @@ def _wrap_behavior(fragment: str) -> str:
 
 
 def case__src__prototyping__planned_behavior__emit_planned_behavior() -> EmitterCase:
-    rendered = _wrap_behavior(emit_planned_behavior(_planned_behavior()))
+    behavior = _planned_behavior()
     return EmitterCase(
-        lambda: emit_planned_behavior(_planned_behavior()), _wrap_behavior,
+        lambda: emit_planned_behavior(behavior), _wrap_behavior,
         {"state_extractor": _behavior_facts},
-        {"state_extractor": _behavior_facts(rendered)},
+        {"state_extractor": _expected_behavior_facts(behavior)},
     )
 
 
-def _realization_text() -> str:
+def _realization_report():
     from src.realization.closure import close_the_loop
-    from src.realization.realization_emitter import emit_realization_package
     from tests.realization_fixtures import catalog
 
     design = DesignInputs(1.0, 12000, 6, 4, 18 * 0.0254 / 2, 0.0)
-    report = close_the_loop(
+    return close_the_loop(
         design, [], ["REQ-PERF-002: endurance at least 15 minutes."], catalog()
     )
+
+
+def _realization_text(report=None) -> str:
+    from src.realization.realization_emitter import emit_realization_package
+
+    report = report or _realization_report()
     return _text(emit_realization_package(report))
 
 
+def _identifier_from_input(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_")
+
+
 def case__src__realization__realization_emitter__emit_realization_package() -> EmitterCase:
-    rendered = _realization_text()
-    return EmitterCase(
-        _realization_text, _identity, {"lite_model": _lite_facts},
-        {"lite_model": _lite_facts(rendered)},
+    report = _realization_report()
+    realized = report.chosen.rd
+    expected_parts = tuple(_identifier_from_input(name) for name in (
+        realized.combo.name,
+        realized.pack.name,
+        realized.frame.name,
+        realized.integration_bundle.name,
+    ))
+    expected_requirements = tuple(
+        item.req_id.replace("-", "_")
+        for item in report.per_requirement
+        if item.scope == "closure"
     )
+    return EmitterCase(
+        lambda: _realization_text(report), _identity,
+        {"lite_model": _realization_facts},
+        {"lite_model": (expected_parts, expected_requirements)},
+    )
+
+
+ANALYSIS_DESIGN = DesignInputs(0.5, 5000, 4, 4, 0.13)
+ANALYSIS_TARGET = 10.0
+ANALYSIS_REQUIREMENT = "REQ-PERF-002"
+ANALYSIS_PART = "AnalyzedDesign"
 
 
 def _analysis_text() -> str:
     from src.dse.analysis_emitter import emit_endurance_analysis
 
-    return _text(emit_endurance_analysis(DesignInputs(0.5, 5000, 4, 4, 0.13), 10.0))
+    return _text(emit_endurance_analysis(
+        ANALYSIS_DESIGN,
+        ANALYSIS_TARGET,
+        satisfy_req=ANALYSIS_REQUIREMENT,
+        part_name=ANALYSIS_PART,
+    ))
 
 
 def case__src__dse__analysis_emitter__emit_endurance_analysis() -> EmitterCase:
-    rendered = _analysis_text()
     return EmitterCase(
         _analysis_text, _identity, {"lite_model": _lite_facts},
-        {"lite_model": _lite_facts(rendered)},
+        {"lite_model": ((ANALYSIS_PART,), (ANALYSIS_REQUIREMENT.replace("-", "_"),))},
     )
 
 
@@ -306,10 +482,14 @@ def _structured_model() -> SysMLModel:
 
 
 def case__src__sysml__model__SysMLModel__to_sysml_text() -> EmitterCase:
-    rendered = _structured_model().to_sysml_text()
+    model = _structured_model()
     return EmitterCase(
-        lambda: _structured_model().to_sysml_text(), _identity,
-        {"lite_model": _lite_facts}, {"lite_model": _lite_facts(rendered)},
+        model.to_sysml_text, _identity,
+        {"lite_model": _lite_facts},
+        {"lite_model": (
+            tuple(item.name for item in model.part_definitions),
+            tuple(item.name for item in model.requirement_definitions),
+        )},
     )
 
 
@@ -321,7 +501,7 @@ def case__src__sysml__lite_model__SysMLLiteModel__to_sysml_text() -> EmitterCase
     rendered = _lite_model_text()
     return EmitterCase(
         lambda: build_lite_model(rendered).to_sysml_text(), _identity,
-        {"lite_model": _lite_facts}, {"lite_model": _lite_facts(rendered)},
+        {"lite_model": _lite_facts}, {"lite_model": (("Sensor",), ())},
     )
 
 
@@ -335,10 +515,9 @@ def _wrap_connect(fragment: str) -> str:
 
 def case__src__simulation__connectivity_fixer__ConnectStmt__to_sysml() -> EmitterCase:
     stmt = ConnectStmt("source", "data", "sink", "data")
-    rendered = _wrap_connect(stmt.to_sysml())
     return EmitterCase(
         stmt.to_sysml, _wrap_connect, {"connectivity_reader": _connect_facts},
-        {"connectivity_reader": _connect_facts(rendered)},
+        {"connectivity_reader": (stmt.key(),)},
     )
 
 
@@ -351,10 +530,15 @@ def _wrap_transition(fragment: str) -> str:
 
 def case__src__simulation__transition_fixer__TransitionStmt__to_sysml() -> EmitterCase:
     stmt = TransitionStmt("respond", "Idle", "", "Responding", "FaultSignal")
-    rendered = _wrap_transition(stmt.to_sysml())
     return EmitterCase(
         stmt.to_sysml, _wrap_transition, {"transition_reader": _transition_facts},
-        {"transition_reader": _transition_facts(rendered)},
+        {"transition_reader": ((
+            stmt.name,
+            stmt.source,
+            stmt.accept_cmd,
+            stmt.guard_raw,
+            stmt.target,
+        ),)},
     )
 
 
@@ -364,10 +548,9 @@ def _wrap_port(fragment: str) -> str:
 
 def case__src__simulation__port_fixer__PortAdd__to_sysml() -> EmitterCase:
     addition = PortAdd("Device", "in", "data", "DataPort")
-    rendered = _wrap_port(addition.to_sysml())
     return EmitterCase(
         addition.to_sysml, _wrap_port, {"lite_model": _port_facts},
-        {"lite_model": _port_facts(rendered)},
+        {"lite_model": ((addition.name, FeatureDirection.IN, addition.port_type),)},
     )
 
 
@@ -510,6 +693,91 @@ def test_reader_facts_are_invariant_under_meaning_preserving_spelling(
 def test_every_required_spelling_class_is_exercised_on_emitter_output():
     exercised = {perturbation.name for _, perturbation in _perturbation_cases()}
     assert exercised == {item.name for item in PERTURBATIONS}
+
+
+def _perturbation_named(name: str) -> SpellingPerturbation:
+    return next(item for item in PERTURBATIONS if item.name == name)
+
+
+def _assert_ag_mutation_is_asymmetric_and_caught(
+    perturbation_name: str,
+) -> None:
+    emitter = "src.prototyping.ag_emitter:emit_ag_package"
+    case = globals()[_case_name(emitter)]()
+    baseline = case.parse_source(case.emit())
+    assert _ag_attribute_facts(baseline) == case.expected["ag_attribute_reader"]
+    with pytest.raises(AssertionError):
+        test_reader_facts_are_invariant_under_meaning_preserving_spelling(
+            emitter,
+            _perturbation_named(perturbation_name),
+        )
+
+
+def test_unit_suffix_perturbation_kills_asymmetric_reader_mutation(monkeypatch):
+    """Baseline has no type unit; only the perturbed spelling is made blind."""
+    from src.prototyping import ag_extractor
+
+    monkeypatch.setattr(ag_extractor, "_ATTR_RE", re.compile(
+        r"\battribute\s+(\w+)\s*:\s*(\w+(?:::\w+)*)"
+        r"\s*(?:=\s*(-?[\d.]+)"
+        r"\s*(?:\[([^\]]+)\])?)?\s*;"
+    ))
+    _assert_ag_mutation_is_asymmetric_and_caught("unit suffix added/removed")
+
+
+def test_qualified_type_perturbation_kills_asymmetric_reader_mutation(monkeypatch):
+    """Unqualified baseline types survive; qualified perturbed types disappear."""
+    from src.prototyping import ag_extractor
+
+    monkeypatch.setattr(ag_extractor, "_ATTR_RE", re.compile(
+        r"\battribute\s+(\w+)\s*:\s*(\w+)"
+        r"(?:\s*\[[^\]]*\])?"
+        r"\s*(?:=\s*(-?[\d.]+)"
+        r"\s*(?:\[([^\]]+)\])?)?\s*;"
+    ))
+    monkeypatch.setattr(ag_extractor, "_BOOL_ATTR_RE", re.compile(
+        r"\battribute\s+(\w+)\s*:\s*Boolean"
+        r"(?:\s*\[[^\]]*\])?"
+        r"\s*=\s*(true|false)\s*;",
+        re.I,
+    ))
+    _assert_ag_mutation_is_asymmetric_and_caught("qualified/unqualified type")
+
+
+def test_initializer_perturbation_kills_asymmetric_reader_mutation(monkeypatch):
+    """The uninitialized baseline is visible; only initialized airborne is blind."""
+    from src.prototyping import ag_extractor
+
+    monkeypatch.setattr(ag_extractor, "_BOOL_ATTR_RE", re.compile(
+        r"\battribute\s+((?!airborne\b)\w+)\s*:\s*(?:\w+::)*Boolean"
+        r"(?:\s*\[[^\]]*\])?"
+        r"\s*=\s*(true|false)\s*;",
+        re.I,
+    ))
+    _assert_ag_mutation_is_asymmetric_and_caught("initializer present/absent")
+
+
+def test_optional_clause_perturbation_kills_asymmetric_reader_mutation(monkeypatch):
+    """Simulate a reader blind only to `accept E if true`, not its baseline."""
+    original = extract_state_machines
+
+    def optional_clause_blind(text: str):
+        if re.search(r"accept\s+\w+\s+if\s+true", text):
+            return []
+        return original(text)
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "extract_state_machines", optional_clause_blind
+    )
+    emitter = "src.prototyping.planned_behavior:emit_planned_behavior"
+    case = globals()[_case_name(emitter)]()
+    baseline = case.parse_source(case.emit())
+    assert _behavior_facts(baseline) == case.expected["state_extractor"]
+    with pytest.raises(AssertionError):
+        test_reader_facts_are_invariant_under_meaning_preserving_spelling(
+            emitter,
+            _perturbation_named("optional clause present/absent"),
+        )
 
 
 def test_legacy_transition_repair_reader_disagrees_with_syside_on_optional_guard():
