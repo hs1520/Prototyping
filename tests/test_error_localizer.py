@@ -16,9 +16,9 @@ from src.simulation.error_localizer import (
     extract_error_context,
     merge_fixed_chunk,
     build_fix_prompt,
-    strip_code_fences,
     ErrorChunk,
 )
+from src.sysml.text_normalization import strip_code_fences
 
 
 # ---------------------------------------------------------------------------

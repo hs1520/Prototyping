@@ -13,10 +13,8 @@ from .orchestrator_support import (
     _SURGICAL_FIX_SYSTEM,
     _SysMLModelTypes,
     _TRANSITION_FIX_SYSTEM,
-    _fix_keyword_item_names,
     _inject_missing_guard_attrs,
     _scenario_src_instance,
-    _strip_readonly_keyword,
 )
 from ..dse.design_space import DesignConfiguration
 from ..simulation.connect_auditor import audit_connects
@@ -32,7 +30,6 @@ from ..simulation.error_localizer import (
     build_fix_prompt,
     extract_error_context,
     merge_fixed_chunk,
-    strip_code_fences,
 )
 from ..simulation.levenshtein_fixer import format_hints_for_llm, try_fix_sema_errors
 from ..simulation.port_fixer import (
@@ -53,6 +50,11 @@ from ..simulation.transition_fixer import (
 from ..simulation.validator import SimulationResult
 from ..sysml.lite_model import build_lite_model
 from ..sysml.model import SysMLModel
+from ..sysml.text_normalization import (
+    fix_keyword_item_names,
+    strip_code_fences,
+    strip_readonly_keyword,
+)
 from ..utils.sysml_text_utils import get_sysml_text
 
 
@@ -1934,7 +1936,7 @@ class RefinementMixin:
         # syside rejects `readonly attribute X : ...`; idiomatic SysML v2 uses
         # plain `attribute`.  Strip deterministically — no LLM needed.
         if latest_result.parser_errors:
-            stripped = _strip_readonly_keyword(working_sysml)
+            stripped = strip_readonly_keyword(working_sysml)
             if stripped != working_sysml:
                 re_checked = check_syntax(stripped)
                 if re_checked.total_errors() < latest_result.total_errors():
@@ -1961,7 +1963,7 @@ class RefinementMixin:
         # word causes a parser error ("Unexpected 'item'").  Fix deterministically
         # by quoting the offending name — no LLM needed.
         if latest_result.parser_errors:
-            working_sysml = _fix_keyword_item_names(working_sysml)
+            working_sysml = fix_keyword_item_names(working_sysml)
             re_checked = check_syntax(working_sysml)
             if re_checked.total_errors() < latest_result.total_errors():
                 n_fixed = latest_result.total_errors() - re_checked.total_errors()

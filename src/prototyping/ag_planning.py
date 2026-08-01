@@ -11,7 +11,6 @@ generation inputs and must never be merged into the committed model verbatim.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Tuple
 
@@ -27,73 +26,11 @@ from .ag_contracts import (
     _check_timing,
     _classify_completeness,
 )
-from .ag_emitter import AGChainSpec, ag_event_signals, emit_ag_package
+from .ag_emitter import AGChainSpec, emit_ag_package
 from ..sysml.writer import EmissionMode
-from ..utils.sysml_text_utils import find_block_end
 
 
 PLANNING_CONSISTENCY = "PLANNING_CONSISTENCY"
-
-
-def _remove_named_block(text: str, keyword: str, name: str) -> str:
-    pattern = re.compile(
-        rf"\b{re.escape(keyword)}\s+{re.escape(name)}\s*\{{"
-    )
-    result = str(text)
-    while True:
-        match = pattern.search(result)
-        if match is None:
-            return result
-        brace = result.find("{", match.start())
-        end = find_block_end(result, brace)
-        if end == -1:
-            return result
-        result = result[:match.start()] + result[end + 1:]
-
-
-def strip_ag_implementation(
-    package_text: str, spec: AGChainSpec
-) -> str:
-    """Remove implementation claims from an authored A/G package."""
-    text = str(package_text)
-
-    # A planning artifact may describe the behavior obligation by name in the
-    # typed AGChainSpec, but no concrete state definition exists until the main
-    # model has been generated.
-    for behavior in dict.fromkeys(
-        component.behavior for component in spec.components
-    ):
-        text = _remove_named_block(text, "state def", behavior)
-
-    for component in spec.components:
-        text = re.sub(
-            rf"(?m)^\s*part\s+def\s+"
-            rf"{re.escape(component.owner_def)}\s*;\s*\n?",
-            "",
-            text,
-        )
-        text = re.sub(
-            rf"(?m)^\s*part\s+{re.escape(component.owner_usage)}\s*:\s*"
-            rf"{re.escape(component.owner_def)}\s*;\s*\n?",
-            "",
-            text,
-        )
-        text = re.sub(
-            rf"(?m)^\s*satisfy\s+requirement\s+\w+\s*:\s*"
-            rf"{re.escape(component.name)}\s+by\s+"
-            rf"{re.escape(component.owner_usage)}\s*;\s*\n?",
-            "",
-            text,
-        )
-
-    # Realization edges would assert that the removed behavior exists.  The
-    # terminal binder recreates these edges against qualified main-model paths.
-    text = re.sub(
-        r"(?m)^\s*dependency\s+realize\w+\s+from\s+\w+\s+to\s+\w+\s*;\s*\n?",
-        "",
-        text,
-    )
-    return text
 
 
 def emit_ag_planning_package(spec: AGChainSpec) -> str:
@@ -104,27 +41,6 @@ def emit_ag_planning_package(spec: AGChainSpec) -> str:
     # behavior exists. The terminal binder recreates those edges against
     # qualified main-model paths.
     return emit_ag_package(spec, mode=EmissionMode.CONTRACTS_ONLY)
-
-
-def strip_ag_local_event_definitions(
-    package_text: str,
-    spec: AGChainSpec,
-) -> str:
-    """Remove standalone event types before terminal canonical imports.
-
-    A terminal A/G package imports the exact system event classifiers and must
-    not retain package-local classifiers with merely equal simple names.
-    """
-    text = str(package_text)
-    for event_name in ag_event_signals(spec):
-        text = re.sub(
-            rf"(?m)^\s*item\s+def\s+"
-            rf"{re.escape(event_name)}\s*;\s*\n?",
-            "",
-            text,
-        )
-    return text
-
 
 @dataclass(frozen=True)
 class AGPlanningReport:

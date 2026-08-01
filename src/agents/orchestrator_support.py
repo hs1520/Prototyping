@@ -65,44 +65,6 @@ _SCEN_TAG_PREFIXES = (
 )
 
 
-def _fix_keyword_item_names(sysml_text: str) -> str:
-    """
-    Quote SysML reserved words used as item-usage names inside port/part defs.
-
-    Pattern:  (in|out|inout) item <keyword> :
-    Fix:      (in|out|inout) item '<keyword>' :
-
-    syside rejects bare reserved words like `message`, `flow`, `connect`,
-    `accept`, `send`, `loop`, `state` as item-usage names (parser error
-    "Unexpected 'item'").  Quoting them makes the syntax valid.
-    """
-    _SYSML_KW = re.compile(
-        r'\b(in|out|inout)\s+item\s+'
-        r'(message|flow|connect|accept|send|loop|state|item|if|then|first|else)\s*:',
-        re.IGNORECASE,
-    )
-    return _SYSML_KW.sub(lambda m: f"{m.group(1)} item '{m.group(2)}' :", sysml_text)
-
-
-_READONLY_ATTR_RE = re.compile(r'\breadonly\s+(attribute\b)')
-
-
-def _strip_readonly_keyword(sysml_text: str) -> str:
-    """
-    Drop the `readonly` modifier before `attribute`.
-
-    syside's parser rejects `readonly attribute X : ...` ("Unexpected
-    identifier"), and the official SysML v2 corpus never uses `readonly`
-    — constants are plain `attribute name : T = value [unit];`.  The
-    design-limit vs runtime-state distinction is carried by naming
-    convention (max/min/limit vs current*) and assert constraints, not by
-    this keyword.  The generation prompt no longer teaches `readonly`;
-    this is a deterministic safety net for residual LLM emissions so they
-    cost no syntax-gate LLM round.
-    """
-    return _READONLY_ATTR_RE.sub(r'\1', sysml_text)
-
-
 _GUARD_VAR_RE = re.compile(
     r'\bif\s+(\w+)\s*(?:[<>=!]+|$)',
 )
@@ -270,16 +232,13 @@ __all__ = [
     "_INDUSTRIAL_KWS",
     "_PART_DEF_BLOCK_RE",
     "_PORT_FIX_SYSTEM",
-    "_READONLY_ATTR_RE",
     "_ROBOT_KWS",
     "_SCEN_TAG_PREFIXES",
     "_SURGICAL_FIX_SYSTEM",
     "_SysMLModelTypes",
     "_TRANSITION_FIX_SYSTEM",
     "_chat_json",
-    "_fix_keyword_item_names",
     "_inject_missing_guard_attrs",
     "_public_realization",
     "_scenario_src_instance",
-    "_strip_readonly_keyword",
 ]

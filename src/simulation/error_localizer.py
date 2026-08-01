@@ -18,7 +18,7 @@ Tier-1 外科式 LLM 修复：把整个 SysML 模型传给 LLM 之前，先把�
   extract_error_context   — 按语法块分组，提取最小上下文
   merge_fixed_chunk       — 行范围替换合并
   build_fix_prompt        — 为单块生成 LLM 修复 prompt
-  strip_code_fences       — 清除 LLM 返回中的 markdown 围栏
+  text_normalization.strip_code_fences — 清除 LLM 返回中的 markdown 围栏
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from .levenshtein_fixer import SysMLVocab, build_vocab
 from .syntax_checker import condense_diagnostic
+from ..sysml import text_normalization
 
 
 # ---------------------------------------------------------------------------
@@ -86,22 +87,6 @@ class MergeResult:
 # ---------------------------------------------------------------------------
 # 工具函数
 # ---------------------------------------------------------------------------
-
-def strip_code_fences(text: str) -> str:
-    """
-    去除 LLM 返回内容中常见的 markdown 代码围栏。
-
-    处理以下格式：
-      ```sysml ... ```
-      ```         ... ```
-      ~~~sysml    ... ~~~
-    """
-    # 去掉开头的围栏行（```sysml、```、~~~sysml 等）
-    text = re.sub(r'^[ \t]*(?:```|~~~)\w*[ \t]*\n', '', text, flags=re.MULTILINE)
-    # 去掉结尾的围栏行
-    text = re.sub(r'^[ \t]*(?:```|~~~)[ \t]*$', '', text, flags=re.MULTILINE)
-    return text.strip('\n')
-
 
 # ---------------------------------------------------------------------------
 # 声明摘要生成
@@ -267,7 +252,7 @@ def merge_fixed_chunk(
     -------
     MergeResult
     """
-    fixed_text  = strip_code_fences(fixed_text)
+    fixed_text  = text_normalization.strip_code_fences(fixed_text)
 
     orig_lines   = sysml_text.split('\n')
     fixed_lines  = fixed_text.split('\n')

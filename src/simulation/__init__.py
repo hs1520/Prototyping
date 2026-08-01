@@ -28,7 +28,6 @@ from .error_localizer import (
     extract_error_context,
     merge_fixed_chunk,
     build_fix_prompt,
-    strip_code_fences,
 )
 from .connectivity_fixer import (
     PortInfo,
@@ -64,7 +63,6 @@ __all__ = [
     "extract_error_context",
     "merge_fixed_chunk",
     "build_fix_prompt",
-    "strip_code_fences",
     "PortInfo",
     "PortDirectory",
     "ConnectStmt",

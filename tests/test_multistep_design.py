@@ -33,6 +33,10 @@ if "syside" not in sys.modules:
 
 from src.llm.interface import LLMResponse, Message
 from src.llm.chain_of_thought import ChainOfThoughtPrompter, CoTResult
+from src.sysml.text_normalization import (
+    fix_capability_semantics,
+    fix_safety_action_semantics,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1463,7 +1467,7 @@ def test_range_floor_is_not_emitted_as_opposite_always_on_constraint():
             }
         }
     }"""
-    fixed, count = DesignAgent._fix_capability_semantics(  # noqa: SLF001
+    fixed, count = fix_capability_semantics(
         text,
         ["REQ-PERF-006: The system shall achieve an operational range of at least 5 km."],
     )
@@ -1545,7 +1549,7 @@ def test_range_floor_cleanup_does_not_remove_sensor_range_constraint():
             }
         }
     }"""
-    fixed, count = DesignAgent._fix_capability_semantics(  # noqa: SLF001
+    fixed, count = fix_capability_semantics(
         text,
         ["REQ-PERF-006: The system shall achieve an operational range of at least 5 km."],
     )
@@ -1564,7 +1568,7 @@ def test_parachute_action_command_is_repaired_and_declared():
             action def deployParachute { send CMD_LAND() to parachuteCmd; }
         }
     }"""
-    fixed, count = DesignAgent._fix_safety_action_semantics(text)  # noqa: SLF001
+    fixed, count = fix_safety_action_semantics(text)
 
     assert count == 2
     assert "action def CMD_PARACHUTE" in fixed

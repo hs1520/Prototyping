@@ -14,8 +14,8 @@ from .ag_behavior_plan import (
 )
 from .ag_planning import (
     emit_ag_planning_package,
-    strip_ag_local_event_definitions,
 )
+from ..sysml.text_normalization import strip_named_item_definitions
 from ..utils.sysml_text_utils import find_block_end
 
 try:
@@ -530,9 +530,9 @@ def bind_ag_contracts_to_model(
                     f"to {priority_owner.behavior};"
                 )
 
-        terminal_package = strip_ag_local_event_definitions(
+        terminal_package = strip_named_item_definitions(
             emit_ag_planning_package(spec),
-            spec,
+            ag_event_signals(spec),
         )
         package = _insert_package_members(
             terminal_package,

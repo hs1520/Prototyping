@@ -304,8 +304,8 @@ class AGAssuranceMixin:
         from ..prototyping.ag_planning import (
             check_ag_planning_graph,
             emit_ag_planning_package,
-            strip_ag_implementation,
         )
+        from ..sysml.text_normalization import strip_ag_implementation
 
         planning_model = self._requirement_planning_model(requirements)
         planned_specs: List[Any] = []
@@ -337,7 +337,16 @@ class AGAssuranceMixin:
                 # boundary is used only to compile non-gold architecture prompts.
                 planned_spec = reviewed_spec
                 planning_package = strip_ag_implementation(
-                    guidance_package, planned_spec
+                    guidance_package,
+                    (component.behavior for component in planned_spec.components),
+                    (
+                        (
+                            component.owner_def,
+                            component.owner_usage,
+                            component.name,
+                        )
+                        for component in planned_spec.components
+                    ),
                 )
             else:  # constructor validation should make this unreachable
                 raise RuntimeError(
