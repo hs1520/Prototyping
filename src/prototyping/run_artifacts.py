@@ -52,8 +52,15 @@ def write_revised_run_artifacts(
 ) -> Dict[str, str]:
     """Serialise the derived audit views of one revised run; returns {name: path}.
 
-    Requires a `revised_experiment` result (a `BLACKBOARD_AG_V1` arm). Raises if
-    the run carries no collaboration block.
+    Requires a `revised_experiment` result (a `BLACKBOARD_AG_V1` arm).
+
+    A run without a collaboration block is not an error: R0-CURRENT has no
+    blackboard by construction, and refusing to write anything for it meant the
+    baseline archived no model at all. A defect that appeared only in R0 could
+    then not be diagnosed after the fact — one measured run failed on an
+    undeclared type and the evidence was a single line number. Board-derived
+    views are still skipped, because they genuinely do not exist; everything
+    derived from the committed model text is written for every arm.
     """
     experiment = run_result.get("revised_experiment") or {}
     if (
@@ -66,8 +73,6 @@ def write_revised_run_artifacts(
             "with an R0-CURRENT/R1-BBCTX/R2-BBAG configuration"
         )
     collaboration = run_result.get("collaboration") or {}
-    if not collaboration:
-        raise ValueError("revised run has no collaboration artifacts to write")
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

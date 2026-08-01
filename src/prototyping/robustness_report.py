@@ -340,3 +340,53 @@ def format_robustness_table(report: Mapping[str, Any]) -> str:
     lines.append("")
     lines.append("n/a = the arm carries no A/G layer; not a score of zero")
     return "\n".join(lines)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Write the cross-arm table beside an archived pilot.
+
+    Exists because the report was previously only reachable by hand-written
+    script, and four pilots were archived before anyone generated one. It reads
+    the pilot's own frozen requirement set, so the declared denominator cannot
+    drift from the run it describes.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description=main.__doc__)
+    parser.add_argument("pilot_dir", type=Path)
+    parser.add_argument(
+        "--out", type=Path, default=None,
+        help="defaults to <pilot_dir>/robustness_report.json",
+    )
+    args = parser.parse_args(argv)
+
+    config_path = args.pilot_dir / "pilot_config.json"
+    if not config_path.exists():
+        parser.error(f"no pilot_config.json in {args.pilot_dir}")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    requirements = (
+        config.get("frozen_requirement_set", {}).get("requirements") or ()
+    )
+    declared = [
+        item.split(":", 1)[0].strip().replace("-", "_").upper()
+        for item in requirements
+    ]
+    from .ag_traceability import DECLARED_OUT_OF_SCOPE
+
+    report = build_robustness_report(
+        args.pilot_dir,
+        declared_requirements=declared,
+        out_of_scope=DECLARED_OUT_OF_SCOPE,
+    )
+    out = args.out or (args.pilot_dir / "robustness_report.json")
+    out.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False, default=str) + "\n",
+        encoding="utf-8",
+    )
+    print(format_robustness_table(report))
+    print(f"\nwritten: {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

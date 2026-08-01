@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import re
 import time
+import traceback
 from typing import Any, Callable, Mapping, Sequence
 
 from .ag_contracts import AG_CHECKER_VERSION
@@ -61,6 +62,26 @@ def _write_json(path: Path, payload: Any) -> None:
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+
+
+
+def _salvage_model_text(model: Any) -> str:
+    """Best-effort SysML text from a partially built model, never raising.
+
+    Used only on the failure path, where anything recoverable beats nothing.
+    """
+    if model is None:
+        return ""
+    try:
+        from ..utils.sysml_text_utils import get_sysml_text
+        return str(get_sysml_text(model) or "")
+    except Exception:
+        try:
+            return str((getattr(model, "metadata", None) or {}).get(
+                "last_sysml_text", ""
+            ))
+        except Exception:
+            return ""
 
 
 def _utc_now() -> str:
@@ -595,6 +616,31 @@ def run_revised_pilot(
                         },
                     )
                     failed_artifacts.append("ag_authoring_attempts")
+                # A failed run is when the model is most worth having, and it
+                # used to be the one case that archived nothing but a manifest:
+                # two measured failures could not be diagnosed afterwards
+                # because the evidence was a line number and no model. The
+                # orchestrator holds the last text it worked on even when a
+                # later stage raised, so it is written here.
+                salvage = getattr(
+                    getattr(pipeline, "orchestrator", None), "state", None
+                )
+                model = getattr(salvage, "current_model", None)
+                for label, text in (
+                    ("shared_model_partial.sysml", _salvage_model_text(model)),
+                ):
+                    if text:
+                        (run_dir / label).write_text(text, encoding="utf-8")
+                        failed_artifacts.append(label.split(".")[0])
+                _write_json(run_dir / "failure_context.json", {
+                    "schema_version": "1.0",
+                    "artifact_role": "RUN_FAILURE_CONTEXT",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "traceback": traceback.format_exc(),
+                    "model_archived": bool(_salvage_model_text(model)),
+                })
+                failed_artifacts.append("failure_context")
                 row = {
                     **base,
                     "status": "FAILED",
