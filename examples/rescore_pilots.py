@@ -37,16 +37,25 @@ def _score(model, requirements, *, stakeholder_only: bool):
     """Evaluate once under one denominator rule."""
     import src.dse.evaluator as evaluator
 
-    original = evaluator._STAKEHOLDER_REQ
+    original_req = evaluator._STAKEHOLDER_REQ
+    original_tx = evaluator._GUARDED_TRANSITION
     if not stakeholder_only:
-        # the old rule: every requirement def counted, contracts included
+        # the archived rules: every requirement def counted, contracts
+        # included; and a guarded transition had to put `if` immediately
+        # after the source state, so an `accept` clause hid it
         evaluator._STAKEHOLDER_REQ = re.compile(r"(?!)")
+        evaluator._GUARDED_TRANSITION = re.compile(
+            r"\btransition\s+\w+\s+first\s+\w+\s+if\s+[^;]+?"
+            r"\s+then\s+\w+\s*;",
+            re.IGNORECASE | re.DOTALL,
+        )
     try:
         return DesignEvaluator().evaluate(
             DesignConfiguration({}), model, requirements=requirements
         )
     finally:
-        evaluator._STAKEHOLDER_REQ = original
+        evaluator._STAKEHOLDER_REQ = original_req
+        evaluator._GUARDED_TRANSITION = original_tx
 
 
 def rescore_run(run_dir: Path) -> dict | None:

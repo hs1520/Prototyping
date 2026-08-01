@@ -200,6 +200,18 @@ DIMENSION_VETO_FLOORS: Dict[str, Tuple[float, str]] = {
 _STAKEHOLDER_REQ = re.compile(r"^REQ[_-][A-Za-z]+[_-]\d+$", re.IGNORECASE)
 
 
+#: A guard-based transition, the structural stand-in for a fault transition.
+#: The `accept` clause is optional because the bounded A/G profile emits
+#: `first X accept Sig if guard then Y`, which is legal SysML v2; a pattern
+#: requiring `if` immediately after the source state cannot see it.
+_GUARDED_TRANSITION = re.compile(
+    r"\btransition\s+\w+\s+first\s+\w+"
+    r"(?:\s+accept\s+[^;]+?)?"
+    r"\s+if\s+[^;]+?\s+then\s+\w+\s*;",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 class DesignEvaluator:
     """
     Evaluates SysML v2 design configurations against five quality dimensions.
@@ -1093,19 +1105,24 @@ class DesignEvaluator:
         state_cov = min(1.0, state_defs / max(n_safe, 1))
 
         # ── Fault transitions (SysML v2: first/then syntax) ─────────────
-        # Counts ALL guard-based transitions (`first X if <guard> then Y`)
-        # regardless of target-state naming.  In the generation pipeline
-        # (chain_of_thought templates), nominal phase chains are driven by
-        # `accept CMD_*` while guard transitions appear only in fault
-        # monitors / safety arbiters — so "guard transition" is the
-        # structural definition of a fault transition.  Filtering by target
-        # name (Fault/Fail/Emergency…) missed the template's XxxDetected /
-        # ArbXxxMode naming and scored 0 systematically; min(1.0, …) caps
-        # any over-count so the looser match is safe.
-        fault_tx = len(re.findall(
-            r"\btransition\s+\w+\s+first\s+\w+\s+if\s+[^;]+?\s+then\s+\w+\s*;",
-            text, re.IGNORECASE | re.DOTALL,
-        ))
+        # Counts guard-based transitions (`first X [accept Sig] if <guard>
+        # then Y`) regardless of target-state naming.  In the generation
+        # pipeline, nominal phase chains are driven by `accept CMD_*` alone
+        # while guard transitions appear only in fault monitors / safety
+        # arbiters — so "guard transition" is the structural definition of a
+        # fault transition.  Filtering by target name (Fault/Fail/Emergency…)
+        # missed the template's XxxDetected / ArbXxxMode naming and scored 0
+        # systematically; min(1.0, …) caps any over-count.
+        #
+        # The optional `accept` clause is what the bounded A/G profile emits —
+        # `first awaitingResponse accept CriticalPropulsionFailureDetectedSignal
+        # if criticalPropulsionFailureDetected then …` is legal SysML v2 and is
+        # exactly the shape this metric wants to count, but a pattern requiring
+        # `if` immediately after the source state could not see it. Every A/G
+        # chain scored 0 on this sub-metric for that reason alone, which read as
+        # the assurance layer having no fault transitions when it has nothing
+        # but.
+        fault_tx = len(_GUARDED_TRANSITION.findall(text))
         fault_tx_score = min(1.0, fault_tx / max(n_safe, 1))
 
         # ── Override-command path ────────────────────────────────────────
