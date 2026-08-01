@@ -43,7 +43,14 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 # declared is still held to its obligation. The timed pattern's own obligations
 # are unchanged and separately pinned, but the set of accepted declarations and
 # the untimed verdicts differ, so v8 and v9 may not be pooled.
-AG_CHECKER_VERSION = "ag-bounded-9"
+# ag-bounded-10: the extractor now reads a deadline written with a
+# qualified or unit-suffixed type (`maxLatency : DurationValue [s] = ...`),
+# which it previously missed entirely — a timed chain then extracted with
+# no budget and was judged not to be a timed pattern. Verdicts on all 14
+# archived R2 runs are unchanged, because the emitter never wrote that
+# spelling; what changed is the input space the checker can see, so v9 and
+# v10 are not pooled.
+AG_CHECKER_VERSION = "ag-bounded-10"
 
 # Completeness states (§6.3).
 READY = "READY"

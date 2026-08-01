@@ -99,6 +99,19 @@ class EvaluationResult:
 # prior share — they are invariants of a well-formed model, not a function of
 # which requirement categories dominate.
 
+#: Bump when a dimension's meaning changes, not when its code moves. Scores from
+#: different versions are not comparable, and until now nothing in a run report
+#: said which evaluator produced its final_score.
+#:
+#: v2 — requirement_coverage no longer counts A/G contract definitions in its
+#: denominator (they are `requirement def` by profile requirement, and were
+#: diluting the metric that judges the layer declaring them), and
+#: safety_assurance counts guarded transitions from the parse rather than from a
+#: pattern that could not see an `accept` clause. Measured effect on 29 archived
+#: models: R1-BBCTX unchanged to the last digit, R2-BBAG +0.16.
+EVALUATOR_VERSION = "dimension-weights-v2"
+
+
 DIMENSION_WEIGHTS: Dict[str, float] = {
     "syntactic_validity":       0.10,
     "requirement_coverage":     0.18,

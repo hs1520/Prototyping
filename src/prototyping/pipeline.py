@@ -15,6 +15,7 @@ from ..rag.pinecone_wrapper import PineconeWrapper
 from ..rag.retriever import RAGRetriever
 from ..sysml.model import SysMLModel
 from ..sysml.lite_model import SysMLLiteModel
+from ..dse.evaluator import EVALUATOR_VERSION as _EVALUATOR_VERSION
 from ..utils.suppressed import suppressed_summary
 
 _SysMLModelTypes = (SysMLModel, SysMLLiteModel)
@@ -402,6 +403,7 @@ class PrototypingPipeline:
             "dse_search_coverage": result.get("dse_search_coverage"),
             "design_space_summary": result.get("design_space_summary"),
             "llm_usage": result.get("llm_usage"),
+            "evaluator_version": _EVALUATOR_VERSION,
             "terminal_consistency": result.get("terminal_consistency"),
             "model_qualification": result.get("model_qualification"),
             "model_acceptance_status": result.get(
