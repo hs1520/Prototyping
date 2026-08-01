@@ -72,7 +72,7 @@ def main() -> None:
     parser.add_argument("--provider", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--seeds", nargs=3, type=int, default=(0, 1, 2))
+    parser.add_argument("--seeds", nargs="+", type=int, default=(0, 1, 2))
     parser.add_argument("--max-iterations", type=int, default=1)
     parser.add_argument(
         "--r2-generation-mode",

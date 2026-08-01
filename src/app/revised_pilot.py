@@ -92,7 +92,7 @@ def _utc_now() -> str:
 class RevisedPilotConfig:
     provider: str
     model: str
-    seeds: tuple[int, int, int]
+    seeds: tuple[int, ...]
     max_iterations: int
     code_revision: str
     requirements: tuple[str, ...]
@@ -126,8 +126,14 @@ class RevisedPilotConfig:
             raise ValueError("revised pilot requires BLACKBOARD_AG_V1")
         if tuple(self.arms) != REVISED_PILOT_ARMS:
             raise ValueError("revised pilot requires exact R0/R1/R2 arm ordering")
-        if len(self.seeds) != 3 or len(set(self.seeds)) != 3:
-            raise ValueError("descriptive pilot requires exactly three distinct seeds")
+        # Three is the floor, not the design.  The study stays DESCRIPTIVE_PILOT
+        # at any n — more repetitions tighten the descriptive estimates and let
+        # more chain behaviour be observed; they do not license confirmatory
+        # inference, and `evaluation_protocol` still forbids p-values.
+        if len(self.seeds) < 3 or len(set(self.seeds)) != len(self.seeds):
+            raise ValueError(
+                "descriptive pilot requires at least three distinct seeds"
+            )
         if self.max_iterations <= 0:
             raise ValueError("max_iterations must be positive")
         if not 0 < self.quality_threshold <= 1:
@@ -367,13 +373,16 @@ def _aggregate(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     if not rows or not all(row.get("status") == "COMPLETED" for row in rows):
         return {
             "status": "INCOMPLETE",
-            "reason": "all nine arm/seed runs must complete before aggregation",
+            "reason": "every arm/seed run must complete before aggregation",
         }
     by_arm: dict[str, list[Mapping[str, Any]]] = {
         arm: [row for row in rows if row.get("configuration") == arm]
         for arm in REVISED_PILOT_ARMS
     }
-    if any(len(items) != 3 for items in by_arm.values()):
+    # Pairing is the invariant, not the count: every arm must carry the same
+    # number of repetitions, and the descriptive floor of three still applies.
+    arm_counts = {len(items) for items in by_arm.values()}
+    if len(arm_counts) != 1 or next(iter(arm_counts)) < 3:
         return {"status": "INCOMPLETE", "reason": "paired arm coverage is incomplete"}
 
     arms: dict[str, Any] = {}
@@ -420,7 +429,7 @@ def run_revised_pilot(
     pipeline_factory: Callable[..., Any],
     artifact_writer: Callable[[Mapping[str, Any], Path], Mapping[str, str]],
 ) -> dict[str, Any]:
-    """Run exactly three paired R0/R1/R2 repetitions with full provenance.
+    """Run one paired R0/R1/R2 repetition per configured seed, with provenance.
 
     A fresh provider instance is created for every arm/seed run so token ledgers,
     call state, and seed configuration cannot leak across arms. Existing output

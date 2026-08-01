@@ -499,10 +499,10 @@ def _configuration_problems(config: Mapping[str, Any]) -> list[str]:
     seeds = config.get("seeds")
     if (
         not isinstance(seeds, list)
-        or len(seeds) != 3
-        or len({str(value) for value in seeds}) != 3
+        or len(seeds) < 3
+        or len({str(value) for value in seeds}) != len(seeds)
     ):
-        problems.append("experiment config must bind exactly three distinct seeds")
+        problems.append("experiment config must bind at least three distinct seeds")
     runs = [str(value) for value in (config.get("selected_r2_run_ids") or [])]
     if not runs or len(runs) != len(set(runs)):
         problems.append("selected_r2_run_ids must be non-empty and unique")

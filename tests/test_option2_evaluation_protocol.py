@@ -19,5 +19,17 @@ def test_pilot_manifest_rejects_mixed_namespace_and_wrong_n():
             ["a", "b", "c"],
             experiment_namespace="LEGACY_EXTERNAL_CONTRACT_V1",
         )
-    with pytest.raises(ValueError, match="exactly three"):
+    with pytest.raises(ValueError, match="at least three"):
         build_descriptive_pilot_manifest(["a", "b"])
+    with pytest.raises(ValueError, match="at least three"):
+        build_descriptive_pilot_manifest(["a", "b", "b"])
+
+
+def test_more_repetitions_raise_n_without_licensing_inference():
+    """Above the floor, `n` follows the runs; the inference bans do not move."""
+    manifest = build_descriptive_pilot_manifest(["a", "b", "c", "d", "e", "f"])
+
+    assert manifest["n"] == 6
+    assert manifest["study_classification"] == "DESCRIPTIVE_PILOT"
+    assert manifest["confirmatory_inference"] is False
+    assert manifest["confirmatory_p_values_permitted"] is False
