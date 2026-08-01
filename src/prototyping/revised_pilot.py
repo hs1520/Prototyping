@@ -528,9 +528,12 @@ def run_revised_pilot(
                     r2_intervention_version=config.r2_intervention_version,
                 )
                 _write_json(run_dir / "run_report.json", report)
-                written: Mapping[str, str] = {}
-                if result.get("collaboration"):
-                    written = artifact_writer(result, run_dir)
+                # Every arm archives what it has. Gating on the collaboration
+                # block meant R0-CURRENT — which has no blackboard by
+                # construction — archived no model, so a defect seen only in the
+                # baseline could not be diagnosed afterwards. The writer already
+                # skips the board-derived views when there is no board.
+                written: Mapping[str, str] = artifact_writer(result, run_dir)
                 calls, tokens = _usage(report)
                 row = {
                     **base,

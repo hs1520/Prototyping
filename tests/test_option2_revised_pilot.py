@@ -290,7 +290,10 @@ def test_complete_pilot_archives_nine_isolated_runs_and_descriptive_summary(tmp_
         call["provider_kwargs"]["enable_langsmith"] is False
         for call in factory_calls
     )
-    assert len(artifact_calls) == 6
+    # every arm archives, including R0-CURRENT: gating this on the
+    # collaboration block left the baseline with no model on disk, and a
+    # defect seen only there could not be diagnosed after the fact
+    assert len(artifact_calls) == 9
     assert len(list(out.glob("seed-*/*/run_manifest.json"))) == 9
     on_disk = json.loads((out / "pilot_manifest.json").read_text(encoding="utf-8"))
     assert on_disk["configuration_digest"] == manifest["configuration_digest"]
