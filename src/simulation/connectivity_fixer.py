@@ -172,8 +172,57 @@ def build_port_directory(sysml_text: str) -> PortDirectory:
     return directory
 
 
+def _parse_connects_via_syside(sysml_text: str) -> Optional[List[ConnectStmt]]:
+    """Connections from the parse; None when Syside cannot answer.
+
+    Anchoring on ConnectionUsage removes a whole class of false positive that a
+    free-text pattern cannot avoid: prose inside a requirement `doc` comment can
+    read like a declaration, and a scan of transitions in one archived model did
+    match a sentence from REQ_SAFE_004's text. Endpoint identity still comes
+    from each end's own CST text, which is exactly `a.x`, so the split is on a
+    node the parser has already delimited rather than on a guess about where a
+    statement begins and ends.
+    """
+    try:
+        import syside
+    except ImportError:
+        return None
+    try:
+        model, _diagnostics = syside.try_load_model(sysml_source=str(sysml_text))
+    except Exception:
+        return None
+    out: List[ConnectStmt] = []
+    try:
+        for connection in model.nodes(syside.ConnectionUsage):
+            ends = list(getattr(connection, "connector_ends", None) or [])
+            if len(ends) != 2:
+                continue
+            parsed = []
+            for end in ends:
+                node = getattr(end, "cst_node", None)
+                if node is None:
+                    break
+                parts = str(node.text(sysml_text)).strip().split(".")
+                if len(parts) != 2 or not all(parts):
+                    break
+                parsed.append((parts[0], parts[1]))
+            if len(parsed) == 2:
+                out.append(ConnectStmt(
+                    parsed[0][0], parsed[0][1], parsed[1][0], parsed[1][1]
+                ))
+    except Exception:
+        return None
+    return out
+
+
 def parse_connects(sysml_text: str) -> List[ConnectStmt]:
-    """解析文本中所有 `connect a.x to b.y;`。"""
+    """解析文本中所有 `connect a.x to b.y;`。
+
+    Prefers the parser; the regex remains for environments without Syside.
+    """
+    parsed = _parse_connects_via_syside(sysml_text)
+    if parsed is not None:
+        return parsed
     out: List[ConnectStmt] = []
     for m in _CONNECT_RE.finditer(sysml_text):
         out.append(ConnectStmt(m.group(1), m.group(2), m.group(3), m.group(4)))
