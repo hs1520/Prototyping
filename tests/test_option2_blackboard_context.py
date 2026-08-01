@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.agents.orchestrator import Orchestrator
-from src.agents.surgical_refiner import _find_def_span
+from src.simulation.surgical_refiner import _find_def_span
 from src.prototyping.blackboard import (
     Blackboard,
     RecordType,

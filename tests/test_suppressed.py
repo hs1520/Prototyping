@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from src.dse.variation_dse import run_variation_dse
-from src.prototyping.pipeline import PrototypingPipeline
+from src.app.pipeline import PrototypingPipeline
 from src.utils.suppressed import record_suppressed, reset_suppressed, suppressed_summary
 
 

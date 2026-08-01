@@ -165,7 +165,7 @@ class RefinementMixin:
         if not self.use_surgical_refinement:
             print("  └─ ⚠ surgical refinement disabled; functional gaps remain", flush=True)
         else:
-            from .surgical_refiner import (
+            from ..simulation.surgical_refiner import (
                 SurgicalAudit,
                 attempt_surgical_refinement,
                 build_dependency_closed_context,
@@ -320,7 +320,7 @@ class RefinementMixin:
         print(f"  ~ Quality met, but {len(verify_gaps)} requirement(s) "
               f"would be UNASSIGNED in the verification matrix — "
               f"one surgical anchor pass", flush=True)
-        from .surgical_refiner import (
+        from ..simulation.surgical_refiner import (
             SurgicalAudit,
             attempt_surgical_refinement,
             build_dependency_closed_context,
@@ -556,7 +556,7 @@ class RefinementMixin:
         the full rewrite needs).  Falls back to the legacy whole-model
         rewrite on any failure.  Returns the candidate model or None."""
         if self.use_surgical_refinement:
-            from .surgical_refiner import (
+            from ..simulation.surgical_refiner import (
                 SurgicalAudit,
                 attempt_surgical_refinement,
             )

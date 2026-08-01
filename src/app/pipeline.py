@@ -434,7 +434,7 @@ class PrototypingPipeline:
             collaboration = result.get("collaboration")
             report["collaboration"] = collaboration
             if collaboration:
-                from .run_metrics import compute_coordination_metrics
+                from ..prototyping.run_metrics import compute_coordination_metrics
                 report["coordination_metrics"] = compute_coordination_metrics(
                     collaboration, llm_usage=result.get("llm_usage")
                 )

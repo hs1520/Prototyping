@@ -10,7 +10,7 @@ import inspect
 
 import pytest
 
-from src.prototyping.pipeline import PrototypingPipeline
+from src.app.pipeline import PrototypingPipeline
 
 
 def test_default_mode_is_variation():

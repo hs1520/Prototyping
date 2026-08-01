@@ -12,7 +12,7 @@ from .blackboard import Blackboard, RecordType, TaskStatus
 from .context_builder import ContextBuilder
 from .task_session import SessionStatus, TaskSessionRegistry
 from ..utils.sysml_text_utils import find_block_end
-from ..agents.surgical_refiner import (
+from ..simulation.surgical_refiner import (
     SurgicalAudit,
     attempt_surgical_refinement,
     build_dependency_closed_context,

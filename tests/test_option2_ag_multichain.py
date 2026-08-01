@@ -200,7 +200,7 @@ def test_repair_now_runs_inside_a_multi_chain_run():
     all chains from the current revision and re-checks them. That is what the two
     analysis rounds below show.
     """
-    from src.agents.surgical_refiner import _find_def_span
+    from src.simulation.surgical_refiner import _find_def_span
 
     injured, _healthy_state = _injured_two_chain_model()
     span = _find_def_span(_two_chain_model(), "state", "ArmingAuthorityBehavior")
@@ -278,7 +278,7 @@ def test_the_repair_budget_is_fixed_and_audited_across_all_chains():
 
 def test_rejected_chain_does_not_orphan_or_suppress_the_next_chain():
     """A rejected candidate is local: the next independent chain is attempted."""
-    from src.agents.surgical_refiner import _find_def_span
+    from src.simulation.surgical_refiner import _find_def_span
 
     healthy = _two_chain_model()
     injured, _ = _injured_two_chain_model()

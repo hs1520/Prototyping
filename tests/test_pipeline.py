@@ -1,7 +1,7 @@
 """Tests for provider factory and orchestration split."""
 
 from src.llm.interface import LLMResponse, MockLLM
-from src.prototyping import pipeline as orchestration_module
+from src.app import pipeline as orchestration_module
 from src.prototyping import provider_factory as provider_module
 from src.sitl.sitl_bridge import BridgeReport, TestResult as SITLTestResult
 

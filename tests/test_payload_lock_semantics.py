@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.agents.surgical_refiner import SURGICAL_SYSTEM_PROMPT
+from src.simulation.surgical_refiner import SURGICAL_SYSTEM_PROMPT
 from src.agents.verification_audit import verification_gap_issues
 from src.prototyping.verification_matrix import build_matrix
 from src.simulation.behavioral_sim import run_behavioral_simulation

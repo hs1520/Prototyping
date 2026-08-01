@@ -225,7 +225,7 @@ def test_ag_entry_edges_and_reused_transition_names_are_scoped_per_machine():
 
 
 def test_generation_and_surgical_prompts_require_executable_functional_responses():
-    from src.agents.surgical_refiner import SURGICAL_SYSTEM_PROMPT
+    from src.simulation.surgical_refiner import SURGICAL_SYSTEM_PROMPT
     from src.llm.chain_of_thought import BEHAVIOR_TEMPLATE
 
     for prompt in (BEHAVIOR_TEMPLATE, SURGICAL_SYSTEM_PROMPT):

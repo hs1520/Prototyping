@@ -5,7 +5,7 @@ shed satisfy links — the same silent-loss failure mode the connect gate guards
 """
 from __future__ import annotations
 
-from src.agents.surgical_refiner import _gates_ok
+from src.simulation.surgical_refiner import _gates_ok
 
 _BASE = """package D {
     requirement def REQ_A {

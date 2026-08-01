@@ -7,7 +7,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.prototyping.provider_factory import create_llm
-from src.prototyping.pipeline import PrototypingPipeline
+from src.app.pipeline import PrototypingPipeline
 from src.sitl.requirement_linker import RequirementLinker
 
 from examples.drone_system_v2 import DRONE_DESCRIPTION, DRONE_REQUIREMENTS

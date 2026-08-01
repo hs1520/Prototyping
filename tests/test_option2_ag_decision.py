@@ -531,7 +531,7 @@ def test_a_run_reports_the_generation_mode_it_actually_executed():
 def test_the_pipeline_hands_the_mode_to_the_orchestrator():
     """Plumbing test: the pilot configures the mode, but it only takes effect if
     the pipeline forwards it."""
-    from src.prototyping.pipeline import PrototypingPipeline
+    from src.app.pipeline import PrototypingPipeline
 
     pipeline = PrototypingPipeline(
         llm=_DecisionLLM(_CORRECT),

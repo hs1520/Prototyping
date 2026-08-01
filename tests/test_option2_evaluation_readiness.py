@@ -21,7 +21,7 @@ from src.prototyping.evaluation_readiness import (
     validate_blind_label,
     validate_frozen_failure_taxonomy,
 )
-from src.prototyping.revised_pilot import RevisedPilotConfig
+from src.app.revised_pilot import RevisedPilotConfig
 
 
 _SOURCE = (

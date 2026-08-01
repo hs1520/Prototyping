@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.agents.surgical_refiner import _find_def_span
+from src.simulation.surgical_refiner import _find_def_span
 from src.prototyping.ag_assurance import (
     FailureClass,
     FailureRoute,
@@ -682,7 +682,7 @@ def test_the_repair_prompt_states_the_rules_its_gate_enforces():
     assert "prefixed with `set`" in feedback
     # and an unknown code still gets the scope rules, just no convention line
     assert "adding a new definition" in _repair_feedback("SOMETHING_ELSE")
-    from src.agents.surgical_refiner import SURGICAL_SYSTEM_PROMPT
+    from src.simulation.surgical_refiner import SURGICAL_SYSTEM_PROMPT
     assert "never translate it" in SURGICAL_SYSTEM_PROMPT
     assert "entry; then <state>;" in SURGICAL_SYSTEM_PROMPT
 

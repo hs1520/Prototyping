@@ -14,7 +14,7 @@ import os
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.prototyping.pipeline import PrototypingPipeline
+from src.app.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
 
 

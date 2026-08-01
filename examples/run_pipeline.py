@@ -15,7 +15,7 @@ import os
 import sys
 import src.config  # noqa: F401  (loads .env)
 from src.prototyping.provider_factory import create_llm
-from src.prototyping.pipeline import PrototypingPipeline
+from src.app.pipeline import PrototypingPipeline
 
 # Reuse the industry-grade v2 system description + INCOSE-style requirements.
 sys.path.insert(0, os.path.dirname(__file__))

@@ -10,7 +10,7 @@ import hashlib
 import json
 from typing import List, Optional
 
-from src.agents.surgical_refiner import (
+from src.simulation.surgical_refiner import (
     SurgicalAudit,
     SurgicalOutcome,
     attempt_surgical_refinement,
@@ -195,7 +195,7 @@ class TestAttemptSurgicalRefinement:
     def test_connect_floor_gate_rejects_shedding_merge(self):
         # a syntactically valid merge that nonetheless lost a connect must be
         # rejected by the gate (prevention of the reachability-collapse mode)
-        from src.agents.surgical_refiner import _gates_ok
+        from src.simulation.surgical_refiner import _gates_ok
 
         shed = _BASE.replace("    connect imu.dataOut to fc.sensorIn;\n", "")
         ok, why = _gates_ok(_BASE, shed)

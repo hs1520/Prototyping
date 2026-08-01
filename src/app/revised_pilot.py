@@ -16,16 +16,16 @@ import time
 import traceback
 from typing import Any, Callable, Mapping, Sequence
 
-from .ag_contracts import AG_CHECKER_VERSION
-from .evaluation_protocol import build_descriptive_pilot_manifest
-from .experiment_arms import (
+from ..prototyping.ag_contracts import AG_CHECKER_VERSION
+from ..prototyping.evaluation_protocol import build_descriptive_pilot_manifest
+from ..prototyping.experiment_arms import (
     REVISED_EXPERIMENT_NAMESPACE,
     R2_DETERMINISTIC_GENERATION_MODE,
     R2_DETERMINISTIC_INTERVENTION_VERSION,
     R2_INTERVENTION_VERSION_BY_MODE,
 )
 from ..agents.design_agent import DEFAULT_MAXIMUM_PLAN_ATTEMPTS
-from .requirement_inputs import (
+from ..prototyping.requirement_inputs import (
     build_frozen_requirement_set,
     normalise_requirement_id,
 )
@@ -275,7 +275,7 @@ def _validate_run_result(
     r2_generation_mode: str,
     r2_intervention_version: str,
 ) -> None:
-    from .blackboard import text_digest
+    from ..prototyping.blackboard import text_digest
 
     revised = result.get("revised_experiment") or {}
     if (

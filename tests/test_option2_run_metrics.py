@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from src.agents.orchestrator import Orchestrator
 from src.prototyping.blackboard import Blackboard
 from src.prototyping.context_builder import ContextBuilder
-from src.prototyping.pipeline import PrototypingPipeline
+from src.app.pipeline import PrototypingPipeline
 from src.prototyping.run_artifacts import write_revised_run_artifacts
 from src.prototyping.run_metrics import compute_coordination_metrics
 from src.prototyping.task_session import TaskSessionRegistry

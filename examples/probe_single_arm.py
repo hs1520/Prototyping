@@ -33,9 +33,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import src.config  # noqa: F401,E402  (loads .env)
 from run_revised_experiment import FROZEN_REQUIREMENTS  # noqa: E402
-from src.prototyping.pipeline import PrototypingPipeline  # noqa: E402
+from src.app.pipeline import PrototypingPipeline  # noqa: E402
 from src.prototyping.provider_factory import create_llm  # noqa: E402
-from src.prototyping.revised_pilot import (  # noqa: E402
+from src.app.revised_pilot import (  # noqa: E402
     R2_INTERVENTION_VERSION_BY_MODE,
     REVISED_PILOT_ARMS,
     RevisedPilotConfig,

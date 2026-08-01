@@ -31,7 +31,7 @@ from src.prototyping.artifact_store import (
     publish_latest,
     write_state,
 )
-from src.prototyping.pipeline import PrototypingPipeline
+from src.app.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
 from src.sitl.dse_sitl_params import design_to_sitl_parm
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE

@@ -28,7 +28,7 @@ from src.prototyping.posthoc_evidence import (
     stamp_blind_label_digests,
     stamp_human_digest,
 )
-from src.prototyping.revised_pilot import RevisedPilotConfig
+from src.app.revised_pilot import RevisedPilotConfig
 
 
 _SOURCE = (

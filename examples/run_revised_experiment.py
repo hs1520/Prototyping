@@ -14,9 +14,9 @@ from src.prototyping.experiment_arms import (
     R2_DETERMINISTIC_GENERATION_MODE,
     R2_INTERVENTION_VERSION_BY_MODE,
 )
-from src.prototyping.pipeline import PrototypingPipeline
+from src.app.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
-from src.prototyping.revised_pilot import RevisedPilotConfig, run_revised_pilot
+from src.app.revised_pilot import RevisedPilotConfig, run_revised_pilot
 from src.prototyping.run_artifacts import write_revised_run_artifacts
 
 

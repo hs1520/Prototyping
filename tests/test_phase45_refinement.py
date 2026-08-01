@@ -34,7 +34,7 @@ for _name, _attrs in [
         sys.modules[_name] = _mod
 
 from src.agents.orchestrator import Orchestrator, PrototypingState  # noqa: F401 (Orchestrator used in tests)
-from src.agents.surgical_refiner import SurgicalOutcome
+from src.simulation.surgical_refiner import SurgicalOutcome
 from src.agents.dse_injectors import build_dse_design_constraints
 from src.llm.interface import MockLLM
 from src.dse.design_space import DesignConfiguration
@@ -938,11 +938,11 @@ class TestVerificationAnchorPass:
         anchored_text = "package D { part def Anchor { } }"
 
         monkeypatch.setattr(
-            "src.agents.surgical_refiner.attempt_surgical_refinement",
+            "src.simulation.surgical_refiner.attempt_surgical_refinement",
             lambda **kwargs: SurgicalOutcome(merged_text=anchored_text),
         )
         monkeypatch.setattr(
-            "src.agents.surgical_refiner.build_dependency_closed_context",
+            "src.simulation.surgical_refiner.build_dependency_closed_context",
             lambda *args, **kwargs: SimpleNamespace(
                 to_dict=lambda: {"mode": "TEST_DEPENDENCY_SLICE"}
             ),
@@ -1026,10 +1026,10 @@ class TestFunctionalClosurePass:
             ]
 
         monkeypatch.setattr(
-            "src.agents.surgical_refiner.attempt_surgical_refinement", fake_repair
+            "src.simulation.surgical_refiner.attempt_surgical_refinement", fake_repair
         )
         monkeypatch.setattr(
-            "src.agents.surgical_refiner.build_dependency_closed_context",
+            "src.simulation.surgical_refiner.build_dependency_closed_context",
             lambda *args, **kwargs: SimpleNamespace(
                 to_dict=lambda: {"mode": "TEST_DEPENDENCY_SLICE"}
             ),
@@ -1078,11 +1078,11 @@ class TestFunctionalClosurePass:
             lambda text, name: ["[VERIFY-GAP] REQ_FUNC_008 missing report response"],
         )
         monkeypatch.setattr(
-            "src.agents.surgical_refiner.attempt_surgical_refinement",
+            "src.simulation.surgical_refiner.attempt_surgical_refinement",
             lambda **kwargs: None,
         )
         monkeypatch.setattr(
-            "src.agents.surgical_refiner.build_dependency_closed_context",
+            "src.simulation.surgical_refiner.build_dependency_closed_context",
             lambda *args, **kwargs: SimpleNamespace(
                 to_dict=lambda: {"mode": "TEST_DEPENDENCY_SLICE"}
             ),

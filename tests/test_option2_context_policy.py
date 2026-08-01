@@ -233,7 +233,7 @@ def test_the_repair_slice_carries_what_an_omission_fault_needs():
     from src.prototyping.ag_extractor import extract_ag_graph
     from src.prototyping.ag_assurance import route_failure_diagnostics
     from src.prototyping.ag_repair import _ag_context_supplement
-    from src.agents.surgical_refiner import build_dependency_closed_context
+    from src.simulation.surgical_refiner import build_dependency_closed_context
 
     model = (
         "package Drone {\n    requirement def REQ_SAFE_005 { doc /* deploy the "

@@ -11,7 +11,7 @@ from src.prototyping.experiment_arms import (
     revised_arm_metadata,
 )
 from src.prototyping.ag_contracts import AG_CHECKER_VERSION
-from src.prototyping.revised_pilot import (
+from src.app.revised_pilot import (
     RevisedPilotConfig,
     _contains_evaluator_only_material,
     _validate_run_result,

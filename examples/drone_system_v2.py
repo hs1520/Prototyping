@@ -20,7 +20,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.prototyping.pipeline import PrototypingPipeline
+from src.app.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
