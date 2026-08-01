@@ -428,3 +428,72 @@ def test_expected_generation_plan_is_fail_closed_when_metadata_is_lost():
         "TYPED_GENERATION_PLAN_CONFORMANCE",
         "REQUIREMENT_STRUCTURAL_OBLIGATIONS",
     ]
+
+
+def test_a_planned_port_written_with_the_wrong_type_is_retyped():
+    """One measured run failed with four ports reported as BOTH missing and
+    unplanned: same component, same name, same direction, different type.
+
+    "Does this port exist?" looked only at the name, so nothing added the port
+    and nothing corrected it. The plan owns a port's type exactly as it owns an
+    attribute's, so the mismatch is repaired rather than reported twice.
+    """
+    from types import SimpleNamespace
+
+    from src.prototyping.generation_plan import normalise_planned_port_types
+
+    component = SimpleNamespace(
+        name="FlightController",
+        ports=(
+            SimpleNamespace(
+                name="overrideCmd", direction="in", port_type="CommandPort"
+            ),
+            SimpleNamespace(
+                name="telemetry", direction="out", port_type="StatusPort"
+            ),
+        ),
+    )
+    model = (
+        "package S {\n"
+        "    part def FlightController {\n"
+        "        in port overrideCmd : DataPort;\n"
+        "        out port telemetry : StatusPort;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    text, changes = normalise_planned_port_types(model, [component])
+
+    assert "in port overrideCmd : CommandPort;" in text
+    assert "DataPort" not in text
+    # the port that already agreed is untouched, and not reported
+    assert "out port telemetry : StatusPort;" in text
+    assert changes == ["FlightController.overrideCmd (DataPort -> CommandPort)"]
+
+
+def test_a_wrong_direction_is_left_alone_because_it_is_a_design_question():
+    """Retyping is a notation repair. A direction reversal changes what the
+    connections mean, so it stays a reported mismatch rather than a silent edit.
+    """
+    from types import SimpleNamespace
+
+    from src.prototyping.generation_plan import normalise_planned_port_types
+
+    component = SimpleNamespace(
+        name="FlightController",
+        ports=(SimpleNamespace(
+            name="overrideCmd", direction="in", port_type="CommandPort"
+        ),),
+    )
+    model = (
+        "package S {\n"
+        "    part def FlightController {\n"
+        "        out port overrideCmd : DataPort;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    text, changes = normalise_planned_port_types(model, [component])
+
+    assert text == model
+    assert changes == []

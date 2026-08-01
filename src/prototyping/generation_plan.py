@@ -98,6 +98,68 @@ _SI_UNIT_NAMES = {
 }
 
 
+_DECLARED_PORT = re.compile(
+    r"\b(?P<direction>in|out|inout)\s+port\s+(?P<name>[A-Za-z_]\w*)"
+    r"\s*:\s*(?P<type>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*;"
+)
+
+
+def normalise_planned_port_types(
+    model_text: str, components: Sequence[Any]
+) -> tuple[str, list[str]]:
+    """Give a planned port the planned type when generation used another one.
+
+    The plan owns a port's type exactly as it owns an attribute's. Generation
+    writing `in port overrideCmd : DataPort` where the plan says `CommandPort`
+    used to satisfy the "does this port exist?" test, which looks only at the
+    name, so nothing added it and nothing corrected it — and conformance then
+    reported the same port as BOTH a missing planned port and an unplanned one.
+    Four such pairs failed one measured run.
+
+    Direction is deliberately not rewritten. A wrong direction changes what the
+    connections mean, which is a design question rather than a notation one.
+    """
+    text = str(model_text)
+    changes: list[str] = []
+    for component in components:
+        planned = {
+            item.name: item for item in getattr(component, "ports", ())
+        }
+        if not planned:
+            continue
+        match = re.search(
+            rf"\bpart\s+def\s+{re.escape(component.name)}\s*\{{", text
+        )
+        if match is None:
+            continue
+        brace = text.index("{", match.start())
+        end = find_block_end(text, brace)
+        if end == -1:
+            continue
+        body = text[brace + 1:end]
+        rewritten = []
+        for declaration in _DECLARED_PORT.finditer(body):
+            want = planned.get(declaration.group("name"))
+            if want is None:
+                continue
+            if declaration.group("direction") != want.direction:
+                continue
+            if declaration.group("type") == want.port_type:
+                continue
+            rewritten.append((
+                declaration.start(), declaration.end(),
+                f"{want.direction} port {want.name} : {want.port_type};",
+                f"{component.name}.{want.name} "
+                f"({declaration.group('type')} -> {want.port_type})",
+            ))
+        for start, stop, replacement, note in reversed(rewritten):
+            body = body[:start] + replacement + body[stop:]
+            changes.append(note)
+        if rewritten:
+            text = text[:brace + 1] + body + text[end:]
+    return text, changes
+
+
 def materialize_standard_library_imports(
     model_text: str,
 ) -> tuple[str, dict[str, Any]]:
@@ -1766,6 +1828,13 @@ def apply_generation_plan(
         resolved_usages[component] = resolved
         return resolved
 
+    # The plan owns a planned port's type; correct it before deciding what to
+    # add, so a type-mismatched port is repaired rather than reported as both
+    # missing and unplanned.
+    semantic_text, retyped_ports = normalise_planned_port_types(
+        semantic_text, plan.components
+    )
+
     planned_port_additions: list[PortAdd] = []
     for component in plan.components:
         usage = resolve(component.name)
@@ -2084,6 +2153,7 @@ def apply_generation_plan(
         "deterministically_added_ports": list(
             port_merge.added_descriptions
         ),
+        "deterministically_retyped_ports": list(retyped_ports),
         "semantic_binding_conformance": (
             semantic_binding_conformance
         ),

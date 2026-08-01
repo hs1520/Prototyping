@@ -42,7 +42,13 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # fixed one, and the duplicate came back through the other. The semantic
 # binder now also sees a declaration with no initializer. v14 and v15 are
 # not poolable.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v15"
+# v16 also lets the plan own a planned port's TYPE. "Does this port exist?"
+# looked only at the name, so a port written with the wrong type was neither
+# added nor corrected, and conformance reported it as both a missing planned
+# port and an unplanned one — four such pairs failed one measured run. A
+# wrong DIRECTION is still reported rather than rewritten: that changes what
+# the connections mean. v15 and v16 are not poolable.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v16"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"
