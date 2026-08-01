@@ -212,6 +212,22 @@ _GUARDED_TRANSITION = re.compile(
 )
 
 
+def _connections(model_text: str):
+    """Every `connect a.x to b.y` in the model, from the parser where possible.
+
+    Six sites in this module each rolled their own pattern for the same
+    question, differing only in which capture groups they wanted. They now share
+    the parser-backed entry point, which also means prose inside a requirement
+    `doc` comment can no longer be read as a declaration.
+    """
+    from src.simulation.connectivity_fixer import parse_connects
+
+    try:
+        return parse_connects(model_text)
+    except Exception:
+        return []
+
+
 class DesignEvaluator:
     """
     Evaluates SysML v2 design configurations against five quality dimensions.
@@ -802,12 +818,9 @@ class DesignEvaluator:
                        len(instances) / num_sensors
 
             # (b) every instance appears in a connect statement
-            connect_re = re.compile(
-                r"\bconnect\s+(\w+)\.\w+\s+to\s+(\w+)\.\w+", re.IGNORECASE,
-            )
             connected_parts: set = set()
-            for m in connect_re.finditer(text):
-                connected_parts.add(m.group(1))
+            for stmt in _connections(text):
+                connected_parts.add(stmt.src_inst)
                 connected_parts.add(m.group(2))
             connectivity = (
                 len(instances & connected_parts) / max(len(instances), 1)
@@ -994,12 +1007,7 @@ class DesignEvaluator:
         out_port_decls = re.findall(
             r"\b(?:out|inout)\s+port\s+(\w+)", text, re.IGNORECASE
         )
-        connect_sources = {
-            m.group(1)
-            for m in re.finditer(
-                r"\bconnect\s+\w+\.(\w+)\s+to\s+\w+\.\w+", text, re.IGNORECASE
-            )
-        }
+        connect_sources = {stmt.src_port for stmt in _connections(text)}
         if out_port_decls:
             connected_out = sum(
                 1 for p in set(out_port_decls) if p in connect_sources
@@ -1007,9 +1015,7 @@ class DesignEvaluator:
             connect_density = connected_out / len(set(out_port_decls))
         else:
             # No out ports declared at all — fall back to connect-per-part
-            connects = re.findall(
-                r"\bconnect\s+\w+\.\w+\s+to\s+\w+\.\w+", text, re.IGNORECASE
-            )
+            connects = _connections(text)
             # Tighter denominator: expect 1.5 connects per part
             connect_density = min(1.0, len(connects) / max(n * 1.5, 1))
 
@@ -1265,12 +1271,9 @@ class DesignEvaluator:
         # Fan-in is a port-level concern: multiple sources → same target port.
         # The instance-level graph cannot detect this (multiple edges to the
         # same instance is expected and valid).
-        connects_fi = re.findall(
-            r"\bconnect\s+\w+\.(\w+)\s+to\s+(\w+)\.(\w+)", text, re.IGNORECASE
-        )
         target_count: Dict[str, int] = {}
-        for _, tgt_inst, tgt_port in connects_fi:
-            key = f"{tgt_inst}::{tgt_port}"
+        for stmt in _connections(text):
+            key = f"{stmt.tgt_inst}::{stmt.tgt_port}"
             target_count[key] = target_count.get(key, 0) + 1
         fan_in_violations = sum(1 for c in target_count.values() if c > 1)
         fan_in_score = max(0.0, 1.0 - fan_in_violations * 0.40)
@@ -1307,12 +1310,10 @@ class DesignEvaluator:
         # For each connect X.portA to Y.portB, resolve both port type names
         # and flag domain mismatches (data ↔ power) or exact type mismatches.
         port_type_map = _build_port_type_map(model)
-        connects_typed = re.findall(
-            r"\bconnect\s+\w+\.(\w+)\s+to\s+\w+\.(\w+)", text, re.IGNORECASE
-        )
         type_mismatches = 0
         type_checked = 0
-        for src_port, tgt_port in connects_typed:
+        for _stmt in _connections(text):
+            src_port, tgt_port = _stmt.src_port, _stmt.tgt_port
             src_type = port_type_map.get(src_port)
             tgt_type = port_type_map.get(tgt_port)
             if src_type and tgt_type:
