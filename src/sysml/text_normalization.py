@@ -6,7 +6,7 @@ They are deliberately not part of the structured SysML writer.
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Sequence, Tuple
+from typing import Iterable, Sequence, Tuple
 
 from ..utils.sysml_text_utils import find_block_end
 
@@ -193,7 +193,10 @@ def strip_invalid_requirement_attrs(sysml_text: str) -> Tuple[str, int]:
 
 
 def fix_capability_semantics(
-    sysml_text: str, requirements: List[str]
+    sysml_text: str,
+    *,
+    has_range_floor: bool,
+    has_range_ceiling: bool,
 ) -> Tuple[str, int]:
     """Repair range-floor naming and remove invalid always-on invariants.
 
@@ -203,14 +206,7 @@ def fix_capability_semantics(
     startup.  Keep the design target as ``min*Range`` and leave evaluation
     to the forward-flight fidelity tier.
     """
-    try:
-        from ..dse.requirement_spec import RANGE, extract_requirements
-        specs = extract_requirements(requirements)
-        has_floor = any(s.quantity == RANGE and s.operator == ">=" for s in specs)
-        has_ceiling = any(s.quantity == RANGE and s.operator == "<=" for s in specs)
-    except Exception:
-        return sysml_text, 0
-    if not has_floor or has_ceiling:
+    if not has_range_floor or has_range_ceiling:
         return sysml_text, 0
 
     fixes = 0

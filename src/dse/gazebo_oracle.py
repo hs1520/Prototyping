@@ -27,7 +27,7 @@ import os
 from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from ..sitl.dse_calibration import CalibrationResult, calibrate_ranking
+from .calibration import CalibrationResult, calibrate_ranking
 from .physics_estimator import DesignInputs, disk_area_m2, hover_power_w, total_mass_kg
 
 # Frames the gazebo_poc SDF generator supports (ArduCopter motor tables).

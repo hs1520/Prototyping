@@ -1469,7 +1469,8 @@ def test_range_floor_is_not_emitted_as_opposite_always_on_constraint():
     }"""
     fixed, count = fix_capability_semantics(
         text,
-        ["REQ-PERF-006: The system shall achieve an operational range of at least 5 km."],
+        has_range_floor=True,
+        has_range_ceiling=False,
     )
 
     assert count >= 2
@@ -1551,7 +1552,8 @@ def test_range_floor_cleanup_does_not_remove_sensor_range_constraint():
     }"""
     fixed, count = fix_capability_semantics(
         text,
-        ["REQ-PERF-006: The system shall achieve an operational range of at least 5 km."],
+        has_range_floor=True,
+        has_range_ceiling=False,
     )
 
     assert count == 1

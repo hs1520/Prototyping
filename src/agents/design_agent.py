@@ -484,8 +484,21 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         no LLM call is spent repairing them.  Mutates *generation_metadata*
         in place and returns the (possibly replaced) CoT result.
         """
+        try:
+            from ..dse.requirement_spec import RANGE, extract_requirements
+            specs = extract_requirements(requirements)
+            has_range_floor = any(
+                s.quantity == RANGE and s.operator == ">=" for s in specs
+            )
+            has_range_ceiling = any(
+                s.quantity == RANGE and s.operator == "<=" for s in specs
+            )
+        except Exception:
+            has_range_floor = has_range_ceiling = False
         cleaned_sysml, capability_fixes = fix_capability_semantics(
-            cot_result.extracted_sysml, requirements
+            cot_result.extracted_sysml,
+            has_range_floor=has_range_floor,
+            has_range_ceiling=has_range_ceiling,
         )
         cleaned_sysml, action_fixes = fix_safety_action_semantics(cleaned_sysml)
         cleaned_sysml, self_test_fixes = self._fix_self_test_behavior_semantics(

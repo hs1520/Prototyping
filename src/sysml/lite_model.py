@@ -351,10 +351,10 @@ def _extract_diagnostics(raw_diags) -> List[LiteDiagnostic]:
     _collect(getattr(raw_diags, "parser",   []), DiagnosticSeverity.ERROR)
 
     # Filter stdlib false positives from sema errors (Real, Integer, SI, etc.)
-    # before storing — mirrors syntax_checker._is_stdlib_sema_error logic.
+    # before storing — mirrors the shared is_stdlib_sema_error logic.
     try:
-        from ..simulation.syntax_checker import _is_stdlib_sema_error
-        _stdlib_filter = _is_stdlib_sema_error
+        from .diagnostics import is_stdlib_sema_error
+        _stdlib_filter = is_stdlib_sema_error
     except Exception:
         _stdlib_filter = None
 
