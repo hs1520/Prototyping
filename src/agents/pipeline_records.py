@@ -61,3 +61,31 @@ class PipelineRuntimeState:
     estimator_calibration: Any = None
     ag_generation_plan: Optional[AGGenerationPlanRecord] = None
     model_generation_plan: Optional[ModelGenerationPlanRecord] = None
+
+
+@dataclass
+class GenerationContext:
+    system_name: str
+    system_description: str
+    additional_requirements: list[str]
+    parse_strict: Any
+    platform_profile: Any
+    frozen_requirements: Any
+    requirements: list[str] = field(default_factory=list)
+    model: Any = None
+    final_model: Any = None
+    final_score: Any = None
+    final_sim: Any = None
+    pre_terminal_score: Any = None
+    pre_ag_sysml: str = ""
+    pre_ag_sim: Any = None
+    final_sysml: str = ""
+    generation_plan_conformance: Any = None
+    collaboration_artifacts: Dict[str, Any] = field(default_factory=dict)
+    terminal_consistency: Any = None
+    structural_obligation_report: Any = None
+    semantic_fidelity_report: Any = None
+    model_qualification: Any = None
+    verification_plan: Any = None
+    assurance_artifacts: Dict[str, Any] = field(default_factory=dict)
+    result: Dict[str, Any] = field(default_factory=dict)

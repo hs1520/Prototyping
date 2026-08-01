@@ -101,12 +101,45 @@ def _record_arm(arm: str) -> list[dict]:
     return llm.calls
 
 
+def _run_with_agenda(arm: str) -> dict:
+    llm = _RecordingReplayLLM(_assistant_responses(arm))
+    kwargs = {
+        "llm": llm,
+        "revised_experiment_arm": arm,
+        "max_iterations": 1,
+        "quality_threshold": 0.75,
+        "maximum_plan_attempts": 6,
+    }
+    if arm == "R2-BBAG":
+        kwargs["r2_generation_mode"] = R2_LLM_DECIDED_GENERATION_MODE
+    return Orchestrator(**kwargs).generate(
+        system_name="DeliveryUAV",
+        system_description=(
+            "An autonomous delivery UAV with ballistic parachute recovery and "
+            "forward obstacle avoidance."
+        ),
+        frozen_requirements=_frozen_requirements(),
+    )
+
+
 def _record_all() -> dict[str, list[dict]]:
     return {arm: _record_arm(arm) for arm in _ARMS}
 
 
 def test_refactor_provider_call_sequence_matches_golden():
     assert _record_all() == json.loads(_GOLDEN.read_text())
+
+
+def test_fresh_run_agenda_activates_every_phase_from_reversed_registration():
+    result = _run_with_agenda("R2-BBAG")
+    agenda = result["control_agenda"]
+    registered = [item["name"] for item in agenda["registered_knowledge_sources"]]
+    activated = [item["knowledge_source"] for item in agenda["activations"]]
+    assert len(activated) == 21
+    assert registered == list(reversed(activated))
+    assert activated.index("pre_ag_simulation") < activated.index(
+        "ag_contract_reconciliation"
+    )
 
 
 if __name__ == "__main__":

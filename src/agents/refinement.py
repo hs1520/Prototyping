@@ -1055,6 +1055,9 @@ class RefinementMixin:
         return "\n".join(lines)
 
 
+    # ------------------------------------------------------------------
+    # Phase 3.5: SITL-L1 refinement loop
+    # ------------------------------------------------------------------
     def _sitl_refinement_loop(
         self,
         model: SysMLModel,
@@ -1315,6 +1318,9 @@ class RefinementMixin:
         })
 
 
+    # ------------------------------------------------------------------
+    # Simulation inner refinement loop
+    # ------------------------------------------------------------------
     def _sim_refinement_loop(
         self,
         model: SysMLModel,
@@ -1676,6 +1682,9 @@ class RefinementMixin:
         return self._finalize_sim_loop(current, max_iters)
 
 
+    # ------------------------------------------------------------------
+    # Connect audit step
+    # ------------------------------------------------------------------
     def _connect_audit_step(
         self,
         sysml_text: str,
@@ -2193,6 +2202,9 @@ class RefinementMixin:
         return working_sysml, working_model, latest_result
 
 
+    # ------------------------------------------------------------------
+    # Simulation helpers
+    # ------------------------------------------------------------------
     def _run_simulation(self, sysml_text: str, model_name: str) -> SimulationResult:
         """Run simulation and attach fixed requirement-path evidence."""
         try:
@@ -2333,3 +2345,60 @@ class RefinementMixin:
 
         return issues
 
+
+    @staticmethod
+    def _build_refinement_feedback(
+        eval_result: Any,
+        cot_feedback: str,
+        persistent_issues: Optional[List[str]] = None,
+        mcts_constraints: str = "",
+        sim_issues: Optional[List[str]] = None,
+    ) -> str:
+        """Combine evaluator issues, simulation failures, and LLM feedback into
+        a refinement-oriented prompt section.
+
+        Args:
+            eval_result:        Rule-based evaluation result (issues + recommendations).
+            cot_feedback:       LLM chain-of-thought final answer (may be empty).
+            persistent_issues:  Issues that have appeared in more than one iteration.
+            mcts_constraints:   Architectural decisions from MCTS (non-negotiable).
+            sim_issues:         Behavioral simulation failures from SimulationValidator.
+        """
+        lines = []
+
+        # MCTS decisions come first — they are non-negotiable architectural constraints
+        if mcts_constraints:
+            lines.append(mcts_constraints)
+            lines.append("")
+
+        lines.append("Refinement targets:")
+        for issue in eval_result.issues:
+            lines.append(f"- {issue}")
+        for rec in eval_result.recommendations:
+            lines.append(f"- {rec}")
+
+        # Simulation failures: these are structural connectivity gaps found by
+        # running the port-connection graph against operational scenarios.
+        if sim_issues:
+            lines.append("")
+            lines.append(
+                "Behavioral simulation failures (port-connection reachability check):\n"
+                "  The following operational scenarios have no directed signal path in the model.\n"
+                "  Add `connect <source_part>::<port> to <target_part>::<port>;` statements\n"
+                "  to establish the missing paths."
+            )
+            for iss in sim_issues:
+                lines.append(f"- [SIM] {iss}")
+
+        if persistent_issues:
+            lines.append("")
+            lines.append(
+                "Persistent issues (appeared in multiple iterations — escalate priority):"
+            )
+            for iss in persistent_issues:
+                lines.append(f"- [PERSISTENT] {iss}")
+        if cot_feedback:
+            lines.append("")
+            lines.append("LLM evaluation summary:")
+            lines.append(cot_feedback)
+        return "\n".join(lines)

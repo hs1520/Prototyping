@@ -5,6 +5,9 @@ from .orchestrator_support import *
 
 
 class ExplorationMixin:
+    # ---------------------------------------------------------------------- #
+    #  Stage 2 — Design Space Exploration on a validated model                #
+    # ---------------------------------------------------------------------- #
     def _reset_exploration_state(
         self, system_name: str, requirements: List[str], model: SysMLModel
     ) -> None:

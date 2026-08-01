@@ -6,6 +6,12 @@ from .pipeline_records import DesignHandoffRecord
 
 
 class CollaborationMixin:
+    #: Topic carrying per-step generation drafts. Deliberately its own topic so
+    #: it is easy to see — and easy to refuse. `ContextBuilder` accepts only
+    #: `requirements.authoritative` and `design.ag_generation_plan` as design
+    #: sources, so a draft can never become the input a later stage builds from.
+    GENERATION_FRAGMENT_TOPIC = "generation.fragment"
+
     DESIGN_HANDOFF_TOPIC = "handoff.design.runtime"
 
     def _design_handoff(self):
@@ -26,6 +32,34 @@ class CollaborationMixin:
             self.blackboard.task(handoff.task_id),
             self.context_builder.get(handoff.envelope_id),
             self.task_sessions.get(handoff.session_id),
+        )
+
+    def _ensure_terminal_ready(self) -> None:
+        if self.blackboard is None:
+            return
+        from ..prototyping.blackboard import RecordType
+
+        terminal_records = [
+            record for record in self.blackboard.records(
+                topic="model.terminal.ready"
+            )
+            if record.model_revision == self.blackboard.current_revision
+            and record.model_digest == self.blackboard.current_model.model_digest
+        ]
+        if terminal_records:
+            return
+        design_results = self.blackboard.records(topic="agent.design.result")
+        self.blackboard.publish(
+            RecordType.CONTROL,
+            "model.terminal.ready",
+            "Orchestrator",
+            {
+                "model_revision": self.blackboard.current_revision,
+                "model_digest": self.blackboard.current_model.model_digest,
+                "upstream_design_result_record_id": (
+                    design_results[-1].record_id if design_results else None
+                ),
+            },
         )
 
     @property
@@ -885,32 +919,7 @@ class CollaborationMixin:
                 )
             # Explicit current-revision activation fact. Controller preconditions
             # never use stale topics from an earlier model revision.
-            terminal_records = [
-                record
-                for record in self.blackboard.records(
-                    topic="model.terminal.ready"
-                )
-                if record.model_revision == self.blackboard.current_revision
-                and record.model_digest
-                == self.blackboard.current_model.model_digest
-            ]
-            if not terminal_records:
-                design_results = self.blackboard.records(
-                    topic="agent.design.result"
-                )
-                self.blackboard.publish(
-                    RecordType.CONTROL,
-                    "model.terminal.ready",
-                    "Orchestrator",
-                    {
-                        "model_revision": self.blackboard.current_revision,
-                        "model_digest": self.blackboard.current_model.model_digest,
-                        "upstream_design_result_record_id": (
-                            design_results[-1].record_id
-                            if design_results else None
-                        ),
-                    },
-                )
+            self._ensure_terminal_ready()
             # Event-driven control: the Blackboard Controller opportunistically
             # activates each registered downstream knowledge source once the board
             # satisfies current-revision typed preconditions. Verification
@@ -926,7 +935,13 @@ class CollaborationMixin:
             has_authoritative_source = bool(
                 self.blackboard.records(topic="requirements.authoritative")
             )
-            if has_authoritative_source:
+            has_verification_result = any(
+                record.model_revision == self.blackboard.current_revision
+                for record in self.blackboard.records(
+                    topic="agent.verification.result"
+                )
+            )
+            if has_authoritative_source and not has_verification_result:
                 controller.register(KnowledgeSource(
                     name="verification_planning",
                     agent_role="VerificationAgent",
@@ -934,10 +949,15 @@ class CollaborationMixin:
                     activate=self._run_verification_handoff,
                     output_topics=("agent.verification.result",),
                 ))
+            has_assurance_result = any(
+                record.model_revision == self.blackboard.current_revision
+                for record in self.blackboard.records(topic="analysis.ag_trace")
+            )
             if (
                 self.revised_experiment_arm
                 is RevisedExperimentArm.SEMANTIC_ASSURANCE
                 and model_text is not None
+                and not has_assurance_result
             ):
                 assurance_preconditions = ["model.terminal.ready"]
                 if has_authoritative_source:
