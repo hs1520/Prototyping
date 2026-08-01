@@ -48,7 +48,14 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # port and an unplanned one — four such pairs failed one measured run. A
 # wrong DIRECTION is still reported rather than rewritten: that changes what
 # the connections mean. v15 and v16 are not poolable.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v16"
+# v17 rejects a planned attribute whose value type the pipeline cannot emit.
+# One baseline run committed `lockState : StateEnum = Locked` and failed
+# Syside on a type that is declared nowhere; the plan has no way to declare
+# one, and validation had only checked the name was a well-formed
+# identifier. The plan now fails closed, which puts the retry inside the
+# bounded attempt budget. This changes generation, so v16 and v17 are not
+# poolable.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v17"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"
