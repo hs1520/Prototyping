@@ -739,10 +739,6 @@ def _requirement_defs(text: str) -> set:
     return set(_REQ_DEF_RE.findall(text))
 
 
-def _count_satisfies(text: str) -> int:
-    return len(re.findall(r"\bsatisfy\b", text, re.IGNORECASE))
-
-
 def _requirement_identities(text: str) -> Dict[str, str]:
     """Exact requirement-definition bodies keyed by definition name."""
     result: Dict[str, str] = {}

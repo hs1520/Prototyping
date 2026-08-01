@@ -1110,9 +1110,22 @@ class DesignEvaluator:
         """
         Four weighted sub-metrics (only applied when SAFE requirements exist):
           state_machine_coverage (40 %) — state defs per SAFE requirement
-          fault_transitions      (25 %) — transitions to fault/failsafe states
+          fault_transitions      (25 %) — guarded transitions, from the parse
           override_path          (20 %) — overrideCmd port present AND connected
           emergency_actions      (15 %) — action defs for emergency behaviours
+
+        Two of these are LEXICAL HEURISTICS, not structural checks, and the
+        distinction matters when reading the number. `override_path` looks for a
+        feature literally named `overrideCmd`, and `emergency_actions` looks for
+        action names containing emergency/autoland/failsafe. Both judge naming
+        intent, which no parser can answer — a model that implements the same
+        behaviour under different names scores lower for that reason alone.
+
+        They are kept because they are informative on models that follow the
+        generation templates' vocabulary, and because this dimension ranks
+        candidates rather than deciding anything: the hard safety verdict is
+        SAFETY_PATTERN_CONFORMANCE in model_qualification, which checks topology
+        and never consults a name.
         """
         safe_reqs = [r for r in model.requirement_definitions if "_SAFE_" in r.name]
         if not safe_reqs:
@@ -1157,7 +1170,7 @@ class DesignEvaluator:
             fault_tx = len(_GUARDED_TRANSITION.findall(text))
         fault_tx_score = min(1.0, fault_tx / max(n_safe, 1))
 
-        # ── Override-command path ────────────────────────────────────────
+        # ── Override-command path (LEXICAL: matches the name, not a role) ──
         has_override_port = bool(re.search(r"\boverrideCmd\b", text))
         # Also check it appears in a connect statement (SysML v2 dot notation)
         override_connected = bool(re.search(

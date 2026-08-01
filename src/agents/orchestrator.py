@@ -1929,16 +1929,6 @@ class Orchestrator:
                 return text
             text = text[:match.start()] + text[end + 1:]
 
-    def _merge_planned_ag_packages(self, model_text: str) -> str:
-        plan = self._active_ag_generation_plan
-        if plan is None:
-            return model_text
-        merged = str(model_text)
-        for spec, package_text in zip(plan["specs"], plan["packages"]):
-            merged = self._without_named_package(merged, spec.package).rstrip()
-            merged += "\n\n" + package_text.strip() + "\n"
-        return merged
-
     def _materialize_guided_ag_contracts(
         self, model: SysMLModel, system_name: str
     ) -> SysMLModel:

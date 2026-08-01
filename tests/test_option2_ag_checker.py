@@ -308,3 +308,71 @@ def test_the_composition_rules_are_published_to_the_author():
     assert "timingMargin" in rules
     fields = {name for name, _rule in DECISION_FIELD_OBLIGATIONS}
     assert {"timing_segment_group", "timing_margin_seconds"} <= fields
+
+
+def test_extraction_does_not_depend_on_how_the_model_is_spelled():
+    """Why ag_extractor was left on patterns while other modules moved to Syside.
+
+    Four regex-based checks elsewhere were found blind to a legal spelling — a
+    unit suffix after a type, an `accept` clause before a guard, a port declared
+    with the planned name but another type. The same failure here would corrupt
+    every A/G verdict, so before converting 39 sites in the extraction core the
+    question was asked as a measurement: does extraction actually depend on
+    spelling?
+
+    It does not, under equivalent rewrites that leave the model's meaning alone.
+    Conversion was therefore declined as risk without evidence of need — and this
+    pins the property so that stays true. A failure here is a reason to revisit
+    that decision, not to relax the test.
+    """
+    import re
+
+    from src.prototyping.ag_chains import (
+        REQ_SAFE_004_CHAIN, REQ_SAFE_005_CHAIN, REQ_SAFE_008_CHAIN,
+    )
+    from src.prototyping.ag_emitter import emit_ag_package
+    from src.prototyping.ag_extractor import extract_ag_graphs
+
+    text = "\n".join(
+        emit_ag_package(chain) for chain in
+        (REQ_SAFE_004_CHAIN, REQ_SAFE_005_CHAIN, REQ_SAFE_008_CHAIN)
+    )
+
+    def fingerprint(source: str):
+        return [
+            (
+                sorted(graph.source_requirement_ids),
+                len(graph.components),
+                len(graph.behaviors),
+                sorted(
+                    assumption.concept
+                    for component in graph.components
+                    for assumption in component.assumptions
+                ),
+            )
+            for graph in extract_ag_graphs(source)
+        ]
+
+    baseline = fingerprint(text)
+    assert baseline, "fixture must extract at least one chain"
+
+    rewrites = {
+        "extra whitespace around the colon": lambda s: s.replace(" : ", "  :  "),
+        "constraint body on its own line": lambda s: re.sub(
+            r"((?:assume|require) constraint \w+)\s*\{\s*([^}\n]+?)\s*\}",
+            r"\1 {\n        \2\n    }", s,
+        ),
+        "transition wrapped after its name": lambda s: re.sub(
+            r"(transition \w+) (first \w+)", r"\1\n            \2", s,
+        ),
+        "dependency wrapped before from": lambda s: re.sub(
+            r"(dependency \w+) (from )", r"\1\n        \2", s,
+        ),
+    }
+    for label, rewrite in rewrites.items():
+        rewritten = rewrite(text)
+        assert rewritten != text, f"rewrite {label!r} did not change the text"
+        assert fingerprint(rewritten) == baseline, (
+            f"extraction changed under {label!r}: the same model, spelled "
+            "differently, produced a different A/G graph"
+        )
