@@ -7,6 +7,7 @@ the coverage test fails when a new public emitter has no conformance obligation.
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
@@ -15,6 +16,7 @@ import pytest
 
 from src.dse.physics_estimator import DesignInputs
 from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
+from src.prototyping.ag_contracts import check_ag_graph
 from src.prototyping.ag_emitter import emit_ag_package
 from src.prototyping.ag_extractor import extract_ag_graph
 from src.prototyping.ag_planning import emit_ag_planning_package
@@ -46,6 +48,12 @@ class EmitterCase:
     parse_source: Callable[[str], str]
     readers: Mapping[str, Callable[[str], object]]
     expected: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class SpellingPerturbation:
+    name: str
+    apply: Callable[[str], str | None]
 
 
 def _returns_text(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -90,10 +98,56 @@ def _identity(text: str) -> str:
 
 def _ag_facts(text: str) -> object:
     graph = extract_ag_graph(text)
+    report = check_ag_graph(graph)
+
+    def contract_facts(contract):
+        if contract is None:
+            return None
+        return (
+            contract.name,
+            contract.role,
+            tuple((item.concept, item.expr, item.kind) for item in contract.assumptions),
+            tuple((item.concept, item.expr, item.kind) for item in contract.guarantees),
+            contract.timing_budget,
+            contract.timing_unit,
+            contract.timing_segment_required,
+            contract.timing_segment_group,
+            contract.timing_margin,
+            contract.observation,
+            contract.owners,
+            contract.source_requirement,
+            contract.declared_pattern,
+        )
+
     return (
-        graph.system.name if graph.system else None,
-        tuple(component.name for component in graph.components),
-        tuple(behavior.name for behavior in graph.behaviors),
+        contract_facts(graph.system),
+        tuple(contract_facts(component) for component in graph.components),
+        tuple((edge.kind, edge.src, edge.dst, edge.subject) for edge in graph.edges),
+        tuple(
+            (
+                behavior.name,
+                behavior.initial_state,
+                tuple(
+                    (
+                        transition.source,
+                        transition.trigger,
+                        transition.target,
+                        None if transition.guard in {None, "true", "(true)"} else transition.guard,
+                    )
+                    for transition in behavior.transitions
+                ),
+                tuple(sorted(behavior.entry_actions.items())),
+            )
+            for behavior in graph.behaviors
+        ),
+        tuple(sorted(graph.verification_targets.items())),
+        graph.source_requirement_ids,
+        graph.priority,
+        graph.invariants,
+        graph.selected_model_elements,
+        graph.declared_event_signals,
+        report.verdict,
+        tuple(sorted(item.code for item in report.diagnostics)),
     )
 
 
@@ -111,9 +165,18 @@ def _behavior_facts(text: str) -> object:
     return tuple(
         (
             machine.name,
-            tuple(machine.states),
             tuple(
-                (transition.name, transition.source, transition.target)
+                (state.name, state.entry_action, state.do_action)
+                for state in machine.states
+            ),
+            tuple(
+                (
+                    transition.name,
+                    transition.source,
+                    transition.target,
+                    transition.accept_trigger,
+                    tuple(guard.raw for guard in transition.guards),
+                )
                 for transition in machine.transitions
             ),
         )
@@ -308,6 +371,84 @@ def case__src__simulation__port_fixer__PortAdd__to_sysml() -> EmitterCase:
 DISCOVERED = _discovered_emitters()
 
 
+def _unit_suffix_on_type(text: str) -> str | None:
+    """Add the same unit already carried by the value to its declared type.
+
+    This is meaning-preserving because both spellings declare seconds, and the
+    numeric initializer and its unit are unchanged.  The precondition rejects
+    mixed or absent units instead of guessing dimensional meaning.
+    """
+    pattern = re.compile(
+        r"(attribute\s+\w+\s*:\s*DurationValue)(\s*=\s*-?[\d.]+\s*\[s\])"
+    )
+    match = pattern.search(text)
+    if match is None:
+        return None
+    assert "[s]" in match.group(2) and "[" not in match.group(1)
+    return text[:match.start()] + match.group(1) + " [s]" + match.group(2) + text[match.end():]
+
+
+def _qualified_type(text: str) -> str | None:
+    """Qualify a type through an import already present in the emitted package.
+
+    `ScalarValues::Boolean` and imported `Boolean` resolve to the same library
+    classifier.  Requiring the import before rewriting is the semantic proof.
+    """
+    if "private import ScalarValues::*;" not in text:
+        return None
+    match = re.search(r":\s*Boolean\s*;", text)
+    if match is None:
+        return None
+    assert "ScalarValues::*" in text
+    return text[:match.start()] + ": ScalarValues::Boolean;" + text[match.end():]
+
+
+def _optional_true_guard(text: str) -> str | None:
+    """Add a tautological optional guard to an event-triggered transition.
+
+    `accept E then` and `accept E if true then` enable on exactly the same event;
+    unlike removing an arbitrary accept clause, this cannot discard a trigger.
+    """
+    # Probe model-level emitters whose consumer is the Syside state reader.  The
+    # repair-line parser is a legacy lexical gate and is covered at baseline,
+    # but §3.3 forbids changing it here; its disagreement is reported separately.
+    if "// OWNER:" not in text and "private import ScalarValues::*;" not in text:
+        return None
+    match = re.search(r"(accept\s+\w+)(\s+then\s+\w+;)", text)
+    if match is None:
+        return None
+    assert "if" not in match.group(0)
+    return text[:match.start()] + match.group(1) + " if true" + match.group(2) + text[match.end():]
+
+
+def _redundant_initializer(text: str) -> str | None:
+    """Initialize a Boolean already constrained to true by the same contract.
+
+    The initializer is redundant only when the exact feature has a positive
+    assume constraint in the same emitted text.  This precondition deliberately
+    excludes `timingSegmentRequired`, where removing `= true` changes a fact.
+    """
+    for match in re.finditer(r"attribute\s+(\w+)\s*:\s*Boolean\s*;", text):
+        name = match.group(1)
+        constraint = re.compile(
+            rf"assume\s+constraint\s+\w+\s*\{{\s*{re.escape(name)}\s*\}}"
+        )
+        if constraint.search(text) is None:
+            continue
+        assert name != "timingSegmentRequired"
+        replacement = match.group(0)[:-1] + " = true;"
+        return text[:match.start()] + replacement + text[match.end():]
+    return None
+
+
+PERTURBATIONS = (
+    SpellingPerturbation("unit suffix added/removed", _unit_suffix_on_type),
+    SpellingPerturbation("qualified/unqualified type", _qualified_type),
+    SpellingPerturbation("optional clause present/absent", _optional_true_guard),
+    SpellingPerturbation("initializer present/absent", _redundant_initializer),
+)
+
+
 def test_every_discovered_emitter_has_a_conformance_obligation():
     missing = [item for item in DISCOVERED if _case_name(item) not in globals()]
     assert not missing, f"discovered SysML emitters without obligations: {missing}"
@@ -324,3 +465,64 @@ def test_discovered_emitter_parses_and_round_trips_to_every_reader(emitter):
     assert not syntax.has_errors, (emitter, syntax.to_dict())
     for reader_name, reader in case.readers.items():
         assert reader(source) == case.expected[reader_name], reader_name
+
+
+def _perturbation_cases():
+    result = []
+    for emitter in DISCOVERED:
+        factory = globals().get(_case_name(emitter))
+        if not callable(factory):
+            continue
+        emitted = factory().emit()
+        for perturbation in PERTURBATIONS:
+            if perturbation.apply(emitted) is not None:
+                result.append((emitter, perturbation))
+    return result
+
+
+@pytest.mark.parametrize(
+    ("emitter", "perturbation"),
+    _perturbation_cases(),
+    ids=lambda value: value.name if isinstance(value, SpellingPerturbation) else value,
+)
+def test_reader_facts_are_invariant_under_meaning_preserving_spelling(
+    emitter, perturbation
+):
+    case = globals()[_case_name(emitter)]()
+    baseline_text = case.parse_source(case.emit())
+    perturbed_emission = perturbation.apply(case.emit())
+    assert perturbed_emission is not None
+    assert perturbed_emission != case.emit()
+    perturbed_text = case.parse_source(perturbed_emission)
+    syntax = check_syntax(perturbed_text, fail_closed=True)
+    assert not syntax.has_errors, (emitter, perturbation.name, syntax.to_dict())
+    for reader_name, reader in case.readers.items():
+        assert reader(perturbed_text) == reader(baseline_text), (
+            emitter,
+            perturbation.name,
+            reader_name,
+        )
+
+
+def test_every_required_spelling_class_is_exercised_on_emitter_output():
+    exercised = {perturbation.name for _, perturbation in _perturbation_cases()}
+    assert exercised == {item.name for item in PERTURBATIONS}
+
+
+def test_legacy_transition_repair_reader_disagrees_with_syside_on_optional_guard():
+    """Record, but do not repair, the reader disagreement found by this probe.
+
+    P0-3 §3.3 says a reader change is a finding rather than a step in this task.
+    The model-level Syside reader retains the transition; the repair-line reader
+    silently drops the same legal construct when `accept` and `if` coexist.
+    """
+    stmt = TransitionStmt("respond", "Idle", "", "Responding", "FaultSignal")
+    perturbed = stmt.to_sysml().replace(
+        "accept FaultSignal\n", "accept FaultSignal if true\n"
+    )
+    source = _wrap_transition(perturbed)
+    assert not check_syntax(source, fail_closed=True).has_errors
+    assert len(extract_state_machines(source)[0].transitions) == 1
+    summary = build_state_machine_summary(source, "ControllerBehavior")
+    assert summary is not None
+    assert summary.transitions == []
