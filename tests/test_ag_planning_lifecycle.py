@@ -26,22 +26,22 @@ _REQUIREMENTS = [
 
 _PLANNING_BYTES = {
     "REQ_SAFE_004": (
-        3699,
-        "8ab4c89d5cd1b870ef993e523b02334db849e01d2f81db01743f4e9f7911153a",
+        3700,
+        "7885140c2e2420728bfbe1e1059845b28cb474f9f167efd1a39028bb042b083d",
     ),
     "REQ_SAFE_005": (
-        5629,
-        "c6bef6f8f7e46b41b7d56cbebfea84635ba41d5cd3f61c1f733ad1051e822cc8",
+        5640,
+        "a8110e79381cce702f52062bb2cf4e7f4f0541a27e902579d9946371906fbe9a",
     ),
     "REQ_SAFE_008": (
-        2881,
-        "59dd5dc376be8a6dfd21df43b1390fa4fa5990c8e162099a87406ceb613e07de",
+        2883,
+        "292a25279ff492c00d37ad014d2bde4ea8a2085b6f86515a6cf84bf8c68e80ba",
     ),
 }
 
 
 @pytest.mark.parametrize("spec", select_ag_chains(_REQUIREMENTS))
-def test_direct_planning_emission_preserves_historical_bytes(spec):
+def test_direct_planning_emission_is_byte_pinned(spec):
     payload = emit_ag_planning_package(spec).encode("utf-8")
     assert (len(payload), hashlib.sha256(payload).hexdigest()) == (
         _PLANNING_BYTES[spec.source_requirement]

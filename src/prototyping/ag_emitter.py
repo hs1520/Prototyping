@@ -474,29 +474,10 @@ def emit_ag_package(
         if spec.priority is not None
         else set()
     )
-    planning_first_post_owner_line = True
-    planning_signal_lines = 0
-    planning_pending_blank_lines = 0
-
     def append_behavior_signal(signal: str) -> None:
-        nonlocal planning_first_post_owner_line, planning_signal_lines
-        indent = ""
-        if include_implementation or not planning_first_post_owner_line:
-            indent = "    "
-        out.append(f"{indent}item def {signal};")
-        planning_first_post_owner_line = False
-        planning_signal_lines += 1
-
-    def record_omitted_behavior(*, emitted_signal: bool) -> None:
-        nonlocal planning_pending_blank_lines
-        if emitted_signal:
-            out.extend(["    "] * (planning_pending_blank_lines + 1))
-            planning_pending_blank_lines = 0
-        else:
-            planning_pending_blank_lines += 1
+        out.append(f"    item def {signal};")
 
     for comp in spec.components:
-        signals_before_component = planning_signal_lines
         if comp.behavior == "SafetyResponseArbitration":
             continue
         if comp.name == "ReleaseCommandGatewayContract":
@@ -509,9 +490,6 @@ def emit_ag_package(
                     append_behavior_signal(signal)
                     emitted_signal_defs.add(signal)
             if not include_implementation:
-                record_omitted_behavior(
-                    emitted_signal=planning_signal_lines > signals_before_component
-                )
                 continue
             out.extend([
                 f"    state def {comp.behavior} {{",
@@ -542,9 +520,6 @@ def emit_ag_package(
                     append_behavior_signal(signal)
                     emitted_signal_defs.add(signal)
             if not include_implementation:
-                record_omitted_behavior(
-                    emitted_signal=planning_signal_lines > signals_before_component
-                )
                 continue
             out.extend([
                 f"    state def {comp.behavior} {{",
@@ -576,9 +551,6 @@ def emit_ag_package(
                     append_behavior_signal(signal)
                     emitted_signal_defs.add(signal)
             if not include_implementation:
-                record_omitted_behavior(
-                    emitted_signal=planning_signal_lines > signals_before_component
-                )
                 continue
             out.extend([
                 f"    state def {comp.behavior} {{",
@@ -601,7 +573,6 @@ def emit_ag_package(
             continue
         if comp.name == "RecoveryPowerSupplyContract":
             if not include_implementation:
-                record_omitted_behavior(emitted_signal=False)
                 continue
             out.extend([
                 f"    state def {comp.behavior} {{",
@@ -615,9 +586,6 @@ def emit_ag_package(
             append_behavior_signal(comp.trigger_signal)
             emitted_signal_defs.add(comp.trigger_signal)
         if not include_implementation:
-            record_omitted_behavior(
-                emitted_signal=planning_signal_lines > signals_before_component
-            )
             continue
         out.append(f"    state def {comp.behavior} {{")
         out.append(f"        entry; then {comp.initial_state};")
@@ -634,16 +602,9 @@ def emit_ag_package(
         out.append("    }")
 
     # Decomposition edges (unique names → no namespace-shadowing warning).
-    if not include_implementation:
-        out.extend(["    "] * planning_pending_blank_lines)
-        if spec.priority is not None and out[-1:] == ["    "]:
-            # The historical priority-realization removal consumed one of the
-            # indentation-only lines left by omitted component behaviors.
-            out.pop()
-    for index, comp in enumerate(spec.components):
-        indent = "    " if include_implementation or index == 0 else ""
+    for comp in spec.components:
         out.append(
-            f"{indent}dependency decompose{comp.name} "
+            f"    dependency decompose{comp.name} "
             f"from {spec.system_contract} to {comp.name};"
         )
         if include_implementation:
@@ -658,7 +619,6 @@ def emit_ag_package(
         for guarantee in comp.guarantees
     }
     system_environment = set(spec.system_assumptions)
-    planning_unindent_next = not include_implementation
     for comp in spec.components:
         for assumption in comp.assumptions:
             if assumption.environment or assumption.concept in system_environment:
@@ -666,15 +626,12 @@ def emit_ag_package(
             producer = producers.get(assumption.concept)
             if producer is not None:
                 subject = assumption.concept[0].upper() + assumption.concept[1:]
-                indent = "" if planning_unindent_next else "    "
                 out.append(
-                    f"{indent}dependency discharge{subject}__to__{comp.name} "
+                    f"    dependency discharge{subject}__to__{comp.name} "
                     f"from {producer} to {comp.name};"
                 )
-                planning_unindent_next = False
 
-    verification_indent = "" if planning_unindent_next else "    "
-    out.append(f"{verification_indent}verification def {spec.verification} {{")
+    out.append(f"    verification def {spec.verification} {{")
     out.append("        objective deploymentObservation {")
     out.append(
         f"            verify requirement observedContract : {spec.system_contract};"
