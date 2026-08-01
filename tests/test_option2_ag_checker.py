@@ -376,3 +376,84 @@ def test_extraction_does_not_depend_on_how_the_model_is_spelled():
             f"extraction changed under {label!r}: the same model, spelled "
             "differently, produced a different A/G graph"
         )
+
+
+def test_extraction_survives_every_meaning_preserving_rewrite():
+    """The wider probe that the narrow one should have been.
+
+    A first version of this check tried five rewrites, found no difference, and
+    was used to justify leaving ag_extractor on patterns while seven other
+    modules moved to the parser. That conclusion was wrong: it had simply not
+    tried the rewrites that bite. Widening it found a real defect —
+    `maxLatency : DurationValue [s] = 0.5 [s]` is legal, and the deadline
+    vanished, so a timed chain was judged not to be a timed pattern at all.
+
+    Rewrites here must PRESERVE MEANING. Removing `= true` from
+    `timingSegmentRequired : Boolean = true` looks like a spelling change and is
+    not: that value is the fact being read, and "not declared" is a third state.
+    A probe that changes meaning reports a false blind spot, which is how the
+    first pass nearly sent a correct distinction to be "fixed".
+    """
+    import re
+
+    from src.prototyping.ag_chains import (
+        REQ_SAFE_004_CHAIN, REQ_SAFE_005_CHAIN, REQ_SAFE_008_CHAIN,
+    )
+    from src.prototyping.ag_contracts import check_ag_graph
+    from src.prototyping.ag_emitter import emit_ag_package
+    from src.prototyping.ag_extractor import extract_ag_graphs
+
+    text = "\n".join(
+        emit_ag_package(chain) for chain in
+        (REQ_SAFE_004_CHAIN, REQ_SAFE_005_CHAIN, REQ_SAFE_008_CHAIN)
+    )
+
+    def fingerprint(source: str):
+        return [
+            (
+                sorted(graph.source_requirement_ids),
+                check_ag_graph(graph).verdict,
+                len(graph.components),
+                len(graph.behaviors),
+                getattr(graph.system, "timing_budget", None),
+                tuple(sorted(
+                    d.code for d in check_ag_graph(graph).diagnostics
+                )),
+            )
+            for graph in extract_ag_graphs(source)
+        ]
+
+    baseline = fingerprint(text)
+    assert baseline, "fixture must extract at least one chain"
+
+    rewrites = {
+        "qualified type name": lambda s: re.sub(
+            r":\s*Boolean\s*;", ": ScalarValues::Boolean;", s),
+        "unit suffix on the type": lambda s: re.sub(
+            r":\s*DurationValue\s*=", ": DurationValue [s] =", s),
+        "wide spacing around the colon": lambda s: s.replace(" : ", "   :   "),
+        "constraint body on its own line": lambda s: re.sub(
+            r"((?:assume|require) constraint \w+)\s*\{\s*([^}\n]+?)\s*\}",
+            r"\1 {\n        \2\n    }", s),
+        "transition wrapped after its name": lambda s: re.sub(
+            r"(transition \w+) (first \w+)", r"\1\n            \2", s),
+        "transition fully expanded": lambda s: re.sub(
+            r"(first \w+) (accept \w+) (then|if)",
+            r"\1\n                \2\n                \3", s),
+        "dependency wrapped before from": lambda s: re.sub(
+            r"(dependency \w+) (from )", r"\1\n        \2", s),
+        "dependency from and to split": lambda s: re.sub(
+            r"(from [\w:]+) (to )", r"\1\n        \2", s),
+        "enum members on their own lines": lambda s: re.sub(
+            r"(enum \w+;)", r"\n        \1", s),
+        "satisfy wrapped": lambda s: re.sub(
+            r"(satisfy requirement \w+) (: )", r"\1\n        \2", s),
+        "CRLF line endings": lambda s: s.replace("\n", "\r\n"),
+    }
+    for label, rewrite in rewrites.items():
+        rewritten = rewrite(text)
+        assert rewritten != text, f"rewrite {label!r} did not change the text"
+        assert fingerprint(rewritten) == baseline, (
+            f"extraction changed under {label!r}: the same model, spelled "
+            "differently, produced a different A/G graph"
+        )

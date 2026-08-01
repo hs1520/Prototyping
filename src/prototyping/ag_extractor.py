@@ -44,12 +44,28 @@ from .blackboard import text_digest
 from ..utils.sysml_text_utils import find_block_end
 
 _REQ_DEF_RE = re.compile(r"\brequirement\s+def\s+(\w+)\s*\{")
+#: `attribute <name> : <Type>[::<Type>][ [unit] ] [= <number> [ [unit] ]];`
+#:
+#: The type may be qualified and may carry a unit suffix, and the initializer is
+#: optional. A pattern accepting only a bare single-word type with a value was
+#: blind to `maxLatency : DurationValue [s] = 0.5 [s]` — a legal spelling that
+#: made a timed chain extract with NO deadline, so the checker then judged it as
+#: not a timed pattern at all (PATTERN_DECLARATION_INCONSISTENT). Found by a
+#: spelling-invariance probe rather than by a run, which is the point of having
+#: one.
 _ATTR_RE = re.compile(
-    r"\battribute\s+(\w+)\s*:\s*(\w+)\s*(?:=\s*(-?[\d.]+)"
+    r"\battribute\s+(\w+)\s*:\s*(\w+(?:::\w+)*)"
+    r"(?:\s*\[[^\]]*\])?"
+    r"\s*(?:=\s*(-?[\d.]+)"
     r"\s*(?:\[([^\]]+)\])?)?\s*;"
 )
+#: Same, for a Boolean carrying an explicit default. `= true|false` stays
+#: required here because the value IS the fact being read; what widens is the
+#: type, which may be written `ScalarValues::Boolean`.
 _BOOL_ATTR_RE = re.compile(
-    r"\battribute\s+(\w+)\s*:\s*Boolean\s*=\s*(true|false)\s*;",
+    r"\battribute\s+(\w+)\s*:\s*(?:\w+::)*Boolean"
+    r"(?:\s*\[[^\]]*\])?"
+    r"\s*=\s*(true|false)\s*;",
     re.I,
 )
 _EVENT_DEF_RE = re.compile(
