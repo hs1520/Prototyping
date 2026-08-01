@@ -102,32 +102,37 @@ def write_revised_run_artifacts(
         _write_jsonl(p, board.get("records") or [])
         record("blackboard_event_log", p)
 
-    p = out / "context_envelopes.jsonl"
-    _write_jsonl(p, envelopes)
-    record("context_envelopes", p)
+    # Board-derived views only where a board exists. R0-CURRENT has none, and
+    # writing empty ones for it puts a file labelled R1_COORDINATION_METRICS in
+    # the baseline's directory — a reader would have to check every value is
+    # null to learn it means "no board" rather than "no coordination".
+    if collaboration:
+        p = out / "context_envelopes.jsonl"
+        _write_jsonl(p, envelopes)
+        record("context_envelopes", p)
 
-    p = out / "task_sessions.jsonl"
-    _write_jsonl(p, sessions)
-    record("task_sessions", p)
+        p = out / "task_sessions.jsonl"
+        _write_jsonl(p, sessions)
+        record("task_sessions", p)
 
-    # Transcripts are present only when the session snapshot included messages.
-    transcripts = [
-        {
-            "session_id": s.get("session_id"),
-            "task_id": s.get("task_id"),
-            "agent_role": s.get("agent_role"),
-            "base_model_revision": s.get("base_model_revision"),
-            "base_model_digest": s.get("base_model_digest"),
-            "context_envelope_ids": s.get("context_envelope_ids"),
-            "transcript_digest": s.get("transcript_digest"),
-            "messages": s.get("messages"),
-        }
-        for s in sessions if s.get("messages") is not None
-    ]
-    if transcripts:
-        p = out / "session_transcripts.jsonl"
-        _write_jsonl(p, transcripts)
-        record("session_transcripts", p)
+        # Transcripts are present only when the session snapshot included messages.
+        transcripts = [
+            {
+                "session_id": s.get("session_id"),
+                "task_id": s.get("task_id"),
+                "agent_role": s.get("agent_role"),
+                "base_model_revision": s.get("base_model_revision"),
+                "base_model_digest": s.get("base_model_digest"),
+                "context_envelope_ids": s.get("context_envelope_ids"),
+                "transcript_digest": s.get("transcript_digest"),
+                "messages": s.get("messages"),
+            }
+            for s in sessions if s.get("messages") is not None
+        ]
+        if transcripts:
+            p = out / "session_transcripts.jsonl"
+            _write_jsonl(p, transcripts)
+            record("session_transcripts", p)
 
     ag_graph = run_result.get("ag_contract_graph")
     if ag_graph is not None:
@@ -195,12 +200,13 @@ def write_revised_run_artifacts(
             _write_json(p, payload)
             record(key, p)
 
-    metrics = compute_coordination_metrics(
-        collaboration, llm_usage=run_result.get("llm_usage")
-    )
-    p = out / "coordination_metrics.json"
-    _write_json(p, metrics)
-    record("coordination_metrics", p)
+    if collaboration:
+        metrics = compute_coordination_metrics(
+            collaboration, llm_usage=run_result.get("llm_usage")
+        )
+        p = out / "coordination_metrics.json"
+        _write_json(p, metrics)
+        record("coordination_metrics", p)
 
     # Requirement traceability, carried natively rather than reconstructed
     # post-hoc. It is derived from the committed model alone and needs no gold, so

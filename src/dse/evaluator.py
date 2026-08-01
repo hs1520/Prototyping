@@ -193,6 +193,13 @@ DIMENSION_VETO_FLOORS: Dict[str, Tuple[float, str]] = {
 # Main evaluator
 # ---------------------------------------------------------------------------
 
+#: A stakeholder requirement identifier (`REQ_SAFE_005`, `REQ-FUNC-002`).
+#: Distinguishes the frozen requirement set from A/G contract definitions, which
+#: are also `requirement def` but are assurance structure rather than the thing
+#: being assured.
+_STAKEHOLDER_REQ = re.compile(r"^REQ[_-][A-Za-z]+[_-]\d+$", re.IGNORECASE)
+
+
 class DesignEvaluator:
     """
     Evaluates SysML v2 design configurations against five quality dimensions.
@@ -468,7 +475,20 @@ class DesignEvaluator:
         text = _sysml_text(model)
 
         # ── satisfy-link coverage ─────────────────────────────────────────
-        req_ids = {r.name for r in req_defs}
+        # Denominator is the STAKEHOLDER requirements only. A model carrying a
+        # bounded A/G layer also declares its contracts as `requirement def`,
+        # because the profile requires legal SysML requirement constructs — so
+        # counting every requirement def put the intervention's own contracts
+        # into the denominator of the metric that judges it. Measured: the same
+        # seed scored 1.00 without the layer and 0.55 with it, while every other
+        # dimension was identical. Contract coverage is measured separately, by
+        # ag_traceability, against the declared requirement set.
+        #
+        # A model that declares no stakeholder-shaped ids keeps the old
+        # denominator, so models that do not follow the REQ convention are
+        # scored exactly as before.
+        stakeholder = {r.name for r in req_defs if _STAKEHOLDER_REQ.match(r.name)}
+        req_ids = stakeholder or {r.name for r in req_defs}
         sat_ids = _satisfied_req_ids(model)
         satisfy_cov = len(sat_ids & req_ids) / len(req_ids)
 
