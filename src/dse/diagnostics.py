@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from .design_space import DesignConfiguration
 from .eval_helpers import (
     _HAS_NX,
+    _has_numeric_unit_attr,
     _SENSOR_USAGE_RE,
     _build_connection_graph,
     _build_port_type_map,
@@ -91,27 +92,13 @@ def diagnose(
         recs.append("Add at least one directed port (in/out/inout) to each part def.")
 
     # ── PERF/CONS parts without numeric+unit attributes ──────────────────
-    def _has_numeric_unit_attr(part) -> bool:  # noqa: ANN001
-        for a in part.attributes:
-            val  = getattr(a, "default_value", None)
-            unit = getattr(a, "unit", None)
-            if val and unit:
-                try:
-                    float(str(val).replace(",", "."))
-                    return True
-                except (TypeError, ValueError):
-                    pass
-            if a.name in syside_attr_map:
-                return True
-        return False
-
     no_attrs = [
         p.name for p in model.part_definitions
         if any(
             "_PERF_" in str(r) or "_CONS_" in str(r)
             for r in getattr(p, "satisfied_requirements", [])
         )
-        and not _has_numeric_unit_attr(p)
+        and not _has_numeric_unit_attr(p, syside_attr_map)
     ]
     if no_attrs:
         issues.append(

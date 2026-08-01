@@ -116,3 +116,28 @@ def _satisfied_req_ids(model: SysMLModel) -> set:
         for sr in part.satisfy_relationships
         if sr.target and sr.target.name
     }
+
+
+def _has_numeric_unit_attr(part, syside_attr_map) -> bool:  # noqa: ANN001
+    """True when a part carries at least one numeric attribute with a unit.
+
+    Shared by the evaluator's attribute-coverage dimension and the diagnostics'
+    PERF/CONS check.  It was duplicated in both, which meant a fix to one reader
+    did not reach the other while both fed the same score — the class of defect
+    that moved requirement_coverage by 0.1172 when only one denominator was
+    corrected.
+    """
+    for a in part.attributes:
+        val  = getattr(a, "default_value", None)
+        unit = getattr(a, "unit", None)
+        if val and unit:
+            try:
+                float(str(val).replace(",", "."))
+                return True
+            except (TypeError, ValueError):
+                pass
+        # Fallback: syside evaluated this attribute to a concrete float
+        # (catches expressions like `= mass * g` the IR parser left as str)
+        if a.name in syside_attr_map:
+            return True
+    return False

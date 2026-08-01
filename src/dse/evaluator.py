@@ -44,6 +44,7 @@ from .design_space import DesignConfiguration
 from .diagnostics import diagnose as _diagnose_impl
 from .eval_helpers import (
     _HAS_NX,
+    _has_numeric_unit_attr,
     _SENSOR_USAGE_RE,
     _build_port_type_map,
     _satisfied_req_ids,
@@ -989,22 +990,6 @@ class DesignEvaluator:
         # excluded from the denominator to avoid false penalties.
         syside_attr_map = getattr(self, "_syside_attr_map", {})
 
-        def _has_numeric_unit_attr(part) -> bool:  # noqa: ANN001
-            for a in part.attributes:
-                val  = getattr(a, "default_value", None)
-                unit = getattr(a, "unit", None)
-                if val and unit:
-                    try:
-                        float(str(val).replace(",", "."))
-                        return True
-                    except (TypeError, ValueError):
-                        pass
-                # Fallback: syside evaluated this attribute to a concrete float
-                # (catches expressions like `= mass * g` the IR parser left as str)
-                if a.name in syside_attr_map:
-                    return True
-            return False
-
         quantitative_parts = [
             p for p in parts
             if any(
@@ -1014,7 +999,8 @@ class DesignEvaluator:
         ]
         if quantitative_parts:
             attr_cov = sum(
-                1 for p in quantitative_parts if _has_numeric_unit_attr(p)
+                1 for p in quantitative_parts
+                if _has_numeric_unit_attr(p, syside_attr_map)
             ) / len(quantitative_parts)
         else:
             attr_cov = 1.0  # no PERF/CONS requirements → N/A
