@@ -17,6 +17,30 @@ from ..utils.req_id import normalise_req_id
 from ..utils.sysml_text_utils import find_block_end
 
 
+#: Value types an attribute may be planned with. The plan has no way to declare
+#: a new type, so anything outside this set is emitted as a reference to
+#: something that does not exist.
+#:
+#: Measured: one run planned `lockState : StateEnum = Locked`, the materialiser
+#: wrote it faithfully, and the model failed Syside with "No Type named
+#: 'StateEnum' found." Validation had only checked that the name was a
+#: well-formed identifier, which `StateEnum` is. Failing the plan instead lets
+#: generation retry, which is what the bounded attempt budget is for.
+RESOLVABLE_VALUE_TYPES = frozenset({
+    # ScalarValues
+    "Boolean", "Integer", "Natural", "Rational", "Real", "String",
+    # ISQ / SI quantity values used by the emitters
+    "DurationValue", "LengthValue", "MassValue", "TimeValue",
+    "SpeedValue", "AccelerationValue", "AngleValue", "TemperatureValue",
+    "ElectricCurrentValue", "PowerValue", "EnergyValue", "FrequencyValue",
+})
+
+
+def _bare_type(value_type: str) -> str:
+    """The last segment of a possibly qualified type name."""
+    return str(value_type or "").rsplit("::", 1)[-1].strip()
+
+
 ATTRIBUTE_ROLES = {
     "RUNTIME_MEASUREMENT",
     "FROZEN_THRESHOLD",
@@ -353,6 +377,12 @@ def validate_constraint_plan(
                 issues.append(f"{prefix}.name is not a SysML identifier")
             if not _QUALIFIED.fullmatch(attribute.value_type):
                 issues.append(f"{prefix}.value_type is not a SysML type")
+            elif _bare_type(attribute.value_type) not in RESOLVABLE_VALUE_TYPES:
+                issues.append(
+                    f"{prefix}.value_type {attribute.value_type!r} names no "
+                    "type this pipeline can emit; the plan cannot declare new "
+                    "types, so it would be written as an unresolvable reference"
+                )
             if attribute.role not in ATTRIBUTE_ROLES:
                 issues.append(f"{prefix}.role is unsupported")
             if attribute.provenance not in PROVENANCE_KINDS:

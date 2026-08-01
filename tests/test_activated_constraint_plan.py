@@ -628,3 +628,42 @@ def test_a_unit_suffixed_type_is_normalised_rather_than_duplicated():
     # normalised to the project's form: unit on the value, not on the type
     assert "LengthValue [m]" not in text
     assert "attribute minSeparationThreshold : LengthValue = 5 [m];" in text
+
+
+def test_a_value_type_the_pipeline_cannot_emit_fails_the_plan():
+    """One archived run failed Syside with "No Type named 'StateEnum' found."
+
+    The plan had `lockState : StateEnum = Locked`, and the materialiser wrote it
+    faithfully, because validation only checked that the name was a well-formed
+    identifier — which StateEnum is. The plan has no way to declare a type, so
+    anything outside the library set becomes a reference to nothing.
+
+    Failing the plan lets generation retry inside its bounded budget, instead of
+    committing a model that cannot parse.
+    """
+    from src.prototyping.activated_constraint_plan import (
+        AttributePlan, validate_constraint_plan,
+    )
+
+    def plan_with(value_type: str):
+        return AttributePlan(
+            name="lockState", value_type=value_type, unit="1",
+            role="LOCAL_STATE", initial_value=None,
+            provenance="DESIGN_DECISION",
+        )
+
+    component = SimpleNamespace(
+        name="PayloadMechanism", attributes=(plan_with("StateEnum"),)
+    )
+    issues = validate_constraint_plan([], [component], [])
+    assert any("StateEnum" in issue for issue in issues), (
+        f"an unresolvable value type must fail the plan; got {issues}"
+    )
+
+    for legal in ("Boolean", "Real", "LengthValue", "ISQ::DurationValue"):
+        ok = SimpleNamespace(
+            name="PayloadMechanism", attributes=(plan_with(legal),)
+        )
+        assert not validate_constraint_plan([], [ok], []), (
+            f"{legal} is emitted by this pipeline and must be accepted"
+        )
