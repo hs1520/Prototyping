@@ -410,6 +410,24 @@ class DesignEvaluator:
         except Exception:
             return None
 
+    def _syside_guarded_transitions(self) -> Optional[int]:
+        """Guarded transitions from the parsed model; None when unavailable."""
+        sm = getattr(self, "_syside_model", None)
+        if sm is None or not _SYSIDE_EVAL_OK:
+            return None
+        membership = getattr(_syside_eval, "TransitionFeatureMembership", None)
+        kinds = getattr(_syside_eval, "TransitionFeatureKind", None)
+        if membership is None or kinds is None:
+            return None
+        try:
+            guard = kinds.Guard
+            return sum(
+                1 for node in sm.nodes(membership)
+                if getattr(node, "kind", None) == guard
+            )
+        except Exception:
+            return None
+
     def _syside_any(self, cls_name: str, predicate=None) -> Optional[bool]:
         """
         Return True/False if any syside node of *cls_name* satisfies
@@ -1122,7 +1140,15 @@ class DesignEvaluator:
         # chain scored 0 on this sub-metric for that reason alone, which read as
         # the assurance layer having no fault transitions when it has nothing
         # but.
-        fault_tx = len(_GUARDED_TRANSITION.findall(text))
+        # Ask the parser, not a pattern: a guard is a TransitionFeatureMembership
+        # whose kind is Guard, which is what "guarded transition" means in the
+        # language rather than in one spelling of it. The regex stays as the
+        # fallback for environments without Syside, and had to learn about the
+        # optional `accept` clause the hard way — every A/G chain scored 0 on
+        # this sub-metric because a legal spelling was invisible to it.
+        fault_tx = self._syside_guarded_transitions()
+        if fault_tx is None:
+            fault_tx = len(_GUARDED_TRANSITION.findall(text))
         fault_tx_score = min(1.0, fault_tx / max(n_safe, 1))
 
         # ── Override-command path ────────────────────────────────────────
