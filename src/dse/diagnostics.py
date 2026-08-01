@@ -28,6 +28,26 @@ from ..utils.sysml_text_utils import find_block_end
 from ..utils.syside_utils import SYSIDE_OK as _SYSIDE_EVAL_OK, syside as _syside_eval
 
 
+#: A stakeholder requirement id, as distinct from an A/G contract definition.
+#: Both are `requirement def`; only the first is what the model is judged to
+#: cover. Mirrors `_STAKEHOLDER_REQ` in dse.evaluator.
+_STAKEHOLDER_REQ = re.compile(r"^REQ[_-][A-Za-z]+[_-]\d+$", re.IGNORECASE)
+
+
+def _connections(model_text: str):
+    """Every `connect a.x to b.y`, from the parser where Syside is available.
+
+    Four sites here asked this with four patterns. Sharing one entry also means
+    prose in a requirement `doc` comment is no longer read as a declaration.
+    """
+    from src.simulation.connectivity_fixer import parse_connects
+
+    try:
+        return parse_connects(model_text)
+    except Exception:
+        return []
+
+
 def diagnose(
     model: SysMLModel,
     dse_config: Optional[DesignConfiguration],
@@ -45,7 +65,16 @@ def diagnose(
         syside_attr_map = {}
 
     # ── Untraced requirements ────────────────────────────────────────────
-    req_ids = {r.name for r in model.requirement_definitions}
+    # Stakeholder requirements only. A model carrying the bounded A/G layer also
+    # declares its contracts as `requirement def`, because the profile requires
+    # legal SysML requirement constructs — so counting every definition reported
+    # the assurance layer's own contracts as untraced requirements. Their trace
+    # is the A/G graph, measured by ag_traceability, not a `satisfy` link.
+    # Same denominator confusion the evaluator's coverage dimension had.
+    req_ids = {
+        r.name for r in model.requirement_definitions
+        if _STAKEHOLDER_REQ.match(r.name)
+    } or {r.name for r in model.requirement_definitions}
     sat_ids = _satisfied_req_ids(model)
     untraced = sorted(req_ids - sat_ids)
     if untraced:
@@ -96,10 +125,8 @@ def diagnose(
     declared = {m.group(1) for m in re.finditer(r"\bpart\s+(\w+)\s*:\s*\w+\s*;", text)}
     in_connects = {
         g
-        for m in re.finditer(
-            r"\bconnect\s+(\w+)\.\w+\s+to\s+(\w+)\.\w+", text, re.IGNORECASE
-        )
-        for g in (m.group(1), m.group(2))
+        for stmt in _connections(text)
+        for g in (stmt.src_inst, stmt.tgt_inst)
     }
     dangling = sorted(declared - in_connects)
     if dangling:
@@ -143,10 +170,10 @@ def diagnose(
 
     # ── Fan-in violations ────────────────────────────────────────────────
     target_map: Dict[str, List[str]] = {}
-    for m in re.finditer(
-        r"\bconnect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)", text, re.IGNORECASE
-    ):
-        src, sp, tgt, tp = m.groups()
+    for stmt in _connections(text):
+        src, sp, tgt, tp = (
+            stmt.src_inst, stmt.src_port, stmt.tgt_inst, stmt.tgt_port
+        )
         key = f"{tgt}.{tp}"
         target_map.setdefault(key, []).append(f"{src}.{sp}")
     fan_ins = {k: v for k, v in target_map.items() if len(v) > 1}
@@ -202,10 +229,10 @@ def diagnose(
 
     # ── Connect type mismatches ──────────────────────────────────────────
     port_type_map = _build_port_type_map(model)
-    for m in re.finditer(
-        r"\bconnect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)", text, re.IGNORECASE
-    ):
-        src_inst, src_port, tgt_inst, tgt_port = m.groups()
+    for stmt in _connections(text):
+        src_inst, src_port, tgt_inst, tgt_port = (
+            stmt.src_inst, stmt.src_port, stmt.tgt_inst, stmt.tgt_port
+        )
         src_type = port_type_map.get(src_port)
         tgt_type = port_type_map.get(tgt_port)
         if src_type and tgt_type:
@@ -432,11 +459,9 @@ def diagnose(
                 )
 
             connected_parts: set = set()
-            for m in re.finditer(
-                r"\bconnect\s+(\w+)\.\w+\s+to\s+(\w+)\.\w+", text, re.IGNORECASE,
-            ):
-                connected_parts.add(m.group(1))
-                connected_parts.add(m.group(2))
+            for stmt in _connections(text):
+                connected_parts.add(stmt.src_inst)
+                connected_parts.add(stmt.tgt_inst)
             dangling_sensors = sorted(instances - connected_parts)
             if dangling_sensors:
                 issues.append(
