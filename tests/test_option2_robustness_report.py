@@ -83,7 +83,15 @@ def test_the_table_marks_unmeasurable_cells_rather_than_zeroing_them(tmp_path):
         line for line in table.splitlines() if line.startswith("R1-BBCTX")
     )
     assert "n/a" in baseline_row
-    assert "0.00" not in baseline_row
+    # The A/G columns must be marked unmeasurable, never scored. Checked on the
+    # slice before the obligations column rather than on the whole row: an arm
+    # that commits to zero executable obligations genuinely committed to zero,
+    # and that IS the measurement. Blanket-matching "0.00" across the row would
+    # forbid reporting it.
+    ag_columns = baseline_row[: baseline_row.rindex("n/a") + len("n/a")]
+    assert "0.00" not in ag_columns
+    assert "—" in ag_columns              # A/G layer count: absent, not zero
+    assert ag_columns.count("n/a") == 4   # PASS, mean err, trace, traced
     assert "not a score of zero" in table
 
 
@@ -327,3 +335,47 @@ def test_the_runner_carries_the_scope_declaration_with_its_reason(tmp_path):
     # REQ_FUNC_003 is undeclared, so it still counts as an in-scope gap
     assert traceability["untraced_requirements"] == ["REQ_FUNC_003"]
     assert traceability["fully_traced"] == 1
+
+
+def test_committed_obligations_are_counted_for_every_arm_including_the_baseline():
+    """A conformance rate alone rewards the run that commits to least.
+
+    pilot_n6_20260802 is the measurement behind this: seed-3 carried four plan
+    constraints where every other seed carried one or two, discharged two of
+    them, and was the only run in its arm to lose the qualification gate. Read
+    without this column that is a worse run; read with it, it is a run that
+    asked for more checking than any other.
+    """
+    from src.prototyping.robustness_report import (
+        count_committed_obligations,
+        measure_model,
+    )
+
+    plain = "package P { part def Controller; }"
+    assert count_committed_obligations(plain) == {
+        "plan_constraints": 0,
+        "state_execution_obligations": 0,
+        "asserted_constraints": 0,
+    }
+
+    committed = (
+        "package P {\n"
+        "    state def B {\n"
+        "        state S {\n"
+        "            // PLAN-CONSTRAINT c1 provenance=A_G_GUARANTEE "
+        "activation=STATE_ACTIVE verification=STATE_EXECUTION reference=B::S\n"
+        "            assert constraint c1 { a == b }\n"
+        "        }\n"
+        "    }\n"
+        "}"
+    )
+    counted = count_committed_obligations(committed)
+    assert counted["plan_constraints"] == 1
+    assert counted["state_execution_obligations"] == 1
+    assert counted["asserted_constraints"] == 1
+
+    # The baseline carries no A/G layer, and must still report the count rather
+    # than omit the field — an absent measurement and a zero are different claims.
+    baseline = measure_model(plain)
+    assert baseline["ag_layer_present"] is False
+    assert baseline["obligations"]["state_execution_obligations"] == 0

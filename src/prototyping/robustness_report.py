@@ -54,6 +54,34 @@ def assert_reads_no_gold(paths: Sequence[Path]) -> None:
             raise ValueError(f"{path.name} is not a permitted input")
 
 
+#: A planned obligation the committed model asks an executor to discharge.
+#: Counted from the model text so this stays inside the report's two-artifact
+#: boundary; the executor's own pass counts live in `run_report.json`, which
+#: this report is not permitted to read.
+_PLAN_CONSTRAINT_MARKER = "// PLAN-CONSTRAINT"
+_STATE_EXECUTION_MARKER = "verification=STATE_EXECUTION"
+
+
+def count_committed_obligations(model_text: str) -> Dict[str, int]:
+    """How much a committed model asks to be checked against it.
+
+    Reported beside conformance because a rate alone rewards conservatism: a run
+    that plans one executable constraint and discharges it scores better than one
+    that plans four and discharges two, though the second committed to more.
+    Measured on pilot_n6_20260802, where seed-3 carried four plan constraints and
+    every other seed one or two — and seed-3 was the only run in its arm to lose
+    the qualification gate. Without this column that reads as a worse run.
+
+    Counted for every arm, not only those carrying an A/G layer, so the baseline
+    is visible as the zero it actually is rather than as an absent measurement.
+    """
+    return {
+        "plan_constraints": model_text.count(_PLAN_CONSTRAINT_MARKER),
+        "state_execution_obligations": model_text.count(_STATE_EXECUTION_MARKER),
+        "asserted_constraints": model_text.count("assert constraint"),
+    }
+
+
 def measure_model(
     model_text: str,
     declared_requirements: Sequence[str] = (),
@@ -74,6 +102,7 @@ def measure_model(
     if not components:
         return {
             "ag_layer_present": False,
+            "obligations": count_committed_obligations(model_text),
             "note": (
                 "no A/G decomposition in the committed model; the A/G layer is "
                 "the R2 intervention, so this is the baseline condition rather "
@@ -111,6 +140,7 @@ def measure_model(
     )
     return {
         "ag_layer_present": True,
+        "obligations": count_committed_obligations(model_text),
         "pattern_conformance": {
             "verdict": (
                 "PASS" if reports and all(
@@ -197,6 +227,20 @@ def build_robustness_report(
             "models_archived": sum(1 for i in arm_runs if i["model_archived"]),
             "runs_with_ag_layer": len(measured),
         }
+        # Deliberately outside the `measured` branch below: an arm that commits
+        # to nothing executable must show a zero here, not an absent field.
+        committed = [
+            item["obligations"]["state_execution_obligations"]
+            for item in arm_runs if item.get("obligations")
+        ]
+        if committed:
+            summary["committed_obligations"] = {
+                "total": sum(committed),
+                "mean": round(mean(committed), 2),
+                "min": min(committed),
+                "max": max(committed),
+                "per_run": committed,
+            }
         if measured:
             traces = [
                 item["traceability"]["mean_trace_completeness"] for item in measured
@@ -318,16 +362,22 @@ def summarise_models(
 
 def format_robustness_table(report: Mapping[str, Any]) -> str:
     """The cross-arm table as text, with unmeasurable cells marked, never zeroed."""
+    def obligations(summary: Mapping[str, Any]) -> str:
+        committed = summary.get("committed_obligations")
+        if not committed:
+            return "—"
+        return f"{committed['mean']:.2f} [{committed['min']}-{committed['max']}]"
+
     lines = [
         f"{'arm':<12} {'runs':>4} {'A/G':>4} {'PASS':>5} "
-        f"{'mean err':>9} {'trace':>7} {'traced':>7}",
-        "-" * 56,
+        f"{'mean err':>9} {'trace':>7} {'traced':>7} {'obligations':>13}",
+        "-" * 70,
     ]
     for arm, summary in (report.get("by_arm") or {}).items():
         if not summary.get("runs_with_ag_layer"):
             lines.append(
                 f"{arm:<12} {summary['runs']:>4} {'—':>4} {'n/a':>5} "
-                f"{'n/a':>9} {'n/a':>7} {'n/a':>7}"
+                f"{'n/a':>9} {'n/a':>7} {'n/a':>7} {obligations(summary):>13}"
             )
             continue
         trace = summary.get("mean_trace_completeness")
@@ -335,10 +385,16 @@ def format_robustness_table(report: Mapping[str, Any]) -> str:
             f"{arm:<12} {summary['runs']:>4} {summary['runs_with_ag_layer']:>4} "
             f"{summary['pattern_pass']:>5} {summary['mean_errors']:>9} "
             f"{(f'{trace:.2f}' if trace is not None else '—'):>7} "
-            f"{summary['fully_traced_runs']:>7}"
+            f"{summary['fully_traced_runs']:>7} {obligations(summary):>13}"
         )
     lines.append("")
     lines.append("n/a = the arm carries no A/G layer; not a score of zero")
+    # Without this column a conformance rate rewards conservatism: the run that
+    # commits to the fewest executable obligations has the fewest ways to fail.
+    lines.append(
+        "obligations = executable state-constraint obligations the committed "
+        "model asks to be checked, mean [min-max] per run"
+    )
     return "\n".join(lines)
 
 
