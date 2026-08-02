@@ -1,8 +1,34 @@
-"""Characterize the provider-call sequence before the controller refactor.
+"""Golden: what each arm asks the provider during ``generate()``, and in what order.
 
-The replay responses are archived seed-0 pilot responses.  They let the real
-``Orchestrator.generate()`` pipeline run offline while this test records exactly
-what each arm asks the provider, and in what order.
+Written to characterize the sequence before the controller refactor, which has
+since landed. What it does now is different and more demanding: it is a standing
+prompt-drift golden. Every prompt digest here moves when any prompt those calls
+assemble is edited, so **an intentional prompt change must regenerate this
+golden in the same commit, and the commit must say which digests moved and why**.
+A digest that moves without such a statement is the regression this test exists
+to catch. Running this module as a script rewrites the golden; diff it before
+committing, because the point is knowing exactly which digests moved.
+
+The replay responses are archived seed-0 responses from ``pilot_v17_20260801``,
+which let the real ``Orchestrator.generate()`` pipeline run offline. Two
+qualifications on reading the recorded sequence:
+
+- **R0-CURRENT is a hybrid, not a recording of R0.** The baseline arm archives
+  no ``session_transcripts.jsonl`` — board-derived views are skipped for an arm
+  that has no blackboard sessions — and ``step1_plan_attempts.json`` keeps only
+  an 800-character excerpt of each response, which cannot be replayed. So R0's
+  code path is driven by the R1-BBCTX arm's answers. Prompts from the second
+  call onward embed the model text built from earlier answers, and this was
+  measured rather than assumed: perturbing the first replayed response changes
+  R0's call #2 digest. R0's entry is therefore "what R0 would ask had it been
+  given R1's answers". It is stable and drift-sensitive, which is what a golden
+  needs; it is not evidence about what R0 asked in a real run.
+- The pilot is pinned at v17 while the pipeline is at v20. Replaying archived
+  answers against current code is the point, but the responses are two pipeline
+  versions old, and pruning that pilot directory would take this test with it.
+
+``VerificationAgent`` responses are deliberately outside the replay: that agent
+is not called within ``generate()``.
 """
 from __future__ import annotations
 
@@ -26,6 +52,8 @@ def _digest(parts: list[str]) -> str:
 
 
 def _assistant_responses(arm: str) -> list[str]:
+    # R0-CURRENT has no transcript of its own to replay; see the module
+    # docstring for why, and for what that costs the R0 entry.
     transcript_arm = "R1-BBCTX" if arm == "R0-CURRENT" else arm
     path = _PILOT / "seed-0" / transcript_arm / "session_transcripts.jsonl"
     sessions = [json.loads(line) for line in path.read_text().splitlines()]
@@ -48,8 +76,27 @@ class _RecordingReplayLLM(LLMInterface):
     RETRY_DELAYS = ()
 
     def __init__(self, responses: list[str]):
-        self._responses = iter(responses)
+        self._responses = list(responses)
+        self._issued = 0
         self.calls: list[dict] = []
+
+    def _next_response(self) -> str:
+        """Fail as a call-count change rather than as `StopIteration`.
+
+        An arm that starts asking for one more call than the archive holds is
+        exactly what this golden is for, and a bare `StopIteration` raised deep
+        inside the orchestrator reports it as anything but that.
+        """
+        if self._issued >= len(self._responses):
+            raise AssertionError(
+                f"arm asked for provider call {self._issued + 1} but the "
+                f"archived replay holds {len(self._responses)}: the call "
+                "sequence grew, so the golden and the recorded call count "
+                "both need regenerating"
+            )
+        response = self._responses[self._issued]
+        self._issued += 1
+        return response
 
     def _complete_impl(
         self,
@@ -70,7 +117,7 @@ class _RecordingReplayLLM(LLMInterface):
             "temperature": temperature,
             "max_tokens": max_tokens,
         })
-        return LLMResponse(content=next(self._responses), model="replay")
+        return LLMResponse(content=self._next_response(), model="replay")
 
 
 def _frozen_requirements() -> dict:
@@ -140,6 +187,21 @@ def test_fresh_run_agenda_activates_every_phase_from_reversed_registration():
     assert activated.index("pre_ag_simulation") < activated.index(
         "ag_contract_reconciliation"
     )
+
+
+def test_exhausted_replay_reports_a_grown_call_sequence():
+    """The one failure this golden exists to catch must say what it is."""
+    llm = _RecordingReplayLLM(["only one archived answer"])
+    messages = [Message(role="user", content="plan")]
+    llm._complete_impl(messages, temperature=0.2, max_tokens=16)
+
+    try:
+        llm._complete_impl(messages, temperature=0.2, max_tokens=16)
+    except AssertionError as exc:
+        assert "call sequence grew" in str(exc)
+        assert "provider call 2" in str(exc)
+    else:
+        raise AssertionError("exhausted replay did not report the growth")
 
 
 if __name__ == "__main__":
