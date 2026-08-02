@@ -63,7 +63,19 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # was known to the system and simply never enforced on provider output. A model
 # the gate previously rejected can now be repaired, so v17 and v18 are not
 # poolable. `!=` is untouched: it is a legal inequality the emitter produces.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v18"
+# v19 stops the plan promising execution evidence the executor cannot produce.
+# A STATE_ACTIVE constraint had to claim STATE_EXECUTION, but the executor
+# probes a satisfaction boundary by perturbing the right-hand value and needs
+# one side to satisfy and the other not to — which `==` fails by construction,
+# so every equality state constraint was reported "boundary is not live"
+# whatever the model said. In pilot_n6_20260802 seed-3 was the only seed to
+# plan two of them and the only run in its arm to lose qualification; it had
+# committed to more checking than any other seed, not done worse work. Such
+# constraints are now required to claim INSPECTION: still emitted, still
+# inspectable, no longer counted as discharged execution evidence. This moves
+# both the qualification outcome and the committed-obligation count, so v18 and
+# v19 are not poolable.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v19"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"

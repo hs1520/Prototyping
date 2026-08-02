@@ -667,3 +667,61 @@ def test_a_value_type_the_pipeline_cannot_emit_fails_the_plan():
         assert not validate_constraint_plan([], [ok], []), (
             f"{legal} is emitted by this pipeline and must be accepted"
         )
+
+
+def test_equality_state_constraint_must_claim_inspection_not_execution():
+    """The plan may not promise execution evidence the executor cannot produce.
+
+    `behavioral_sim` probes a constraint's satisfaction boundary by perturbing
+    the right-hand value and requiring one side to satisfy and the other not to.
+    Equality fails that by construction, so every `==` STATE_ACTIVE constraint
+    was reported "boundary is not live" no matter what the model said. Measured
+    on pilot_n6_20260802/seed-3, the only seed to plan equality state
+    constraints and the only run in its arm to lose the qualification gate.
+    """
+    from src.prototyping.activated_constraint_plan import (
+        ConstraintPlan,
+        _state_execution_obstacle,
+    )
+
+    def constraint(operator: str) -> ConstraintPlan:
+        return ConstraintPlan(
+            constraint_id="c",
+            owner="Controller",
+            lhs="payloadLocked",
+            operator=operator,
+            rhs="defaultLockState",
+            activation_kind="STATE_ACTIVE",
+            activation_ref="B::S",
+        )
+
+    for operator in ("<=", ">=", "<", ">"):
+        assert _state_execution_obstacle(constraint(operator), None) is None
+
+    obstacle = _state_execution_obstacle(constraint("=="), None)
+    assert obstacle is not None
+    assert "live satisfaction boundary" in obstacle
+
+
+def test_the_executor_really_cannot_discharge_an_equality_boundary():
+    """Pins the executor behaviour the rule above exists to respect.
+
+    If the liveness probe ever learns to handle `==`, this fails and the plan
+    rule should be revisited rather than the constraint being routed around.
+    """
+    from src.simulation.behavioral_sim import eval_op
+
+    rhs = 1.0
+    epsilon = max(abs(rhs) * 0.01, 0.01)
+    for operator in ("<=", ">=", "<", ">"):
+        above, below = rhs + epsilon, rhs - epsilon
+        valid, invalid = (
+            (above, below) if operator in {">=", ">"} else (below, above)
+        )
+        assert eval_op(valid, operator, rhs)
+        assert not eval_op(invalid, operator, rhs)
+
+    # Equality: both perturbed sides violate, so no assignment of valid/invalid
+    # sides exists and the probe can never report a live boundary.
+    assert not eval_op(rhs + epsilon, "==", rhs)
+    assert not eval_op(rhs - epsilon, "==", rhs)

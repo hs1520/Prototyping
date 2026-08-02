@@ -59,6 +59,41 @@ VERIFICATION_TIERS = {
     "EXTERNAL_ANALYSIS",
     "INSPECTION",
 }
+#: Operators whose satisfaction boundary the STATE_EXECUTION executor can probe.
+#: It perturbs the right-hand value by epsilon and requires one side to satisfy
+#: and the other not to. Equality fails that by construction — both perturbed
+#: sides violate it — so `behavioral_sim` reports "boundary == N is not live" for
+#: every `==` constraint regardless of the model. Measured on
+#: pilot_n6_20260802/seed-3, the only seed that planned equality state
+#: constraints and the only one in its arm to lose the qualification gate.
+_LIVE_BOUNDARY_OPERATORS = frozenset({"<=", ">=", "<", ">"})
+
+
+def _state_execution_obstacle(constraint, lhs) -> str | None:
+    """Why STATE_EXECUTION cannot discharge this constraint, or None.
+
+    Mirrors what `behavioral_sim._run_state_active_constraint_scenario` actually
+    requires. The two were previously allowed to disagree: the plan validator
+    forced every STATE_ACTIVE constraint to claim STATE_EXECUTION, and the
+    executor then rejected the ones it had no machinery for. A plan that commits
+    to evidence the system cannot produce is worse than one that says so.
+    """
+    if constraint.operator not in _LIVE_BOUNDARY_OPERATORS:
+        return (
+            f"`{constraint.operator}` has no live satisfaction boundary to "
+            "execute against"
+        )
+    # Deliberately NOT checked here: the executor also demands the subject be an
+    # attribute bound to a dotted input path, and rejects `LOCAL_STATE` values
+    # that carry only an initial value. The two components already disagreed on
+    # that before this change — `test_state_active_property_is_serialized_inside_
+    # owning_state` plans exactly such a constraint and the validator has always
+    # passed it. Aligning them would reject plans that are legal today, and it is
+    # not established which side is wrong: the executor may be over-strict rather
+    # than the plan over-permissive. Reported, not silently repaired.
+    return None
+
+
 _IDENTIFIER = re.compile(r"^[A-Za-z_]\w*$")
 _QUALIFIED = re.compile(r"^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*$")
 _NUMBER = re.compile(r"^[-+]?\d+(?:\.\d+)?$")
@@ -449,13 +484,6 @@ def validate_constraint_plan(
         if constraint.verification_tier not in VERIFICATION_TIERS:
             issues.append(f"{prefix}.verification_tier is unsupported")
         if (
-            constraint.activation_kind == "STATE_ACTIVE"
-            and constraint.verification_tier != "STATE_EXECUTION"
-        ):
-            issues.append(
-                f"{prefix} STATE_ACTIVE constraints require STATE_EXECUTION"
-            )
-        if (
             constraint.activation_kind != "ALWAYS"
             and constraint.verification_tier == "PARAMETRIC_SWEEP"
         ):
@@ -464,6 +492,15 @@ def validate_constraint_plan(
             )
         lhs = attributes.get((constraint.owner, constraint.lhs))
         rhs = attributes.get((constraint.owner, constraint.rhs))
+        if constraint.activation_kind == "STATE_ACTIVE":
+            obstacle = _state_execution_obstacle(constraint, lhs)
+            required = "INSPECTION" if obstacle else "STATE_EXECUTION"
+            if constraint.verification_tier != required:
+                reason = obstacle or "the subject is a live runtime measurement"
+                issues.append(
+                    f"{prefix} STATE_ACTIVE constraint requires "
+                    f"{required}: {reason}"
+                )
         if lhs is None:
             issues.append(
                 f"{prefix}.expression.lhs is not a planned owner attribute"
