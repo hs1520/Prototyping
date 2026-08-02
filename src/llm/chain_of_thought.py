@@ -486,6 +486,24 @@ Rules:
 - The first path endpoint must represent the copied trigger; the final endpoint
   must represent the copied effect. Do not add unrelated connections merely to
   make the architecture globally connected.
+- Representation is checked lexically, so it must be visible in the names you
+  choose: the copied phrase and the endpoint that carries it must share a
+  content word. `'completing an automated landing'` is not represented by
+  `FlightController.telemetry` and `'not transition to the armed or airborne
+  state'` is not represented by `SafetyMonitor.sensorStatus`; a `landingState`
+  or an `armingState` port carries each of them. An abbreviation counts
+  (`navState` represents `'navigate'`), and so does the domain synonym already
+  in use (`obstacleData` represents `'collision threat'`). If no planned
+  endpoint shares a word with the phrase, plan the port that does rather than
+  attaching the phrase to an unrelated one.
+- The same holds for LOCAL_BEHAVIOR: the owner component, the behavior name, or
+  a state, transition or action you plan inside it must share a content word
+  with each copied phrase.
+- A phrase headed by a preposition — `'with a circular error probable (CEP) of
+  less than 1.0 metre'`, `'in accordance with the ASTM F3411-22 standard'` —
+  states a tolerance, a deadline or a governing standard rather than a
+  behaviour, and nothing is required to represent it. Prefer the clause that
+  names the behaviour when the requirement offers one.
 - If SOURCE-DERIVED SEMANTIC BINDINGS REQUIRED IN PLAN appears in the context,
   `semantic_bindings` is mandatory and must contain exactly one entry per listed
   obligation. Otherwise return an empty `semantic_bindings` array.

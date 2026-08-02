@@ -75,7 +75,21 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # inspectable, no longer counted as discharged execution evidence. This moves
 # both the qualification outcome and the committed-obligation count, so v18 and
 # v19 are not poolable.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v19"
+# v20 stops the source-anchor gate demanding a lexical match the two vocabularies
+# cannot produce. It intersects the stemmed words of a phrase copied verbatim out
+# of a requirement with the stemmed words of a model identifier, and those diverge
+# by construction: identifiers abbreviate (`navState` for `'navigate'`), they use
+# the domain synonym (`obstacleData` for `'collision threat'`), and a requirement
+# often offers only an adjunct clause where an effect is wanted (`'with a circular
+# error probable (CEP) of less than 1.0 metre'`), which names no behaviour for any
+# component to represent. Measured on the failed authoritative attempt of
+# 2026-08-01: 13 issues over 11 realizations, of which 10 were the gate's own
+# lexical reach and 3 were real endpoint mistakes that still fail. Abbreviation
+# and synonym now count, an adjunct-headed phrase is not required to be
+# represented, and the planning prompt states the rule instead of leaving it to
+# be discovered by rejection. Plans the gate previously rejected can now pass, so
+# v19 and v20 are not poolable.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v20"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"

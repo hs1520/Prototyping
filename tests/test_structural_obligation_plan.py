@@ -12,6 +12,8 @@ from src.prototyping.planned_behavior import (
 )
 from src.prototyping.structural_obligations import (
     RequirementRealizationPlan,
+    _concept_terms,
+    _represents,
     compile_source_anchored_structural_obligations,
 )
 
@@ -524,3 +526,109 @@ def test_local_behavior_realization_avoids_inventing_a_connection():
     assert obligation.realization_kind == "LOCAL_BEHAVIOR"
     assert obligation.required_connections == ()
     assert obligation.behavior_name == "OperatingModes"
+
+
+def _latency_requirement():
+    return [
+        "REQ_SAFE_005: Upon critical propulsion subsystem failure, the "
+        "system shall command parachute recovery with a deployment latency "
+        "of less than 0.5 seconds."
+    ]
+
+
+def test_adjunct_effect_phrase_needs_no_endpoint_representation():
+    """A tolerance clause qualifies a behaviour instead of naming one.
+
+    Measured on the failed authoritative attempt of 2026-08-01: the planner is
+    obliged to copy the effect phrase verbatim, and where the requirement
+    offers only a bound there is nothing a port name could represent.
+    """
+    payload = _source_anchored_safety_payload()
+    realization = _realization(
+        "PropulsionSystem", "propulsionStatus", "PropulsionStatusPort"
+    )
+    realization["effect_concept"] = (
+        "with a deployment latency of less than 0.5 seconds"
+    )
+    payload["requirement_realizations"] = [realization]
+
+    plan = ModelGenerationPlan.from_payload(
+        payload,
+        requirements=_latency_requirement(),
+        require_source_anchored_paths=True,
+    )
+
+    assert plan.status == "PASS"
+    assert not any(
+        "does not represent effect phrase" in issue for issue in plan.issues
+    )
+
+
+def test_adjunct_rule_does_not_excuse_an_unrelated_endpoint():
+    """`when` heads a real trigger clause, so the gate still applies to it."""
+    payload = _source_anchored_safety_payload()
+    realization = _realization(
+        "PerceptionSystem", "sensorStatus", "SensorStatusPort"
+    )
+    realization["trigger_concept"] = (
+        "when the propulsion unit has failed"
+    )
+    payload["requirement_realizations"] = [realization]
+
+    plan = ModelGenerationPlan.from_payload(
+        payload,
+        requirements=[
+            "REQ_SAFE_005: When the propulsion unit has failed, the system "
+            "shall command parachute recovery."
+        ],
+        require_source_anchored_paths=True,
+    )
+
+    assert plan.status == "INVALID"
+    assert any(
+        "does not represent trigger phrase" in issue for issue in plan.issues
+    )
+
+
+def test_abbreviated_identifier_represents_the_spelled_out_phrase():
+    """`navState` is the port that realises `navigate`; the stemmer cannot see it."""
+    assert _represents(
+        _concept_terms("autonomously navigate to designated GPS waypoints"),
+        _concept_terms("PerceptionSystem navState NavigationStatePort"),
+    )
+    assert _represents(
+        _concept_terms("receive and apply differential GNSS corrections"),
+        _concept_terms("GNSSReceiver correctionIn"),
+    )
+
+
+def test_domain_synonym_bridges_prose_and_identifier():
+    """A requirement says `collision threat`; the model says `obstacleData`."""
+    assert _represents(
+        _concept_terms("approaching a stationary collision threat"),
+        _concept_terms("PerceptionSystem obstacleData"),
+    )
+    assert _represents(
+        _concept_terms("transmit a post-flight system health report"),
+        _concept_terms("CommunicationSystem telemetry"),
+    )
+
+
+def test_representation_still_fails_for_an_unrelated_endpoint():
+    """The two endpoint errors the planner really did make must still fail."""
+    assert not _represents(
+        _concept_terms("completing an automated landing"),
+        _concept_terms("FlightController telemetry"),
+    )
+    assert not _represents(
+        _concept_terms("not transition to the armed or airborne state"),
+        _concept_terms("SafetyMonitor sensorStatus"),
+    )
+
+
+def test_negation_does_not_abbreviate_an_unrelated_word():
+    """`not` is three characters and must not stand for `notification`."""
+    assert not _represents(
+        _concept_terms("shall not arm"),
+        _concept_terms("NotificationService noticeOut"),
+    )

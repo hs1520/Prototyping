@@ -223,6 +223,79 @@ def _concept_terms(value: str) -> set[str]:
     }
 
 
+#: Prepositional heads that mark an adjunct clause. A phrase headed by one of
+#: these qualifies a behaviour — a tolerance, a deadline, a governing standard —
+#: instead of naming one, so no component, port or state can lexically represent
+#: it. Measured on the failed authoritative attempt of 2026-08-01, where the
+#: planner was obliged to copy `'with a circular error probable (CEP) of less
+#: than 1.0 metre'` and `'in accordance with the ASTM F3411-22 standard'`
+#: verbatim out of the requirement and was then failed for not representing
+#: them. `when`, `if` and `during` are deliberately absent: they introduce a
+#: real trigger clause rather than an adjunct.
+_ADJUNCT_HEADS = frozenset({"with", "within", "in", "per", "under", "by"})
+
+#: Synonym groups bridging requirement prose and model identifiers, seeded from
+#: the same run. `_stem` is morphological only, so it cannot connect a word to
+#: its domain synonym: the port named `obstacleData` is exactly what carries a
+#: `'collision threat'`, and what a requirement calls `'transmit'` a model calls
+#: `telemetry`. Each group is evidence-backed rather than a general thesaurus.
+_LEXICAL_BRIDGE_GROUPS = (
+    frozenset({"collide", "threat", "obstacle"}),
+    frozenset({"telemetry", "transmit"}),
+)
+
+#: Shortest stem allowed to stand for a longer one by prefix. Identifiers
+#: abbreviate where requirements spell out — `navState` is the port that
+#: realises `'navigate'` — and three characters is what `nav` needs.
+_MIN_ABBREVIATION_STEM = 3
+
+#: Function words that survive `_CONCEPT_STOPWORDS` and must never act as the
+#: abbreviated side of a prefix match, or `not` would stand for `notification`.
+_NON_ABBREVIATING = frozenset({
+    "as", "at", "is", "it", "less", "no", "not", "of", "than", "to", "with",
+})
+
+
+def _bridged(terms: set[str]) -> set[str]:
+    result = set(terms)
+    for group in _LEXICAL_BRIDGE_GROUPS:
+        if result & group:
+            result |= group
+    return result
+
+
+def _represents(phrase_terms: set[str], vocabulary_terms: set[str]) -> bool:
+    """Does the model vocabulary lexically stand for the requirement phrase?
+
+    Exact stem overlap first, then the two ways the two vocabularies are known
+    to diverge: identifiers abbreviate, and identifiers use the domain synonym.
+    """
+    if not phrase_terms:
+        return True
+    left = _bridged(phrase_terms)
+    right = _bridged(vocabulary_terms)
+    if left & right:
+        return True
+    for term in left:
+        for other in right:
+            short, long_ = sorted((term, other), key=len)
+            if (
+                len(short) >= _MIN_ABBREVIATION_STEM
+                and short not in _NON_ABBREVIATING
+                and long_.startswith(short)
+            ):
+                return True
+    return False
+
+
+def _adjunct_reason(value: str) -> str | None:
+    """Why no owner can represent this phrase, or None if it names a behaviour."""
+    words = _normalise_phrase(value).split()
+    if words and words[0] in _ADJUNCT_HEADS:
+        return f"{words[0]!r} heads an adjunct clause"
+    return None
+
+
 def _is_initialization_trigger(value: str) -> bool:
     """Recognise lifecycle triggers represented by a state-machine initial edge."""
     phrase = _normalise_phrase(value)
@@ -487,22 +560,30 @@ def compile_source_anchored_structural_obligations(
             elif (
                 trigger_terms
                 and not lifecycle_trigger
-                and not (
-                    trigger_terms
-                    & (owner_terms | typed_trigger_terms)
+                and _adjunct_reason(realization.trigger_concept) is None
+                and not _represents(
+                    trigger_terms, owner_terms | typed_trigger_terms
                 )
             ):
                 issues.append(
-                    f"{prefix} local behavior owner does not represent "
-                    f"trigger phrase {realization.trigger_concept!r}"
+                    f"{prefix} local behavior owner "
+                    f"{realization.owner_component}.{realization.behavior_name}"
+                    " does not represent trigger phrase "
+                    f"{realization.trigger_concept!r}"
                 )
                 local_valid = False
-            if effect_terms and not (
-                effect_terms & (owner_terms | typed_effect_terms)
+            if (
+                effect_terms
+                and _adjunct_reason(realization.effect_concept) is None
+                and not _represents(
+                    effect_terms, owner_terms | typed_effect_terms
+                )
             ):
                 issues.append(
-                    f"{prefix} local behavior owner does not represent "
-                    f"effect phrase {realization.effect_concept!r}"
+                    f"{prefix} local behavior owner "
+                    f"{realization.owner_component}.{realization.behavior_name}"
+                    " does not represent effect phrase "
+                    f"{realization.effect_concept!r}"
                 )
                 local_valid = False
             if local_valid:
@@ -576,8 +657,12 @@ def compile_source_anchored_structural_obligations(
             last.item_type,
             str(getattr(target_component, "responsibility", "")),
         ))
-        if trigger_terms and not (
-            trigger_terms & _concept_terms(source_vocabulary)
+        if (
+            trigger_terms
+            and _adjunct_reason(realization.trigger_concept) is None
+            and not _represents(
+                trigger_terms, _concept_terms(source_vocabulary)
+            )
         ):
             issues.append(
                 f"{prefix} causal source {first.source_component}."
@@ -585,8 +670,12 @@ def compile_source_anchored_structural_obligations(
                 f"{realization.trigger_concept!r}"
             )
             path_valid = False
-        if effect_terms and not (
-            effect_terms & _concept_terms(target_vocabulary)
+        if (
+            effect_terms
+            and _adjunct_reason(realization.effect_concept) is None
+            and not _represents(
+                effect_terms, _concept_terms(target_vocabulary)
+            )
         ):
             issues.append(
                 f"{prefix} causal target {last.target_component}."
