@@ -18,6 +18,7 @@ NORMALIZATION_RULE_ORDER = {
     "syntax_gate": (
         "strip_readonly_keyword",
         "fix_keyword_item_names",
+        "fix_c_style_negation",
     ),
     "design_semantics": (
         "fix_capability_semantics",
@@ -363,3 +364,24 @@ def strip_named_item_definitions(
             text,
         )
     return text
+
+
+#: Boolean negation written the C way.  `!=` is a legal SysML v2 inequality and
+#: our own A/G emitter produces it, so the lookahead excluding `=` is what makes
+#: this rule safe rather than a nicety.  Negation is only rewritten where an
+#: identifier follows, which is the only position `not` is valid in.
+_C_NEGATION_RE = re.compile(r"(?<![!=<>])!(?!=)\s*(?=[A-Za-z_])")
+
+
+def fix_c_style_negation(sysml_text: str) -> str:
+    """Rewrite `!flag` as `not flag`.
+
+    SysML v2 spells boolean negation `not`; syside rejects `!` with
+    "Unexpected token '!'".  Measured in pilot_n6_20260802/seed-3/R0-CURRENT,
+    where a single `if !sensorFailure` at line 125 was the only parser error in
+    the committed model and failed the whole run's qualification gate.  One
+    occurrence across eight archived pilots, and the deterministic A/G emitter
+    already writes `not`, so the convention was known to the system but never
+    enforced on provider output.
+    """
+    return _C_NEGATION_RE.sub("not ", sysml_text)

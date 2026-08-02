@@ -51,6 +51,7 @@ from ..simulation.validator import SimulationResult
 from ..sysml.lite_model import build_lite_model
 from ..sysml.model import SysMLModel
 from ..sysml.text_normalization import (
+    fix_c_style_negation,
     fix_keyword_item_names,
     strip_code_fences,
     strip_readonly_keyword,
@@ -1984,6 +1985,36 @@ class RefinementMixin:
                     f" — continuing",
                     flush=True,
                 )
+
+        # ── C-style boolean negation ─────────────────────────────────────────
+        # `if !flag` is a parser error ("Unexpected token '!'"); SysML v2 spells
+        # negation `not`.  Found in pilot_n6_20260802/seed-3/R0-CURRENT, where
+        # one such line was the committed model's only error and cost the run its
+        # qualification.  Rewritten deterministically — no LLM needed.  The
+        # rewrite is kept only when it reduces the error count, which is what
+        # bounds the regex's exposure to `!` inside a doc comment or string.
+        if latest_result.parser_errors:
+            negation_fixed = fix_c_style_negation(working_sysml)
+            if negation_fixed != working_sysml:
+                re_checked = check_syntax(negation_fixed)
+                if re_checked.total_errors() < latest_result.total_errors():
+                    n_fixed = latest_result.total_errors() - re_checked.total_errors()
+                    working_sysml = negation_fixed
+                    print(
+                        f"\n  ┌─ [NOT-FIX]  {n_fixed} C-style negation(s) rewritten"
+                        f" as `not` — no LLM needed",
+                        flush=True,
+                    )
+                    self._sync_model_text(working_model, working_sysml)
+                    latest_result = re_checked
+                    if not latest_result.has_errors:
+                        print(f"  └─ [NOT-FIX]  ✓ all errors resolved", flush=True)
+                        return working_sysml, latest_result, lev_hints, True
+                    print(
+                        f"  └─ [NOT-FIX]  {latest_result.total_errors()} error(s) remain"
+                        f" — continuing",
+                        flush=True,
+                    )
 
         # ── Levenshtein quick-fix ────────────────────────────────────────────
         if latest_result.sema_errors:

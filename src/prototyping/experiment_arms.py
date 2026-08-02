@@ -55,7 +55,15 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # identifier. The plan now fails closed, which puts the retry inside the
 # bounded attempt budget. This changes generation, so v16 and v17 are not
 # poolable.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v17"
+# v18 rewrites C-style boolean negation deterministically in the syntax gate.
+# `if !sensorFailure` is a parser error — SysML v2 spells negation `not` — and
+# in pilot_n6_20260802/seed-3/R0-CURRENT it was the committed model's only
+# error, which cost that run its qualification. One occurrence in eight
+# archived pilots, and the A/G emitter already wrote `not`, so the convention
+# was known to the system and simply never enforced on provider output. A model
+# the gate previously rejected can now be repaired, so v17 and v18 are not
+# poolable. `!=` is untouched: it is a legal inequality the emitter produces.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v18"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"
