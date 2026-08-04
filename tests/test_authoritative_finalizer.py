@@ -23,8 +23,16 @@ def _bundle(path: Path) -> dict:
     model = "package D {}\n"
     parm = "FRAME_CLASS 1\n"
     requirements = [{"id": "REQ-1", "text": "The drone shall fly."}]
+    requirement_graph = {
+        "schema_version": "1.0",
+        "artifact_type": "REQUIREMENT_DEPENDENCY_GRAPH",
+        "nodes": [],
+        "edges": [],
+        "graph_digest": "test-graph-digest",
+    }
     run = {
         "requirements": requirements,
+        "requirement_input": {"dependency_graph": requirement_graph},
         "recommended_design_inputs": {
             "rotor_count": 4, "battery_cells": 6,
             "rotor_radius_m": 0.20, "battery_capacity_mah": 10000,
@@ -55,6 +63,7 @@ def _bundle(path: Path) -> dict:
         realization=run["realization"],
         requirements=requirements,
         parm_text=parm,
+        requirement_input=run["requirement_input"],
         run_id="test-authority",
     )
     provenance = run["artifact_provenance"]
@@ -87,6 +96,12 @@ def _bundle(path: Path) -> dict:
             "unassigned_req_ids": [],
         },
         "rows": [{"req_id": "REQ-1", "status": "verified"}],
+    })
+    _write_json(path / "requirement_dependency_graph.json", requirement_graph)
+    _write_json(path / "requirement_impact.json", {
+        "current_graph_digest": requirement_graph["graph_digest"],
+        "directly_changed_requirement_ids": [],
+        "invalidated_requirement_ids": [],
     })
     write_state(path, "EVIDENCE", run_id=provenance["run_id"])
     return run

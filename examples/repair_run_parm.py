@@ -6,18 +6,26 @@ from pathlib import Path
 
 from src.dse.physics_estimator import DesignInputs
 from src.prototyping.artifact_provenance import sha256_text
-from src.prototyping.artifact_store import atomic_write_text, ensure_open_bundle, output_dir
+from src.prototyping.artifact_store import (
+    atomic_write_text,
+    ensure_open_bundle,
+    input_dir,
+    output_dir,
+)
 from src.sitl.dse_sitl_params import design_to_sitl_parm
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = output_dir()
+INPUT = input_dir()
 
 
 def main() -> int:
     ensure_open_bundle(OUT)
-    run = json.loads((OUT / "realization_run.json").read_text(encoding="utf-8"))
+    run = json.loads(
+        (INPUT / "realization_run.json").read_text(encoding="utf-8")
+    )
     raw = run.get("recommended_design_inputs")
     if not raw:
         raise SystemExit("current run has no recommended design")

@@ -24,10 +24,15 @@ from pymavlink import mavutil
 from src.dse.physics_estimator import DesignInputs
 from src.realization.closure import close_the_loop
 from src.prototyping.artifact_provenance import (
-    validate_derived_provenance, validate_run_provenance,
+    evidence_reuse_allowed, validate_derived_provenance, validate_run_provenance,
 )
 from src.prototyping.artifact_store import (
-    atomic_write_json, atomic_write_text, ensure_open_bundle, output_dir,
+    atomic_write_json,
+    atomic_write_text,
+    ensure_open_bundle,
+    input_dir,
+    latest_output_dir,
+    output_dir,
 )
 from src.sitl.dse_sitl_params import FRAME_CLASS, design_to_sitl_parm
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE, SITLBridge
@@ -36,11 +41,12 @@ from src.sysml.lite_model import build_lite_model
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = output_dir()
-SYSML_PATH = OUT / "final_model.sysml"
+INPUT = input_dir()
+SYSML_PATH = INPUT / "final_model.sysml"
 FALLBACK_SYSML_PATH = ROOT / "examples" / "drone_system_v2.sysml"
-PARM_PATH = OUT / "recommended.parm"
-RUN_JSON = OUT / "realization_run.json"
-GAZEBO_REPORT_JSON = OUT / "gazebo_feasibility_report.json"
+PARM_PATH = INPUT / "recommended.parm"
+RUN_JSON = INPUT / "realization_run.json"
+GAZEBO_REPORT_JSON = INPUT / "gazebo_feasibility_report.json"
 WORK = OUT / "sitl_feasibility"
 REPORT_JSON = OUT / "sitl_feasibility_report.json"
 REPORT_MD = OUT / "sitl_feasibility_report.md"
@@ -156,7 +162,7 @@ def _prepare_bridge_inputs(model, allow_stale: bool = False) -> tuple[SITLBridge
         fdm_backend="native",
         verbose=False,
     )
-    source = "examples/output/recommended.parm + requirement_linker safety params"
+    source = f"{PARM_PATH} + requirement_linker safety params"
     if PARM_PATH.exists():
         primary = PARM_PATH.read_text(encoding="utf-8").splitlines()
         fresh, reason = parm_freshness(primary, run_json)
@@ -808,6 +814,88 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2), flush=True)
         return 0
     bridge, parm_source = _prepare_bridge_inputs(model, allow_stale=args.allow_stale)
+    run_json = json.loads(RUN_JSON.read_text(encoding="utf-8"))
+    current_model = SYSML_PATH.read_text(encoding="utf-8")
+    try:
+        previous_dir = latest_output_dir()
+        previous_run = json.loads(
+            (previous_dir / "realization_run.json").read_text(encoding="utf-8")
+        )
+        previous_model = (previous_dir / "final_model.sysml").read_text(
+            encoding="utf-8"
+        )
+        previous_report = json.loads(
+            (previous_dir / "sitl_feasibility_report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except FileNotFoundError:
+        previous_dir = INPUT.resolve()
+        previous_run = previous_model = previous_report = None
+    if previous_dir != INPUT.resolve():
+        current_ids = {
+            str(spec.req_id).upper().replace("-", "_")
+            for spec in bridge._linker.generate_test_specs()  # noqa: SLF001
+            if spec.tier == "L2"
+        }
+        previous_ids = {
+            str(item.get("req_id") or "").upper().replace("-", "_")
+            for item in previous_report.get("safety_l2", ())
+            if item.get("passed") is True
+        }
+        if (
+            (previous_report.get("flight") or {}).get("passed") is True
+            and previous_ids == current_ids
+            and previous_report.get("source_provenance")
+            == previous_run.get("artifact_provenance")
+            and evidence_reuse_allowed(
+                previous_run,
+                run_json,
+                previous_model,
+                current_model,
+                current_ids,
+                require_parm_match=True,
+            )
+        ):
+            report = dict(previous_report)
+            report.update({
+                "model_source": model_source,
+                "model_source_note": model_source_note,
+                "parm_source": parm_source,
+                "source_provenance": run_json.get("artifact_provenance"),
+                "evidence_origin_provenance": previous_run.get(
+                    "artifact_provenance"
+                ),
+                "reused_from_run_id": (
+                    previous_run.get("artifact_provenance") or {}
+                ).get("run_id"),
+                "coverage": coverage_summary(bridge),
+                "traceability": traceability_results(bridge),
+                "safety_l2": [
+                    {**item, "evidence_reused": True}
+                    for item in previous_report.get("safety_l2", ())
+                ],
+                "flight": {
+                    **(previous_report.get("flight") or {}),
+                    "evidence_reused": True,
+                },
+            })
+            report["verification_matrix"] = matrix_summary(
+                model,
+                bridge,
+                l1_results=bridge.validate_l1(),
+                l2_results=report["safety_l2"],
+            )
+            report["safety_verification"] = safety_verification_status(
+                report["safety_l2"], report["traceability"]
+            )
+            _write_reports(report)
+            print(
+                "Reused unchanged PASS flight and L2 evidence from "
+                f"{report['reused_from_run_id']}",
+                flush=True,
+            )
+            return 0
     report = {
         "model_source": model_source,
         "model_source_note": model_source_note,

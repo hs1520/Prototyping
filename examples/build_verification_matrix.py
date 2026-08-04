@@ -1,7 +1,7 @@
 """Build the per-requirement verification strategy matrix from existing artifacts.
 
-Reads examples/output/final_model.sysml + realization_run.json (no LLM, no SITL),
-writes examples/output/verification_matrix.{md,json}.
+Reads the authoritative published bundle (no LLM, no SITL) and writes to the
+configured open bundle or ``examples/output/scratch``.
 
 Run:
   PYTHONPATH=. .venv/bin/python examples/build_verification_matrix.py
@@ -16,16 +16,17 @@ from src.prototyping.artifact_provenance import (
     validate_derived_provenance, validate_run_provenance,
 )
 from src.prototyping.artifact_store import (
-    atomic_write_json, atomic_write_text, ensure_open_bundle, output_dir,
+    atomic_write_json, atomic_write_text, ensure_open_bundle, input_dir, output_dir,
 )
 from src.sitl.requirement_linker import RequirementLinker
 from src.sysml.lite_model import build_lite_model
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = output_dir()
-SYSML_PATH = OUT / "final_model.sysml"
-RUN_JSON = OUT / "realization_run.json"
-GAZEBO_JSON = OUT / "gazebo_feasibility_report.json"
+INPUT = input_dir()
+SYSML_PATH = INPUT / "final_model.sysml"
+RUN_JSON = INPUT / "realization_run.json"
+GAZEBO_JSON = INPUT / "gazebo_feasibility_report.json"
 MATRIX_MD = OUT / "verification_matrix.md"
 MATRIX_JSON = OUT / "verification_matrix.json"
 

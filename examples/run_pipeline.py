@@ -19,7 +19,11 @@ from src.app.pipeline import PrototypingPipeline
 
 # Reuse the industry-grade v2 system description + INCOSE-style requirements.
 sys.path.insert(0, os.path.dirname(__file__))
-from drone_system_v2 import DRONE_DESCRIPTION, DRONE_REQUIREMENTS  # noqa: E402
+from drone_system_v2 import (  # noqa: E402
+    DRONE_DESCRIPTION,
+    DRONE_FROZEN_REQUIREMENTS,
+    DRONE_REQUIREMENTS,
+)
 
 SYSTEM = "AutonomousDrone"
 DESC = DRONE_DESCRIPTION
@@ -34,7 +38,7 @@ if __name__ == "__main__":
 
     # Split generate / explore so we capture BOTH the pre-DSE model and the post-DSE model.
     gen = pipe.orchestrator.generate(system_name=SYSTEM, system_description=DESC,
-                                     frozen_requirements=DRONE_REQUIREMENTS)
+                                     frozen_requirements=DRONE_FROZEN_REQUIREMENTS)
     initial_sysml = gen["model_sysml"]                          # after generate, BEFORE DSE
     res = pipe.orchestrator.explore(gen, mcts_iterations=20)    # DSE + refinement + verification
     final_sysml = res["model_sysml"]                            # AFTER DSE

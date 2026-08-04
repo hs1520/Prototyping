@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from examples import run_gazebo_feasibility as rgf
+from src.prototyping.artifact_provenance import build_run_provenance
 
 
 def test_planned_gazebo_requirements_are_extracted_by_requirement_text():
@@ -30,6 +33,94 @@ def test_numeric_wind_and_actuation_targets_are_preserved():
     assert by_check["wind_condition"]["wind_mps"] == 15.0
     assert by_check["wind_condition"]["min_groundspeed_mps"] == 2.0
     assert by_check["timed_actuation"]["max_delay_s"] == 2.0
+
+
+def test_build_report_reuses_unchanged_pass_without_launching_gazebo(
+    tmp_path, monkeypatch
+):
+    model = """package D {
+        requirement def REQ_SAFE_007 {
+            doc /* Maintain controlled flight with one motor inoperative. */
+        }
+        part def Drone;
+    }"""
+    design = {
+        "battery_capacity_mah": 10000,
+        "battery_cells": 6,
+        "rotor_count": 6,
+        "rotor_radius_m": 0.2,
+        "payload_mass_kg": 1.5,
+        "cruise_speed_mps": 18.0,
+    }
+    realization = {"chosen": {"combo": "M", "pack": "B", "frame": "F"}}
+
+    def run(run_id):
+        value = {
+            "requirements": ["REQ-SAFE-007: one motor inoperative"],
+            "recommended_design_inputs": design,
+            "realization": realization,
+            "requirement_impact": {
+                "invalidated_requirement_ids": ["REQ_OTHER_001"]
+            },
+        }
+        value["artifact_provenance"] = build_run_provenance(
+            model_sysml=model,
+            recommended_design=design,
+            realization=realization,
+            requirements=value["requirements"],
+            parm_text=None,
+            run_id=run_id,
+        )
+        return value
+
+    previous = tmp_path / "previous"
+    current = tmp_path / "current"
+    output = tmp_path / "output"
+    previous.mkdir()
+    current.mkdir()
+    output.mkdir()
+    previous_run = run("previous-run")
+    current_run = run("current-run")
+    (previous / "realization_run.json").write_text(
+        json.dumps(previous_run), encoding="utf-8"
+    )
+    (previous / "final_model.sysml").write_text(model, encoding="utf-8")
+    (previous / "gazebo_feasibility_report.json").write_text(json.dumps({
+        "status": "PASS",
+        "source_provenance": previous_run["artifact_provenance"],
+        "req_results": [{
+            "req_id": "REQ-SAFE-007",
+            "check": "single_motor_out",
+            "status": "PASS",
+            "message": "stable",
+        }],
+        "gazebo_result": {"hover_stable": True},
+    }), encoding="utf-8")
+    (current / "realization_run.json").write_text(
+        json.dumps(current_run), encoding="utf-8"
+    )
+    (current / "final_model.sysml").write_text(model, encoding="utf-8")
+
+    monkeypatch.setattr(rgf, "INPUT", current)
+    monkeypatch.setattr(rgf, "SYSML_PATH", current / "final_model.sysml")
+    monkeypatch.setattr(rgf, "RUN_JSON", current / "realization_run.json")
+    monkeypatch.setattr(rgf, "REPORT_JSON", output / "report.json")
+    monkeypatch.setattr(rgf, "REPORT_MD", output / "report.md")
+    monkeypatch.setattr(rgf, "latest_output_dir", lambda: previous)
+    monkeypatch.setattr(
+        rgf,
+        "_run_live_gazebo",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Gazebo must not launch")
+        ),
+    )
+
+    report = rgf.build_report(dry_run=False, include_single_motor_out=True)
+
+    assert report["reused_from_run_id"] == "previous-run"
+    assert report["req_results"][0]["evidence_reused"] is True
+    assert report["source_provenance"] == current_run["artifact_provenance"]
+    assert report["evidence_origin_provenance"] == previous_run["artifact_provenance"]
 
 
 

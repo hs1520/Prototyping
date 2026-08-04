@@ -17,10 +17,12 @@ from typing import Any
 
 
 OUTPUT_DIR_ENV = "PROTOTYPING_OUTPUT_DIR"
+INPUT_DIR_ENV = "PROTOTYPING_INPUT_DIR"
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_ROOT = ROOT / "examples" / "output"
 RUNS_DIRNAME = "runs"
 LATEST_NAME = "latest"
+SCRATCH_DIRNAME = "scratch"
 STATE_NAME = "run_state.json"
 
 
@@ -28,26 +30,65 @@ def output_root() -> Path:
     return DEFAULT_OUTPUT_ROOT
 
 
+def _configured_artifact_dir(value: str, *, variable: str) -> Path:
+    resolved = Path(value).expanduser().resolve()
+    if resolved == output_root().resolve():
+        raise RuntimeError(
+            f"{variable} may not select deprecated legacy artifact root "
+            f"{resolved}; select latest, scratch, or a run bundle"
+        )
+    return resolved
+
+
 def output_dir() -> Path:
     """Resolve the writable artifact directory for a runner.
 
     Authoritative child processes always receive ``PROTOTYPING_OUTPUT_DIR`` and
-    therefore write into their open run bundle.  Ad-hoc/standalone commands use
-    the legacy scratch root by default; they must never silently select the
-    published ``latest`` bundle because that bundle is immutable after FINAL.
+    therefore write into their open run bundle. Ad-hoc/standalone commands write
+    below ``examples/output/scratch``. The output root itself is never a writable
+    artifact bundle and legacy files found there have no authority.
     """
     configured = os.environ.get(OUTPUT_DIR_ENV)
     if configured:
-        return Path(configured).expanduser().resolve()
-    return output_root()
+        return _configured_artifact_dir(configured, variable=OUTPUT_DIR_ENV)
+    return (output_root() / SCRATCH_DIRNAME).resolve()
 
 
 def latest_output_dir() -> Path:
-    """Resolve the latest published bundle for read-only consumers."""
+    """Resolve and validate the latest published bundle for read-only consumers.
+
+    This deliberately fails closed. Falling back to the output root would make a
+    stale legacy file indistinguishable from a published artifact.
+    """
     latest = output_root() / LATEST_NAME
-    if latest.exists():
-        return latest.resolve()
-    return output_root()
+    if not latest.exists():
+        raise FileNotFoundError(
+            f"no authoritative bundle is published at {latest}"
+        )
+    resolved = latest.resolve()
+    state = read_state(resolved)
+    if state.get("state") != "FINAL":
+        raise RuntimeError(
+            f"published bundle is not FINAL: {resolved} "
+            f"(state={state.get('state')!r})"
+        )
+    return resolved
+
+
+def input_dir() -> Path:
+    """Resolve the artifact input authority for a runner.
+
+    An explicit input wins. Authoritative child processes traditionally pass one
+    open bundle as both input and output, so ``PROTOTYPING_OUTPUT_DIR`` remains the
+    second choice. Standalone readers otherwise consume only published ``latest``.
+    """
+    configured = os.environ.get(INPUT_DIR_ENV)
+    if configured:
+        return _configured_artifact_dir(configured, variable=INPUT_DIR_ENV)
+    configured = os.environ.get(OUTPUT_DIR_ENV)
+    if configured:
+        return _configured_artifact_dir(configured, variable=OUTPUT_DIR_ENV)
+    return latest_output_dir()
 
 
 def atomic_write_text(path: Path, text: str) -> None:

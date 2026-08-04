@@ -27,17 +27,22 @@ from src.prototyping.artifact_store import (
     atomic_write_json,
     atomic_write_text,
     create_staging_bundle,
+    latest_output_dir,
     output_root,
     publish_latest,
     write_state,
 )
 from src.app.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
+from src.prototyping.requirement_inputs import requirement_change_impact
 from src.sitl.dse_sitl_params import design_to_sitl_parm
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
 sys.path.insert(0, os.path.dirname(__file__))
-from drone_system_v2 import DRONE_DESCRIPTION, DRONE_REQUIREMENTS  # noqa: E402
+from drone_system_v2 import (  # noqa: E402
+    DRONE_DESCRIPTION,
+    DRONE_FROZEN_REQUIREMENTS,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -220,6 +225,20 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
         realization=realization,
         requirements=out["requirements"],
         parm_text=parm_text,
+        requirement_input=out["requirement_input"],
+    )
+    previous_input = None
+    try:
+        previous_run = json.loads(
+            (latest_output_dir() / "realization_run.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        previous_input = previous_run.get("requirement_input")
+    except FileNotFoundError:
+        pass
+    out["requirement_impact"] = requirement_change_impact(
+        previous_input, out["requirement_input"]
     )
     return out, final_sysml, parm_text or ""
 
@@ -247,7 +266,7 @@ def main() -> int:
             gen = pipe.orchestrator.generate(
                 system_name=SYSTEM,
                 system_description=DRONE_DESCRIPTION,
-                frozen_requirements=DRONE_REQUIREMENTS,
+                frozen_requirements=DRONE_FROZEN_REQUIREMENTS,
             )
             res = pipe.orchestrator.explore(gen, mcts_iterations=20)
             base, final_sysml, parm_text = _build_base_artifacts(
@@ -258,6 +277,14 @@ def main() -> int:
             staging = None
 
             atomic_write_json(run_dir / "realization_run.json", base)
+            atomic_write_json(
+                run_dir / "requirement_dependency_graph.json",
+                base["requirement_input"]["dependency_graph"],
+            )
+            atomic_write_json(
+                run_dir / "requirement_impact.json",
+                base["requirement_impact"],
+            )
             atomic_write_text(run_dir / "final_model.sysml", final_sysml)
             atomic_write_text(run_dir / "recommended.parm", parm_text)
             # Canonical snapshot contains the report plus exact model/requirement

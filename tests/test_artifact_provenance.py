@@ -1,5 +1,6 @@
 from src.prototyping.artifact_provenance import (
     build_run_provenance,
+    evidence_reuse_allowed,
     validate_derived_provenance,
     validate_run_provenance,
 )
@@ -69,3 +70,76 @@ def test_legacy_run_without_provenance_is_rejected():
 
     assert not ok
     assert "regenerate" in reason
+
+
+def test_run_provenance_detects_dependency_graph_change():
+    run = _run()
+    run["requirement_input"] = {
+        "dependency_graph": {"nodes": [], "edges": []}
+    }
+    run["artifact_provenance"] = build_run_provenance(
+        model_sysml="package D {}",
+        recommended_design=run["recommended_design_inputs"],
+        realization=run["realization"],
+        requirements=run["requirements"],
+        parm_text="FRAME_CLASS 1\n",
+        requirement_input=run["requirement_input"],
+        run_id="run-1",
+    )
+    run["requirement_input"]["dependency_graph"]["edges"].append({
+        "from": "REQ_2", "to": "REQ_1",
+    })
+
+    ok, reason = validate_run_provenance(run)
+
+    assert not ok
+    assert "dependency graph" in reason
+
+
+def test_passed_evidence_reuse_ignores_unrelated_requirement_prose_only():
+    previous = _run()
+    current = _run()
+    current["requirement_impact"] = {
+        "invalidated_requirement_ids": ["REQ_OTHER_001"]
+    }
+    old_model = """package D {
+        requirement def REQ_TARGET_001 { doc /* old prose */ }
+        part def Drone { attribute ready : Boolean = true; }
+    }"""
+    new_model = old_model.replace("old prose", "new prose")
+
+    assert evidence_reuse_allowed(
+        previous,
+        current,
+        old_model,
+        new_model,
+        {"REQ_TARGET_001"},
+        require_parm_match=True,
+    )
+
+
+def test_passed_evidence_reuse_rejects_impacted_or_changed_model_semantics():
+    previous = _run()
+    current = _run()
+    old_model = "package D { part def Drone { attribute ready : Boolean = true; } }"
+    current["requirement_impact"] = {
+        "invalidated_requirement_ids": ["REQ_TARGET_001"]
+    }
+    assert not evidence_reuse_allowed(
+        previous,
+        current,
+        old_model,
+        old_model,
+        {"REQ_TARGET_001"},
+        require_parm_match=False,
+    )
+
+    current["requirement_impact"] = {"invalidated_requirement_ids": []}
+    assert not evidence_reuse_allowed(
+        previous,
+        current,
+        old_model,
+        old_model.replace("true", "false"),
+        {"REQ_TARGET_001"},
+        require_parm_match=False,
+    )

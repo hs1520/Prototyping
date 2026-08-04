@@ -29,6 +29,7 @@ class RequirementsDesignMixin:
         # RequirementsAgent now returns a unified set (fixed anchors + new additions)
         # with consistent IDs in one pass — no separate merge step needed.
         requirements = result.output if result.output else list(additional)
+        dependencies = result.metadata.get("dependencies", [])
 
         # Validate unified set
         validation = self.requirements_agent.validate_requirements(requirements)
@@ -42,6 +43,7 @@ class RequirementsDesignMixin:
                 requirements,
                 name=f"{system_name}-llm-extracted",
                 source="llm_extracted",
+                dependencies=dependencies,
             )
             self.last_requirement_input = {
                 **input_artifact,
@@ -73,7 +75,6 @@ class RequirementsDesignMixin:
             print(f"  Categories: {category_summary}")
 
         # Surface dependency info if found
-        dependencies = result.metadata.get("dependencies", [])
         if dependencies:
             print(f"  Dependencies: {len(dependencies)} pair(s) identified")
 
@@ -185,4 +186,3 @@ class RequirementsDesignMixin:
         model = self._materialize_guided_ag_contracts(model, system_name)
         self._finalize_design_handoff(result, model)
         return model
-

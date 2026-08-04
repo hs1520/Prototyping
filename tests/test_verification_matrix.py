@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from src.prototyping.verification_matrix import build_matrix, summarize, to_markdown
+from src.prototyping.verification_matrix import build_matrix, summarize, to_json, to_markdown
+from src.prototyping.verification_obligations import compile_verification_obligations
 from src.sitl.requirement_linker import RequirementLinker
 from src.sysml.lite_model import build_lite_model
 
@@ -295,8 +296,87 @@ def test_matrix_accepts_reachable_postflight_report_action():
     )
     row = build_matrix(model, None, RequirementLinker(model))[0]
 
-    assert row.status == "verified"
+    assert row.status == "partial"
     assert "behavioral_sim" in row.tiers
+    assert {item.kind: item.status for item in row.obligations} == {
+        "behavior": "verified",
+        "response_time": "unverified",
+    }
+
+
+def test_compound_payload_requirement_requires_every_mandatory_clause():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_FUNC_003 {
+                doc /* The system shall transport payloads with a gross mass of
+                up to 1.5 kg while maintaining a hover throttle margin of at
+                least 30 percent and roll and pitch RMS within 1.0 degree. */
+            }
+            part Drone { satisfy requirement REQ_FUNC_003; }
+        }""",
+        model_name="D",
+    )
+    realization = {"per_requirement": [{
+        "req_id": "REQ-FUNC-003", "family": "payload", "scope": "closure",
+        "target": 0.3, "realized_value": 0.46, "met": True,
+        "note": "attitude/behaviour clauses are not covered at the datasheet tier",
+    }]}
+
+    row = build_matrix(model, realization, RequirementLinker(model))[0]
+    by_kind = {item.kind: item.status for item in row.obligations}
+
+    assert row.status == "partial"
+    assert by_kind == {
+        "behavior": "verified",
+        "payload": "verified",
+        "hover_throttle_margin": "verified",
+        "attitude_rms": "unverified",
+    }
+    payload = to_json([row])["rows"][0]
+    assert payload["obligations"][3]["kind"] == "attitude_rms"
+    assert payload["obligations"][3]["evidence"] == []
+
+
+def test_behavioral_pass_cannot_verify_a_position_accuracy_threshold():
+    model_text = _MODEL.replace(
+        "Operate in sequential phases: STANDBY then CRUISE then LANDING.",
+        "Operate in sequential phases: STANDBY then CRUISE then LANDING, "
+        "with a CEP of less than 1.0 metre.",
+    )
+    model = build_lite_model(model_text, model_name="D")
+
+    row = {item.req_id: item for item in build_matrix(
+        model, _REALIZATION, RequirementLinker(model)
+    )}["REQ_OPER_001"]
+
+    assert row.status == "partial"
+    assert {item.kind: item.status for item in row.obligations} == {
+        "behavior": "verified",
+        "position_accuracy": "unverified",
+    }
+
+
+def test_obligation_compiler_keeps_percent_and_temperature_limits():
+    battery = compile_verification_obligations(
+        "REQ_SAFE_001",
+        "The system shall return when battery state-of-charge reaches 25%.",
+    )
+    temperature = compile_verification_obligations(
+        "REQ_PERF_008",
+        "The system shall operate across an ambient temperature range of "
+        "-10 °C to +45 °C.",
+    )
+    timeout = compile_verification_obligations(
+        "REQ_SAFE_003",
+        "The system shall land when the uplink has been absent for more than "
+        "10 consecutive seconds.",
+    )
+
+    assert [item.kind for item in battery] == ["behavior", "battery_threshold"]
+    assert [item.kind for item in temperature] == [
+        "behavior", "temperature", "temperature",
+    ]
+    assert [item.kind for item in timeout] == ["behavior", "response_time"]
 
 
 def test_matrix_marks_trace_blocked_requirements():

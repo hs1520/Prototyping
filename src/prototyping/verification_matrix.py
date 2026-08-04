@@ -6,7 +6,9 @@ inspection/analysis work outside any simulation toolchain. This module derives �
 from artifacts that already exist (linker specs, Phase 8 per-requirement scopes,
 model state machines, deterministic keyword rules) — a per-requirement assignment,
 so the honest gap ("unassigned") is explicit and small instead of an undifferentiated
-"20/36 unmapped" bucket.
+"20/36 unmapped" bucket. Each requirement is also decomposed into an observable
+behaviour obligation and its explicit physical thresholds; requirement-level
+``verified`` is gated on every such obligation being verified.
 
 Method vocabulary follows the systems-engineering IADT convention
 (Inspection / Analysis / Demonstration / Test).
@@ -15,6 +17,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+
+from .verification_obligations import (
+    EvidenceClaim,
+    ObligationResult,
+    all_obligations_verified,
+    compile_verification_obligations,
+    evaluate_obligations,
+)
 
 # Canonical tiers, ordered from executable test downwards. A requirement may hold
 # several (e.g. max airspeed: L1 param + forward-flight analysis).
@@ -72,6 +82,7 @@ class MatrixRow:
     methods: Tuple[str, ...]
     status: str  # verified | partial | planned | failed | out-of-sim-scope | blocked | unassigned
     evidence: Tuple[str, ...] = field(default_factory=tuple)
+    obligations: Tuple[ObligationResult, ...] = field(default_factory=tuple)
 
 
 def _l2_strength(inject_kind: str, verify_kind: str) -> str:
@@ -126,17 +137,27 @@ def _record_behavioral_outcome(
     outcomes: List[bool],
     tiers: Dict[str, set],
     evidence: Dict[str, List[str]],
+    claims: Dict[str, List[EvidenceClaim]],
     description: str,
+    claim_kinds=frozenset({"behavior"}),
 ) -> bool:
     """Persist real simulator evidence; return True when an outcome existed."""
     if not outcomes:
         return False
     if all(outcomes):
         tiers[rid].add("behavioral_sim")
-        evidence[rid].append(f"{description} (PASS)")
+        detail = f"{description} (PASS)"
+        evidence[rid].append(detail)
+        claims[rid].append(EvidenceClaim(
+            description=detail, status="verified", kinds=frozenset(claim_kinds),
+        ))
     else:
         tiers[rid].add("behavioral_sim_failed")
-        evidence[rid].append(f"{description} (FAIL)")
+        detail = f"{description} (FAIL)"
+        evidence[rid].append(detail)
+        claims[rid].append(EvidenceClaim(
+            description=detail, status="failed", kinds=frozenset(claim_kinds),
+        ))
     return True
 
 
@@ -166,6 +187,7 @@ def build_matrix(model, realization: Optional[dict], linker,
 
     tiers: Dict[str, set] = {r: set() for r in universe}
     evidence: Dict[str, List[str]] = {r: [] for r in universe}
+    claims: Dict[str, List[EvidenceClaim]] = {r: [] for r in universe}
     blocked: set = set()
 
     # 1. Linker specs describe verification intent only.  They become verified
@@ -189,6 +211,15 @@ def build_matrix(model, realization: Optional[dict], linker,
             evidence[rid].append(
                 f"L2 {spec.inject.kind}→{spec.verify.kind} ({strength}; {state})"
             )
+            claims[rid].append(EvidenceClaim(
+                description=evidence[rid][-1],
+                status=(
+                    "verified" if outcome is True
+                    else "failed" if outcome is False
+                    else "planned"
+                ),
+                kinds=frozenset({"behavior"}),
+            ))
         elif spec.tier == "L1":
             names = ", ".join(p.param_name for p in spec.params) or "params"
             outcome = l1_by_req.get(_norm_req_id(rid))
@@ -198,6 +229,15 @@ def build_matrix(model, realization: Optional[dict], linker,
             tiers[rid].add(tier)
             state = "PASS" if outcome is True else "FAIL" if outcome is False else "planned, not executed"
             evidence[rid].append(f"L1 param consistency ({state}): {names}")
+            claims[rid].append(EvidenceClaim(
+                description=evidence[rid][-1],
+                status=(
+                    "verified" if outcome is True
+                    else "failed" if outcome is False
+                    else "planned"
+                ),
+                all_obligations=True,
+            ))
         elif spec.tier == "TRACE":
             blocked.add(rid)
             evidence[rid].append(f"TRACE blocked: {spec.notes}")
@@ -217,6 +257,21 @@ def build_matrix(model, realization: Optional[dict], linker,
             evidence[rid].append(
                 f"datasheet closure: {v.get('family')} realized={v.get('realized_value')} "
                 f"target={v.get('target')} met={v.get('met')}{extra}")
+            family = str(v.get("family") or "").lower()
+            family_kinds = {
+                "time": {"behavior", "endurance"},
+                "mass": {"behavior", "mass"},
+                "payload": {"behavior", "payload", "hover_throttle_margin"},
+            }.get(family, {"behavior", family})
+            claims[rid].append(EvidenceClaim(
+                description=evidence[rid][-1],
+                status=(
+                    "verified" if v.get("met") is True
+                    else "failed" if v.get("met") is False
+                    else "partial"
+                ),
+                kinds=frozenset(family_kinds),
+            ))
         elif scope == "forward_flight":
             if v.get("met") is True:
                 tiers[rid].add("forward_flight")
@@ -225,6 +280,16 @@ def build_matrix(model, realization: Optional[dict], linker,
             evidence[rid].append(
                 f"forward-flight (lumped): {v.get('family')} realized={v.get('realized_value')} "
                 f"met={v.get('met')}")
+            family = str(v.get("family") or "").lower()
+            claims[rid].append(EvidenceClaim(
+                description=evidence[rid][-1],
+                status=(
+                    "verified" if v.get("met") is True
+                    else "failed" if v.get("met") is False
+                    else "partial"
+                ),
+                kinds=frozenset({"behavior", family}),
+            ))
         elif scope == "deferred":
             evidence[rid].append(f"Phase 8 deferred: {v.get('note') or v.get('family')}")
 
@@ -283,9 +348,20 @@ def build_matrix(model, realization: Optional[dict], linker,
                 for name in matched_names
                 for outcome in results_by_machine.get(name, [])
             ]
+            compiled = compile_verification_obligations(
+                rid, req_texts.get(rid, "")
+            )
+            quantitative_kinds = {
+                obligation.kind for obligation in compiled
+                if obligation.kind != "behavior"
+            }
             _record_behavioral_outcome(
-                rid, outcomes, tiers, evidence,
+                rid, outcomes, tiers, evidence, claims,
                 f"model guard '{attr}' exercised at behavioral-sim tier",
+                claim_kinds={
+                    "behavior",
+                    *(quantitative_kinds if len(quantitative_kinds) == 1 else ()),
+                },
             )
             continue
 
@@ -310,7 +386,7 @@ def build_matrix(model, realization: Optional[dict], linker,
                 run_initialization_scenario(sm).passed for sm in init_candidates
             ]
             if _record_behavioral_outcome(
-                rid, init_outcomes, tiers, evidence,
+                rid, init_outcomes, tiers, evidence, claims,
                 "initial/default-state invariant exercised at behavioral-sim tier",
             ):
                 continue
@@ -331,7 +407,7 @@ def build_matrix(model, realization: Optional[dict], linker,
                 for outcome in results_by_machine.get(sm.name, [])
             ]
             _record_behavioral_outcome(
-                rid, outcomes, tiers, evidence,
+                rid, outcomes, tiers, evidence, claims,
                 "requirement-linked state-machine scenario exercised at behavioral-sim tier",
             )
 
@@ -345,10 +421,17 @@ def build_matrix(model, realization: Optional[dict], linker,
         if any(k in low for k in _INSPECTION_KWS):
             tiers[rid].add("inspection_analysis")
             evidence[rid].append("inspection/analysis item (compliance/environment/materials)")
+            claims[rid].append(EvidenceClaim(
+                description=evidence[rid][-1], status="out-of-sim-scope",
+                all_obligations=True,
+            ))
         if (any(k in low for k in _GAZEBO_KWS)
                 or _positional_release(low) or _timing_actuation(low)):
             tiers[rid].add("gazebo_deferred")
             evidence[rid].append("needs Gazebo-tier physics (S8 boundary) — planned")
+            claims[rid].append(EvidenceClaim(
+                description=evidence[rid][-1], status="planned", all_obligations=True,
+            ))
 
     # 6. Optional Gazebo high-fidelity results. A PASS upgrades only the exact
     #    requirement the Gazebo runner names; other Gazebo-planned requirements
@@ -366,16 +449,28 @@ def build_matrix(model, realization: Optional[dict], linker,
             tiers[rid].discard("gazebo_deferred")
             tiers[rid].add("gazebo")
             evidence[rid].append(f"Gazebo PASS ({check}){suffix}")
+            claims[rid].append(EvidenceClaim(
+                description=evidence[rid][-1], status="verified", all_obligations=True,
+            ))
         elif status == "FAIL":
             tiers[rid].add("gazebo_failed")
             evidence[rid].append(f"Gazebo FAIL ({check}){suffix}")
+            claims[rid].append(EvidenceClaim(
+                description=evidence[rid][-1], status="failed", all_obligations=True,
+            ))
         elif status == "PARTIAL":
             tiers[rid].add("gazebo_deferred")
             tiers[rid].add("gazebo_partial")
             evidence[rid].append(f"Gazebo partial ({check}){suffix}")
+            claims[rid].append(EvidenceClaim(
+                description=evidence[rid][-1], status="partial", all_obligations=True,
+            ))
         elif status in {"INCONCLUSIVE", "PLANNED", "SKIPPED", "SUSPENDED"}:
             tiers[rid].add("gazebo_deferred")
             evidence[rid].append(f"Gazebo {status.lower()} ({check}){suffix}")
+            claims[rid].append(EvidenceClaim(
+                description=evidence[rid][-1], status="planned", all_obligations=True,
+            ))
 
     rows: List[MatrixRow] = []
     for rid in universe:
@@ -397,6 +492,13 @@ def build_matrix(model, realization: Optional[dict], linker,
             status = "out-of-sim-scope"
         else:
             status = "unassigned"
+        obligations = evaluate_obligations(
+            compile_verification_obligations(rid, req_texts.get(rid, "")),
+            claims[rid],
+            blocked=rid in blocked,
+        )
+        if status == "verified" and not all_obligations_verified(obligations):
+            status = "partial"
         rows.append(MatrixRow(
             req_id=rid,
             text=req_texts.get(rid, ""),
@@ -404,6 +506,7 @@ def build_matrix(model, realization: Optional[dict], linker,
             methods=tuple(TIER_METHOD[x] for x in t),
             status=status,
             evidence=tuple(evidence[rid]),
+            obligations=obligations,
         ))
     return rows
 
@@ -415,11 +518,14 @@ def summarize(rows: List[MatrixRow]) -> Dict[str, object]:
         by_status[r.status] = by_status.get(r.status, 0) + 1
         for t in r.tiers:
             by_tier[t] = by_tier.get(t, 0) + 1
+    obligations = [item for row in rows for item in row.obligations]
     return {
         "total": len(rows),
         "by_status": dict(sorted(by_status.items())),
         "by_tier": dict(sorted(by_tier.items())),
         "unassigned_req_ids": [r.req_id for r in rows if r.status == "unassigned"],
+        "obligations_total": len(obligations),
+        "obligations_verified": sum(item.status == "verified" for item in obligations),
     }
 
 
@@ -434,13 +540,19 @@ def to_markdown(rows: List[MatrixRow]) -> str:
         f"- Total requirements: {s['total']}",
         "- By status: " + ", ".join(f"{k}={v}" for k, v in s["by_status"].items()),
         "- By tier: " + ", ".join(f"{k}={v}" for k, v in s["by_tier"].items()),
+        f"- Verified obligations: {s['obligations_verified']}/{s['obligations_total']}",
         "",
-        "| Requirement | Status | Tiers | Evidence |",
-        "|---|---|---|---|",
+        "| Requirement | Status | Obligation coverage | Tiers | Evidence |",
+        "|---|---|---|---|---|",
     ]
     for r in rows:
         ev = "; ".join(r.evidence[:2]) or "—"
-        lines.append(f"| {r.req_id} | {r.status} | {', '.join(r.tiers) or '—'} | {ev} |")
+        verified = sum(item.status == "verified" for item in r.obligations)
+        coverage = f"{verified}/{len(r.obligations)}"
+        lines.append(
+            f"| {r.req_id} | {r.status} | {coverage} | "
+            f"{', '.join(r.tiers) or '—'} | {ev} |"
+        )
     if s["unassigned_req_ids"]:
         lines += ["", "## Unassigned (honest gap)"]
         for r in rows:
@@ -460,6 +572,16 @@ def to_json(rows: List[MatrixRow]) -> Dict[str, object]:
                 "methods": list(r.methods),
                 "status": r.status,
                 "evidence": list(r.evidence),
+                "obligations": [
+                    {
+                        "obligation_id": item.obligation_id,
+                        "clause": item.clause,
+                        "kind": item.kind,
+                        "status": item.status,
+                        "evidence": list(item.evidence),
+                    }
+                    for item in r.obligations
+                ],
             }
             for r in rows
         ],

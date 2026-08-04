@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.app.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
+from src.prototyping.requirement_inputs import build_frozen_requirement_set
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
 
@@ -278,6 +279,31 @@ DRONE_REQUIREMENTS = [
     "operational regulations. [V: inspection / regulatory audit]",
 ]
 
+# Explicit requirement-to-requirement dependencies for the frozen authoritative
+# input. ``from`` is the dependent requirement; ``to`` is its prerequisite.
+DRONE_REQUIREMENT_DEPENDENCIES = [
+    {"from": "REQ-FUNC-001", "to": "REQ-INTF-002"},
+    {"from": "REQ-FUNC-004", "to": "REQ-INTF-001"},
+    {"from": "REQ-FUNC-005", "to": "REQ-FUNC-001"},
+    {"from": "REQ-FUNC-005", "to": "REQ-SAFE-006"},
+    {"from": "REQ-FUNC-006", "to": "REQ-INTF-001"},
+    {"from": "REQ-FUNC-007", "to": "REQ-FUNC-001"},
+    {"from": "REQ-FUNC-008", "to": "REQ-FUNC-004"},
+    {"from": "REQ-PERF-002", "to": "REQ-FUNC-003"},
+    {"from": "REQ-PERF-005", "to": "REQ-FUNC-005"},
+    {"from": "REQ-PERF-006", "to": "REQ-FUNC-003"},
+    {"from": "REQ-PERF-006", "to": "REQ-PERF-002"},
+    {"from": "REQ-PERF-006", "to": "REQ-PERF-003"},
+    {"from": "REQ-SAFE-001", "to": "REQ-FUNC-007"},
+]
+
+DRONE_FROZEN_REQUIREMENTS = build_frozen_requirement_set(
+    DRONE_REQUIREMENTS,
+    name="autonomous-drone-authoritative-requirements",
+    source="code-declared-example-input",
+    dependencies=DRONE_REQUIREMENT_DEPENDENCIES,
+)
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -304,7 +330,7 @@ def main():
     result = pipeline.generate_system(
         system_name="AutonomousDrone",
         description=DRONE_DESCRIPTION,
-        frozen_requirements=DRONE_REQUIREMENTS,
+        frozen_requirements=DRONE_FROZEN_REQUIREMENTS,
         platform_profile=ARDUPILOT_COPTER_PROFILE,
         sitl=True,
         sitl_output_dir="sitl_output",

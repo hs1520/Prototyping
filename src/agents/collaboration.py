@@ -121,6 +121,9 @@ class CollaborationMixin:
                 "requirement_set_digest": self.last_requirement_input.get(
                     "requirement_set_digest"
                 ),
+                "dependency_graph": self.last_requirement_input.get(
+                    "dependency_graph"
+                ),
                 "gold_access": False,
             },
         )
@@ -158,6 +161,9 @@ class CollaborationMixin:
                     ),
                     "requirement_set_digest": self.last_requirement_input.get(
                         "requirement_set_digest"
+                    ),
+                    "dependency_graph": self.last_requirement_input.get(
+                        "dependency_graph"
                     ),
                     "gold_access": False,
                 },
@@ -401,6 +407,7 @@ class CollaborationMixin:
                 "requirement_set_digest": source.payload.get(
                     "requirement_set_digest"
                 ),
+                "dependency_graph": source.payload.get("dependency_graph"),
                 "gold_access": False,
                 "reaffirmed_for": "verification_planning",
             },

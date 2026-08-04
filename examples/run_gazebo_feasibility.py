@@ -22,15 +22,25 @@ from pathlib import Path
 from typing import Any
 
 from src.dse.physics_estimator import DesignInputs, total_mass_kg
-from src.prototyping.artifact_provenance import validate_run_provenance
+from src.prototyping.artifact_provenance import (
+    evidence_reuse_allowed,
+    validate_derived_provenance,
+    validate_run_provenance,
+)
 from src.prototyping.artifact_store import (
-    atomic_write_json, atomic_write_text, ensure_open_bundle, output_dir,
+    atomic_write_json,
+    atomic_write_text,
+    ensure_open_bundle,
+    input_dir,
+    latest_output_dir,
+    output_dir,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = output_dir()
-SYSML_PATH = OUT / "final_model.sysml"
-RUN_JSON = OUT / "realization_run.json"
+INPUT = input_dir()
+SYSML_PATH = INPUT / "final_model.sysml"
+RUN_JSON = INPUT / "realization_run.json"
 REPORT_JSON = OUT / "gazebo_feasibility_report.json"
 REPORT_MD = OUT / "gazebo_feasibility_report.md"
 
@@ -520,6 +530,77 @@ def build_report(dry_run: bool = False, include_single_motor_out: bool = False) 
             f"{SYSML_PATH} not found; Gazebo must use the exact model from the realization run"
         )
     planned = _planned_gazebo_reqs(requirements)
+    if not dry_run:
+        previous_run = None
+        previous_model = None
+        previous_report = None
+        try:
+            previous_dir = latest_output_dir()
+            if previous_dir != INPUT.resolve():
+                previous_run = json.loads(
+                    (previous_dir / "realization_run.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                previous_model = (previous_dir / "final_model.sysml").read_text(
+                    encoding="utf-8"
+                )
+                previous_report = json.loads(
+                    (previous_dir / "gazebo_feasibility_report.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+        except FileNotFoundError:
+            previous_dir = INPUT.resolve()
+        if previous_dir != INPUT.resolve():
+            current_ids = {
+                str(item.get("req_id") or "").upper().replace("-", "_")
+                for item in planned
+            }
+            previous_pass_ids = {
+                str(item.get("req_id") or "").upper().replace("-", "_")
+                for item in previous_report.get("req_results", ())
+                if str(item.get("status") or "").upper() == "PASS"
+            }
+            fresh, _ = validate_derived_provenance(
+                previous_report, previous_run, previous_model
+            )
+            if (
+                fresh
+                and previous_report.get("status") == "PASS"
+                and current_ids == previous_pass_ids
+                and evidence_reuse_allowed(
+                    previous_run,
+                    run,
+                    previous_model,
+                    model_sysml,
+                    current_ids,
+                    require_parm_match=False,
+                )
+            ):
+                report = dict(previous_report)
+                report.update({
+                    "generated_at": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                    ),
+                    "requirements_source": requirements_source,
+                    "recommended_design_inputs": run.get(
+                        "recommended_design_inputs"
+                    ),
+                    "source_provenance": run.get("artifact_provenance"),
+                    "evidence_origin_provenance": previous_run.get(
+                        "artifact_provenance"
+                    ),
+                    "reused_from_run_id": (
+                        previous_run.get("artifact_provenance") or {}
+                    ).get("run_id"),
+                    "req_results": [
+                        {**item, "evidence_reused": True}
+                        for item in previous_report.get("req_results", ())
+                    ],
+                })
+                _write_report(report)
+                return report
     gazebo_design = _gazebo_design_from_run(run)
     live = None if dry_run else _run_live_gazebo(
         gazebo_design, planned, include_single_motor_out=include_single_motor_out

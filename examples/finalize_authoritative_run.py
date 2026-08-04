@@ -132,6 +132,19 @@ def main() -> int:
         raise SystemExit(
             "INCOMPLETE verification matrix: row count does not match exact requirement set"
         )
+    requirement_graph = _read("requirement_dependency_graph.json")
+    expected_graph = (run.get("requirement_input") or {}).get("dependency_graph")
+    if requirement_graph != expected_graph:
+        raise SystemExit(
+            "STALE requirement dependency graph: artifact does not match run input"
+        )
+    requirement_impact = _read("requirement_impact.json")
+    if requirement_impact.get("current_graph_digest") != requirement_graph.get(
+        "graph_digest"
+    ):
+        raise SystemExit(
+            "STALE requirement impact: current graph digest does not match"
+        )
     try:
         research_conclusion = derive_research_conclusion(run, gazebo, sitl, matrix)
     except ValueError as exc:
@@ -212,6 +225,8 @@ def main() -> int:
         "research_conclusion.md",
         "working_tree.patch",
         "working_tree_untracked.json",
+        "requirement_dependency_graph.json",
+        "requirement_impact.json",
     ]
     artifact_sha256 = {name: _file_sha256(name) for name in artifact_files}
     artifact_index = {
@@ -226,6 +241,8 @@ def main() -> int:
         "research_conclusion_markdown": "research_conclusion.md",
         "code_diff": "working_tree.patch",
         "untracked_code_archive": "working_tree_untracked.json",
+        "requirement_dependency_graph": "requirement_dependency_graph.json",
+        "requirement_impact": "requirement_impact.json",
     }
     authority = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -240,6 +257,14 @@ def main() -> int:
         },
         "phase9": phase9,
         "verification_matrix_summary": matrix_summary,
+        "requirement_impact": {
+            "directly_changed_requirement_ids": requirement_impact.get(
+                "directly_changed_requirement_ids", []
+            ),
+            "invalidated_requirement_ids": requirement_impact.get(
+                "invalidated_requirement_ids", []
+            ),
+        },
         "research_conclusion": research_conclusion,
         "artifacts": artifact_index,
     }

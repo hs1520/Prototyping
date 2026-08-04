@@ -22,10 +22,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     raw = json.loads(args.input.expanduser().resolve().read_text(encoding="utf-8"))
     requirements = raw.get("requirements") if isinstance(raw, dict) else raw
+    dependencies = raw.get("dependencies", []) if isinstance(raw, dict) else []
     if not isinstance(requirements, list):
         parser.error("input must be a JSON list or object with a requirements list")
     artifact = build_frozen_requirement_set(
-        requirements, name=args.name, source=args.source
+        requirements,
+        name=args.name,
+        source=args.source,
+        dependencies=dependencies,
     )
     args.output.expanduser().resolve().write_text(
         json.dumps(artifact, indent=2, ensure_ascii=False) + "\n",
