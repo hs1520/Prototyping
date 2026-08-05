@@ -6,6 +6,7 @@ from src.prototyping.generation_plan import (
 )
 from src.prototyping.activated_constraint_plan import (
     ConstraintPlan,
+    _unit_tokens,
     materialize_planned_constraints,
 )
 from src.prototyping.model_qualification import build_model_qualification
@@ -155,6 +156,25 @@ def test_frozen_constraint_cannot_invent_a_500_newton_threshold():
         "unit 'N' is absent from frozen source" in item
         for item in plan.issues
     )
+
+
+def test_units_the_frozen_text_states_are_accepted_in_both_spellings():
+    """A stated unit must not be rejected in every spelling of itself.
+
+    'degree' and 'minutes' were absent from the vocabulary, so a plan could
+    satisfy neither 'deg' nor 'degree' and simply alternated between them
+    until the attempt budget ran out.
+    """
+    assert {"degree", "deg"} <= _unit_tokens(
+        "roll and pitch RMS within 1.0 degree"
+    )
+    assert {"minutes", "min"} <= _unit_tokens(
+        "sustain flight for a minimum of 25 minutes"
+    )
+    # "m/s" must survive as itself rather than decomposing into "m" and "s"
+    assert {"m/s", "m_s"} <= _unit_tokens("a closing speed of 1.5 m/s")
+    # a unit the text never states is still rejected
+    assert "N" not in _unit_tokens("within 1.0 degree")
 
 
 def test_requirement_identifier_digits_are_not_accepted_as_a_bound():

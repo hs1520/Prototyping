@@ -160,8 +160,12 @@ def _unit_tokens(source: str) -> set[str]:
     tokens = {
         item.lower().replace("%", "percent")
         for item in re.findall(
+            # "m/s" must be tried before the bare "m" alternative, or it is
+            # only ever seen as the two separate units "m" and "s".
+            r"m/s|km/h|"
             r"\b(?:ms|s|m|km|m_s|km_h|N|V|A|W|Hz|kg|g|percent|"
-            r"metres?|meters?|seconds?|milliseconds?|kilometres?|kilometers?)\b|%",
+            r"metres?|meters?|seconds?|milliseconds?|kilometres?|kilometers?|"
+            r"degrees?|deg|minutes?|min)\b|%",
             source,
             flags=re.IGNORECASE,
         )
@@ -179,6 +183,15 @@ def _unit_tokens(source: str) -> set[str]:
         "kilometres": "km",
         "kilometer": "km",
         "kilometers": "km",
+        # A requirement writes "1.0 degree" / "25 minutes" / "15 m/s"; a plan
+        # may legitimately carry either spelling, so accept both rather than
+        # rejecting every form of a unit the frozen text actually states.
+        "degree": "deg",
+        "degrees": "deg",
+        "minute": "min",
+        "minutes": "min",
+        "m/s": "m_s",
+        "km/h": "km_h",
     }
     return tokens | {aliases[item] for item in tokens if item in aliases}
 
