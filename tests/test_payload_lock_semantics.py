@@ -152,3 +152,28 @@ def test_failed_behavioral_anchor_remains_a_refinement_issue():
 def test_surgical_contract_forbids_empty_multi_state_shells():
     assert "every state MUST be reachable" in SURGICAL_SYSTEM_PROMPT
     assert "empty Locked/Unlocked shell" in SURGICAL_SYSTEM_PROMPT
+
+
+def test_unnamed_attribute_redefinition_does_not_break_the_linker():
+    """A redefinition is legal SysML and reports no name of its own.
+
+    Keying the linker's attribute map on that name put a None into every
+    later keyword scan, so one such line anywhere in the model crashed the
+    verification audit — which fails closed — and blocked the whole run.
+    """
+    text, model = _model("""
+        attribute maxMass : Real = 5.0;
+        attribute :>> maxMass = 7.0;
+        satisfy requirement REQ_SAFE_008;
+    """)
+
+    linker = RequirementLinker(model)
+
+    assert all(
+        name is not None
+        for attrs in linker._attr_map.values()
+        for name in attrs
+    )
+    # the audit must reach a verdict rather than raise
+    verification_gap_issues(text, "D", strict=True)
+    build_matrix(model, None, linker)

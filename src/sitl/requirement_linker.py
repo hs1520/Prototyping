@@ -1425,12 +1425,19 @@ class RequirementLinker:
                     part_name = getattr(owner, "name", None)
                     if not part_name:
                         continue
+                    # An AttributeUsage need not be named — a redefinition
+                    # such as `attribute :>> mass = 5[kg];` is legal and
+                    # reports name None.  Keying the map on that put a None
+                    # into every keyword scan that later reads attr names.
+                    attr_name = getattr(attr, "name", None)
+                    if not attr_name:
+                        continue
                     expr = attr.feature_value_expression
                     if expr is None:
                         continue
                     val, report = compiler.evaluate(expr)
                     if not report.fatal and val is not None:
-                        result.setdefault(part_name, {})[attr.name] = float(val)
+                        result.setdefault(part_name, {})[attr_name] = float(val)
                 except Exception as exc:
                     from src.utils.suppressed import record_suppressed
                     record_suppressed("sitl.requirement_linker.syside_attr_node", exc)
