@@ -35,12 +35,12 @@ DEFAULT_MAX_TOKENS = 20480
 ESCALATION_TEMPERATURES: Tuple[float, ...] = (DEFAULT_TEMPERATURE, 0.6, 1.0)
 
 
-def _default_timeout_seconds() -> float:
+def _default_timeout_seconds(default: float = 120.0) -> float:
     """Per-request timeout, overridable via LLM_TIMEOUT_SECONDS."""
     try:
-        return float(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))
+        return float(os.environ.get("LLM_TIMEOUT_SECONDS", str(default)))
     except ValueError:
-        return 120.0
+        return default
 
 
 @dataclass
@@ -779,9 +779,12 @@ class GitHubCopilotLLM(LLMInterface):
 class VertexLLM(LLMInterface):
     """Vertex-backed Gemini LLM implementation."""
 
-    # Vertex quota (429) recovers slowly — keep the wider ladder the previous
-    # bespoke retry loop used rather than the base class's faster schedule.
-    RETRY_DELAYS = (10.0, 30.0, 60.0, 120.0)
+    ARCHITECTURE_MAX_TOKENS = 65536
+
+    # Retry shared-capacity failures at most twice. A client deadline is not a
+    # capacity failure and is deliberately rejected without replaying the same
+    # expensive request.
+    RETRY_DELAYS = (10.0, 30.0)
 
     def __init__(
         self,
@@ -789,7 +792,8 @@ class VertexLLM(LLMInterface):
         api_key: Optional[str] = None,
         enable_langsmith: bool = True,
         timeout_seconds: Optional[float] = None,
-        seed: Optional[int] = None,
+        seed: Optional[int] = 0,
+        thinking_level: str = "HIGH",
     ):
         try:
             from google import genai
@@ -800,9 +804,14 @@ class VertexLLM(LLMInterface):
 
         self.model = model
         self.seed = seed
+        self.thinking_level = thinking_level.upper()
+        if self.thinking_level not in {"LOW", "HIGH"}:
+            raise ValueError("Vertex thinking_level must be LOW or HIGH")
         self.langsmith_enabled = False
         self.timeout_seconds = (
-            timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
+            timeout_seconds
+            if timeout_seconds is not None
+            else _default_timeout_seconds(600.0)
         )
 
         Config.setup_langsmith_env()
@@ -858,6 +867,9 @@ class VertexLLM(LLMInterface):
         config: Dict[str, Any] = {
             "temperature": temperature,
             "max_output_tokens": max_tokens,
+            "thinking_config": {
+                "thinking_level": getattr(self, "thinking_level", "HIGH")
+            },
         }
         seed = getattr(self, "seed", None)
         if seed is not None:
@@ -891,8 +903,17 @@ class VertexLLM(LLMInterface):
                 "provider": "vertex",
                 "langsmith_enabled": self.langsmith_enabled,
                 "seed": seed,
+                "thinking_level": getattr(self, "thinking_level", "HIGH"),
             },
         )
+
+    @classmethod
+    def _is_retryable(cls, exc: Exception) -> bool:
+        status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+        text = f"{type(exc).__name__} {exc}".lower()
+        if status == 504 or "deadline" in text or "timeout" in text:
+            return False
+        return super()._is_retryable(exc)
 
 
 class MockLLM(LLMInterface):

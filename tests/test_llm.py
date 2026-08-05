@@ -470,7 +470,27 @@ class TestVertexLLM:
         response = vertex.complete([Message(role="user", content="hello")])
 
         assert captured_kwargs["config"]["seed"] == 4321
+        assert captured_kwargs["config"]["thinking_config"] == {
+            "thinking_level": "HIGH"
+        }
         assert response.metadata["seed"] == 4321
+        assert response.metadata["thinking_level"] == "HIGH"
+
+    def test_deadline_is_not_retried_but_capacity_failure_is(self):
+        assert not VertexLLM._is_retryable(
+            RuntimeError("504 DEADLINE_EXCEEDED")
+        )
+        assert not VertexLLM._is_retryable(RuntimeError("ReadTimeout"))
+        assert not VertexLLM._is_retryable(RuntimeError("ConnectTimeout"))
+        assert VertexLLM._is_retryable(RuntimeError("429 RESOURCE_EXHAUSTED"))
+
+    def test_vertex_retry_count_is_bounded_to_two(self):
+        assert VertexLLM.RETRY_DELAYS == (10.0, 30.0)
+        assert VertexLLM.ARCHITECTURE_MAX_TOKENS == 65536
+
+    def test_vertex_default_timeout_is_ten_minutes(self, monkeypatch):
+        monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
+        assert interface_module._default_timeout_seconds(600.0) == 600.0
 
 
 class TestGitHubCopilotLLMListModels:

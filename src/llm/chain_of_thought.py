@@ -17,6 +17,7 @@ from contextlib import contextmanager
 
 from .interface import (
     DEFAULT_MAX_TOKENS,
+    DEFAULT_TEMPERATURE,
     Conversation,
     LLMInterface,
     Message,
@@ -1541,7 +1542,10 @@ class ChainOfThoughtPrompter:
         )
         content = self._ask(
             prompt,
-            temperature=0.7,
+            temperature=DEFAULT_TEMPERATURE,
+            max_tokens=getattr(
+                self.llm, "ARCHITECTURE_MAX_TOKENS", DEFAULT_MAX_TOKENS
+            ),
             system_prompt=TYPED_MODEL_PLAN_SYSTEM_PROMPT,
             stage="architecture",
         )

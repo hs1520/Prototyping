@@ -4,14 +4,14 @@
       "max_tokens": 20480,
       "ordinal": 1,
       "system_prompt_digest": "4766d0baea09e7951f75a6889fff1dfc6ba4c648f9d44967c60ae84c23151836",
-      "temperature": 0.7,
+      "temperature": 0.2,
       "user_prompt_digest": "4eabcce75d0d2a3991d8c3295e642b5968bf1a85cd8fbfa8db51d19df51a4e67"
     },
     {
       "max_tokens": 20480,
       "ordinal": 2,
       "system_prompt_digest": "4766d0baea09e7951f75a6889fff1dfc6ba4c648f9d44967c60ae84c23151836",
-      "temperature": 0.7,
+      "temperature": 0.2,
       "user_prompt_digest": "7f20466408fcdf4cb87ea95ea400609b24cecf81b4e5cdd2951cafeafcf735a8"
     },
     {
@@ -48,29 +48,29 @@
       "max_tokens": 20480,
       "ordinal": 1,
       "system_prompt_digest": "4766d0baea09e7951f75a6889fff1dfc6ba4c648f9d44967c60ae84c23151836",
-      "temperature": 0.7,
-      "user_prompt_digest": "6880b79b002ff579107f18c990eb9685614fe289350cc478decc747b2c833d8f"
+      "temperature": 0.2,
+      "user_prompt_digest": "692765c660b0a7358b777ee4410f59863c9c9f13b69dabd91bcd83488ff8afe8"
     },
     {
       "max_tokens": 20480,
       "ordinal": 2,
       "system_prompt_digest": "4766d0baea09e7951f75a6889fff1dfc6ba4c648f9d44967c60ae84c23151836",
-      "temperature": 0.7,
-      "user_prompt_digest": "3493eb6a885428769fc564a3a5a2b14f9808712e635f7fc5de31bfc936d253ad"
+      "temperature": 0.2,
+      "user_prompt_digest": "e2b73e9996944f8068a8db28b771c207f6f9c3efe22529b912f510caa93ab9f0"
     },
     {
       "max_tokens": 20480,
       "ordinal": 3,
       "system_prompt_digest": "d5286d9e3aeb9a8c318e100dbbc6fa8a337bf6ee1bd04a8fa9f3e859ed02c079",
       "temperature": 0.3,
-      "user_prompt_digest": "19e585f253f58c617d56824e3697a4600663557dfbe116106c6ac0e8e6747e6b"
+      "user_prompt_digest": "014a4d01f6d1aae77a3dd239f7020a83d92adb5d96a7307ad1c8b0fa1b0731eb"
     },
     {
       "max_tokens": 20480,
       "ordinal": 4,
       "system_prompt_digest": "d5286d9e3aeb9a8c318e100dbbc6fa8a337bf6ee1bd04a8fa9f3e859ed02c079",
       "temperature": 0.3,
-      "user_prompt_digest": "125d4c8ba1519c92ed7c4b0b975fe659e274ad272ba59bcc3e34fb99da5be0bd"
+      "user_prompt_digest": "db16596d612d31cc113e0ebeb39e53faf050a4ca2da1b08da70aef5e1b5ce26f"
     },
     {
       "max_tokens": 20480,
@@ -113,29 +113,29 @@
       "max_tokens": 20480,
       "ordinal": 4,
       "system_prompt_digest": "4766d0baea09e7951f75a6889fff1dfc6ba4c648f9d44967c60ae84c23151836",
-      "temperature": 0.7,
-      "user_prompt_digest": "fcb340091a3f1dab7b1e28ea74875a457cfb2ee567e0136897645bef3a365ea8"
+      "temperature": 0.2,
+      "user_prompt_digest": "0a9a74dd836447750684b7aae09a82276f14ae2fce212dc1cf230e35e62d2233"
     },
     {
       "max_tokens": 20480,
       "ordinal": 5,
       "system_prompt_digest": "4766d0baea09e7951f75a6889fff1dfc6ba4c648f9d44967c60ae84c23151836",
-      "temperature": 0.7,
-      "user_prompt_digest": "4d947d1d2062d91bd271db7132cbc0a0c8142ec83c126fa2d1ba1e53d7ae20f2"
+      "temperature": 0.2,
+      "user_prompt_digest": "ccb30c7fe3f139d7f173420aeefbf9beb0969a3445648c9af1f78cda7c2bcc30"
     },
     {
       "max_tokens": 20480,
       "ordinal": 6,
       "system_prompt_digest": "d5286d9e3aeb9a8c318e100dbbc6fa8a337bf6ee1bd04a8fa9f3e859ed02c079",
       "temperature": 0.3,
-      "user_prompt_digest": "4c31f3d4e37e98a677f9b37e2b8ba6078ce97d387cfd64291da11cf7d7f63cc1"
+      "user_prompt_digest": "e38fc63a28f0a3c1f6b44a9aa0e277287baeb603b0d5303a8e40a98468d33773"
     },
     {
       "max_tokens": 20480,
       "ordinal": 7,
       "system_prompt_digest": "d5286d9e3aeb9a8c318e100dbbc6fa8a337bf6ee1bd04a8fa9f3e859ed02c079",
       "temperature": 0.3,
-      "user_prompt_digest": "ce377d82061733647e24f3c826315715c2e89aabcc3f8806fcba6fabc35e3d90"
+      "user_prompt_digest": "fc01cae971204f81d25f1677bf28c4d6ea33e86e7480ff2db93d7ca4262fd237"
     },
     {
       "max_tokens": 20480,

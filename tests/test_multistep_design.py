@@ -147,6 +147,24 @@ class TestDecomposeArchitecture:
             llm.messages[0][0].content
         )
 
+    def test_typed_plan_uses_stable_temperature_and_full_output_budget(self):
+        captured = {}
+
+        class CaptureLLM:
+            ARCHITECTURE_MAX_TOKENS = 65536
+
+            def complete(self, _messages, **kwargs):
+                captured.update(kwargs)
+                return LLMResponse(content="{}", model="capture")
+
+        ChainOfThoughtPrompter(CaptureLLM()).decompose_architecture(
+            system_name="DroneSystem",
+            requirements=["REQ-FUNC-001: The drone shall navigate."],
+        )
+
+        assert captured["temperature"] == 0.2
+        assert captured["max_tokens"] == 65536
+
     def test_planning_prompt_commits_state_identity_and_local_power_on(self):
         llm = QueuedMockLLM(["{}"])
         cot = ChainOfThoughtPrompter(llm)
