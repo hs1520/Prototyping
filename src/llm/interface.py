@@ -13,10 +13,9 @@ implement ``_complete_impl()`` only.
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import random
-import signal
-import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -43,6 +42,50 @@ def _default_timeout_seconds(default: float = 120.0) -> float:
         return float(os.environ.get("LLM_TIMEOUT_SECONDS", str(default)))
     except ValueError:
         return default
+
+
+def _vertex_request_worker(
+    connection: Any,
+    client: Any,
+    model: str,
+    contents: List[Dict[str, Any]],
+    config: Dict[str, Any],
+) -> None:
+    """Execute one Vertex request in a process that the parent can terminate."""
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=config,
+        )
+        usage = getattr(response, "usage_metadata", None)
+        connection.send(("OK", {
+            "content": getattr(response, "text", None) or "",
+            "model": (
+                getattr(response, "model_version", None)
+                or getattr(response, "model", None)
+                or model
+            ),
+            "prompt_tokens": int(
+                getattr(usage, "prompt_token_count", 0) or 0
+            ),
+            "completion_tokens": int(
+                getattr(usage, "candidates_token_count", 0) or 0
+            ),
+        }))
+    except BaseException as exc:
+        status_code = getattr(exc, "status_code", None)
+        code = getattr(exc, "code", None)
+        connection.send(("ERROR", {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "status_code": (
+                str(status_code) if status_code is not None else None
+            ),
+            "code": str(code) if code is not None else None,
+        }))
+    finally:
+        connection.close()
 
 
 @dataclass
@@ -810,6 +853,7 @@ class VertexLLM(LLMInterface):
         if self.thinking_level not in {"LOW", "HIGH"}:
             raise ValueError("Vertex thinking_level must be LOW or HIGH")
         self.langsmith_enabled = False
+        self._process_isolation = True
         self.timeout_seconds = (
             timeout_seconds
             if timeout_seconds is not None
@@ -882,51 +926,65 @@ class VertexLLM(LLMInterface):
         if system_instruction:
             config["system_instruction"] = system_instruction
 
-        hard_timeout = float(getattr(self, "timeout_seconds", 0.0) or 0.0)
-        use_hard_timeout = (
-            hard_timeout > 0
-            and hasattr(signal, "setitimer")
-            and threading.current_thread() is threading.main_thread()
-        )
-        previous_handler = None
-        if use_hard_timeout:
-            previous_handler = signal.getsignal(signal.SIGALRM)
-
-            def raise_hard_timeout(_signum, _frame):
-                raise TimeoutError(
-                    "Vertex request exceeded hard wall-clock timeout of "
-                    f"{hard_timeout:g} seconds"
-                )
-
-            signal.signal(signal.SIGALRM, raise_hard_timeout)
-            signal.setitimer(signal.ITIMER_REAL, hard_timeout)
-        try:
+        if not getattr(self, "_process_isolation", False):
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=contents,
                 config=config,
             )
-        finally:
-            if use_hard_timeout:
-                signal.setitimer(signal.ITIMER_REAL, 0.0)
-                signal.signal(signal.SIGALRM, previous_handler)
-
-        content = getattr(response, "text", None) or ""
-        usage = getattr(response, "usage_metadata", None)
-        prompt_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
-        completion_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
-
-        model_name = (
-            getattr(response, "model_version", None)
-            or getattr(response, "model", None)
-            or self.model
-        )
+            usage = getattr(response, "usage_metadata", None)
+            result = {
+                "content": getattr(response, "text", None) or "",
+                "model": (
+                    getattr(response, "model_version", None)
+                    or getattr(response, "model", None)
+                    or self.model
+                ),
+                "prompt_tokens": int(
+                    getattr(usage, "prompt_token_count", 0) or 0
+                ),
+                "completion_tokens": int(
+                    getattr(usage, "candidates_token_count", 0) or 0
+                ),
+            }
+        else:
+            timeout = float(getattr(self, "timeout_seconds", 0.0) or 0.0)
+            context = multiprocessing.get_context("fork")
+            receive, send = context.Pipe(duplex=False)
+            process = context.Process(
+                target=_vertex_request_worker,
+                args=(send, self.client, self.model, contents, config),
+                daemon=True,
+            )
+            process.start()
+            send.close()
+            try:
+                if not receive.poll(timeout):
+                    process.terminate()
+                    process.join(5.0)
+                    if process.is_alive():
+                        process.kill()
+                        process.join(5.0)
+                    raise TimeoutError(
+                        "Vertex request exceeded hard wall-clock timeout of "
+                        f"{timeout:g} seconds"
+                    )
+                status, result = receive.recv()
+            finally:
+                receive.close()
+            process.join(5.0)
+            if status != "OK":
+                raise RuntimeError(
+                    "Vertex provider error "
+                    f"({result['type']}): {result['message']} "
+                    f"status_code={result['status_code']} code={result['code']}"
+                )
 
         return LLMResponse(
-            content=content,
-            model=model_name,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            content=result["content"],
+            model=result["model"],
+            prompt_tokens=result["prompt_tokens"],
+            completion_tokens=result["completion_tokens"],
             metadata={
                 "provider": "vertex",
                 "langsmith_enabled": self.langsmith_enabled,

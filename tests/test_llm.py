@@ -472,12 +472,13 @@ class TestVertexLLM:
             lambda: "test-key",
         )
 
-        VertexLLM(enable_langsmith=False, timeout_seconds=12.5)
+        vertex = VertexLLM(enable_langsmith=False, timeout_seconds=12.5)
 
         assert captured["http_options"] == {
             "timeout": 12500,
             "retry_options": {"attempts": 1},
         }
+        assert vertex._process_isolation is True
 
     def test_generation_seed_is_forwarded_in_sdk_config(self):
         captured_kwargs = {}
@@ -522,10 +523,7 @@ class TestVertexLLM:
 
     def test_hard_timeout_interrupts_blocked_provider_call(self):
         class BlockingModels:
-            calls = 0
-
             def generate_content(self, **kwargs):
-                self.calls += 1
                 time.sleep(5.0)
 
         models = BlockingModels()
@@ -535,6 +533,7 @@ class TestVertexLLM:
         vertex.thinking_level = "HIGH"
         vertex.timeout_seconds = 0.05
         vertex.langsmith_enabled = False
+        vertex._process_isolation = True
         vertex.client = SimpleNamespace(models=models)
         started = time.monotonic()
 
@@ -544,8 +543,37 @@ class TestVertexLLM:
             vertex.complete([Message(role="user", content="hello")])
 
         assert time.monotonic() - started < 0.5
-        assert models.calls == 1
         assert vertex.ledger.failures == 1
+
+    def test_process_isolated_request_returns_response(self):
+        class Models:
+            def generate_content(self, **kwargs):
+                return SimpleNamespace(
+                    text="ok",
+                    model_version="vertex-child",
+                    usage_metadata=SimpleNamespace(
+                        prompt_token_count=3,
+                        candidates_token_count=7,
+                    ),
+                )
+
+        vertex = VertexLLM.__new__(VertexLLM)
+        vertex.model = "vertex-test"
+        vertex.seed = 0
+        vertex.thinking_level = "HIGH"
+        vertex.timeout_seconds = 2.0
+        vertex.langsmith_enabled = False
+        vertex._process_isolation = True
+        vertex.client = SimpleNamespace(models=Models())
+
+        response = vertex.complete([
+            Message(role="user", content="hello")
+        ])
+
+        assert response.content == "ok"
+        assert response.model == "vertex-child"
+        assert response.prompt_tokens == 3
+        assert response.completion_tokens == 7
 
 
 class TestGitHubCopilotLLMListModels:
