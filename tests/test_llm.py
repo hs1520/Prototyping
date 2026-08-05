@@ -1,5 +1,6 @@
 """Tests for the LLM interface and Chain of Thought prompting."""
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -451,6 +452,33 @@ class TestGeminiLLM:
 
 
 class TestVertexLLM:
+    def test_sdk_retry_is_disabled_and_timeout_is_forwarded(
+        self, monkeypatch
+    ):
+        from google import genai
+
+        captured = {}
+        monkeypatch.setattr(
+            genai,
+            "Client",
+            lambda **kwargs: captured.update(kwargs) or SimpleNamespace(),
+        )
+        monkeypatch.setattr(
+            interface_module.Config, "setup_langsmith_env", lambda: None
+        )
+        monkeypatch.setattr(
+            interface_module.Config,
+            "get_vertex_api_key",
+            lambda: "test-key",
+        )
+
+        VertexLLM(enable_langsmith=False, timeout_seconds=12.5)
+
+        assert captured["http_options"] == {
+            "timeout": 12500,
+            "retry_options": {"attempts": 1},
+        }
+
     def test_generation_seed_is_forwarded_in_sdk_config(self):
         captured_kwargs = {}
 
@@ -491,6 +519,33 @@ class TestVertexLLM:
     def test_vertex_default_timeout_is_ten_minutes(self, monkeypatch):
         monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
         assert interface_module._default_timeout_seconds(600.0) == 600.0
+
+    def test_hard_timeout_interrupts_blocked_provider_call(self):
+        class BlockingModels:
+            calls = 0
+
+            def generate_content(self, **kwargs):
+                self.calls += 1
+                time.sleep(5.0)
+
+        models = BlockingModels()
+        vertex = VertexLLM.__new__(VertexLLM)
+        vertex.model = "vertex-test"
+        vertex.seed = 0
+        vertex.thinking_level = "HIGH"
+        vertex.timeout_seconds = 0.05
+        vertex.langsmith_enabled = False
+        vertex.client = SimpleNamespace(models=models)
+        started = time.monotonic()
+
+        with pytest.raises(
+            TimeoutError, match="hard wall-clock timeout"
+        ):
+            vertex.complete([Message(role="user", content="hello")])
+
+        assert time.monotonic() - started < 0.5
+        assert models.calls == 1
+        assert vertex.ledger.failures == 1
 
 
 class TestGitHubCopilotLLMListModels:

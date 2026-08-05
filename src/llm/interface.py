@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import os
 import random
+import signal
+import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -824,7 +826,10 @@ class VertexLLM(LLMInterface):
         base_client = genai.Client(
             vertexai=True,
             api_key=selected_api_key,
-            http_options={"timeout": int(self.timeout_seconds * 1000)},
+            http_options={
+                "timeout": int(self.timeout_seconds * 1000),
+                "retry_options": {"attempts": 1},
+            },
         )
         self.client = self._maybe_wrap_with_langsmith(base_client, enable_langsmith)
 
@@ -877,11 +882,34 @@ class VertexLLM(LLMInterface):
         if system_instruction:
             config["system_instruction"] = system_instruction
 
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=contents,
-            config=config,
+        hard_timeout = float(getattr(self, "timeout_seconds", 0.0) or 0.0)
+        use_hard_timeout = (
+            hard_timeout > 0
+            and hasattr(signal, "setitimer")
+            and threading.current_thread() is threading.main_thread()
         )
+        previous_handler = None
+        if use_hard_timeout:
+            previous_handler = signal.getsignal(signal.SIGALRM)
+
+            def raise_hard_timeout(_signum, _frame):
+                raise TimeoutError(
+                    "Vertex request exceeded hard wall-clock timeout of "
+                    f"{hard_timeout:g} seconds"
+                )
+
+            signal.signal(signal.SIGALRM, raise_hard_timeout)
+            signal.setitimer(signal.ITIMER_REAL, hard_timeout)
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=config,
+            )
+        finally:
+            if use_hard_timeout:
+                signal.setitimer(signal.ITIMER_REAL, 0.0)
+                signal.signal(signal.SIGALRM, previous_handler)
 
         content = getattr(response, "text", None) or ""
         usage = getattr(response, "usage_metadata", None)
