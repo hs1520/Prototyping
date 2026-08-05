@@ -205,6 +205,40 @@ def test_registry_preserves_specialized_event_item_semantics():
     assert "attribute severity : Integer;" in materialized
 
 
+def test_registry_removes_port_definition_drift_and_preserves_rich_item():
+    model = """package P {
+    private import ScalarValues::*;
+    port def OverrideCommand {
+        in item command;
+    }
+    item def OverrideCommand {
+        attribute overrideActive : Boolean;
+    }
+    part def Controller {
+        state def ControllerBehavior {
+            entry; then idle;
+            state idle;
+            state responding;
+            transition respond first idle accept OverrideCommand then responding;
+        }
+    }
+}"""
+    symbols = (PlannedEventSymbol("OverrideCommand", ("PLAN",)),)
+
+    materialized, report = materialize_planned_event_symbols(model, symbols)
+
+    assert report["status"] == "PASS"
+    assert materialized.count("item def OverrideCommand") == 1
+    assert "port def OverrideCommand" not in materialized
+    assert "attribute overrideActive : Boolean;" in materialized
+    assert {"name": "OverrideCommand", "kind": "port def"} in report[
+        "removed_declarations"
+    ]
+    assert check_syntax(
+        materialized, filter_stdlib_diagnostics=False
+    ).total_errors() == 0
+
+
 def test_conformance_rejects_every_unregistered_accept_target():
     model = """package P {
     item def RegisteredSignal;

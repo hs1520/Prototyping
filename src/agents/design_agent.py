@@ -1464,6 +1464,21 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
 
+        # --- restore interface definition kinds before behavior compilation ---
+        if interfaces_fragment and step5.extracted_sysml:
+            assembled_text, injected_items = self._inject_missing_item_defs(
+                step5.extracted_sysml, interfaces_fragment
+            )
+            if injected_items:
+                metadata["injected_item_defs"] = injected_items
+                if verbose:
+                    print(
+                        f"\n  [DEBUG] Step 5 — Programmatic injection: "
+                        f"restored {len(injected_items)} dropped item/port def(s): "
+                        f"{', '.join(injected_items)}"
+                    )
+                step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
+
         # --- compile exact ordinary plan-owned behavior into its owner ---
         if (
             behavior_fragment
@@ -1544,21 +1559,6 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
                     "a frozen behavior obligation: "
                     + "; ".join(terminal_behavior_gate["issues"])
                 )
-
-        # --- inject any item defs / typed port defs the LLM dropped ---
-        if interfaces_fragment and step5.extracted_sysml:
-            assembled_text, injected_items = self._inject_missing_item_defs(
-                step5.extracted_sysml, interfaces_fragment
-            )
-            if injected_items:
-                metadata["injected_item_defs"] = injected_items
-                if verbose:
-                    print(
-                        f"\n  [DEBUG] Step 5 — Programmatic injection: "
-                        f"restored {len(injected_items)} dropped item/port def(s): "
-                        f"{', '.join(injected_items)}"
-                    )
-                step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
 
         # --- restore one canonical package-level item type per planned event ---
         if step5.extracted_sysml and generation_plan is not None:

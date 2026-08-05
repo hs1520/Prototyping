@@ -196,6 +196,43 @@ def test_step1_plan_rejects_owner_port_as_accept_event_classifier():
     )
 
 
+def test_step1_plan_rejects_event_name_used_as_planned_port_type():
+    payload = copy.deepcopy(_PAYLOAD)
+    payload["schema_version"] = "9.0"
+    for component in payload["components"]:
+        component["ports"][0]["type"] = "OverrideCommand"
+    payload["connections"][0]["item_type"] = "OverrideCommand"
+    payload["behaviors"] = [{
+        "owner": "Consumer",
+        "behavior_id": "ConsumerBehavior",
+        "initial_state": "idle",
+        "states": [
+            {"state_id": "idle", "role": "INITIAL"},
+            {
+                "state_id": "responding",
+                "role": "RESPONSE",
+                "entry_action": "respond",
+            },
+        ],
+        "transitions": [{
+            "transition_id": "receive",
+            "source": "idle",
+            "target": "responding",
+            "trigger_kind": "ACCEPT",
+            "trigger": "OverrideCommand",
+        }],
+        "provenance": {"kind": "DESIGN_DECISION"},
+    }]
+
+    plan = ModelGenerationPlan.from_payload(payload)
+
+    assert plan.status == "INVALID"
+    assert (
+        "planned event OverrideCommand collides with planned port "
+        "definition type"
+    ) in plan.issues
+
+
 def test_typed_plan_rejects_item_type_that_disagrees_with_endpoints():
     payload = {
         **_PAYLOAD,

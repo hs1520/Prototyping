@@ -1654,6 +1654,70 @@ def test_missing_defs_are_restored_into_quoted_package_name():
     assert "item def TelemetryData" in restored
 
 
+def test_post_assembly_restores_event_item_before_behavior_compilation():
+    from src.agents.design_agent import DesignAgent
+    from src.prototyping.generation_plan import (
+        ComponentPlan,
+        ModelGenerationPlan,
+    )
+    from src.prototyping.planned_behavior import (
+        PlannedBehavior,
+        PlannedState,
+        PlannedTransition,
+    )
+
+    plan = ModelGenerationPlan(
+        components=(ComponentPlan(
+            name="Controller",
+            responsibility="Responds to override commands.",
+            requirements=(),
+            ports=(),
+        ),),
+        planned_behaviors=(PlannedBehavior(
+            owner="Controller",
+            behavior_id="ControllerBehavior",
+            initial_state="idle",
+            states=(
+                PlannedState("idle", "INITIAL"),
+                PlannedState(
+                    "responding", "RESPONSE", entry_action="respond"
+                ),
+            ),
+            transitions=(PlannedTransition(
+                "receive",
+                "idle",
+                "responding",
+                "ACCEPT",
+                "OverrideCommand",
+            ),),
+        ),),
+    )
+    assembled = CoTResult(final_answer="", extracted_sysml="""package P {
+        port def OverrideCommand { in item command; }
+        part def Controller {}
+    }""")
+    interfaces = """item def OverrideCommand {
+        attribute overrideActive : Boolean;
+    }"""
+    metadata = {}
+
+    result = DesignAgent.__new__(DesignAgent)._postprocess_assembly(
+        assembled,
+        "",
+        interfaces,
+        "planned behavior fragment",
+        plan,
+        metadata,
+        False,
+    )
+
+    assert result.extracted_sysml.count("item def OverrideCommand") == 1
+    assert "port def OverrideCommand" not in result.extracted_sysml
+    assert "attribute overrideActive : Boolean;" in result.extracted_sysml
+    assert "accept OverrideCommand" in result.extracted_sysml
+    assert metadata["owned_planned_behavior_conformance"]["status"] == "PASS"
+
+
 def test_existing_part_defs_are_not_duplicated_during_restore():
     from src.agents.design_agent import DesignAgent
 

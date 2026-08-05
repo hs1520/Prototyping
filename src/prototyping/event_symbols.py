@@ -78,8 +78,9 @@ def validate_planned_event_symbols(
     symbols: Sequence[PlannedEventSymbol],
     planned_behaviors: Sequence[Any] = (),
     behavior_obligations: Sequence[Any] = (),
+    components: Sequence[Any] = (),
 ) -> list[str]:
-    """Reject an event type also planned as executable action behavior."""
+    """Reject event identities reserved for actions or planned port types."""
     executable_actions = {
         str(action)
         for behavior in planned_behaviors
@@ -96,11 +97,23 @@ def validate_planned_event_symbols(
         for transition in (getattr(obligation, "transitions", ()) or ())
         if getattr(transition, "action", None)
     )
-    return [
+    issues = [
         f"planned event {symbol.name} collides with executable action identity"
         for symbol in symbols
         if symbol.name in executable_actions
     ]
+    planned_port_types = {
+        str(getattr(port, "port_type", ""))
+        for component in components
+        for port in (getattr(component, "ports", ()) or ())
+        if getattr(port, "port_type", None)
+    }
+    issues.extend(
+        f"planned event {symbol.name} collides with planned port definition type"
+        for symbol in symbols
+        if symbol.name in planned_port_types
+    )
+    return issues
 
 
 _DEFINITION_RE = re.compile(
@@ -261,7 +274,7 @@ def materialize_planned_event_symbols(
     model_text: str,
     symbols: Sequence[PlannedEventSymbol],
 ) -> tuple[str, dict[str, Any]]:
-    """Canonicalize safe legacy declarations and emit every event once."""
+    """Canonicalize declarations to the frozen event item identity."""
     text = str(model_text)
     materialized: list[str] = []
     removed: list[dict[str, str]] = []
@@ -274,9 +287,12 @@ def materialize_planned_event_symbols(
         action_defs = [
             item for item in declarations if item["kind"] == "action def"
         ]
+        port_defs = [
+            item for item in declarations if item["kind"] == "port def"
+        ]
         other_defs = [
             item for item in declarations
-            if item["kind"] not in {"item def", "action def"}
+            if item["kind"] not in {"item def", "action def", "port def"}
         ]
         rich_items = [
             item for item in item_defs if _has_semantics(item)
@@ -307,7 +323,7 @@ def materialize_planned_event_symbols(
             rich_items[0]["text"]
             if rich_items else f"item def {symbol.name};"
         )
-        removable = [*item_defs, *action_defs]
+        removable = [*item_defs, *action_defs, *port_defs]
         for declaration in sorted(
             removable, key=lambda item: item["start"], reverse=True
         ):

@@ -1140,6 +1140,7 @@ class ModelGenerationPlan:
         issues.extend(validate_planned_event_symbols(
             ordinary_event_symbols,
             planned_behaviors,
+            components=components,
         ))
         raw_realizations = payload.get("requirement_realizations")
         if not isinstance(raw_realizations, Sequence) or isinstance(
@@ -1666,6 +1667,7 @@ def attach_ag_behavior_obligations(
         combined_event_symbols,
         plan.planned_behaviors,
         behavior_plan.obligations,
+        components=plan.components,
     ))
 
     # A source-anchored LOCAL_BEHAVIOR and an A/G state-machine obligation for
