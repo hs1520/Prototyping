@@ -348,6 +348,53 @@ class TestAssembleModel:
         assert result.extracted_sysml is not None
         assert "package DroneSystem" in result.extracted_sysml
         assert "satisfy REQ_FUNC_001" in result.extracted_sysml
+        assert result.metadata["assembly_retries"] == 0
+        assert llm.call_count == 1
+        assert "deterministic SysML v2 assembly compiler" in (
+            llm.messages[0][0].content
+        )
+        assert "Always think step-by-step" not in llm.messages[0][0].content
+
+    def test_incomplete_code_fence_gets_one_compact_retry(self):
+        llm = QueuedMockLLM([
+            "```sysml\npackage DroneSystem {",
+            _ASSEMBLED_MODEL,
+        ])
+        cot = ChainOfThoughtPrompter(llm)
+
+        result = cot.assemble_model(
+            system_name="DroneSystem",
+            parts_fragment="part def FlightController {}",
+            interfaces_fragment="",
+            behavior_fragment="",
+            requirements=["REQ-FUNC-001: The system shall navigate."],
+        )
+
+        assert result.extracted_sysml is not None
+        assert result.metadata["assembly_retries"] == 1
+        assert result.metadata["assembly_initial_extraction"] == (
+            "UNCLOSED_SYSML_FENCE"
+        )
+        assert llm.call_count == 2
+        assert "ASSEMBLY OUTPUT CORRECTION" in llm.messages[1][1].content
+
+    def test_incomplete_code_fence_remains_fail_closed_after_retry(self):
+        llm = QueuedMockLLM([
+            "```sysml\npackage DroneSystem {",
+            "```sysml\npackage DroneSystem {",
+        ])
+        cot = ChainOfThoughtPrompter(llm)
+
+        with pytest.raises(RuntimeError, match="after one targeted retry"):
+            cot.assemble_model(
+                system_name="DroneSystem",
+                parts_fragment="part def FlightController {}",
+                interfaces_fragment="",
+                behavior_fragment="",
+                requirements=["REQ-FUNC-001: The system shall navigate."],
+            )
+
+        assert llm.call_count == 2
 
     def test_package_name_strips_special_chars(self):
         captured_prompts = []
@@ -521,10 +568,18 @@ class TestMultistepGeneratePipeline:
         assert "expert in Model Based Systems Engineering" not in (
             planning[0].content
         )
-        # the authoring steps run under the authoring role instruction
-        assert len({turns[0].content for turns in authoring}) == 1
-        assert "SysML v2" in authoring[0][0].content
-        assert "typed model-planning compiler" not in authoring[0][0].content
+        # design authoring keeps the expert role; mechanical assembly gets a
+        # compact compiler role that does not demand displayed reasoning.
+        *design_authoring, assembly = authoring
+        assert len({turns[0].content for turns in design_authoring}) == 1
+        assert "SysML v2" in design_authoring[0][0].content
+        assert "typed model-planning compiler" not in (
+            design_authoring[0][0].content
+        )
+        assert "deterministic SysML v2 assembly compiler" in (
+            assembly[0].content
+        )
+        assert "Always think step-by-step" not in assembly[0].content
         # what each step needs reaches it through the curated prompt, not history
         assert "FlightController" in authoring[1][1].content
 

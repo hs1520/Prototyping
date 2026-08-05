@@ -63,6 +63,12 @@ Strict output contract:
 - Never weaken or omit a validation issue merely to make the JSON parse.
 """
 
+ASSEMBLY_SYSTEM_PROMPT = """You are a deterministic SysML v2 assembly compiler.
+Integrate the supplied fragments exactly as instructed. Use minimal internal
+deliberation so the complete model fits in the response budget. Return only one
+complete ```sysml code block with no analysis, headings, or prose.
+"""
+
 REQUIREMENTS_COT_TEMPLATE = """Analyze the following system description and extract a complete set of structured requirements.
 
 System Description:
@@ -1651,11 +1657,46 @@ class ChainOfThoughtPrompter:
             semantic_guidance=semantic_guidance,
             package_name=package_name,
         )
-        return self._parse_cot_response(
-            self._ask(
-                prompt, temperature=0.2, max_tokens=65536, stage="assembly"
-            )
+        response_text = self._ask(
+            prompt,
+            temperature=0.2,
+            max_tokens=65536,
+            system_prompt=ASSEMBLY_SYSTEM_PROMPT,
+            stage="assembly",
         )
+        result = self._parse_cot_response(response_text)
+        result.metadata["assembly_retries"] = 0
+        if result.extracted_sysml or not re.search(
+            r"```sysml\n", response_text
+        ):
+            return result
+
+        retry_prompt = prompt + """
+
+ASSEMBLY OUTPUT CORRECTION (MANDATORY):
+The previous response ended before its SysML code fence was complete. Produce
+one compact replacement model. Keep internal deliberation brief, omit decorative
+comments and blank lines, do not repeat declarations, start immediately with
+```sysml, and always reserve enough output budget for the closing ``` fence.
+"""
+        retry_text = self._ask(
+            retry_prompt,
+            temperature=0.0,
+            max_tokens=65536,
+            system_prompt=ASSEMBLY_SYSTEM_PROMPT,
+            stage="assembly_retry",
+        )
+        retry_result = self._parse_cot_response(retry_text)
+        retry_result.metadata["assembly_retries"] = 1
+        retry_result.metadata["assembly_initial_extraction"] = (
+            "UNCLOSED_SYSML_FENCE"
+        )
+        if not retry_result.extracted_sysml:
+            raise RuntimeError(
+                "[ASSEMBLY_EXTRACTION_ERROR] assembly failed to return one "
+                "complete SysML code block after one targeted retry"
+            )
+        return retry_result
 
     #TODO 检查是否需要
     def self_consistency_generate(
@@ -1700,8 +1741,9 @@ class ChainOfThoughtPrompter:
         if sysml_matches:
             result.extracted_sysml = sysml_matches[-1].strip()
         elif re.search(r"```sysml\n", response_text):
-            print("  ⚠ [TOKEN LIMIT] LLM response truncated before closing ``` — "
-                  "increase max_tokens for this step.")
+            print(
+                "  ⚠ [INCOMPLETE SYSML] LLM response ended before closing ```"
+            )
 
         # Extract an explicitly delimited JSON response. Fence matching is
         # intentionally tolerant of case, spaces, and CRLF, but we never scan
