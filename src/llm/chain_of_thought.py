@@ -1542,6 +1542,7 @@ class ChainOfThoughtPrompter:
         system_name: str,
         requirements: List[str],
         context: str = "",
+        temperature: float = DEFAULT_TEMPERATURE,
     ) -> CoTResult:
         """Step 1: Produce a typed whole-model JSON generation plan."""
         req_text = "\n".join(f"  {r}" for r in requirements)
@@ -1557,7 +1558,7 @@ class ChainOfThoughtPrompter:
         )
         content = self._ask(
             prompt,
-            temperature=DEFAULT_TEMPERATURE,
+            temperature=temperature,
             max_tokens=getattr(
                 self.llm, "ARCHITECTURE_MAX_TOKENS", DEFAULT_MAX_TOKENS
             ),
@@ -1778,7 +1779,20 @@ comments and blank lines, do not repeat declarations, start immediately with
         json_diagnostic: Dict[str, Any] = {
             "response_digest": response_digest,
             "source": json_source or "NONE",
-            "status": "JSON_BLOCK_ABSENT",
+            "status": (
+                # An opened but never closed ```json fence is the signature of
+                # a response the provider cut off (HIGH thinking spending the
+                # shared output budget, finish_reason MAX_TOKENS).  Reporting
+                # it as "absent" is what made a truncation indistinguishable
+                # from a model that answered in prose.
+                "JSON_FENCE_UNCLOSED"
+                if not json_candidate and re.search(
+                    r"```[ \t]*json[ \t]*\r?\n",
+                    response_text,
+                    re.IGNORECASE,
+                )
+                else "JSON_BLOCK_ABSENT"
+            ),
         }
         if json_candidate:
             try:

@@ -108,6 +108,7 @@ class QueuedMockLLM:
         self._queue: deque = deque(responses)
         self.call_count = 0
         self.messages: List[List[Message]] = []
+        self.temperatures: List[float] = []
 
     def complete(
         self,
@@ -121,6 +122,7 @@ class QueuedMockLLM:
         # provider is asked to produce.
         self.call_count += 1
         self.messages.append(list(messages))
+        self.temperatures.append(temperature)
         content = self._queue.popleft() if self._queue else "fallback response"
         return LLMResponse(content=content, model="mock-queued")
 
@@ -224,6 +226,29 @@ class TestDecomposeArchitecture:
         assert non_object.metadata["json_parse"]["status"] == (
             "JSON_ROOT_NOT_OBJECT"
         )
+
+    def test_json_parser_separates_truncation_from_a_missing_block(self):
+        """A response cut off mid-plan must not look like one that had no JSON.
+
+        HIGH thinking shares the output budget with the answer, so an
+        over-long plan comes back as an opened-but-never-closed ```json
+        fence.  Reporting that as JSON_BLOCK_ABSENT hid a length failure
+        behind a format failure.
+        """
+        cot = ChainOfThoughtPrompter(QueuedMockLLM([]))
+
+        truncated = cot._parse_cot_response(
+            '```json\n{"components": [{"name": "FlightCont'
+        )
+        prose = cot._parse_cot_response(
+            "I propose Producer and Consumer components."
+        )
+
+        assert truncated.extracted_json is None
+        assert truncated.metadata["json_parse"]["status"] == (
+            "JSON_FENCE_UNCLOSED"
+        )
+        assert prose.metadata["json_parse"]["status"] == "JSON_BLOCK_ABSENT"
 
     def test_context_block_injected_when_provided(self):
         captured = []
@@ -911,6 +936,45 @@ class TestMultistepGeneratePipeline:
         assert '"connections": []' in third_prompt
         assert "Do not emit SysML" in third_prompt
 
+    def test_truncated_plan_escalates_then_stops_replaying_one_request(
+        self, monkeypatch
+    ):
+        """A truncated Step 1 must not burn the whole attempt budget.
+
+        With no payload ever parsed the repair prompt is rebuilt from
+        constants, so every attempt after the first was byte-identical and —
+        against a fixed provider seed — could only reproduce the same
+        truncation, at several minutes per call.
+        """
+        from src.agents.design_agent import TypedModelPlanError
+
+        truncated = '```json\n{"components": [{"name": "FlightCont'
+        agent = self._make_agent([truncated] * 6, monkeypatch)
+        agent.allow_legacy_architecture_plan = False
+        metadata = {"degraded_steps": []}
+
+        with pytest.raises(TypedModelPlanError) as captured:
+            agent._step1_architecture("P", [], "", "", metadata, False)
+
+        prompts = [m[-1].content for m in agent.llm.messages]
+        temperatures = agent.llm.temperatures
+        # three genuinely different requests, then an honest stop instead of
+        # three more replays of the third one
+        assert agent.llm.call_count == 3
+        assert agent.maximum_plan_attempts == 6
+        assert temperatures == [0.2, 0.6, 1.0]
+        assert len(set(zip(prompts, temperatures))) == 3
+        assert metadata["step1_plan_exhausted_reason"] == (
+            "CORRECTION_CANNOT_VARY_REQUEST"
+        )
+        assert "CORRECTION_CANNOT_VARY_REQUEST" in str(captured.value)
+        # the length failure must be named as such, and be repairable-looking
+        assert all(
+            item["json_parse"]["status"] == "JSON_FENCE_UNCLOSED"
+            for item in captured.value.plan_attempts
+        )
+        assert "TYPED MODEL PLAN LENGTH CORRECTION" in prompts[1]
+
     def test_production_mode_never_silently_uses_legacy_plan(
         self, monkeypatch
     ):
@@ -931,11 +995,11 @@ class TestMultistepGeneratePipeline:
                 "P", [], "", "", metadata, False
             )
 
-        # the budget is a frozen configuration value, not a literal: it is set
-        # so every arm can complete, and the baseline needs more attempts than
-        # the blackboard arms
-        assert agent.llm.call_count == agent.maximum_plan_attempts
-        assert len(captured.value.plan_attempts) == agent.maximum_plan_attempts
+        # The attempt budget is the ceiling, not a quota to spend: once the
+        # correction can no longer vary the request, further attempts are
+        # replays and the loop stops short of the bound.
+        assert agent.llm.call_count <= agent.maximum_plan_attempts
+        assert len(captured.value.plan_attempts) == agent.llm.call_count
         assert all(
             item["json_parse"]["status"] == "JSON_BLOCK_ABSENT"
             for item in captured.value.plan_attempts

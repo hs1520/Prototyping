@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from .base_agent import AgentResult, BaseAgent
 from ..llm.chain_of_thought import ChainOfThoughtPrompter
-from ..llm.interface import LLMInterface
+from ..llm.interface import ESCALATION_TEMPERATURES, LLMInterface
 from ..rag.retriever import RAGRetriever
 from ..sysml.model import (
     FeatureDirection,
@@ -823,13 +823,33 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
         last_valid_payload: Optional[Dict[str, Any]] = None
         previous_attempt_issues: Tuple[str, ...] = ()
         previous_failure_kind: Optional[str] = None
+        previous_request_signature: Optional[Tuple[str, float]] = None
         maximum_attempts = self.maximum_plan_attempts
         while len(attempts) < maximum_attempts:
             attempt_index = len(attempts)
+            # A correction that leaves the request unchanged cannot produce a
+            # different answer: the provider seed is fixed and the repair
+            # prompt is rebuilt from constants whenever no payload has ever
+            # parsed.  Escalate along the ladder that exists for exactly this
+            # case, and stop once the request can no longer vary rather than
+            # replaying the same expensive call to the attempt bound.
+            request_signature = (
+                attempt_context,
+                ESCALATION_TEMPERATURES[
+                    min(attempt_index, len(ESCALATION_TEMPERATURES) - 1)
+                ],
+            )
+            if request_signature == previous_request_signature:
+                metadata["step1_plan_exhausted_reason"] = (
+                    "CORRECTION_CANNOT_VARY_REQUEST"
+                )
+                break
+            previous_request_signature = request_signature
             step1 = self.cot.decompose_architecture(
                 system_name=system_name,
                 requirements=requirements,
                 context=attempt_context,
+                temperature=request_signature[1],
             )
             parse_diagnostic = dict(
                 step1.metadata.get("json_parse") or {}
@@ -955,10 +975,23 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
 
             if failure_kind == "FORMAT_UNAVAILABLE":
                 format_retries_used += 1
-                retry_heading = (
-                    "TYPED MODEL PLAN FORMAT CORRECTION — the previous "
-                    "response did not contain a parseable JSON object."
-                )
+                if parse_diagnostic.get("status") == "JSON_FENCE_UNCLOSED":
+                    # The plan was being written correctly and ran out of
+                    # output budget, so repeating "return JSON" is useless —
+                    # the next attempt has to fit.
+                    retry_heading = (
+                        "TYPED MODEL PLAN LENGTH CORRECTION — the previous "
+                        "response opened a ```json block but was cut off "
+                        "before closing it, so it exceeded the output "
+                        "budget. Keep internal deliberation brief, drop "
+                        "optional prose fields, and reserve enough budget "
+                        "for the closing fence."
+                    )
+                else:
+                    retry_heading = (
+                        "TYPED MODEL PLAN FORMAT CORRECTION — the previous "
+                        "response did not contain a parseable JSON object."
+                    )
             elif failure_kind == "SEMANTIC_PLAN_INVALID":
                 semantic_retries_used += 1
                 retry_heading = (
@@ -1013,10 +1046,13 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             and generation_plan.status != "PASS"
         ):
             final_issues = attempts[-1]["issues"] if attempts else []
+            exhausted_reason = metadata.get("step1_plan_exhausted_reason")
             raise TypedModelPlanError(
                 "[TYPED_MODEL_PLAN_UNAVAILABLE] typed whole-model plan "
                 f"remained unavailable or invalid after {len(attempts)} "
-                "bounded attempts: "
+                "bounded attempts"
+                + (f" ({exhausted_reason})" if exhausted_reason else "")
+                + ": "
                 + "; ".join(final_issues),
                 plan_attempts=attempts,
             )

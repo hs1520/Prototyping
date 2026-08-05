@@ -344,6 +344,23 @@ def main() -> int:
                     )
                 except Exception:
                     pass
+                # Without this the bounded Step 1 attempts — response digests,
+                # excerpts, and per-attempt parse status — die with the
+                # process, leaving only a one-line error to diagnose from.
+                step1_attempts = list(getattr(exc, "plan_attempts", ()) or ())
+                if step1_attempts:
+                    try:
+                        atomic_write_json(
+                            failed / "step1_plan_attempts.json",
+                            {
+                                "schema_version": "1.0",
+                                "artifact_role": "TYPED_MODEL_PLAN_ATTEMPTS",
+                                "error_type": type(exc).__name__,
+                                "attempts": step1_attempts,
+                            },
+                        )
+                    except Exception:
+                        pass
             raise
 
 
