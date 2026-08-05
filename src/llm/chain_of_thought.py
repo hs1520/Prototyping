@@ -466,6 +466,15 @@ Rules:
   `entry_action` or `do_action`. Use `entry_action` for a one-shot response on
   state entry and `do_action` for behavior sustained while the state is
   active. A declared state with both fields null is not an implementation.
+- For event-driven waypoint-modification and post-flight health-report FUNC
+  requirements containing `within N seconds`, the typed plan itself must own
+  the complete evidence chain. Add a FROZEN_REQUIREMENT behavior whose
+  reachable RESPONSE action names the required effect and whose incoming
+  trigger preserves qualifiers such as ValidWaypointModification or
+  AutomatedLandingCompleted. On that same owner, plan a `Real` threshold
+  attribute named with the response family plus `Latency`, `Delay`, or `Time`,
+  copy the exact N with unit `s`, and add a FROZEN_REQUIREMENT constraint that
+  references the attribute. Do not leave these members for a later text repair.
 - Keep this behavior IR minimal and requirement-driven. Do not add a behavior
   merely because a component exists. Every declared transition must preserve
   the frozen trigger/effect semantics or be marked honestly as a design

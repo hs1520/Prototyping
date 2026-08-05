@@ -283,6 +283,9 @@ class ExplorationMixin:
         final_sysml = collaboration_artifacts.pop(
             "_terminal_model_sysml", final_sysml
         )
+        self._verify_terminal_functional_closure(
+            final_sysml, self.state.system_name
+        )
         final_model, final_score, final_sim, terminal_consistency = (
             self._synchronize_terminal_snapshot(
                 final_model,

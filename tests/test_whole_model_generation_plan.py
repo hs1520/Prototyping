@@ -233,6 +233,104 @@ def test_step1_plan_rejects_event_name_used_as_planned_port_type():
     ) in plan.issues
 
 
+def test_step1_requires_plan_owned_timed_functional_evidence_chain():
+    requirement = (
+        "REQ-FUNC-006: The system shall incorporate a revised waypoint "
+        "sequence into the active flight plan within 1.0 second of receiving "
+        "a valid waypoint-modification command from the GCS."
+    )
+    payload = copy.deepcopy(_PAYLOAD)
+    payload["components"][0]["requirements"] = ["REQ_FUNC_006"]
+    payload["connections"][0]["requirements"] = ["REQ_FUNC_006"]
+
+    missing = ModelGenerationPlan.from_payload(
+        payload,
+        requirements=[requirement],
+        require_source_anchored_paths=True,
+    )
+
+    assert any(
+        "REQ_FUNC_006 timed functional plan requires a source-linked "
+        "reachable waypoint response" in issue
+        for issue in missing.issues
+    )
+    assert any(
+        "REQ_FUNC_006 timed functional plan requires a source-linked "
+        "waypoint latency bound" in issue
+        for issue in missing.issues
+    )
+
+    payload["components"][0]["attributes"] = [
+        {
+            "name": "currentWaypointLatency",
+            "value_type": "Real",
+            "unit": "s",
+            "role": "LOCAL_STATE",
+            "initial_value": "0.0",
+            "provenance": "DESIGN_DECISION",
+        },
+        {
+            "name": "maxWaypointLatency",
+            "value_type": "Real",
+            "unit": "s",
+            "role": "FROZEN_THRESHOLD",
+            "initial_value": "1.0",
+            "provenance": "FROZEN_REQUIREMENT",
+            "source_requirement_id": "REQ_FUNC_006",
+        },
+    ]
+    payload["constraints"] = [{
+        "constraint_id": "waypointLatencyBound",
+        "owner": "Producer",
+        "expression": {
+            "lhs": "currentWaypointLatency",
+            "operator": "<=",
+            "rhs": "maxWaypointLatency",
+        },
+        "activation": {"kind": "ALWAYS"},
+        "provenance": {
+            "kind": "FROZEN_REQUIREMENT",
+            "requirement_id": "REQ_FUNC_006",
+        },
+        "verification_tier": "PARAMETRIC_SWEEP",
+    }]
+    payload["behaviors"] = [{
+        "owner": "Producer",
+        "behavior_id": "WaypointUpdateBehavior",
+        "initial_state": "waiting",
+        "states": [
+            {"state_id": "waiting", "role": "INITIAL"},
+            {
+                "state_id": "updating",
+                "role": "RESPONSE",
+                "entry_action": "reviseWaypointSequence",
+            },
+        ],
+        "transitions": [{
+            "transition_id": "receiveUpdate",
+            "source": "waiting",
+            "target": "updating",
+            "trigger_kind": "ACCEPT",
+            "trigger": "ValidWaypointModificationCommand",
+        }],
+        "provenance": {
+            "kind": "FROZEN_REQUIREMENT",
+            "requirement_id": "REQ_FUNC_006",
+        },
+    }]
+
+    covered = ModelGenerationPlan.from_payload(
+        payload,
+        requirements=[requirement],
+        require_source_anchored_paths=True,
+    )
+
+    assert not any(
+        "REQ_FUNC_006 timed functional plan requires" in issue
+        for issue in covered.issues
+    )
+
+
 def test_typed_plan_rejects_item_type_that_disagrees_with_endpoints():
     payload = {
         **_PAYLOAD,

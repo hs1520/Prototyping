@@ -206,6 +206,9 @@ class GenerationPipelineMixin:
         )
 
     def _phase_terminal_snapshot(self, c: GenerationContext) -> None:
+        self._verify_terminal_functional_closure(
+            c.final_sysml, c.system_name
+        )
         (
             c.final_model, c.final_score, c.final_sim, c.terminal_consistency
         ) = self._synchronize_terminal_snapshot(

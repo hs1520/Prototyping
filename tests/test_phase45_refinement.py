@@ -1097,6 +1097,86 @@ class TestFunctionalClosurePass:
         assert orch.last_functional_closure["remaining_gap_req_ids"] == ["REQ_FUNC_008"]
         assert orch.last_functional_closure["attempts"] == 2
 
+    def test_closure_rejects_repair_removed_by_terminal_plan(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        orch = Orchestrator(llm=MockLLM(), use_surgical_refinement=True)
+        simulation = type("Simulation", (), {
+            "behavioral_result": None,
+            "failed_scenarios": lambda self: [],
+        })()
+        original_text = "package D { part def Original { } }"
+        model = build_lite_model(original_text, model_name="D")
+        monkeypatch.setattr(
+            "src.simulation.surgical_refiner.attempt_surgical_refinement",
+            lambda **kwargs: SurgicalOutcome(
+                merged_text="package D { part def RawFunctionalAnchor { } }"
+            ),
+        )
+        monkeypatch.setattr(
+            "src.simulation.surgical_refiner.build_dependency_closed_context",
+            lambda *args, **kwargs: SimpleNamespace(
+                to_dict=lambda: {"mode": "TEST_DEPENDENCY_SLICE"}
+            ),
+        )
+        monkeypatch.setattr(
+            orch,
+            "_enforce_terminal_generation_plan",
+            lambda candidate, text: (
+                original_text,
+                {"status": "PASS", "issues": []},
+            ),
+        )
+        monkeypatch.setattr(
+            orch,
+            "_functional_verification_gap_issues",
+            lambda text, name: (
+                [] if "RawFunctionalAnchor" in text else
+                ["[VERIFY-GAP] REQ_FUNC_008 missing report response"]
+            ),
+        )
+        monkeypatch.setattr(
+            orch, "_run_simulation", lambda *args, **kwargs: simulation
+        )
+
+        returned, _, _ = orch._functional_closure_pass(
+            model, simulation, 0.90, [], None, max_iters=1
+        )
+
+        assert "RawFunctionalAnchor" not in returned.to_sysml_text()
+        assert orch.last_functional_closure["status"] == "OPEN"
+        assert orch.last_functional_closure["accepted_repairs"] == 0
+
+    def test_terminal_audit_reopens_stale_closed_result(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        orch = Orchestrator(llm=MockLLM())
+        orch.last_functional_closure = {
+            "status": "CLOSED",
+            "remaining_gap_req_ids": [],
+            "closure_model_digest": "pre-terminal",
+        }
+        monkeypatch.setattr(
+            orch,
+            "_functional_verification_gap_issues",
+            lambda text, name: [
+                "[VERIFY-GAP] REQ_FUNC_006 missing waypoint response"
+            ],
+        )
+
+        with pytest.raises(RuntimeError, match="REQ_FUNC_006"):
+            orch._verify_terminal_functional_closure(
+                "package D {}", "D"
+            )
+
+        closure = orch.last_functional_closure
+        assert closure["status"] == (
+            "REOPENED_BY_TERMINAL_MATERIALIZATION"
+        )
+        assert closure["remaining_gap_req_ids"] == ["REQ_FUNC_006"]
+        assert closure["closure_model_digest"] == "pre-terminal"
+        assert len(closure["terminal_model_digest"]) == 64
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Integration smoke test

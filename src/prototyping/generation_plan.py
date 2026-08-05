@@ -1133,6 +1133,148 @@ class ModelGenerationPlan:
             ) if not legacy_behavior_schema else (),
             require_executable_responses=not legacy_behavior_schema,
         ))
+        if require_source_anchored_paths:
+            components_by_name = {
+                component.name: component for component in components
+            }
+            for source_requirement in requirements:
+                source_text = " ".join(
+                    str(source_requirement or "").split()
+                )
+                source_low = source_text.lower()
+                source_ids = _req_ids((source_text,))
+                deadline = re.search(
+                    r"\bwithin\s+(\d+(?:\.\d+)?)\s*(?:seconds?|s)\b",
+                    source_text,
+                    flags=re.IGNORECASE,
+                )
+                if not deadline:
+                    continue
+                for req_id in source_ids:
+                    if "FUNC" not in req_id:
+                        continue
+                    if (
+                        "health report" in source_low
+                        and any(token in source_low for token in (
+                            "landing", "post-flight",
+                        ))
+                    ):
+                        family = "report"
+                    elif (
+                        "waypoint" in source_low
+                        and any(token in source_low for token in (
+                            "modification command", "waypoint-modification",
+                            "revised waypoint",
+                        ))
+                    ):
+                        family = "waypoint"
+                    else:
+                        continue
+                    matching_behaviors = [
+                        behavior for behavior in planned_behaviors
+                        if behavior.source_requirement_id == req_id
+                    ]
+                    behavior_chain_ok = False
+                    for behavior in matching_behaviors:
+                        response_states = {
+                            state.state_id: state
+                            for state in behavior.states
+                            if state.role == "RESPONSE"
+                            and (state.entry_action or state.do_action)
+                        }
+                        for transition in behavior.transitions:
+                            state = response_states.get(transition.target)
+                            if state is None:
+                                continue
+                            action_text = " ".join(filter(None, (
+                                state.entry_action, state.do_action,
+                            ))).lower()
+                            trigger_text = transition.trigger.lower()
+                            if family == "report":
+                                behavior_chain_ok = (
+                                    any(token in action_text for token in (
+                                        "report", "health", "postflight",
+                                        "telemetry",
+                                    ))
+                                    and "land" in trigger_text
+                                    and "complet" in trigger_text
+                                )
+                            else:
+                                behavior_chain_ok = (
+                                    any(token in action_text for token in (
+                                        "waypoint", "sequence", "revise",
+                                        "update", "navigate",
+                                    ))
+                                    and "waypoint" in trigger_text
+                                    and any(token in trigger_text for token in (
+                                        "modification", "revision", "revised",
+                                        "update",
+                                    ))
+                                    and (
+                                        "valid" not in source_low
+                                        or "valid" in trigger_text
+                                    )
+                                )
+                            if behavior_chain_ok:
+                                break
+                        if behavior_chain_ok:
+                            break
+                    if not behavior_chain_ok:
+                        issues.append(
+                            f"{req_id} timed functional plan requires a "
+                            f"source-linked reachable {family} response with "
+                            "the qualified causal trigger"
+                        )
+
+                    expected_seconds = float(deadline.group(1))
+                    timing_attributes: set[tuple[str, str]] = set()
+                    for behavior in matching_behaviors:
+                        component = components_by_name.get(behavior.owner)
+                        if component is None:
+                            continue
+                        for attribute in component.attributes:
+                            value_match = re.search(
+                                r"[-+]?\d+(?:\.\d+)?",
+                                str(attribute.initial_value or ""),
+                            )
+                            name_low = attribute.name.lower()
+                            if (
+                                value_match
+                                and abs(
+                                    float(value_match.group(0))
+                                    - expected_seconds
+                                ) < 1e-9
+                                and attribute.unit.lower() == "s"
+                                and family in name_low
+                                and any(token in name_low for token in (
+                                    "latency", "delay", "time",
+                                ))
+                            ):
+                                timing_attributes.add((
+                                    behavior.owner, attribute.name,
+                                ))
+                    matching_constraints = [
+                        constraint for constraint in constraint_plans
+                        if constraint.source_requirement_id == req_id
+                    ]
+                    if not timing_attributes:
+                        issues.append(
+                            f"{req_id} timed functional plan requires a "
+                            f"source-linked {family} latency bound of "
+                            f"{deadline.group(1)} [s] on the behavior owner"
+                        )
+                    elif not any(
+                        (constraint.owner, constraint.lhs)
+                        in timing_attributes
+                        or (constraint.owner, constraint.rhs)
+                        in timing_attributes
+                        for constraint in matching_constraints
+                    ):
+                        issues.append(
+                            f"{req_id} timed functional plan requires a "
+                            "source-linked constraint that references its "
+                            "planned latency bound"
+                        )
         ordinary_event_symbols = collect_planned_event_symbols(
             planned_behaviors,
             components=components,

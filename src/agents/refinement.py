@@ -1,6 +1,7 @@
 """Refinement, repair, simulation closure, and syntax-gate orchestration."""
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 from typing import Any, Dict, List, Mapping, Optional, Tuple
@@ -117,6 +118,34 @@ class RefinementMixin:
         )))
 
 
+    def _verify_terminal_functional_closure(
+        self, model_text: str, model_name: str
+    ) -> None:
+        """Bind functional-closure evidence to the exact terminal revision."""
+        gaps = self._functional_verification_gap_issues(model_text, model_name)
+        remaining_ids = self._gap_req_ids(gaps)
+        closure = dict(self.last_functional_closure or {})
+        was_closed = closure.get("status") == "CLOSED"
+        closure.update({
+            "status": (
+                "REOPENED_BY_TERMINAL_MATERIALIZATION"
+                if remaining_ids and was_closed else
+                "OPEN" if remaining_ids else "CLOSED"
+            ),
+            "remaining_gap_req_ids": remaining_ids,
+            "terminal_model_digest": hashlib.sha256(
+                model_text.encode("utf-8")
+            ).hexdigest(),
+            "terminal_audit_issues": list(gaps),
+        })
+        self.last_functional_closure = closure
+        if remaining_ids:
+            raise RuntimeError(
+                "terminal functional closure is not closed on the published "
+                "model revision: " + ", ".join(remaining_ids)
+            )
+
+
     def _functional_closure_pass(
         self,
         current_model: SysMLModel,
@@ -155,6 +184,9 @@ class RefinementMixin:
                 "attempts": 0,
                 "accepted_repairs": 0,
                 "repair_contexts": [],
+                "closure_model_digest": hashlib.sha256(
+                    text.encode("utf-8")
+                ).hexdigest(),
             }
             return current, current_score, current_sim
 
@@ -230,12 +262,42 @@ class RefinementMixin:
                     print("  │    ⚠ no syntax-safe surgical result", flush=True)
                     continue
 
-                candidate = build_lite_model(
+                raw_candidate = build_lite_model(
                     repaired.merged_text, model_name=model_name
                 )
-                self._restore_generation_plan_metadata(candidate)
-                cand_syntax = check_syntax(repaired.merged_text)
-                cand_sim = self._run_simulation(repaired.merged_text, model_name)
+                self._restore_generation_plan_metadata(raw_candidate)
+                candidate_text, plan_conformance = (
+                    self._enforce_terminal_generation_plan(
+                        raw_candidate, repaired.merged_text
+                    )
+                )
+                if (
+                    plan_conformance is not None
+                    and plan_conformance.get("status") != "PASS"
+                ):
+                    context_record["status"] = "REJECTED"
+                    context_record["post_merge_reason"] = (
+                        "terminal generation-plan conformance failed"
+                    )
+                    context_record["generation_plan_issues"] = list(
+                        plan_conformance.get("issues") or ()
+                    )
+                    print(
+                        "  │    ⚠ rejected: terminal generation-plan "
+                        "conformance failed",
+                        flush=True,
+                    )
+                    continue
+                candidate_metadata = dict(
+                    getattr(raw_candidate, "metadata", None) or {}
+                )
+                candidate = build_lite_model(
+                    candidate_text, model_name=model_name
+                )
+                candidate.metadata.update(candidate_metadata)
+                candidate_text = get_sysml_text(candidate)
+                cand_syntax = check_syntax(candidate_text)
+                cand_sim = self._run_simulation(candidate_text, model_name)
                 cand_eval = self.evaluator.evaluate(
                     config=DesignConfiguration(
                         name=f"functional_closure_{idx + 1}", parameters={}
@@ -247,7 +309,7 @@ class RefinementMixin:
                     requirements=requirements,
                 )
                 remaining = self._functional_verification_gap_issues(
-                    repaired.merged_text, model_name
+                    candidate_text, model_name
                 )
                 after_ids = set(self._gap_req_ids(remaining))
                 progress = after_ids < before_ids
@@ -288,6 +350,9 @@ class RefinementMixin:
             "attempts": attempts,
             "accepted_repairs": accepted,
             "repair_contexts": repair_contexts,
+            "closure_model_digest": hashlib.sha256(
+                get_sysml_text(current).encode("utf-8")
+            ).hexdigest(),
         }
         if remaining_ids:
             print(
