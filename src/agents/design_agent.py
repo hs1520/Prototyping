@@ -1311,10 +1311,63 @@ Enclose the entire model in exactly one ```sysml code block. No prose after the 
             )
             metadata["planned_behavior_conformance"] = conformance
             if conformance["status"] != "PASS":
-                raise RuntimeError(
-                    "[PLANNED_BEHAVIOR_GENERATION_ERROR] Step 4 failed "
-                    "the typed behavior identity gate: "
-                    + "; ".join(conformance["issues"])
+                metadata["planned_behavior_conformance_initial"] = conformance
+                metadata["step4_behavior_retries"] = 1
+                allowed_events = ", ".join(
+                    symbol.name
+                    for symbol in generation_plan.planned_event_symbols
+                ) or "(none; do not emit accept transitions)"
+                correction = (
+                    contract_pattern_guidance
+                    + "\n\nSTEP 4 EVENT-IDENTITY CORRECTION (MANDATORY; "
+                    "overrides general behavior-generation instructions):\n"
+                    "Return one complete replacement SysML behavior fragment.\n"
+                    "Allowed accept event item types: "
+                    + allowed_events
+                    + "\nEvery `accept` target must exactly match one name in "
+                    "that list. Do not invent, rename, abbreviate, or declare "
+                    "event definitions. Do not add a state definition or "
+                    "transition beyond the frozen TYPED BEHAVIOR IDENTITY PLAN. "
+                    "A requirement without a frozen planned behavior must not "
+                    "gain an additional state machine in this fragment.\n"
+                    "VALIDATION ISSUES:\n"
+                    + "\n".join(
+                        f"- {issue}" for issue in conformance["issues"]
+                    )
+                )
+                retry_step4 = self.cot.generate_behavior(
+                    system_name=system_name,
+                    architecture=architecture_text,
+                    behavioral_requirements=behavioral_reqs,
+                    parts_fragment=parts_fragment,
+                    context=ctx4,
+                    platform_profile=platform_profile,
+                    contract_pattern_guidance=correction,
+                )
+                retry_fragment = (
+                    retry_step4.extracted_sysml
+                    or retry_step4.final_answer
+                    or ""
+                )
+                retry_fragment, retry_conformance = (
+                    materialize_planned_behaviors(
+                        retry_fragment,
+                        generation_plan.planned_behaviors,
+                        event_symbols=generation_plan.planned_event_symbols,
+                    )
+                )
+                metadata["planned_behavior_conformance"] = retry_conformance
+                if retry_conformance["status"] != "PASS":
+                    raise RuntimeError(
+                        "[PLANNED_BEHAVIOR_GENERATION_ERROR] Step 4 failed "
+                        "the typed behavior identity gate after one targeted "
+                        "retry: "
+                        + "; ".join(retry_conformance["issues"])
+                    )
+                step4 = retry_step4
+                behavior_fragment = retry_fragment
+                metadata["degraded_steps"].append(
+                    "step4_behavior: targeted event-identity retry accepted"
                 )
         if behavior_obligation_plan is not None:
             from ..prototyping.ag_behavior_plan import (

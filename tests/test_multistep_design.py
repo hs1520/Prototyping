@@ -1238,6 +1238,123 @@ class TestMultistepGeneratePipeline:
         assert "interfaces_fragment_length" in result.metadata
         assert "behavior_fragment_length" in result.metadata
 
+    def test_step4_retries_unregistered_accept_once_and_remains_fail_closed(
+        self, monkeypatch
+    ):
+        from src.prototyping.generation_plan import (
+            ComponentPlan,
+            ConnectionPlan,
+            ModelGenerationPlan,
+            PortPlan,
+        )
+        from src.prototyping.planned_behavior import (
+            PlannedBehavior,
+            PlannedState,
+            PlannedTransition,
+        )
+
+        plan = ModelGenerationPlan(
+            components=(
+                ComponentPlan(
+                    name="Controller",
+                    responsibility="Controls the response.",
+                    requirements=("REQ_FUNC_001",),
+                    ports=(PortPlan("signalOut", "out", "SignalPort"),),
+                ),
+                ComponentPlan(
+                    name="Monitor",
+                    responsibility="Receives the response.",
+                    requirements=(),
+                    ports=(PortPlan("signalIn", "in", "SignalPort"),),
+                ),
+            ),
+            connections=(ConnectionPlan(
+                source_component="Controller",
+                source_port="signalOut",
+                target_component="Monitor",
+                target_port="signalIn",
+                item_type="SignalPort",
+            ),),
+            planned_behaviors=(PlannedBehavior(
+                owner="Controller",
+                behavior_id="ControllerBehavior",
+                initial_state="Idle",
+                states=(
+                    PlannedState("Idle", "INITIAL"),
+                    PlannedState(
+                        "Responding", "RESPONSE",
+                        entry_action="performResponse",
+                    ),
+                ),
+                transitions=(PlannedTransition(
+                    "respond",
+                    "Idle",
+                    "Responding",
+                    "ACCEPT",
+                    "RegisteredSignal",
+                ),),
+                source_requirement_id="REQ_FUNC_001",
+            ),),
+        )
+        unregistered = """```sysml
+state def ExtraBehavior {
+    entry; then Idle;
+    state Idle;
+    state Acting;
+    transition act first Idle accept UnplannedSignal then Acting;
+}
+```"""
+        corrected = "```sysml\naction def supportingAction {}\n```"
+
+        for retry_response, should_pass in (
+            (corrected, True),
+            (unregistered, False),
+        ):
+            agent = self._make_agent(
+                [unregistered, retry_response], monkeypatch
+            )
+            metadata = {"degraded_steps": []}
+            if not should_pass:
+                with pytest.raises(
+                    RuntimeError,
+                    match="after one targeted retry",
+                ):
+                    agent._step4_behavior(
+                        "DroneSystem",
+                        plan.render_for_prompt(),
+                        "part def Controller; part def Monitor;",
+                        ["REQ-FUNC-001: The system shall respond to a signal."],
+                        None,
+                        lambda _step: "",
+                        "",
+                        metadata,
+                        False,
+                        generation_plan=plan,
+                    )
+                assert agent.llm.call_count == 2
+                continue
+
+            _step, fragment = agent._step4_behavior(
+                "DroneSystem",
+                plan.render_for_prompt(),
+                "part def Controller; part def Monitor;",
+                ["REQ-FUNC-001: The system shall respond to a signal."],
+                None,
+                lambda _step: "",
+                "",
+                metadata,
+                False,
+                generation_plan=plan,
+            )
+            retry_prompt = agent.llm.messages[1][-1].content
+            assert agent.llm.call_count == 2
+            assert metadata["step4_behavior_retries"] == 1
+            assert metadata["planned_behavior_conformance"]["status"] == "PASS"
+            assert "RegisteredSignal" in retry_prompt
+            assert "UnplannedSignal" in retry_prompt
+            assert "UnplannedSignal" not in fragment
+            assert "item def RegisteredSignal" in fragment
+
     def test_step2_retries_once_when_first_response_has_no_part_defs(
         self, monkeypatch
     ):
