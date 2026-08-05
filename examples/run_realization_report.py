@@ -361,6 +361,26 @@ def main() -> int:
                         )
                     except Exception:
                         pass
+                closure = getattr(exc, "functional_closure", None)
+                if closure:
+                    try:
+                        atomic_write_json(
+                            failed / "functional_closure_failure.json",
+                            {
+                                "schema_version": "1.0",
+                                "artifact_role": "FUNCTIONAL_CLOSURE_FAILURE",
+                                "error_type": type(exc).__name__,
+                                "functional_closure": closure,
+                            },
+                        )
+                        # The audit's verdict is only checkable against the
+                        # exact revision it judged.
+                        atomic_write_text(
+                            failed / "terminal_model.sysml",
+                            getattr(exc, "terminal_model_text", "") or "",
+                        )
+                    except Exception:
+                        pass
             raise
 
 

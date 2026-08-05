@@ -140,10 +140,16 @@ class RefinementMixin:
         })
         self.last_functional_closure = closure
         if remaining_ids:
-            raise RuntimeError(
+            error = RuntimeError(
                 "terminal functional closure is not closed on the published "
                 "model revision: " + ", ".join(remaining_ids)
             )
+            # The audit already knows which revision it judged and why; without
+            # carrying it out, a failed run keeps only the requirement ids and
+            # the exact model that failed is gone.
+            error.functional_closure = closure
+            error.terminal_model_text = model_text
+            raise error
 
 
     def _functional_closure_pass(
