@@ -44,6 +44,7 @@ from .activated_constraint_plan import (
     ConstraintPlan,
     materialize_planned_attributes,
     materialize_planned_constraints,
+    state_execution_advisories,
     validate_constraint_plan,
 )
 from .planned_behavior import (
@@ -476,6 +477,8 @@ class ModelGenerationPlan:
     constraint_identity_reconciliations: tuple[str, ...] = ()
     source: str = "LLM_TYPED_JSON"
     issues: tuple[str, ...] = ()
+    # Reported, never blocking — see state_execution_advisories.
+    advisories: tuple[str, ...] = ()
     schema_version: str = "1.0"
 
     @property
@@ -532,6 +535,7 @@ class ModelGenerationPlan:
                 self.constraint_identity_reconciliations
             ),
             "issues": list(self.issues),
+            "advisories": list(self.advisories),
         }
 
     @classmethod
@@ -1097,6 +1101,9 @@ class ModelGenerationPlan:
             components,
             requirements,
         ))
+        advisories = tuple(
+            state_execution_advisories(constraint_plans, components)
+        )
         raw_behaviors = payload.get("behaviors")
         archived_schema = str(payload.get("schema_version") or "").strip()
         legacy_behavior_schema = archived_schema in {
@@ -1413,6 +1420,7 @@ class ModelGenerationPlan:
             ),
             source=source,
             issues=tuple(dict.fromkeys(issues)),
+            advisories=advisories,
             schema_version=(
                 archived_schema
                 if planned_behaviors and archived_schema == "8.0"

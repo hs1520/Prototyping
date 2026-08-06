@@ -745,3 +745,113 @@ def test_the_executor_really_cannot_discharge_an_equality_boundary():
     # sides exists and the probe can never report a live boundary.
     assert not eval_op(rhs + epsilon, "==", rhs)
     assert not eval_op(rhs - epsilon, "==", rhs)
+
+
+def test_state_execution_on_a_constant_subject_is_reported_not_rejected():
+    """The plan may claim executable evidence its executor cannot produce.
+
+    A STATE_ACTIVE constraint whose subject carries only an initial value
+    compares that constant to itself, so the behavioural executor refuses it
+    for want of a bound runtime measurement and the requirement lands
+    unanchored. `_state_execution_obstacle` documents why the validator does
+    not reject this today; until that is settled the disagreement must at
+    least be visible.
+    """
+    requirement = (
+        "REQ_FUNC_006: The system shall incorporate a revised waypoint "
+        "sequence into the active flight plan within 1.0 second."
+    )
+    attributes = [{
+        "name": "waypointModificationLatency",
+        "value_type": "Real",
+        "unit": "s",
+        "role": "FROZEN_THRESHOLD",
+        "initial_value": "1.0",
+        "provenance": "FROZEN_REQUIREMENT",
+        "source_requirement_id": "REQ_FUNC_006",
+    }]
+    constraints = [{
+        "constraint_id": "waypointModificationLatencyConstraint",
+        "owner": "Controller",
+        "expression": {
+            "lhs": "waypointModificationLatency",
+            "operator": "<=",
+            "rhs": "1.0",
+        },
+        "activation": {
+            "kind": "STATE_ACTIVE",
+            "reference": "WaypointModificationBehavior::ModifyingWaypoint",
+        },
+        "provenance": {
+            "kind": "FROZEN_REQUIREMENT",
+            "requirement_id": "REQ_FUNC_006",
+        },
+        "verification_tier": "STATE_EXECUTION",
+    }]
+
+    plan = ModelGenerationPlan.from_payload(
+        _payload(attributes=attributes, constraints=constraints),
+        requirements=[requirement],
+    )
+
+    # reported ...
+    assert any(
+        "claims STATE_EXECUTION" in item
+        and "waypointModificationLatency" in item
+        for item in plan.advisories
+    )
+    assert plan.advisories == tuple(plan.to_dict()["advisories"])
+    # ... and deliberately not blocking: no advisory text leaks into issues
+    assert not any("claims STATE_EXECUTION" in item for item in plan.issues)
+
+
+def test_a_bound_runtime_measurement_raises_no_state_execution_advisory():
+    requirement = (
+        "REQ_FUNC_006: The system shall incorporate a revised waypoint "
+        "sequence into the active flight plan within 1.0 second."
+    )
+    attributes = [
+        {
+            "name": "measuredLatency",
+            "value_type": "Real",
+            "unit": "s",
+            "role": "RUNTIME_MEASUREMENT",
+            "input_binding": "signal.latency",
+            "provenance": "FROZEN_REQUIREMENT",
+            "source_requirement_id": "REQ_FUNC_006",
+        },
+        {
+            "name": "latencyLimit",
+            "value_type": "Real",
+            "unit": "s",
+            "role": "FROZEN_THRESHOLD",
+            "initial_value": "1.0",
+            "provenance": "FROZEN_REQUIREMENT",
+            "source_requirement_id": "REQ_FUNC_006",
+        },
+    ]
+    constraints = [{
+        "constraint_id": "waypointModificationLatencyConstraint",
+        "owner": "Controller",
+        "expression": {
+            "lhs": "measuredLatency",
+            "operator": "<=",
+            "rhs": "latencyLimit",
+        },
+        "activation": {
+            "kind": "STATE_ACTIVE",
+            "reference": "WaypointModificationBehavior::ModifyingWaypoint",
+        },
+        "provenance": {
+            "kind": "FROZEN_REQUIREMENT",
+            "requirement_id": "REQ_FUNC_006",
+        },
+        "verification_tier": "STATE_EXECUTION",
+    }]
+
+    plan = ModelGenerationPlan.from_payload(
+        _payload(attributes=attributes, constraints=constraints),
+        requirements=[requirement],
+    )
+
+    assert plan.advisories == ()

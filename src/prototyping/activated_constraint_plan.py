@@ -94,6 +94,45 @@ def _state_execution_obstacle(constraint, lhs) -> str | None:
     return None
 
 
+def state_execution_advisories(
+    constraints: Sequence[Any],
+    components: Sequence[Any],
+) -> list[str]:
+    """Report STATE_EXECUTION constraints the executor cannot discharge.
+
+    Deliberately advisory. ``_state_execution_obstacle`` documents why the
+    plan validator does not reject these: it is not established whether the
+    executor is over-strict or the plan over-permissive, and rejecting them
+    would invalidate plans that are legal today. Until that is decided, the
+    disagreement should at least be visible in the run artefacts instead of
+    passing silently and reappearing as an unanchored requirement six phases
+    later.
+    """
+    attributes = {
+        (str(component.name), attribute.name): attribute
+        for component in components
+        for attribute in component.attributes
+    }
+    advisories: list[str] = []
+    for constraint in constraints:
+        if constraint.verification_tier != "STATE_EXECUTION":
+            continue
+        lhs = attributes.get((constraint.owner, constraint.lhs))
+        if lhs is None:
+            continue
+        if lhs.input_binding:
+            continue
+        advisories.append(
+            f"constraints[{constraint.constraint_id}] claims STATE_EXECUTION "
+            f"but its subject {constraint.owner}.{constraint.lhs} carries "
+            f"only the value {lhs.initial_value!r} and no input binding; the "
+            "behavioural executor requires a bound runtime measurement, so "
+            "this constraint cannot anchor "
+            f"{constraint.source_requirement_id or 'its requirement'}"
+        )
+    return advisories
+
+
 _IDENTIFIER = re.compile(r"^[A-Za-z_]\w*$")
 _QUALIFIED = re.compile(r"^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*$")
 _NUMBER = re.compile(r"^[-+]?\d+(?:\.\d+)?$")
