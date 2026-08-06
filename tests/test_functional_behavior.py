@@ -277,6 +277,24 @@ def test_temporal_response_needs_the_real_trigger_and_timing_anchor():
     )
     assert functional_behavior_status(no_timing, reqs)["REQ-FUNC-008"] == BEHAVIOR_ABSENT
 
+    # The semantic materialiser types a seconds bound as DurationValue, so the
+    # attribute a constraint actually references is often not spelled `Real`.
+    # Recognising only `Real` reported a real timing anchor as missing and left
+    # the requirement unassigned at every tier.
+    duration_typed = base.replace(
+        "attribute maxHealthReportLatency : Real = 5.0 [s];",
+        "attribute maxHealthReportLatency : DurationValue = 5.0 [s];",
+    )
+    assert functional_behavior_status(
+        duration_typed, reqs
+    )["REQ-FUNC-008"] == BEHAVIORALLY_VERIFIED
+
+    # a bound that is not the requirement's own value still fails
+    wrong_bound = base.replace("Real = 5.0 [s]", "Real = 9.0 [s]")
+    assert functional_behavior_status(
+        wrong_bound, reqs
+    )["REQ-FUNC-008"] == BEHAVIOR_ABSENT
+
 
 def test_self_test_requires_reachable_action_from_power_on_context():
     base = """package D {

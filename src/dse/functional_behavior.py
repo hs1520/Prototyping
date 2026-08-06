@@ -118,7 +118,13 @@ def _has_required_trigger(req_text: str, record: _ProducedResponse) -> bool:
 
 _SECONDS_RE = re.compile(r"\bwithin\s+(\d+(?:\.\d+)?)\s*(?:seconds?|s)\b", re.IGNORECASE)
 _TIME_ATTR_RE = re.compile(
-    r"attribute\s+(\w+)\s*:\s*Real\s*=\s*(\d+(?:\.\d+)?)\s*\[s\]\s*;",
+    # A seconds-valued bound is emitted as `DurationValue` by the semantic
+    # materialiser (requirement_semantics maps the unit "s" to that type) and
+    # as `Real` by the typed plan. Recognising only `Real` meant the attribute
+    # the constraint actually referenced was invisible here, so a requirement
+    # with a perfectly good timing anchor was reported as having none.
+    r"attribute\s+(\w+)\s*:\s*(?:Real|DurationValue|TimeValue)\s*=\s*"
+    r"(\d+(?:\.\d+)?)\s*\[s\]\s*;",
     re.IGNORECASE,
 )
 _CONSTRAINT_RE = re.compile(r"assert\s+constraint\s+\w+\s*\{([^{}]+)\}", re.IGNORECASE)
