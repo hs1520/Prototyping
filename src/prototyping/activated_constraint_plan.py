@@ -195,6 +195,30 @@ def _numeric(value: str | None) -> float | None:
         return None
 
 
+# A unit reaches the model as a SysML name, so it must be one. `%` does not
+# even tokenise — `= 25 [%]` is a parse error that makes syside reparent every
+# declaration after it into the unclosed expression, silently detaching the
+# state machines that follow from their owning part. The long and plural
+# spellings parse but resolve to nothing ("No Feature named 'degree' found").
+# Requirement text still states units in prose; _unit_tokens accepts those.
+_SYSML_UNIT_NAMES = {
+    "%": "percent",
+    "second": "s", "seconds": "s",
+    "millisecond": "ms", "milliseconds": "ms",
+    "minute": "min", "minutes": "min",
+    "hour": "h", "hours": "h",
+    "degree": "deg", "degrees": "deg",
+    "meter": "m", "meters": "m", "metre": "m", "metres": "m",
+    "kilometer": "km", "kilometers": "km",
+    "kilometre": "km", "kilometres": "km",
+}
+
+
+def sysml_unit_name(unit: str) -> str:
+    """The SysML identifier for a unit, or the unit unchanged."""
+    return _SYSML_UNIT_NAMES.get(str(unit or "").strip().lower(), unit)
+
+
 def _unit_tokens(source: str) -> set[str]:
     tokens = {
         item.lower().replace("%", "percent")
@@ -267,7 +291,7 @@ class AttributePlan:
         return cls(
             name=str(value.get("name") or "").strip(),
             value_type=str(value.get("value_type") or "Real").strip(),
-            unit=str(value.get("unit") or "1").strip(),
+            unit=sysml_unit_name(str(value.get("unit") or "1").strip()),
             role=str(value.get("role") or "DESIGN_PARAMETER").strip().upper(),
             initial_value=(
                 str(initial).strip() if initial not in (None, "") else None

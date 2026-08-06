@@ -855,3 +855,57 @@ def test_a_bound_runtime_measurement_raises_no_state_execution_advisory():
     )
 
     assert plan.advisories == ()
+
+
+def test_percent_unit_does_not_detach_later_state_machines():
+    """`= 25 [%]` is a parse error, and parse errors do not stay local.
+
+    syside reparents every declaration after the unclosed expression, so the
+    state machines of *later* parts lose their owning part. That silently
+    disabled the whole behavioural tier — the crash it caused downstream was
+    swallowed as "non-fatal" — and left timed requirements unanchored.
+    """
+    from src.simulation.state_extractor import extract_state_machines
+    from src.simulation.syntax_checker import check_syntax
+    from src.prototyping.activated_constraint_plan import sysml_unit_name
+
+    def model(unit: str) -> str:
+        return f"""package P {{
+            part def Battery {{
+                attribute soc : Real = 25 [{unit}];
+                assert constraint socFloor {{ soc == 25 }}
+            }}
+            part def Monitor {{
+                state def RtbMonitor {{ state Idle; entry; then Idle; }}
+            }}
+        }}"""
+
+    raw = model("%")
+    assert check_syntax(raw).has_errors
+    assert any(
+        machine.owner_part is None or machine.owner_part == "__unknown__"
+        for machine in extract_state_machines(raw)
+    )
+
+    emitted = model(sysml_unit_name("%"))
+    assert not check_syntax(emitted).has_errors
+    machines = extract_state_machines(emitted)
+    assert [m.owner_part for m in machines] == ["Monitor"]
+
+
+def test_long_unit_spellings_are_emitted_as_resolvable_sysml_names():
+    from src.prototyping.activated_constraint_plan import sysml_unit_name
+    from src.simulation.syntax_checker import check_syntax
+
+    for stated, expected in (
+        ("degree", "deg"), ("minutes", "min"), ("seconds", "s"),
+        ("metres", "m"), ("%", "percent"),
+    ):
+        assert sysml_unit_name(stated) == expected
+        src = (
+            "package P { part def B { attribute a : Real = 1 "
+            f"[{expected}]; assert constraint K {{ a == 1 }} }} }}"
+        )
+        assert not check_syntax(src).has_errors, expected
+    # a unit already valid is left alone
+    assert sysml_unit_name("m/s") == "m/s"

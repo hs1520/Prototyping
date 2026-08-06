@@ -754,7 +754,10 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
                     state_match.start():state_close + 1
                 ]
         owner = sd.owner
-        owner_name: str = owner.name if owner else "__unknown__"
+        # A parse error upstream can reparent a state def under an unnamed
+        # expression node, so an owner may exist and still have no name.
+        # Losing the owner name must not cost every scenario in the run.
+        owner_name: str = (owner.name if owner else None) or "__unknown__"
 
         sm = StateMachineDef(
             name=sd.name,
