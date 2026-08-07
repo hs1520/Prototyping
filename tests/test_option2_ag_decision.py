@@ -544,7 +544,7 @@ def test_the_pipeline_hands_the_mode_to_the_orchestrator():
     )["revised_experiment"]
     assert reported["r2_generation_mode"] == "LLM_DECIDED_SPEC"
     assert reported["r2_intervention_version"] == (
-        "r2-bbag-whole-model-guided-decided-v7"
+        "r2-bbag-whole-model-guided-decided-v8"
     )
 
 

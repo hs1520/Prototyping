@@ -125,9 +125,23 @@ R2_LLM_AUTHORED_INTERVENTION_VERSION = (
 # 9/9 evidence was produced under v5, where every retry was a fresh single-turn
 # prompt carrying only a paraphrase of the rejection. v5 and v6 must never be
 # pooled, and a v6 claim requires its own runs.
+# v8 carries no change to this intervention's own prompts or budgets. It records
+# that the shared generation path underneath it moved: between 03ce19b and
+# 30dd9f9, fifteen commits changed what the model is asked and what it is shown
+# — planned events are retried when invalid and preserved through assembly
+# (0ff752a, e1a7adb), high-thinking assembly output is bounded (fa62f85),
+# truncated Step 1 plans are separated from missing ones (b3c5f32), units are
+# emitted as SysML names and recognised however spelled (abc9462, fa4cca8,
+# 7ed60a1), and Vertex calls acquired a hard wall-clock timeout (e5464a2,
+# 02f62f8). A targeted recheck on seeds 2/3/4 at 30dd9f9 confirmed the effect is
+# not cosmetic: R0 and R1 both scored lower than on 2 August and became
+# indistinguishable from each other, while R2 scored higher and held pattern
+# conformance at 9/9 chains. So v7 and v8 must never be pooled: a v8 claim
+# requires its own runs, and `code_revision` in each pilot_config is the field
+# that actually separates them.
 R2_LLM_DECIDED_GENERATION_MODE = "LLM_DECIDED_SPEC"
 R2_LLM_DECIDED_INTERVENTION_VERSION = (
-    "r2-bbag-whole-model-guided-decided-v7"
+    "r2-bbag-whole-model-guided-decided-v8"
 )
 
 R2_GENERATION_MODES = (
