@@ -66,14 +66,31 @@ class BlackboardController:
         # predecessor just published. The generation pipeline is the second kind,
         # and it stays viable only because its board never commits a model — see
         # the invariant recorded at the `pipeline-runtime` board's construction.
-        # If that ever changes, `run(require_all=True)` is what turns the
-        # resulting stall into a loud failure instead of a short run.
+        # If that ever changes, `run(require_all=True)` reports it as a stall and
+        # `_hidden_topics` says which topics the revision change took away, so
+        # the diagnosis does not depend on recognising how the commit was
+        # written.
         return {
             record.topic
             for record in self.board.records()
             if record.model_revision == self.board.current_revision
             and record.model_digest == self.board.current_model.model_digest
         }
+
+    def _topics_at_any_revision(self) -> set:
+        """Every topic ever published on this board, ignoring model revision."""
+        return {record.topic for record in self.board.records()}
+
+    def _hidden_topics(self) -> set:
+        """Topics that exist on the board but are invisible at the current revision.
+
+        A non-empty result means a model was committed onto this board and the
+        facts published before it were not reaffirmed afterwards. That is the
+        failure mode `_published_topics` creates, and it is detected here from
+        the board's own contents rather than by looking for a `commit_model`
+        call, so it holds however the commit was spelled.
+        """
+        return self._topics_at_any_revision() - self._published_topics()
 
     def activatable(self) -> List[KnowledgeSource]:
         """Registered sources not yet run whose every precondition is on the board."""
@@ -179,28 +196,36 @@ class BlackboardController:
                 agenda.append({**entry, "result": result})
                 progressed = True
         if require_all:
-            stalled = [
+            stalled = {
                 source.name
                 for source in self._sources
                 if source.name not in self._activated
-            ]
+            }
             if stalled:
                 published = self._published_topics()
-                detail = "; ".join(
-                    f"{source.name} awaiting "
-                    + ", ".join(
-                        sorted(
-                            topic
-                            for topic in source.precondition_topics
-                            if topic not in published
-                        )
+                hidden = self._hidden_topics()
+                parts = []
+                for source in self._sources:
+                    if source.name not in stalled:
+                        continue
+                    awaited = sorted(
+                        topic
+                        for topic in source.precondition_topics
+                        if topic not in published
                     )
-                    for source in self._sources
-                    if source.name in set(stalled)
-                )
+                    # Distinguish a topic nobody ever produced from one that was
+                    # produced and then hidden by a model commit on this board.
+                    described = ", ".join(
+                        f"{topic} (published earlier, hidden by a model "
+                        "revision on this board and never reaffirmed)"
+                        if topic in hidden
+                        else topic
+                        for topic in awaited
+                    )
+                    parts.append(f"{source.name} awaiting {described}")
                 raise RuntimeError(
                     "control reached a fixpoint with knowledge sources that "
-                    f"never activated: {detail}"
+                    f"never activated: {'; '.join(parts)}"
                 )
         return agenda
 

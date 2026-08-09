@@ -150,12 +150,19 @@ def test_generation_sources_declare_their_agent_role_explicitly():
     }
 
 
-def test_runtime_control_board_never_commits_a_model():
-    """The controller only sees topics at the board's current revision.
+def test_no_module_commits_a_model_onto_the_runtime_board_by_name():
+    """A cheap early warning, and deliberately not the protection.
 
-    Committing a model onto the runtime board would advance that revision and
-    hide every phase topic published before it, stalling the chain. Nothing may
-    call commit_model on `_runtime_board`.
+    Committing a model onto the runtime board advances its revision and hides
+    every phase topic published before it, stalling the generation chain. This
+    check only matches the literal attribute access, so it misses an alias, a
+    board passed into a helper, or a getattr. The actual guard is semantic and
+    lives in the controller: `_hidden_topics` detects the condition from the
+    board's contents, and `run(require_all=True)` raises naming the topics a
+    revision change took away -- see
+    `test_a_model_commit_hides_earlier_topics_and_the_stall_says_so`. This test
+    is kept because it fails at edit time rather than at run time, which is
+    cheaper when it does fire.
     """
     from pathlib import Path
 

@@ -215,3 +215,57 @@ def test_stall_error_names_the_topic_each_stalled_source_is_waiting_on():
     assert "blocked awaiting missing.topic" in message
     # The precondition that *was* satisfied is not reported as outstanding.
     assert "start" not in message.split("awaiting", 1)[1]
+
+
+def test_a_model_commit_hides_earlier_topics_and_the_stall_says_so():
+    """The real hazard, detected from the board rather than from source text.
+
+    `_published_topics` only sees the current model revision. Committing a model
+    advances it, so topics published before the commit stop being visible unless
+    something reaffirms them. This test performs the commit through an alias, so
+    no textual search for `commit_model` on a named attribute would find it; the
+    controller still diagnoses it.
+    """
+    board = _board()
+    _publish_topic(board, "start")
+    controller = BlackboardController(board)
+    controller.register(KnowledgeSource(
+        name="downstream", agent_role="Role",
+        precondition_topics=("start",),
+        activate=lambda: None,
+    ))
+    assert [s.name for s in controller.activatable()] == ["downstream"]
+
+    alias = board                      # the commit is not written as board.commit_model
+    alias.commit_model(
+        "part def P;",
+        base_revision=board.current_revision,
+        base_digest=board.current_model.model_digest,
+        producer="Test",
+    )
+
+    # The topic still exists on the board, but not at the current revision.
+    assert "start" in controller._topics_at_any_revision()
+    assert "start" in controller._hidden_topics()
+    assert controller.activatable() == []
+
+    with pytest.raises(RuntimeError) as excinfo:
+        controller.run(require_all=True)
+    message = str(excinfo.value)
+    assert "downstream awaiting start" in message
+    assert "hidden by a model revision" in message
+
+
+def test_a_topic_nobody_produced_is_not_reported_as_hidden():
+    board = _board()
+    controller = BlackboardController(board)
+    controller.register(KnowledgeSource(
+        name="blocked", agent_role="Role",
+        precondition_topics=("never.produced",),
+        activate=lambda: None,
+    ))
+    with pytest.raises(RuntimeError) as excinfo:
+        controller.run(require_all=True)
+    message = str(excinfo.value)
+    assert "blocked awaiting never.produced" in message
+    assert "hidden by a model revision" not in message
