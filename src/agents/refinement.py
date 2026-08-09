@@ -1536,35 +1536,12 @@ class RefinementMixin:
                     self._run_simulation(before_text, current.name),
                     self._run_simulation(repaired_text, current.name),
                 )
-            # The three admission conditions, recorded individually. Reporting
-            # only that a repair was refused leaves a reader unable to tell a
-            # syntax regression from a lost obligation from a behavioural one,
-            # and the counts that would settle it are computed here and were
-            # previously discarded.
-            text_changed = repaired_text != before_text
-            failed_conditions = [
-                name for name, held in (
-                    ("fixed_set_preserved", fixed_set_preserved),
-                    ("syntax_ok", syntax_ok),
-                    ("behavior_preserved", behavior_preserved),
-                )
-                if not held
-            ]
-            repair_audit = {
-                "schema_version": "1.0",
-                "text_changed": text_changed,
-                "applied": text_changed and not failed_conditions,
-                "fixed_set_preserved": fixed_set_preserved,
-                "syntax_ok": syntax_ok,
-                "behavior_preserved": behavior_preserved,
-                "failed_conditions": failed_conditions,
-                "obligations_total": len(before_report["results"]),
-                "obligations_passed_before": len(before_passed),
-                "obligations_passed_after": len(after_passed),
-                "obligations_lost": sorted(before_passed - after_passed),
-            }
-            conformance["plan_authorized_repair"] = repair_audit
-            if text_changed and not failed_conditions:
+            if (
+                repaired_text != before_text
+                and fixed_set_preserved
+                and syntax_ok
+                and behavior_preserved
+            ):
                 self._sync_model_text(current, repaired_text)
                 print(
                     "  │  ✓ restored plan-authorized ports/connections; "
@@ -1572,19 +1549,12 @@ class RefinementMixin:
                     f"{len(after_report['results'])}",
                     flush=True,
                 )
-            elif text_changed:
+            elif repaired_text != before_text:
                 conformance["status"] = "FAIL"
                 conformance.setdefault("issues", []).append(
-                    "plan-authorized repair rejected on "
-                    + ", ".join(failed_conditions)
-                    + f"; obligations passing {len(before_passed)} before, "
-                    f"{len(after_passed)} after"
+                    "plan-authorized repair rejected: syntax, behavior, or "
+                    "frozen structural obligation regression"
                 )
-                if getattr(current, "metadata", None) is None:
-                    current.metadata = {}
-                current.metadata.setdefault(
-                    "rejected_plan_authorized_repairs", []
-                ).append(repair_audit)
                 after_report = before_report
 
             if getattr(current, "metadata", None) is None:
