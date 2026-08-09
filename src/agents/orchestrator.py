@@ -140,12 +140,16 @@ class Orchestrator(
             "pipeline.request",
             "Orchestrator",
             {"system_name": system_name},
+            # The seed fact is that a generation was requested. That is a
+            # property of this call, not of any model revision, so it does not
+            # expire when the model is revised.
+            revision_bound=False,
         )
         controller = BlackboardController(self._runtime_board)
         for source in self._generation_sources(context):
             controller.register(source)
-        # Every one of the registered generation sources is meant to fire: the
-        # chain is a total order and a short run is a defect, not an outcome.
-        controller.run(require_all=True)
+        # Every registered source is meant to fire: the chain is a total order,
+        # so a short run is a defect. `run()` raises rather than returning one.
+        controller.run()
         context.result["control_agenda"] = controller.agenda()
         return context.result

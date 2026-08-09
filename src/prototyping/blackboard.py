@@ -100,6 +100,14 @@ class BlackboardRecord:
     model_digest: str
     task_id: Optional[str] = None
     session_id: Optional[str] = None
+    # Whether this record asserts something *about* the model it was published
+    # against. An analysis result is: revise the model and the analysis is stale.
+    # A process fact -- "the requirements phase finished" -- is not: revising the
+    # model later does not make it untrue. Consumers that expire stale facts must
+    # expire only the first kind, so the distinction is carried on the record
+    # rather than inferred by whoever reads it. Defaults to True because assuming
+    # a fact expires is the safe error.
+    revision_bound: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -281,6 +289,7 @@ class Blackboard:
         task_id: Optional[str] = None,
         session_id: Optional[str] = None,
         allow_stale: bool = False,
+        revision_bound: bool = True,
     ) -> BlackboardRecord:
         revision = self.current_revision if model_revision is None else int(model_revision)
         if revision < 0 or revision >= len(self._revisions):
@@ -307,6 +316,7 @@ class Blackboard:
             payload_digest=payload_digest(clean_payload),
             model_revision=revision,
             model_digest=model.model_digest,
+            revision_bound=bool(revision_bound),
             task_id=task_id,
             session_id=session_id,
         )

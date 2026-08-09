@@ -11,7 +11,11 @@ from __future__ import annotations
 import pytest
 
 from src.prototyping.blackboard import Blackboard, RecordType
-from src.prototyping.controller import BlackboardController, KnowledgeSource
+from src.prototyping.controller import (
+    AgentRole,
+    BlackboardController,
+    KnowledgeSource,
+)
 
 
 def _board() -> Blackboard:
@@ -34,7 +38,7 @@ def test_a_source_activates_only_when_its_preconditions_are_on_the_board():
 
     # precondition absent -> not activatable, run() is a no-op
     assert controller.activatable() == []
-    assert controller.run() == []
+    assert controller.run(allow_partial=True) == []
     assert fired == []
 
     # publish the precondition -> the source becomes activatable and fires
@@ -51,7 +55,7 @@ def test_each_source_fires_at_most_once():
     fired: list[str] = []
     controller = BlackboardController(board)
     controller.register(KnowledgeSource(
-        name="ks", agent_role="Role", precondition_topics=("start",),
+        name="ks", agent_role=AgentRole.ORCHESTRATOR, precondition_topics=("start",),
         activate=lambda: fired.append("ks"),
     ))
     controller.run()
@@ -74,10 +78,10 @@ def test_control_reaches_a_fixpoint_a_firing_can_unblock_the_next_source():
     controller = BlackboardController(board)
     # register B first to prove activation follows preconditions, not registration
     controller.register(KnowledgeSource(
-        name="b", agent_role="B", precondition_topics=("mid",), activate=fire_b,
+        name="b", agent_role=AgentRole.DESIGN, precondition_topics=("mid",), activate=fire_b,
     ))
     controller.register(KnowledgeSource(
-        name="a", agent_role="A", precondition_topics=("start",), activate=fire_a,
+        name="a", agent_role=AgentRole.ORCHESTRATOR, precondition_topics=("start",), activate=fire_a,
     ))
     controller.run()
     # A fires (start present), publishes mid, then B fires on the next pass
@@ -105,7 +109,7 @@ def test_every_activation_is_recorded_on_the_board():
 def test_duplicate_registration_is_rejected():
     controller = BlackboardController(_board())
     ks = KnowledgeSource(
-        name="dup", agent_role="R", precondition_topics=(), activate=lambda: None,
+        name="dup", agent_role=AgentRole.ORCHESTRATOR, precondition_topics=(), activate=lambda: None,
     )
     controller.register(ks)
     with pytest.raises(ValueError, match="already registered"):
@@ -138,7 +142,7 @@ def test_stale_topic_cannot_activate_a_current_revision_source():
     controller = BlackboardController(board)
     controller.register(KnowledgeSource(
         name="current_only",
-        agent_role="Role",
+        agent_role=AgentRole.ORCHESTRATOR,
         precondition_topics=("ready",),
         activate=lambda: None,
     ))
@@ -151,7 +155,7 @@ def test_declared_output_topic_is_enforced_and_failure_is_audited():
     controller = BlackboardController(board)
     controller.register(KnowledgeSource(
         name="broken",
-        agent_role="Role",
+        agent_role=AgentRole.ORCHESTRATOR,
         precondition_topics=("ready",),
         activate=lambda: None,
         output_topics=("result.required",),
@@ -164,21 +168,21 @@ def test_declared_output_topic_is_enforced_and_failure_is_audited():
     assert controller.agenda()["activations"][0]["status"] == "FAILED"
 
 
-def test_require_all_is_off_by_default_so_a_short_run_still_returns():
-    # The unit-level contract stays what it was: an unmet precondition makes
-    # run() a no-op rather than an error.
+def test_allow_partial_lets_a_short_run_return_instead_of_raising():
+    # Completeness is the default, so a caller that means to register more
+    # sources than the board satisfies must say so.
     board = _board()
     controller = BlackboardController(board)
     controller.register(KnowledgeSource(
         name="never",
-        agent_role="Role",
+        agent_role=AgentRole.ORCHESTRATOR,
         precondition_topics=("absent",),
         activate=lambda: None,
     ))
-    assert controller.run() == []
+    assert controller.run(allow_partial=True) == []
 
 
-def test_require_all_turns_a_stalled_chain_into_an_error():
+def test_a_stalled_chain_is_an_error_by_default():
     # The output-topic check cannot see this case: `blocked` never ran at all,
     # so nothing failed to publish -- control simply reached a fixpoint early.
     board = _board()
@@ -186,16 +190,16 @@ def test_require_all_turns_a_stalled_chain_into_an_error():
     fired: list[str] = []
     controller = BlackboardController(board)
     controller.register(KnowledgeSource(
-        name="runs", agent_role="Role", precondition_topics=("start",),
+        name="runs", agent_role=AgentRole.ORCHESTRATOR, precondition_topics=("start",),
         activate=lambda: fired.append("runs"),
     ))
     controller.register(KnowledgeSource(
-        name="blocked", agent_role="Role",
+        name="blocked", agent_role=AgentRole.ORCHESTRATOR,
         precondition_topics=("never.published",),
         activate=lambda: fired.append("blocked"),
     ))
     with pytest.raises(RuntimeError, match="never activated"):
-        controller.run(require_all=True)
+        controller.run()
     # The source that could run still did; the error is about completeness.
     assert fired == ["runs"]
 
@@ -205,12 +209,12 @@ def test_stall_error_names_the_topic_each_stalled_source_is_waiting_on():
     _publish_topic(board, "start")
     controller = BlackboardController(board)
     controller.register(KnowledgeSource(
-        name="blocked", agent_role="Role",
+        name="blocked", agent_role=AgentRole.ORCHESTRATOR,
         precondition_topics=("start", "missing.topic"),
         activate=lambda: None,
     ))
     with pytest.raises(RuntimeError) as excinfo:
-        controller.run(require_all=True)
+        controller.run()
     message = str(excinfo.value)
     assert "blocked awaiting missing.topic" in message
     # The precondition that *was* satisfied is not reported as outstanding.
@@ -230,7 +234,7 @@ def test_a_model_commit_hides_earlier_topics_and_the_stall_says_so():
     _publish_topic(board, "start")
     controller = BlackboardController(board)
     controller.register(KnowledgeSource(
-        name="downstream", agent_role="Role",
+        name="downstream", agent_role=AgentRole.ORCHESTRATOR,
         precondition_topics=("start",),
         activate=lambda: None,
     ))
@@ -250,7 +254,7 @@ def test_a_model_commit_hides_earlier_topics_and_the_stall_says_so():
     assert controller.activatable() == []
 
     with pytest.raises(RuntimeError) as excinfo:
-        controller.run(require_all=True)
+        controller.run()
     message = str(excinfo.value)
     assert "downstream awaiting start" in message
     assert "hidden by a model revision" in message
@@ -260,12 +264,91 @@ def test_a_topic_nobody_produced_is_not_reported_as_hidden():
     board = _board()
     controller = BlackboardController(board)
     controller.register(KnowledgeSource(
-        name="blocked", agent_role="Role",
+        name="blocked", agent_role=AgentRole.ORCHESTRATOR,
         precondition_topics=("never.produced",),
         activate=lambda: None,
     ))
     with pytest.raises(RuntimeError) as excinfo:
-        controller.run(require_all=True)
+        controller.run()
     message = str(excinfo.value)
     assert "blocked awaiting never.produced" in message
     assert "hidden by a model revision" not in message
+
+
+def test_an_unknown_agent_role_is_rejected_at_registration_not_in_the_artefacts():
+    with pytest.raises(ValueError, match="unknown agent role"):
+        KnowledgeSource(
+            name="typo", agent_role="AssurenceAgent",
+            precondition_topics=(), activate=lambda: None,
+        )
+
+
+def test_a_known_role_given_as_a_string_is_normalised_to_the_enum():
+    source = KnowledgeSource(
+        name="ok", agent_role="VerificationAgent",
+        precondition_topics=(), activate=lambda: None,
+    )
+    assert source.agent_role is AgentRole.VERIFICATION
+
+
+def test_a_process_fact_survives_a_model_commit_and_a_model_fact_does_not():
+    """The root-cause fix: staleness is a property the publisher declares.
+
+    Before this, every record expired with the revision, so a chain spanning a
+    commit could not proceed and opportunistic activation was unavailable to any
+    pipeline that revises its model. Now the record says whether it asserts
+    something about the model.
+    """
+    board = _board()
+    board.publish(
+        RecordType.RESULT, "phase.done", "Test", {}, revision_bound=False,
+    )
+    board.publish(RecordType.ANALYSIS, "analysis.of.model", "Test", {})
+    controller = BlackboardController(board)
+
+    board.commit_model(
+        "part def P;",
+        base_revision=board.current_revision,
+        base_digest=board.current_model.model_digest,
+        producer="Test",
+    )
+
+    published = controller._published_topics()
+    assert "phase.done" in published        # process fact: still true
+    assert "analysis.of.model" not in published  # model fact: now stale
+
+
+def test_a_chain_spanning_a_model_commit_now_completes():
+    board = _board()
+    board.publish(
+        RecordType.SOURCE, "start", "Test", {}, revision_bound=False,
+    )
+    fired: list[str] = []
+    controller = BlackboardController(board)
+
+    def commit_then_publish():
+        board.commit_model(
+            "part def P;",
+            base_revision=board.current_revision,
+            base_digest=board.current_model.model_digest,
+            producer="Test",
+        )
+        board.publish(
+            RecordType.RESULT, "mid", "Test", {}, revision_bound=False,
+        )
+        fired.append("first")
+
+    controller.register(KnowledgeSource(
+        name="first", agent_role=AgentRole.ORCHESTRATOR,
+        precondition_topics=("start",), activate=commit_then_publish,
+        output_topics=("mid",),
+    ))
+    controller.register(KnowledgeSource(
+        name="second", agent_role=AgentRole.ORCHESTRATOR,
+        # Two preconditions published under *different* model revisions -- the
+        # case that could never activate before.
+        precondition_topics=("start", "mid"),
+        activate=lambda: fired.append("second"),
+    ))
+    controller.run()
+    assert fired == ["first", "second"]

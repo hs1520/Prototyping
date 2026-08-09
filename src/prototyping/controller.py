@@ -20,9 +20,27 @@ interleaved with LLM generation and is not a pure board-triggered activation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable, List, Tuple
 
 from .blackboard import Blackboard, RecordType
+
+
+class AgentRole(str, Enum):
+    """Who a knowledge source acts as.
+
+    A closed set rather than free text, because the role is written onto every
+    ``control.activation`` record and therefore into the run artefacts. A typo
+    in a free string reaches the evidence and is only discoverable by reading
+    it; a name that is not a member fails here, at registration.
+    """
+
+    ORCHESTRATOR = "Orchestrator"
+    DESIGN = "DesignAgent"
+    VERIFICATION = "VerificationAgent"
+    ASSURANCE = "AssuranceAgent"
+    AG_PLANNING = "AGPlanningAgent"
+    REPAIR = "RepairAgent"
 
 
 @dataclass(frozen=True)
@@ -30,10 +48,24 @@ class KnowledgeSource:
     """A downstream knowledge source with typed board preconditions."""
 
     name: str
-    agent_role: str
+    agent_role: AgentRole
     precondition_topics: Tuple[str, ...]
     activate: Callable[[], Any]
     output_topics: Tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        # Accept the string form so existing call sites and archived fixtures
+        # keep working, but reject anything outside the closed set instead of
+        # letting it through to the artefacts.
+        try:
+            role = AgentRole(self.agent_role)
+        except ValueError:
+            raise ValueError(
+                f"knowledge source {self.name!r} declares unknown agent role "
+                f"{self.agent_role!r}; expected one of "
+                + ", ".join(sorted(item.value for item in AgentRole))
+            ) from None
+        object.__setattr__(self, "agent_role", role)
 
 
 class BlackboardController:
@@ -54,27 +86,33 @@ class BlackboardController:
         return self
 
     def _published_topics(self) -> set:
-        # A stale publication must never activate work against a newer model
-        # revision. Upstream facts that remain valid are explicitly reaffirmed
-        # on the current revision by the orchestrator/knowledge source.
-        #
-        # Note what this costs, because it is not obvious and it bounds the
-        # architecture. A source whose preconditions were published under
-        # *different* revisions can never activate, since only one revision is
-        # ever visible here. Chains therefore have to be either revision-flat or
-        # strictly sequential, each source depending on the topic its immediate
-        # predecessor just published. The generation pipeline is the second kind,
-        # and it stays viable only because its board never commits a model — see
-        # the invariant recorded at the `pipeline-runtime` board's construction.
-        # If that ever changes, `run(require_all=True)` reports it as a stall and
-        # `_hidden_topics` says which topics the revision change took away, so
-        # the diagnosis does not depend on recognising how the commit was
-        # written.
+        """Topics available as preconditions right now.
+
+        A stale publication must never activate work against a newer model
+        revision -- but only records that assert something *about* a model go
+        stale when the model changes. A process fact such as "the requirements
+        phase finished" is not falsified by a later revision, and expiring it
+        would break any chain that spans a commit: a source needing two topics
+        published under different revisions could never activate, forcing every
+        chain to be either revision-flat or strictly sequential and making
+        opportunistic activation unavailable in exactly the pipelines that
+        revise their model.
+
+        The record carries the distinction (``revision_bound``), so it is made
+        by the publisher, which knows what it is asserting, rather than inferred
+        here. Revision-bound records still expire on the revision they were
+        published against; unbound ones persist.
+        """
+        current_revision = self.board.current_revision
+        current_digest = self.board.current_model.model_digest
         return {
             record.topic
             for record in self.board.records()
-            if record.model_revision == self.board.current_revision
-            and record.model_digest == self.board.current_model.model_digest
+            if not getattr(record, "revision_bound", True)
+            or (
+                record.model_revision == current_revision
+                and record.model_digest == current_digest
+            )
         }
 
     def _topics_at_any_revision(self) -> set:
@@ -102,7 +140,7 @@ class BlackboardController:
             and all(topic in published for topic in source.precondition_topics)
         ]
 
-    def run(self, *, require_all: bool = False) -> List[dict]:
+    def run(self, *, allow_partial: bool = False) -> List[dict]:
         """Activate every activatable source to a fixpoint.
 
         Deterministic: sources fire in registration order; each fires at most once.
@@ -110,17 +148,18 @@ class BlackboardController:
         decisions are auditable on the board, then the agenda is re-evaluated so a
         source unblocked by that firing runs on the next pass.
 
-        ``require_all`` closes a gap the output-topic check leaves open. That
-        check catches a source that ran and failed to publish what it declared;
-        it cannot catch a source that never became activatable at all, because
-        reaching a fixpoint early is indistinguishable from finishing. The
-        agenda records the difference in ``activated``/``preconditions_met``, but
-        a caller that does not read those fields would take a short run for a
-        complete one. Pass ``require_all=True`` where every registered source is
-        meant to fire — the generation pipeline does — and a stalled chain raises
-        instead of returning a partial result. It stays off by default so that
-        callers registering a subset, and the unit tests that assert an unmet
-        precondition makes ``run()`` a no-op, keep their semantics.
+        Completeness is the default. The output-topic check catches a source
+        that ran and failed to publish what it declared; it cannot catch one
+        that never became activatable, because reaching a fixpoint early is
+        indistinguishable from finishing. Leaving that to the caller made
+        correctness opt-in, and every caller that forgot got a partial run
+        reported as a success. So ``run`` now raises when a registered source
+        never fires, naming it and the topics it is still waiting on.
+
+        ``allow_partial=True`` is for callers that deliberately register more
+        sources than the board will satisfy -- a conditional registration whose
+        precondition may legitimately be absent. Those callers state the
+        intention; nobody gets it by omission.
         """
         agenda: List[dict] = []
         progressed = True
@@ -147,7 +186,7 @@ class BlackboardController:
                         "BlackboardController",
                         {
                             "knowledge_source": source.name,
-                            "agent_role": source.agent_role,
+                            "agent_role": source.agent_role.value,
                             "precondition_topics": list(
                                 source.precondition_topics
                             ),
@@ -160,7 +199,7 @@ class BlackboardController:
                     )
                     entry = {
                         "knowledge_source": source.name,
-                        "agent_role": source.agent_role,
+                        "agent_role": source.agent_role.value,
                         "precondition_topics": list(
                             source.precondition_topics
                         ),
@@ -177,7 +216,7 @@ class BlackboardController:
                     "BlackboardController",
                     {
                         "knowledge_source": source.name,
-                        "agent_role": source.agent_role,
+                        "agent_role": source.agent_role.value,
                         "precondition_topics": list(source.precondition_topics),
                         "output_topics": list(source.output_topics),
                         "activation_index": activation_index,
@@ -186,7 +225,7 @@ class BlackboardController:
                 )
                 entry = {
                     "knowledge_source": source.name,
-                    "agent_role": source.agent_role,
+                    "agent_role": source.agent_role.value,
                     "precondition_topics": list(source.precondition_topics),
                     "output_topics": list(source.output_topics),
                     "activation_record_id": record.record_id,
@@ -195,7 +234,7 @@ class BlackboardController:
                 self.activation_log.append(entry)
                 agenda.append({**entry, "result": result})
                 progressed = True
-        if require_all:
+        if not allow_partial:
             stalled = {
                 source.name
                 for source in self._sources
@@ -240,7 +279,7 @@ class BlackboardController:
             "registered_knowledge_sources": [
                 {
                     "name": source.name,
-                    "agent_role": source.agent_role,
+                    "agent_role": source.agent_role.value,
                     "precondition_topics": list(source.precondition_topics),
                     "output_topics": list(source.output_topics),
                     "activated": source.name in self._activated,

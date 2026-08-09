@@ -984,7 +984,11 @@ class CollaborationMixin:
                     activate=lambda: self._build_ag_trace(model_text),
                     output_topics=("analysis.ag_trace",),
                 ))
-            for activation in controller.run():
+            # Registration here is conditional on what the board already holds,
+            # and `ag_semantic_assurance` may additionally wait on a
+            # verification result that this arm does not produce. A source that
+            # does not fire is a legitimate outcome, not a stalled chain.
+            for activation in controller.run(allow_partial=True):
                 if (
                     activation["knowledge_source"] == "verification_planning"
                     and activation["result"] is not None

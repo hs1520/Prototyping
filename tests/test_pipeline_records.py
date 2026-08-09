@@ -109,7 +109,10 @@ def test_generation_dependency_stops_when_upstream_output_is_removed():
             source = replace(source, activate=publish)
         controller.register(source)
 
-    controller.run()
+    # A partial run is the point of this test: one source's output publication
+    # was removed, so its dependents must stay ineligible. Completeness is not
+    # being asserted here, so it is opted out of explicitly.
+    controller.run(allow_partial=True)
     activated = [item["knowledge_source"] for item in controller.activation_log]
     assert "pre_ag_simulation" in activated
     assert "ag_contract_reconciliation" not in activated
@@ -158,7 +161,7 @@ def test_no_module_commits_a_model_onto_the_runtime_board_by_name():
     check only matches the literal attribute access, so it misses an alias, a
     board passed into a helper, or a getattr. The actual guard is semantic and
     lives in the controller: `_hidden_topics` detects the condition from the
-    board's contents, and `run(require_all=True)` raises naming the topics a
+    board's contents, and `run()` raises naming the topics a
     revision change took away -- see
     `test_a_model_commit_hides_earlier_topics_and_the_stall_says_so`. This test
     is kept because it fails at edit time rather than at run time, which is

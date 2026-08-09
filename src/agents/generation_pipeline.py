@@ -26,6 +26,12 @@ class GenerationPipelineMixin:
             topic,
             "PipelineKnowledgeSource",
             {"phase": topic, "status": "COMPLETED"},
+            # A phase-completion record states that a step of the process ran,
+            # not a property of the model it ran against. Committing a model
+            # afterwards does not make it untrue, so it must not expire with the
+            # revision -- otherwise every topic published before a commit would
+            # vanish and the chain would stall halfway.
+            revision_bound=False,
         )
         return result
 
