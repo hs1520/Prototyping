@@ -2037,9 +2037,10 @@ class RefinementMixin:
         # word causes a parser error ("Unexpected 'item'").  Fix deterministically
         # by quoting the offending name — no LLM needed.
         if latest_result.parser_errors:
-            working_sysml = fix_keyword_item_names(working_sysml)
-            re_checked = check_syntax(working_sysml)
+            candidate = fix_keyword_item_names(working_sysml)
+            re_checked = check_syntax(candidate)
             if re_checked.total_errors() < latest_result.total_errors():
+                working_sysml = candidate
                 n_fixed = latest_result.total_errors() - re_checked.total_errors()
                 print(
                     f"\n  ┌─ [KW-FIX]  {n_fixed} reserved-keyword item name(s) quoted"
@@ -2108,27 +2109,35 @@ class RefinementMixin:
                         flush=True,
                     )
 
-                # Re-check after applying Levenshtein fixes
-                working_sysml = lev.fixed_text
-                re_checked    = check_syntax(working_sysml)
+                # Re-check after applying Levenshtein fixes, and adopt only on a
+                # strict improvement so the rule is the same for every rewrite.
+                candidate = lev.fixed_text
+                re_checked = check_syntax(candidate)
+                if re_checked.total_errors() < latest_result.total_errors():
+                    working_sysml = candidate
+                    self._sync_model_text(working_model, working_sysml)
 
-                # Update model metadata so downstream reads the fixed text
-                self._sync_model_text(working_model, working_sysml)
+                    if not re_checked.has_errors:
+                        print(
+                            f"  └─ [LEV-FIX]  ✓ all errors resolved"
+                            f" — LLM fix loop skipped",
+                            flush=True,
+                        )
+                        return working_sysml, re_checked, lev_hints, True
 
-                if not re_checked.has_errors:
                     print(
-                        f"  └─ [LEV-FIX]  ✓ all errors resolved"
-                        f" — LLM fix loop skipped",
+                        f"  └─ [LEV-FIX]  {re_checked.total_errors()} error(s) remain"
+                        f" — continuing to LLM fix loop",
                         flush=True,
                     )
-                    return working_sysml, re_checked, lev_hints, True
-
-                print(
-                    f"  └─ [LEV-FIX]  {re_checked.total_errors()} error(s) remain"
-                    f" — continuing to LLM fix loop",
-                    flush=True,
-                )
-                latest_result = re_checked
+                    latest_result = re_checked
+                else:
+                    print(
+                        f"  └─ [LEV-FIX]  ↩ rejected: error count did not fall"
+                        f" ({latest_result.total_errors()} → "
+                        f"{re_checked.total_errors()})",
+                        flush=True,
+                    )
 
             # Collect distance-2 hints for the LLM prompt
             lev_hints = lev.hints
@@ -2138,26 +2147,36 @@ class RefinementMixin:
         # machine guard → inject `attribute X : Real/Boolean = <default>;`
         # into the owner part def.  No LLM needed — purely programmatic.
         if latest_result.sema_errors:
-            working_sysml, n_injected = _inject_missing_guard_attrs(
+            candidate, n_injected = _inject_missing_guard_attrs(
                 working_sysml, latest_result.sema_errors
             )
             if n_injected:
-                re_checked = check_syntax(working_sysml)
-                self._sync_model_text(working_model, working_sysml)
-                print(
-                    f"\n  ┌─ [ATTR-INJ]  {n_injected} missing guard attribute(s)"
-                    f" injected — no LLM needed",
-                    flush=True,
-                )
-                if not re_checked.has_errors:
-                    print(f"  └─ [ATTR-INJ]  ✓ all errors resolved", flush=True)
-                    return working_sysml, re_checked, lev_hints, True
-                print(
-                    f"  └─ [ATTR-INJ]  {re_checked.total_errors()} error(s) remain"
-                    f" — continuing",
-                    flush=True,
-                )
-                latest_result = re_checked
+                re_checked = check_syntax(candidate)
+                if re_checked.total_errors() < latest_result.total_errors():
+                    working_sysml = candidate
+                    self._sync_model_text(working_model, working_sysml)
+                    print(
+                        f"\n  ┌─ [ATTR-INJ]  {n_injected} missing guard attribute(s)"
+                        f" injected — no LLM needed",
+                        flush=True,
+                    )
+                    if not re_checked.has_errors:
+                        print(f"  └─ [ATTR-INJ]  ✓ all errors resolved", flush=True)
+                        return working_sysml, re_checked, lev_hints, True
+                    print(
+                        f"  └─ [ATTR-INJ]  {re_checked.total_errors()} error(s) remain"
+                        f" — continuing",
+                        flush=True,
+                    )
+                    latest_result = re_checked
+                else:
+                    print(
+                        f"\n  ┌─ [ATTR-INJ]  ↩ rejected {n_injected} injection(s):"
+                        f" error count did not fall"
+                        f" ({latest_result.total_errors()} → "
+                        f"{re_checked.total_errors()})",
+                        flush=True,
+                    )
 
         return working_sysml, latest_result, lev_hints, False
 
