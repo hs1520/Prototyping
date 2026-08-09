@@ -96,3 +96,46 @@ def test_a_chain_of_two_fixers_still_converges_under_the_strict_rule():
     assert result.total_errors() == 0
     assert "attribute lowBattery" in fixed  # ATTR-INJ contributed
     assert check_syntax(fixed).total_errors() == 0
+
+
+# A guard names `y`, which nothing declares; `x` is declared but in a different
+# part definition, so it is not visible from the guard. `x` is one edit away
+# from `y`, which is enough for the Levenshtein fixer to propose it.
+_TYPO_WHOSE_NEAREST_NAME_IS_OUT_OF_SCOPE = (
+    "package M { part def A { attribute x : Real = 1.0; } "
+    "part def B { state def S { entry; then a; state a; "
+    "transition t first a if y > 1 then a; } } }"
+)
+
+
+def test_a_rewrite_that_fixes_nothing_is_rejected_even_though_it_looks_right():
+    """The case the strict rule exists for, and the reason it is not cosmetic.
+
+    Substituting `x` for `y` resolves nothing: the error merely moves from "no
+    feature named y" to "no feature named x", because `x` is declared in another
+    part. The error count is identical before and after, so the edit is refused.
+    Without the rule it would be adopted, and a guard would silently come to
+    reference a different variable in a different part -- a model that passes
+    every syntactic check while meaning something else.
+    """
+    text = _TYPO_WHOSE_NEAREST_NAME_IS_OUT_OF_SCOPE
+    before = check_syntax(text)
+    assert len(before.sema_errors) == 1
+    assert "No Feature named 'y' found" in before.sema_errors[0]["message"]
+
+    # The fixer does propose the substitution ...
+    import src.agents.refinement as refinement
+
+    proposed = refinement.try_fix_sema_errors(text, before.sema_errors)
+    assert proposed.fixed_text != text
+    assert "if x >" in proposed.fixed_text
+    # ... and it resolves nothing.
+    assert check_syntax(proposed.fixed_text).total_errors() == before.total_errors()
+
+    # Tier 0 therefore keeps the original identifier, and reaches zero errors by
+    # declaring the attribute the guard actually names.
+    fixed, result, _hints, resolved = _tier0(text)
+    assert "if y >" in fixed
+    assert "if x >" not in fixed
+    assert resolved is True
+    assert result.total_errors() == 0
