@@ -7,6 +7,10 @@ from ..utils.sysml_text_utils import get_sysml_text
 from .pipeline_records import GenerationContext
 
 
+
+_ORCH = "Orchestrator"
+_ASSUR = "AssuranceAgent"
+
 class GenerationPipelineMixin:
     def _publish_phase(
         self,
@@ -28,34 +32,40 @@ class GenerationPipelineMixin:
     def _generation_sources(self, context: GenerationContext):
         from ..prototyping.controller import KnowledgeSource
 
+        # The agent role is declared per source, not derived from the name. It
+        # used to be `"Orchestrator" if "ag_" not in name else "AssuranceAgent"`,
+        # which happened to be right for these twenty-one and is wrong for any
+        # future name that merely contains those two characters. The role reaches
+        # the run artefacts on every activation record, so a misclassification
+        # would land in the evidence rather than staying in the code.
         phases = (
-            ("requirements_input", ("pipeline.request",), "phase.requirements.ready", self._phase_requirements),
-            ("collaboration_board", ("phase.requirements.ready",), "phase.board.ready", self._phase_board),
-            ("ag_generation_planning", ("phase.board.ready",), "phase.ag_plan.ready", self._phase_ag_plan),
-            ("design_handoff", ("phase.ag_plan.ready",), "phase.design_handoff.ready", self._phase_design_handoff),
-            ("initial_design_generation", ("phase.design_handoff.ready",), "phase.initial_design.ready", self._phase_initial_design),
-            ("iterative_refinement", ("phase.initial_design.ready",), "phase.refinement.ready", self._phase_refinement),
-            ("sitl_refinement", ("phase.refinement.ready",), "phase.sitl_refinement.ready", self._phase_sitl_refinement),
-            ("functional_closure", ("phase.sitl_refinement.ready",), "phase.functional_closure.ready", self._phase_functional_closure),
-            ("terminal_plan_enforcement", ("phase.functional_closure.ready",), "phase.terminal_plan.ready", self._phase_terminal_plan),
-            ("pre_ag_simulation", ("phase.terminal_plan.ready",), "phase.pre_ag_simulation.ready", self._phase_pre_ag_simulation),
-            ("ag_contract_reconciliation", ("phase.pre_ag_simulation.ready",), "phase.ag_reconciliation.ready", self._phase_ag_reconciliation),
-            ("terminal_model_commit", ("phase.ag_reconciliation.ready",), "phase.terminal_commit.ready", self._phase_terminal_commit),
-            ("verification_planning", ("phase.terminal_commit.ready",), "phase.verification.ready", self._phase_verification),
-            ("ag_semantic_assurance", ("phase.verification.ready",), "phase.assurance.ready", self._phase_assurance),
-            ("collaboration_artifacts", ("phase.assurance.ready",), "phase.collaboration.ready", self._phase_collaboration_artifacts),
-            ("terminal_snapshot_sync", ("phase.collaboration.ready",), "phase.terminal_snapshot.ready", self._phase_terminal_snapshot),
-            ("ag_non_degradation", ("phase.terminal_snapshot.ready",), "phase.ag_non_degradation.ready", self._phase_ag_non_degradation),
-            ("structural_qualification", ("phase.ag_non_degradation.ready",), "phase.structural.ready", self._phase_structural),
-            ("semantic_qualification", ("phase.structural.ready",), "phase.semantic.ready", self._phase_semantic),
-            ("model_qualification", ("phase.semantic.ready",), "phase.qualification.ready", self._phase_qualification),
-            ("generation_reporting", ("phase.qualification.ready",), "phase.generation.complete", self._phase_reporting),
+            ("requirements_input", _ORCH, ("pipeline.request",), "phase.requirements.ready", self._phase_requirements),
+            ("collaboration_board", _ORCH, ("phase.requirements.ready",), "phase.board.ready", self._phase_board),
+            ("ag_generation_planning", _ASSUR, ("phase.board.ready",), "phase.ag_plan.ready", self._phase_ag_plan),
+            ("design_handoff", _ORCH, ("phase.ag_plan.ready",), "phase.design_handoff.ready", self._phase_design_handoff),
+            ("initial_design_generation", _ORCH, ("phase.design_handoff.ready",), "phase.initial_design.ready", self._phase_initial_design),
+            ("iterative_refinement", _ORCH, ("phase.initial_design.ready",), "phase.refinement.ready", self._phase_refinement),
+            ("sitl_refinement", _ORCH, ("phase.refinement.ready",), "phase.sitl_refinement.ready", self._phase_sitl_refinement),
+            ("functional_closure", _ORCH, ("phase.sitl_refinement.ready",), "phase.functional_closure.ready", self._phase_functional_closure),
+            ("terminal_plan_enforcement", _ORCH, ("phase.functional_closure.ready",), "phase.terminal_plan.ready", self._phase_terminal_plan),
+            ("pre_ag_simulation", _ASSUR, ("phase.terminal_plan.ready",), "phase.pre_ag_simulation.ready", self._phase_pre_ag_simulation),
+            ("ag_contract_reconciliation", _ASSUR, ("phase.pre_ag_simulation.ready",), "phase.ag_reconciliation.ready", self._phase_ag_reconciliation),
+            ("terminal_model_commit", _ORCH, ("phase.ag_reconciliation.ready",), "phase.terminal_commit.ready", self._phase_terminal_commit),
+            ("verification_planning", _ORCH, ("phase.terminal_commit.ready",), "phase.verification.ready", self._phase_verification),
+            ("ag_semantic_assurance", _ASSUR, ("phase.verification.ready",), "phase.assurance.ready", self._phase_assurance),
+            ("collaboration_artifacts", _ORCH, ("phase.assurance.ready",), "phase.collaboration.ready", self._phase_collaboration_artifacts),
+            ("terminal_snapshot_sync", _ORCH, ("phase.collaboration.ready",), "phase.terminal_snapshot.ready", self._phase_terminal_snapshot),
+            ("ag_non_degradation", _ASSUR, ("phase.terminal_snapshot.ready",), "phase.ag_non_degradation.ready", self._phase_ag_non_degradation),
+            ("structural_qualification", _ORCH, ("phase.ag_non_degradation.ready",), "phase.structural.ready", self._phase_structural),
+            ("semantic_qualification", _ORCH, ("phase.structural.ready",), "phase.semantic.ready", self._phase_semantic),
+            ("model_qualification", _ORCH, ("phase.semantic.ready",), "phase.qualification.ready", self._phase_qualification),
+            ("generation_reporting", _ORCH, ("phase.qualification.ready",), "phase.generation.complete", self._phase_reporting),
         )
         sources = []
-        for name, preconditions, output, phase in reversed(phases):
+        for name, role, preconditions, output, phase in reversed(phases):
             sources.append(KnowledgeSource(
                 name=name,
-                agent_role="Orchestrator" if "ag_" not in name else "AssuranceAgent",
+                agent_role=role,
                 precondition_topics=preconditions,
                 output_topics=(output,),
                 activate=lambda p=phase, o=output: self._publish_phase(

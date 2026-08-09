@@ -57,6 +57,17 @@ class BlackboardController:
         # A stale publication must never activate work against a newer model
         # revision. Upstream facts that remain valid are explicitly reaffirmed
         # on the current revision by the orchestrator/knowledge source.
+        #
+        # Note what this costs, because it is not obvious and it bounds the
+        # architecture. A source whose preconditions were published under
+        # *different* revisions can never activate, since only one revision is
+        # ever visible here. Chains therefore have to be either revision-flat or
+        # strictly sequential, each source depending on the topic its immediate
+        # predecessor just published. The generation pipeline is the second kind,
+        # and it stays viable only because its board never commits a model — see
+        # the invariant recorded at the `pipeline-runtime` board's construction.
+        # If that ever changes, `run(require_all=True)` is what turns the
+        # resulting stall into a loud failure instead of a short run.
         return {
             record.topic
             for record in self.board.records()
@@ -74,13 +85,25 @@ class BlackboardController:
             and all(topic in published for topic in source.precondition_topics)
         ]
 
-    def run(self) -> List[dict]:
+    def run(self, *, require_all: bool = False) -> List[dict]:
         """Activate every activatable source to a fixpoint.
 
         Deterministic: sources fire in registration order; each fires at most once.
         A firing publishes a typed ``control.activation`` record so the control
         decisions are auditable on the board, then the agenda is re-evaluated so a
         source unblocked by that firing runs on the next pass.
+
+        ``require_all`` closes a gap the output-topic check leaves open. That
+        check catches a source that ran and failed to publish what it declared;
+        it cannot catch a source that never became activatable at all, because
+        reaching a fixpoint early is indistinguishable from finishing. The
+        agenda records the difference in ``activated``/``preconditions_met``, but
+        a caller that does not read those fields would take a short run for a
+        complete one. Pass ``require_all=True`` where every registered source is
+        meant to fire — the generation pipeline does — and a stalled chain raises
+        instead of returning a partial result. It stays off by default so that
+        callers registering a subset, and the unit tests that assert an unmet
+        precondition makes ``run()`` a no-op, keep their semantics.
         """
         agenda: List[dict] = []
         progressed = True
@@ -155,6 +178,30 @@ class BlackboardController:
                 self.activation_log.append(entry)
                 agenda.append({**entry, "result": result})
                 progressed = True
+        if require_all:
+            stalled = [
+                source.name
+                for source in self._sources
+                if source.name not in self._activated
+            ]
+            if stalled:
+                published = self._published_topics()
+                detail = "; ".join(
+                    f"{source.name} awaiting "
+                    + ", ".join(
+                        sorted(
+                            topic
+                            for topic in source.precondition_topics
+                            if topic not in published
+                        )
+                    )
+                    for source in self._sources
+                    if source.name in set(stalled)
+                )
+                raise RuntimeError(
+                    "control reached a fixpoint with knowledge sources that "
+                    f"never activated: {detail}"
+                )
         return agenda
 
     def agenda(self) -> dict:

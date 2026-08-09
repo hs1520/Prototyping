@@ -162,3 +162,56 @@ def test_declared_output_topic_is_enforced_and_failure_is_audited():
     assert len(activation) == 1
     assert activation[0].payload["status"] == "FAILED"
     assert controller.agenda()["activations"][0]["status"] == "FAILED"
+
+
+def test_require_all_is_off_by_default_so_a_short_run_still_returns():
+    # The unit-level contract stays what it was: an unmet precondition makes
+    # run() a no-op rather than an error.
+    board = _board()
+    controller = BlackboardController(board)
+    controller.register(KnowledgeSource(
+        name="never",
+        agent_role="Role",
+        precondition_topics=("absent",),
+        activate=lambda: None,
+    ))
+    assert controller.run() == []
+
+
+def test_require_all_turns_a_stalled_chain_into_an_error():
+    # The output-topic check cannot see this case: `blocked` never ran at all,
+    # so nothing failed to publish -- control simply reached a fixpoint early.
+    board = _board()
+    _publish_topic(board, "start")
+    fired: list[str] = []
+    controller = BlackboardController(board)
+    controller.register(KnowledgeSource(
+        name="runs", agent_role="Role", precondition_topics=("start",),
+        activate=lambda: fired.append("runs"),
+    ))
+    controller.register(KnowledgeSource(
+        name="blocked", agent_role="Role",
+        precondition_topics=("never.published",),
+        activate=lambda: fired.append("blocked"),
+    ))
+    with pytest.raises(RuntimeError, match="never activated"):
+        controller.run(require_all=True)
+    # The source that could run still did; the error is about completeness.
+    assert fired == ["runs"]
+
+
+def test_stall_error_names_the_topic_each_stalled_source_is_waiting_on():
+    board = _board()
+    _publish_topic(board, "start")
+    controller = BlackboardController(board)
+    controller.register(KnowledgeSource(
+        name="blocked", agent_role="Role",
+        precondition_topics=("start", "missing.topic"),
+        activate=lambda: None,
+    ))
+    with pytest.raises(RuntimeError) as excinfo:
+        controller.run(require_all=True)
+    message = str(excinfo.value)
+    assert "blocked awaiting missing.topic" in message
+    # The precondition that *was* satisfied is not reported as outstanding.
+    assert "start" not in message.split("awaiting", 1)[1]

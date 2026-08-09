@@ -114,3 +114,53 @@ def test_generation_dependency_stops_when_upstream_output_is_removed():
     assert "pre_ag_simulation" in activated
     assert "ag_contract_reconciliation" not in activated
     assert "generation_reporting" not in activated
+
+
+def test_generation_sources_declare_their_agent_role_explicitly():
+    """The role must not be re-derived from a substring of the source name.
+
+    `pre_ag_simulation` is the case that made the old rule fragile: it contains
+    "ag_" and is correctly an AssuranceAgent source, so the substring test
+    happened to agree. Any future name that merely contains those characters
+    would not, and the role travels into every activation record in the run
+    artefacts.
+    """
+    import re
+    from pathlib import Path
+
+    source = Path("src/agents/generation_pipeline.py").read_text()
+    # Strip comments: the rule being guarded against is quoted in one, and the
+    # point is that it must not be live code.
+    code = "\n".join(
+        re.sub(r"#.*$", "", line) for line in source.splitlines()
+    )
+    assert '"ag_" not in name' not in code, (
+        "agent role is being derived from the source name again"
+    )
+    block = source[source.index("phases = ("):source.index("sources = []")]
+    rows = re.findall(r'\("([a-z_]+)",\s*(_ORCH|_ASSUR),', block)
+    assert len(rows) == 21
+    assurance = {name for name, role in rows if role == "_ASSUR"}
+    assert assurance == {
+        "ag_generation_planning",
+        "pre_ag_simulation",
+        "ag_contract_reconciliation",
+        "ag_semantic_assurance",
+        "ag_non_degradation",
+    }
+
+
+def test_runtime_control_board_never_commits_a_model():
+    """The controller only sees topics at the board's current revision.
+
+    Committing a model onto the runtime board would advance that revision and
+    hide every phase topic published before it, stalling the chain. Nothing may
+    call commit_model on `_runtime_board`.
+    """
+    from pathlib import Path
+
+    for path in Path("src").rglob("*.py"):
+        text = path.read_text()
+        assert "_runtime_board.commit_model" not in text, (
+            f"{path} commits a model onto the runtime control board"
+        )

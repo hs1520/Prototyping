@@ -24,6 +24,16 @@ class PipelineStateMixin:
         # have provenance, then replace the whole runtime board when the next
         # generate() call starts.  This prevents cross-run log growth without
         # discarding the history needed to audit one result.
+        #
+        # INVARIANT: nothing commits a model onto this board.  `commit_model` is
+        # called only on the collaboration board and in `ag_repair`, never here,
+        # so this board's model revision stays at its initial value for the whole
+        # of one `generate()`.  The controller depends on that: it only sees
+        # topics published at the board's current revision, so advancing the
+        # revision mid-run would hide every phase topic published before the
+        # commit and stall the chain.  `run(require_all=True)` at the call site
+        # turns that stall into an error rather than a silently short run, but
+        # the invariant is the actual protection — do not commit models here.
         self._runtime_board = Blackboard("pipeline-runtime")
         self._runtime_board.publish_typed(
             RecordType.CONTROL,

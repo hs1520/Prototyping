@@ -144,6 +144,8 @@ class Orchestrator(
         controller = BlackboardController(self._runtime_board)
         for source in self._generation_sources(context):
             controller.register(source)
-        controller.run()
+        # Every one of the registered generation sources is meant to fire: the
+        # chain is a total order and a short run is a defect, not an outcome.
+        controller.run(require_all=True)
         context.result["control_agenda"] = controller.agenda()
         return context.result
