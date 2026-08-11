@@ -297,6 +297,32 @@ class TestRetryAndTimeout:
         refusal."""
         assert sum(LLMInterface.RETRY_DELAYS) >= 300
 
+    def test_a_cancelled_vertex_request_is_retried(self):
+        """The exact text a 2026-08-11 pilot failed on, twice.
+
+        The provider error reaches the classifier as a plain RuntimeError with
+        the status only in its message, so adding 499 to _RETRYABLE_STATUS
+        would have been dead code.
+        """
+        from src.llm.interface import VertexLLM
+
+        exc = RuntimeError(
+            "Vertex provider error (ClientError): 499 CANCELLED. "
+            "{'error': {'code': 499, 'message': 'The operation was "
+            "cancelled.', 'status': 'CANCELLED'}} status_code=None code=499"
+        )
+        assert VertexLLM._is_retryable(exc) is True
+
+    def test_this_clients_own_deadline_is_still_not_retried(self):
+        """Retrying a request our own wall clock killed meets the same wall
+        clock again, which is why timeouts are excluded."""
+        from src.llm.interface import VertexLLM
+
+        exc = TimeoutError(
+            "Vertex request exceeded hard wall-clock timeout of 600 seconds"
+        )
+        assert VertexLLM._is_retryable(exc) is False
+
     def test_retryable_detection_by_status_code(self):
         exc = RuntimeError("boom")
         exc.status_code = 503

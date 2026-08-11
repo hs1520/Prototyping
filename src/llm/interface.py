@@ -1045,6 +1045,16 @@ class VertexLLM(LLMInterface):
         text = f"{type(exc).__name__} {exc}".lower()
         if status == 504 or "deadline" in text or "timeout" in text:
             return False
+        # 499 is the provider abandoning the request, not this client reaching
+        # its deadline: across two full pilots the longest single attempt was
+        # 218 s against a 600 s timeout, and raising that timeout from 300 s
+        # changed nothing. Matched on text because the provider error is
+        # re-raised as a plain RuntimeError carrying the status only in its
+        # message -- a _RETRYABLE_STATUS entry would never see it. The hard
+        # wall-clock timeout this class enforces itself raises TimeoutError and
+        # is excluded above, so a deadline we set is still not retried.
+        if "499" in text or "cancelled" in text:
+            return True
         return super()._is_retryable(exc)
 
 
