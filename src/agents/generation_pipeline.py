@@ -181,11 +181,75 @@ class GenerationPipelineMixin:
             c.pre_ag_sysml, c.requirements
         )
 
+    #: Scoped to one chain while the profile is proven end to end.  Widening
+    #: this is a deliberate act: every added chain changes more generated text.
+    _ACTION_EFFECT_CHAINS = ("REQ_SAFE_005",)
+
+    def _derive_action_effects(self) -> tuple:
+        """The planned response chains, from the specs this run actually decided.
+
+        `LLM_DECIDED_SPEC` re-decides every name, so the static chain library is
+        a template and not the authority: the archived models call the arbiter's
+        response `setParachuteDeploymentCommandAndParachuteResponseSelected`
+        where the library says `setParachuteResponseSelectedAndIssue...`.
+        Deriving from the library instead of the run's own specs resolves to
+        nothing.
+        """
+        from ..prototyping.action_effects import derive_action_effects
+
+        ag_plan = self._active_ag_generation_plan or {}
+        specs = ag_plan.get("specs") or ()
+        model_plan = self._active_model_generation_plan
+        components = (
+            model_plan.get("components") or ()
+            if isinstance(model_plan, Mapping) else ()
+        )
+        connections = (
+            model_plan.get("connections") or ()
+            if isinstance(model_plan, Mapping) else ()
+        )
+        effects: list = []
+        for spec in specs:
+            if getattr(spec, "source_requirement", None) not in (
+                self._ACTION_EFFECT_CHAINS
+            ):
+                continue
+            effects.extend(
+                derive_action_effects(spec, components, connections)
+            )
+        return tuple(effects)
+
     def _phase_terminal_commit(self, c: GenerationContext) -> None:
+        self._materialize_action_effects(c)
         self._commit_terminal_model(
             c.final_sysml, producer="Orchestrator.generate"
         )
         self._ensure_terminal_ready()
+
+    def _materialize_action_effects(self, c: GenerationContext) -> None:
+        """Write the planned send and type edge, and keep it only if it holds.
+
+        Applied here because every other writer of behaviour text has already
+        run: `materialize_owned_behavior_obligations` re-renders a state machine
+        with bare entry actions, and anything written before it is replaced.
+        The result is kept only when the syntax check does not get worse, which
+        is what bounds a rewrite that names elements the plan believes exist.
+        """
+        from ..prototyping.action_effects import materialize_action_effects
+
+        self.last_action_effects = self._derive_action_effects()
+        if not self.last_action_effects:
+            return
+        candidate, written = materialize_action_effects(
+            c.final_sysml, self.last_action_effects
+        )
+        if not written or candidate == c.final_sysml:
+            return
+        before = check_syntax(c.final_sysml).total_errors()
+        after = check_syntax(candidate).total_errors()
+        if after > before:
+            return
+        c.final_sysml = candidate
 
     def _phase_verification(self, c: GenerationContext) -> None:
         c.verification_plan = self._run_verification_handoff()
@@ -250,7 +314,7 @@ class GenerationPipelineMixin:
         effects = parse_action_effects(
             (plan or {}).get("action_effects") if isinstance(plan, Mapping)
             else None
-        )
+        ) or getattr(self, "last_action_effects", ())
         report = analyze_action_semantics(
             c.final_sysml,
             requirements=c.requirements,

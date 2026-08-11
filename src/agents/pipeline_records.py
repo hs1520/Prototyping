@@ -59,6 +59,7 @@ class PipelineRuntimeState:
     ag_binding_report: Any = None
     ag_non_degradation: Any = None
     action_semantics_audit: Any = None
+    action_effects: tuple = ()
     estimator_calibration: Any = None
     ag_generation_plan: Optional[AGGenerationPlanRecord] = None
     model_generation_plan: Optional[ModelGenerationPlanRecord] = None

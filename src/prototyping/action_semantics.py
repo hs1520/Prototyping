@@ -289,6 +289,10 @@ def analyze_action_semantics(
     # following the usage's type edge into the definition body, which is exactly
     # what a bare usage does not have.
     machines = extract_state_machines(text)
+    # Where each definition is actually invoked through a type edge. The usage
+    # label is not part of the key: it is a local name, and three runs of one
+    # configuration spelled the same correct invocation three ways.
+    invocations: Dict[str, List[Tuple[str, str, str]]] = {}
     sends_by_action: Dict[str, List[Tuple[str, str]]] = {}
     send_records: List[SendRecord] = []
     accept_triggers: Dict[str, List[str]] = {}
@@ -300,6 +304,10 @@ def analyze_action_semantics(
                 ).append(machine.name)
         for state in machine.states:
             definition = state.entry_action_def or state.do_action_def
+            if definition:
+                invocations.setdefault(definition, []).append(
+                    (machine.owner_part or "", machine.name, state.name)
+                )
             for event, port in state.sends:
                 if definition:
                     sends_by_action.setdefault(definition, []).append(
@@ -345,7 +353,7 @@ def analyze_action_semantics(
     report.sends = send_records
     plan = tuple(action_effect_plan or ())
     report.requirement_chains = _check_planned_chains(
-        plan, report, machines, text
+        plan, report, invocations, text
     )
     report.summary = _summarise(report, plan, bare_names, typed_targets)
     report.issues = _collect_issues(report, plan)
@@ -394,13 +402,14 @@ def _summarise(
 def _check_planned_chains(
     plan: Sequence[PlannedActionEffect],
     report: ActionSemanticsReport,
-    machines: Sequence[Any],
+    invocations: Dict[str, List[Tuple[str, str, str]]],
     text: str,
 ) -> List[Dict[str, Any]]:
     chains: List[Dict[str, Any]] = []
     by_name = {item.name: item for item in report.actions}
     for effect in plan:
         failures: List[str] = []
+        evidence: Dict[str, Any] = {}
         if not effect.is_complete_identity():
             failures.append(PLAN_IDENTITY_INCOMPLETE)
         elif effect.effect_kind == EXTERNAL_OR_UNSUPPORTED:
@@ -419,8 +428,41 @@ def _check_planned_chains(
                 failures.append(UNRESOLVED_ACTION)
             if record.body_empty:
                 failures.append(UNSUPPORTED_BODY)
-            if effect.usage_label not in record.typed_by:
+            # The planned response state must invoke this definition through a
+            # type edge. The usage *label* is not checked: it is a local name,
+            # and three runs of one configuration spelled the same correct
+            # invocation `onParachute`, `...SelectedAction` and `onSet...`.
+            # Requiring the planned spelling would reject a correct model for
+            # the reason this profile exists to stop — treating a name as
+            # evidence — while requiring nothing but "some state somewhere"
+            # would let an unrelated machine discharge the obligation.
+            observed = tuple(invocations.get(effect.action_def, ()))
+            if not any(
+                owner == effect.owner_def
+                and behaviour == effect.owner_behavior
+                and state == effect.response_state
+                for owner, behaviour, state in observed
+            ):
                 failures.append(BARE_INVOCATION)
+                # Recorded because the first failure of this check cost a
+                # separate reading of the model to answer "which of the three
+                # did not match" — a report that states only the code cannot
+                # distinguish a missing type edge from a renamed state.
+                evidence = {
+                    "expected": {
+                        "owner_def": effect.owner_def,
+                        "owner_behavior": effect.owner_behavior,
+                        "response_state": effect.response_state,
+                    },
+                    "observed": [
+                        {
+                            "owner_def": owner,
+                            "owner_behavior": behaviour,
+                            "response_state": state,
+                        }
+                        for owner, behaviour, state in observed
+                    ],
+                }
             if (effect.event_type, effect.sender_port) not in record.sends:
                 failures.append(UNSUPPORTED_BODY)
         match = next(
@@ -448,6 +490,7 @@ def _check_planned_chains(
             "action_def": effect.action_def,
             "status": "PASS" if not failures else "FAIL",
             "failures": sorted(set(failures)),
+            **({"invocation": evidence} if evidence else {}),
         })
     return chains
 

@@ -148,6 +148,31 @@ def _capitalise(value: str) -> str:
     return value[:1].upper() + value[1:] if value else value
 
 
+def arbitration_response_state(spec: AGChainSpec) -> Optional[str]:
+    """The state name the arbitration behaviour is emitted with.
+
+    Two fields of the spec describe this one state and they do not agree: the
+    action comes from ``arbiter.response_action`` while the state comes from the
+    priority block, so ``component.response_state`` is not what reaches the
+    model. Reading the component field instead produced a model whose response
+    action matched the plan and whose state did not — `parachute_deployment`
+    against a planned `parachuteResponseSelected`. Anything that needs to name
+    this state must ask here rather than re-deriving it.
+    """
+    priority = getattr(spec, "priority", None)
+    if priority is None:
+        return None
+    runtime_catalog_bound = (
+        bool(priority.member_provenance)
+        or priority.source_kind == "STUDENT_DERIVED_DESIGN_CONSTRAINT"
+    )
+    return (
+        _sysml_identifier(priority.selected_response)
+        if runtime_catalog_bound
+        else priority.selected_state
+    )
+
+
 def _dedup(concepts: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(c for c in concepts if c))
 
@@ -403,11 +428,7 @@ def emit_ag_package(
                 f"    item def "
                 f"{_sysml_identifier(lower.title())}RequestSignal;"
             )
-        selected_token = (
-            _sysml_identifier(priority.selected_response)
-            if runtime_catalog_bound
-            else priority.selected_state
-        )
+        selected_token = arbitration_response_state(spec)
         arbiter = next(
             (
                 component for component in spec.components

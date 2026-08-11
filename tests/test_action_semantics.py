@@ -90,6 +90,8 @@ def _effect(**overrides) -> PlannedActionEffect:
     base = dict(
         requirement_id="REQ_FUNC_005",
         owner_def="PayloadController",
+        owner_behavior="PayloadControllerBehavior",
+        response_state="Releasing",
         action_def="releasePayload",
         usage_label="onRelease",
         effect_kind=SEND_EVENT,
@@ -463,3 +465,34 @@ def test_the_archived_plans_round_trip_without_gaining_a_schema_10_key():
         assert rebuilt["schema_version"] == archived.get("schema_version")
         assert "action_effects" not in rebuilt
     assert checked
+
+
+def test_an_invocation_from_an_unrelated_state_does_not_discharge_the_plan():
+    """`some state somewhere types it` is not the obligation.
+
+    Dropping the usage-label requirement was right — the label is a local name
+    and three runs of one configuration spelled it three ways — but the check
+    still has to bind the invocation to the planned response state, or an
+    unrelated machine satisfies it.
+    """
+    from src.prototyping.action_semantics import BARE_INVOCATION
+
+    elsewhere = _COMPLETE.replace(
+        "state Releasing { entry action onRelease : releasePayload; }",
+        "state Releasing;",
+    ).replace(
+        "state Held;",
+        "state Held { entry action stray : releasePayload; }",
+    )
+    chain = _chain(elsewhere, _effect())
+    assert chain["status"] == "FAIL"
+    assert BARE_INVOCATION in chain["failures"]
+
+
+def test_the_planned_response_state_may_spell_its_usage_label_any_way():
+    for label in ("onRelease", "releasePayloadAction", "doIt"):
+        model = _COMPLETE.replace(
+            "entry action onRelease : releasePayload;",
+            f"entry action {label} : releasePayload;",
+        )
+        assert _chain(model, _effect())["status"] == "PASS", label
