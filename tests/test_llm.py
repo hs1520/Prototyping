@@ -257,6 +257,46 @@ class TestRetryAndTimeout:
         assert llm.impl_calls == len(llm.RETRY_DELAYS) + 1
         assert llm.ledger.failures == 1
 
+    def test_max_call_seconds_measures_one_attempt_not_the_retry_chain(self):
+        """A cancelled call is only diagnosable against the client deadline if
+        the recorded duration is one request, so retries and their sleeps must
+        not accumulate into it."""
+        import time
+
+        class _SlowThenFast(LLMInterface):
+            RETRY_DELAYS = (0.0, 0.0)
+
+            def __init__(self):
+                self.impl_calls = 0
+
+            def _complete_impl(self, messages, temperature, max_tokens):
+                self.impl_calls += 1
+                time.sleep(0.05 if self.impl_calls == 1 else 0.0)
+                if self.impl_calls == 1:
+                    raise RuntimeError("429 RESOURCE_EXHAUSTED")
+                return LLMResponse(content="ok", prompt_tokens=1, completion_tokens=1)
+
+        llm = _SlowThenFast()
+        llm.complete([Message(role="user", content="hi")])
+        usage = llm.ledger.as_dict()
+        assert usage["max_call_seconds"] >= 0.05
+        assert usage["max_call_seconds"] <= usage["elapsed_seconds"]
+
+    def test_a_failed_call_still_records_how_long_it_ran(self):
+        """The archived failure context stores the provider's text and nothing
+        else; without this the run cannot say whether the deadline was hit."""
+        llm = _FlakyLLM(failures=10)
+        with pytest.raises(RuntimeError):
+            llm.complete([Message(role="user", content="hi")])
+        assert llm.ledger.as_dict()["max_call_seconds"] >= 0.0
+        assert llm.ledger.failures == 1
+
+    def test_the_backoff_ladder_outlasts_a_quota_window(self):
+        """Three of eighteen paired runs were lost to 429 on 2026-08-11 while
+        429 was already retryable: the ladder gave up 62 s after the first
+        refusal."""
+        assert sum(LLMInterface.RETRY_DELAYS) >= 300
+
     def test_retryable_detection_by_status_code(self):
         exc = RuntimeError("boom")
         exc.status_code = 503

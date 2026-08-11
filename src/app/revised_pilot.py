@@ -102,7 +102,12 @@ class RevisedPilotConfig:
     code_revision: str
     requirements: tuple[str, ...]
     quality_threshold: float = 0.75
-    llm_timeout_seconds: float = 300.0
+    #: 300 s cancelled two runs of the 2026-08-11 pilot client-side, surfacing
+    #: as 499 CANCELLED, which the Vertex subclass deliberately does not retry.
+    #: Raised rather than made retryable: a request the deadline killed will
+    #: hit the same deadline again, and `llm_usage.max_call_seconds` now records
+    #: whether any single attempt actually approaches it.
+    llm_timeout_seconds: float = 600.0
     task_session_max_turns: int = 12
     task_session_max_tokens: int = 600000
     context_token_budget: int = 12000

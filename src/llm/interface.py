@@ -121,18 +121,39 @@ class TokenLedger:
     retries: int = 0
     failures: int = 0
     elapsed_seconds: float = 0.0
+    #: Longest single provider attempt, retries and their sleeps excluded.
+    #: `elapsed_seconds` is cumulative and cannot answer the question a
+    #: cancelled call raises -- whether any one request approached the client
+    #: deadline -- so a 499 was previously undiagnosable from the artefacts.
+    max_call_seconds: float = 0.0
 
-    def record(self, response: LLMResponse, elapsed: float, retries: int) -> None:
+    def record(
+        self, response: LLMResponse, elapsed: float, retries: int,
+        attempt_seconds: float = 0.0,
+    ) -> None:
         self.calls += 1
         self.prompt_tokens += int(response.prompt_tokens or 0)
         self.completion_tokens += int(response.completion_tokens or 0)
         self.retries += retries
         self.elapsed_seconds += elapsed
+        self.max_call_seconds = max(self.max_call_seconds, attempt_seconds)
 
-    def record_failure(self, elapsed: float, retries: int) -> None:
+    def note_attempt(self, attempt_seconds: float) -> None:
+        """Record an attempt that is about to be retried.
+
+        Without this the slow attempt that caused a retry is invisible: only
+        the fast one that succeeded afterwards would be measured, which is the
+        opposite of what a deadline investigation needs.
+        """
+        self.max_call_seconds = max(self.max_call_seconds, attempt_seconds)
+
+    def record_failure(
+        self, elapsed: float, retries: int, attempt_seconds: float = 0.0
+    ) -> None:
         self.failures += 1
         self.retries += retries
         self.elapsed_seconds += elapsed
+        self.max_call_seconds = max(self.max_call_seconds, attempt_seconds)
 
     @property
     def total_tokens(self) -> int:
@@ -147,6 +168,7 @@ class TokenLedger:
             "retries": self.retries,
             "failures": self.failures,
             "elapsed_seconds": round(self.elapsed_seconds, 1),
+            "max_call_seconds": round(self.max_call_seconds, 1),
         }
 
     def summary(self) -> str:
@@ -176,7 +198,12 @@ class LLMInterface(ABC):
 
     # Backoff schedule for transient errors; jittered ±25% per attempt.
     # Override per instance (e.g. in tests) to speed up or disable retries.
-    RETRY_DELAYS: Tuple[float, ...] = (2.0, 5.0, 15.0, 40.0)
+    #: Sized for a quota window rather than a network blip.  A paired pilot on
+    #: 2026-08-11 lost three of eighteen runs to 429 RESOURCE_EXHAUSTED even
+    #: though 429 is retryable and the completed runs used 22 retries between
+    #: them: the previous ladder gave up 62 seconds after the first refusal,
+    #: which is shorter than the window being waited out.
+    RETRY_DELAYS: Tuple[float, ...] = (5.0, 15.0, 60.0, 120.0, 300.0)
 
     _RETRYABLE_MARKERS: Tuple[str, ...] = (
         "429", "rate limit", "resource_exhausted", "resource exhausted",
@@ -286,11 +313,16 @@ class LLMInterface(ABC):
         retries = 0
         start = time.monotonic()
         while True:
+            attempt_start = time.monotonic()
             try:
                 response = self._complete_impl(
                     messages, temperature=resolved_temp, max_tokens=max_tokens
                 )
-                self.ledger.record(response, time.monotonic() - start, retries)
+                attempt_seconds = time.monotonic() - attempt_start
+                self.ledger.record(
+                    response, time.monotonic() - start, retries,
+                    attempt_seconds=attempt_seconds,
+                )
                 self._notify_call_observers(
                     messages=messages,
                     response=response,
@@ -303,14 +335,28 @@ class LLMInterface(ABC):
                 )
                 return response
             except Exception as exc:
+                attempt_seconds = time.monotonic() - attempt_start
                 if not delays or not self._is_retryable(exc):
-                    self.ledger.record_failure(time.monotonic() - start, retries)
+                    self.ledger.record_failure(
+                        time.monotonic() - start, retries,
+                        attempt_seconds=attempt_seconds,
+                    )
+                    # Printed because the provider exception carries no timing
+                    # and the archived failure context stores only its text: a
+                    # cancelled call is indistinguishable from a rejected one
+                    # without knowing how long it ran.
+                    print(
+                        f"  [LLM] giving up after {attempt_seconds:.0f}s "
+                        f"({type(exc).__name__}: {str(exc)[:120]})"
+                    )
                     raise
+                self.ledger.note_attempt(attempt_seconds)
                 delay = delays.pop(0) * random.uniform(0.75, 1.25)
                 retries += 1
                 print(
-                    f"  [LLM] transient error ({type(exc).__name__}: "
-                    f"{str(exc)[:120]}) — retry {retries} in {delay:.0f}s"
+                    f"  [LLM] transient error after {attempt_seconds:.0f}s "
+                    f"({type(exc).__name__}: {str(exc)[:120]}) — "
+                    f"retry {retries} in {delay:.0f}s"
                 )
                 time.sleep(delay)
 
