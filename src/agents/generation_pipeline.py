@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Mapping
+from ..prototyping.action_effects import LEGACY_AUDIT
 from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import get_sysml_text
 from .pipeline_records import GenerationContext
@@ -231,6 +232,32 @@ class GenerationPipelineMixin:
             c.final_model, c.final_sysml, c.requirements,
             prior_score=c.pre_terminal_score, dse_best_config=None,
         )
+        self._audit_action_semantics(c)
+
+    def _audit_action_semantics(self, c: GenerationContext) -> None:
+        """Record what the committed actions do.  Advisory: it changes no verdict.
+
+        Run at the tail of the terminal snapshot rather than as its own
+        knowledge source: the audit is read-only, and a new source would change
+        the 21/5 phase-and-role counts that the pipeline's own tests pin and the
+        write-up states.  A profile that gates on this evidence should add a
+        real phase deliberately, and revise those counts with it.
+        """
+        from ..dse.functional_behavior import functional_behavior_diagnosis
+        from ..prototyping.action_semantics import analyze_action_semantics
+
+        report = analyze_action_semantics(
+            c.final_sysml,
+            requirements=c.requirements,
+            profile=getattr(self, "action_semantics_profile", LEGACY_AUDIT),
+        )
+        payload = report.to_dict()
+        # Merged here rather than inside the audit: the strict reading lives in
+        # `dse`, and having `prototyping` call it would close a package cycle.
+        payload["functional_behaviour_diagnosis"] = functional_behavior_diagnosis(
+            c.final_sysml, list(c.requirements or ())
+        )
+        self.last_action_semantics_audit = payload
 
     def _phase_ag_non_degradation(self, c: GenerationContext) -> None:
         self.last_ag_non_degradation = None
@@ -309,6 +336,7 @@ class GenerationPipelineMixin:
             "semantic_fidelity_report": c.semantic_fidelity_report,
             "ag_binding_report": self.last_ag_binding_report,
             "ag_non_degradation": self.last_ag_non_degradation,
+            "action_semantics_audit": self.last_action_semantics_audit,
             "functional_closure": dict(self.last_functional_closure or {}),
             "verification_anchor_attempts": list(self.last_verification_anchor_attempts),
             "requirement_semantic_analysis": dict(self.last_requirement_semantic_analysis or {}),

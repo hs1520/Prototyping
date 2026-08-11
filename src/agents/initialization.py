@@ -123,6 +123,7 @@ class InitializationMixin:
         self._active_model_generation_plan: Optional[Dict[str, Any]] = None
         self.last_ag_binding_report: Optional[Dict[str, Any]] = None
         self.last_ag_non_degradation: Optional[Dict[str, Any]] = None
+        self.last_action_semantics_audit: Optional[Dict[str, Any]] = None
         self.task_session_max_turns = int(task_session_max_turns)
         self.task_session_max_tokens = int(task_session_max_tokens)
         if self.task_session_max_turns <= 0 or self.task_session_max_tokens <= 0:

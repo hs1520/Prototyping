@@ -423,6 +423,7 @@ class PrototypingPipeline:
             ),
             "ag_binding_report": result.get("ag_binding_report"),
             "ag_non_degradation": result.get("ag_non_degradation"),
+            "action_semantics_audit": result.get("action_semantics_audit"),
         }
         revised = result.get("revised_experiment")
         if revised:

@@ -187,3 +187,116 @@ def functional_behavior_status(model_text: str, requirements: List[str]) -> Dict
         elif has_state_machines:
             out[rid] = BEHAVIOR_ABSENT                     # response action not produced anywhere
     return out
+
+
+# ---------------------------------------------------------------------------
+# Strict diagnosis: what the name-based rule credits, and what survives an
+# owner- and type-aware reading of the same model.  Advisory only — nothing
+# here changes `functional_behavior_status`, so archived runs stay reproducible.
+# ---------------------------------------------------------------------------
+
+_PART_DEF_RE = re.compile(r"\bpart\s+def\s+([A-Za-z_]\w*)\s*\{")
+
+#: Why a requirement the legacy rule credits does not survive the strict one.
+NAME_MATCH_ONLY = "credited by a name match on an action that does nothing"
+BARE_INVOCATION_ONLY = "the crediting state invokes no action definition"
+FOREIGN_OWNER = "the crediting response belongs to another part"
+NO_STRICT_DIFFERENCE = ""
+
+
+def _satisfy_owners(model_text: str) -> Dict[str, str]:
+    """{normalised requirement id: part def that satisfies it}."""
+    from ..utils.sysml_text_utils import find_block_end
+
+    owners: Dict[str, str] = {}
+    for match in _PART_DEF_RE.finditer(model_text):
+        opening = model_text.find("{", match.start())
+        closing = find_block_end(model_text, opening)
+        if closing == -1:
+            continue
+        for satisfied in _SATISFY_RE.finditer(model_text[opening:closing]):
+            owners.setdefault(_norm(satisfied.group(1)), match.group(1))
+    return owners
+
+
+def functional_behavior_diagnosis(
+    model_text: str, requirements: List[str]
+) -> Dict[str, Dict[str, str]]:
+    """Per functional requirement: legacy verdict, strict verdict, and the gap.
+
+    The legacy rule credits a requirement when some reachable state's action
+    *name* contains an intent marker.  The name can be the usage label of a bare
+    invocation, whose definition is empty, or even the SysML library type
+    ``Action`` that a bare usage resolves to — and it need not belong to the part
+    that satisfies the requirement.  The strict reading requires the crediting
+    state to invoke a named action definition, owned by the satisfying part,
+    whose body is not empty.
+    """
+    from ..prototyping.action_semantics import analyze_action_semantics
+
+    legacy = functional_behavior_status(model_text, requirements)
+    audit = analyze_action_semantics(model_text)
+    by_name = {record.name.lower(): record for record in audit.actions}
+    owners = _satisfy_owners(model_text)
+    text = {m.group(0).replace("_", "-"): r for r in requirements
+            for m in [_REQ_ID_RE.search(r)] if m}
+
+    strict_support: Dict[str, List[tuple]] = {}
+    for machine in extract_state_machines(model_text):
+        reachable = reachable_states(machine)
+        for state in machine.states:
+            if state.name not in reachable:
+                continue
+            definition = state.entry_action_def or state.do_action_def
+            record = by_name.get(str(definition).lower()) if definition else None
+            names = {
+                value.lower() for value in (
+                    state.entry_action, state.do_action, definition
+                ) if value
+            }
+            names.update(command.lower() for command, _ in state.sends)
+            strict_support.setdefault(machine.owner_part or "", []).append(
+                (frozenset(names), record)
+            )
+
+    out: Dict[str, Dict[str, str]] = {}
+    for rid, legacy_status in legacy.items():
+        markers: Set[str] = set()
+        low = text.get(rid, rid).lower()
+        for intent in _FUNC_INTENT_PRIORITY:
+            keywords, response = _FUNC_INTENT[intent]
+            if any(keyword in low for keyword in keywords):
+                markers = set(response)
+                break
+        owner = owners.get(_norm(rid))
+        reason = NAME_MATCH_ONLY
+        strict = BEHAVIOR_ABSENT
+        if legacy_status != BEHAVIORALLY_VERIFIED:
+            strict, reason = legacy_status, NO_STRICT_DIFFERENCE
+        else:
+            foreign_only = True
+            for part, records in strict_support.items():
+                for names, record in records:
+                    if not any(marker in name
+                               for name in names for marker in markers):
+                        continue
+                    if owner and part != owner:
+                        continue
+                    foreign_only = False
+                    if record is None:
+                        reason = BARE_INVOCATION_ONLY
+                    elif record.body_empty:
+                        reason = NAME_MATCH_ONLY
+                    else:
+                        strict, reason = BEHAVIORALLY_VERIFIED, NO_STRICT_DIFFERENCE
+                        break
+                if strict == BEHAVIORALLY_VERIFIED:
+                    break
+            if strict != BEHAVIORALLY_VERIFIED and foreign_only:
+                reason = FOREIGN_OWNER
+        out[rid] = {
+            "legacy_status": legacy_status,
+            "strict_status": strict,
+            "status_difference_reason": reason,
+        }
+    return out

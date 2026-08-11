@@ -193,6 +193,10 @@ def write_revised_run_artifacts(
         ("ag_authoring_attempts", "ag_authoring_attempts.json"),
         ("verification_plan", "verification_plan.json"),
         ("control_agenda", "control_agenda.json"),
+        # Written as its own file as well as into the run report: a conformance
+        # payload nested under a stage key has twice been overwritten wholesale
+        # by a later stage before reaching an artefact.
+        ("action_semantics_audit", "action_semantics_audit.json"),
     ):
         payload = run_result.get(key)
         if payload is not None:

@@ -17,6 +17,11 @@ import traceback
 from typing import Any, Callable, Mapping, Sequence
 
 from ..prototyping.ag_contracts import AG_CHECKER_VERSION
+from ..prototyping.action_effects import (
+    LEGACY_AUDIT,
+    PROFILES as ACTION_SEMANTICS_PROFILES,
+    PROFILE_VERSION as ACTION_SEMANTICS_PROFILE_VERSION,
+)
 from ..prototyping.evaluation_protocol import build_descriptive_pilot_manifest
 from ..prototyping.experiment_arms import (
     REVISED_EXPERIMENT_NAMESPACE,
@@ -103,6 +108,11 @@ class RevisedPilotConfig:
     context_token_budget: int = 12000
     ag_checker_version: str = AG_CHECKER_VERSION
     pattern_profile_version: str = "bounded-ag-safety-profile-2.0"
+    #: Frozen per pilot and carried in the configuration digest: a run that
+    #: enforces action effects is not the same evaluator as one that only
+    #: records them, and the two must never be aggregated.
+    action_semantics_profile: str = LEGACY_AUDIT
+    action_semantics_profile_version: str = ACTION_SEMANTICS_PROFILE_VERSION
     r2_generation_mode: str = R2_DETERMINISTIC_GENERATION_MODE
     r2_intervention_version: str = R2_DETERMINISTIC_INTERVENTION_VERSION
     r2_authored_syntax_max_attempts: int = 3
@@ -126,6 +136,11 @@ class RevisedPilotConfig:
             raise ValueError("revised pilot requires BLACKBOARD_AG_V1")
         if tuple(self.arms) != REVISED_PILOT_ARMS:
             raise ValueError("revised pilot requires exact R0/R1/R2 arm ordering")
+        if self.action_semantics_profile not in ACTION_SEMANTICS_PROFILES:
+            raise ValueError(
+                "unknown action semantics profile: "
+                f"{self.action_semantics_profile}"
+            )
         # Three is the floor, not the design.  The study stays DESCRIPTIVE_PILOT
         # at any n — more repetitions tighten the descriptive estimates and let
         # more chain behaviour be observed; they do not license confirmatory

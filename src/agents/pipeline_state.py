@@ -140,6 +140,7 @@ _STATE_FIELDS = {
     "last_ag_authoring_attempts": "ag_authoring_attempts",
     "last_ag_binding_report": "ag_binding_report",
     "last_ag_non_degradation": "ag_non_degradation",
+    "last_action_semantics_audit": "action_semantics_audit",
     "last_estimator_calibration": "estimator_calibration",
 }
 
