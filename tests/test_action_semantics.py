@@ -388,3 +388,78 @@ def test_the_strict_reading_leaves_the_legacy_verdict_untouched():
     before = dict(functional_behavior_status(model, requirements))
     functional_behavior_diagnosis(model, requirements)
     assert functional_behavior_status(model, requirements) == before
+
+
+# ---------------------------------------------------------------------------
+# Schema 10: the plan carries the response chain, so a requirement's evidence
+# is an identity to resolve rather than a name to match.
+# ---------------------------------------------------------------------------
+
+def _schema_10_payload() -> dict:
+    return {
+        "schema_version": "9.0",
+        "components": [{"name": "PayloadController", "responsibility": "x"}],
+        "connections": [{
+            "source_component": "PayloadController",
+            "source_port": "payloadCommand",
+            "target_component": "PayloadActuator",
+            "target_port": "payloadCommandIn",
+        }],
+        "action_effects": [_effect().to_dict()],
+    }
+
+
+def test_a_plan_that_carries_action_effects_declares_schema_10():
+    from src.prototyping.generation_plan import ModelGenerationPlan
+
+    plan = ModelGenerationPlan.from_dict(_schema_10_payload())
+    assert plan.schema_version == "10.0"
+    assert len(plan.action_effects) == 1
+    assert plan.to_dict()["action_effects"][0]["requirement_id"] == "REQ_FUNC_005"
+
+
+def test_a_plan_without_action_effects_serialises_exactly_as_before():
+    """Schema 1-9 plans must round-trip unchanged, or every archived run's
+    plan artefact stops being comparable with the one the code now produces."""
+    from src.prototyping.generation_plan import ModelGenerationPlan
+
+    payload = _schema_10_payload()
+    payload.pop("action_effects")
+    plan = ModelGenerationPlan.from_dict(payload)
+    assert plan.action_effects == ()
+    assert plan.schema_version != "10.0"
+    assert "action_effects" not in plan.to_dict()
+
+
+def test_an_action_effect_missing_an_identity_fails_the_plan_closed():
+    from src.prototyping.generation_plan import ModelGenerationPlan
+
+    payload = _schema_10_payload()
+    payload["action_effects"][0]["consumer"]["accept_transition"] = ""
+    plan = ModelGenerationPlan.from_dict(payload)
+    assert any("does not name every element" in issue for issue in plan.issues)
+
+
+def test_the_archived_plans_round_trip_without_gaining_a_schema_10_key():
+    import glob
+    import json
+
+    from src.prototyping.generation_plan import ModelGenerationPlan
+
+    reports = sorted(glob.glob(
+        "examples/output/pilot_n6_v8_full_20260808_1029/*/*/run_report.json"
+    ))
+    if not reports:                 # evidence archives are optional in a checkout
+        return
+    checked = 0
+    for path in reports:
+        archived = json.loads(
+            open(path, encoding="utf-8").read()
+        ).get("whole_model_generation_plan")
+        if not archived:
+            continue
+        checked += 1
+        rebuilt = ModelGenerationPlan.from_dict(archived).to_dict()
+        assert rebuilt["schema_version"] == archived.get("schema_version")
+        assert "action_effects" not in rebuilt
+    assert checked

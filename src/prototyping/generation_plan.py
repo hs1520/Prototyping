@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Mapping, Sequence
 
+from .action_effects import PlannedActionEffect, parse_action_effects
 from .ag_behavior_plan import (
     BehaviorObligation,
     BehaviorObligationPlan,
@@ -472,6 +473,11 @@ class ModelGenerationPlan:
     semantic_bindings: tuple[SemanticBindingPlan, ...] = ()
     constraint_plans: tuple[ConstraintPlan, ...] = ()
     planned_behaviors: tuple[PlannedBehavior, ...] = ()
+    #: Schema 10. One response action per functional requirement, bound to
+    #: element identities rather than names, so a response can be checked
+    #: instead of matched by spelling. Absent in schema 1-9, and absent here
+    #: means the audit reports no planned chains rather than inferring them.
+    action_effects: tuple[PlannedActionEffect, ...] = ()
     behavior_obligations: tuple[BehaviorObligation, ...] = ()
     behavior_identity_reconciliations: tuple[str, ...] = ()
     constraint_identity_reconciliations: tuple[str, ...] = ()
@@ -496,7 +502,15 @@ class ModelGenerationPlan:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        # `action_effects` is emitted only when the plan carries one, so a
+        # schema 1-9 plan serialises byte-identically to how it always has and
+        # every archived run stays comparable.
+        effects = (
+            {"action_effects": [item.to_dict() for item in self.action_effects]}
+            if self.action_effects else {}
+        )
         return {
+            **effects,
             "schema_version": self.schema_version,
             "artifact_role": "WHOLE_MODEL_GENERATION_PLAN",
             "semantic_authority": "GENERATION_INPUT_ONLY_COMMITTED_SYSML_WINS",
@@ -1106,6 +1120,14 @@ class ModelGenerationPlan:
         )
         raw_behaviors = payload.get("behaviors")
         archived_schema = str(payload.get("schema_version") or "").strip()
+        action_effects = parse_action_effects(payload.get("action_effects"))
+        for effect in action_effects:
+            if not effect.is_complete_identity():
+                issues.append(
+                    "action effect for "
+                    f"{effect.requirement_id or '<no requirement>'} "
+                    "does not name every element the check needs"
+                )
         legacy_behavior_schema = archived_schema in {
             "1.0", "3.0", "5.0", "6.0", "7.0", "8.0",
         }
@@ -1411,6 +1433,7 @@ class ModelGenerationPlan:
             semantic_bindings=tuple(semantic_bindings),
             constraint_plans=constraint_plans,
             planned_behaviors=planned_behaviors,
+            action_effects=action_effects,
             behavior_obligations=behavior_obligations,
             behavior_identity_reconciliations=(
                 behavior_identity_reconciliations
@@ -1422,7 +1445,9 @@ class ModelGenerationPlan:
             issues=tuple(dict.fromkeys(issues)),
             advisories=advisories,
             schema_version=(
-                archived_schema
+                "10.0"
+                if action_effects
+                else archived_schema
                 if planned_behaviors and archived_schema == "8.0"
                 else "9.0"
                 if planned_behaviors
@@ -1897,7 +1922,9 @@ def attach_ag_behavior_obligations(
         )),
         issues=tuple(dict.fromkeys(issues)),
         schema_version=(
-            plan.schema_version
+            "10.0"
+            if plan.action_effects
+            else plan.schema_version
             if plan.planned_behaviors and plan.schema_version == "8.0"
             else "9.0"
             if plan.planned_behaviors

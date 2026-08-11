@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Mapping
-from ..prototyping.action_effects import LEGACY_AUDIT
+from ..prototyping.action_effects import LEGACY_AUDIT, parse_action_effects
 from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import get_sysml_text
 from .pipeline_records import GenerationContext
@@ -246,9 +246,15 @@ class GenerationPipelineMixin:
         from ..dse.functional_behavior import functional_behavior_diagnosis
         from ..prototyping.action_semantics import analyze_action_semantics
 
+        plan = self._active_model_generation_plan
+        effects = parse_action_effects(
+            (plan or {}).get("action_effects") if isinstance(plan, Mapping)
+            else None
+        )
         report = analyze_action_semantics(
             c.final_sysml,
             requirements=c.requirements,
+            action_effect_plan=effects,
             profile=getattr(self, "action_semantics_profile", LEGACY_AUDIT),
         )
         payload = report.to_dict()
