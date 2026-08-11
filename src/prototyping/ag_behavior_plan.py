@@ -655,7 +655,12 @@ def _transition_is_present(
     return bool(
         target_state
         and re.search(
-            rf"\bentry\s+action\s+{re.escape(transition.action)}\s*;",
+            # The obligation names an action definition, so accept both the bare
+            # usage and the typed `entry action <label> : <ActionDef>;` form.
+            # This matches check_planned_behavior_conformance, and without it a
+            # model written the way the prompts teach fails every obligation.
+            rf"\bentry\s+action\s+(?:\w+\s*:\s*)?"
+            rf"{re.escape(transition.action)}\s*;",
             target_state.group("body"),
         )
     )

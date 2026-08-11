@@ -88,6 +88,13 @@ _TRANSITION_RE = re.compile(
     r"(?:\s+if\s+(.+?))?\s+then\s+(\w+)\s*;",
     re.DOTALL,
 )
+# A state entry action has two legal spellings and the generators disagree on
+# which to use: `ag_emitter` writes the bare `entry action deployParachute;`,
+# while the chain_of_thought prompts teach the typed
+# `entry action onParachute : deployParachute;`.  Both name the same action
+# definition, so the optional usage label is skipped and the captured group is
+# always the definition.  Reading only the first identifier returns the label.
+_ENTRY_ACTION_RE = re.compile(r"\bentry\s+action\s+(?:\w+\s*:\s*)?(\w+)")
 _VERIFICATION_DEF_RE = re.compile(r"\bverification\s+def\s+(\w+)\s*\{")
 _VERIFY_REQ_RE = re.compile(
     r"\bverify\s+requirement\s+\w+\s*:\s*(\w+)\s*;"
@@ -298,7 +305,7 @@ def _parse_behavior(name: str, block: str, span: Span) -> BehaviorRealization:
         end = find_block_end(block, brace)
         if end == -1:
             continue
-        action = re.search(r"\bentry\s+action\s+(\w+)", block[brace + 1:end])
+        action = _ENTRY_ACTION_RE.search(block[brace + 1:end])
         if action:
             entry_actions[state.group(1)] = action.group(1)
     return BehaviorRealization(
@@ -483,7 +490,7 @@ def _extract_priority(text: str) -> Dict[str, object]:
         end = find_block_end(state, brace)
         if end == -1:
             continue
-        action = re.search(r"\bentry\s+action\s+(\w+)", state[brace + 1:end])
+        action = _ENTRY_ACTION_RE.search(state[brace + 1:end])
         if action:
             target_actions.append(action.group(1))
     selection_action_connected = bool(

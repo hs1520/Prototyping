@@ -104,7 +104,11 @@ def _behavior_tokens(model_text: str, behavior: str) -> set[tuple[str, str]]:
         for kind, pattern in (
             ("state", r"\bstate\s+(\w+)"),
             ("transition", r"\btransition\s+(\w+)"),
-            ("entry_action", r"\bentry\s+action\s+(\w+)"),
+            # Skip the optional usage label so the bare
+            # `entry action deployParachute;` and the typed
+            # `entry action onParachute : deployParachute;` yield the same
+            # token — otherwise a repair that only respelled it reads as a loss.
+            ("entry_action", r"\bentry\s+action\s+(?:\w+\s*:\s*)?(\w+)"),
             ("trigger", r"\baccept\s+(\w+)"),
         )
         for item in re.findall(pattern, body)

@@ -79,3 +79,89 @@ def test_the_guarded_transition_pattern_sees_every_spelling(transition):
         "a guarded transition written this way is not counted, so a model "
         "made only of them scores zero on the fault-transition sub-metric"
     )
+
+
+# A state entry action has two legal spellings, and the generators disagree on
+# which to use: ag_emitter writes the bare usage, the chain_of_thought prompts
+# teach the typed one. Both name the same action definition, so every consumer
+# must read the definition name out of either.
+ENTRY_ACTION_SPELLINGS = [
+    "entry action deployParachute;",
+    "entry action onParachute : deployParachute;",
+]
+
+
+@pytest.mark.parametrize("entry_action", ENTRY_ACTION_SPELLINGS)
+def test_the_ag_extractor_reads_the_definition_from_every_spelling(entry_action):
+    from src.prototyping.ag_extractor import _ENTRY_ACTION_RE
+
+    match = _ENTRY_ACTION_RE.search(entry_action)
+    assert match is not None
+    assert match.group(1) == "deployParachute", (
+        "the usage label was captured instead of the action definition, so the "
+        "realization records a response that no action definition backs"
+    )
+
+
+@pytest.mark.parametrize("entry_action", ENTRY_ACTION_SPELLINGS)
+def test_the_repair_token_set_reads_the_definition_from_every_spelling(
+    entry_action,
+):
+    from src.prototyping.ag_repair import _behavior_tokens
+
+    tokens = _behavior_tokens(
+        f"state def Probe {{ state Fault {{ {entry_action} }} }}", "Probe"
+    )
+    assert ("entry_action", "deployParachute") in tokens, (
+        "the same behaviour spelled the other way yields a different token "
+        "set, so a repair that only changed the spelling reads as a change"
+    )
+
+
+@pytest.mark.parametrize("entry_action", ENTRY_ACTION_SPELLINGS)
+def test_the_behaviour_obligation_gate_accepts_every_spelling(entry_action):
+    from src.prototyping.ag_behavior_plan import (
+        TransitionObligation,
+        _transition_is_present,
+    )
+
+    block = (
+        "    state Nominal;\n"
+        f"    state Fault {{ {entry_action} }}\n"
+        "    entry; then Nominal;\n"
+        "    transition onFail first Nominal accept FailSignal then Fault;\n"
+    )
+    obligation = TransitionObligation(
+        source="Nominal",
+        trigger="FailSignal",
+        target="Fault",
+        action="deployParachute",
+        guard=None,
+    )
+    assert _transition_is_present(block, obligation), (
+        "the obligation gate rejects a realization that satisfies it, so every "
+        "A/G behaviour obligation fails on a model written this way"
+    )
+
+
+def test_the_runtime_response_catalog_needs_the_typed_form_to_find_anything():
+    """`ag_decision` only ever matched the typed spelling, and the emitter only
+    ever wrote the bare one, so this path produced nothing in R2 — the
+    inconsistency is between two halves of the same system, not a style choice.
+    """
+    from src.prototyping.ag_decision import extract_runtime_response_catalog
+
+    def arbiter(entry_action: str) -> str:
+        return (
+            "state def SafetyArbiter {\n"
+            "    entry; then Idle;\n"
+            "    state Idle;\n"
+            f"    state Firing {{ {entry_action} }}\n"
+            "}"
+        )
+
+    bare, typed = ENTRY_ACTION_SPELLINGS
+    assert extract_runtime_response_catalog(arbiter(bare))["entries"] == []
+    assert extract_runtime_response_catalog(arbiter(typed))["entries"], (
+        "the typed spelling is the only one this extractor can read"
+    )
