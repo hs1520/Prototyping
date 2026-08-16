@@ -279,6 +279,30 @@ def main() -> int:
                     else DRONE_FROZEN_REQUIREMENTS
                 ),
             )
+            # Persist the generation-stage inputs and output before explore
+            # runs. Explore can fail (no admissible design space, no realisable
+            # design) after generation succeeded, and until this point nothing
+            # had been written to the staging bundle: a failed run left only a
+            # one-line error and no way to see which requirement set or which
+            # committed model produced it. On the extraction path that is the
+            # only record of the extracted set, which is not otherwise frozen.
+            try:
+                atomic_write_json(
+                    staging / "generation_stage.json",
+                    {
+                        "artifact_role": "GENERATION_STAGE_SNAPSHOT",
+                        "requirement_input": pipe.orchestrator.last_requirement_input,
+                        "requirements": list(
+                            getattr(pipe.orchestrator.state, "requirements", []) or []
+                        ),
+                        "final_score": gen.get("final_score") if isinstance(gen, dict) else None,
+                        "model_qualification": gen.get("model_qualification") if isinstance(gen, dict) else None,
+                    },
+                )
+                if isinstance(gen, dict) and isinstance(gen.get("model_sysml"), str):
+                    atomic_write_text(staging / "committed_model.sysml", gen["model_sysml"])
+            except Exception as snap_exc:  # diagnostics must never fail the run
+                print(f"  (generation-stage snapshot not written: {snap_exc})", flush=True)
             res = pipe.orchestrator.explore(gen, mcts_iterations=20)
             base, final_sysml, parm_text = _build_base_artifacts(
                 pipe, res, time.time() - t0
