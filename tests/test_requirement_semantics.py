@@ -1,4 +1,12 @@
-from src.prototyping.generation_plan import ModelGenerationPlan
+from src.prototyping.activated_constraint_plan import (
+    ConstraintPlanningContext,
+    compile_constraint_plan,
+)
+from src.prototyping.generation_plan import (
+    ComponentPlan,
+    ModelGenerationPlan,
+    PortPlan,
+)
 from src.prototyping.requirement_semantics import (
     NUMERIC_INVARIANT,
     RequirementSemanticObligation,
@@ -147,6 +155,63 @@ def test_non_matching_or_timed_requirement_is_not_overinterpreted():
     )
 
     assert compile_requirement_semantic_obligations(requirements) == ()
+
+
+def test_constraint_compiler_owns_binding_reconciliation_and_attributes():
+    producer_port = PortPlan("obstacleData", "out", "ObstaclePort")
+    controller_port = PortPlan("obstacleData", "in", "ObstaclePort")
+    components = (
+        ComponentPlan(
+            "Perception",
+            "Measures obstacle separation.",
+            ("REQ_FUNC_002",),
+            (producer_port,),
+        ),
+        ComponentPlan(
+            "Controller",
+            "Maintains obstacle separation.",
+            ("REQ_FUNC_002",),
+            (controller_port,),
+        ),
+    )
+
+    compiled = compile_constraint_plan(
+        _payload(),
+        requirements=(_REQUIREMENT,),
+        context=ConstraintPlanningContext(
+            components=components,
+            port_lookup={
+                ("Perception", "obstacleData"): producer_port,
+                ("Controller", "obstacleData"): controller_port,
+            },
+            connection_keys=frozenset({(
+                "Perception",
+                "obstacleData",
+                "Controller",
+                "obstacleData",
+            )}),
+            allocated_component_requirements=frozenset({
+                ("Perception", "REQ_FUNC_002"),
+                ("Controller", "REQ_FUNC_002"),
+            }),
+        ),
+    )
+
+    assert compiled.issues == ()
+    assert compiled.semantic_bindings[0].constraint_name == (
+        "maintainSeparationConstraint"
+    )
+    assert compiled.identity_reconciliations == (
+        "Controller.keepSeparation -> maintainSeparationConstraint "
+        "(SEM_REQ_FUNC_002_001)",
+    )
+    controller = next(
+        item for item in compiled.components if item.name == "Controller"
+    )
+    assert {item.name for item in controller.attributes} == {
+        "currentSeparation",
+        "minimumSeparation",
+    }
 
 
 def test_plan_carries_and_round_trips_frozen_semantic_obligation():

@@ -1,6 +1,8 @@
 """RequirementsDesignMixin extracted from the orchestrator."""
 from __future__ import annotations
 
+import re
+
 from typing import Any, Dict, List, Mapping, Optional
 from .orchestrator_support import _SysMLModelTypes
 from ..sysml.lite_model import build_lite_model
@@ -58,6 +60,23 @@ class RequirementsDesignMixin:
                 "requirement_set_digest": None,
                 "validation_error": str(exc),
             }
+
+        # A requirement the extractor flags as carrying no measurable criterion
+        # can never be anchored by the parameter linker, and if it also obliges no
+        # discrete response it cannot be anchored by the behavioural simulator
+        # either. That fact is known here, at the source, and is recorded on the
+        # requirement-input artefact so the terminal closure gate can distinguish
+        # "the model lacks an anchor" from "the requirement offers nothing to
+        # anchor to" instead of asking the LLM to repair the latter.
+        unmeasurable: set[str] = set()
+        for warning in validation.get("warnings") or ():
+            if "No measurable criterion" in str(warning):
+                unmeasurable.update(
+                    match.upper().replace("-", "_")
+                    for match in re.findall(r"REQ[-_][A-Z]+[-_]\d+", str(warning), re.I)
+                )
+        if isinstance(self.last_requirement_input, dict):
+            self.last_requirement_input["unmeasurable_req_ids"] = sorted(unmeasurable)
 
         if validation["issues"]:
             for issue in validation["issues"][:5]:

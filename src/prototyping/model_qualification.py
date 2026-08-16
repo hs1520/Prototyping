@@ -9,18 +9,15 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Sequence
 
-from ..utils.req_id import normalise_req_id
-
-
-_REQ_ID = re.compile(r"\bREQ[-_][A-Za-z]+[-_]\d+\b", re.IGNORECASE)
+from ..utils.req_id import first_req_id, normalise_req_id
 
 
 def _declared_requirement_ids(requirements: Sequence[str]) -> list[str]:
     result: list[str] = []
     for requirement in requirements:
-        match = _REQ_ID.search(str(requirement))
+        match = first_req_id(str(requirement))
         if match:
-            req_id = normalise_req_id(match.group(0))
+            req_id = normalise_req_id(match)
             if req_id not in result:
                 result.append(req_id)
     return result

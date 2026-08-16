@@ -34,7 +34,10 @@ from src.prototyping.artifact_store import (
     latest_output_dir,
     output_dir,
 )
-from src.sitl.dse_sitl_params import FRAME_CLASS, design_to_sitl_parm
+from src.sitl.parameter_projection import (
+    FRAME_CLASS_BY_ROTOR_COUNT,
+    design_parm_lines,
+)
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE, SITLBridge
 from src.sitl.sitl_specs import TestContext
 from src.sysml.lite_model import build_lite_model
@@ -74,12 +77,10 @@ def _parm_lines_from_json() -> list[str]:
     if not d:
         raise FileNotFoundError(f"{PARM_PATH} missing and {RUN_JSON} lacks recommended_design_inputs")
     di = DesignInputs(**d)
-    lines = list(design_to_sitl_parm(di))
-    existing = {line.split()[0] for line in lines if line.strip() and not line.lstrip().startswith("#")}
-    for key, value in (ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {}).items():
-        if key not in existing:
-            lines.append(f"{key:<20} {value}")
-    return lines
+    return design_parm_lines(
+        di,
+        base_params=ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {},
+    )
 
 
 def _parm_key(line: str) -> str | None:
@@ -136,7 +137,7 @@ def parm_freshness(primary_lines: list[str], run_json: dict | None,
     if "BATT_CAPACITY" in values and abs(values["BATT_CAPACITY"] - round(cap)) > 0.5:
         return False, (f"BATT_CAPACITY {values['BATT_CAPACITY']:.0f} does not match the "
                        f"latest recommended design ({cap:.0f} mAh)")
-    fc = FRAME_CLASS.get(int(d.get("rotor_count", 0)))
+    fc = FRAME_CLASS_BY_ROTOR_COUNT.get(int(d.get("rotor_count", 0)))
     if fc is not None and "FRAME_CLASS" in values and int(values["FRAME_CLASS"]) != fc:
         return False, (f"FRAME_CLASS {int(values['FRAME_CLASS'])} does not match the latest "
                        f"recommended rotor count ({int(d.get('rotor_count', 0))} → {fc})")
@@ -184,7 +185,7 @@ def _prepare_bridge_inputs(model, allow_stale: bool = False) -> tuple[SITLBridge
         if not fresh:
             raise SystemExit(f"STALE artifact set: {reason}")
         primary = _parm_lines_from_json()
-    supplemental = bridge._linker.generate_parm_file().splitlines()  # noqa: SLF001
+    supplemental = bridge.requirement_evidence.parm_file.splitlines()
     lines = merge_parm_lines(primary, supplemental)
     atomic_write_text(bridge_parm, "\n".join(lines) + "\n")
     return bridge, source
@@ -432,7 +433,7 @@ def _run_single_l2_with_timeout(bridge: SITLBridge, spec, timeout_s: int = 240) 
 
 def run_safety_l2(model, parm_source: str, allow_stale: bool = False) -> list[dict]:  # noqa: ARG001 - parm source is reported by caller
     bridge, _ = _prepare_bridge_inputs(model, allow_stale=allow_stale)
-    specs = [s for s in bridge._linker.generate_test_specs() if s.tier == "L2"]  # noqa: SLF001
+    specs = [s for s in bridge.requirement_evidence.test_specs if s.tier == "L2"]
     results = []
     for spec in specs:
         result = _run_single_l2_with_timeout(bridge, spec)
@@ -443,20 +444,16 @@ def run_safety_l2(model, parm_source: str, allow_stale: bool = False) -> list[di
 
 def _model_guard(bridge: SITLBridge, req_id: str) -> str | None:
     """The model guard a spec traces to — grounds 'behavioral sim covers the trigger'."""
-    assigned = getattr(bridge._linker, "_guard_assignment", {}).get(req_id)  # noqa: SLF001
+    assigned = bridge.requirement_evidence.guard_assignments.get(req_id)
     if not assigned:
         return None
-    g = assigned["guard"]
-    attr = getattr(g, "attribute", "?")
-    op = getattr(g, "operator", "")
-    th = getattr(g, "threshold", None)
-    if getattr(g, "kind", "") == "bool_true" or not op or th is None:
-        return f"{attr} (bool)"
-    return f"{attr} {op} {th}"
+    if assigned.kind == "bool_true" or not assigned.operator or assigned.threshold is None:
+        return f"{assigned.attribute} (bool)"
+    return f"{assigned.attribute} {assigned.operator} {assigned.threshold}"
 
 
 def coverage_summary(bridge: SITLBridge) -> dict:
-    return bridge._linker.coverage_stats()  # noqa: SLF001
+    return bridge.requirement_evidence.coverage_payload()
 
 
 def matrix_summary(model, bridge: SITLBridge,
@@ -474,7 +471,7 @@ def matrix_summary(model, bridge: SITLBridge,
             realization = run_json.get("realization")
         gazebo = _fresh_gazebo_report(run_json)
         rows = build_matrix(
-            model, realization, bridge._linker, gazebo=gazebo,  # noqa: SLF001
+            model, realization, bridge.requirement_evidence, gazebo=gazebo,
             l1_results=l1_results, l2_results=l2_results,
         )
         # The live SITL run is the last evidence-producing tier, so it owns the
@@ -543,7 +540,7 @@ def planned_l2_specs(bridge: SITLBridge) -> list[dict]:
             "notes": s.notes,
             "model_guard": _model_guard(bridge, s.req_id),
         }
-        for s in bridge._linker.generate_test_specs()
+        for s in bridge.requirement_evidence.test_specs
         if s.tier == "L2"
     ]
 
@@ -835,7 +832,7 @@ def main(argv: list[str] | None = None) -> int:
     if previous_dir != INPUT.resolve():
         current_ids = {
             str(spec.req_id).upper().replace("-", "_")
-            for spec in bridge._linker.generate_test_specs()  # noqa: SLF001
+            for spec in bridge.requirement_evidence.test_specs
             if spec.tier == "L2"
         }
         previous_ids = {

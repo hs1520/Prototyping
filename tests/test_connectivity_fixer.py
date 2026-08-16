@@ -19,6 +19,7 @@ from src.simulation.connectivity_fixer import (
     merge_connects,
     build_connectivity_prompt,
     extract_connect_lines,
+    audit_connects,
 )
 
 
@@ -101,6 +102,22 @@ def test_parse_connects():
     ok("connect_fields",
        c.src_inst == "perception" and c.src_port == "sensorData"
        and c.tgt_inst == "flightController" and c.tgt_port == "sensorData")
+
+
+def test_parse_connects_keeps_repeated_declarations_and_ignores_prose():
+    text = """package P {
+        requirement def REQ_SAFE_001 {
+            doc /* Example only: connect fake.out to fake.in; */
+        }
+        connect first.out to target.one;
+        connect second.out to target.two;
+        // connect commented.out to target.three;
+    }"""
+
+    assert [statement.to_sysml() for statement in parse_connects(text)] == [
+        "connect first.out to target.one;",
+        "connect second.out to target.two;",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +209,24 @@ def test_validate_rejects_duplicate():
         ["connect perception.sensorData to flightController.sensorData;"], d, existing)
     ok("rejected", len(v.accepted) == 0, f"acc={v.accepted}")
     ok("dup_reason", any("重复" in r[1] for r in v.rejected), f"rej={v.rejected}")
+
+
+def test_candidate_validation_and_audit_share_the_same_rules():
+    directory = build_port_directory(SYSML)
+    existing = parse_connects(SYSML)
+    invalid = (
+        "connect airframe.telemetryOut to flightController.sensorData;",
+        "connect perception.sensorData to flightController.motorCmd;",
+        "connect powerSystem.powerOut to flightController.sensorData;",
+    )
+    for line in invalid:
+        candidate = validate_connects([line], directory, existing)
+        model = SYSML[:SYSML.rfind("}")] + f"    {line}\n" + SYSML[SYSML.rfind("}"):]
+        audit = audit_connects(model)
+        assert not candidate.accepted
+        assert candidate.rejected
+        assert audit.has_violations
+        assert audit.violations[-1].stmt.to_sysml() == line
 
 
 # ---------------------------------------------------------------------------

@@ -34,43 +34,16 @@ from .ag_chains import (
     AGInvariantSpec,
     AGPrioritySpec,
 )
+from .ag_profile import (
+    DERIVED_SOURCE_KIND,
+    INVARIANT_PATTERNS,
+    INVARIANT_SOURCE_KINDS,
+    KNOWN_PATTERNS,
+    LOCKED_UNTIL_RELEASE_PATTERN,
+    TIMED_PATTERN,
+    TRIGGERED_PATTERNS,
+)
 from ..utils.sysml_text_utils import find_block_end
-
-#: Invariant source kinds. Whether an invariant is stated by the stakeholder or
-#: derived by the designer changes the evaluator's denominators, so it is a
-#: decision the author must make, not something inferred here.
-INVARIANT_SOURCE_KINDS = ("STAKEHOLDER", "STUDENT_DERIVED_DESIGN_CONSTRAINT")
-
-#: Patterns an author may choose between; the choice itself is the model's.
-KNOWN_PATTERNS = (
-    "TRIGGERED_TIMED_FAILSAFE_RESPONSE",
-    "THRESHOLD_TRIGGERED_RESPONSE",
-    "STARTUP_INHIBIT",
-    "LOCKED_UNTIL_AUTHORISED_RELEASE",
-)
-
-#: Patterns whose obligation is a trigger→response transition with arbitration.
-#: Both carry a priority contract; only the timed one apportions a deadline.
-#:
-#: The untimed member exists because the profile had a structural gap: a
-#: requirement that names a trigger, a response, and a precedence relation but no
-#: deadline ("return to base at 25% state-of-charge, unless a higher-priority
-#: response is in progress") could be declared neither timed — the checker
-#: rejects a timed pattern with no budget — nor invariant, because a
-#: trigger→response transition is not a continuously held implication. Declaring
-#: one to get the other's checks would mean inventing a deadline the requirement
-#: does not state.
-TRIGGERED_PATTERNS = (
-    "TRIGGERED_TIMED_FAILSAFE_RESPONSE",
-    "THRESHOLD_TRIGGERED_RESPONSE",
-)
-
-#: Patterns whose obligation is stated as continuously held Boolean invariants.
-INVARIANT_PATTERNS = (
-    "STARTUP_INHIBIT",
-    "LOCKED_UNTIL_AUTHORISED_RELEASE",
-)
-
 
 class DecisionError(ValueError):
     """The decisions are missing, malformed, or internally inconsistent."""
@@ -314,7 +287,7 @@ def _locked_release_lifecycle(
     consumes — so the lifecycle is derived rather than asked for, and the model is
     never required to write a state machine.
     """
-    if decisions.get("safety_pattern") != "LOCKED_UNTIL_AUTHORISED_RELEASE":
+    if decisions.get("safety_pattern") != LOCKED_UNTIL_RELEASE_PATTERN:
         return ()
     locked = authorisation = None
     for item in decisions.get("invariants") or ():
@@ -496,7 +469,7 @@ def validate_decisions(
                 )
 
     if pattern in TRIGGERED_PATTERNS:
-        if pattern == "TRIGGERED_TIMED_FAILSAFE_RESPONSE":
+        if pattern == TIMED_PATTERN:
             if decisions.get("deadline_seconds") in (None, ""):
                 raise DecisionError("a timed pattern needs deadline_seconds")
         else:
@@ -747,7 +720,7 @@ def build_spec_from_decisions(
                 "timing_origin",
             ),
             selected_response=selected,
-            source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            source_kind=DERIVED_SOURCE_KIND,
             source_id=f"{requirement}_PRIORITY",
             member_provenance=tuple(
                 (member, *provenance_by_member[member])

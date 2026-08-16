@@ -15,6 +15,7 @@ Method vocabulary follows the systems-engineering IADT convention
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -46,6 +47,7 @@ TIER_METHOD: Dict[str, str] = {
     "behavioral_sim_failed": "Analysis (model-level simulation — failed)",
     "gazebo_deferred": "Test (Gazebo — planned, see SITL_INTEGRATION_DESIGN S8/T9)",
     "inspection_analysis": "Inspection/Analysis (outside simulation scope)",
+    "planned_no_response": "Plan records no discrete response obliged",
 }
 
 _VERIFIED_TIERS = {"l2_sitl", "gazebo", "l1_param", "datasheet", "forward_flight", "behavioral_sim"}
@@ -161,9 +163,10 @@ def _record_behavioral_outcome(
     return True
 
 
-def build_matrix(model, realization: Optional[dict], linker,
+def build_matrix(model, realization: Optional[dict], requirement_evidence,
                  gazebo: Optional[dict] = None,
-                 l1_results=None, l2_results=None) -> List[MatrixRow]:
+                 l1_results=None, l2_results=None,
+                 planned_intents: Optional[Dict[str, str]] = None) -> List[MatrixRow]:
     """Derive the per-requirement verification assignment from existing artifacts.
 
     ``realization`` is the Phase 8 dict (``realization_run.json``'s "realization"
@@ -178,11 +181,25 @@ def build_matrix(model, realization: Optional[dict], linker,
         BEHAVIOR_ABSENT,
         BEHAVIORALLY_VERIFIED,
         functional_behavior_status,
+        planned_intents_from_model,
     )
 
-    req_texts: Dict[str, str] = dict(getattr(linker, "_req_texts", {}) or {})
-    satisfy_map: Dict[str, List[str]] = dict(getattr(linker, "_satisfy_map", {}) or {})
-    guard_assignment = dict(getattr(linker, "_guard_assignment", {}) or {})
+    from src.sitl.requirement_linker import RequirementEvidenceBundle
+
+    if not isinstance(requirement_evidence, RequirementEvidenceBundle):
+        raise TypeError("build_matrix requires a RequirementEvidenceBundle")
+    model_text = model.to_sysml_text() or ""
+    model_digest = hashlib.sha256(model_text.encode("utf-8")).hexdigest()
+    if requirement_evidence.model_digest != model_digest:
+        raise ValueError(
+            "requirement evidence does not match the model revision"
+        )
+    req_texts: Dict[str, str] = dict(requirement_evidence.requirement_texts)
+    satisfy_map: Dict[str, List[str]] = {
+        req_id: list(parts)
+        for req_id, parts in requirement_evidence.satisfying_parts.items()
+    }
+    guard_assignment = requirement_evidence.guard_assignments
     universe = sorted(set(req_texts) | set(satisfy_map))
 
     tiers: Dict[str, set] = {r: set() for r in universe}
@@ -196,7 +213,7 @@ def build_matrix(model, realization: Optional[dict], linker,
     # a false green in the verification matrix.
     l1_by_req = _result_map(l1_results)
     l2_by_req = _result_map(l2_results)
-    for spec in linker.generate_test_specs():
+    for spec in requirement_evidence.test_specs:
         rid = spec.req_id
         if rid not in tiers:
             continue
@@ -296,7 +313,6 @@ def build_matrix(model, realization: Optional[dict], linker,
     # 3. Behavioral-sim tier. Presence of a state machine is not evidence: the
     #    exact simulator scenario must pass. This prevents declaration-only
     #    anchors from turning an UNASSIGNED row into a false green.
-    model_text = model.to_sysml_text() or ""
     try:
         state_machines = extract_state_machines(model_text)
         behavioral = run_behavioral_simulation(model_text)
@@ -314,6 +330,11 @@ def build_matrix(model, realization: Optional[dict], linker,
     machines_by_owner: Dict[str, list] = {}
     for sm in state_machines:
         machines_by_owner.setdefault(sm.owner_part, []).append(sm)
+    # The plan's recorded intents ride on the committed model's metadata; a
+    # model rebuilt from its text (as the closure audit does) carries none, so
+    # a caller that holds the plan passes the intents in.
+    if planned_intents is None:
+        planned_intents = planned_intents_from_model(model)
     functional_status = {
         _norm_req_id(rid): status
         for rid, status in functional_behavior_status(
@@ -322,8 +343,22 @@ def build_matrix(model, realization: Optional[dict], linker,
                 f"{rid.replace('_', '-')}: {req_texts.get(rid, '')}"
                 for rid in universe
             ],
+            planned_intents=planned_intents,
         ).items()
     }
+    # A functional requirement the generation plan recorded as obliging no
+    # discrete response is noted as such. This is evidence about the plan's
+    # decision, not about the design; the row's status is unchanged here and
+    # the terminal closure audit decides, together with the extractor's own
+    # "no measurable criterion" flag, whether such a row is a model gap or a
+    # requirement that offers nothing to anchor to.
+    for rid in universe:
+        if planned_intents.get(_norm_req_id(rid)) == "none":
+            tiers[rid].add("planned_no_response")
+            evidence[rid].append(
+                "generation plan records response_intent=none for this "
+                "requirement (no discrete response obliged)"
+            )
 
     for rid in universe:
         # A TRACE-blocked requirement's guard assignment is the WRONG-family guard
@@ -331,12 +366,11 @@ def build_matrix(model, realization: Optional[dict], linker,
         assigned = None if rid in blocked else guard_assignment.get(rid)
         low = f"{rid} {req_texts.get(rid, '')}".lower()
         if assigned:
-            g = assigned.get("guard")
-            attr = getattr(g, "attribute", "?")
-            signature = _guard_signature(g)
+            attr = assigned.attribute
+            signature = assigned.signature
             matched_names = [
                 sm.name
-                for sm in machines_by_owner.get(assigned.get("part"), [])
+                for sm in machines_by_owner.get(assigned.part_name, [])
                 if any(
                     _guard_signature(sm_guard) == signature
                     for transition in sm.transitions
@@ -373,7 +407,17 @@ def build_matrix(model, realization: Optional[dict], linker,
         # Default/initial-state requirements need initialization semantics, not
         # a fabricated fault transition. Select machines whose initial-state
         # name is actually mentioned by the requirement (e.g. Locked).
-        if any(k in low for k in _INITIALIZATION_KWS):
+        #
+        # Not, however, when the plan recorded a discrete response intent for
+        # this requirement: "execute a power-on self-check" obliges a self-test
+        # response and is anchored by the state that produces it, not by an
+        # initial-state invariant. Without this guard the substring match below
+        # bound such a requirement to whichever owner machine happened to start
+        # in a state named PowerOn -- the flight-phase manager -- and reported
+        # that machine's initialisation as the requirement's evidence.
+        planned_intent = planned_intents.get(_norm_req_id(rid))
+        obliges_response = bool(planned_intent) and planned_intent != "none"
+        if not obliges_response and any(k in low for k in _INITIALIZATION_KWS):
             compact_low = "".join(ch for ch in low if ch.isalnum())
             init_candidates = [
                 sm for sm in owner_machines

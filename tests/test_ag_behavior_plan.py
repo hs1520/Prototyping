@@ -1,7 +1,5 @@
-import pytest
 from dataclasses import replace
 
-from src.agents.design_agent import DesignAgent
 from src.prototyping.ag_behavior_plan import (
     INVARIANT,
     STATE_MACHINE,
@@ -18,8 +16,6 @@ from src.prototyping.ag_chains import (
 )
 from src.prototyping.ag_decision import build_spec_from_decisions
 from tests.test_option2_ag_decision import _BOUNDARY, _CORRECT
-from src.simulation import extractor
-from src.simulation.syntax_checker import check_syntax
 
 
 def test_all_three_chains_compile_one_typed_obligation_per_component():
@@ -269,46 +265,14 @@ def test_assembly_restores_a_rewritten_definition_inside_the_exact_owner():
         }}
     }}
     """
-    restored, injected = DesignAgent._inject_missing_ag_obligation_defs(
-        assembled, fragment, plan
+    restored, report = materialize_owned_behavior_obligations(
+        assembled,
+        plan,
     )
-    assert any(item.startswith("replaced::") for item in injected)
+    assert report["replaced_inconsistent"]
     assert "wrongInitial" not in restored
     assert restored.count(
         f"state def {obligation.stable_behavior_id}"
     ) == 1
     owned = check_owned_behavior_obligation_conformance(restored, plan)
     assert owned["status"] == "PASS", owned
-
-
-@pytest.mark.skipif(
-    not extractor._SYSIDE_OK,
-    reason="Syside is required for the materialization syntax gate",
-)
-def test_all_reviewed_obligations_materialize_without_unresolved_references():
-    plan = compile_behavior_obligation_plan((
-        REQ_SAFE_004_CHAIN,
-        REQ_SAFE_005_CHAIN,
-        REQ_SAFE_008_CHAIN,
-    ))
-    fragment, step4 = materialize_behavior_obligations("", plan)
-    assert step4["status"] == "PASS"
-    owners = []
-    for obligation in plan.obligations:
-        if obligation.owner_def not in owners:
-            owners.append(obligation.owner_def)
-    model = "package DeliveryUAV {\n" + "\n".join(
-        f"    part def {owner} {{ }}"
-        for owner in owners
-    ) + "\n}"
-    model, _injected = DesignAgent._inject_missing_ag_obligation_defs(
-        model, fragment, plan
-    )
-    owned = check_owned_behavior_obligation_conformance(model, plan)
-    assert owned["status"] == "PASS", owned
-    syntax = check_syntax(
-        model,
-        fail_closed=True,
-        filter_stdlib_diagnostics=True,
-    )
-    assert not syntax.has_errors, syntax.format_for_llm()

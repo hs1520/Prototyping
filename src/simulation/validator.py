@@ -22,11 +22,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .extractor import extract_behavioral_graph, BehavioralGraph, PartNode
+from .extractor import extract_behavioral_graph, BehavioralGraph
 from .exec_graph import build_exec_graph
 from .scenarios import (
     Scenario,
-    DRONE_SCENARIOS,
     classify_parts_by_role,
     select_scenarios,
 )
@@ -425,10 +424,6 @@ def _generate_recommendations(
         return ["All scenarios passed — model connectivity is structurally sound"]
 
     # Identify parts with no connections (reported as issues upstream; skip duplicate)
-    connected_src = {c.source.split(".")[0] for c in bg.connections}
-    connected_tgt = {c.target.split(".")[0] for c in bg.connections}
-    isolated = [p for p in bg.parts if p not in connected_src and p not in connected_tgt]
-
     # Parts with only in-ports (potential dead ends)
     for pname, pnode in bg.parts.items():
         dirs = [bg.ports[pid].direction for pid in pnode.port_ids if pid in bg.ports]

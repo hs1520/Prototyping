@@ -13,12 +13,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from contextlib import contextmanager
-
 from .interface import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
-    Conversation,
     LLMInterface,
     Message,
 )
@@ -319,7 +316,9 @@ Return exactly one JSON object in a ```json block using this schema:
           "provenance": "FROZEN_REQUIREMENT|DESIGN_DECISION",
           "source_requirement_id": "<REQ_CATEGORY_NNN, or empty for a design decision>"
         }}
-      ]
+      ],
+      "passive": false,
+      "passive_rationale": "<required when passive is true: why this component exchanges no signals, commands or power>"
     }}
   ],
   "connections": [
@@ -339,6 +338,8 @@ Return exactly one JSON object in a ```json block using this schema:
       "owner_component": "<LOCAL_BEHAVIOR owner; empty for CAUSAL_PATH>",
       "behavior_kind": "<STATE_DEF|ACTION_DEF for LOCAL_BEHAVIOR; otherwise empty>",
       "behavior_name": "<planned behavior identifier for LOCAL_BEHAVIOR; otherwise empty>",
+      "response_intent": "<FUNC requirements only: release|return|land|navigate|report|self_test|none; empty for other categories>",
+      "response_intent_rationale": "<required when response_intent is none: why this requirement obliges no discrete response>",
       "connection_path": [
         {{
           "source_component": "<component>",
@@ -433,6 +434,13 @@ Rules:
 - Aim for 3–12 top-level components; avoid micro-splitting single responsibilities.
 - Within one component, every direct member name must be unique across ports and
   attributes. A port and an attribute MUST NOT share a name.
+- A purely structural body -- an airframe, chassis, fuselage, enclosure -- that
+  carries other parts but exchanges no signals, commands or power in this model
+  is declared `"passive": true` with a `passive_rationale`, and plans NO ports.
+  Do not invent a port for such a component to give it a connection; the
+  reachability check will not expect a path into a declared-passive body. A
+  structural body that DOES host powered or sensing equipment in this model
+  is not passive: give it the ports that equipment needs and connect them.
 - Every non-external `in` port must have exactly one connection source.
 - Every non-external `out` port must have at least one connection consumer.
 - A connection's source/target port types must be identical.
@@ -496,6 +504,22 @@ Rules:
 - `trigger_concept` and `effect_concept` must each be an exact, non-empty phrase
   copied from that frozen requirement. Do not infer either phrase from component
   names or graph topology.
+- For every FUNC requirement, `response_intent` records the discrete response
+  the requirement obliges, from the closed set release, return, land,
+  navigate, report, self_test, none. Decide it from what the requirement
+  actually asks the system to DO, not from words that merely appear in it: a
+  requirement to receive a waypoint list, hold a hover, or maintain a link
+  obliges no discrete response and is `none`; a requirement to actuate the
+  release mechanism is `release`; to fly a path is `navigate`. A requirement
+  that states a continuous condition with no number, unit or threshold and no
+  event that starts a response is almost always `none`; do not invent a
+  response for it. When you record
+  an intent other than `none`, the owning component MUST also carry a planned
+  behavior whose reachable state runs an action named for that response
+  (release, navigate, land, rtb, report, selftest), or the plan will be
+  refused. When you record `none`, give the reason in
+  `response_intent_rationale`. Leave both fields empty for SAFE, INTF and OPER
+  requirements.
 - Each `connection_path` must be ordered and component-contiguous. Every edge
   must exactly reuse one entry in `connections`, including its `item_type`, and
   that connection must trace the same requirement ID.
@@ -1352,31 +1376,6 @@ class ChainOfThoughtPrompter:
 
     def __init__(self, llm: LLMInterface):
         self.llm = llm
-        self.system_prompt = SYSML_EXPERT_SYSTEM_PROMPT
-        self._conversation: Optional[Conversation] = None
-
-    @contextmanager
-    def generation_conversation(self):
-        """Bind the multi-step generation calls into one bounded conversation.
-
-        §5.3: one session belongs to one Agent role and one bounded task. The
-        five generation steps are that task, so each step sees the fragments it
-        must stay consistent with as the model's *own* earlier turns rather than
-        as a re-pasted summary. Evaluation and refinement are different roles
-        with different system instructions and stay outside.
-
-        The conversation carries the role instruction as its system message;
-        a step whose own system prompt differs passes it to ``_ask`` and it
-        becomes a preamble on that turn instead of a second system message.
-        """
-        previous = self._conversation
-        self._conversation = Conversation(
-            self.llm, system_prompt=self.system_prompt
-        )
-        try:
-            yield self._conversation
-        finally:
-            self._conversation = previous
 
     def _ask(
         self,
@@ -1387,21 +1386,11 @@ class ChainOfThoughtPrompter:
         system_prompt: Optional[str] = None,
         stage: Optional[str] = None,
     ) -> str:
-        """One turn — continuing the open conversation when there is one.
-
-        ``stage`` names the pipeline step for transcript/board archiving only;
-        it never reaches the provider.
-        """
-        if self._conversation is not None:
-            return self._conversation.send(
-                f"{system_prompt}\n\n{prompt}" if system_prompt else prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                label=stage,
-            )
+        """Issue one independent turn with an explicit optional role prompt."""
         messages = [
             Message(
-                role="system", content=system_prompt or self.system_prompt
+                role="system",
+                content=system_prompt or SYSML_EXPERT_SYSTEM_PROMPT,
             ),
             Message(role="user", content=prompt),
         ]
@@ -1416,6 +1405,8 @@ class ChainOfThoughtPrompter:
         system_name: str = "system",
         context: str = "",
         fixed_requirements: Optional[List[str]] = None,
+        *,
+        system_prompt: Optional[str] = None,
     ) -> CoTResult:
         """
         Use CoT prompting to extract structured requirements from a description.
@@ -1457,7 +1448,10 @@ class ChainOfThoughtPrompter:
             fixed_block=fixed_block,
         )
         messages = [
-            Message(role="system", content=self.system_prompt),
+            Message(
+                role="system",
+                content=system_prompt or SYSML_EXPERT_SYSTEM_PROMPT,
+            ),
             Message(role="user", content=prompt),
         ]
         response = self.llm.complete(messages, temperature=0.9)
@@ -1485,7 +1479,7 @@ class ChainOfThoughtPrompter:
             context_block=context_block,
         )
         messages = [
-            Message(role="system", content=self.system_prompt),
+            Message(role="system", content=SYSML_EXPERT_SYSTEM_PROMPT),
             Message(role="user", content=prompt),
         ]
         response = self.llm.complete(messages, temperature=temperature)
@@ -1505,7 +1499,7 @@ class ChainOfThoughtPrompter:
             requirements=req_text,
         )
         messages = [
-            Message(role="system", content=self.system_prompt),
+            Message(role="system", content=SYSML_EXPERT_SYSTEM_PROMPT),
             Message(role="user", content=prompt),
         ]
         response = self.llm.complete(messages, temperature=0.2)
@@ -1516,6 +1510,8 @@ class ChainOfThoughtPrompter:
         model_text: str,
         feedback: str,
         issues: List[str],
+        *,
+        system_prompt: Optional[str] = None,
     ) -> CoTResult:
         """
         Use CoT prompting to refine a design based on evaluation feedback.
@@ -1527,7 +1523,10 @@ class ChainOfThoughtPrompter:
             issues=issues_text,
         )
         messages = [
-            Message(role="system", content=self.system_prompt),
+            Message(
+                role="system",
+                content=system_prompt or SYSML_EXPERT_SYSTEM_PROMPT,
+            ),
             Message(role="user", content=prompt),
         ]
         response = self.llm.complete(messages, temperature=0.4, max_tokens=65536)
@@ -1574,6 +1573,7 @@ class ChainOfThoughtPrompter:
         requirements: List[str],
         context: str = "",
         semantic_guidance: str = "",
+        system_prompt: Optional[str] = None,
     ) -> CoTResult:
         """Step 2: Generate structural SysML fragment (part def / port / attribute)."""
         req_text = "\n".join(f"  {r}" for r in requirements)
@@ -1590,7 +1590,12 @@ class ChainOfThoughtPrompter:
             context_block=context_block,
         )
         return self._parse_cot_response(
-            self._ask(prompt, temperature=0.3, stage="parts")
+            self._ask(
+                prompt,
+                temperature=0.3,
+                system_prompt=system_prompt,
+                stage="parts",
+            )
         )
 
     def generate_behavior(
@@ -1602,6 +1607,7 @@ class ChainOfThoughtPrompter:
         context: str = "",
         platform_profile: Optional[Dict[str, Any]] = None,
         contract_pattern_guidance: str = "",
+        system_prompt: Optional[str] = None,
     ) -> CoTResult:
         """Step 3: Generate behavioral SysML fragment (action def / state def)."""
         req_text = "\n".join(f"  {r}" for r in behavioral_requirements)
@@ -1615,7 +1621,12 @@ class ChainOfThoughtPrompter:
             contract_pattern_guidance=contract_pattern_guidance,
         )
         return self._parse_cot_response(
-            self._ask(prompt, temperature=0.4, stage="behavior")
+            self._ask(
+                prompt,
+                temperature=0.4,
+                system_prompt=system_prompt,
+                stage="behavior",
+            )
         )
 
     def generate_interfaces_and_flows(
@@ -1626,6 +1637,7 @@ class ChainOfThoughtPrompter:
         intf_requirements: List[str],
         context: str = "",
         semantic_guidance: str = "",
+        system_prompt: Optional[str] = None,
     ) -> CoTResult:
         """Step 3: Generate interface & flow fragment (item def / typed port def)."""
         req_text = "\n".join(f"  {r}" for r in intf_requirements) if intf_requirements else "  (none)"
@@ -1643,7 +1655,12 @@ class ChainOfThoughtPrompter:
             context_block=context_block,
         )
         return self._parse_cot_response(
-            self._ask(prompt, temperature=0.3, stage="interfaces")
+            self._ask(
+                prompt,
+                temperature=0.3,
+                system_prompt=system_prompt,
+                stage="interfaces",
+            )
         )
 
     def assemble_model(

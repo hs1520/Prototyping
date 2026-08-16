@@ -5,7 +5,7 @@ from __future__ import annotations
 import networkx as nx
 
 from src.simulation import extractor as ex
-from src.simulation.direction_fixer import fix_signal_directions
+from src.simulation.connectivity_fixer import fix_signal_directions
 from src.simulation.exec_graph import build_exec_graph
 
 _BAD = """package P {
@@ -49,7 +49,7 @@ def test_noop_when_directions_already_valid():
 
 
 def test_missing_connect_adds_feedback_path():
-    from src.simulation.direction_fixer import fix_missing_connects
+    from src.simulation.connectivity_fixer import fix_missing_connects
     # payload→flightController unreachable: only the command connect exists (fc→payload); the
     # feedback connect (payload.payloadStatus → fc.payloadStatus) is missing but the ports match.
     model = """package P {
@@ -73,7 +73,7 @@ def test_missing_connect_adds_feedback_path():
 
 
 def test_missing_connect_noop_when_no_type_match():
-    from src.simulation.direction_fixer import fix_missing_connects
+    from src.simulation.connectivity_fixer import fix_missing_connects
     # different TYPES (and names) → no name match, no type match → nothing fabricated
     model = """package P {
         port def DataPort; port def CtrlPort;
@@ -86,7 +86,7 @@ def test_missing_connect_noop_when_no_type_match():
 
 
 def test_missing_connect_unambiguous_type_match_diff_names():
-    from src.simulation.direction_fixer import fix_missing_connects
+    from src.simulation.connectivity_fixer import fix_missing_connects
     # diff names, same type, exactly one each side → safe to connect (telemetry→telemetryData style)
     model = """package P {
         port def DataPort;
@@ -99,7 +99,7 @@ def test_missing_connect_unambiguous_type_match_diff_names():
 
 
 def test_missing_connect_ambiguous_type_match_skipped():
-    from src.simulation.direction_fixer import fix_missing_connects
+    from src.simulation.connectivity_fixer import fix_missing_connects
     # TWO DataPort in-ports on tgt → ambiguous → do NOT guess (leave to LLM)
     model = """package P {
         port def DataPort;

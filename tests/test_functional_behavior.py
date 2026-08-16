@@ -36,6 +36,34 @@ def test_functional_response_verified_and_absent():
     assert st["REQ-FUNC-012"] == BEHAVIOR_ABSENT         # no navigate action produced anywhere
 
 
+def test_a_sustained_response_is_credited_like_an_entry_response():
+    """`do action` is the natural spelling of a continuous response.
+
+    Navigating is an activity, not an instant, so the model that expresses it
+    correctly must not read as having no response at all.
+    """
+    model = _MODEL.replace(
+        "state cruising;",
+        "state cruising { do action navigateToWaypoint; }",
+    )
+
+    st = functional_behavior_status(model, _REQS)
+
+    assert st["REQ-FUNC-012"] == BEHAVIORALLY_VERIFIED
+    assert st["REQ-FUNC-011"] == BEHAVIORALLY_VERIFIED   # entry response unaffected
+
+
+def test_an_unreachable_sustained_response_is_still_absent():
+    model = _MODEL.replace(
+        "state delivering { entry action releasePayload : ReleaseAction; }",
+        "state delivering { do action navigateToWaypoint; }",
+    ).replace("transition d first cruising if pos > 0.5 then delivering;", "")
+
+    st = functional_behavior_status(model, _REQS)
+
+    assert st["REQ-FUNC-012"] == BEHAVIOR_ABSENT
+
+
 def test_unreachable_action_is_absent():
     # make the action-bearing state unreachable (no transition into it) → response not reachable
     model = _MODEL.replace("transition d first cruising if pos > 0.5 then delivering;", "")

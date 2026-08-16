@@ -29,7 +29,6 @@ from .exploration import ExplorationMixin
 from .generation_pipeline import GenerationPipelineMixin
 from .initialization import InitializationMixin
 from .pipeline_state import PipelineStateMixin
-from .refinement import RefinementMixin
 from .reporting import ReportingMixin
 from .requirements_design import RequirementsDesignMixin
 
@@ -43,7 +42,6 @@ class Orchestrator(
     CollaborationMixin,
     PipelineStateMixin,
     AGAssuranceMixin,
-    RefinementMixin,
     ExplorationMixin,
     ReportingMixin,
 ):

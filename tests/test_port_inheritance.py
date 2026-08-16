@@ -9,8 +9,7 @@ isolating the component (reachability → 0).
 """
 from __future__ import annotations
 
-from src.simulation.connect_auditor import audit_connects
-from src.simulation.connectivity_fixer import build_port_directory
+from src.simulation.connectivity_fixer import audit_connects, build_port_directory
 from src.simulation.extractor import extract_behavioral_graph
 
 _RESOLVED = """package Drone {

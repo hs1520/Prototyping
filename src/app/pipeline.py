@@ -7,7 +7,7 @@ framework, combining all components into a unified workflow.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Optional
 
 from ..agents.orchestrator import Orchestrator
 from ..llm.interface import LLMInterface

@@ -296,6 +296,20 @@ def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
     # ── Classify all parts ───────────────────────────────────────────────────
     classified = classify_parts_by_role(bg)
 
+    # A part whose definition the model declares passive (`// PLAN-PASSIVE`)
+    # takes no part in any scenario, including the power-to-structure one: the
+    # planner has recorded, with a reason, that the body exchanges nothing.
+    # Structural parts NOT so declared keep the conservative treatment below.
+    passive_ids = {
+        node.id for node in bg.parts.values()
+        if node.def_name in getattr(bg, "passive_defs", set())
+    }
+    if passive_ids:
+        classified = {
+            role: [pid for pid in ids if pid not in passive_ids]
+            for role, ids in classified.items()
+        }
+
     controllers = classified.get("controller", [])
     sensors     = classified.get("sensor", [])
     safety      = classified.get("safety", [])
@@ -386,10 +400,11 @@ def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
     # random dict ordering, but these scenarios are labelled "unclassified" so
     # the validator report makes clear they are degraded fallback paths, not
     # intentional design scenarios.
-    if not scenarios and len(bg.parts) >= 2:
+    active_parts = [p for p in bg.parts if p not in passive_ids]
+    if not scenarios and len(active_parts) >= 2:
         degrees = _part_degrees(bg)
-        hub = max(bg.parts, key=lambda p: degrees.get(p, 0))
-        for other in bg.parts:
+        hub = max(active_parts, key=lambda p: degrees.get(p, 0))
+        for other in active_parts:
             if other == hub:
                 continue
             _add(f"connectivity_{other}_to_{hub}",

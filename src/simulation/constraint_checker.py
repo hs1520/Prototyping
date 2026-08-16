@@ -15,8 +15,8 @@ constraint_checker.py
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
 from ..utils.sysml_text_utils import find_block_end
 
@@ -40,17 +40,6 @@ class ParsedConstraint:
     activation_ref: Optional[str] = None
     containing_behavior: Optional[str] = None
     containing_state: Optional[str] = None
-
-
-@dataclass
-class ConstraintCheckResult:
-    constraint_name: str
-    owner_part: str
-    expression: str
-    status: str        # "PASS" | "FAIL" | "UNCHECKED" | "GUARD_VERIFIED"
-    detail: str        # 人可读的说明
-    lhs_value: Optional[float] = None
-    rhs_value: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -184,13 +173,6 @@ def extract_constraints(sysml_text: str) -> List[ParsedConstraint]:
 # ---------------------------------------------------------------------------
 # Evaluator
 # ---------------------------------------------------------------------------
-
-def _try_float(s: str) -> Optional[float]:
-    try:
-        return float(s)
-    except (TypeError, ValueError):
-        return None
-
 
 def eval_op(lhs_val: float, op: str, rhs_val: float) -> bool:
     if op == "<=": return lhs_val <= rhs_val

@@ -16,7 +16,7 @@ from .ag_planning import (
     emit_ag_planning_package,
 )
 from ..sysml.text_normalization import strip_named_item_definitions
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import find_block_end, remove_named_package
 
 try:
     import syside as _syside
@@ -131,20 +131,6 @@ def _qualified_name(element) -> str:
     return str(qualified) if qualified is not None else str(
         getattr(element, "name", "") or ""
     )
-
-
-def _without_named_package(model_text: str, package_name: str) -> str:
-    pattern = re.compile(rf"\bpackage\s+{re.escape(package_name)}\s*\{{")
-    text = str(model_text)
-    while True:
-        match = pattern.search(text)
-        if match is None:
-            return text
-        brace = text.find("{", match.start())
-        end = find_block_end(text, brace)
-        if end == -1:
-            return text
-        text = text[:match.start()] + text[end + 1:]
 
 
 def _insert_package_members(
@@ -384,7 +370,7 @@ def bind_ag_contracts_to_model(
     aggregate_issues: List[str] = []
     cleaned_model = str(model_text)
     for spec in specs:
-        cleaned_model = _without_named_package(cleaned_model, spec.package)
+        cleaned_model = remove_named_package(cleaned_model, spec.package)
         imports: List[str] = []
         relationships: List[str] = []
         behavior_by_contract: Dict[str, str] = {}

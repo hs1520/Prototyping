@@ -14,6 +14,7 @@ from typing import Any, Iterable, Mapping, Sequence, Tuple
 from ..utils.sysml_text_utils import find_block_end
 
 from .ag_emitter import AGChainSpec, AGComponentSpec
+from .ag_profile import TIMED_PATTERN
 from .event_symbols import (
     PlannedEventSymbol,
     collect_planned_event_symbols,
@@ -232,7 +233,7 @@ def _compile_component(
     inferred_availability_boundary = (
         not paths
         and component.trigger_signal is None
-        and chain.pattern == "TRIGGERED_TIMED_FAILSAFE_RESPONSE"
+        and chain.pattern == TIMED_PATTERN
         and component.timing_segment_required is False
         and any(
             "available" in guarantee.lower()

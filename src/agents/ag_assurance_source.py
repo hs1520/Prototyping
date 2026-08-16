@@ -6,7 +6,10 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from ..simulation.syntax_checker import SyntaxCheckResult
 from ..sysml.lite_model import build_lite_model
 from ..sysml.model import SysMLModel
-from ..utils.sysml_text_utils import find_block_end, get_sysml_text
+from ..utils.sysml_text_utils import (
+    get_sysml_text,
+    remove_named_package,
+)
 from .pipeline_records import AGPlanningHandoffRecord
 
 
@@ -416,23 +419,6 @@ class AGAssuranceMixin:
         }
 
 
-    @staticmethod
-    def _without_named_package(model_text: str, package_name: str) -> str:
-        pattern = re.compile(
-            rf"\bpackage\s+{re.escape(package_name)}\s*\{{"
-        )
-        text = str(model_text)
-        while True:
-            match = pattern.search(text)
-            if match is None:
-                return text
-            brace = text.find("{", match.start())
-            end = find_block_end(text, brace)
-            if end == -1:
-                return text
-            text = text[:match.start()] + text[end + 1:]
-
-
     def _materialize_guided_ag_contracts(
         self, model: SysMLModel, system_name: str
     ) -> SysMLModel:
@@ -448,7 +434,7 @@ class AGAssuranceMixin:
         original_text = get_sysml_text(model)
         sanitized_text = original_text
         for spec in self._active_ag_generation_plan["specs"]:
-            sanitized_text = self._without_named_package(
+            sanitized_text = remove_named_package(
                 sanitized_text, spec.package
             )
         if sanitized_text != original_text:

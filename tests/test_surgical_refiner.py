@@ -10,6 +10,10 @@ import hashlib
 import json
 from typing import List, Optional
 
+from src.agents.orchestrator import Orchestrator, PrototypingState
+from src.agents.refinement import ModelRevision, RefinementClosureRequest
+from src.sysml.lite_model import build_lite_model
+
 from src.simulation.surgical_refiner import (
     SurgicalAudit,
     SurgicalOutcome,
@@ -69,6 +73,16 @@ _CONTEXT_MODEL = """package DroneSystem {
     part comms : CommunicationSystem;
     connect comms.dataOut to fc.commandIn;
 }"""
+
+
+def _refine(orch, model, requirements, **kwargs):
+    result = orch.refinement_closure.refine(RefinementClosureRequest(
+        base=ModelRevision.capture(model),
+        requirements=tuple(requirements),
+        dse_best_config=kwargs.get("dse_best_config"),
+        preserve_connectivity=bool(kwargs.get("connectivity_floor", False)),
+    ))
+    return result.materialize()
 
 
 class _ScriptedLLM:
@@ -423,8 +437,6 @@ class TestOrchestratorIntegration:
     def test_surgical_path_bypasses_full_rewrite(self, capsys):
         """When the surgical merge succeeds, the legacy whole-model rewrite
         (design_agent.run) must not be invoked at all."""
-        from src.agents.orchestrator import Orchestrator, PrototypingState
-        from src.sysml.lite_model import build_lite_model
 
         class _Eval:  # minimal evaluator double
             quality_threshold = 0.9
@@ -466,7 +478,7 @@ class TestOrchestratorIntegration:
         orch.design_agent = _NeverAgent()
 
         model = build_lite_model(_BASE, model_name="DroneSystem")
-        orch._iterative_refinement(model, [])
+        _refine(orch, model, [])
 
         out = capsys.readouterr().out
         assert "Surgical refinement: replaced 1 block(s) (FlightController)" in out

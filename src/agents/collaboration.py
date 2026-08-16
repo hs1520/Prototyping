@@ -7,7 +7,7 @@ from ..simulation.syntax_checker import check_syntax
 from ..simulation.validator import SimulationResult
 from ..sysml.lite_model import build_lite_model
 from ..sysml.model import SysMLModel
-from ..utils.sysml_text_utils import get_sysml_text
+from ..utils.sysml_text_utils import get_sysml_text, set_sysml_text
 from .pipeline_records import DesignHandoffRecord
 
 
@@ -96,7 +96,6 @@ class CollaborationMixin:
 
         Returns False for an arm that does not use the blackboard at all.
         """
-        from ..prototyping.experiment_arms import RevisedExperimentArm  # noqa: F401
         from ..prototyping.blackboard import Blackboard, RecordType
         from ..prototyping.context_builder import ContextBuilder
         from ..prototyping.task_session import TaskSessionRegistry
@@ -523,9 +522,11 @@ class CollaborationMixin:
         terminal_model = build_lite_model(model_text, model_name=model_name)
         prior_metadata = dict(getattr(model, "metadata", None) or {})
         terminal_model.metadata.update(prior_metadata)
-        self._sync_model_text(terminal_model, model_text)
+        set_sysml_text(terminal_model, model_text)
         syntax_result = check_syntax(model_text)
-        sim_result = self._run_simulation(model_text, model_name)
+        sim_result = self.refinement_closure.simulate(
+            model_text, model_name
+        )
         evaluation = self.evaluator.evaluate(
             config=DesignConfiguration(
                 name="terminal_snapshot",
@@ -920,7 +921,7 @@ class CollaborationMixin:
                 "attempts": authoring_attempts,
             }
         if self.blackboard is not None:
-            from ..prototyping.blackboard import RecordType, text_digest
+            from ..prototyping.blackboard import text_digest
 
             if model_text is not None and (
                 text_digest(model_text)

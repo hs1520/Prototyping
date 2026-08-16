@@ -26,9 +26,11 @@ Maps SysML requirements to ArduPilot parameters and SITL test specs.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Tuple
+from types import MappingProxyType
+from typing import Dict, List, Optional, Any, Mapping, Tuple
 
 from src.sysml.lite_model import SysMLLiteModel
 from src.sitl.sitl_specs import InjectSpec, VerifySpec
@@ -44,7 +46,6 @@ except ImportError:
 from src.sitl.sitl_catalogue import (
     _CONTENT_CATALOGUE,
     _TAG_TO_ENTRY,
-    AttrMatcher,
     ContentEntry,
     GuardMatcher,
 )
@@ -54,7 +55,7 @@ from src.sitl.sitl_catalogue import (
 # Data classes
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class ResolvedParam:
     req_id: str
     part_name: str
@@ -63,14 +64,46 @@ class ResolvedParam:
     source: str = ""       # 描述值的来源，例如 "guard:<=:25.0" 或 "attr:maxAltitude"
 
 
-@dataclass
+@dataclass(frozen=True)
 class SITLTestSpec:
     req_id: str
     tier: str
     inject: InjectSpec
     verify: VerifySpec
     notes: str
-    params: List[ResolvedParam] = field(default_factory=list)
+    params: tuple[ResolvedParam, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class GuardEvidence:
+    part_name: str
+    attribute: str
+    kind: str
+    operator: str
+    threshold: Any
+    signature: tuple[Any, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementEvidenceBundle:
+    """Immutable, revision-bound input for SITL and verification consumers."""
+
+    model_digest: str
+    requirement_texts: Mapping[str, str]
+    satisfying_parts: Mapping[str, tuple[str, ...]]
+    guard_assignments: Mapping[str, GuardEvidence]
+    test_specs: tuple[SITLTestSpec, ...]
+    resolved_params: tuple[ResolvedParam, ...]
+    parm_file: str
+    traceability_mismatches: tuple[Mapping[str, str], ...]
+    coverage: Mapping[str, Any]
+
+    def coverage_payload(self) -> Dict[str, Any]:
+        """Return the legacy JSON shape without exposing mutable bundle state."""
+        return {
+            key: list(value) if isinstance(value, tuple) else value
+            for key, value in self.coverage.items()
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +157,8 @@ class RequirementLinker:
         self._guard_assignment: Dict[str, Any] = self._assign_guards_exclusive()
         # _lookup_catalogue 结果缓存：避免 _resolve_all 多次调用时重复打印 [CONTENT]
         self._catalogue_cache: Dict[str, Optional[Dict]] = {}
+        self._resolved_cache: Optional[tuple[ResolvedParam, ...]] = None
+        self._evidence_bundle: Optional[RequirementEvidenceBundle] = None
 
     def _assign_guards_exclusive(self) -> Dict[str, Any]:
         """
@@ -321,7 +356,7 @@ class RequirementLinker:
             # 把 req_id 拆成小写词（REQ_FUNC_007 → ["func","007"]）
             req_tokens = set(req_id.lower().replace("_", " ").split())
 
-            best_sm, best_tag, best_score = None, None, -1
+            best_tag, best_score = None, -1
             for sm_name, tag, (owner, guard_attrs) in candidate_sms:
                 # 先用 tag 关键词打分
                 tag_tokens = set(tag.lower().replace("_", " ").split())
@@ -334,7 +369,7 @@ class RequirementLinker:
                     if any(tok in attr for tok in req_tokens):
                         score += 2
                 if score > best_score:
-                    best_score, best_sm, best_tag = score, sm_name, tag
+                    best_score, best_tag = score, tag
 
             # 只有打到分才采用，否则不误判
             if best_tag and best_score > 0:
@@ -1121,6 +1156,59 @@ class RequirementLinker:
         "SCHED_LOOP_RATE",  # 改调度频率会破坏 SITL GPS 仿真，让 SITL 用默认 400Hz
     }
 
+    def compile_evidence(self) -> RequirementEvidenceBundle:
+        """Compile one immutable evidence bundle for this model revision."""
+        if self._evidence_bundle is not None:
+            return self._evidence_bundle
+
+        model_text = self._model.to_sysml_text() or ""
+        assignments: Dict[str, GuardEvidence] = {}
+        for req_id, assigned in self._guard_assignment.items():
+            if not assigned:
+                continue
+            guard = assigned.get("guard")
+            assignments[req_id] = GuardEvidence(
+                part_name=str(assigned.get("part", "")),
+                attribute=str(getattr(guard, "attribute", "?")),
+                kind=str(getattr(guard, "kind", "")),
+                operator=str(getattr(guard, "operator", "")),
+                threshold=getattr(guard, "threshold", None),
+                signature=(
+                    getattr(guard, "kind", None),
+                    getattr(guard, "attribute", None),
+                    getattr(guard, "operator", None),
+                    getattr(guard, "threshold", None),
+                    getattr(guard, "enum_type", None),
+                    getattr(guard, "enum_value", None),
+                ),
+            )
+
+        specs = tuple(self.generate_test_specs())
+        resolved = tuple(self._resolve_all())
+        mismatches = tuple(
+            MappingProxyType(dict(item))
+            for item in self.traceability_mismatches()
+        )
+        coverage = MappingProxyType({
+            key: tuple(value) if isinstance(value, list) else value
+            for key, value in self.coverage_stats().items()
+        })
+        self._evidence_bundle = RequirementEvidenceBundle(
+            model_digest=hashlib.sha256(model_text.encode("utf-8")).hexdigest(),
+            requirement_texts=MappingProxyType(dict(self._req_texts)),
+            satisfying_parts=MappingProxyType({
+                req_id: tuple(parts)
+                for req_id, parts in self._satisfy_map.items()
+            }),
+            guard_assignments=MappingProxyType(assignments),
+            test_specs=specs,
+            resolved_params=resolved,
+            parm_file=self.generate_parm_file(),
+            traceability_mismatches=mismatches,
+            coverage=coverage,
+        )
+        return self._evidence_bundle
+
     def generate_parm_file(self) -> str:
         resolved = self._resolve_all()
         lines = [
@@ -1173,7 +1261,7 @@ class RequirementLinker:
                 inject=st.get("inject"),
                 verify=st.get("verify"),
                 notes=st.get("notes", ""),
-                params=resolved_by_req.get(req_id, []),
+                params=tuple(resolved_by_req.get(req_id, [])),
             ))
         return specs
 
@@ -1486,6 +1574,8 @@ class RequirementLinker:
           @guard*N / @guard_attr*N → parachute delay 特殊处理
           number       → 直接使用
         """
+        if self._resolved_cache is not None:
+            return list(self._resolved_cache)
         results: List[ResolvedParam] = []
         for req_id in self._covered_req_ids():
             cat = self._lookup_catalogue(req_id)
@@ -1556,7 +1646,8 @@ class RequirementLinker:
                     value=val,
                     source=src,
                 ))
-        return results
+        self._resolved_cache = tuple(results)
+        return list(self._resolved_cache)
 
     def _threshold_for_guard_var(
         self,

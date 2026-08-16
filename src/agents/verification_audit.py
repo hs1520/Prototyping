@@ -23,7 +23,7 @@ rewriting the spec instead.
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Optional
+from typing import Mapping, Iterable, List, Optional
 
 from ..utils.req_id import normalise_req_id
 
@@ -77,6 +77,8 @@ def verification_gap_issues(
     limit: int = 6,
     strict: bool = False,
     allowed_req_ids: Optional[Iterable[str]] = None,
+    unmeasurable_req_ids: Optional[Iterable[str]] = None,
+    planned_intents: Optional[Mapping[str, str]] = None,
 ) -> List[str]:
     """Return surgical-refinement issues for requirements no verification tier anchors.
 
@@ -92,7 +94,10 @@ def verification_gap_issues(
 
         lite = build_lite_model(model_text, model_name=model_name)
         linker = RequirementLinker(lite)
-        rows = build_matrix(lite, None, linker)
+        rows = build_matrix(
+            lite, None, linker.compile_evidence(),
+            planned_intents=dict(planned_intents) if planned_intents else None,
+        )
     except Exception:
         if strict:
             raise
@@ -101,12 +106,30 @@ def verification_gap_issues(
         {normalise_req_id(str(req_id)) for req_id in allowed_req_ids}
         if allowed_req_ids is not None else None
     )
+    unmeasurable = (
+        {normalise_req_id(str(req_id)) for req_id in unmeasurable_req_ids}
+        if unmeasurable_req_ids is not None else set()
+    )
     issues: List[str] = []
     for row in rows:
         if allowed is not None and normalise_req_id(row.req_id) not in allowed:
             continue
         behavioral_failed = "behavioral_sim_failed" in row.tiers
         if row.status != "unassigned" and not behavioral_failed:
+            continue
+        if (
+            not behavioral_failed
+            and "planned_no_response" in row.tiers
+            and normalise_req_id(row.req_id) in unmeasurable
+        ):
+            # Two independent signals agree that there is nothing here for a
+            # model to anchor: the planner recorded that the requirement
+            # obliges no discrete response, and the extractor flagged it as
+            # carrying no measurable criterion. Asking the surgical LLM to
+            # repair the model would ask it to invent an anchor the requirement
+            # does not provide. The row stays UNASSIGNED in the matrix -- the
+            # gap is real -- but it is a requirement-side gap, not a
+            # model-side one, and it does not block closure.
             continue
         text = " ".join((row.text or "").split())[:220]
         if _phase8_will_anchor(row.req_id, text):
@@ -136,6 +159,23 @@ def verification_gap_issues(
                 "release/re-lock transitions so no state is unreachable. Tie the default "
                 "state to an entry action or explicit initial attribute value."
             )
+        elif any(k in low for k in ("inhibit", "prevent", "block", "suppress", "shall not release",
+                                     "shall not actuate", "lock out", "lockout")):
+            # An inhibition requirement is satisfied by the transition that is
+            # NOT taken. Repeated probe runs showed the surgical LLM adding a
+            # response action for it instead, which the simulator cannot credit:
+            # nothing fires. Name the shape that does anchor.
+            default_guidance = (
+                " This is an INHIBITION requirement: it is satisfied when a response is "
+                "withheld while a condition holds. Model it as a Boolean attribute for the "
+                "inhibiting condition on the owning part (e.g. deliveryAbortActive : Boolean "
+                "= false) and EITHER a guard `if not <condition>` on the transition that "
+                "would otherwise perform the response, OR a transition from the response "
+                "state back to the safe/secured state that fires on the condition. Do not "
+                "add a new response action; the anchor is the guarded or reverting "
+                "transition, which the behavioural simulator exercises by sweeping the "
+                "condition across true and false."
+            )
         issues.append(
             f"{_ISSUE_PREFIX} {row.req_id} has no verification anchor at any tier — it "
             f"will land UNASSIGNED in the verification matrix. Requirement: \"{text}\". "
@@ -164,6 +204,8 @@ def functional_verification_gap_issues(
     limit: int = 100,
     strict: bool = False,
     allowed_req_ids: Optional[Iterable[str]] = None,
+    unmeasurable_req_ids: Optional[Iterable[str]] = None,
+    planned_intents: Optional[Mapping[str, str]] = None,
 ) -> List[str]:
     """Model-fixable functional gaps that require a dedicated closure pass.
 
@@ -176,6 +218,8 @@ def functional_verification_gap_issues(
         issue for issue in verification_gap_issues(
             model_text, model_name, limit=limit, strict=strict,
             allowed_req_ids=allowed_req_ids,
+            unmeasurable_req_ids=unmeasurable_req_ids,
+            planned_intents=planned_intents,
         )
         if _FUNC_GAP_RE.search(issue)
     ]

@@ -331,6 +331,104 @@ def test_step1_requires_plan_owned_timed_functional_evidence_chain():
     )
 
 
+def test_step1_requires_the_response_the_closure_gate_will_demand():
+    """The deadlock this prevents: the gate demands an accept-triggered
+    navigate response, but only plan-declared symbols are legal accept
+    targets, so a plan without the behavior can never be repaired into one."""
+    requirement = (
+        "REQ-FUNC-001: The drone shall navigate to GPS waypoints with "
+        "< 1 m precision"
+    )
+    payload = copy.deepcopy(_PAYLOAD)
+
+    missing = ModelGenerationPlan.from_payload(
+        payload,
+        requirements=[requirement],
+        require_source_anchored_paths=True,
+    )
+
+    assert any(
+        "REQ_FUNC_001 needs a planned navigate response" in issue
+        for issue in missing.issues
+    )
+
+    payload["behaviors"] = [{
+        "owner": "Producer",
+        "behavior_id": "WaypointNavigationBehavior",
+        "initial_state": "idle",
+        "states": [
+            {"state_id": "idle", "role": "INITIAL"},
+            {
+                "state_id": "navigating",
+                "role": "RESPONSE",
+                "entry_action": "navigateToWaypoint",
+            },
+        ],
+        "transitions": [{
+            "transition_id": "startNavigation",
+            "source": "idle",
+            "target": "navigating",
+            "trigger_kind": "ACCEPT",
+            "trigger": "WaypointMissionAcceptedSignal",
+        }],
+        "provenance": {
+            "kind": "FROZEN_REQUIREMENT",
+            "requirement_id": "REQ_FUNC_001",
+        },
+    }]
+
+    covered = ModelGenerationPlan.from_payload(
+        payload,
+        requirements=[requirement],
+        require_source_anchored_paths=True,
+    )
+
+    assert not any(
+        "REQ_FUNC_001 needs a planned" in issue for issue in covered.issues
+    )
+    # the trigger the repair would have had to invent is now a legal symbol
+    assert "WaypointMissionAcceptedSignal" in {
+        symbol.name for symbol in covered.planned_event_symbols
+    }
+
+
+def test_a_response_state_the_plan_cannot_reach_does_not_discharge_the_intent():
+    requirement = (
+        "REQ-FUNC-001: The drone shall navigate to GPS waypoints with "
+        "< 1 m precision"
+    )
+    payload = copy.deepcopy(_PAYLOAD)
+    payload["behaviors"] = [{
+        "owner": "Producer",
+        "behavior_id": "WaypointNavigationBehavior",
+        "initial_state": "idle",
+        "states": [
+            {"state_id": "idle", "role": "INITIAL"},
+            {
+                "state_id": "navigating",
+                "role": "RESPONSE",
+                "entry_action": "navigateToWaypoint",
+            },
+        ],
+        "transitions": [],          # nothing leads to the response state
+        "provenance": {
+            "kind": "FROZEN_REQUIREMENT",
+            "requirement_id": "REQ_FUNC_001",
+        },
+    }]
+
+    plan = ModelGenerationPlan.from_payload(
+        payload,
+        requirements=[requirement],
+        require_source_anchored_paths=True,
+    )
+
+    assert any(
+        "REQ_FUNC_001 needs a planned navigate response" in issue
+        for issue in plan.issues
+    )
+
+
 def test_typed_plan_rejects_item_type_that_disagrees_with_endpoints():
     payload = {
         **_PAYLOAD,

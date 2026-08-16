@@ -15,12 +15,10 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
+from .artifact_store import atomic_write_json
 from .run_metrics import compute_coordination_metrics
 
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+_write_json = atomic_write_json
 
 
 def _write_jsonl(path: Path, rows: List[Mapping[str, Any]]) -> None:

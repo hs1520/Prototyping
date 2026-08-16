@@ -89,6 +89,16 @@ class RequirementRealizationPlan:
     behavior_kind: str = ""
     behavior_name: str = ""
     source_digest: str = ""
+    # The discrete response a functional requirement obliges, decided by the
+    # planner from the requirement text and recorded here so that the plan
+    # validator and the terminal closure gate read the same decision instead
+    # of each inferring it from keywords. One of RESPONSE_INTENTS, or "" when
+    # the requirement is not functional; "none" is a valid decision and means
+    # the requirement obliges no discrete response (a continuous property, a
+    # data-reception duty, a hover). "none" must be accompanied by a
+    # non-empty response_intent_rationale.
+    response_intent: str = ""
+    response_intent_rationale: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -103,6 +113,8 @@ class RequirementRealizationPlan:
             "behavior_kind": self.behavior_kind,
             "behavior_name": self.behavior_name,
             "source_digest": self.source_digest,
+            "response_intent": self.response_intent,
+            "response_intent_rationale": self.response_intent_rationale,
         }
 
     @classmethod
@@ -137,6 +149,12 @@ class RequirementRealizationPlan:
                 value.get("behavior_name") or ""
             ).strip(),
             source_digest=str(value.get("source_digest") or "").strip(),
+            response_intent=str(
+                value.get("response_intent") or ""
+            ).strip().lower(),
+            response_intent_rationale=str(
+                value.get("response_intent_rationale") or ""
+            ).strip(),
         )
 
 

@@ -26,6 +26,12 @@ from .ag_emitter import (
     AGPrioritySpec,
     AGRealizationPathSpec,
 )
+from .ag_profile import (
+    DERIVED_SOURCE_KIND,
+    LOCKED_UNTIL_RELEASE_PATTERN,
+    STARTUP_INHIBIT_PATTERN,
+    THRESHOLD_PATTERN,
+)
 from ..utils.req_id import normalise_req_id
 
 
@@ -180,7 +186,7 @@ REQ_SAFE_004_CHAIN = AGChainSpec(
     observation="armingTransitionInhibited and airborneTransitionInhibited",
     deadline=None,
     verification="ArmingInhibitVerification",
-    pattern="STARTUP_INHIBIT",
+    pattern=STARTUP_INHIBIT_PATTERN,
     components=(
         AGComponentSpec(
             name="SelfTestStatusLatchContract",
@@ -269,7 +275,7 @@ REQ_SAFE_004_CHAIN = AGChainSpec(
                 _id("armingTransitionInhibited"),
                 _id("airborneTransitionInhibited"),
             ),
-            source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            source_kind=DERIVED_SOURCE_KIND,
             source_id="SAFE004_LATCH_PROPAGATION_V1",
         ),
         AGInvariantSpec(
@@ -277,7 +283,7 @@ REQ_SAFE_004_CHAIN = AGChainSpec(
             scope="SystemArmingInhibitContract",
             trigger_or_antecedent_ast=_id("selfTestPassed"),
             required_consequent_ast=_not("startupInhibitActive"),
-            source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            source_kind=DERIVED_SOURCE_KIND,
             source_id="SAFE004_LATCH_RESET_V1",
         ),
     ),
@@ -310,7 +316,7 @@ REQ_SAFE_008_CHAIN = AGChainSpec(
     observation="not powerOnInitialisation or payloadLocked",
     deadline=None,
     verification="PayloadLockVerification",
-    pattern="LOCKED_UNTIL_AUTHORISED_RELEASE",
+    pattern=LOCKED_UNTIL_RELEASE_PATTERN,
     components=(
         AGComponentSpec(
             name="ReleaseCommandGatewayContract",
@@ -391,7 +397,7 @@ REQ_SAFE_008_CHAIN = AGChainSpec(
             scope="SystemPayloadLockContract",
             trigger_or_antecedent_ast=_id("payloadUnlocked"),
             required_consequent_ast=_id("authorisedReleaseCommandReceived"),
-            source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            source_kind=DERIVED_SOURCE_KIND,
             source_id="SAFE008_UNLOCK_AUTHORIZATION_V1",
         ),
         AGInvariantSpec(
@@ -399,7 +405,7 @@ REQ_SAFE_008_CHAIN = AGChainSpec(
             scope="SystemPayloadLockContract",
             trigger_or_antecedent_ast=_not("actuatorPowerAvailable"),
             required_consequent_ast=_id("payloadLocked"),
-            source_kind="STUDENT_DERIVED_DESIGN_CONSTRAINT",
+            source_kind=DERIVED_SOURCE_KIND,
             source_id="SAFE008_DEENERGISE_TO_LOCK_V1",
         ),
     ),
@@ -494,7 +500,7 @@ REQ_SAFE_002_CHAIN = AGChainSpec(
         ),
     ),
     verification="ControlledDescentVerification",
-    pattern="THRESHOLD_TRIGGERED_RESPONSE",
+    pattern=THRESHOLD_PATTERN,
     # No timing_origin: the chain declares no interval, so the trigger is stated
     # once, in the priority contract, rather than twice.
     timing_origin=None,

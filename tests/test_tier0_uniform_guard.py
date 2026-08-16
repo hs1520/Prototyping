@@ -9,20 +9,23 @@ two still converges.
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
-from src.agents.orchestrator import Orchestrator
+from src.agents.orchestrator import Orchestrator, PrototypingState
+from src.agents.refinement import (
+    ModelRevision,
+    RefinementClosure,
+    RefinementClosureRequest,
+)
+from src.agents.refinement_intelligence import ScriptedRefinementIntelligence
+from src.simulation.validator import SimulationResult
 from src.simulation.syntax_checker import check_syntax
+from src.sysml.lite_model import build_lite_model
 
 
 class _NoCallLLM:
     def complete(self, *_args, **_kwargs):  # pragma: no cover
         raise AssertionError("Tier 0 must not call the LLM")
-
-
-class _Model:
-    def __init__(self) -> None:
-        self.metadata: dict = {}
-        self.name = "M"
 
 
 # A guard names an attribute nothing declares -> one sema error -> ATTR-INJ.
@@ -55,9 +58,43 @@ _BOTH = _GUARD_ATTR_MISSING.replace(
 
 
 def _tier0(text: str):
-    orchestrator = Orchestrator(_NoCallLLM())
-    return orchestrator._tier0_deterministic_fixes(
-        text, _Model(), check_syntax(text)
+    orchestrator = Orchestrator(
+        _NoCallLLM(),
+        max_iterations=1,
+        quality_threshold=0.5,
+        use_surgical_refinement=False,
+    )
+    orchestrator.state = PrototypingState(
+        system_name="M",
+        system_description="",
+    )
+    intelligence = ScriptedRefinementIntelligence(evaluate=(
+        SimpleNamespace(
+            weighted_total=1.0,
+            issues=[],
+            recommendations=[],
+            criteria_scores={},
+        ),
+    ))
+    orchestrator.refinement_closure = RefinementClosure(
+        orchestrator,
+        intelligence=intelligence,
+        simulation_runner=lambda _text, name: SimulationResult(model_name=name),
+        verification_gap_audit=lambda _text, _name: [],
+    )
+    outcome = orchestrator.refinement_closure.refine(
+        RefinementClosureRequest(
+            base=ModelRevision.capture(
+                build_lite_model(text, model_name="M")
+            ),
+            requirements=(),
+        )
+    )
+    return (
+        outcome.revision.sysml,
+        check_syntax(outcome.revision.sysml),
+        (),
+        outcome.evidence["syntax_error_count"] == 0,
     )
 
 

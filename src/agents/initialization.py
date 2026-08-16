@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-from .design_agent import DEFAULT_MAXIMUM_PLAN_ATTEMPTS, DesignAgent
+from .design_agent import DesignAgent
+from .typed_plan_generation import DEFAULT_MAXIMUM_PLAN_ATTEMPTS
 from .orchestrator_support import PrototypingState
 from .requirements_agent import RequirementsAgent
+from .refinement import RefinementClosure
 from ..dse.evaluator import DesignEvaluator
 from ..llm.chain_of_thought import ChainOfThoughtPrompter
 from ..llm.interface import LLMInterface
@@ -123,8 +125,6 @@ class InitializationMixin:
         self._active_model_generation_plan: Optional[Dict[str, Any]] = None
         self.last_ag_binding_report: Optional[Dict[str, Any]] = None
         self.last_ag_non_degradation: Optional[Dict[str, Any]] = None
-        self.last_action_semantics_audit: Optional[Dict[str, Any]] = None
-        self.last_action_effects = ()
         self.task_session_max_turns = int(task_session_max_turns)
         self.task_session_max_tokens = int(task_session_max_tokens)
         if self.task_session_max_turns <= 0 or self.task_session_max_tokens <= 0:
@@ -155,6 +155,6 @@ class InitializationMixin:
         self.evaluator = DesignEvaluator(quality_threshold=quality_threshold)
         self.cot = ChainOfThoughtPrompter(llm)
         self.sim_validator = SimulationValidator()
+        self.refinement_closure = RefinementClosure(self)
 
         self.state: Optional[PrototypingState] = None
-

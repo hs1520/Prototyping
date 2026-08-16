@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
 from .connectivity_fixer import PortDirectory
 from ..utils.sysml_text_utils import find_block_end as _block_end
@@ -45,7 +45,7 @@ from ..utils.sysml_text_utils import find_block_end as _block_end
 # 数据类
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class PortAdd:
     """A proposed new port to add into a given part def."""
     part_def: str        # 例如 "PropulsionSystem"

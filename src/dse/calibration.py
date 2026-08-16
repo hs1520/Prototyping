@@ -16,7 +16,7 @@ SITL run on the Pareto front, or a reference model for offline calibration.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 
 def _ranks(xs: Sequence[float]) -> List[float]:

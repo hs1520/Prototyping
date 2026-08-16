@@ -13,18 +13,18 @@ sitl_specs.py
 
 from __future__ import annotations
 
-import re
 import textwrap
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from types import MappingProxyType
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
 # Spec dataclasses
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class InjectSpec:
     """
     描述一次故障注入。
@@ -43,12 +43,15 @@ class InjectSpec:
                  pre_takeoff_m=10.0)
     """
     kind: str
-    params: Dict[str, float] = field(default_factory=dict)
+    params: Mapping[str, float] = field(default_factory=dict)
     pre_takeoff_m: float = 0.0
     notes: str = ""
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "params", MappingProxyType(dict(self.params)))
 
-@dataclass
+
+@dataclass(frozen=True)
 class VerifySpec:
     """
     描述如何验证预期行为。
@@ -68,9 +71,12 @@ class VerifySpec:
                  timeout=10.0)
     """
     kind: str
-    args: Dict[str, Any] = field(default_factory=dict)
+    args: Mapping[str, Any] = field(default_factory=dict)
     timeout: float = 10.0
     notes: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "args", MappingProxyType(dict(self.args)))
 
 
 # ---------------------------------------------------------------------------

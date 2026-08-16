@@ -115,6 +115,14 @@ def atomic_write_json(path: Path, value: Any) -> None:
     )
 
 
+def read_json_object(path: Path) -> dict[str, Any]:
+    """Read a JSON artifact and fail closed when its root is not an object."""
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"JSON artifact must be an object: {path}")
+    return value
+
+
 def read_state(run_dir: Path) -> dict[str, Any]:
     path = run_dir / STATE_NAME
     if not path.exists():

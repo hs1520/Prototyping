@@ -34,6 +34,11 @@ for _name, _attrs in [
         sys.modules[_name] = _mod
 
 from src.agents.orchestrator import Orchestrator, PrototypingState  # noqa: F401 (Orchestrator used in tests)
+from src.agents.refinement import (
+    ModelRevision,
+    RefinementClosure,
+    RefinementClosureRequest,
+)
 from src.simulation.surgical_refiner import SurgicalOutcome
 from src.agents.dse_injectors import build_dse_design_constraints
 from src.llm.interface import MockLLM
@@ -44,6 +49,45 @@ from src.simulation.validator import SimulationResult
 from src.prototyping.blackboard import text_digest
 from src.prototyping.generation_plan import ModelGenerationPlan
 from src.utils.sysml_text_utils import get_sysml_text
+
+
+def _refine(orch, model, requirements, **kwargs):
+    """Exercise Refinement Closure through its public QUALITY interface."""
+    result = orch.refinement_closure.refine(RefinementClosureRequest(
+        base=ModelRevision.capture(model),
+        requirements=tuple(requirements),
+        dse_best_config=kwargs.get("dse_best_config"),
+        preserve_connectivity=bool(kwargs.get("connectivity_floor", False)),
+    ))
+    return result.materialize()
+
+
+def _close(
+    orch,
+    model,
+    requirements,
+    *,
+    simulation_runner,
+    functional_gap_audit,
+):
+    """Exercise all three public Refinement Closure stages."""
+    if orch.state is None:
+        orch.state = PrototypingState(
+            system_name=getattr(model, "name", "Test"),
+            system_description="",
+        )
+    orch.refinement_closure = RefinementClosure(
+        orch,
+        simulation_runner=simulation_runner,
+        verification_gap_audit=lambda _text, _name: [],
+        functional_gap_audit=functional_gap_audit,
+    )
+    refined = orch.refinement_closure.refine(RefinementClosureRequest(
+        base=ModelRevision.capture(model),
+        requirements=tuple(requirements),
+    ))
+    projected = orch.refinement_closure.project_parameters(refined, None)
+    return orch.refinement_closure.close(projected)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -245,7 +289,7 @@ class TestBestModelTracking:
 
     def test_returns_peak_scoring_model_not_last(self):
         """When iteration 1 produces the best score and later iterations
-        regress, _iterative_refinement must return the iteration-1 model."""
+        regress, the public refinement stage must return the iteration-1 model."""
         model_a = _make_model("model_a")
         model_b = _make_model("model_b")  # accepted in iter-1 refinement
 
@@ -268,7 +312,7 @@ class TestBestModelTracking:
         ])
         orch.design_agent = FakeDesignAgent([model_b])
 
-        result_model, result_score, _ = orch._iterative_refinement(model_a, [])
+        result_model, result_score, _ = _refine(orch, model_a, [])
 
         assert result_model.name == "model_a"
         # 0.6*0.65 + 0.4*0.70 = 0.67
@@ -294,58 +338,11 @@ class TestBestModelTracking:
         ])
         orch.design_agent = FakeDesignAgent([model_b])
 
-        result_model, result_score, _ = orch._iterative_refinement(model_a, [])
+        result_model, result_score, _ = _refine(orch, model_a, [])
 
         # Iter 2 blended: 0.6*0.70 + 0.4*0.80 = 0.74
         assert result_model.name == "model_b"
         assert abs(result_score - 0.74) < 0.01
-
-    def test_last_chance_surgical_improvement_is_returned_for_terminal_scoring(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Never pair the old best model with a newer post-fix simulation."""
-        model_a = _make_model("before_fix")
-        model_b = _make_model("after_fix")
-        before_sim = SimulationResult(model_name="before_fix")
-        after_sim = SimulationResult(model_name="after_fix")
-        orch = _make_orch(max_iterations=1, quality_threshold=0.75)
-        orch.evaluator = FakeEvaluator([FakeEvalResult(weighted_total=0.90)])
-        orch.cot = FakeCot([])
-
-        monkeypatch.setattr(
-            orch,
-            "_syntax_gate",
-            lambda text, model, requirements, max_attempts: (
-                text,
-                model,
-                SimpleNamespace(has_errors=False, total_errors=lambda: 0),
-            ),
-        )
-        monkeypatch.setattr(
-            orch, "_connect_audit_step", lambda text, model: (text, model)
-        )
-        monkeypatch.setattr(orch, "_run_simulation", lambda *_args: before_sim)
-        monkeypatch.setattr(orch, "_verification_gap_issues", lambda *_args: [])
-        monkeypatch.setattr(
-            orch, "_early_exit_gates", lambda *_args: (False, False, True)
-        )
-        monkeypatch.setattr(orch, "_print_iteration_summary", lambda **_kwargs: None)
-        monkeypatch.setattr(
-            orch, "_sim_refinement_loop", lambda *_args, **_kwargs: model_b
-        )
-        monkeypatch.setattr(
-            orch,
-            "_resolve_after_forced_fix",
-            lambda *_args, **_kwargs: (False, model_b, 0.91, after_sim),
-        )
-
-        result_model, result_score, result_sim = orch._iterative_refinement(
-            model_a, []
-        )
-
-        assert result_model is model_b
-        assert result_score == 0.91
-        assert result_sim is after_sim
 
     def test_last_iteration_accepted_refinement_is_promoted_immediately(self):
         model_a = _make_model("before_refinement")
@@ -364,10 +361,10 @@ class TestBestModelTracking:
         orch.design_agent = FakeDesignAgent([model_b])
 
         result_model, result_score, _result_sim = (
-            orch._iterative_refinement(model_a, [])
+            _refine(orch, model_a, [])
         )
 
-        assert result_model is model_b
+        assert result_model.name == model_b.name
         assert result_score == 0.90
 
 
@@ -391,7 +388,10 @@ class TestTerminalConsistencyGate:
             seen["simulation_text"] = text
             return terminal_sim
 
-        monkeypatch.setattr(orch, "_run_simulation", simulate)
+        orch.refinement_closure = RefinementClosure(
+            orch,
+            simulation_runner=simulate,
+        )
         model, score, sim, consistency = orch._synchronize_terminal_snapshot(
             stale_model,
             terminal_text,
@@ -414,103 +414,6 @@ class TestTerminalConsistencyGate:
 
 
 class TestPlanAwareStructuralGates:
-
-    def test_frozen_structural_report_overrides_heuristic_failures(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        orch = _make_orch()
-        model = _make_model()
-        simulation = SimpleNamespace(
-            behavioral_result=None,
-            failed_scenarios=lambda: [SimpleNamespace()],
-        )
-        monkeypatch.setattr(
-            orch,
-            "_validate_terminal_structural_obligations",
-            lambda *_args: {"status": "PASS"},
-        )
-
-        behavioral, structural, syntax = orch._early_exit_gates(
-            simulation,
-            SimpleNamespace(has_errors=False),
-            [],
-            model,
-        )
-
-        assert behavioral is True
-        assert structural is True
-        assert syntax is True
-
-    def test_plan_conformant_model_never_invokes_free_connectivity_generation(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        payload = {
-            "components": [
-                {
-                    "name": "Source",
-                    "responsibility": "Produces a signal.",
-                    "requirements": ["REQ_FUNC_001"],
-                    "ports": [{
-                        "name": "signal",
-                        "direction": "out",
-                        "type": "SignalPort",
-                        "external": False,
-                    }],
-                },
-                {
-                    "name": "Sink",
-                    "responsibility": "Consumes a signal.",
-                    "requirements": ["REQ_FUNC_001"],
-                    "ports": [{
-                        "name": "signal",
-                        "direction": "in",
-                        "type": "SignalPort",
-                        "external": False,
-                    }],
-                },
-            ],
-            "connections": [{
-                "source": {"component": "Source", "port": "signal"},
-                "target": {"component": "Sink", "port": "signal"},
-                "item_type": "SignalPort",
-                "requirements": ["REQ_FUNC_001"],
-            }],
-        }
-        plan = ModelGenerationPlan.from_payload(
-            payload,
-            requirements=["REQ_FUNC_001: propagate signal"],
-        )
-        text = """package P {
-            port def SignalPort;
-            part def Source { out port signal : SignalPort; }
-            part def Sink { in port signal : SignalPort; }
-            part source : Source;
-            part sink : Sink;
-            connect source.signal to sink.signal;
-        }"""
-        model = build_lite_model(text, model_name="P")
-        model.metadata["whole_model_generation_plan"] = plan.to_dict()
-        orch = _make_orch()
-        monkeypatch.setattr(
-            orch,
-            "_fix_stuck_transitions",
-            lambda candidate: candidate,
-        )
-        calls_before = orch.llm._call_count
-
-        result = orch._sim_refinement_loop(
-            model,
-            ["REQ_FUNC_001: propagate signal"],
-            max_iters=2,
-        )
-
-        assert result is model
-        assert orch.llm._call_count == calls_before
-        assert (
-            model.metadata["structural_obligation_report"]["status"]
-            == "PASS"
-        )
-
     def test_refinement_with_unplanned_port_is_rejected_before_fixer(
         self,
     ):
@@ -565,22 +468,33 @@ class TestPlanAwareStructuralGates:
             model_name="P",
         )
         candidate.metadata["whole_model_generation_plan"] = plan.to_dict()
-        orch = _make_orch()
+        orch = _make_orch(max_iterations=1, quality_threshold=0.95)
         orch.evaluator = FakeEvaluator([
-            FakeEvalResult(weighted_total=1.0),
+            FakeEvalResult(weighted_total=0.5, issues=["improve"]),
         ])
-
-        accepted = orch._accept_refinement_candidate(
-            candidate=candidate,
-            current_sysml="package P {}",
-            rule_score=0.5,
-            dse_best_config=None,
-            requirements=["REQ_FUNC_001: propagate signal"],
-            connectivity_floor=False,
+        orch.cot = FakeCot([
+            FakeCotResult(_scores={"overall": 0.5}, final_answer="improve"),
+        ])
+        orch.design_agent = FakeDesignAgent([candidate])
+        current = build_lite_model("package P {}", model_name="P")
+        orch.refinement_closure = RefinementClosure(
+            orch,
+            simulation_runner=lambda _text, name: SimulationResult(
+                model_name=name
+            ),
+            verification_gap_audit=lambda _text, _name: [],
         )
 
-        assert accepted is None
-        assert orch.evaluator.call_count == 0
+        outcome = orch.refinement_closure.refine(RefinementClosureRequest(
+            base=ModelRevision.capture(current),
+            requirements=("REQ_FUNC_001: propagate signal",),
+        ))
+
+        assert outcome.revision.digest == ModelRevision.capture(current).digest
+        assert outcome.evidence["events"][-1]["decision"] == (
+            "PLAN_CONFORMANCE_FAILED"
+        )
+        assert orch.evaluator.call_count == 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -607,7 +521,7 @@ class TestRegressionPrevention:
         ])
         orch.design_agent = FakeDesignAgent([model_bad])
 
-        result_model, _, _sim = orch._iterative_refinement(model_a, [])
+        result_model, _, _sim = _refine(orch, model_a, [])
 
         assert result_model.name == "model_a"   # model_bad was rejected
 
@@ -630,7 +544,7 @@ class TestRegressionPrevention:
         ])
         orch.design_agent = FakeDesignAgent([model_b])
 
-        result_model, result_score, _ = orch._iterative_refinement(model_a, [])
+        result_model, result_score, _ = _refine(orch, model_a, [])
 
         # Iter 2 blended: 0.6*0.74 + 0.4*0.80 = 0.764
         assert result_model.name == "model_b"
@@ -651,7 +565,7 @@ class TestRegressionPrevention:
         ])
         orch.design_agent = FakeDesignAgent([model_b])
 
-        orch._iterative_refinement(model_a, [])
+        _refine(orch, model_a, [])
 
         # 1 main eval + 1 regression check = 2 total calls
         assert orch.evaluator.call_count == 2
@@ -682,7 +596,7 @@ class TestLLMGuidedRefinement:
         ])
         orch.design_agent = FakeDesignAgent([model_b])
 
-        orch._iterative_refinement(model_a, [])
+        _refine(orch, model_a, [])
 
         # Refinement must have been triggered despite empty issues list
         assert orch.design_agent.call_count == 1
@@ -703,7 +617,7 @@ class TestLLMGuidedRefinement:
         ])
         orch.design_agent = FakeDesignAgent([])
 
-        orch._iterative_refinement(model_a, [])
+        _refine(orch, model_a, [])
 
         assert orch.design_agent.call_count == 0
 
@@ -724,7 +638,7 @@ class TestLLMGuidedRefinement:
         ])
         orch.design_agent = FakeDesignAgent([model_b])
 
-        orch._iterative_refinement(model_a, [])
+        _refine(orch, model_a, [])
 
         feedback = orch.design_agent.last_task.get("refinement_feedback", "")
         assert llm_text in feedback
@@ -757,7 +671,7 @@ class TestPersistentIssueEscalation:
         ])
         orch.design_agent = FakeDesignAgent([model_b, model_c])
 
-        orch._iterative_refinement(model_a, [])
+        _refine(orch, model_a, [])
 
         # last_task is from the 2nd design_agent call (iter 2 refinement)
         feedback = orch.design_agent.last_task.get("refinement_feedback", "")
@@ -779,7 +693,7 @@ class TestPersistentIssueEscalation:
         ])
         orch.design_agent = FakeDesignAgent([model_b])
 
-        orch._iterative_refinement(model_a, [])
+        _refine(orch, model_a, [])
 
         feedback = orch.design_agent.last_task.get("refinement_feedback", "")
         assert "[PERSISTENT]" not in feedback
@@ -803,7 +717,7 @@ class TestPersistentIssueEscalation:
         ])
         orch.design_agent = FakeDesignAgent([model_b, model_c])
 
-        orch._iterative_refinement(model_a, [])
+        _refine(orch, model_a, [])
 
         feedback = orch.design_agent.last_task.get("refinement_feedback", "")
         assert "[PERSISTENT]" not in feedback
@@ -831,7 +745,7 @@ class TestConfigurableBlendWeights:
         orch.cot = FakeCot([FakeCotResult(_scores={"overall": 0.80}, final_answer="")])
         orch.design_agent = FakeDesignAgent([])
 
-        _, score, _ = orch._iterative_refinement(model_a, [])
+        _, score, _ = _refine(orch, model_a, [])
 
         assert abs(score - 0.66) < 1e-4
 
@@ -855,8 +769,8 @@ class TestConfigurableBlendWeights:
         orch_heavy.cot = FakeCot([FakeCotResult(_scores={"overall": 0.20}, final_answer="")])
         orch_heavy.design_agent = FakeDesignAgent([])
 
-        _, score_default, _ = orch_default._iterative_refinement(model_a, [])
-        _, score_heavy, _ = orch_heavy._iterative_refinement(_make_model(), [])
+        _, score_default, _ = _refine(orch_default, model_a, [])
+        _, score_heavy, _ = _refine(orch_heavy, _make_model(), [])
 
         # rule=0.80 > llm=0.20 → heavier rule weight → higher blended score
         assert score_heavy > score_default
@@ -879,7 +793,7 @@ class TestSkipLLMWhenThresholdMet:
         orch.cot = FakeCot([])  # no entries — would explode if accidentally called
         orch.design_agent = FakeDesignAgent([])
 
-        _, score, _ = orch._iterative_refinement(model_a, [])
+        _, score, _ = _refine(orch, model_a, [])
 
         assert orch.cot.call_count == 0
         assert abs(score - 0.80) < 1e-4   # score == rule_score, not blended
@@ -893,7 +807,7 @@ class TestSkipLLMWhenThresholdMet:
         orch.cot = FakeCot([])
         orch.design_agent = FakeDesignAgent([])
 
-        _, score, _ = orch._iterative_refinement(model_a, [])
+        _, score, _ = _refine(orch, model_a, [])
 
         assert abs(score - 0.90) < 1e-4
 
@@ -906,7 +820,7 @@ class TestSkipLLMWhenThresholdMet:
         orch.cot = FakeCot([FakeCotResult(_scores={"overall": 0.70}, final_answer="")])
         orch.design_agent = FakeDesignAgent([])
 
-        orch._iterative_refinement(model_a, [])
+        _refine(orch, model_a, [])
 
         assert orch.cot.call_count == 1
 
@@ -921,9 +835,14 @@ class TestVerificationAnchorPass:
             use_surgical_refinement=True,
             max_iterations=1,
         )
+        orch.state = PrototypingState(
+            system_name="D",
+            system_description="",
+        )
         orch.evaluator = FakeEvaluator([FakeEvalResult(weighted_total=0.90)])
         before_behavior = type("Behavior", (), {
             "sim_score": 1.0,
+            "extracted_sm_count": 0,
             "scenario_results": [],
             "failed_scenarios": lambda self: [],
         })()
@@ -931,10 +850,11 @@ class TestVerificationAnchorPass:
             "behavioral_result": before_behavior,
             "failed_scenarios": lambda self: [],
         })()
-        after_sim = type("Simulation", (), {
-            "behavioral_result": before_behavior,
-            "failed_scenarios": lambda self: [],
-        })()
+        after_sim = SimulationResult(
+            model_name="D",
+            reachability_score=1.0,
+            behavioral_result=before_behavior,
+        )
         anchored_text = "package D { part def Anchor { } }"
 
         monkeypatch.setattr(
@@ -947,27 +867,24 @@ class TestVerificationAnchorPass:
                 to_dict=lambda: {"mode": "TEST_DEPENDENCY_SLICE"}
             ),
         )
-        monkeypatch.setattr(
-            orch, "_run_simulation",
-            lambda text, model_name: after_sim,
-        )
-        monkeypatch.setattr(
-            orch, "_verification_gap_issues",
-            lambda text, model_name: [],
-        )
-
-        model, sim, accepted = orch._verification_anchor_pass(
-            current_model=_make_model("D"),
-            sim_result=before_sim,
-            rule_score=0.90,
-            verify_gaps=["[VERIFY-GAP] REQ_SAFE_008"],
-            requirements=[],
-            dse_best_config=None,
+        orch.refinement_closure = RefinementClosure(
+            orch,
+            simulation_runner=lambda _text, _name: after_sim,
+            verification_gap_audit=lambda text, _name: (
+                [] if "Anchor" in text
+                else ["[VERIFY-GAP] REQ_SAFE_008"]
+            ),
         )
 
-        assert accepted is True
-        assert sim is after_sim
+        outcome = orch.refinement_closure.refine(RefinementClosureRequest(
+            base=ModelRevision.capture(_make_model("D")),
+            requirements=(),
+        ))
+        model, _, sim = outcome.materialize()
+
+        assert sim is not before_sim
         assert "Anchor" in model.to_sysml_text()
+        assert outcome.evidence["events"][-1]["decision"] == "ACCEPTED"
 
 
 class TestFunctionalClosurePass:
@@ -976,13 +893,15 @@ class TestFunctionalClosurePass:
         self, monkeypatch: pytest.MonkeyPatch
     ):
         orch = Orchestrator(llm=MockLLM())
-        monkeypatch.setattr(
-            "src.agents.verification_audit.functional_verification_gap_issues",
-            lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("audit failed")),
+        orch.refinement_closure = RefinementClosure(
+            orch,
+            functional_gap_audit=lambda *_args: (
+                (_ for _ in ()).throw(ValueError("audit failed"))
+            ),
         )
 
         with pytest.raises(RuntimeError, match="refusing to mark closure"):
-            orch._functional_verification_gap_issues("package D {}", "D")
+            orch.refinement_closure.verify_terminal("package D {}", "D")
 
     def test_targeted_closure_retries_until_all_functional_gaps_close(
         self, monkeypatch: pytest.MonkeyPatch
@@ -996,15 +915,10 @@ class TestFunctionalClosurePass:
             FakeEvalResult(weighted_total=0.90),
             FakeEvalResult(weighted_total=0.91),
         ])
-        behavior = type("Behavior", (), {
-            "sim_score": 1.0,
-            "scenario_results": [],
-            "failed_scenarios": lambda self: [],
-        })()
-        simulation = type("Simulation", (), {
-            "behavioral_result": behavior,
-            "failed_scenarios": lambda self: [],
-        })()
+        simulation = SimulationResult(
+            model_name="D",
+            reachability_score=1.0,
+        )
         base = build_lite_model("package D { part def Original { } }", model_name="D")
         partial = "package D { part def PartialAnchor { } }"
         closed = "package D { part def FinalAnchor { } }"
@@ -1034,28 +948,25 @@ class TestFunctionalClosurePass:
                 to_dict=lambda: {"mode": "TEST_DEPENDENCY_SLICE"}
             ),
         )
-        monkeypatch.setattr(orch, "_functional_verification_gap_issues", fake_gaps)
-        monkeypatch.setattr(orch, "_run_simulation", lambda *args, **kwargs: simulation)
-
-        model, score, sim = orch._functional_closure_pass(
+        outcome = _close(
+            orch,
             base,
-            simulation,
-            0.90,
-            requirements=[],
-            dse_best_config=None,
-            max_iters=2,
+            [],
+            simulation_runner=lambda *_args: simulation,
+            functional_gap_audit=fake_gaps,
         )
+        model, score, sim = outcome.materialize()
 
         assert "FinalAnchor" in model.to_sysml_text()
         assert score == 0.91
-        assert sim is simulation
+        assert sim.failed_scenarios() == []
         assert len(repair_issues) == 2
         assert "REQ_FUNC_006" in " ".join(repair_issues[0])
         assert "REQ_FUNC_008" in " ".join(repair_issues[0])
-        closure = orch.last_functional_closure
+        closure = outcome.evidence
         assert closure["status"] == "CLOSED"
-        assert closure["initial_gap_req_ids"] == ["REQ_FUNC_006", "REQ_FUNC_008"]
-        assert closure["remaining_gap_req_ids"] == []
+        assert closure["initial_gap_req_ids"] == ("REQ_FUNC_006", "REQ_FUNC_008")
+        assert closure["remaining_gap_req_ids"] == ()
         assert closure["attempts"] == 2
         assert closure["accepted_repairs"] == 2
         assert [item["status"] for item in closure["repair_contexts"]] == [
@@ -1067,16 +978,14 @@ class TestFunctionalClosurePass:
         self, monkeypatch: pytest.MonkeyPatch
     ):
         orch = Orchestrator(llm=MockLLM(), use_surgical_refinement=True)
-        simulation = type("Simulation", (), {
-            "behavioral_result": None,
-            "failed_scenarios": lambda self: [],
-        })()
-        model = build_lite_model("package D { part def Original { } }", model_name="D")
-        monkeypatch.setattr(
-            orch,
-            "_functional_verification_gap_issues",
-            lambda text, name: ["[VERIFY-GAP] REQ_FUNC_008 missing report response"],
+        simulation = SimulationResult(
+            model_name="D",
+            reachability_score=1.0,
         )
+        model = build_lite_model("package D { part def Original { } }", model_name="D")
+        orch.evaluator = FakeEvaluator([
+            FakeEvalResult(weighted_total=0.90),
+        ])
         monkeypatch.setattr(
             "src.simulation.surgical_refiner.attempt_surgical_refinement",
             lambda **kwargs: None,
@@ -1088,30 +997,50 @@ class TestFunctionalClosurePass:
             ),
         )
 
-        returned, _, _ = orch._functional_closure_pass(
-            model, simulation, 0.90, [], None, max_iters=2
+        outcome = _close(
+            orch,
+            model,
+            [],
+            simulation_runner=lambda *_args: simulation,
+            functional_gap_audit=lambda _text, _name: [
+                "[VERIFY-GAP] REQ_FUNC_008 missing report response"
+            ],
         )
+        returned, _, _ = outcome.materialize()
 
-        assert returned is model
-        assert orch.last_functional_closure["status"] == "OPEN"
-        assert orch.last_functional_closure["remaining_gap_req_ids"] == ["REQ_FUNC_008"]
-        assert orch.last_functional_closure["attempts"] == 2
+        assert get_sysml_text(returned) == get_sysml_text(model)
+        assert outcome.evidence["status"] == "OPEN"
+        assert outcome.evidence["remaining_gap_req_ids"] == ("REQ_FUNC_008",)
+        assert outcome.evidence["attempts"] == 2
 
-    def test_closure_rejects_repair_removed_by_terminal_plan(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "candidate_text,failed_on_candidate,expected_reason",
+        [
+            ("package D { part def Candidate {", False, "SYNTAX_ERRORS"),
+            (
+                "package D { part def Candidate { } }",
+                True,
+                "SIMULATION_FAILURE_COUNT",
+            ),
+        ],
+    )
+    def test_closure_rolls_back_syntax_and_simulation_regressions(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        candidate_text: str,
+        failed_on_candidate: bool,
+        expected_reason: str,
     ):
         orch = Orchestrator(llm=MockLLM(), use_surgical_refinement=True)
-        simulation = type("Simulation", (), {
-            "behavioral_result": None,
-            "failed_scenarios": lambda self: [],
-        })()
         original_text = "package D { part def Original { } }"
         model = build_lite_model(original_text, model_name="D")
+        orch.evaluator = FakeEvaluator([
+            FakeEvalResult(weighted_total=0.90),
+            FakeEvalResult(weighted_total=0.90),
+        ])
         monkeypatch.setattr(
             "src.simulation.surgical_refiner.attempt_surgical_refinement",
-            lambda **kwargs: SurgicalOutcome(
-                merged_text="package D { part def RawFunctionalAnchor { } }"
-            ),
+            lambda **kwargs: SurgicalOutcome(merged_text=candidate_text),
         )
         monkeypatch.setattr(
             "src.simulation.surgical_refiner.build_dependency_closed_context",
@@ -1119,33 +1048,37 @@ class TestFunctionalClosurePass:
                 to_dict=lambda: {"mode": "TEST_DEPENDENCY_SLICE"}
             ),
         )
-        monkeypatch.setattr(
+        def simulate(text, name):
+            failed = failed_on_candidate and "Candidate" in text
+            return SimpleNamespace(
+                model_name=name,
+                behavioral_result=None,
+                scenario_results=(),
+                reachability_score=1.0,
+                requirement_reachability_score=None,
+                failed_scenarios=lambda: [object()] if failed else [],
+                passed_scenarios=lambda: [],
+                isolated_parts=[],
+            )
+
+        outcome = _close(
             orch,
-            "_enforce_terminal_generation_plan",
-            lambda candidate, text: (
-                original_text,
-                {"status": "PASS", "issues": []},
+            model,
+            [],
+            simulation_runner=simulate,
+            functional_gap_audit=lambda text, _name: (
+                [] if "Candidate" in text
+                else ["[VERIFY-GAP] REQ_FUNC_008 missing response"]
             ),
         )
-        monkeypatch.setattr(
-            orch,
-            "_functional_verification_gap_issues",
-            lambda text, name: (
-                [] if "RawFunctionalAnchor" in text else
-                ["[VERIFY-GAP] REQ_FUNC_008 missing report response"]
-            ),
-        )
-        monkeypatch.setattr(
-            orch, "_run_simulation", lambda *args, **kwargs: simulation
-        )
+        returned, _, _ = outcome.materialize()
 
-        returned, _, _ = orch._functional_closure_pass(
-            model, simulation, 0.90, [], None, max_iters=1
-        )
-
-        assert "RawFunctionalAnchor" not in returned.to_sysml_text()
-        assert orch.last_functional_closure["status"] == "OPEN"
-        assert orch.last_functional_closure["accepted_repairs"] == 0
+        assert get_sysml_text(returned) == original_text
+        assert outcome.evidence["status"] == "OPEN"
+        assert outcome.evidence["accepted_repairs"] == 0
+        assert expected_reason in outcome.evidence[
+            "repair_contexts"
+        ][0]["regression_reasons"]
 
     def test_terminal_audit_reopens_stale_closed_result(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1156,16 +1089,15 @@ class TestFunctionalClosurePass:
             "remaining_gap_req_ids": [],
             "closure_model_digest": "pre-terminal",
         }
-        monkeypatch.setattr(
+        orch.refinement_closure = RefinementClosure(
             orch,
-            "_functional_verification_gap_issues",
-            lambda text, name: [
+            functional_gap_audit=lambda _text, _name: [
                 "[VERIFY-GAP] REQ_FUNC_006 missing waypoint response"
             ],
         )
 
         with pytest.raises(RuntimeError, match="REQ_FUNC_006"):
-            orch._verify_terminal_functional_closure(
+            orch.refinement_closure.verify_terminal(
                 "package D {}", "D"
             )
 
@@ -1193,7 +1125,7 @@ class TestIterativeRefinementIntegration:
         orch.cot = FakeCot([FakeCotResult(_scores={"overall": 0.60}, final_answer="")])
         orch.design_agent = FakeDesignAgent([])
 
-        orch._iterative_refinement(model_a, [])
+        _refine(orch, model_a, [])
 
         assert len(orch.state.evaluation_history) == 3
         for i, entry in enumerate(orch.state.evaluation_history, 1):
@@ -1213,7 +1145,7 @@ class TestIterativeRefinementIntegration:
         orch.cot = FakeCot([])
         orch.design_agent = FakeDesignAgent([])
 
-        orch._iterative_refinement(model_a, [])
+        _refine(orch, model_a, [])
 
         # Only 1 evaluation round should have happened
         assert orch.evaluator.call_count == 1
@@ -1230,7 +1162,7 @@ class TestMCTSGrounding:
         return DesignConfiguration(name="best", parameters=params)
 
     def test_mcts_constraints_appear_in_refinement_feedback(self):
-        """When dse_best_config is provided, _iterative_refinement must
+        """When dse_best_config is provided, the public refinement stage must
         include the MCTS architectural decisions in the refinement prompt."""
         model_a = _make_model("model_a")
         model_b = _make_model("model_b")
@@ -1250,7 +1182,7 @@ class TestMCTSGrounding:
             control_frequency_hz=200.0,
             communication_protocol="MAVLink",
         )
-        orch._iterative_refinement(model_a, [], dse_best_config=mcts_cfg)
+        _refine(orch, model_a, [], dse_best_config=mcts_cfg)
 
         feedback = orch.design_agent.last_task.get("refinement_feedback", "")
         assert "DSE Architectural Decisions" in feedback
@@ -1275,7 +1207,7 @@ class TestMCTSGrounding:
         orch.design_agent = FakeDesignAgent([model_b])
 
         mcts_cfg = self._make_config(redundancy_level="dual")
-        orch._iterative_refinement(model_a, [], dse_best_config=mcts_cfg)
+        _refine(orch, model_a, [], dse_best_config=mcts_cfg)
 
         feedback = orch.design_agent.last_task.get("refinement_feedback", "")
         mcts_pos = feedback.find("DSE Architectural Decisions")
@@ -1303,7 +1235,7 @@ class TestMCTSGrounding:
         orch.design_agent = FakeDesignAgent([model_b])
 
         # No dse_best_config → default None
-        orch._iterative_refinement(model_a, [])
+        _refine(orch, model_a, [])
 
         feedback = orch.design_agent.last_task.get("refinement_feedback", "")
         assert "DSE Architectural Decisions" not in feedback

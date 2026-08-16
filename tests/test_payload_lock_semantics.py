@@ -56,7 +56,7 @@ def test_bare_single_state_declaration_has_no_initialization_evidence():
     result = run_behavioral_simulation(text, model_name="D")
     scenario = next(r for r in result.scenario_results
                     if r.state_machine == "PayloadLockMachine")
-    row = build_matrix(model, None, RequirementLinker(model))[0]
+    row = build_matrix(model, None, RequirementLinker(model).compile_evidence())[0]
 
     assert not scenario.passed
     assert any("no observable initialization semantics" in violation
@@ -96,7 +96,7 @@ def test_declaration_only_locked_unlocked_shell_fails_as_unreachable():
     result = run_behavioral_simulation(text, model_name="D")
     scenario = next(r for r in result.scenario_results
                     if r.state_machine == "PayloadLockMachine")
-    row = build_matrix(model, None, RequirementLinker(model))[0]
+    row = build_matrix(model, None, RequirementLinker(model).compile_evidence())[0]
 
     assert not scenario.passed
     assert any("unreachable" in violation.lower() for violation in scenario.violations)
@@ -124,7 +124,7 @@ def test_complete_lock_lifecycle_produces_real_behavioral_evidence():
     result = run_behavioral_simulation(text, model_name="D")
     scenario = next(r for r in result.scenario_results
                     if r.state_machine == "PayloadLockMachine")
-    row = build_matrix(model, None, RequirementLinker(model))[0]
+    row = build_matrix(model, None, RequirementLinker(model).compile_evidence())[0]
 
     assert scenario.passed, scenario.violations
     assert row.status == "partial"  # behavioral PASS; generated L2 check still planned
@@ -176,4 +176,4 @@ def test_unnamed_attribute_redefinition_does_not_break_the_linker():
     )
     # the audit must reach a verdict rather than raise
     verification_gap_issues(text, "D", strict=True)
-    build_matrix(model, None, linker)
+    build_matrix(model, None, linker.compile_evidence())

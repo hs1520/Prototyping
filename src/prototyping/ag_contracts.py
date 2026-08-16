@@ -28,6 +28,46 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .ag_profile import (
+    CODE_ASSUMPTION_UNDISCHARGED,
+    CODE_CIRCULAR_ASSUMPTION,
+    CODE_COMPONENT_GUARANTEE_NONATOMIC,
+    CODE_CONTRACT_INCOMPLETE,
+    CODE_CONTRACT_UNSUPPORTED,
+    CODE_DECOMPOSITION_INSUFFICIENT,
+    CODE_DECOMPOSITION_MISSING,
+    CODE_DISCHARGE_EDGE_MISSING,
+    CODE_GUARANTEE_MULTIPLE_OWNERS,
+    CODE_GUARANTEE_NO_OWNER,
+    CODE_INVARIANT_SEMANTICS_INVALID,
+    CODE_INVARIANT_SEMANTICS_MISSING,
+    CODE_OBSERVATION_MISSING,
+    CODE_PATTERN_DECLARATION_INCONSISTENT,
+    CODE_PATTERN_TOPOLOGY_INCOMPLETE,
+    CODE_PRIORITY_TOPOLOGY_INCOMPLETE,
+    CODE_PRIORITY_TOPOLOGY_MISSING,
+    CODE_REALIZATION_ACTION_MISSING,
+    CODE_REALIZATION_MISSING,
+    CODE_REALIZATION_TRIGGER_MISSING,
+    CODE_REALIZATION_UNREACHABLE,
+    CODE_SOURCE_PROVENANCE_MISSING,
+    CODE_SYSTEM_OBSERVATION_BINDING_MISSING,
+    CODE_TIMING_BUDGET_EXCEEDED,
+    CODE_TIMING_BUDGET_MISSING,
+    CODE_UNIT_INCOMPATIBLE,
+    DERIVED_SOURCE_KIND,
+    INVARIANT_PATTERNS as PROFILE_INVARIANT_PATTERNS,
+    INVARIANT_SOURCE_KINDS as PROFILE_INVARIANT_SOURCE_KINDS,
+    KNOWN_PATTERNS as PROFILE_KNOWN_PATTERNS,
+    LOCKED_UNTIL_RELEASE_PATTERN,
+    PATTERN_INVARIANT_ROLES,
+    STARTUP_INHIBIT_PATTERN,
+    THRESHOLD_PATTERN,
+    TIMED_PATTERN,
+    TRIGGERED_PATTERNS as PROFILE_TRIGGERED_PATTERNS,
+    UNTIMED_PATTERNS as PROFILE_UNTIMED_PATTERNS,
+)
+
 # ag-bounded-8: priority response members must carry provenance in committed
 # SysML. The checker still knows no reviewed response names; it checks only that
 # each declared member says whether it came from existing model behavior or an
@@ -57,37 +97,6 @@ READY = "READY"
 INCOMPLETE = "INCOMPLETE"
 UNSUPPORTED = "UNSUPPORTED"
 
-# Diagnostic codes. Kept aligned with the failure-routing table (§10) so a
-# downstream router can map them without re-deriving intent.
-CODE_CONTRACT_INCOMPLETE = "CONTRACT_INCOMPLETE"
-CODE_CONTRACT_UNSUPPORTED = "CONTRACT_UNSUPPORTED"
-CODE_COMPONENT_GUARANTEE_NONATOMIC = "COMPONENT_GUARANTEE_NONATOMIC"
-CODE_SYSTEM_OBSERVATION_BINDING_MISSING = (
-    "SYSTEM_OBSERVATION_BINDING_MISSING"
-)
-CODE_GUARANTEE_NO_OWNER = "GUARANTEE_NO_OWNER"
-CODE_GUARANTEE_MULTIPLE_OWNERS = "GUARANTEE_MULTIPLE_OWNERS"
-CODE_ASSUMPTION_UNDISCHARGED = "ASSUMPTION_UNDISCHARGED"
-CODE_CIRCULAR_ASSUMPTION = "CIRCULAR_ASSUMPTION"
-CODE_UNIT_INCOMPATIBLE = "UNIT_INCOMPATIBLE"
-CODE_TIMING_BUDGET_EXCEEDED = "TIMING_BUDGET_EXCEEDED"
-CODE_TIMING_BUDGET_MISSING = "TIMING_BUDGET_MISSING"
-CODE_DECOMPOSITION_INSUFFICIENT = "DECOMPOSITION_INSUFFICIENT"
-CODE_DECOMPOSITION_MISSING = "DECOMPOSITION_MISSING"
-CODE_DISCHARGE_EDGE_MISSING = "DISCHARGE_EDGE_MISSING"
-CODE_REALIZATION_MISSING = "REALIZATION_MISSING"
-CODE_REALIZATION_UNREACHABLE = "REALIZATION_UNREACHABLE"
-CODE_REALIZATION_TRIGGER_MISSING = "REALIZATION_TRIGGER_MISSING"
-CODE_REALIZATION_ACTION_MISSING = "REALIZATION_ACTION_MISSING"
-CODE_OBSERVATION_MISSING = "OBSERVATION_MISSING"
-CODE_SOURCE_PROVENANCE_MISSING = "SOURCE_PROVENANCE_MISSING"
-CODE_PATTERN_DECLARATION_INCONSISTENT = "PATTERN_DECLARATION_INCONSISTENT"
-CODE_PRIORITY_TOPOLOGY_MISSING = "PRIORITY_TOPOLOGY_MISSING"
-CODE_PRIORITY_TOPOLOGY_INCOMPLETE = "PRIORITY_TOPOLOGY_INCOMPLETE"
-CODE_INVARIANT_SEMANTICS_MISSING = "INVARIANT_SEMANTICS_MISSING"
-CODE_INVARIANT_SEMANTICS_INVALID = "INVARIANT_SEMANTICS_INVALID"
-CODE_PATTERN_TOPOLOGY_INCOMPLETE = "PATTERN_TOPOLOGY_INCOMPLETE"
-
 _ERROR_CODES = frozenset({
     CODE_GUARANTEE_NO_OWNER,
     CODE_GUARANTEE_MULTIPLE_OWNERS,
@@ -113,21 +122,18 @@ _ERROR_CODES = frozenset({
     CODE_PATTERN_TOPOLOGY_INCOMPLETE,
 })
 
-_TIMED_PATTERN = "TRIGGERED_TIMED_FAILSAFE_RESPONSE"
+_TIMED_PATTERN = TIMED_PATTERN
 #: A trigger→response pattern that states no deadline. It shares the timed
 #: pattern's arbitration obligations and drops only the timing ones: the profile
 #: previously forced a requirement with a trigger, a response and a precedence
 #: relation but no deadline to be declared under a pattern that does not fit it.
-_THRESHOLD_PATTERN = "THRESHOLD_TRIGGERED_RESPONSE"
-_TRIGGERED_PATTERNS = {_TIMED_PATTERN, _THRESHOLD_PATTERN}
-_INVARIANT_PATTERNS = {
-    "STARTUP_INHIBIT",
-    "LOCKED_UNTIL_AUTHORISED_RELEASE",
-}
+_THRESHOLD_PATTERN = THRESHOLD_PATTERN
+_TRIGGERED_PATTERNS = frozenset(PROFILE_TRIGGERED_PATTERNS)
+_INVARIANT_PATTERNS = frozenset(PROFILE_INVARIANT_PATTERNS)
 #: Every pattern that must not apportion a deadline — the untimed triggered
 #: pattern for the same reason the invariant ones do: it owns no interval.
-_UNTIMED_PATTERNS = {_THRESHOLD_PATTERN, *_INVARIANT_PATTERNS}
-_KNOWN_PATTERNS = {_TIMED_PATTERN, *_TRIGGERED_PATTERNS, *_INVARIANT_PATTERNS}
+_UNTIMED_PATTERNS = frozenset(PROFILE_UNTIMED_PATTERNS)
+_KNOWN_PATTERNS = frozenset(PROFILE_KNOWN_PATTERNS)
 
 #: The roles each invariant pattern is *defined* by. An invariant set that leaves
 #: one of them unfilled has not stated the pattern, whatever it names its
@@ -138,20 +144,11 @@ _KNOWN_PATTERNS = {_TIMED_PATTERN, *_TRIGGERED_PATTERNS, *_INVARIANT_PATTERNS}
 #: by any author: ``ag_convention`` republishes these role names as an authoring
 #: rule and the two tables are pinned to each other in the tests, so a role added
 #: here cannot go unstated in the prompts.
-PATTERN_INVARIANT_ROLES: Mapping[str, Tuple[str, ...]] = {
-    "LOCKED_UNTIL_AUTHORISED_RELEASE": (
-        "locked", "authorisation", "unlocked", "power", "power_on",
-    ),
-    "STARTUP_INHIBIT": ("latch", "reset", "inhibited", "forbidden"),
-}
-_INVARIANT_SOURCE_KINDS = {
-    "STAKEHOLDER",
-    "STUDENT_DERIVED_DESIGN_CONSTRAINT",
-}
+_INVARIANT_SOURCE_KINDS = frozenset(PROFILE_INVARIANT_SOURCE_KINDS)
 _PRIORITY_MEMBER_SOURCE_KINDS = {
     "EXISTING_MODEL_BEHAVIOR",
     "STUDENT_APPROVED_DECOMPOSITION",
-    "STUDENT_DERIVED_DESIGN_CONSTRAINT",
+    DERIVED_SOURCE_KIND,
 }
 # REQ_SAFE_005's reviewed response set and precedence ordering used to be pinned
 # here and compared against directly. That made a gold-blind runtime verdict depend
@@ -433,8 +430,8 @@ def _classify_completeness(
     pure_system_invariant = (
         contract.role == "system"
         and contract.declared_pattern in {
-            "STARTUP_INHIBIT",
-            "LOCKED_UNTIL_AUTHORISED_RELEASE",
+            STARTUP_INHIBIT_PATTERN,
+            LOCKED_UNTIL_RELEASE_PATTERN,
         }
     )
     # A component contract may deliberately use A=true (no assume constraints),
@@ -1142,18 +1139,6 @@ def _ast_shape(node: Any) -> tuple:
     return ("INVALID", kind)
 
 
-def _id_ast(name: str) -> Mapping[str, Any]:
-    return {"node": "Identifier", "name": name}
-
-
-def _not_ast(name: str) -> Mapping[str, Any]:
-    return {"node": "Not", "expr": _id_ast(name)}
-
-
-def _and_ast(*items: Mapping[str, Any]) -> Mapping[str, Any]:
-    return {"node": "And", "operands": list(items)}
-
-
 # REQ_SAFE_004's and REQ_SAFE_008's reviewed invariant sets (ids, ASTs,
 # provenance) used to be pinned here and compared against directly, which
 # left the runtime checker holding the answer for those chains.
@@ -1176,22 +1161,6 @@ def _behavior_for_contract(
         (item for item in graph.behaviors if item.name == behavior_name),
         None,
     )
-
-
-def _transition_signatures(
-    behavior: Optional[BehaviorRealization],
-) -> set[tuple[str, str, str, str]]:
-    if behavior is None:
-        return set()
-    return {
-        (
-            transition.source,
-            transition.trigger,
-            transition.target,
-            " ".join(str(transition.guard or "").split()),
-        )
-        for transition in behavior.transitions
-    }
 
 
 def _negated_identifiers(node: Any) -> set[str]:
@@ -1529,7 +1498,11 @@ def _check_profile_semantics(
     declared_pattern = system.declared_pattern
     effective_pattern = (
         declared_pattern
-        or (_TIMED_PATTERN if system.timing_budget is not None else "STARTUP_INHIBIT")
+        or (
+            _TIMED_PATTERN
+            if system.timing_budget is not None
+            else STARTUP_INHIBIT_PATTERN
+        )
     )
     # Which pattern a given requirement *ought* to instantiate is an accuracy
     # question answered by the evaluator against frozen gold, not here: this
@@ -1861,7 +1834,7 @@ def _check_profile_semantics(
             if needed:
                 roles = (
                     _startup_inhibit_roles(graph)
-                    if effective_pattern == "STARTUP_INHIBIT"
+                    if effective_pattern == STARTUP_INHIBIT_PATTERN
                     else _invariant_roles(graph)
                 )
                 missing_roles = [
@@ -1893,10 +1866,10 @@ def _check_profile_semantics(
                 ))
         topology_obligations, topology_behavior = (
             _startup_inhibit_topology_obligations(graph, realization_links)
-            if effective_pattern == "STARTUP_INHIBIT"
+            if effective_pattern == STARTUP_INHIBIT_PATTERN
             else _locked_release_topology_obligations(graph, realization_links)
         )
-        if effective_pattern == "LOCKED_UNTIL_AUTHORISED_RELEASE":
+        if effective_pattern == LOCKED_UNTIL_RELEASE_PATTERN:
             # "Default safe" means the locking component holds its guarantee
             # without depending on anything: a mechanism that assumes some
             # condition is not locked by default, it is locked when that condition

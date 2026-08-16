@@ -21,10 +21,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 from ..simulation.syntax_checker import check_syntax
-from ..utils.sysml_text_utils import find_block_end, get_sysml_text
+from ..utils.sysml_text_utils import find_block_end
 
 
 def _ports_used(model_text: str, usage: str) -> dict:

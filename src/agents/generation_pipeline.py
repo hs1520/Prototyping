@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Mapping
-from ..prototyping.action_effects import LEGACY_AUDIT, parse_action_effects
+from ..prototyping.action_effects import LEGACY_AUDIT
 from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import get_sysml_text
+from .planned_action_lifecycle import (
+    observe_terminal_actions,
+    prepare_planned_actions,
+)
 from .pipeline_records import GenerationContext
+from .refinement import ModelRevision, RefinementClosureRequest
 
 
 
@@ -137,8 +142,14 @@ class GenerationPipelineMixin:
     def _phase_refinement(self, c: GenerationContext) -> None:
         print("Phase 3: Iterative Refinement")
         print("-" * 40)
-        c.final_model, c.final_score, c.final_sim = self._iterative_refinement(
-            c.model, c.requirements, dse_best_config=None
+        c.refined_revision = self.refinement_closure.refine(
+            RefinementClosureRequest(
+                base=ModelRevision.capture(c.model),
+                requirements=tuple(c.requirements),
+            )
+        )
+        c.final_model, c.final_score, c.final_sim = (
+            c.refined_revision.materialize()
         )
 
     def _phase_sitl_refinement(self, c: GenerationContext) -> None:
@@ -147,18 +158,26 @@ class GenerationPipelineMixin:
         # missing a guard/attribute a requirement needs) back to the design
         # LLM.  Cheap & deterministic (no SITL process launch); L2 stays
         # terminal.
-        if c.platform_profile is not None:
-            c.final_model, c.final_score, c.final_sim = self._sitl_refinement_loop(
-                c.final_model, c.requirements, c.final_score, c.final_sim,
-                max_iters=2,
-            )
+        if c.refined_revision is None:
+            raise RuntimeError("parameter projection requires refined revision")
+        c.projected_revision = self.refinement_closure.project_parameters(
+            c.refined_revision,
+            c.platform_profile,
+        )
+        c.final_model, c.final_score, c.final_sim = (
+            c.projected_revision.materialize()
+        )
 
     def _phase_functional_closure(self, c: GenerationContext) -> None:
         # Terminal model mutation: runs after ordinary and optional SITL-L1
         # refinement so no later LLM rewrite can overwrite functional closure.
-        c.final_model, c.final_score, c.final_sim = self._functional_closure_pass(
-            c.final_model, c.final_sim, c.final_score, c.requirements,
-            dse_best_config=None, max_iters=2,
+        if c.projected_revision is None:
+            raise RuntimeError("functional closure requires parameter projection")
+        c.refinement_closure_outcome = self.refinement_closure.close(
+            c.projected_revision,
+        )
+        c.final_model, c.final_score, c.final_sim = (
+            c.refinement_closure_outcome.materialize()
         )
         c.pre_terminal_score = c.final_score
 
@@ -174,82 +193,29 @@ class GenerationPipelineMixin:
         )
 
     def _phase_pre_ag_simulation(self, c: GenerationContext) -> None:
-        c.pre_ag_sim = self._run_simulation(c.pre_ag_sysml, c.system_name)
+        c.pre_ag_sim = self.refinement_closure.simulate(
+            c.pre_ag_sysml, c.system_name
+        )
 
     def _phase_ag_reconciliation(self, c: GenerationContext) -> None:
         c.final_sysml = self._reconcile_guided_ag_contract_layer(
             c.pre_ag_sysml, c.requirements
         )
 
-    #: Scoped to one chain while the profile is proven end to end.  Widening
-    #: this is a deliberate act: every added chain changes more generated text.
-    _ACTION_EFFECT_CHAINS = ("REQ_SAFE_005",)
-
-    def _derive_action_effects(self) -> tuple:
-        """The planned response chains, from the specs this run actually decided.
-
-        `LLM_DECIDED_SPEC` re-decides every name, so the static chain library is
-        a template and not the authority: the archived models call the arbiter's
-        response `setParachuteDeploymentCommandAndParachuteResponseSelected`
-        where the library says `setParachuteResponseSelectedAndIssue...`.
-        Deriving from the library instead of the run's own specs resolves to
-        nothing.
-        """
-        from ..prototyping.action_effects import derive_action_effects
-
-        ag_plan = self._active_ag_generation_plan or {}
-        specs = ag_plan.get("specs") or ()
-        model_plan = self._active_model_generation_plan
-        components = (
-            model_plan.get("components") or ()
-            if isinstance(model_plan, Mapping) else ()
-        )
-        connections = (
-            model_plan.get("connections") or ()
-            if isinstance(model_plan, Mapping) else ()
-        )
-        effects: list = []
-        for spec in specs:
-            if getattr(spec, "source_requirement", None) not in (
-                self._ACTION_EFFECT_CHAINS
-            ):
-                continue
-            effects.extend(
-                derive_action_effects(spec, components, connections)
-            )
-        return tuple(effects)
-
     def _phase_terminal_commit(self, c: GenerationContext) -> None:
-        self._materialize_action_effects(c)
+        c.planned_action_preparation = prepare_planned_actions(
+            c.final_sysml,
+            model_plan=self._active_model_generation_plan,
+            ag_plan=self._active_ag_generation_plan,
+        )
+        self._publish_pipeline_state(
+            "planned_action_preparation", c.planned_action_preparation
+        )
+        c.final_sysml = c.planned_action_preparation.model_text
         self._commit_terminal_model(
             c.final_sysml, producer="Orchestrator.generate"
         )
         self._ensure_terminal_ready()
-
-    def _materialize_action_effects(self, c: GenerationContext) -> None:
-        """Write the planned send and type edge, and keep it only if it holds.
-
-        Applied here because every other writer of behaviour text has already
-        run: `materialize_owned_behavior_obligations` re-renders a state machine
-        with bare entry actions, and anything written before it is replaced.
-        The result is kept only when the syntax check does not get worse, which
-        is what bounds a rewrite that names elements the plan believes exist.
-        """
-        from ..prototyping.action_effects import materialize_action_effects
-
-        self.last_action_effects = self._derive_action_effects()
-        if not self.last_action_effects:
-            return
-        candidate, written = materialize_action_effects(
-            c.final_sysml, self.last_action_effects
-        )
-        if not written or candidate == c.final_sysml:
-            return
-        before = check_syntax(c.final_sysml).total_errors()
-        after = check_syntax(candidate).total_errors()
-        if after > before:
-            return
-        c.final_sysml = candidate
 
     def _phase_verification(self, c: GenerationContext) -> None:
         c.verification_plan = self._run_verification_handoff()
@@ -287,7 +253,7 @@ class GenerationPipelineMixin:
         )
 
     def _phase_terminal_snapshot(self, c: GenerationContext) -> None:
-        self._verify_terminal_functional_closure(
+        self.refinement_closure.verify_terminal(
             c.final_sysml, c.system_name
         )
         (
@@ -296,38 +262,19 @@ class GenerationPipelineMixin:
             c.final_model, c.final_sysml, c.requirements,
             prior_score=c.pre_terminal_score, dse_best_config=None,
         )
-        self._audit_action_semantics(c)
-
-    def _audit_action_semantics(self, c: GenerationContext) -> None:
-        """Record what the committed actions do.  Advisory: it changes no verdict.
-
-        Run at the tail of the terminal snapshot rather than as its own
-        knowledge source: the audit is read-only, and a new source would change
-        the 21/5 phase-and-role counts that the pipeline's own tests pin and the
-        write-up states.  A profile that gates on this evidence should add a
-        real phase deliberately, and revise those counts with it.
-        """
-        from ..dse.functional_behavior import functional_behavior_diagnosis
-        from ..prototyping.action_semantics import analyze_action_semantics
-
-        plan = self._active_model_generation_plan
-        effects = parse_action_effects(
-            (plan or {}).get("action_effects") if isinstance(plan, Mapping)
-            else None
-        ) or getattr(self, "last_action_effects", ())
-        report = analyze_action_semantics(
+        if c.planned_action_preparation is None:
+            raise RuntimeError(
+                "terminal snapshot requires planned-action preparation"
+            )
+        c.planned_action_observation = observe_terminal_actions(
+            c.planned_action_preparation,
             c.final_sysml,
             requirements=c.requirements,
-            action_effect_plan=effects,
             profile=getattr(self, "action_semantics_profile", LEGACY_AUDIT),
         )
-        payload = report.to_dict()
-        # Merged here rather than inside the audit: the strict reading lives in
-        # `dse`, and having `prototyping` call it would close a package cycle.
-        payload["functional_behaviour_diagnosis"] = functional_behavior_diagnosis(
-            c.final_sysml, list(c.requirements or ())
+        self._publish_pipeline_state(
+            "planned_action_observation", c.planned_action_observation
         )
-        self.last_action_semantics_audit = payload
 
     def _phase_ag_non_degradation(self, c: GenerationContext) -> None:
         self.last_ag_non_degradation = None
@@ -406,9 +353,13 @@ class GenerationPipelineMixin:
             "semantic_fidelity_report": c.semantic_fidelity_report,
             "ag_binding_report": self.last_ag_binding_report,
             "ag_non_degradation": self.last_ag_non_degradation,
-            "action_semantics_audit": self.last_action_semantics_audit,
+            "action_semantics_audit": (
+                c.planned_action_observation.to_artifact_dict()
+                if c.planned_action_observation is not None else None
+            ),
             "functional_closure": dict(self.last_functional_closure or {}),
             "verification_anchor_attempts": list(self.last_verification_anchor_attempts),
+            "plan_conformance_rejections": list(self.last_plan_conformance_rejections),
             "requirement_semantic_analysis": dict(self.last_requirement_semantic_analysis or {}),
             "requirement_input": dict(self.last_requirement_input or {}),
             **c.collaboration_artifacts,
@@ -420,44 +371,21 @@ class GenerationPipelineMixin:
         self, final_model, final_score, final_sim, model_qualification,
         requirements,
     ) -> None:
-        sim_warnings = (getattr(final_model, "metadata", None) or {}).get(
-            "sim_warnings", ""
+        from .summary_rendering import (
+            runtime_footer_lines,
+            simulation_summary_lines,
         )
+
         print(f"{'='*60}")
         print("Generation Complete!")
         print(f"  Final score:              {final_score:.3f}")
         print(f"  Model qualification:      {model_qualification['status']}")
-        if final_sim.requirement_reachability_score is not None:
-            print(
-                "  Requirement reachability: "
-                f"{final_sim.requirement_reachability_score:.3f} "
-                f"({final_sim.requirement_scenarios_passed}/"
-                f"{final_sim.requirement_scenarios_total} frozen paths)"
-            )
-            print(
-                "  Advisory role scenarios: "
-                f"{final_sim.reachability_score:.3f} "
-                f"({len(final_sim.passed_scenarios())}/"
-                f"{len(final_sim.scenario_results)} scenarios)"
-            )
-        else:
-            print(
-                f"  Simulation reachability:  {final_sim.reachability_score:.3f} "
-                f"({len(final_sim.passed_scenarios())}/"
-                f"{len(final_sim.scenario_results)} scenarios)"
-            )
+        for line in simulation_summary_lines(final_sim):
+            print(line)
         print(f"  Part definitions: {len(final_model.part_definitions)}")
         print(f"  Requirements:     {len(requirements)}")
-        if sim_warnings:
-            print()
-            for line in sim_warnings.splitlines():
-                print(f"  {line}")
-        ledger = getattr(self.llm, "ledger", None)
-        if ledger is not None and getattr(ledger, "calls", 0):
-            print(f"  LLM usage:        {ledger.summary()}")
-        if self.verbose:
-            from ..utils.suppressed import suppressed_summary
-            summary = suppressed_summary()
-            if summary:
-                print(f"  suppressed:       {summary}")
+        for line in runtime_footer_lines(
+            final_model, self.llm, verbose=self.verbose
+        ):
+            print(line)
         print(f"{'='*60}\n")

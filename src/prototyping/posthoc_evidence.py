@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import json
 from pathlib import Path
 import re
 from typing import Any, Mapping
 
 from .ag_gold_template import validate_frozen_gold
+from .artifact_store import atomic_write_json, read_json_object
 from .architecture_boundary import (
     architecture_boundary_digest,
     validate_frozen_boundary,
@@ -53,19 +53,8 @@ _RESPONSIBILITY_CANDIDATES = {
 }
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"JSON artifact must be an object: {path}")
-    return value
-
-
-def _write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+_read_json = read_json_object
+_write_json = atomic_write_json
 
 
 def _source_by_chain(config: Mapping[str, Any]) -> dict[str, str]:

@@ -16,7 +16,7 @@ Reachability strategy (three-tier):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Set
+from typing import List, Optional
 
 try:
     import networkx as nx
@@ -25,7 +25,7 @@ except ModuleNotFoundError:
     _HAS_NX = False
 
 from .scenarios import Scenario
-from .exec_graph import shortest_path, all_simple_paths
+from .exec_graph import shortest_path
 
 
 @dataclass

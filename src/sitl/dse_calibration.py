@@ -9,7 +9,7 @@ fidelity gap), not necessarily an estimator error.
 """
 from __future__ import annotations
 
-from ..dse.calibration import CalibrationResult, calibrate_ranking
+from ..dse.calibration import calibrate_ranking
 
 
 # Original (capacity-axis) name kept as an alias — same computation.

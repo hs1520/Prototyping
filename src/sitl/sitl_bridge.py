@@ -23,17 +23,17 @@ import textwrap
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional
 
 from src.sysml.lite_model import SysMLLiteModel
-from src.sitl.requirement_linker import RequirementLinker, SITLTestSpec
-
-# ArduCopter 二进制默认路径 — 服务器用 ~/ardupilot/，本地用 ~/PycharmProjects/ardupilot/
-_SERVER_ARDUCOPTER = os.path.expanduser("~/ardupilot/build/sitl/bin/arducopter")
-_LOCAL_ARDUCOPTER  = os.path.expanduser("~/PycharmProjects/ardupilot/build/sitl/bin/arducopter")
-_DEFAULT_ARDUCOPTER = (
-    _SERVER_ARDUCOPTER if os.path.exists(_SERVER_ARDUCOPTER) else _LOCAL_ARDUCOPTER
+from src.sitl.requirement_linker import (
+    RequirementEvidenceBundle,
+    RequirementLinker,
+    SITLTestSpec,
 )
+from src.utils.ardupilot import default_arducopter_binary
+
+_DEFAULT_ARDUCOPTER = default_arducopter_binary()
 
 # Gazebo (headless_gazebo 镜像) — fdm_backend="gazebo" 时使用
 # home 坐标必须匹配 worlds/iris_runway.sdf 里的 <spherical_coordinates>（CMAC），
@@ -162,17 +162,22 @@ class SITLBridge:
         self._connection_string = connection_string
         self._arducopter_bin = arducopter_bin
         self._platform_profile = platform_profile or {}
-        self._linker = RequirementLinker(
+        linker = RequirementLinker(
             model,
             llm=llm,
             verbose=verbose,
         )
+        self._requirement_evidence = linker.compile_evidence()
         self._output_dir.mkdir(parents=True, exist_ok=True)
         self._sitl_proc: Optional[subprocess.Popen] = None
         if fdm_backend not in ("native", "gazebo"):
             raise ValueError(f"未知 fdm_backend: {fdm_backend!r}（应为 'native' 或 'gazebo'）")
         self._fdm_backend = fdm_backend
         self._gazebo_started_by_us = False
+
+    @property
+    def requirement_evidence(self) -> RequirementEvidenceBundle:
+        return self._requirement_evidence
 
     # ------------------------------------------------------------------
     # SITL 进程管理
@@ -354,28 +359,15 @@ class SITLBridge:
 
     def generate_l1(self) -> Path:
         """生成 .parm 文件，返回文件路径。"""
-        parm_content = self._linker.generate_parm_file()
+        parm_content = self._requirement_evidence.parm_file
         parm_path = self._output_dir / f"{self._model.name}.parm"
 
-        # Append platform base_sitl_params (e.g. FRAME_CLASS, ARMING_CHECK)
-        # that must be present after --wipe. 用"已定义的参数名集合"做精确判重，
-        # 不能用子串匹配（`k not in parm_content` 会被注释或更长的同名子串误伤，
-        # 例如把 base 参数静默丢弃 → EK3_CHECK_SCALE 这类关键项可能漏写）。
+        # Append platform defaults through the authoritative projection policy.
         base_params = self._platform_profile.get("base_sitl_params", {})
         if base_params:
-            existing_names = set()
-            for line in parm_content.splitlines():
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                existing_names.add(stripped.split()[0])
-            additions = [
-                f"{k:<30} {v}  # base SITL param"
-                for k, v in base_params.items()
-                if k not in existing_names
-            ]
-            if additions:
-                parm_content += "\n" + "\n".join(additions) + "\n"
+            from .parameter_projection import merge_base_parameters
+
+            parm_content = merge_base_parameters(parm_content, base_params)
 
         parm_path.write_text(parm_content, encoding="utf-8")
         print(f"[L1] .parm 文件已写入: {parm_path}")
@@ -384,7 +376,7 @@ class SITLBridge:
     def validate_l1(self) -> List[TestResult]:
         """静态验证：检查所有 L1 参数是否已正确解析（无 <unresolved>）。"""
         results: List[TestResult] = []
-        specs = [s for s in self._linker.generate_test_specs() if s.tier == "L1"]
+        specs = [s for s in self._requirement_evidence.test_specs if s.tier == "L1"]
 
         for spec in specs:
             unresolved = [
@@ -411,7 +403,7 @@ class SITLBridge:
                 passed=False,
                 message=str(m.get("message", "traceability mismatch")),
             )
-            for m in self._linker.traceability_mismatches()
+            for m in self._requirement_evidence.traceability_mismatches
         ]
 
     # ------------------------------------------------------------------
@@ -429,7 +421,7 @@ class SITLBridge:
         paths: List[Path] = []
 
         # ── Safety guard 测试（原有）────────────────────────────────────
-        specs = [s for s in self._linker.generate_test_specs() if s.tier == "L2"]
+        specs = [s for s in self._requirement_evidence.test_specs if s.tier == "L2"]
         for spec in specs:
             code = self._render_test_script(spec)
             script_path = self._output_dir / f"test_{spec.req_id.lower()}.py"
@@ -497,348 +489,90 @@ class SITLBridge:
         self, cmd_name: str, mavlink_mode: str, requires_airborne: bool
     ) -> str:
         """渲染一个 MAVLink 模式切换测试脚本。"""
-        conn = self._connection_string
-        out  = self._output_dir
-        pre  = ""
-        if requires_airborne:
-            pre = (
-                "    print('  ARM + TAKEOFF to 5m ...')\n"
-                "    if not force_arm_and_takeoff(mav, altitude=5.0):\n"
-                "        print('FAIL  takeoff failed')\n"
-                "        sys.exit(1)\n"
-            )
+        from .script_runtime import render_pymavlink_runtime
 
-        return "\n".join([
-            "#!/usr/bin/env python3",
-            f'"""',
-            f"Auto-generated SITL accept-mode test: {cmd_name} → SET_MODE {mavlink_mode}",
-            f"",
-            f"Verifies that the ArduPilot flight controller accepts the MAVLink",
-            f"mode switch corresponding to SysML accept trigger {cmd_name!r}.",
-            f"",
-            f"Run:",
-            f"    python {out}/test_mode_{mavlink_mode.lower()}.py",
-            f"(requires ArduPilot SITL running on {conn})",
-            f'"""',
-            "",
-            "import sys, time",
-            "from pymavlink import mavutil",
-            "",
-            f'CONNECTION = "{conn}"',
-            "",
-            "",
-            "def connect():",
-            "    mav = mavutil.mavlink_connection(CONNECTION)",
-            "    mav.wait_heartbeat(timeout=10)",
-            "    return mav",
-            "",
-            "",
-            "def set_param(mav, name, value):",
-            "    mav.mav.param_set_send(",
-            "        mav.target_system, mav.target_component,",
-            "        name.encode(), float(value),",
-            "        mavutil.mavlink.MAV_PARAM_TYPE_REAL32,",
-            "    )",
-            "    time.sleep(0.3)",
-            "",
-            "",
-            "def force_arm_and_takeoff(mav, altitude=5.0):",
-            "    set_param(mav, 'SIM_GPS1_ENABLE', 1)",
-            "    set_param(mav, 'FENCE_ENABLE', 0)",
-            "    mapping = mav.mode_mapping() or {}",
-            "    guided_id = mapping.get('GUIDED') or 4",
-            "    mav.mav.set_mode_send(mav.target_system,",
-            "        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, guided_id)",
-            "    time.sleep(0.5)",
-            "    # wait_ready_to_arm：EKF 启动后需数秒设定 origin/home，重试直到就绪",
-            "    armed = False",
-            "    arm_deadline = time.time() + 45",
-            "    while time.time() < arm_deadline:",
-            "        mav.mav.command_long_send(",
-            "            mav.target_system, mav.target_component,",
-            "            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,",
-            "            0, 1, 21196, 0, 0, 0, 0, 0,",
-            "        )",
-            "        ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=2)",
-            "        if (ack",
-            "                and ack.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM",
-            "                and ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED):",
-            "            armed = True",
-            "            break",
-            "        time.sleep(2)",
-            "    if not armed:",
-            "        return False",
-            "    mav.mav.command_long_send(",
-            "        mav.target_system, mav.target_component,",
-            "        mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,",
-            "        0, 0, 0, 0, 0, 0, 0, altitude,",
-            "    )",
-            "    # relative_alt 是相对 home 高度；home 未设的瞬间可能等于绝对海拔",
-            "    # （~584000mm），会让 '>= target' 在地面误判。按基线相对爬升判断，",
-            "    # 加合理性上限 + 连续 2 帧确认。",
-            "    target_mm = int(altitude * 0.6 * 1000)",
-            "    plausible_max_mm = int(altitude * 3 * 1000) + 5000",
-            "    baseline_mm = None",
-            "    hits = 0",
-            "    deadline = time.time() + 30",
-            "    while time.time() < deadline:",
-            "        msg = mav.recv_match(type='GLOBAL_POSITION_INT',",
-            "                             blocking=True, timeout=1)",
-            "        if msg is not None:",
-            "            if baseline_mm is None or msg.relative_alt < baseline_mm:",
-            "                baseline_mm = msg.relative_alt",
-            "            climb = msg.relative_alt - (baseline_mm or 0)",
-            "            if 0 < climb <= plausible_max_mm and climb >= target_mm:",
-            "                hits += 1",
-            "                if hits >= 2:",
-            "                    return True",
-            "            else:",
-            "                hits = 0",
-            "        time.sleep(0.3)",
-            "    return False",
-            "",
-            "",
-            "def set_mode(mav, mode_name):",
-            "    mapping = mav.mode_mapping() or {}",
-            "    mode_id = mapping.get(mode_name.upper())",
-            "    if mode_id is None:",
-            "        return False",
-            "    mav.mav.set_mode_send(mav.target_system,",
-            "        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, mode_id)",
-            "    time.sleep(0.5)",
-            "    return True",
-            "",
-            "",
-            "def wait_mode(mav, mode, timeout=15.0):",
-            "    deadline = time.time() + timeout",
-            "    while time.time() < deadline:",
-            "        msg = mav.recv_match(type='HEARTBEAT', blocking=True, timeout=2)",
-            "        if msg:",
-            "            cur = mavutil.mode_string_v10(msg)",
-            "            if mode.upper() in cur.upper():",
-            "                return True",
-            "        time.sleep(0.5)",
-            "    return False",
-            "",
-            "",
-            "def main():",
-            "    mav = connect()",
-            f"    print('Testing SysML accept trigger: {cmd_name} → SET_MODE {mavlink_mode}')",
-            pre.rstrip(),
-            f"    print('  Sending SET_MODE {mavlink_mode} ...')",
-            f"    if not set_mode(mav, '{mavlink_mode}'):",
-            f"        print('FAIL  {cmd_name}: mode {mavlink_mode} not in ArduPilot mapping')",
-            "        sys.exit(1)",
-            f"    ok = wait_mode(mav, '{mavlink_mode}', timeout=10.0)",
-            "    if ok:",
-            f"        print('PASS  {cmd_name} → {mavlink_mode}')",
-            "        sys.exit(0)",
-            "    else:",
-            f"        print('FAIL  {cmd_name}: timeout waiting for {mavlink_mode}')",
-            "        sys.exit(1)",
-            "",
-            "",
-            'if __name__ == "__main__":',
-            "    main()",
-            "",
-        ])
+        conn = self._connection_string
+        preflight = ""
+        if requires_airborne:
+            preflight = textwrap.indent(
+                "print('  ARM + TAKEOFF to 5m ...')\n"
+                "if not force_arm_and_takeoff(mav, altitude=5.0):\n"
+                "    print('FAIL  takeoff failed')\n"
+                "    sys.exit(1)\n",
+                "    ",
+            )
+        header = (
+            "#!/usr/bin/env python3\n"
+            '"""\n'
+            f"Auto-generated SITL accept-mode test: {cmd_name} → SET_MODE {mavlink_mode}\n\n"
+            "Verifies that the ArduPilot flight controller accepts the MAVLink\n"
+            f"mode switch corresponding to SysML accept trigger {cmd_name!r}.\n\n"
+            "Run:\n"
+            f"    python {self._output_dir}/test_mode_{mavlink_mode.lower()}.py\n"
+            f"(requires ArduPilot SITL running on {conn})\n"
+            '"""\n\n'
+        )
+        main = (
+            "\ndef main():\n"
+            "    mav = connect()\n"
+            f"    print('Testing SysML accept trigger: {cmd_name} → SET_MODE {mavlink_mode}')\n"
+            f"{preflight}"
+            f"    print('  Sending SET_MODE {mavlink_mode} ...')\n"
+            f"    ok = set_mode(mav, '{mavlink_mode}')\n"
+            "    if ok:\n"
+            f"        print('PASS  {cmd_name} → {mavlink_mode}')\n"
+            "        sys.exit(0)\n"
+            "    else:\n"
+            f"        print('FAIL  {cmd_name}: mode switch to {mavlink_mode} failed')\n"
+            "        sys.exit(1)\n\n\n"
+            'if __name__ == "__main__":\n'
+            "    main()\n"
+        )
+        return header + render_pymavlink_runtime(conn) + main
 
     def _render_test_script(self, spec: SITLTestSpec) -> str:
         """根据 SITLTestSpec 渲染一个独立可执行的 pymavlink 测试脚本。"""
+        from .script_runtime import render_pymavlink_runtime
+
         inject_body = textwrap.indent(self._render_inject(spec), "    ")
         verify_body = textwrap.indent(self._render_verify(spec), "    ")
         req_id = spec.req_id
         conn = self._connection_string
-        out = self._output_dir
-
-        lines = [
-            "#!/usr/bin/env python3",
-            f'"""',
-            f"Auto-generated SITL test: {req_id}",
-            f"Tier  : {spec.tier}",
-            f"Notes : {spec.notes}",
-            f"",
-            f"Run:",
-            f"    python {out}/test_{req_id.lower()}.py",
-            f"(requires ArduPilot SITL running on {conn})",
-            f'"""',
-            "",
-            "import sys, time",
-            "from pymavlink import mavutil",
-            "",
-            f'CONNECTION = "{conn}"',
-            "TIMEOUT    = 30.0",
-            "",
-            "",
-            "def connect():",
-            "    print(f'Connecting to {CONNECTION} ...')",
-            "    mav = mavutil.mavlink_connection(CONNECTION)",
-            "    mav.wait_heartbeat(timeout=10)",
-            "    print(f'Connected — system {mav.target_system} component {mav.target_component}')",
-            "    return mav",
-            "",
-            "",
-            "def set_param(mav, name: str, value: float):",
-            "    mav.mav.param_set_send(",
-            "        mav.target_system, mav.target_component,",
-            "        name.encode(), value,",
-            "        mavutil.mavlink.MAV_PARAM_TYPE_REAL32,",
-            "    )",
-            "    time.sleep(0.3)",
-            "",
-            "",
-            "def get_mode(mav) -> str:",
-            "    msg = mav.recv_match(type='HEARTBEAT', blocking=True, timeout=5)",
-            "    if msg is None:",
-            "        return 'UNKNOWN'",
-            "    return mavutil.mode_string_v10(msg)",
-            "",
-            "",
-            "def wait_mode(mav, mode: str, timeout: float = 15.0) -> bool:",
-            "    deadline = time.time() + timeout",
-            "    while time.time() < deadline:",
-            "        current = get_mode(mav)",
-            "        if mode.upper() in current.upper():",
-            "            return True",
-            "        time.sleep(0.5)",
-            "    return False",
-            "",
-            "",
-            "def try_arm(mav) -> bool:",
-            "    mav.mav.command_long_send(",
-            "        mav.target_system, mav.target_component,",
-            "        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,",
-            "        0, 1, 0, 0, 0, 0, 0, 0,",
-            "    )",
-            "    ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=5)",
-            "    if ack is None:",
-            "        return False",
-            "    return ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED",
-            "",
-            "",
-            "def wait_for_command(mav, cmd_id: int, timeout: float = 10.0) -> bool:",
-            "    deadline = time.time() + timeout",
-            "    while time.time() < deadline:",
-            "        msg = mav.recv_match(type='COMMAND_LONG', blocking=True, timeout=1)",
-            "        if msg and msg.command == cmd_id:",
-            "            return True",
-            "    return False",
-            "",
-            "",
-            "def wait_for_statustext(mav, keyword: str, timeout: float = 10.0) -> bool:",
-            "    deadline = time.time() + timeout",
-            "    while time.time() < deadline:",
-            "        msg = mav.recv_match(type='STATUSTEXT', blocking=True, timeout=1)",
-            "        if msg and keyword.lower() in msg.text.lower():",
-            "            return True",
-            "    return False",
-            "",
-            "",
-            "def set_mode(mav, mode_name: str) -> bool:",
-            "    mode_id = mav.mode_mapping().get(mode_name.upper())",
-            "    if mode_id is None:",
-            "        return False",
-            "    mav.mav.set_mode_send(mav.target_system,",
-            "        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, mode_id)",
-            "    return wait_mode(mav, mode_name, timeout=5.0)",
-            "",
-            "",
-            "def force_arm_and_takeoff(mav, altitude: float = 3.0) -> bool:",
-            "    _MODES = {'STABILIZE':0,'GUIDED':4,'LOITER':5,'RTL':6,'LAND':9}",
-            "    set_param(mav, 'SIM_GPS1_ENABLE', 1)",
-            "    set_param(mav, 'SIM_BARO_DISABLE', 0)",
-            "    time.sleep(0.5)",
-            "    print('  等待 GPS 定位...')",
-            "    gps_deadline = time.time() + 15",
-            "    while time.time() < gps_deadline:",
-            "        gps = mav.recv_match(type='GPS_RAW_INT', blocking=True, timeout=2)",
-            "        if gps and gps.fix_type >= 3:",
-            "            break",
-            "        time.sleep(0.5)",
-            "    # 切 GUIDED 模式（硬编码 ID 兜底）",
-            "    mapping = mav.mode_mapping() or {}",
-            "    guided_id = mapping.get('GUIDED') or _MODES['GUIDED']",
-            "    mav.mav.set_mode_send(mav.target_system,",
-            "        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, guided_id)",
-            "    time.sleep(1)",
-            "    # wait_ready_to_arm：EKF 启动后需数秒设定 origin/home，期间会",
-            "    # 报 'Arm: Need Position Estimate'，这是强制硬检查，ARMING_CHECK=0",
-            "    # 和 force-arm(21196) 都绕不过。必须反复重试直到 EKF 就绪。",
-            "    armed = False",
-            "    arm_deadline = time.time() + 45",
-            "    while time.time() < arm_deadline:",
-            "        mav.mav.command_long_send(",
-            "            mav.target_system, mav.target_component,",
-            "            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,",
-            "            0, 1, 21196, 0, 0, 0, 0, 0,",
-            "        )",
-            "        ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=2)",
-            "        if (ack is not None",
-            "                and ack.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM",
-            "                and ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED):",
-            "            armed = True",
-            "            break",
-            "        time.sleep(2)",
-            "    if not armed:",
-            "        return False",
-            "    mav.mav.command_long_send(",
-            "        mav.target_system, mav.target_component,",
-            "        mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,",
-            "        0, 0, 0, 0, 0, 0, 0, altitude,",
-            "    )",
-            "    # relative_alt 是相对 home 高度；home 未设的瞬间可能等于绝对海拔",
-            "    # （~584000mm），会让 '>= target' 在地面误判。按基线相对爬升判断，",
-            "    # 加合理性上限 + 连续 2 帧确认。",
-            "    target_mm = int(altitude * 0.7 * 1000)",
-            "    plausible_max_mm = int(altitude * 3 * 1000) + 5000",
-            "    baseline_mm = None",
-            "    hits = 0",
-            "    deadline = time.time() + 30",
-            "    while time.time() < deadline:",
-            "        msg = mav.recv_match(type='GLOBAL_POSITION_INT', blocking=True, timeout=2)",
-            "        if msg is not None:",
-            "            if baseline_mm is None or msg.relative_alt < baseline_mm:",
-            "                baseline_mm = msg.relative_alt",
-            "            climb = msg.relative_alt - (baseline_mm or 0)",
-            "            if 0 < climb <= plausible_max_mm and climb >= target_mm:",
-            "                hits += 1",
-            "                if hits >= 2:",
-            "                    return True",
-            "            else:",
-            "                hits = 0",
-            "        time.sleep(0.5)",
-            "    return False",
-            "",
-            "",
-            "# ── Inject ──────────────────────────────────────────────────────",
-            "def inject(mav):",
-            inject_body,
-            "",
-            "# ── Verify ──────────────────────────────────────────────────────",
-            "def verify(mav) -> bool:",
-            verify_body,
-            "",
-            "# ── Main ────────────────────────────────────────────────────────",
-            "def main():",
-            "    mav = connect()",
-            "    print('Injecting fault condition ...')",
-            "    inject(mav)",
-            "    print('Verifying expected behavior ...')",
-            "    result = verify(mav)",
-            "    if result:",
-            f"        print('PASS  {req_id}')",
-            "        sys.exit(0)",
-            "    else:",
-            f"        print('FAIL  {req_id}')",
-            "        sys.exit(1)",
-            "",
-            "",
-            'if __name__ == "__main__":',
-            "    main()",
-            "",
-        ]
-        return "\n".join(lines)
-
+        header = (
+            "#!/usr/bin/env python3\n"
+            '"""\n'
+            f"Auto-generated SITL test: {req_id}\n"
+            f"Tier  : {spec.tier}\n"
+            f"Notes : {spec.notes}\n\n"
+            "Run:\n"
+            f"    python {self._output_dir}/test_{req_id.lower()}.py\n"
+            f"(requires ArduPilot SITL running on {conn})\n"
+            '"""\n\n'
+        )
+        test_body = (
+            "\n# ── Inject ──────────────────────────────────────────────────────\n"
+            "def inject(mav):\n"
+            f"{inject_body}\n"
+            "# ── Verify ──────────────────────────────────────────────────────\n"
+            "def verify(mav) -> bool:\n"
+            f"{verify_body}\n"
+            "# ── Main ────────────────────────────────────────────────────────\n"
+            "def main():\n"
+            "    mav = connect()\n"
+            "    print('Injecting fault condition ...')\n"
+            "    inject(mav)\n"
+            "    print('Verifying expected behavior ...')\n"
+            "    result = verify(mav)\n"
+            "    if result:\n"
+            f"        print('PASS  {req_id}')\n"
+            "        sys.exit(0)\n"
+            "    else:\n"
+            f"        print('FAIL  {req_id}')\n"
+            "        sys.exit(1)\n\n\n"
+            'if __name__ == "__main__":\n'
+            "    main()\n"
+        )
+        return header + render_pymavlink_runtime(conn) + test_body
     def _render_inject(self, spec: SITLTestSpec) -> str:
         from src.sitl.sitl_specs import render_inject
         return render_inject(spec.inject)
@@ -875,7 +609,7 @@ class SITLBridge:
         except ImportError:
             return [TestResult("ALL", "L2", False, "pymavlink 未安装")]
 
-        specs = [s for s in self._linker.generate_test_specs() if s.tier == "L2"]
+        specs = [s for s in self._requirement_evidence.test_specs if s.tier == "L2"]
         results: List[TestResult] = []
         if host is not None and port is not None:
             conn_str = f"tcp:{host}:{port}"

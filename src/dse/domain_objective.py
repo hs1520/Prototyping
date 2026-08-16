@@ -80,6 +80,24 @@ class DesignField:
     family: str = ""
 
 
+@dataclass(frozen=True)
+class ObservedDesignAttribute:
+    name: str
+    value: float
+    unit: str
+    field: str = ""
+    family: str = ""
+
+
+@dataclass(frozen=True)
+class ResolvedDesignAttributes:
+    """A model's numeric attributes resolved through the design ontology."""
+
+    attributes: Tuple[ObservedDesignAttribute, ...]
+    field_values: Dict[str, float]
+    family_values: Dict[str, Tuple[str, float]]
+
+
 DESIGN_ONTOLOGY: Tuple[DesignField, ...] = (
     DesignField("payload_mass_kg", "massKg", 0.5, "outer", ("payload", "cargo"), "max_rated_payload", "mass"),
     DesignField("battery_capacity_mah", "batteryCapacityMah", 5000.0, "inner", ("power", "batter", "energy")),
@@ -118,6 +136,41 @@ def _family_of(*tokens: str) -> str:
         if any(p in blob for p in pats):
             return fam
     return ""
+
+
+def resolve_design_attributes(model_text: str) -> ResolvedDesignAttributes:
+    """Apply parsing, defaults, field identity and family rules in one module.
+
+    Downstream modules consume this result instead of importing the ontology's
+    regexes, private maps, case rules or fallback classifier.
+    """
+    attributes: list[ObservedDesignAttribute] = []
+    field_values: Dict[str, float] = dict(DESIGN_DEFAULTS)
+    family_values: Dict[str, Tuple[str, float]] = {}
+    seen_fields: set[str] = set()
+    for name, raw_value, unit in _ATTR_RE.findall(str(model_text or "")):
+        value = float(raw_value)
+        field = _DESIGN_ATTR_FIELD.get(name.lower(), "")
+        family = DESIGN_FIELD_FAMILY.get(field, "") or _family_of(
+            name, unit or ""
+        )
+        attributes.append(ObservedDesignAttribute(
+            name=name,
+            value=value,
+            unit=unit or "",
+            field=field,
+            family=family,
+        ))
+        if field and field not in seen_fields:
+            field_values[field] = value
+            seen_fields.add(field)
+        if family and family not in family_values:
+            family_values[family] = (name, value)
+    return ResolvedDesignAttributes(
+        attributes=tuple(attributes),
+        field_values=field_values,
+        family_values=family_values,
+    )
 
 
 def requirement_targets(requirements: List[str]) -> Dict[str, List[Tuple[str, float]]]:

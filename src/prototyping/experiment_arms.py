@@ -89,7 +89,97 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # represented, and the planning prompt states the rule instead of leaving it to
 # be discovered by rejection. Plans the gate previously rejected can now pass, so
 # v19 and v20 are not poolable.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v20"
+# v21 makes the response a functional requirement obliges a planned decision
+# instead of a keyword inference. Three probes on the extraction path (2026-08-16,
+# frozen_requirements=None) showed the keyword table reading "delivery
+# waypoint" as a release obligation and "receive a waypoint sequence" as a
+# navigate one, and the plan then failing closed for a behaviour the requirement
+# never asked for. Each FUNC realization now records `response_intent` from a
+# closed set (release|return|land|navigate|report|self_test|none) with a
+# rationale required for `none`; the plan validator and the terminal closure
+# gate both read that field and fall back to the keyword table only when it is
+# blank, so archived runs keep their verdicts. The planning prompt gained the
+# field and its rule, which moves the user-prompt digest of every planning call
+# on every arm (golden_refactor_call_sequence.json ordinals 1/2/4/5;
+# system-prompt digests unchanged). Two smaller repairs ride with it: the unit
+# vocabulary accepts the degree symbol and Celsius, numeric bounds accept the
+# typographic minus U+2212 (each a spelling an extracted set actually used and
+# the frozen set never had), and "deliver" alone no longer marks a release
+# intent. The plan validator now looks for a requirement's response in the
+# behaviour its realization names, falling back to provenance only when none is
+# named: requiring the provenance tag to equal the requirement made one state
+# machine unable to answer two requirements (navigate and return as two states
+# of one behaviour), which is the natural shape and what the LLM kept planning.
+# The return-intent markers gained the launch/RTL spellings for the same reason
+# the units did. Two closure-side changes complete the intent mechanism: the
+# extractor's "no measurable criterion" flag now travels on the requirement
+# input artefact (`unmeasurable_req_ids`), and the terminal closure audit no
+# longer treats a FUNC row as a model gap when the plan recorded
+# response_intent=none for it AND the extractor flagged it unmeasurable -- two
+# independent signals that the requirement offers nothing to anchor to. The
+# verification matrix records such rows under a `planned_no_response` tier and
+# leaves their status UNASSIGNED; the gap is real but is the requirement's, not
+# the model's. The surgical repair prompt also gained an inhibition-shaped
+# guidance branch beside the existing power-on one. On the frozen path none of
+# this fires: no frozen requirement is unmeasurable.
+# One further constraint-plan repair: a RUNTIME_MEASUREMENT attribute used in a
+# constraint must carry an input binding at EVERY verification tier. The
+# STATE_EXECUTION exemption dated from before v19 and was wrong -- the state
+# executor reads a bound input like any other tier -- and its effect on the
+# extraction path was a plan that froze, a model whose scenarios failed with
+# "runtime subject X is not bound to an input", and a closure repair that the
+# plan-conformance gate then had to refuse (a new binding is an unplanned
+# element). Every archived plan (18 pilot cells + the authoritative run) already
+# satisfies the tightened rule, so no archived verdict moves; the golden
+# sequence moves on R2 ordinal 5 only, whose fixture retries a plan that trips
+# this check and so re-embeds its reworded issue text.
+# And the disagreement `_state_execution_obstacle` recorded and deliberately
+# left open -- the executor demands a bound subject for a STATE_ACTIVE
+# constraint, the validator did not -- is now resolved in the executor's favour:
+# an unbound subject is an obstacle, and the constraint must claim INSPECTION.
+# The probes settled which side was wrong. NOTE the one place this touches an
+# archived verdict: the authoritative run's plan carries exactly one such
+# constraint (FlightController.attitudeDeviationRms, claiming STATE_EXECUTION),
+# which that run recorded as an ADVISORY; under v21 the same plan would be
+# returned to the LLM for correction. The archived matrix row (REQ_FUNC_003,
+# partial, anchored by the datasheet tier) is unaffected because the datasheet
+# evidence, not the state execution, is what anchored it. Two tests whose
+# fixtures had pinned the unresolved behaviour now claim INSPECTION.
+# Last, the verification matrix's initial-state rule (a "power-on"/"default"
+# requirement is anchored by an owner machine whose initial state the text
+# names) now yields to a recorded response intent. An extracted "execute a
+# power-on self-check" carried intent self_test, but the substring "poweron"
+# matched the flight-phase manager's initial state PowerOn, and that machine's
+# initialisation failure was reported as the self-check requirement's evidence
+# while the self-check machine itself passed. A requirement that obliges a
+# response is anchored by the state that produces it. The frozen set's only
+# initial-state requirement (REQ_SAFE_008, "default to the mechanically locked
+# state") is a safety requirement with no response intent and is unaffected;
+# its archived verdict stands.
+# And the post-flight-report trigger rule in functional_behavior._has_required_
+# trigger, which demanded both "land" and "complet" in the trigger context
+# because the frozen requirement said "upon completion of the automated landing
+# sequence", now also accepts a completion trigger that is not a start-of-flight
+# event, because an extracted requirement said "upon mission completion" and the
+# model wrote MissionCompletion. The existing test that fires the same state via
+# GenericCommand still fails, as it must.
+# Finally, a component may be declared `passive` in the plan (with a
+# passive_rationale): a purely structural body -- an airframe -- that carries
+# other parts but exchanges no signals, commands or power. A passive component
+# may plan no ports (the "has no planned ports" rule yields to it), is
+# materialised as a `// PLAN-PASSIVE <Def>: <reason>` marker inside its part
+# def, and takes no part in any reachability scenario, including the
+# power-to-structure one. Before this the plan validator forced a port onto
+# every component, the LLM obliged with a port nobody connected, and the
+# reachability simulator then failed the power path into it -- on the
+# authoritative run and on every extraction probe alike, so the airframe cost
+# every model two failed scenarios by construction. Whether a structural body
+# is passive is now a recorded design decision rather than a default the
+# simulator assumes and the planner cannot express. Archived models carry no
+# marker and keep their scenarios and scores; only a plan that declares
+# passivity changes anything. This changes what the model is asked, so v20 and v21 are not
+# poolable; every archived pilot in the artefact tree ran at v20 or earlier.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v21"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"

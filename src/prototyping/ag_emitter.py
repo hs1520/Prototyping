@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional, Tuple
 
 from ..sysml.writer import EmissionMode
+from .ag_profile import DERIVED_SOURCE_KIND, TIMED_PATTERN
 
 
 @dataclass(frozen=True)
@@ -120,7 +121,7 @@ class AGChainSpec:
     # Student-selected safety-pattern kind for this chain (provenance). The
     # conformance checker independently infers the pattern from the emitted
     # topology (a timing budget ⇒ timed failsafe; none ⇒ startup-inhibit invariant).
-    pattern: str = "TRIGGERED_TIMED_FAILSAFE_RESPONSE"
+    pattern: str = TIMED_PATTERN
     timing_origin: Optional[str] = None
     priority: Optional[AGPrioritySpec] = None
     invariants: Tuple[AGInvariantSpec, ...] = ()
@@ -164,7 +165,7 @@ def arbitration_response_state(spec: AGChainSpec) -> Optional[str]:
         return None
     runtime_catalog_bound = (
         bool(priority.member_provenance)
-        or priority.source_kind == "STUDENT_DERIVED_DESIGN_CONSTRAINT"
+        or priority.source_kind == DERIVED_SOURCE_KIND
     )
     return (
         _sysml_identifier(priority.selected_response)
@@ -189,7 +190,7 @@ def ag_event_signals(spec: AGChainSpec) -> Tuple[str, ...]:
         priority = spec.priority
         runtime_catalog_bound = (
             bool(priority.member_provenance)
-            or priority.source_kind == "STUDENT_DERIVED_DESIGN_CONSTRAINT"
+            or priority.source_kind == DERIVED_SOURCE_KIND
         )
         signals.append(
             f"{_capitalise(priority.trigger)}Signal"
@@ -413,7 +414,7 @@ def emit_ag_package(
         # behavior targeted ``parachuteDeploymentSelected``.
         runtime_catalog_bound = (
             bool(priority.member_provenance)
-            or priority.source_kind == "STUDENT_DERIVED_DESIGN_CONSTRAINT"
+            or priority.source_kind == DERIVED_SOURCE_KIND
         )
         trigger_signal = (
             f"{_capitalise(priority.trigger)}Signal"

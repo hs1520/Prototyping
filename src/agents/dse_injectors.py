@@ -15,7 +15,7 @@ build_dse_design_constraints(best_config) -> str
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from typing import List
 
 from ..dse.design_space import DesignConfiguration
 from ..sysml.model import ElementRef, SysMLModel

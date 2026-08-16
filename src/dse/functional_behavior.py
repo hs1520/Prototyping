@@ -19,19 +19,37 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Set
+from typing import Mapping, Dict, List, Protocol, Sequence, Set
 
 from ..simulation.state_extractor import extract_state_machines
-from .safety_behavior import (BEHAVIOR_ABSENT, BEHAVIORALLY_VERIFIED, _norm,
-                              is_safety_req, reachable_states)
+from .requirement_trace import dse_req_id, extract_requirement_trace
+from .safety_behavior import (
+    BEHAVIOR_ABSENT,
+    BEHAVIORALLY_VERIFIED,
+    is_safety_req,
+    reachable_states,
+)
 
 # functional intent → (keywords that mark the intent in the requirement text,
 #                       markers that mark the produced response in a state's action/send/name)
 _FUNC_INTENT = {
-    "release":  (("release", "deliver", "drop", "payload release"),
+    # "deliver" alone is a noun modifier in this domain ("delivery mission",
+    # "delivery waypoint") and marked navigation requirements as release
+    # obligations when the requirement text was LLM-extracted rather than
+    # frozen. Only a phrase that names the act of delivering the payload
+    # counts; the response-side markers keep "deliver" because an action
+    # named deliverPayload is unambiguous.
+    "release":  (("release", "deliver the payload", "deliver payload", "drop",
+                  "payload release"),
                  ("release", "deliver", "drop", "payloadcmd", "payloadrelease")),
-    "return":   (("return to base", "return-to-base", "rtb", "return trajectory", "return-to-home"),
-                 ("rtb", "returnhome", "returntobase", "gohome")),
+    "return":   (("return to base", "return-to-base", "rtb", "return trajectory", "return-to-home",
+                  "return to launch", "return-to-launch", "rtl", "back to the launch"),
+                 # Model-side names: the frozen set said "return-to-base" and the
+                 # models wrote returnToBase; an extracted set said "navigate back
+                 # to the launch coordinates" and the models wrote returnToLaunch,
+                 # which no marker matched. RTL is also the autopilot's own term.
+                 ("rtb", "rtl", "returnhome", "returntohome", "returntobase",
+                  "returntolaunch", "returnlaunch", "gohome")),
     "land":     (("land", "landing", "touchdown"), ("land", "touchdown")),
     "navigate": (("navigate", "waypoint", "gps waypoint", "flight plan"),
                  ("navigate", "waypoint", "gotowaypoint", "nav")),
@@ -46,14 +64,99 @@ _FUNC_INTENT = {
 _FUNC_INTENT_PRIORITY = (
     "report", "self_test", "release", "return", "land", "navigate"
 )
-_REQ_ID_RE = re.compile(r"REQ[-_][A-Z]+[-_]\d+")
-_SATISFY_RE = re.compile(r"satisfy\s+(?:requirement\s+)?(\w*REQ[_-]\w+)", re.IGNORECASE)
+
+# The closed set of values a planner may record as a functional requirement's
+# response intent. "none" is a legitimate decision: the requirement obliges no
+# discrete response (a continuous property, a data-reception duty, a hover).
+# The set is closed because the closure gate has exactly one way of checking
+# each member; an intent it cannot check cannot be honoured.
+RESPONSE_INTENTS: frozenset[str] = frozenset(_FUNC_INTENT) | {"none"}
+
+
+def response_markers(intent: str) -> frozenset[str] | None:
+    """The model-side markers that satisfy a planned intent, or None for
+    "none" / unknown."""
+    entry = _FUNC_INTENT.get((intent or "").lower())
+    return frozenset(entry[1]) if entry else None
+
+
+def planned_intents_from_model(model) -> "Dict[str, str]":
+    """{requirement id: recorded response_intent} read from the generation plan
+    a committed model carries in its metadata, or {} when the model carries no
+    plan (legacy runs). Keys are normalised to the REQ_XXX_NNN form."""
+    meta = getattr(model, "metadata", None) or {}
+    plan = meta.get("whole_model_generation_plan") if isinstance(meta, dict) else None
+    if not isinstance(plan, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for item in plan.get("requirement_realizations") or ():
+        if not isinstance(item, dict):
+            continue
+        rid = str(item.get("requirement_id") or "").strip().upper().replace("-", "_")
+        intent = str(item.get("response_intent") or "").strip().lower()
+        if rid and intent:
+            out[rid] = intent
+    return out
+
+
+def planned_response_intent(
+    req_id: str, req_text: str, planned: str | None
+) -> tuple[str, frozenset[str]] | None:
+    """The response intent for one requirement, preferring the planner's
+    recorded decision over keyword inference.
+
+    ``planned`` is the ``response_intent`` the generation plan recorded for
+    this requirement, or None when no plan is available (legacy runs, or a
+    requirement the plan did not cover). A recorded "none" means the planner
+    decided the requirement obliges no discrete response, and the gate then
+    asks for none. Only when nothing was recorded does the keyword table
+    decide, so archived runs planned before this field existed keep the same
+    verdicts they had.
+    """
+    if planned is not None:
+        planned = planned.strip().lower()
+        if planned == "none":
+            return None
+        markers = response_markers(planned)
+        if markers is not None:
+            return planned, markers
+        # An unrecognised recorded value is treated as absent rather than as
+        # a silent pass: fall through to inference.
+    return functional_response_intent(req_id, req_text)
+
+
+def functional_response_intent(
+    req_id: str, req_text: str
+) -> tuple[str, frozenset[str]] | None:
+    """Keyword-inferred response intent. Retained as the fallback for plans
+    that carry no recorded intent; see :func:`planned_response_intent`.
+
+    The terminal closure gate credits a functional requirement only when a
+    reachable state produces one of these markers, so the generation plan has
+    to read the same table. Two copies of it would let the plan freeze a model
+    the gate then refuses, with no repair able to close the difference.
+    """
+    text = (req_text or "").lower()
+    if "FUNC" not in (req_id or "").upper() or is_safety_req(req_id, text):
+        return None
+    for intent in _FUNC_INTENT_PRIORITY:
+        keywords, responses = _FUNC_INTENT[intent]
+        if any(keyword in text for keyword in keywords):
+            return intent, frozenset(responses)
+    return None
 
 
 @dataclass(frozen=True)
 class _ProducedResponse:
     names: frozenset[str]
     trigger_context: str
+
+
+class ActionBodyEvidence(Protocol):
+    """The action evidence strict diagnosis needs from an upstream audit."""
+
+    name: str
+    body_empty: bool
 
 
 def _produced_response_records(model_text: str) -> List[_ProducedResponse]:
@@ -69,6 +172,15 @@ def _produced_response_records(model_text: str) -> List[_ProducedResponse]:
                 names.add(s.entry_action.lower())
             if s.entry_action_def:
                 names.add(s.entry_action_def.lower())
+            # A sustained response is a `do action`, and reading only entry
+            # actions made the natural spelling of a continuous activity —
+            # navigating, tracking, holding — invisible to this audit while
+            # the extractor had captured it all along.  `response_action_for_
+            # state` already treats the two as one executable response.
+            if s.do_action:
+                names.add(s.do_action.lower())
+            if s.do_action_def:
+                names.add(s.do_action_def.lower())
             for cmd, _port in s.sends:
                 names.add(cmd.lower())
             if not names:
@@ -99,7 +211,21 @@ def _has_required_trigger(req_text: str, record: _ProducedResponse) -> bool:
     text = req_text.lower()
     context = re.sub(r"[^a-z0-9]+", "", record.trigger_context)
     if "health report" in text and any(k in text for k in ("landing", "post-flight")):
-        return "land" in context and "complet" in context
+        # The trigger must denote the end of flight. The frozen set spelled it
+        # "upon completion of the automated landing sequence" and models wrote
+        # AutomatedLandingCompleted; an extracted set spelled the same
+        # obligation "upon mission completion" and the model wrote
+        # MissionCompletion, which no reading of "land" admits. Accept a
+        # landing-completion trigger, or a completion trigger that is not a
+        # start-of-flight event; a bare command, a power-on or an arming
+        # trigger still does not qualify. (`context` also carries the
+        # transition name, so "land" alone is not enough: a transition named
+        # transmitReportAfterLanding fired by GenericCommand must not pass.)
+        if "land" in context and "complet" in context:
+            return True
+        return "complet" in context and not any(
+            k in context for k in ("poweron", "startup", "arm", "takeoff", "launch")
+        )
     if "waypoint" in text and any(k in text for k in (
         "modification command", "waypoint-modification", "revised waypoint",
     )):
@@ -152,28 +278,33 @@ def _has_required_timing_anchor(model_text: str, req_text: str) -> bool:
     return False
 
 
-def functional_behavior_status(model_text: str, requirements: List[str]) -> Dict[str, str]:
+def functional_behavior_status(
+    model_text: str,
+    requirements: List[str],
+    planned_intents: "Mapping[str, str] | None" = None,
+) -> Dict[str, str]:
     """{functional req_id: behaviour status} for FUNC requirements with a recognised
-    actuation/sequencing intent (excludes safety reqs — those go through safety_behavior)."""
+    actuation/sequencing intent (excludes safety reqs — those go through safety_behavior).
+
+    ``planned_intents`` maps requirement id -> the ``response_intent`` the
+    generation plan recorded. When given, it decides which response each
+    requirement is held to (a recorded "none" means: hold it to none). When
+    absent, the keyword table decides, so archived runs planned before the
+    field existed keep their verdicts."""
     produced = _produced_response_records(model_text)
     has_state_machines = bool(extract_state_machines(model_text))
-    text = {m.group(0).replace("_", "-"): r for r in requirements
-            for m in [_REQ_ID_RE.search(r)] if m}
-    satisfied = {_norm(m.group(1)) for m in _SATISFY_RE.finditer(model_text)}
+    trace = extract_requirement_trace(model_text, requirements)
+    text = trace.source_by_id
+    satisfied = trace.satisfied
 
     out: Dict[str, str] = {}
     for rid in satisfied:
         txt = text.get(rid, rid).lower()
-        if "FUNC" not in rid.upper() or is_safety_req(rid, txt):
-            continue
-        markers: Set[str] = set()
-        for intent in _FUNC_INTENT_PRIORITY:
-            kws, resp = _FUNC_INTENT[intent]
-            if any(k in txt for k in kws):
-                markers = set(resp)
-                break
-        if not markers:
+        planned = planned_intents.get(rid) if planned_intents else None
+        intent = planned_response_intent(rid, txt, planned)
+        if intent is None:
             continue                                       # no recognised functional intent
+        markers: Set[str] = set(intent[1])
         response_records = [
             record for record in produced
             if any(marker in name for name in record.names for marker in markers)
@@ -195,8 +326,6 @@ def functional_behavior_status(model_text: str, requirements: List[str]) -> Dict
 # here changes `functional_behavior_status`, so archived runs stay reproducible.
 # ---------------------------------------------------------------------------
 
-_PART_DEF_RE = re.compile(r"\bpart\s+def\s+([A-Za-z_]\w*)\s*\{")
-
 #: Why a requirement the legacy rule credits does not survive the strict one.
 NAME_MATCH_ONLY = "credited by a name match on an action that does nothing"
 BARE_INVOCATION_ONLY = "the crediting state invokes no action definition"
@@ -204,23 +333,10 @@ FOREIGN_OWNER = "the crediting response belongs to another part"
 NO_STRICT_DIFFERENCE = ""
 
 
-def _satisfy_owners(model_text: str) -> Dict[str, str]:
-    """{normalised requirement id: part def that satisfies it}."""
-    from ..utils.sysml_text_utils import find_block_end
-
-    owners: Dict[str, str] = {}
-    for match in _PART_DEF_RE.finditer(model_text):
-        opening = model_text.find("{", match.start())
-        closing = find_block_end(model_text, opening)
-        if closing == -1:
-            continue
-        for satisfied in _SATISFY_RE.finditer(model_text[opening:closing]):
-            owners.setdefault(_norm(satisfied.group(1)), match.group(1))
-    return owners
-
-
 def functional_behavior_diagnosis(
-    model_text: str, requirements: List[str]
+    model_text: str,
+    requirements: List[str],
+    action_records: Sequence[ActionBodyEvidence],
 ) -> Dict[str, Dict[str, str]]:
     """Per functional requirement: legacy verdict, strict verdict, and the gap.
 
@@ -232,14 +348,15 @@ def functional_behavior_diagnosis(
     state to invoke a named action definition, owned by the satisfying part,
     whose body is not empty.
     """
-    from ..prototyping.action_semantics import analyze_action_semantics
-
     legacy = functional_behavior_status(model_text, requirements)
-    audit = analyze_action_semantics(model_text)
-    by_name = {record.name.lower(): record for record in audit.actions}
-    owners = _satisfy_owners(model_text)
-    text = {m.group(0).replace("_", "-"): r for r in requirements
-            for m in [_REQ_ID_RE.search(r)] if m}
+    by_name = {record.name.lower(): record for record in action_records}
+    trace = extract_requirement_trace(model_text, requirements)
+    owners = {
+        req_id: sorted(parts)[0]
+        for req_id, parts in trace.owners.items()
+        if parts
+    }
+    text = trace.source_by_id
 
     strict_support: Dict[str, List[tuple]] = {}
     for machine in extract_state_machines(model_text):
@@ -268,7 +385,7 @@ def functional_behavior_diagnosis(
             if any(keyword in low for keyword in keywords):
                 markers = set(response)
                 break
-        owner = owners.get(_norm(rid))
+        owner = owners.get(dse_req_id(rid))
         reason = NAME_MATCH_ONLY
         strict = BEHAVIOR_ABSENT
         if legacy_status != BEHAVIORALLY_VERIFIED:

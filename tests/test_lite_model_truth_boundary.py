@@ -1,8 +1,12 @@
 """Lite-model caches must never claim edits absent from emitted SysML text."""
 from __future__ import annotations
 
-from src.agents.design_agent import DesignAgent
+from src.agents.generated_model_admission import (
+    GeneratedModelAdmission,
+    ModelAdmissionRequest,
+)
 from src.agents.requirements_agent import RequirementsAgent
+from src.llm.chain_of_thought import CoTResult
 from src.sysml.lite_model import build_lite_model
 
 
@@ -20,11 +24,17 @@ def test_lite_traceability_keeps_missing_satisfy_visible_for_refinement():
             action def initiateReturnToBase { }
         }
     }"""
-    model = build_lite_model(text, model_name="D")
-
-    untraced = DesignAgent._apply_requirement_traceability(
-        object.__new__(DesignAgent), model, [_REQ]
+    outcome = GeneratedModelAdmission(build_lite_model, None).accept(
+        ModelAdmissionRequest(
+            response=CoTResult(final_answer=text, extracted_sysml=text),
+            system_name="D",
+            requirements=[_REQ],
+            generation_metadata={},
+            is_refinement=True,
+        )
     )
+    model = outcome.model
+    untraced = list(outcome.untraced_requirements)
 
     assert untraced == ["REQ_SAFE_001"]
     assert model.part_definitions[0].satisfy_relationships == []

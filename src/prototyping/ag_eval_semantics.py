@@ -17,6 +17,8 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Mapping, Tuple
 
+from .ag_profile import INVARIANT_SOURCE_KINDS
+
 
 class SemanticsError(ValueError):
     """A gold/prediction artifact violates the fixed comparison policy."""
@@ -372,9 +374,6 @@ def _invariant_key(
     )
 
 
-_INVARIANT_SOURCE_KINDS = ("STAKEHOLDER", "STUDENT_DERIVED_DESIGN_CONSTRAINT")
-
-
 def invariant_agreement(
     prediction: Mapping[str, Any], gold: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -386,7 +385,7 @@ def invariant_agreement(
             if not isinstance(inv, Mapping):
                 raise SemanticsError(f"invariant[{index}] must be an object")
             source_kind = str(inv.get("source_kind"))
-            if source_kind not in _INVARIANT_SOURCE_KINDS:
+            if source_kind not in INVARIANT_SOURCE_KINDS:
                 raise SemanticsError(
                     f"unsupported invariant source_kind {source_kind!r}"
                 )
@@ -399,7 +398,7 @@ def invariant_agreement(
     gold_items = gold.get("invariants")
     pred_elements = prediction.get("selected_model_elements")
     gold_elements = gold.get("selected_model_elements")
-    for kind in _INVARIANT_SOURCE_KINDS:
+    for kind in INVARIANT_SOURCE_KINDS:
         result[kind.lower()] = _prf(
             by_kind(pred_items, kind, pred_elements),
             by_kind(gold_items, kind, gold_elements),

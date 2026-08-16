@@ -735,10 +735,6 @@ def _count_connects(text: str) -> int:
 _REQ_DEF_RE = re.compile(r"\brequirement\s+def\s+([A-Za-z_]\w*)")
 
 
-def _requirement_defs(text: str) -> set:
-    return set(_REQ_DEF_RE.findall(text))
-
-
 def _requirement_identities(text: str) -> Dict[str, str]:
     """Exact requirement-definition bodies keyed by definition name."""
     result: Dict[str, str] = {}

@@ -769,13 +769,6 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
             # ── Check 3: trigger at roughly the expected step ────────────────
             if primary_guard.kind == "comparison" and plan.start_val is not None \
                     and plan.step_size is not None:
-                # Re-use the same pseudo-guard the swept plan used to compute exp_step.
-                pseudo = GuardCondition(
-                    kind="comparison",
-                    attribute=plan.swept_var,
-                    operator=("<" if (plan.step_size or 0) < 0 else ">"),
-                    threshold=(plan.start_val + plan.step_size * 0),  # placeholder
-                )
                 # Compute the value at trigger directly:
                 trig_val = round(plan.start_val + plan.step_size * result.trigger_step, 3)
                 result.trigger_value = trig_val

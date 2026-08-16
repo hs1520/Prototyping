@@ -26,7 +26,6 @@ from .action_effects import (
     OFF,
     PROFILE_VERSION,
     PlannedActionEffect,
-    SEND_EVENT,
 )
 from ..utils.sysml_text_utils import find_block_end
 from ..simulation.extractor import extract_behavioral_graph
@@ -62,11 +61,8 @@ _PART_USAGE_RE = re.compile(
 UNRESOLVED_ACTION = "UNRESOLVED_ACTION"
 UNSUPPORTED_BODY = "UNSUPPORTED_BODY"
 BARE_INVOCATION = "BARE_INVOCATION"
-UNRESOLVED_PORT = "UNRESOLVED_PORT"
-WRONG_PORT_DIRECTION = "WRONG_PORT_DIRECTION"
 NO_CONNECT_PATH = "NO_CONNECT_PATH"
 NO_ACCEPT_TRANSITION = "NO_ACCEPT_TRANSITION"
-UNREACHABLE_TARGET_STATE = "UNREACHABLE_TARGET_STATE"
 PLAN_IDENTITY_INCOMPLETE = "PLAN_IDENTITY_INCOMPLETE"
 
 
@@ -259,7 +255,6 @@ def _reachable_parts(model_text: str, part_name: str, port_name: str) -> Tuple[s
 
 def analyze_action_semantics(
     model_text: str,
-    requirements: Optional[Sequence[str]] = None,
     action_effect_plan: Optional[Sequence[PlannedActionEffect]] = None,
     profile: str = LEGACY_AUDIT,
 ) -> ActionSemanticsReport:

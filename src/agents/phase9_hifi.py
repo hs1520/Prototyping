@@ -82,13 +82,12 @@ def _persist_recommendation(design, model_text: str, output_dir: Path) -> None:
     atomic_write_json(run_json, existing)
     if design is not None:
         try:
-            from ..sitl.dse_sitl_params import design_to_sitl_parm
+            from ..sitl.parameter_projection import design_parm_lines
             from ..sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
-            lines = list(design_to_sitl_parm(design))
-            present = {ln.split()[0] for ln in lines if ln.strip() and not ln.lstrip().startswith("#")}
-            for key, value in (ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {}).items():
-                if key not in present:
-                    lines.append(f"{key:<20} {value}")
+            lines = design_parm_lines(
+                design,
+                base_params=ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {},
+            )
             atomic_write_text(
                 output_dir / "recommended.parm",
                 "# Phase 9: recommended design SITL params; native SITL is "
@@ -105,9 +104,9 @@ def _persist_recommendation(design, model_text: str, output_dir: Path) -> None:
 def _env_available(layer: str) -> Optional[str]:
     """Return a human reason when the layer's environment is unavailable, else None."""
     if layer == "sitl":
-        server = os.path.expanduser("~/ardupilot/build/sitl/bin/arducopter")
-        local = os.path.expanduser("~/PycharmProjects/ardupilot/build/sitl/bin/arducopter")
-        if not (os.path.exists(server) or os.path.exists(local)):
+        from ..utils.ardupilot import find_arducopter_binary
+
+        if find_arducopter_binary() is None:
             return "arducopter SITL binary not found"
         return None
     if layer == "gazebo":

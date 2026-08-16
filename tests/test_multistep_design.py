@@ -33,6 +33,25 @@ if "syside" not in sys.modules:
 
 from src.llm.interface import LLMResponse, Message
 from src.llm.chain_of_thought import ChainOfThoughtPrompter, CoTResult
+from src.agents.typed_plan_generation import (
+    TypedModelPlanError,
+    TypedPlanGeneration,
+    TypedPlanRequest,
+)
+from src.agents.assembly_finalization import (
+    AssemblyFinalizer,
+    AssemblyRequest,
+)
+from src.agents.model_authoring import AuthoringRequest, ModelAuthoring
+from src.agents.generated_model_admission import (
+    GeneratedModelAdmission,
+    ModelAdmissionRequest,
+)
+from src.agents.refinement_authoring import (
+    RefinementAuthoring,
+    RefinementRequest,
+)
+from src.sysml.lite_model import build_lite_model
 from src.sysml.text_normalization import (
     fix_capability_semantics,
     fix_safety_action_semantics,
@@ -99,6 +118,35 @@ _ASSEMBLED_MODEL = (
     "}\n"
     "```\n"
 )
+
+
+def _finalize_assembly(
+    assembled: str,
+    *,
+    parts: str = "",
+    interfaces: str = "",
+    behavior: str = "",
+    generation_plan=None,
+):
+    return AssemblyFinalizer().finalize(AssemblyRequest(
+        response=CoTResult(final_answer="", extracted_sysml=assembled),
+        parts_fragment=parts,
+        interfaces_fragment=interfaces,
+        behavior_fragment=behavior,
+        generation_plan=generation_plan,
+    ))
+
+
+def _admit_model(text: str, requirements):
+    return GeneratedModelAdmission(build_lite_model, None).accept(
+        ModelAdmissionRequest(
+            response=CoTResult(final_answer=text, extracted_sysml=text),
+            system_name="D",
+            requirements=requirements,
+            generation_metadata={},
+            is_refinement=True,
+        )
+    )
 
 
 class QueuedMockLLM:
@@ -515,6 +563,57 @@ class TestMultistepGeneratePipeline:
 
         return agent
 
+    def _generate_typed_plan(
+        self,
+        agent,
+        system_name,
+        requirements,
+        *,
+        context="",
+        semantic_guidance="",
+        behavior_plan=None,
+        allow_legacy_plan=None,
+    ):
+        """Exercise the public Step 1 protocol without DesignAgent internals."""
+        if allow_legacy_plan is None:
+            allow_legacy_plan = agent.allow_legacy_architecture_plan
+        return TypedPlanGeneration(
+            agent.cot,
+            maximum_attempts=agent.maximum_plan_attempts,
+        ).generate(TypedPlanRequest(
+            system_name=system_name,
+            requirements=requirements,
+            context=context,
+            semantic_guidance=semantic_guidance,
+            behavior_plan=behavior_plan,
+            allow_legacy_plan=allow_legacy_plan,
+        ))
+
+    def _author_model(
+        self,
+        agent,
+        system_name,
+        requirements,
+        architecture_text,
+        generation_plan,
+        *,
+        semantic_guidance=None,
+        behavior_plan=None,
+        platform_profile=None,
+    ):
+        """Exercise the public Steps 2–5 authoring interface."""
+        return ModelAuthoring(agent.cot, lambda _query: "").generate(
+            AuthoringRequest(
+                system_name=system_name,
+                architecture_text=architecture_text,
+                requirements=requirements,
+                generation_plan=generation_plan,
+                semantic_guidance=semantic_guidance,
+                behavior_plan=behavior_plan,
+                platform_profile=platform_profile,
+            )
+        )
+
     def test_five_llm_calls_made(self, monkeypatch):
         """Pipeline now has 5 steps: arch, parts, interfaces, behavior, assembly."""
         import src.agents.design_agent as da_module
@@ -543,6 +642,10 @@ class TestMultistepGeneratePipeline:
 
         assert result.success
         assert agent.llm.call_count == 5
+        assert any(
+            "explicit legacy" in item
+            for item in result.metadata["degraded_steps"]
+        )
 
     def test_generation_steps_are_independent_calls_not_one_conversation(
         self, monkeypatch
@@ -608,16 +711,54 @@ class TestMultistepGeneratePipeline:
         # what each step needs reaches it through the curated prompt, not history
         assert "FlightController" in authoring[1][1].content
 
-    def test_refinement_does_not_join_the_generation_conversation(
+    def test_refinement_interface_owns_role_and_source_selection(
         self, monkeypatch
     ):
-        """Refinement is a different role with a different system instruction,
-        so it must not inherit generation's turns (§5.3 rules 1 and 6)."""
-        agent = self._make_agent(["irrelevant"], monkeypatch)
-        assert agent.cot._conversation is None
-        with agent.cot.generation_conversation():
-            assert agent.cot._conversation is not None
-        assert agent.cot._conversation is None
+        from src.sysml.model import SysMLModel
+
+        agent = self._make_agent([_ASSEMBLED_MODEL], monkeypatch)
+        existing = SysMLModel(name="D", description="fallback")
+        existing.metadata["last_sysml_text"] = "package D { part def A {} }"
+
+        outcome = RefinementAuthoring(
+            agent.cot,
+            lambda query: f"retrieved for {query}",
+        ).refine(RefinementRequest(
+            existing_model=existing,
+            feedback="Fix the undirected port",
+            issues=("port direction is undirected",),
+        ))
+
+        assert outcome.response.extracted_sysml
+        assert outcome.metadata["source"] == "original LLM text"
+        assert "port def direction" in outcome.metadata["rag_query"]
+        assert "FIX specific reported issues" in agent.llm.messages[0][0].content
+        assert "package D { part def A {} }" in agent.llm.messages[0][1].content
+
+    def test_authoring_interface_owns_role_prompt(self, monkeypatch):
+        from src.prototyping.generation_plan import ModelGenerationPlan
+
+        plan = ModelGenerationPlan.from_payload(
+            self._minimal_typed_payload()
+        )
+        agent = self._make_agent([
+            "```sysml\npart def Producer {}\npart def Consumer {}\n```",
+            _INTERFACE_FRAGMENT,
+            _ASSEMBLED_MODEL,
+        ], monkeypatch)
+        self._author_model(
+            agent,
+            "P",
+            [],
+            plan.render_for_prompt(),
+            plan,
+        )
+
+        authoring_turns = agent.llm.messages[:2]
+        assert all(
+            "expert MBSE architect generating SysML v2" in turns[0].content
+            for turns in authoring_turns
+        )
 
     def test_invalid_typed_plan_gets_one_bounded_retry(self, monkeypatch):
         invalid = {
@@ -721,22 +862,45 @@ class TestMultistepGeneratePipeline:
                     }],
                 },
             ],
+            # REQ-FUNC-001 asks the drone to navigate, so the plan owes the
+            # navigate response the closure gate will look for.
+            "behaviors": [{
+                "owner": "Controller",
+                "behavior_id": "WaypointNavigationBehavior",
+                "initial_state": "Idle",
+                "states": [
+                    {"state_id": "Idle", "role": "INITIAL"},
+                    {
+                        "state_id": "NavigatingToWaypoint",
+                        "role": "RESPONSE",
+                        "entry_action": "navigateToWaypoint",
+                    },
+                ],
+                "transitions": [{
+                    "transition_id": "startNavigation",
+                    "source": "Idle",
+                    "target": "NavigatingToWaypoint",
+                    "trigger_kind": "ACCEPT",
+                    "trigger": "WaypointMissionAcceptedSignal",
+                }],
+                "provenance": {
+                    "kind": "FROZEN_REQUIREMENT",
+                    "requirement_id": "REQ_FUNC_001",
+                },
+            }],
         }
         responses = [
             f"```json\n{json.dumps(invalid)}\n```",
             f"```json\n{json.dumps(valid)}\n```",
         ]
         agent = self._make_agent(responses, monkeypatch)
-        metadata = {"degraded_steps": []}
-
-        _step, rendered = agent._step1_architecture(
+        outcome = self._generate_typed_plan(
+            agent,
             "DroneSystem",
             self._REQUIREMENTS,
-            "",
-            "",
-            metadata,
-            False,
         )
+        metadata = outcome.metadata
+        rendered = outcome.architecture_text
 
         assert agent.llm.call_count == 2
         assert metadata["step1_plan_retries"] == 1
@@ -750,11 +914,9 @@ class TestMultistepGeneratePipeline:
             f"```JSON\r\n{json.dumps(payload)}\r\n```",
         ], monkeypatch)
         agent.allow_legacy_architecture_plan = False
-        metadata = {"degraded_steps": []}
-
-        _step, rendered = agent._step1_architecture(
-            "P", [], "", "", metadata, False
-        )
+        outcome = self._generate_typed_plan(agent, "P", [])
+        metadata = outcome.metadata
+        rendered = outcome.architecture_text
 
         assert agent.llm.call_count == 2
         assert metadata["step1_plan_retries"] == 1
@@ -780,11 +942,7 @@ class TestMultistepGeneratePipeline:
             f"```json\n{json.dumps(valid)}\n```",
         ], monkeypatch)
         agent.allow_legacy_architecture_plan = False
-        metadata = {"degraded_steps": []}
-
-        agent._step1_architecture(
-            "P", [], "", "", metadata, False
-        )
+        metadata = self._generate_typed_plan(agent, "P", []).metadata
 
         assert agent.llm.call_count == 3
         assert [
@@ -837,7 +995,7 @@ class TestMultistepGeneratePipeline:
                 "state": "Active",
             },
             "provenance": {"kind": "DESIGN_DECISION"},
-            "verification_tier": "STATE_EXECUTION",
+            "verification_tier": "INSPECTION",
         }]
         wrong_tier = json.loads(json.dumps(unqualified))
         wrong_tier["constraints"][0]["activation"]["state"] = (
@@ -868,18 +1026,18 @@ class TestMultistepGeneratePipeline:
             "provenance": {"kind": "DESIGN_DECISION"},
         }]
         valid = json.loads(json.dumps(wrong_tier))
-        valid["constraints"][0]["verification_tier"] = "STATE_EXECUTION"
+        # INSPECTION, not STATE_EXECUTION: the subject carries no input binding,
+        # so the state executor cannot sweep it and the validator now requires
+        # the plan to say so. The test still exercises two semantic corrections
+        # across three attempts.
+        valid["constraints"][0]["verification_tier"] = "INSPECTION"
         agent = self._make_agent([
             f"```json\n{json.dumps(unqualified)}\n```",
             f"```json\n{json.dumps(wrong_tier)}\n```",
             f"```json\n{json.dumps(valid)}\n```",
         ], monkeypatch)
         agent.allow_legacy_architecture_plan = False
-        metadata = {"degraded_steps": []}
-
-        agent._step1_architecture(
-            "P", [], "", "", metadata, False
-        )
+        metadata = self._generate_typed_plan(agent, "P", []).metadata
 
         attempts = metadata["step1_plan_attempts"]
         assert agent.llm.call_count == 3
@@ -916,11 +1074,7 @@ class TestMultistepGeneratePipeline:
             f"```json\n{json.dumps(valid)}\n```",
         ], monkeypatch)
         agent.allow_legacy_architecture_plan = False
-        metadata = {"degraded_steps": []}
-
-        agent._step1_architecture(
-            "P", [], "", "", metadata, False
-        )
+        metadata = self._generate_typed_plan(agent, "P", []).metadata
 
         assert [
             item["failure_kind"]
@@ -946,15 +1100,12 @@ class TestMultistepGeneratePipeline:
         against a fixed provider seed — could only reproduce the same
         truncation, at several minutes per call.
         """
-        from src.agents.design_agent import TypedModelPlanError
-
         truncated = '```json\n{"components": [{"name": "FlightCont'
         agent = self._make_agent([truncated] * 6, monkeypatch)
         agent.allow_legacy_architecture_plan = False
-        metadata = {"degraded_steps": []}
 
         with pytest.raises(TypedModelPlanError) as captured:
-            agent._step1_architecture("P", [], "", "", metadata, False)
+            self._generate_typed_plan(agent, "P", [])
 
         prompts = [m[-1].content for m in agent.llm.messages]
         temperatures = agent.llm.temperatures
@@ -964,7 +1115,7 @@ class TestMultistepGeneratePipeline:
         assert agent.maximum_plan_attempts == 6
         assert temperatures == [0.2, 0.6, 1.0]
         assert len(set(zip(prompts, temperatures))) == 3
-        assert metadata["step1_plan_exhausted_reason"] == (
+        assert captured.value.metadata["step1_plan_exhausted_reason"] == (
             "CORRECTION_CANNOT_VARY_REQUEST"
         )
         assert "CORRECTION_CANNOT_VARY_REQUEST" in str(captured.value)
@@ -978,22 +1129,17 @@ class TestMultistepGeneratePipeline:
     def test_production_mode_never_silently_uses_legacy_plan(
         self, monkeypatch
     ):
-        from src.agents.design_agent import TypedModelPlanError
-
         agent = self._make_agent([
             "1. Producer — produces data",
             "1. Producer — still produces data",
         ], monkeypatch)
         agent.allow_legacy_architecture_plan = False
-        metadata = {"degraded_steps": []}
 
         with pytest.raises(
             TypedModelPlanError,
             match="TYPED_MODEL_PLAN_UNAVAILABLE",
         ) as captured:
-            agent._step1_architecture(
-                "P", [], "", "", metadata, False
-            )
+            self._generate_typed_plan(agent, "P", [])
 
         # The attempt budget is the ceiling, not a quota to spend: once the
         # correction can no longer vary the request, further attempts are
@@ -1006,7 +1152,7 @@ class TestMultistepGeneratePipeline:
         )
         assert not any(
             "legacy" in item.lower()
-            for item in metadata["degraded_steps"]
+            for item in captured.value.metadata["degraded_steps"]
         )
 
     def test_explicit_legacy_compatibility_remains_available(
@@ -1017,17 +1163,12 @@ class TestMultistepGeneratePipeline:
             "   Addresses: REQ-FUNC-001\n"
             "   Ports needed: out data",
         ], monkeypatch)
-        metadata = {"degraded_steps": []}
-
-        agent._step1_architecture(
+        metadata = self._generate_typed_plan(
+            agent,
             "P",
             ["REQ-FUNC-001: produce data"],
-            "",
-            "",
-            metadata,
-            False,
-            allow_legacy_architecture_plan=True,
-        )
+            allow_legacy_plan=True,
+        ).metadata
 
         assert agent.llm.call_count == 1
         assert metadata["step1_plan_attempts"][0][
@@ -1124,17 +1265,12 @@ class TestMultistepGeneratePipeline:
             f"```json\n{json.dumps(payload('RecoveryController'))}\n```",
         ], monkeypatch)
         agent.allow_legacy_architecture_plan = False
-        metadata = {"degraded_steps": []}
-
-        agent._step1_architecture(
+        metadata = self._generate_typed_plan(
+            agent,
             "P",
             [requirement],
-            "",
-            "",
-            metadata,
-            False,
             behavior_plan=behavior_plan,
-        )
+        ).metadata
 
         assert agent.llm.call_count == 2
         assert any(
@@ -1281,37 +1417,32 @@ class TestMultistepGeneratePipeline:
         agent = self._make_agent(
             [
                 f"```json\n{json.dumps(payload)}\n```",
+                "```sysml\npart def Perception {}\n"
+                "part def Controller {}\n```",
                 _INTERFACE_FRAGMENT,
+                _BEHAVIOR_FRAGMENT,
+                _ASSEMBLED_MODEL,
             ],
             monkeypatch,
         )
-        metadata = {"degraded_steps": []}
-
-        _step, rendered = agent._step1_architecture(
+        outcome = self._generate_typed_plan(
+            agent,
             "DroneSystem",
             [requirement],
-            "",
-            "",
-            metadata,
-            False,
         )
-        plan = ModelGenerationPlan.from_dict(
-            metadata["whole_model_generation_plan"]
-        )
-        agent._step3_interfaces(
+        rendered = outcome.architecture_text
+        plan = outcome.plan
+        authored = self._author_model(
+            agent,
             "DroneSystem",
+            [requirement],
             rendered,
-            "part def Perception; part def Controller;",
-            [requirement],
-            lambda _step: "",
-            "",
-            metadata,
-            False,
             plan,
         )
+        metadata = authored.metadata
 
         planning_prompt = agent.llm.messages[0][-1].content
-        interface_prompt = agent.llm.messages[1][-1].content
+        interface_prompt = agent.llm.messages[2][-1].content
         assert "SOURCE-DERIVED SEMANTIC BINDINGS REQUIRED IN PLAN" in (
             planning_prompt
         )
@@ -1430,43 +1561,42 @@ state def ExtraBehavior {
             (unregistered, False),
         ):
             agent = self._make_agent(
-                [unregistered, retry_response], monkeypatch
+                [
+                    "```sysml\npart def Controller {}\n"
+                    "part def Monitor {}\n```",
+                    _INTERFACE_FRAGMENT,
+                    unregistered,
+                    retry_response,
+                    _ASSEMBLED_MODEL,
+                ],
+                monkeypatch,
             )
-            metadata = {"degraded_steps": []}
             if not should_pass:
                 with pytest.raises(
                     RuntimeError,
                     match="after one targeted retry",
                 ):
-                    agent._step4_behavior(
+                    self._author_model(
+                        agent,
                         "DroneSystem",
-                        plan.render_for_prompt(),
-                        "part def Controller; part def Monitor;",
                         ["REQ-FUNC-001: The system shall respond to a signal."],
-                        None,
-                        lambda _step: "",
-                        "",
-                        metadata,
-                        False,
-                        generation_plan=plan,
+                        plan.render_for_prompt(),
+                        plan,
                     )
-                assert agent.llm.call_count == 2
+                assert agent.llm.call_count == 4
                 continue
 
-            _step, fragment = agent._step4_behavior(
+            outcome = self._author_model(
+                agent,
                 "DroneSystem",
-                plan.render_for_prompt(),
-                "part def Controller; part def Monitor;",
                 ["REQ-FUNC-001: The system shall respond to a signal."],
-                None,
-                lambda _step: "",
-                "",
-                metadata,
-                False,
-                generation_plan=plan,
+                plan.render_for_prompt(),
+                plan,
             )
-            retry_prompt = agent.llm.messages[1][-1].content
-            assert agent.llm.call_count == 2
+            metadata = outcome.metadata
+            fragment = outcome.fragments.behavior
+            retry_prompt = agent.llm.messages[3][-1].content
+            assert agent.llm.call_count == 5
             assert metadata["step4_behavior_retries"] == 1
             assert metadata["planned_behavior_conformance"]["status"] == "PASS"
             assert "RegisteredSignal" in retry_prompt
@@ -1546,21 +1676,21 @@ state def ExtraBehavior {
             part def Producer {}
             part def Consumer {}
             ```""",
+            _INTERFACE_FRAGMENT,
+            _ASSEMBLED_MODEL,
         ], monkeypatch)
-        metadata = {"degraded_steps": []}
 
-        _step, fragment = agent._step2_parts(
+        outcome = self._author_model(
+            agent,
             "P",
-            plan.render_for_prompt(),
             [],
-            lambda _step: "",
-            "",
-            metadata,
-            False,
+            plan.render_for_prompt(),
             plan,
         )
+        metadata = outcome.metadata
+        fragment = outcome.fragments.parts
 
-        assert agent.llm.call_count == 2
+        assert agent.llm.call_count == 4
         assert "part def ObstacleData" not in fragment
         assert metadata["step2_definition_contract"]["status"] == "PASS"
         assert "STEP 2 DEFINITION-KIND CORRECTION" in (
@@ -1734,8 +1864,6 @@ def test_range_floor_is_not_emitted_as_opposite_always_on_constraint():
 
 
 def test_missing_part_defs_are_restored_from_structural_fragment():
-    from src.agents.design_agent import DesignAgent
-
     assembled = """package DroneSystem {
         requirement def REQ_FUNC_001 { }
     }"""
@@ -1748,7 +1876,9 @@ def test_missing_part_defs_are_restored_from_structural_fragment():
         attribute payloadMass : Real = 2.0 [kg];
     }"""
 
-    restored, names = DesignAgent._inject_missing_part_defs(assembled, parts)
+    outcome = _finalize_assembly(assembled, parts=parts)
+    restored = outcome.response.extracted_sysml
+    names = outcome.metadata["injected_part_defs"]
 
     assert names == ["FlightController", "PayloadManager"]
     assert restored.count("part def FlightController") == 1
@@ -1756,16 +1886,18 @@ def test_missing_part_defs_are_restored_from_structural_fragment():
 
 
 def test_missing_defs_are_restored_into_quoted_package_name():
-    from src.agents.design_agent import DesignAgent
-
     assembled = "package 'Autonomous Drone' { requirement def REQ_FUNC_001 { } }"
     parts = "part def FlightController { attribute x : Real = 1.0; }"
     interfaces = "item def TelemetryData;"
 
-    with_parts, part_names = DesignAgent._inject_missing_part_defs(assembled, parts)
-    restored, item_names = DesignAgent._inject_missing_item_defs(
-        with_parts, interfaces
+    outcome = _finalize_assembly(
+        assembled,
+        parts=parts,
+        interfaces=interfaces,
     )
+    restored = outcome.response.extracted_sysml
+    part_names = outcome.metadata["injected_part_defs"]
+    item_names = outcome.metadata["injected_item_defs"]
 
     assert part_names == ["FlightController"]
     assert item_names == ["item def TelemetryData"]
@@ -1774,7 +1906,6 @@ def test_missing_defs_are_restored_into_quoted_package_name():
 
 
 def test_post_assembly_restores_event_item_before_behavior_compilation():
-    from src.agents.design_agent import DesignAgent
     from src.prototyping.generation_plan import (
         ComponentPlan,
         ModelGenerationPlan,
@@ -1811,24 +1942,21 @@ def test_post_assembly_restores_event_item_before_behavior_compilation():
             ),),
         ),),
     )
-    assembled = CoTResult(final_answer="", extracted_sysml="""package P {
+    assembled = """package P {
         port def OverrideCommand { in item command; }
         part def Controller {}
-    }""")
+    }"""
     interfaces = """item def OverrideCommand {
         attribute overrideActive : Boolean;
     }"""
-    metadata = {}
-
-    result = DesignAgent.__new__(DesignAgent)._postprocess_assembly(
+    outcome = _finalize_assembly(
         assembled,
-        "",
-        interfaces,
-        "planned behavior fragment",
-        plan,
-        metadata,
-        False,
+        interfaces=interfaces,
+        behavior="planned behavior fragment",
+        generation_plan=plan,
     )
+    result = outcome.response
+    metadata = outcome.metadata
 
     assert result.extracted_sysml.count("item def OverrideCommand") == 1
     assert "port def OverrideCommand" not in result.extracted_sysml
@@ -1838,20 +1966,18 @@ def test_post_assembly_restores_event_item_before_behavior_compilation():
 
 
 def test_existing_part_defs_are_not_duplicated_during_restore():
-    from src.agents.design_agent import DesignAgent
-
     assembled = "package D { part def FlightController { } }"
     parts = "part def FlightController { attribute x : Real = 1.0; }"
 
-    restored, names = DesignAgent._inject_missing_part_defs(assembled, parts)
+    outcome = _finalize_assembly(assembled, parts=parts)
+    restored = outcome.response.extracted_sysml
+    names = outcome.metadata.get("injected_part_defs", [])
 
     assert restored == assembled
     assert names == []
 
 
 def test_range_floor_cleanup_does_not_remove_sensor_range_constraint():
-    from src.agents.design_agent import DesignAgent
-
     text = """package D {
         part def PerceptionSystem {
             attribute maxSensorRange : Real = 15.0;
@@ -1880,8 +2006,6 @@ def test_range_floor_cleanup_does_not_remove_sensor_range_constraint():
 
 
 def test_parachute_action_command_is_repaired_and_declared():
-    from src.agents.design_agent import DesignAgent
-
     text = """package D {
         action def CMD_LAND { }
         part def SafetyMonitor {
@@ -1897,8 +2021,6 @@ def test_parachute_action_command_is_repaired_and_declared():
 
 
 def test_self_test_satisfy_is_relocated_to_state_machine_owner():
-    from src.agents.design_agent import DesignAgent
-
     text = """package D {
         requirement def REQ_FUNC_009 { }
         part def FlightController {
@@ -1919,9 +2041,11 @@ def test_self_test_satisfy_is_relocated_to_state_machine_owner():
         "REQ-FUNC-009: Execute an automated system self-check prior to arming."
     ]
 
-    fixed, count = DesignAgent._fix_functional_satisfy_ownership(
-        text, requirements
-    )
+    outcome = _admit_model(text, requirements)
+    fixed = outcome.response.extracted_sysml
+    count = outcome.metadata["semantic_fixes"][
+        "functional_satisfy_ownership"
+    ]
 
     assert count == 1
     assert fixed.count("satisfy requirement REQ_FUNC_009;") == 1
@@ -1930,8 +2054,6 @@ def test_self_test_satisfy_is_relocated_to_state_machine_owner():
 
 
 def test_bare_self_test_phase_gets_executable_entry_action():
-    from src.agents.design_agent import DesignAgent
-
     text = """package D {
         part def FlightController {
             action def executeSelfTest { }
@@ -1946,9 +2068,9 @@ def test_bare_self_test_phase_gets_executable_entry_action():
         "REQ-FUNC-009: Execute an automated system self-test prior to arming."
     ]
 
-    fixed, count = DesignAgent._fix_self_test_behavior_semantics(
-        text, requirements
-    )
+    outcome = _admit_model(text, requirements)
+    fixed = outcome.response.extracted_sysml
+    count = outcome.metadata["semantic_fixes"]["self_test_behavior"]
 
     assert count == 1
     assert "state PhaseSelfTest {" in fixed
@@ -1957,7 +2079,6 @@ def test_bare_self_test_phase_gets_executable_entry_action():
 
 
 def test_functional_satisfy_owner_fix_closes_self_check_audit_gap():
-    from src.agents.design_agent import DesignAgent
     from src.agents.verification_audit import functional_verification_gap_issues
 
     text = """package D {
@@ -1985,10 +2106,7 @@ def test_functional_satisfy_owner_fix_closes_self_check_audit_gap():
     ]
 
     before = functional_verification_gap_issues(text, "D", strict=True)
-    executable, _ = DesignAgent._fix_self_test_behavior_semantics(text, requirements)
-    fixed, _ = DesignAgent._fix_functional_satisfy_ownership(
-        executable, requirements
-    )
+    fixed = _admit_model(text, requirements).response.extracted_sysml
     after = functional_verification_gap_issues(fixed, "D", strict=True)
 
     assert any("REQ_FUNC_009" in issue for issue in before)

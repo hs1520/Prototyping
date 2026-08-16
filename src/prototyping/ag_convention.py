@@ -32,6 +32,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple
 
+from . import ag_profile as profile
+
 CONVENTION = "CONVENTION"
 SPEC_VALUED = "SPEC_VALUED"
 
@@ -127,8 +129,8 @@ class PatternRoles:
 #: than assumed.
 INVARIANT_ROLE_OBLIGATIONS: Tuple[PatternRoles, ...] = (
     PatternRoles(
-        "LOCKED_UNTIL_AUTHORISED_RELEASE",
-        ("locked", "authorisation", "unlocked", "power", "power_on"),
+        profile.LOCKED_UNTIL_RELEASE_PATTERN,
+        profile.PATTERN_INVARIANT_ROLES[profile.LOCKED_UNTIL_RELEASE_PATTERN],
         "LOCKED_UNTIL_AUTHORISED_RELEASE is defined by five roles — locked, "
         "power_on, unlocked, authorisation, power — and needs one invariant per "
         "obligation, three in all:\n"
@@ -148,8 +150,8 @@ INVARIANT_ROLE_OBLIGATIONS: Tuple[PatternRoles, ...] = (
         "`lifecycle_events`).",
     ),
     PatternRoles(
-        "STARTUP_INHIBIT",
-        ("latch", "reset", "inhibited", "forbidden"),
+        profile.STARTUP_INHIBIT_PATTERN,
+        profile.PATTERN_INVARIANT_ROLES[profile.STARTUP_INHIBIT_PATTERN],
         "STARTUP_INHIBIT is defined by four roles — latch, reset, inhibited, "
         "forbidden — and needs one invariant per obligation, three in all:\n"
         "     (a) `<condition concepts> => not <forbidden> and not <forbidden>`: "
@@ -251,14 +253,14 @@ def render_invariant_role_rules() -> str:
 #: Obligations keyed by checker diagnostic code.
 DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
-        "SOURCE_PROVENANCE_MISSING", CONVENTION,
+        profile.CODE_SOURCE_PROVENANCE_MISSING, CONVENTION,
         "The system contract's first member must be its provenance line: "
         "`doc /* bounded A/G system contract for <REQ>; safety_pattern=<PATTERN>; "
         "timing_origin=<assumption attribute> */`, and <REQ> must be the "
         "requirement actually present in the committed model.",
     ),
     Obligation(
-        "CONTRACT_INCOMPLETE", CONVENTION,
+        profile.CODE_CONTRACT_INCOMPLETE, CONVENTION,
         "Every contract declares each concept it uses as `attribute <name> : "
         "Boolean;`. Write one `assume constraint <n> { <concept> }` per CONTRACT "
         "assumption and one `require constraint <n> { <concept> }` per produced "
@@ -266,7 +268,7 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "not automatically a contract assumption.",
     ),
     Obligation(
-        "SYSTEM_OBSERVATION_BINDING_MISSING", CONVENTION,
+        profile.CODE_SYSTEM_OBSERVATION_BINDING_MISSING, CONVENTION,
         "The SYSTEM's observed guarantee "
         "is a separate constraint named exactly `require constraint g_observed "
         "{ <observation> }`; invariant constraints do not replace it. The checker "
@@ -274,7 +276,7 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "concepts component guarantees must support.",
     ),
     Obligation(
-        "COMPONENT_GUARANTEE_NONATOMIC", CONVENTION,
+        profile.CODE_COMPONENT_GUARANTEE_NONATOMIC, CONVENTION,
         "Every COMPONENT `require constraint` must be one atomic Boolean "
         "identifier, for example `require constraint g_locked { locked }`. Put "
         "each produced concept in its own constraint. Compound Boolean formulas "
@@ -282,41 +284,41 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "component guarantee whose realizing action must establish one concept.",
     ),
     Obligation(
-        "CONTRACT_UNSUPPORTED", CONVENTION,
+        profile.CODE_CONTRACT_UNSUPPORTED, CONVENTION,
         "Constraint bodies use only the bounded subset: a Boolean identifier, "
         "`not`, `and`, `or`, or a single `<var> == <ENUM>::<MEMBER>` / `!=` "
         "comparison. Anything richer cannot be represented and is rejected.",
     ),
     Obligation(
-        "GUARANTEE_NO_OWNER", CONVENTION,
+        profile.CODE_GUARANTEE_NO_OWNER, CONVENTION,
         "Each component contract is allocated to exactly one owning part, "
         "declaring the part definition before using it: `part def <Def>;` then "
         "`part <usage> : <Def>;` then `satisfy requirement <u> : <Contract> by "
         "<usage>;`.",
     ),
     Obligation(
-        "GUARANTEE_MULTIPLE_OWNERS", CONVENTION,
+        profile.CODE_GUARANTEE_MULTIPLE_OWNERS, CONVENTION,
         "Ownership must be unique: never satisfy the same contract by more than "
         "one part.",
     ),
     Obligation(
-        "DECOMPOSITION_MISSING", CONVENTION,
+        profile.CODE_DECOMPOSITION_MISSING, CONVENTION,
         "Each component contract has exactly one decomposition edge from the "
         "system contract: `dependency decompose<X> from <SystemContract> to "
         "<ComponentContract>;`.",
     ),
     Obligation(
-        "DECOMPOSITION_INSUFFICIENT", CONVENTION,
+        profile.CODE_DECOMPOSITION_INSUFFICIENT, CONVENTION,
         "The component guarantees together must entail the system contract's "
         "observed guarantee; some component must produce it.",
     ),
     Obligation(
-        "ASSUMPTION_UNDISCHARGED", CONVENTION,
+        profile.CODE_ASSUMPTION_UNDISCHARGED, CONVENTION,
         "Every assumption that is not an environment input must be produced by "
         "some upstream component in the same package.",
     ),
     Obligation(
-        "DISCHARGE_EDGE_MISSING", CONVENTION,
+        profile.CODE_DISCHARGE_EDGE_MISSING, CONVENTION,
         "A matching upstream guarantee is not enough: state the discharge "
         "explicitly as `dependency discharge<Concept>__to__<ConsumerContract> "
         "from <ProducerContract> to <ConsumerContract>;`, where `<Concept>` is "
@@ -324,18 +326,18 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "capitalized. Use element names only, never dotted members.",
     ),
     Obligation(
-        "CIRCULAR_ASSUMPTION", CONVENTION,
+        profile.CODE_CIRCULAR_ASSUMPTION, CONVENTION,
         "The discharge graph must be acyclic — two contracts may not discharge "
         "each other, directly or transitively.",
     ),
     Obligation(
-        "UNIT_INCOMPATIBLE", CONVENTION,
+        profile.CODE_UNIT_INCOMPATIBLE, CONVENTION,
         "Every timing budget carries an explicit SysML unit and they must all use "
         "the same one, e.g. `attribute maxLatency : DurationValue = <N> [s];`.",
            tier=REFINEMENT,
     ),
     Obligation(
-        "TIMING_BUDGET_MISSING", CONVENTION,
+        profile.CODE_TIMING_BUDGET_MISSING, CONVENTION,
         "Under a timed pattern the system contract carries `attribute maxLatency "
         ": DurationValue = <N> [s];`, and every component contributing a segment "
         "carries `attribute latencyBudget : DurationValue = <N> [s];` with "
@@ -343,7 +345,7 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
            tier=REFINEMENT,
     ),
     Obligation(
-        "TIMING_BUDGET_EXCEEDED", CONVENTION,
+        profile.CODE_TIMING_BUDGET_EXCEEDED, CONVENTION,
         "Compose the component budgets and keep them inside the system deadline. "
         "Segments on the serial path ADD. Segments that run concurrently declare "
         "the same `attribute timingSegmentGroup : Integer = <n>;` and their group "
@@ -354,12 +356,12 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
            tier=REFINEMENT,
     ),
     Obligation(
-        "REALIZATION_MISSING", CONVENTION,
+        profile.CODE_REALIZATION_MISSING, CONVENTION,
         "Every contract is realized by exactly one state machine, linked as "
         "`dependency realize<Contract> from <Contract> to <ItsStateDef>;`.",
     ),
     Obligation(
-        "REALIZATION_TRIGGER_MISSING", CONVENTION,
+        profile.CODE_REALIZATION_TRIGGER_MISSING, CONVENTION,
         "A realizing state machine must accept a trigger compatible with the "
         "contract's assumptions. Compatibility is lexical and uses the COMPLETE "
         "assumption concept: for assumption `<concept>`, name the event "
@@ -380,25 +382,25 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
         "guard concept is an unresolved reference.",
     ),
     Obligation(
-        "REALIZATION_UNREACHABLE", CONVENTION,
+        profile.CODE_REALIZATION_UNREACHABLE, CONVENTION,
         "The state machine must have a reachable trigger-to-response path: an "
         "`entry; then <state>;` initial edge leading to the responding state.",
     ),
     Obligation(
-        "REALIZATION_ACTION_MISSING", CONVENTION,
+        profile.CODE_REALIZATION_ACTION_MISSING, CONVENTION,
         "The responding state must perform the action that establishes the "
         "guarantee, as `state <t> { entry action set<GuaranteeConcept>; }` — the "
         "action name is the guarantee concept prefixed with `set`.",
     ),
     Obligation(
-        "OBSERVATION_MISSING", CONVENTION,
+        profile.CODE_OBSERVATION_MISSING, CONVENTION,
         "The system contract is observed by exactly one verification element: "
         "`verification def <V> { objective <o> { verify requirement <r> : "
         "<SystemContract>; } }` plus `dependency observe<V> from <SystemContract> "
         "to <V>;`.",
     ),
     Obligation(
-        "PATTERN_DECLARATION_INCONSISTENT", CONVENTION,
+        profile.CODE_PATTERN_DECLARATION_INCONSISTENT, CONVENTION,
         "Declare `safety_pattern=` on the provenance line as exactly one of "
         "TRIGGERED_TIMED_FAILSAFE_RESPONSE, THRESHOLD_TRIGGERED_RESPONSE, "
         "STARTUP_INHIBIT, LOCKED_UNTIL_AUTHORISED_RELEASE, and classify the "
@@ -413,7 +415,7 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
            tier=REFINEMENT,
     ),
     Obligation(
-        "PATTERN_TOPOLOGY_INCOMPLETE", CONVENTION,
+        profile.CODE_PATTERN_TOPOLOGY_INCOMPLETE, CONVENTION,
         "The declared pattern's state/transition topology must satisfy these "
         "gold-blind structural duties. STARTUP_INHIBIT: the component producing "
         "the latch has an initial decision state, exactly one non-initial state "
@@ -430,7 +432,7 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
            tier=REFINEMENT,
     ),
     Obligation(
-        "INVARIANT_SEMANTICS_MISSING", CONVENTION,
+        profile.CODE_INVARIANT_SEMANTICS_MISSING, CONVENTION,
         "An invariant pattern must state every invariant as a `require constraint` "
         "INSIDE the system contract. Its exact name is "
         "`inv__<invariant_id>__source__<source_id>__kind__<source_kind>`, where "
@@ -441,7 +443,7 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
            tier=REFINEMENT,
     ),
     Obligation(
-        "INVARIANT_SEMANTICS_INVALID", CONVENTION,
+        profile.CODE_INVARIANT_SEMANTICS_INVALID, CONVENTION,
         "Each invariant must bind a parseable Boolean AST, its provenance, and "
         "the model elements it constrains, consistently with each other — and the "
         "invariants must together fill every role the declared pattern is defined "
@@ -449,7 +451,7 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
            tier=REFINEMENT,
     ),
     Obligation(
-        "PRIORITY_TOPOLOGY_MISSING", CONVENTION,
+        profile.CODE_PRIORITY_TOPOLOGY_MISSING, CONVENTION,
         "A TRIGGERED_TIMED_FAILSAFE_RESPONSE must model its arbitration "
         "explicitly, using these fixed element names: `enum def <RESPONSE_SET> "
         "{ enum <MEMBER>; ... }` (each member uses the `enum` keyword), "
@@ -462,7 +464,7 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
            tier=REFINEMENT,
     ),
     Obligation(
-        "PRIORITY_TOPOLOGY_INCOMPLETE", CONVENTION,
+        profile.CODE_PRIORITY_TOPOLOGY_INCOMPLETE, CONVENTION,
         "The arbitration must be internally consistent: one "
         "`require constraint precedence_<WINNER>_over_<LOSER> { not <TRIGGER> or "
         "selectedResponse != <RESPONSE_SET>::<LOSER> }` for every response the "

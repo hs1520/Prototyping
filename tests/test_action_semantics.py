@@ -364,12 +364,15 @@ def test_the_legacy_rule_credits_a_requirement_from_another_requirements_action(
 
 def test_the_strict_reading_withdraws_what_only_a_name_supported():
     from src.dse.functional_behavior import functional_behavior_diagnosis
+    from src.prototyping.action_semantics import analyze_action_semantics
 
     archived = _archived_authoritative()
     if archived is None:
         return
     model, requirements = archived
-    diagnosis = functional_behavior_diagnosis(model, requirements)
+    diagnosis = functional_behavior_diagnosis(
+        model, requirements, analyze_action_semantics(model).actions
+    )
     for rid in ("REQ-FUNC-001", "REQ-FUNC-008"):
         assert diagnosis[rid]["legacy_status"] == "behaviorally-verified"
         assert diagnosis[rid]["strict_status"] == "behavior-absent"
@@ -382,13 +385,16 @@ def test_the_strict_reading_leaves_the_legacy_verdict_untouched():
         functional_behavior_diagnosis,
         functional_behavior_status,
     )
+    from src.prototyping.action_semantics import analyze_action_semantics
 
     archived = _archived_authoritative()
     if archived is None:
         return
     model, requirements = archived
     before = dict(functional_behavior_status(model, requirements))
-    functional_behavior_diagnosis(model, requirements)
+    functional_behavior_diagnosis(
+        model, requirements, analyze_action_semantics(model).actions
+    )
     assert functional_behavior_status(model, requirements) == before
 
 

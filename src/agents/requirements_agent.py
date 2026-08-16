@@ -74,7 +74,6 @@ Core rules:
     ):
         super().__init__("RequirementsAgent", llm, rag_retriever)
         self.cot = ChainOfThoughtPrompter(llm)
-        self.cot.system_prompt = self.SYSTEM_PROMPT
 
     _MIN_DESCRIPTION_LENGTH = 50
 
@@ -117,6 +116,7 @@ Core rules:
             description,
             system_name=system_name,
             fixed_requirements=existing_requirements or None,
+            system_prompt=self.SYSTEM_PROMPT,
         )
 
         requirements = self._parse_requirements(cot_result.final_answer)
@@ -199,7 +199,7 @@ Core rules:
             if not m:
                 issues.append(f"Invalid REQ ID format (expected REQ-<CATEGORY>-<NNN>): '{snippet}'")
             else:
-                req_id, category, _num, _text = m.group(1), m.group(2), m.group(3), m.group(4)
+                req_id, category = m.group(1), m.group(2)
 
                 # Category validity
                 if category not in _VALID_CATEGORIES:

@@ -24,13 +24,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Protocol
 
+from ..utils.ardupilot import find_arducopter_binary
+
 State = Dict[str, str]
-
-_ARDUCOPTER_PATHS = [
-    os.path.expanduser("~/ardupilot/build/sitl/bin/arducopter"),
-    os.path.expanduser("~/PycharmProjects/ardupilot/build/sitl/bin/arducopter"),
-]
-
 
 # ---------------------------------------------------------------------------
 # Architecture → SITL fault scenario
@@ -124,13 +120,11 @@ class SITLFaultOracle:
 
     def __post_init__(self) -> None:
         if not self.arducopter_bin:
-            self.arducopter_bin = next(
-                (p for p in _ARDUCOPTER_PATHS if os.path.exists(p)), ""
-            )
+            self.arducopter_bin = find_arducopter_binary() or ""
 
     @staticmethod
     def is_available() -> bool:
-        return any(os.path.exists(p) for p in _ARDUCOPTER_PATHS)
+        return find_arducopter_binary() is not None
 
     # channel count per redundancy variant → number of GPS units configured
     _CHANNELS = {"single": 1, "dual": 2, "triple": 3}

@@ -135,13 +135,12 @@ _STATE_FIELDS = {
     "last_variation_proposal_source": "variation_proposal_source",
     "last_functional_closure": "functional_closure",
     "last_verification_anchor_attempts": "verification_anchor_attempts",
+    "last_plan_conformance_rejections": "plan_conformance_rejections",
     "last_requirement_semantic_analysis": "requirement_semantic_analysis",
     "last_requirement_input": "requirement_input",
     "last_ag_authoring_attempts": "ag_authoring_attempts",
     "last_ag_binding_report": "ag_binding_report",
     "last_ag_non_degradation": "ag_non_degradation",
-    "last_action_semantics_audit": "action_semantics_audit",
-    "last_action_effects": "action_effects",
     "last_estimator_calibration": "estimator_calibration",
 }
 

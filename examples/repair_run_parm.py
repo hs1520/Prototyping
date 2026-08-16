@@ -12,7 +12,7 @@ from src.prototyping.artifact_store import (
     input_dir,
     output_dir,
 )
-from src.sitl.dse_sitl_params import design_to_sitl_parm
+from src.sitl.parameter_projection import design_parm_lines
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
 
@@ -30,14 +30,10 @@ def main() -> int:
     if not raw:
         raise SystemExit("current run has no recommended design")
     design = DesignInputs(**raw)
-    lines = list(design_to_sitl_parm(design))
-    present = {
-        line.split()[0] for line in lines
-        if line.strip() and not line.lstrip().startswith("#")
-    }
-    for key, value in (ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {}).items():
-        if key not in present:
-            lines.append(f"{key:<20} {value}")
+    lines = design_parm_lines(
+        design,
+        base_params=ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {},
+    )
     text = (
         "# Recommended design SITL params; native SITL is architecture-"
         "nondiscriminating for endurance.\n" + "\n".join(lines) + "\n"

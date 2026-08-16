@@ -5,6 +5,7 @@ from typing import List
 from ..dse.design_space import DesignConfiguration, DesignSpace
 from ..simulation.validator import SimulationResult
 from ..sysml.model import SysMLModel
+from .summary_rendering import runtime_footer_lines, simulation_summary_lines
 
 
 class ReportingMixin:
@@ -12,44 +13,17 @@ class ReportingMixin:
         self, final_model: SysMLModel, final_score: float, final_sim, best_config
     ) -> None:
         """Always-visible end-of-exploration summary (score, sim, LLM usage)."""
-        sim_warnings = (getattr(final_model, "metadata", None) or {}).get("sim_warnings", "")
         print(f"{'='*60}")
         print("Exploration Complete!")
         print(f"  Final score:              {final_score:.3f}")
-        if final_sim.requirement_reachability_score is not None:
-            print(
-                "  Requirement reachability: "
-                f"{final_sim.requirement_reachability_score:.3f} "
-                f"({final_sim.requirement_scenarios_passed}/"
-                f"{final_sim.requirement_scenarios_total} frozen paths)"
-            )
-            print(
-                "  Advisory role scenarios: "
-                f"{final_sim.reachability_score:.3f} "
-                f"({len(final_sim.passed_scenarios())}/"
-                f"{len(final_sim.scenario_results)} scenarios)"
-            )
-        else:
-            print(
-                f"  Simulation reachability:  "
-                f"{final_sim.reachability_score:.3f} "
-                f"({len(final_sim.passed_scenarios())}/"
-                f"{len(final_sim.scenario_results)} scenarios)"
-            )
+        for line in simulation_summary_lines(final_sim):
+            print(line)
         print(f"  Part definitions: {len(final_model.part_definitions)}")
         print(f"  Best config:      {best_config.parameters}")
-        if sim_warnings:
-            print()
-            for line in sim_warnings.splitlines():
-                print(f"  {line}")
-        ledger = getattr(self.llm, "ledger", None)
-        if ledger is not None and getattr(ledger, "calls", 0):
-            print(f"  LLM usage:        {ledger.summary()}")
-        if self.verbose:
-            from ..utils.suppressed import suppressed_summary
-            summary = suppressed_summary()
-            if summary:
-                print(f"  suppressed:       {summary}")
+        for line in runtime_footer_lines(
+            final_model, self.llm, verbose=self.verbose
+        ):
+            print(line)
         print(f"{'='*60}\n")
 
 
@@ -271,7 +245,6 @@ class ReportingMixin:
         """Full simulation report printed at the end of Phase 6."""
         total  = len(sim_result.scenario_results)
         passed = len(sim_result.passed_scenarios())
-        failed = sim_result.failed_scenarios()
         W = 62
 
         def bar(v: float, w: int = 30) -> str:
@@ -369,4 +342,3 @@ class ReportingMixin:
                     print(f"  ║      {line:<{W-4}}║")
                 print(f"  ║  {'·'*W}║")
             print(f"  ╚{'═'*W}╝", flush=True)
-

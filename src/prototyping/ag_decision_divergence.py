@@ -28,7 +28,7 @@ choice rather than the correct one.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping
 
 DIVERGENCE_SCHEMA_VERSION = "1.0"
 

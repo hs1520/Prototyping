@@ -10,20 +10,17 @@ import json
 import re
 from typing import Any, Iterable, Mapping
 
+from ..utils.req_id import first_req_id, normalise_req_id
+
 
 FROZEN_REQUIREMENT_SCHEMA_VERSION = "1.0"
-_REQ_ID_RE = re.compile(r"\b(REQ[-_][A-Z]+[-_]\d+)\b", re.IGNORECASE)
-
-
 def source_digest(text: str) -> str:
     """Stable digest of the stakeholder-owned source text."""
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
 def normalise_requirement_id(value: str) -> str:
-    match = _REQ_ID_RE.search(value or "")
-    token = match.group(1) if match else value
-    return (token or "").upper().replace("-", "_")
+    return normalise_req_id(first_req_id(value) or value)
 
 
 def requirement_records(requirements: Iterable[str]) -> list[dict[str, str]]:
@@ -32,7 +29,7 @@ def requirement_records(requirements: Iterable[str]) -> list[dict[str, str]]:
     for index, raw in enumerate(requirements):
         text = str(raw)
         req_id = normalise_requirement_id(text)
-        if not _REQ_ID_RE.search(text):
+        if first_req_id(text) is None:
             raise ValueError(f"frozen requirement[{index}] has no valid requirement id")
         if req_id in seen:
             raise ValueError(f"frozen requirements contain duplicate id {req_id}")

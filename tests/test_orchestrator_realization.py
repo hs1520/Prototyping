@@ -1,4 +1,9 @@
 from src.agents.orchestrator import Orchestrator, _public_realization
+from src.agents.refinement import (
+    ModelRevision,
+    RefinedRevision,
+    RefinementClosure,
+)
 from src.dse.design_space import DesignConfiguration, DesignSpace
 from src.dse.physics_estimator import DesignInputs
 from src.dse.variation_dse import VariationDSEResult
@@ -102,11 +107,17 @@ def test_explore_phase8_returns_realization_and_can_inject(monkeypatch):
         ds.add_configuration(cfg)
         return ds, cfg, [cfg]
 
-    def fake_refine(self, model, requirements, **kwargs):
-        return model, 1.0, Sim()
+    def fake_refine(self, request):
+        return RefinedRevision(
+            revision=ModelRevision.capture(request.base.materialize()),
+            score=1.0,
+            requirements=request.requirements,
+            dse_best_config=request.dse_best_config,
+            _simulation=Sim(),
+        )
 
     monkeypatch.setattr(Orchestrator, "_explore_variations", fake_explore_variations)
-    monkeypatch.setattr(Orchestrator, "_iterative_refinement", fake_refine)
+    monkeypatch.setattr(RefinementClosure, "refine", fake_refine)
     monkeypatch.setattr(Orchestrator, "_print_final_sim", lambda self, sim: None)
     # Keep Phase 9 explicit so this test documents its Phase 8-only scope.
     # high-fidelity runner, which would otherwise try to launch native SITL/Gazebo.

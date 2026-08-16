@@ -5,11 +5,11 @@ Settable inputs (battery/rotor/cruise) map to SITL params; emergent mass is NOT 
 """
 from __future__ import annotations
 
-from src.sitl.dse_sitl_params import (
-    design_to_sitl_parm,
-    model_design_inputs,
-    predicted_emergent,
-    sitl_plan,
+from src.sitl.parameter_projection import (
+    design_inputs_from_model,
+    design_parm_lines,
+    merge_base_parameters,
+    project_model_parameters,
 )
 
 _MODEL = """package Drone {
@@ -20,38 +20,56 @@ _MODEL = """package Drone {
 
 
 def test_model_design_inputs_merge_across_components():
-    d = model_design_inputs(_MODEL)
+    d = design_inputs_from_model(_MODEL)
     assert d.battery_capacity_mah == 12000.0 and d.battery_cells == 6
     assert d.rotor_count == 6 and d.cruise_speed_mps == 18.0
     assert d.payload_mass_kg == 0.4
 
 
 def test_battery_maps_to_batt_capacity():
-    parm = design_to_sitl_parm(model_design_inputs(_MODEL))
+    parm = design_parm_lines(design_inputs_from_model(_MODEL))
     assert any(line.startswith("BATT_CAPACITY") and "12000" in line for line in parm)
 
 
 def test_rotor_count_maps_to_frame_class():
-    parm = design_to_sitl_parm(model_design_inputs(_MODEL))
+    parm = design_parm_lines(design_inputs_from_model(_MODEL))
     assert any(line.startswith("FRAME_CLASS") and line.strip().endswith("2") for line in parm)  # hexa
 
 
 def test_cruise_maps_to_wpnav_speed_cm_s():
-    parm = design_to_sitl_parm(model_design_inputs(_MODEL))
+    parm = design_parm_lines(design_inputs_from_model(_MODEL))
     assert any(line.startswith("WPNAV_SPEED") and "1800" in line for line in parm)  # 18 m/s × 100
 
 
 def test_mass_is_not_a_sitl_param():
-    parm = " ".join(design_to_sitl_parm(model_design_inputs(_MODEL)))
+    parm = " ".join(design_parm_lines(design_inputs_from_model(_MODEL)))
     assert "MASS" not in parm.upper()  # emergent mass can't be set in SITL
 
 
 def test_predicted_emergent_baseline_present():
-    p = predicted_emergent(model_design_inputs(_MODEL))
+    p = project_model_parameters(_MODEL).predicted
     assert p["endurance_min"] > 0 and p["total_mass_kg"] > 0
 
 
 def test_sitl_plan_bundles_parm_prediction_and_caveat():
-    plan = sitl_plan(_MODEL)
-    assert plan["sitl_parm"] and plan["predicted"]
-    assert "mass is emergent" in plan["caveat"]
+    plan = project_model_parameters(_MODEL)
+    assert plan.parm_lines and plan.predicted
+    assert "mass is emergent" in plan.caveat
+
+
+def test_profile_defaults_merge_without_overriding_projected_values():
+    design = design_inputs_from_model(_MODEL)
+    lines = design_parm_lines(
+        design,
+        base_params={"FRAME_CLASS": 1, "ARMING_CHECK": 0},
+    )
+    assert sum(line.startswith("FRAME_CLASS") for line in lines) == 1
+    assert next(line for line in lines if line.startswith("FRAME_CLASS")).endswith("2")
+    assert any(line.startswith("ARMING_CHECK") for line in lines)
+
+    merged = merge_base_parameters(
+        "FRAME_CLASS 2\n# ARMING_CHECK mentioned only in prose",
+        {"FRAME_CLASS": 1, "ARMING_CHECK": 0},
+    )
+    assert merged.count("FRAME_CLASS") == 1
+    assert "ARMING_CHECK                   0  # base SITL param" in merged

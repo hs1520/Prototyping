@@ -9,7 +9,6 @@ arm metadata.
 from __future__ import annotations
 
 import copy
-from datetime import date
 import hashlib
 import json
 import re
@@ -22,9 +21,13 @@ from .architecture_boundary import (
 )
 from .experiment_arms import (
     REVISED_EXPERIMENT_NAMESPACE,
-    R2_DETERMINISTIC_GENERATION_MODE,
-    R2_DETERMINISTIC_INTERVENTION_VERSION,
     R2_INTERVENTION_VERSION_BY_MODE,
+)
+from .frozen_artifact_protocol import (
+    canonical_artifact_digest,
+    has_review_markers,
+    is_sha256,
+    valid_iso_date,
 )
 from .requirement_inputs import (
     normalise_requirement_id,
@@ -46,7 +49,6 @@ _TAXONOMY_DECISION_SEQUENCE = [
     "VERIFIER_LIMITATION",
     "NO_FAILURE",
 ]
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _FORBIDDEN_BLIND_KEY_TOKENS = {
     "agcontractgraph",
     "analysistrace",
@@ -77,36 +79,7 @@ _FORBIDDEN_BLIND_ARTIFACT_ROLE_TOKENS = {
 
 def artifact_digest(artifact: Mapping[str, Any]) -> str:
     """Canonical SHA-256 excluding the self-referential digest slot."""
-    content = {key: value for key, value in artifact.items() if key != "artifact_digest"}
-    raw = json.dumps(
-        content, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
-    )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _is_digest(value: Any) -> bool:
-    return bool(_SHA256_RE.fullmatch(str(value or "")))
-
-
-def _valid_iso_date(value: Any) -> bool:
-    try:
-        date.fromisoformat(str(value))
-    except (TypeError, ValueError):
-        return False
-    return True
-
-
-def _has_review_markers(value: Any) -> bool:
-    if isinstance(value, Mapping):
-        if any(
-            str(key).startswith("_") and "review" in str(key)
-            for key in value
-        ):
-            return True
-        return any(_has_review_markers(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_has_review_markers(item) for item in value)
-    return False
+    return canonical_artifact_digest(artifact)
 
 
 def _forbidden_keys(value: Any, *, path: str = "packet") -> list[str]:
@@ -218,7 +191,7 @@ def validate_frozen_failure_taxonomy(taxonomy: Mapping[str, Any]) -> list[str]:
         )
     if not taxonomy.get("reviewer"):
         problems.append("taxonomy reviewer must be set")
-    if not _valid_iso_date(taxonomy.get("reviewed_date")):
+    if not valid_iso_date(taxonomy.get("reviewed_date")):
         problems.append("taxonomy reviewed_date must be ISO YYYY-MM-DD")
     protocol = taxonomy.get("review_protocol")
     if not isinstance(protocol, Mapping):
@@ -226,12 +199,12 @@ def validate_frozen_failure_taxonomy(taxonomy: Mapping[str, Any]) -> list[str]:
         protocol = {}
     if protocol.get("independent_human_review") is not True:
         problems.append("taxonomy independent_human_review must be true")
-    if _has_review_markers(taxonomy):
+    if has_review_markers(taxonomy):
         problems.append(
             "taxonomy contains leftover _review markers; confirm and remove them"
         )
     digest = taxonomy.get("artifact_digest")
-    if not _is_digest(digest) or digest != artifact_digest(taxonomy):
+    if not is_sha256(digest) or digest != artifact_digest(taxonomy):
         problems.append("taxonomy artifact_digest is missing, malformed, or stale")
     return problems
 
@@ -254,7 +227,7 @@ def validate_blind_packet(packet: Mapping[str, Any]) -> list[str]:
         "requirement_digest",
         "architecture_boundary_digest",
     ):
-        if not _is_digest(packet.get(field)):
+        if not is_sha256(packet.get(field)):
             problems.append(f"blind packet {field} must be a lowercase SHA-256 digest")
     review_material = packet.get("review_material")
     if not isinstance(review_material, Mapping) or not review_material:
@@ -311,7 +284,7 @@ def validate_blind_packet(packet: Mapping[str, Any]) -> list[str]:
             + ", ".join(sorted(forbidden))
         )
     digest = packet.get("artifact_digest")
-    if not _is_digest(digest) or digest != artifact_digest(packet):
+    if not is_sha256(digest) or digest != artifact_digest(packet):
         problems.append("blind packet artifact_digest is missing, malformed, or stale")
     return problems
 
@@ -439,7 +412,7 @@ def validate_blind_label(
         problems.append("blind label failure_class is not in the frozen taxonomy")
     if not label.get("reviewer"):
         problems.append("blind label reviewer must be set")
-    if not _valid_iso_date(label.get("reviewed_date")):
+    if not valid_iso_date(label.get("reviewed_date")):
         problems.append("blind label reviewed_date must be ISO YYYY-MM-DD")
     protocol = label.get("review_protocol")
     if not isinstance(protocol, Mapping):
@@ -450,7 +423,7 @@ def validate_blind_label(
     if protocol.get("blind_to_runtime_verdict") is not True:
         problems.append("blind label blind_to_runtime_verdict must be true")
     digest = label.get("artifact_digest")
-    if not _is_digest(digest) or digest != artifact_digest(label):
+    if not is_sha256(digest) or digest != artifact_digest(label):
         problems.append("blind label artifact_digest is missing, malformed, or stale")
     return problems
 
@@ -480,7 +453,7 @@ def _configuration_problems(config: Mapping[str, Any]) -> list[str]:
             "experiment config r2_intervention_version must match its generation mode"
         )
     digest = config.get("configuration_digest")
-    if not _is_digest(digest):
+    if not is_sha256(digest):
         problems.append("configuration_digest must be a lowercase SHA-256 digest")
     else:
         content = {key: value for key, value in config.items() if key != "configuration_digest"}
@@ -572,7 +545,7 @@ def build_evaluation_readiness_manifest(
     gold_evidence: dict[str, str | None] = {}
     for chain_id in selected_chains:
         expected_source_digest = source_digests.get(chain_id)
-        if not _is_digest(expected_source_digest):
+        if not is_sha256(expected_source_digest):
             problems.append(
                 f"{chain_id}: no matching requirement source digest in frozen config"
             )
@@ -700,7 +673,7 @@ def build_evaluation_readiness_manifest(
         ) != chain_id:
             problems.append(f"{run_id}/{chain_id}: prediction source requirement mismatch")
         prediction_model_digest = prediction.get("source_model_digest")
-        if not _is_digest(prediction_model_digest):
+        if not is_sha256(prediction_model_digest):
             problems.append(f"{run_id}/{chain_id}: prediction model digest is invalid")
         else:
             model_digests_by_run.setdefault(run_id, set()).add(
@@ -812,7 +785,7 @@ def require_evaluation_ready(
     ):
         raise ValueError("R2 evaluation evidence gate is not ready")
     for field in ("configuration_digest", "requirement_set_digest"):
-        if not _is_digest(manifest.get(field)):
+        if not is_sha256(manifest.get(field)):
             raise ValueError(f"readiness manifest {field} must be a SHA-256 digest")
 
     chains = [str(item) for item in (manifest.get("selected_chain_ids") or [])]
@@ -832,9 +805,9 @@ def require_evaluation_ready(
         ("architecture boundary", boundary_digests),
         ("gold", gold_digests),
     ):
-        if any(not _is_digest(value) for value in evidence.values()):
+        if any(not is_sha256(value) for value in evidence.values()):
             raise ValueError(f"readiness {label} evidence contains an invalid digest")
-    if not _is_digest(manifest.get("failure_taxonomy_digest")):
+    if not is_sha256(manifest.get("failure_taxonomy_digest")):
         raise ValueError("readiness failure taxonomy digest is missing or invalid")
 
     blind_evidence = manifest.get("blind_label_evidence")
@@ -855,7 +828,7 @@ def require_evaluation_ready(
             "run_manifest_digest",
             "prediction_digest",
         ):
-            if not _is_digest(item.get(field)):
+            if not is_sha256(item.get(field)):
                 raise ValueError(
                     f"readiness blind evidence[{index}].{field} is invalid"
                 )

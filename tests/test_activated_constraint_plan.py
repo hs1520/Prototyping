@@ -252,7 +252,12 @@ def test_state_active_property_is_serialized_inside_owning_state():
             "state": "FlightBehavior::Cruise",
         },
         "provenance": {"kind": "DESIGN_DECISION"},
-        "verification_tier": "STATE_EXECUTION",
+        # INSPECTION, not STATE_EXECUTION: the subject is unbound, so the state
+        # executor cannot sweep it and the plan validator now says so (see
+        # activated_constraint_plan._state_execution_obstacle). What this
+        # test protects is unchanged: the constraint must still be serialised
+        # inside the owning state.
+        "verification_tier": "INSPECTION",
     }]
     plan = ModelGenerationPlan.from_payload(
         _payload(

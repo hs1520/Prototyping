@@ -56,7 +56,9 @@ def main() -> int:
         realization = run_json.get("realization")
     gazebo = _fresh_gazebo_report(run_json, model_sysml)
     linker = RequirementLinker(model)
-    rows = build_matrix(model, realization, linker, gazebo=gazebo)
+    rows = build_matrix(
+        model, realization, linker.compile_evidence(), gazebo=gazebo
+    )
     atomic_write_text(MATRIX_MD, to_markdown(rows))
     payload = to_json(rows)
     if run_json:

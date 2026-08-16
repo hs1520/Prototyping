@@ -10,7 +10,10 @@ from types import SimpleNamespace
 
 from src.prototyping.verification_matrix import build_matrix, summarize, to_json, to_markdown
 from src.prototyping.verification_obligations import compile_verification_obligations
-from src.sitl.requirement_linker import RequirementLinker
+from src.sitl.requirement_linker import (
+    RequirementEvidenceBundle,
+    RequirementLinker,
+)
 from src.sysml.lite_model import build_lite_model
 
 _MODEL = """package D {
@@ -61,7 +64,7 @@ def _rows():
     model = build_lite_model(_MODEL, model_name="D")
     linker = RequirementLinker(model)
     return {r.req_id: r for r in build_matrix(
-        model, _REALIZATION, linker,
+        model, _REALIZATION, linker.compile_evidence(),
         l2_results=[{"req_id": "REQ_SAFE_003", "passed": True}],
     )}
 
@@ -98,7 +101,7 @@ def test_matrix_assigns_each_requirement_class_to_the_right_tier():
 def test_matrix_summary_and_markdown_surface_the_honest_gap():
     model = build_lite_model(_MODEL, model_name="D")
     linker = RequirementLinker(model)
-    rows = build_matrix(model, _REALIZATION, linker)
+    rows = build_matrix(model, _REALIZATION, linker.compile_evidence())
 
     s = summarize(rows)
     assert s["total"] == 6
@@ -114,7 +117,7 @@ def test_matrix_does_not_mark_planned_l2_as_verified_without_execution_result():
     model = build_lite_model(_MODEL, model_name="D")
     linker = RequirementLinker(model)
 
-    row = {r.req_id: r for r in build_matrix(model, _REALIZATION, linker)}["REQ_SAFE_003"]
+    row = {r.req_id: r for r in build_matrix(model, _REALIZATION, linker.compile_evidence())}["REQ_SAFE_003"]
 
     assert "l2_sitl_planned" in row.tiers
     assert "l2_sitl" not in row.tiers
@@ -127,11 +130,11 @@ def test_matrix_marks_executed_l2_pass_and_fail_from_results():
     linker = RequirementLinker(model)
 
     passed = {r.req_id: r for r in build_matrix(
-        model, _REALIZATION, linker,
+        model, _REALIZATION, linker.compile_evidence(),
         l2_results=[{"req_id": "REQ-SAFE-003", "passed": True}],
     )}["REQ_SAFE_003"]
     failed = {r.req_id: r for r in build_matrix(
-        model, _REALIZATION, linker,
+        model, _REALIZATION, linker.compile_evidence(),
         l2_results=[{"req_id": "REQ_SAFE_003", "passed": False}],
     )}["REQ_SAFE_003"]
 
@@ -149,7 +152,7 @@ def test_matrix_never_marks_an_unmet_datasheet_result_verified():
         }],
     }
 
-    row = {r.req_id: r for r in build_matrix(model, realization, linker)}["REQ_PERF_002"]
+    row = {r.req_id: r for r in build_matrix(model, realization, linker.compile_evidence())}["REQ_PERF_002"]
 
     assert row.status == "failed"
     assert "datasheet_failed" in row.tiers
@@ -166,7 +169,7 @@ def test_matrix_never_marks_an_unmet_forward_flight_result_verified():
         }],
     }
 
-    row = {r.req_id: r for r in build_matrix(model, realization, linker)}["REQ_FUNC_002"]
+    row = {r.req_id: r for r in build_matrix(model, realization, linker.compile_evidence())}["REQ_FUNC_002"]
 
     assert row.status == "failed"
     assert "forward_flight_failed" in row.tiers
@@ -185,20 +188,29 @@ def test_matrix_requires_an_l1_validation_result_before_marking_l1_verified():
         req_id="REQ_PERF_006", tier="L1",
         params=[SimpleNamespace(param_name="SCHED_LOOP_RATE")],
     )
-    linker = SimpleNamespace(
-        _req_texts={"REQ_PERF_006": "Control loop rate shall be at least 10 Hz."},
-        _satisfy_map={"REQ_PERF_006": ["Drone"]},
-        _guard_assignment={},
-        generate_test_specs=lambda: [spec],
+    evidence = RequirementEvidenceBundle(
+        model_digest=__import__("hashlib").sha256(
+            (model.to_sysml_text() or "").encode("utf-8")
+        ).hexdigest(),
+        requirement_texts={
+            "REQ_PERF_006": "Control loop rate shall be at least 10 Hz."
+        },
+        satisfying_parts={"REQ_PERF_006": ("Drone",)},
+        guard_assignments={},
+        test_specs=(spec,),
+        resolved_params=(),
+        parm_file="",
+        traceability_mismatches=(),
+        coverage={},
     )
 
-    planned = build_matrix(model, None, linker)[0]
+    planned = build_matrix(model, None, evidence)[0]
     passed = build_matrix(
-        model, None, linker,
+        model, None, evidence,
         l1_results=[{"req_id": "REQ_PERF_006", "passed": True}],
     )[0]
     failed = build_matrix(
-        model, None, linker,
+        model, None, evidence,
         l1_results=[{"req_id": "REQ_PERF_006", "passed": False}],
     )[0]
 
@@ -224,7 +236,7 @@ def test_matrix_does_not_treat_serial_protocol_as_postflight_report_evidence():
     )
     linker = RequirementLinker(model)
     rows = build_matrix(
-        model, None, linker,
+        model, None, linker.compile_evidence(),
         l1_results=[{"req_id": "REQ_FUNC_008", "passed": True}],
     )
 
@@ -252,7 +264,7 @@ def test_matrix_does_not_treat_unrelated_phase_machine_as_report_evidence():
         }""",
         model_name="D",
     )
-    row = build_matrix(model, None, RequirementLinker(model))[0]
+    row = build_matrix(model, None, RequirementLinker(model).compile_evidence())[0]
 
     assert row.status == "unassigned"
     assert "behavioral_sim" not in row.tiers
@@ -294,7 +306,7 @@ def test_matrix_accepts_reachable_postflight_report_action():
         }""",
         model_name="D",
     )
-    row = build_matrix(model, None, RequirementLinker(model))[0]
+    row = build_matrix(model, None, RequirementLinker(model).compile_evidence())[0]
 
     assert row.status == "partial"
     assert "behavioral_sim" in row.tiers
@@ -322,7 +334,7 @@ def test_compound_payload_requirement_requires_every_mandatory_clause():
         "note": "attitude/behaviour clauses are not covered at the datasheet tier",
     }]}
 
-    row = build_matrix(model, realization, RequirementLinker(model))[0]
+    row = build_matrix(model, realization, RequirementLinker(model).compile_evidence())[0]
     by_kind = {item.kind: item.status for item in row.obligations}
 
     assert row.status == "partial"
@@ -346,7 +358,7 @@ def test_behavioral_pass_cannot_verify_a_position_accuracy_threshold():
     model = build_lite_model(model_text, model_name="D")
 
     row = {item.req_id: item for item in build_matrix(
-        model, _REALIZATION, RequirementLinker(model)
+        model, _REALIZATION, RequirementLinker(model).compile_evidence()
     )}["REQ_OPER_001"]
 
     assert row.status == "partial"
@@ -400,7 +412,7 @@ def test_matrix_marks_trace_blocked_requirements():
         model_name="D",
     )
     linker = RequirementLinker(model)
-    rows = {r.req_id: r for r in build_matrix(model, None, linker)}
+    rows = {r.req_id: r for r in build_matrix(model, None, linker.compile_evidence())}
 
     assert rows["REQ_SAFE_003"].status == "blocked"
     assert any("TRACE blocked" in e for e in rows["REQ_SAFE_003"].evidence)
@@ -425,7 +437,7 @@ def test_matrix_marks_mixed_verified_and_gazebo_deferred_as_partial():
         ],
     }
     linker = RequirementLinker(model)
-    rows = {r.req_id: r for r in build_matrix(model, realization, linker)}
+    rows = {r.req_id: r for r in build_matrix(model, realization, linker.compile_evidence())}
 
     row = rows["REQ_PERF_005"]
     assert "forward_flight" in row.tiers
@@ -458,7 +470,7 @@ def test_matrix_consumes_gazebo_pass_and_fail_results():
              "message": "collision occurred"},
         ]
     }
-    rows = {r.req_id: r for r in build_matrix(model, None, linker, gazebo=gazebo)}
+    rows = {r.req_id: r for r in build_matrix(model, None, linker.compile_evidence(), gazebo=gazebo)}
 
     assert rows["REQ_SAFE_007"].status == "verified"
     assert rows["REQ_SAFE_007"].tiers == ("gazebo",)
@@ -487,7 +499,7 @@ def test_matrix_preserves_partial_gazebo_evidence_without_false_green():
         "message": "closed-loop flight passed with lumped drag calibration",
     }]}
 
-    row = {r.req_id: r for r in build_matrix(model, None, linker, gazebo=gazebo)}["REQ_PERF_004"]
+    row = {r.req_id: r for r in build_matrix(model, None, linker.compile_evidence(), gazebo=gazebo)}["REQ_PERF_004"]
     assert row.status == "partial"
     assert "gazebo_partial" in row.tiers
     assert "gazebo_deferred" in row.tiers

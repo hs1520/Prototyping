@@ -14,13 +14,15 @@ freezes it. It authors nothing from the runtime checker (F3): it imports neither
 """
 from __future__ import annotations
 
-from datetime import date
-import hashlib
-import json
-import re
 from typing import Any, Dict, List, Mapping
 
 from .ag_emitter import AGChainSpec
+from .frozen_artifact_protocol import (
+    canonical_artifact_digest,
+    has_review_markers,
+    is_sha256,
+    validate_frozen_envelope,
+)
 from ..utils.req_id import normalise_req_id
 
 ARCHITECTURE_BOUNDARY_ROLE = "ARCHITECTURE_BOUNDARY"
@@ -28,43 +30,13 @@ BOUNDARY_STATUS_DRAFT = "DRAFT_FOR_SUPERVISOR_REVIEW"
 BOUNDARY_STATUS_FROZEN = "FROZEN"
 _NAMESPACE = "BLACKBOARD_AG_V1"
 _SCHEMA_VERSION = "1.0"
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-
-
-def _valid_iso_date(value: Any) -> bool:
-    try:
-        date.fromisoformat(str(value))
-    except (TypeError, ValueError):
-        return False
-    return True
-
-
-def _canonical_digest(payload: Mapping[str, Any]) -> str:
-    raw = json.dumps(
-        payload, ensure_ascii=False, sort_keys=True,
-        separators=(",", ":"), default=str,
-    )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _has_review_markers(obj: Any) -> bool:
-    if isinstance(obj, dict):
-        if any(str(k).startswith("_") and "review" in str(k) for k in obj):
-            return True
-        return any(_has_review_markers(v) for v in obj.values())
-    if isinstance(obj, list):
-        return any(_has_review_markers(v) for v in obj)
-    return False
-
-
 def architecture_boundary_digest(boundary: Mapping[str, Any]) -> str:
     """Digest the boundary content, excluding the self-referential digest field.
 
     The gold cites this digest, so it must be stable and independent of the
     ``artifact_digest`` slot itself.
     """
-    content = {k: v for k, v in boundary.items() if k != "artifact_digest"}
-    return _canonical_digest(content)
+    return canonical_artifact_digest(boundary)
 
 
 def build_architecture_boundary_draft(
@@ -139,36 +111,16 @@ def validate_frozen_boundary(boundary: Mapping[str, Any]) -> List[str]:
     leftover review markers, and an ``artifact_digest`` that matches the content.
     Structure only — it never authors or second-guesses the architecture (F3).
     """
-    problems: List[str] = []
-    if boundary.get("artifact_role") != ARCHITECTURE_BOUNDARY_ROLE:
-        problems.append(f"artifact_role must be {ARCHITECTURE_BOUNDARY_ROLE!r}")
-    if boundary.get("experiment_namespace") != _NAMESPACE:
-        problems.append(f"experiment_namespace must be {_NAMESPACE!r}")
-    if boundary.get("schema_version") != _SCHEMA_VERSION:
-        problems.append(f"schema_version must be {_SCHEMA_VERSION!r}")
-    if boundary.get("status") != BOUNDARY_STATUS_FROZEN:
-        problems.append(f"status must be {BOUNDARY_STATUS_FROZEN!r} (still a draft?)")
-    chain_id = str(boundary.get("chain_id") or "")
-    source_requirement = str(boundary.get("source_requirement") or "")
-    if not chain_id:
-        problems.append("chain_id must be set")
-    if not source_requirement:
-        problems.append("source_requirement must be set")
-    elif chain_id and normalise_req_id(source_requirement) != chain_id:
-        problems.append("chain_id must match the normalised source_requirement")
+    problems = validate_frozen_envelope(
+        boundary,
+        role=ARCHITECTURE_BOUNDARY_ROLE,
+        schema_version=_SCHEMA_VERSION,
+        namespace=_NAMESPACE,
+        review_flags=("independent_architecture_review",),
+    )
     requirement_set_digest = str(boundary.get("requirement_set_digest") or "")
-    if not _SHA256_RE.fullmatch(requirement_set_digest):
+    if not is_sha256(requirement_set_digest):
         problems.append("requirement_set_digest must be a lowercase SHA-256 digest")
-    if not boundary.get("reviewer"):
-        problems.append("reviewer must be set to the reviewing supervisor")
-    if not _valid_iso_date(boundary.get("reviewed_date")):
-        problems.append("reviewed_date must be ISO YYYY-MM-DD")
-    review = boundary.get("review_protocol")
-    if not isinstance(review, Mapping):
-        problems.append("review_protocol must be an object")
-        review = {}
-    if review.get("independent_architecture_review") is not True:
-        problems.append("review_protocol.independent_architecture_review must be true")
     components = boundary.get("components")
     if not isinstance(components, list) or not components:
         problems.append("components must be a non-empty list")
@@ -241,7 +193,7 @@ def validate_frozen_boundary(boundary: Mapping[str, Any]) -> List[str]:
         problems.append(
             "allocations must exactly match component owner_usage/interface guarantees"
         )
-    if _has_review_markers(boundary):
+    if has_review_markers(boundary):
         problems.append(
             "leftover _review markers remain — drop them after confirming each field"
         )

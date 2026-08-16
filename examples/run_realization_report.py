@@ -35,7 +35,7 @@ from src.prototyping.artifact_store import (
 from src.app.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
 from src.prototyping.requirement_inputs import requirement_change_impact
-from src.sitl.dse_sitl_params import design_to_sitl_parm
+from src.sitl.parameter_projection import design_parm_lines
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -115,14 +115,10 @@ def require_authoritative_functional_closure(model_sysml: str) -> list[str]:
 def _parm_text(design) -> str | None:
     if design is None:
         return None
-    lines = list(design_to_sitl_parm(design))
-    present = {
-        line.split()[0] for line in lines
-        if line.strip() and not line.lstrip().startswith("#")
-    }
-    for key, value in (ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {}).items():
-        if key not in present:
-            lines.append(f"{key:<20} {value}")
+    lines = design_parm_lines(
+        design,
+        base_params=ARDUPILOT_COPTER_PROFILE.get("base_sitl_params") or {},
+    )
     return (
         "# Recommended design SITL params; native SITL is architecture-"
         "nondiscriminating for endurance.\n" + "\n".join(lines) + "\n"
@@ -263,10 +259,25 @@ def main() -> int:
                 dse_mode="variation",
                 phase9_hifi=None,
             )
+            # REQUIREMENT_INPUT=extract runs Phase 1 (LLM extraction from the
+            # system description) instead of loading the frozen set. Default is
+            # the frozen set, so every existing invocation is unchanged. Which
+            # path ran is recorded on the artefact as requirement_input.mode
+            # ("frozen" | "llm_extracted"), so the two are never confusable.
+            requirement_input_mode = os.environ.get("REQUIREMENT_INPUT", "frozen")
+            if requirement_input_mode not in ("frozen", "extract"):
+                raise SystemExit(
+                    f"REQUIREMENT_INPUT must be 'frozen' or 'extract', got "
+                    f"{requirement_input_mode!r}"
+                )
+            print(f"=== requirement input: {requirement_input_mode} ===", flush=True)
             gen = pipe.orchestrator.generate(
                 system_name=SYSTEM,
                 system_description=DRONE_DESCRIPTION,
-                frozen_requirements=DRONE_FROZEN_REQUIREMENTS,
+                frozen_requirements=(
+                    None if requirement_input_mode == "extract"
+                    else DRONE_FROZEN_REQUIREMENTS
+                ),
             )
             res = pipe.orchestrator.explore(gen, mcts_iterations=20)
             base, final_sysml, parm_text = _build_base_artifacts(

@@ -6,7 +6,7 @@ verification claims.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -23,13 +23,14 @@ from ..prototyping.action_effects import (
     PROFILE_VERSION as ACTION_SEMANTICS_PROFILE_VERSION,
 )
 from ..prototyping.evaluation_protocol import build_descriptive_pilot_manifest
+from ..prototyping.artifact_store import atomic_write_json
 from ..prototyping.experiment_arms import (
     REVISED_EXPERIMENT_NAMESPACE,
     R2_DETERMINISTIC_GENERATION_MODE,
     R2_DETERMINISTIC_INTERVENTION_VERSION,
     R2_INTERVENTION_VERSION_BY_MODE,
 )
-from ..agents.design_agent import DEFAULT_MAXIMUM_PLAN_ATTEMPTS
+from ..agents.typed_plan_generation import DEFAULT_MAXIMUM_PLAN_ATTEMPTS
 from ..prototyping.requirement_inputs import (
     build_frozen_requirement_set,
     normalise_requirement_id,
@@ -62,11 +63,7 @@ def _json_digest(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _write_json(path: Path, payload: Any) -> None:
-    path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+_write_json = atomic_write_json
 
 
 

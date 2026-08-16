@@ -23,13 +23,13 @@ Levels (strongest → weakest):
 """
 from __future__ import annotations
 
-import re
 from collections import Counter
 from typing import Dict, List
 
 from .domain_objective import endurance_target, mass_limit, range_requirement
 from .requirement_spec import extract_requirements
 from .functional_behavior import functional_behavior_status
+from .requirement_trace import dse_req_id, extract_requirement_trace
 from .safety_behavior import safety_behavior_status
 
 FLIGHT_VERIFIED = "flight-verified"
@@ -37,14 +37,6 @@ ANALYSIS_VERIFIED = "analysis-verified"
 QUANTITATIVE = "quantitative"
 ALLOCATED_ONLY = "allocated-only"
 UNALLOCATED = "unallocated"
-
-_REQDEF_RE = re.compile(r"requirement\s+def\s+(REQ[_-]\w+)")
-_SATISFY_RE = re.compile(r"satisfy\s+(?:requirement\s+)?(\w*REQ[_-]\w+)", re.IGNORECASE)
-
-
-def _norm(rid: str) -> str:
-    return rid.upper().replace("_", "-")
-
 
 def classify_requirement_coverage(model_text: str, requirements: List[str],
                                   endurance_req: str = "REQ-PERF-002",
@@ -54,8 +46,9 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
     actually FIRES. ``gazebo`` (a verify_recommended_design result dict) upgrades the endurance
     requirement to flight-verified when the recommended design flew stably AND a real motor+prop
     datasheet meets the endurance target."""
-    declared = [_norm(m.group(1)) for m in _REQDEF_RE.finditer(model_text)]
-    satisfied = {_norm(m.group(1)) for m in _SATISFY_RE.finditer(model_text)}
+    trace = extract_requirement_trace(model_text, requirements)
+    declared = trace.declared
+    satisfied = trace.satisfied
 
     # flight-verified (strongest): Gazebo FLEW the design and confirmed a physical property only
     # flight can show — (a) endurance (stable hover + real datasheet ≥ target), and (b) single-
@@ -64,18 +57,18 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
     if gazebo and gazebo.get("status") == "ok":
         et = endurance_target(requirements)
         if et > 0 and gazebo.get("datasheet_endurance_min", 0) >= et:
-            flight.add(_norm(endurance_req))
+            flight.add(dse_req_id(endurance_req))
         if gazebo.get("motor_failure_tolerant") and gazebo.get("redundancy_req"):
-            flight.add(_norm(gazebo["redundancy_req"]))
+            flight.add(dse_req_id(gazebo["redundancy_req"]))
 
     analysis = set()                                   # reqs an injected assert actually checks
     if "enduranceMeetsReq" in model_text and endurance_target(requirements) > 0:
-        analysis.add(_norm(endurance_req))
+        analysis.add(dse_req_id(endurance_req))
     if "mtowWithinReq" in model_text and mass_limit(requirements)[0]:
-        analysis.add(_norm(mass_limit(requirements)[0]))
+        analysis.add(dse_req_id(mass_limit(requirements)[0]))
     if "rangeMeetsReq" in model_text and range_requirement(requirements)[0]:
-        analysis.add(_norm(range_requirement(requirements)[0]))
-    quant = {_norm(s.req_id) for s in extract_requirements(requirements)}
+        analysis.add(dse_req_id(range_requirement(requirements)[0]))
+    quant = {dse_req_id(s.req_id) for s in extract_requirements(requirements)}
     # safety + functional requirements get a BEHAVIOURAL status from state-machine reachability
     # (safety: fail-safe reachable; functional: response action reachable), upgrading them out
     # of allocated-only. Safety takes precedence when a req qualifies for both.

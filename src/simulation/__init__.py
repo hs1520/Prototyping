@@ -41,6 +41,11 @@ from .connectivity_fixer import (
     merge_connects,
     build_connectivity_prompt,
     extract_connect_lines,
+    ConnectViolation,
+    ConnectivityAudit,
+    audit_connects,
+    fix_signal_directions,
+    fix_missing_connects,
 )
 
 __all__ = [
@@ -74,4 +79,9 @@ __all__ = [
     "merge_connects",
     "build_connectivity_prompt",
     "extract_connect_lines",
+    "ConnectViolation",
+    "ConnectivityAudit",
+    "audit_connects",
+    "fix_signal_directions",
+    "fix_missing_connects",
 ]

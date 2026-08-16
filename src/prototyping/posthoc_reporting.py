@@ -19,6 +19,7 @@ from statistics import mean
 from typing import Any, Iterable, Mapping
 
 from .ag_evaluation import evaluate_ag_against_gold
+from .artifact_store import atomic_write_json, read_json_object
 from .evaluation_protocol import build_descriptive_pilot_manifest
 from .evaluation_readiness import (
     artifact_digest,
@@ -31,19 +32,8 @@ REPORT_SCHEMA_VERSION = "1.0"
 REPORT_ROLE = "POSTHOC_DESCRIPTIVE_PILOT_REPORT"
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"JSON artifact must be an object: {path}")
-    return value
-
-
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(dict(value), indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+_read_json = read_json_object
+_write_json = atomic_write_json
 
 
 def _index(

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, Mapping, Sequence
 
 from .action_effects import PlannedActionEffect, parse_action_effects
@@ -34,19 +34,16 @@ from .structural_obligations import (
 from .requirement_semantics import (
     RequirementSemanticObligation,
     SemanticBindingPlan,
-    compile_requirement_semantic_obligations,
     materialize_semantic_bindings,
-    quantity_type_for_unit,
-    semantic_binding_matches_subject,
 )
 from .namespace_integrity import collect_package_definitions
 from .activated_constraint_plan import (
     AttributePlan,
+    ConstraintPlanningContext,
     ConstraintPlan,
+    compile_constraint_plan,
     materialize_planned_attributes,
     materialize_planned_constraints,
-    state_execution_advisories,
-    validate_constraint_plan,
 )
 from .planned_behavior import (
     PlannedBehavior,
@@ -58,11 +55,6 @@ from ..utils.sysml_text_utils import find_block_end
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_]\w*$")
-_QUALIFIED_TYPE = re.compile(
-    r"^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*$"
-)
-_REQ_ID = re.compile(r"\bREQ[-_][A-Za-z]+[-_]\d+\b", re.IGNORECASE)
-_GENERIC_PORT_TYPES = {"DataPort", "StatusPort", "CommandPort"}
 PLAN_APPLICATION_HISTORY_KEY = "plan_application_history"
 _STANDARD_LIBRARY_TYPES = {
     "ScalarValues": {
@@ -396,9 +388,11 @@ def _definition_contract_report(
 
 
 def _req_ids(values: Iterable[str]) -> tuple[str, ...]:
+    from ..utils.req_id import iter_req_ids
+
     found: list[str] = []
     for value in values:
-        for match in _REQ_ID.findall(str(value)):
+        for match in iter_req_ids(str(value)):
             req_id = normalise_req_id(match)
             if req_id not in found:
                 found.append(req_id)
@@ -428,6 +422,15 @@ class ComponentPlan:
     requirements: tuple[str, ...]
     ports: tuple[PortPlan, ...]
     attributes: tuple[AttributePlan, ...] = ()
+    # A passive component is a purely structural body -- an airframe, a
+    # chassis, an enclosure -- that carries other parts but exchanges no
+    # signals, commands or power in the model. The planner declares it, with a
+    # reason, so that a downstream check does not silently expect the body to
+    # be wired (the reachability simulator used to require a power path into
+    # every structural part) and the planner is not forced to invent a port for
+    # a part that has none. A passive component may plan no ports.
+    passive: bool = False
+    passive_rationale: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -436,6 +439,8 @@ class ComponentPlan:
             "requirements": list(self.requirements),
             "ports": [item.to_dict() for item in self.ports],
             "attributes": [item.to_dict() for item in self.attributes],
+            "passive": self.passive,
+            "passive_rationale": self.passive_rationale,
         }
 
 
@@ -461,6 +466,508 @@ class ConnectionPlan:
             "item_type": self.item_type,
             "requirements": list(self.requirements),
         }
+
+
+@dataclass(frozen=True)
+class _ArchitectureCompilation:
+    components: tuple[ComponentPlan, ...]
+    connections: tuple[ConnectionPlan, ...]
+    port_lookup: Mapping[tuple[str, str], PortPlan]
+    connection_keys: frozenset[tuple[str, str, str, str]]
+    allocated_requirements: frozenset[str]
+    allocated_component_requirements: frozenset[tuple[str, str]]
+
+
+def _compile_architecture_section(
+    payload: Mapping[str, Any],
+    requirements: Sequence[str],
+    issues: list[str],
+) -> _ArchitectureCompilation:
+    """Parse and validate components, ports, allocation and connections."""
+    raw_components = payload.get("components")
+    raw_connections = payload.get("connections")
+    components: list[ComponentPlan] = []
+    if not isinstance(raw_components, Sequence) or isinstance(
+        raw_components, (str, bytes)
+    ):
+        raw_components = ()
+        issues.append("components must be a list")
+    for index, raw in enumerate(raw_components):
+        if not isinstance(raw, Mapping):
+            issues.append(f"components[{index}] must be an object")
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not _IDENTIFIER.fullmatch(name):
+            issues.append(f"components[{index}].name is not a SysML identifier")
+            continue
+        responsibility = str(raw.get("responsibility") or "").strip()
+        if not responsibility:
+            issues.append(f"{name} has no stated responsibility")
+        ports: list[PortPlan] = []
+        for p_index, port in enumerate(raw.get("ports") or ()):
+            if not isinstance(port, Mapping):
+                issues.append(f"{name}.ports[{p_index}] must be an object")
+                continue
+            port_name = str(port.get("name") or "").strip()
+            direction = str(port.get("direction") or "").strip().lower()
+            port_type = str(
+                port.get("type") or port.get("port_type") or "DataPort"
+            ).strip()
+            if not _IDENTIFIER.fullmatch(port_name):
+                issues.append(f"{name}.ports[{p_index}] has invalid name")
+                continue
+            if direction not in {"in", "out", "inout"}:
+                issues.append(
+                    f"{name}.{port_name} has invalid direction {direction!r}"
+                )
+                continue
+            if not _IDENTIFIER.fullmatch(port_type):
+                issues.append(f"{name}.{port_name} has invalid port type")
+                continue
+            ports.append(PortPlan(
+                name=port_name,
+                direction=direction,
+                port_type=port_type,
+                external=bool(port.get("external", False)),
+            ))
+        port_names = [item.name for item in ports]
+        if len(set(port_names)) != len(port_names):
+            issues.append(f"{name} port names must be unique")
+        attributes: list[AttributePlan] = []
+        for attribute in raw.get("attributes") or ():
+            if isinstance(attribute, Mapping) and attribute.get("name"):
+                planned_attribute = AttributePlan.from_dict(
+                    attribute,
+                    requirements=requirements,
+                )
+                if not _IDENTIFIER.fullmatch(planned_attribute.name):
+                    issues.append(
+                        f"{name} attribute name "
+                        f"{planned_attribute.name!r} is not a SysML identifier"
+                    )
+                    continue
+                attributes.append(planned_attribute)
+        attribute_names = [item.name for item in attributes]
+        if len(set(attribute_names)) != len(attribute_names):
+            issues.append(f"{name} attribute names must be unique")
+        for member_name in sorted(set(port_names) & set(attribute_names)):
+            issues.append(
+                f"{name} direct member {member_name!r} cannot be both "
+                "a port and an attribute"
+            )
+        passive = bool(raw.get("passive", False))
+        passive_rationale = str(raw.get("passive_rationale") or "").strip()
+        if passive and not passive_rationale:
+            issues.append(
+                f"{name} is declared passive without a passive_rationale; a "
+                "decision to plan no interfaces for a component must say why"
+            )
+        if passive and ports:
+            issues.append(
+                f"{name} is declared passive but plans {len(ports)} port(s); a "
+                "passive structural body exchanges nothing, so either drop the "
+                "ports or drop the passive declaration"
+            )
+        components.append(ComponentPlan(
+            name=name,
+            responsibility=responsibility,
+            requirements=_req_ids(raw.get("requirements") or ()),
+            ports=tuple(ports),
+            attributes=tuple(attributes),
+            passive=passive,
+            passive_rationale=passive_rationale,
+        ))
+
+    by_component = {item.name: item for item in components}
+    if len(by_component) != len(components):
+        issues.append("component names must be unique")
+    port_lookup = {
+        (component.name, port.name): port
+        for component in components
+        for port in component.ports
+    }
+    connections: list[ConnectionPlan] = []
+    if not isinstance(raw_connections, Sequence) or isinstance(
+        raw_connections, (str, bytes)
+    ):
+        raw_connections = ()
+        issues.append("connections must be a list")
+    driven_inputs: set[tuple[str, str]] = set()
+    connection_keys: set[tuple[str, str, str, str]] = set()
+    for index, raw in enumerate(raw_connections):
+        if not isinstance(raw, Mapping):
+            issues.append(f"connections[{index}] must be an object")
+            continue
+        source_endpoint = raw.get("source") or {}
+        target_endpoint = raw.get("target") or {}
+        if not isinstance(source_endpoint, Mapping) or not isinstance(
+            target_endpoint, Mapping
+        ):
+            issues.append(f"connections[{index}] endpoints must be objects")
+            continue
+        sc = str(source_endpoint.get("component") or "").strip()
+        sp = str(source_endpoint.get("port") or "").strip()
+        tc = str(target_endpoint.get("component") or "").strip()
+        tp = str(target_endpoint.get("port") or "").strip()
+        source_port = port_lookup.get((sc, sp))
+        target_port = port_lookup.get((tc, tp))
+        if source_port is None or target_port is None:
+            issues.append(
+                f"connections[{index}] references an undeclared endpoint "
+                f"{sc}.{sp} -> {tc}.{tp}"
+            )
+            continue
+        if source_port.direction not in {"out", "inout"}:
+            issues.append(f"{sc}.{sp} cannot be a connection source")
+        if target_port.direction not in {"in", "inout"}:
+            issues.append(f"{tc}.{tp} cannot be a connection target")
+        if source_port.port_type != target_port.port_type:
+            issues.append(f"{sc}.{sp} and {tc}.{tp} have different port types")
+        item_type = str(raw.get("item_type") or source_port.port_type).strip()
+        if not _IDENTIFIER.fullmatch(item_type):
+            issues.append(f"connections[{index}] has invalid item_type")
+        elif item_type != source_port.port_type:
+            issues.append(
+                f"connections[{index}] item_type {item_type} does not match "
+                f"endpoint type {source_port.port_type}"
+            )
+        target_key = (tc, tp)
+        if target_port.direction == "in" and target_key in driven_inputs:
+            issues.append(f"{tc}.{tp} has more than one planned driver")
+        driven_inputs.add(target_key)
+        connection_key = (sc, sp, tc, tp)
+        if connection_key in connection_keys:
+            issues.append(f"duplicate planned connection {sc}.{sp} -> {tc}.{tp}")
+        connection_keys.add(connection_key)
+        connections.append(ConnectionPlan(
+            source_component=sc,
+            source_port=sp,
+            target_component=tc,
+            target_port=tp,
+            item_type=item_type,
+            requirements=_req_ids(raw.get("requirements") or ()),
+        ))
+
+    declared_requirements = set(_req_ids(requirements))
+    allocated_requirements = {
+        req_id for component in components for req_id in component.requirements
+    }
+    allocated_component_requirements = {
+        (component.name, requirement)
+        for component in components
+        for requirement in component.requirements
+    }
+    for req_id in sorted(declared_requirements - allocated_requirements):
+        issues.append(f"{req_id} has no responsible component")
+    if declared_requirements:
+        for req_id in sorted(allocated_requirements - declared_requirements):
+            issues.append(f"{req_id} is allocated but not declared")
+        connection_requirements = {
+            req_id for connection in connections for req_id in connection.requirements
+        }
+        for req_id in sorted(connection_requirements - declared_requirements):
+            issues.append(f"{req_id} traces a connection but is not declared")
+
+    consumed = {(item.target_component, item.target_port) for item in connections}
+    produced = {(item.source_component, item.source_port) for item in connections}
+    for component in components:
+        if not component.ports and not component.passive:
+            issues.append(
+                f"{component.name} has no planned ports; if it is a purely "
+                "structural body that exchanges nothing, declare it passive "
+                "with a passive_rationale instead of inventing a port"
+            )
+        for port in component.ports:
+            key = (component.name, port.name)
+            if port.external:
+                continue
+            if port.direction == "in" and key not in consumed:
+                issues.append(f"{component.name}.{port.name} has no planned driver")
+            if port.direction == "out" and key not in produced:
+                issues.append(f"{component.name}.{port.name} has no planned consumer")
+
+    return _ArchitectureCompilation(
+        components=tuple(components),
+        connections=tuple(connections),
+        port_lookup=port_lookup,
+        connection_keys=frozenset(connection_keys),
+        allocated_requirements=frozenset(allocated_requirements),
+        allocated_component_requirements=frozenset(
+            allocated_component_requirements
+        ),
+    )
+
+
+def _reachable_planned_states(behavior: PlannedBehavior) -> set[str]:
+    """States reachable from the planned initial state along its transitions."""
+    edges: dict[str, list[str]] = {}
+    for transition in behavior.transitions:
+        edges.setdefault(transition.source, []).append(transition.target)
+    reachable = {behavior.initial_state} if behavior.initial_state else set()
+    frontier = list(reachable)
+    while frontier:
+        for target in edges.get(frontier.pop(), ()):
+            if target not in reachable:
+                reachable.add(target)
+                frontier.append(target)
+    return reachable
+
+
+def _validate_planned_functional_responses(
+    requirements: Sequence[str],
+    planned_behaviors: Sequence[PlannedBehavior],
+    components: Sequence[ComponentPlan],
+    realizations: Sequence["RequirementRealizationPlan"],
+    issues: list[str],
+) -> None:
+    """Oblige the plan to carry the response the closure gate will demand.
+
+    The terminal gate credits a functional requirement only when a reachable
+    state produces its intent's response, and only event symbols this plan
+    declares are legal ``accept`` targets. When the plan omits the behavior,
+    the gate asks for a repair whose trigger cannot exist in the frozen
+    registry, so every attempt is refused and the run fails closed with no way
+    out. Raising it here instead puts the obligation where it can still be
+    met — in the plan the LLM is about to be asked to correct.
+
+    Which response a requirement obliges is the planner's recorded decision
+    (``response_intent`` on its realization), not a keyword inference: the
+    same LLM that plans the behaviours decides what each functional
+    requirement asks for, in a closed vocabulary the gate can check, and may
+    record "none" with a reason. A functional realization that records no
+    intent, an unknown one, or "none" without a rationale is a plan defect.
+    """
+    from ..dse.functional_behavior import (
+        RESPONSE_INTENTS, is_safety_req, planned_response_intent,
+    )
+
+    owners_by_requirement: dict[str, set[str]] = {}
+    for component in components:
+        for req_id in component.requirements:
+            owners_by_requirement.setdefault(req_id, set()).add(component.name)
+
+    intent_by_requirement: dict[str, str] = {}
+    rationale_by_requirement: dict[str, str] = {}
+    behavior_by_requirement: dict[str, tuple[str, str]] = {}
+    for realization in realizations:
+        intent_by_requirement[realization.requirement_id] = (
+            realization.response_intent
+        )
+        rationale_by_requirement[realization.requirement_id] = (
+            realization.response_intent_rationale
+        )
+        if realization.behavior_name:
+            behavior_by_requirement[realization.requirement_id] = (
+                realization.owner_component, realization.behavior_name,
+            )
+
+    for source_requirement in requirements:
+        source_text = " ".join(str(source_requirement or "").split())
+        for req_id in _req_ids((source_text,)):
+            if "FUNC" not in req_id.upper() or is_safety_req(
+                req_id, source_text.lower()
+            ):
+                continue
+            recorded = intent_by_requirement.get(req_id) or None
+            # A missing realization, or one with a blank intent, means the
+            # planner recorded nothing: fall back to keyword inference below
+            # rather than refusing, so plans archived before the field
+            # existed remain valid and the check still fires for a FUNC
+            # requirement the plan omitted altogether.
+            if recorded is not None and recorded not in RESPONSE_INTENTS:
+                issues.append(
+                    f"{req_id} response_intent {recorded!r} is not one of "
+                    f"{sorted(RESPONSE_INTENTS)}"
+                )
+                continue
+            if recorded == "none" and not rationale_by_requirement.get(req_id):
+                issues.append(
+                    f"{req_id} records response_intent 'none' without a "
+                    "response_intent_rationale; a decision to plan no "
+                    "response must say why"
+                )
+                continue
+            intent = planned_response_intent(req_id, source_text, recorded)
+            if intent is None:
+                continue
+            intent_name, markers = intent
+            satisfied = False
+            # The behaviour that answers a requirement is the one its
+            # realization names (owner + behavior_name); provenance is the
+            # fallback for realizations that name none. Requiring the
+            # provenance tag to equal this requirement made a shared state
+            # machine -- navigate and return as two states of one behaviour --
+            # unable to satisfy the second requirement it serves, because a
+            # behaviour carries exactly one provenance requirement.
+            named = behavior_by_requirement.get(req_id)
+            for behavior in planned_behaviors:
+                if named is not None:
+                    if (behavior.owner, behavior.behavior_id) != named:
+                        continue
+                elif behavior.source_requirement_id != req_id:
+                    continue
+                owners = owners_by_requirement.get(req_id)
+                if owners and behavior.owner not in owners:
+                    continue
+                reachable = _reachable_planned_states(behavior)
+                for state in behavior.states:
+                    if state.state_id not in reachable:
+                        continue
+                    response = " ".join(filter(None, (
+                        state.entry_action, state.do_action,
+                    ))).lower()
+                    if any(marker in response for marker in markers):
+                        satisfied = True
+                        break
+                if satisfied:
+                    break
+            if not satisfied:
+                issues.append(
+                    f"{req_id} needs a planned {intent_name} response: the "
+                    "responsible component must own a behavior whose "
+                    "reachable state runs an action named for that response, "
+                    "otherwise no legal accept trigger exists for it later"
+                )
+
+
+def _validate_timed_functional_paths(
+    requirements: Sequence[str],
+    planned_behaviors: Sequence[PlannedBehavior],
+    components: Sequence[ComponentPlan],
+    constraint_plans: Sequence[ConstraintPlan],
+    issues: list[str],
+) -> None:
+    """Validate source-linked response and timing evidence as one rule set."""
+    components_by_name = {component.name: component for component in components}
+    for source_requirement in requirements:
+        source_text = " ".join(str(source_requirement or "").split())
+        source_low = source_text.lower()
+        source_ids = _req_ids((source_text,))
+        deadline = re.search(
+            r"\bwithin\s+(\d+(?:\.\d+)?)\s*(?:seconds?|s)\b",
+            source_text,
+            flags=re.IGNORECASE,
+        )
+        if not deadline:
+            continue
+        for req_id in source_ids:
+            if "FUNC" not in req_id:
+                continue
+            if "health report" in source_low and any(
+                token in source_low for token in ("landing", "post-flight")
+            ):
+                family = "report"
+            elif "waypoint" in source_low and any(
+                token in source_low
+                for token in (
+                    "modification command",
+                    "waypoint-modification",
+                    "revised waypoint",
+                )
+            ):
+                family = "waypoint"
+            else:
+                continue
+            matching_behaviors = [
+                behavior
+                for behavior in planned_behaviors
+                if behavior.source_requirement_id == req_id
+            ]
+            behavior_chain_ok = False
+            for behavior in matching_behaviors:
+                response_states = {
+                    state.state_id: state
+                    for state in behavior.states
+                    if state.role == "RESPONSE"
+                    and (state.entry_action or state.do_action)
+                }
+                for transition in behavior.transitions:
+                    state = response_states.get(transition.target)
+                    if state is None:
+                        continue
+                    action_text = " ".join(filter(None, (
+                        state.entry_action, state.do_action,
+                    ))).lower()
+                    trigger_text = transition.trigger.lower()
+                    if family == "report":
+                        behavior_chain_ok = (
+                            any(token in action_text for token in (
+                                "report", "health", "postflight", "telemetry",
+                            ))
+                            and "land" in trigger_text
+                            and "complet" in trigger_text
+                        )
+                    else:
+                        behavior_chain_ok = (
+                            any(token in action_text for token in (
+                                "waypoint", "sequence", "revise", "update",
+                                "navigate",
+                            ))
+                            and "waypoint" in trigger_text
+                            and any(token in trigger_text for token in (
+                                "modification", "revision", "revised", "update",
+                            ))
+                            and (
+                                "valid" not in source_low
+                                or "valid" in trigger_text
+                            )
+                        )
+                    if behavior_chain_ok:
+                        break
+                if behavior_chain_ok:
+                    break
+            if not behavior_chain_ok:
+                issues.append(
+                    f"{req_id} timed functional plan requires a "
+                    f"source-linked reachable {family} response with "
+                    "the qualified causal trigger"
+                )
+
+            expected_seconds = float(deadline.group(1))
+            timing_attributes: set[tuple[str, str]] = set()
+            for behavior in matching_behaviors:
+                component = components_by_name.get(behavior.owner)
+                if component is None:
+                    continue
+                for attribute in component.attributes:
+                    value_match = re.search(
+                        r"[-+]?\d+(?:\.\d+)?",
+                        str(attribute.initial_value or ""),
+                    )
+                    name_low = attribute.name.lower()
+                    if (
+                        value_match
+                        and abs(
+                            float(value_match.group(0)) - expected_seconds
+                        ) < 1e-9
+                        and attribute.unit.lower() == "s"
+                        and family in name_low
+                        and any(token in name_low for token in (
+                            "latency", "delay", "time",
+                        ))
+                    ):
+                        timing_attributes.add((behavior.owner, attribute.name))
+            matching_constraints = [
+                constraint
+                for constraint in constraint_plans
+                if constraint.source_requirement_id == req_id
+            ]
+            if not timing_attributes:
+                issues.append(
+                    f"{req_id} timed functional plan requires a "
+                    f"source-linked {family} latency bound of "
+                    f"{deadline.group(1)} [s] on the behavior owner"
+                )
+            elif not any(
+                (constraint.owner, constraint.lhs) in timing_attributes
+                or (constraint.owner, constraint.rhs) in timing_attributes
+                for constraint in matching_constraints
+            ):
+                issues.append(
+                    f"{req_id} timed functional plan requires a "
+                    "source-linked constraint that references its "
+                    "planned latency bound"
+                )
 
 
 @dataclass
@@ -568,201 +1075,18 @@ class ModelGenerationPlan:
         require_source_anchored_paths: bool = False,
         ag_behavior_plan: BehaviorObligationPlan | None = None,
     ) -> "ModelGenerationPlan":
-        raw_components = payload.get("components")
-        raw_connections = payload.get("connections")
         issues: list[str] = []
-        components: list[ComponentPlan] = []
-        if not isinstance(raw_components, Sequence) or isinstance(
-            raw_components, (str, bytes)
-        ):
-            raw_components = ()
-            issues.append("components must be a list")
-        for index, raw in enumerate(raw_components):
-            if not isinstance(raw, Mapping):
-                issues.append(f"components[{index}] must be an object")
-                continue
-            name = str(raw.get("name") or "").strip()
-            if not _IDENTIFIER.fullmatch(name):
-                issues.append(f"components[{index}].name is not a SysML identifier")
-                continue
-            responsibility = str(raw.get("responsibility") or "").strip()
-            if not responsibility:
-                issues.append(f"{name} has no stated responsibility")
-            ports: list[PortPlan] = []
-            for p_index, port in enumerate(raw.get("ports") or ()):
-                if not isinstance(port, Mapping):
-                    issues.append(f"{name}.ports[{p_index}] must be an object")
-                    continue
-                port_name = str(port.get("name") or "").strip()
-                direction = str(port.get("direction") or "").strip().lower()
-                port_type = str(
-                    port.get("type") or port.get("port_type") or "DataPort"
-                ).strip()
-                if not _IDENTIFIER.fullmatch(port_name):
-                    issues.append(f"{name}.ports[{p_index}] has invalid name")
-                    continue
-                if direction not in {"in", "out", "inout"}:
-                    issues.append(
-                        f"{name}.{port_name} has invalid direction {direction!r}"
-                    )
-                    continue
-                if not _IDENTIFIER.fullmatch(port_type):
-                    issues.append(f"{name}.{port_name} has invalid port type")
-                    continue
-                ports.append(PortPlan(
-                    name=port_name,
-                    direction=direction,
-                    port_type=port_type,
-                    external=bool(port.get("external", False)),
-                ))
-            port_names = [item.name for item in ports]
-            if len(set(port_names)) != len(port_names):
-                issues.append(f"{name} port names must be unique")
-            attributes: list[AttributePlan] = []
-            for attribute in raw.get("attributes") or ():
-                if isinstance(attribute, Mapping) and attribute.get("name"):
-                    planned_attribute = AttributePlan.from_dict(
-                        attribute,
-                        requirements=requirements,
-                    )
-                    if not _IDENTIFIER.fullmatch(planned_attribute.name):
-                        issues.append(
-                            f"{name} attribute name "
-                            f"{planned_attribute.name!r} is not a SysML identifier"
-                        )
-                        continue
-                    attributes.append(planned_attribute)
-            attribute_names = [item.name for item in attributes]
-            if len(set(attribute_names)) != len(attribute_names):
-                issues.append(f"{name} attribute names must be unique")
-            for member_name in sorted(
-                set(port_names) & set(attribute_names)
-            ):
-                issues.append(
-                    f"{name} direct member {member_name!r} cannot be both "
-                    "a port and an attribute"
-                )
-            components.append(ComponentPlan(
-                name=name,
-                responsibility=responsibility,
-                requirements=_req_ids(raw.get("requirements") or ()),
-                ports=tuple(ports),
-                attributes=tuple(attributes),
-            ))
-
-        by_component = {item.name: item for item in components}
-        if len(by_component) != len(components):
-            issues.append("component names must be unique")
-        port_lookup = {
-            (component.name, port.name): port
-            for component in components
-            for port in component.ports
-        }
-        connections: list[ConnectionPlan] = []
-        if not isinstance(raw_connections, Sequence) or isinstance(
-            raw_connections, (str, bytes)
-        ):
-            raw_connections = ()
-            issues.append("connections must be a list")
-        driven_inputs: set[tuple[str, str]] = set()
-        connection_keys: set[tuple[str, str, str, str]] = set()
-        for index, raw in enumerate(raw_connections):
-            if not isinstance(raw, Mapping):
-                issues.append(f"connections[{index}] must be an object")
-                continue
-            source_endpoint = raw.get("source") or {}
-            target_endpoint = raw.get("target") or {}
-            if not isinstance(source_endpoint, Mapping) or not isinstance(
-                target_endpoint, Mapping
-            ):
-                issues.append(f"connections[{index}] endpoints must be objects")
-                continue
-            sc = str(source_endpoint.get("component") or "").strip()
-            sp = str(source_endpoint.get("port") or "").strip()
-            tc = str(target_endpoint.get("component") or "").strip()
-            tp = str(target_endpoint.get("port") or "").strip()
-            source_port = port_lookup.get((sc, sp))
-            target_port = port_lookup.get((tc, tp))
-            if source_port is None or target_port is None:
-                issues.append(
-                    f"connections[{index}] references an undeclared endpoint "
-                    f"{sc}.{sp} -> {tc}.{tp}"
-                )
-                continue
-            if source_port.direction not in {"out", "inout"}:
-                issues.append(f"{sc}.{sp} cannot be a connection source")
-            if target_port.direction not in {"in", "inout"}:
-                issues.append(f"{tc}.{tp} cannot be a connection target")
-            if source_port.port_type != target_port.port_type:
-                issues.append(
-                    f"{sc}.{sp} and {tc}.{tp} have different port types"
-                )
-            item_type = str(raw.get("item_type") or source_port.port_type).strip()
-            if not _IDENTIFIER.fullmatch(item_type):
-                issues.append(f"connections[{index}] has invalid item_type")
-            elif item_type != source_port.port_type:
-                issues.append(
-                    f"connections[{index}] item_type {item_type} does not match "
-                    f"endpoint type {source_port.port_type}"
-                )
-            target_key = (tc, tp)
-            if target_port.direction == "in" and target_key in driven_inputs:
-                issues.append(f"{tc}.{tp} has more than one planned driver")
-            driven_inputs.add(target_key)
-            connection_key = (sc, sp, tc, tp)
-            if connection_key in connection_keys:
-                issues.append(
-                    f"duplicate planned connection {sc}.{sp} -> {tc}.{tp}"
-                )
-            connection_keys.add(connection_key)
-            connections.append(ConnectionPlan(
-                source_component=sc,
-                source_port=sp,
-                target_component=tc,
-                target_port=tp,
-                item_type=item_type,
-                requirements=_req_ids(raw.get("requirements") or ()),
-            ))
-
-        declared_requirements = set(_req_ids(requirements))
-        allocated_requirements = {
-            req_id for component in components for req_id in component.requirements
-        }
-        allocated_component_requirements = {
-            (component.name, requirement)
-            for component in components
-            for requirement in component.requirements
-        }
-        for req_id in sorted(declared_requirements - allocated_requirements):
-            issues.append(f"{req_id} has no responsible component")
-        if declared_requirements:
-            for req_id in sorted(allocated_requirements - declared_requirements):
-                issues.append(f"{req_id} is allocated but not declared")
-            connection_requirements = {
-                req_id
-                for connection in connections
-                for req_id in connection.requirements
-            }
-            for req_id in sorted(connection_requirements - declared_requirements):
-                issues.append(f"{req_id} traces a connection but is not declared")
-
-        consumed = {
-            (item.target_component, item.target_port) for item in connections
-        }
-        produced = {
-            (item.source_component, item.source_port) for item in connections
-        }
-        for component in components:
-            if not component.ports:
-                issues.append(f"{component.name} has no planned ports")
-            for port in component.ports:
-                key = (component.name, port.name)
-                if port.external:
-                    continue
-                if port.direction == "in" and key not in consumed:
-                    issues.append(f"{component.name}.{port.name} has no planned driver")
-                if port.direction == "out" and key not in produced:
-                    issues.append(f"{component.name}.{port.name} has no planned consumer")
+        architecture = _compile_architecture_section(
+            payload, requirements, issues
+        )
+        components = list(architecture.components)
+        connections = list(architecture.connections)
+        port_lookup = architecture.port_lookup
+        connection_keys = architecture.connection_keys
+        allocated_requirements = architecture.allocated_requirements
+        allocated_component_requirements = (
+            architecture.allocated_component_requirements
+        )
 
         behavior_obligations = tuple(
             BehaviorObligation.from_dict(dict(item))
@@ -776,348 +1100,27 @@ class ModelGenerationPlan:
             )
             if str(item).strip()
         )
-        archived_semantic_obligations = tuple(
-            RequirementSemanticObligation.from_dict(dict(item))
-            for item in (payload.get("semantic_obligations") or ())
-            if isinstance(item, Mapping)
-        )
-        semantic_obligations = (
-            compile_requirement_semantic_obligations(requirements)
-            if requirements else archived_semantic_obligations
-        )
-        raw_semantic_bindings = payload.get("semantic_bindings")
-        if not isinstance(raw_semantic_bindings, Sequence) or isinstance(
-            raw_semantic_bindings, (str, bytes)
-        ):
-            raw_semantic_bindings = ()
-            if semantic_obligations:
-                issues.append(
-                    "semantic_bindings must contain one typed binding for "
-                    "each semantic obligation"
-                )
-        semantic_bindings: list[SemanticBindingPlan] = []
-        obligations_by_id = {
-            item.obligation_id: item for item in semantic_obligations
-        }
-        seen_binding_ids: set[str] = set()
-        port_payloads: dict[str, tuple[str, str]] = {}
-        item_features: dict[
-            tuple[str, str], tuple[str, str]
-        ] = {}
-        for index, raw in enumerate(raw_semantic_bindings):
-            if not isinstance(raw, Mapping):
-                issues.append(
-                    f"semantic_bindings[{index}] must be an object"
-                )
-                continue
-            binding = SemanticBindingPlan.from_dict(raw)
-            semantic_bindings.append(binding)
-            prefix = f"semantic_bindings[{index}]"
-            obligation = obligations_by_id.get(binding.obligation_id)
-            if obligation is None:
-                issues.append(
-                    f"{prefix} references unknown obligation "
-                    f"{binding.obligation_id!r}"
-                )
-            elif binding.requirement_id != obligation.requirement_id:
-                issues.append(
-                    f"{prefix} requirement_id does not match "
-                    f"{binding.obligation_id}"
-                )
-            if binding.obligation_id in seen_binding_ids:
-                issues.append(
-                    f"duplicate semantic binding for "
-                    f"{binding.obligation_id}"
-                )
-            seen_binding_ids.add(binding.obligation_id)
-
-            identifier_fields = {
-                "source.component": binding.source_component,
-                "source.port": binding.source_port,
-                "target.component": binding.target_component,
-                "target.port": binding.target_port,
-                "payload.port_type": binding.port_type,
-                "payload.port_feature": binding.port_feature,
-                "payload.item_type": binding.item_type,
-                "payload.item_feature": binding.item_feature,
-                "target.runtime_attribute": binding.runtime_attribute,
-                "constraint.threshold_attribute": (
-                    binding.threshold_attribute
+        compiled_constraints = compile_constraint_plan(
+            payload,
+            requirements=requirements,
+            context=ConstraintPlanningContext(
+                components=components,
+                port_lookup=port_lookup,
+                connection_keys=connection_keys,
+                allocated_component_requirements=(
+                    allocated_component_requirements
                 ),
-                "constraint.name": binding.constraint_name,
-            }
-            for field_name, field_value in identifier_fields.items():
-                if not _IDENTIFIER.fullmatch(field_value):
-                    issues.append(
-                        f"{prefix}.{field_name} is not a SysML identifier"
-                    )
-            if not _QUALIFIED_TYPE.fullmatch(binding.value_type):
-                issues.append(
-                    f"{prefix}.payload.value_type is not a SysML type"
-                )
-            expected_quantity_type = quantity_type_for_unit(binding.unit)
-            if expected_quantity_type is None:
-                issues.append(
-                    f"{prefix}.payload.unit {binding.unit!r} has no supported "
-                    "SysML v2 ISQ quantity-type mapping"
-                )
-            elif binding.value_type != expected_quantity_type:
-                issues.append(
-                    f"{prefix}.payload.value_type must be "
-                    f"{expected_quantity_type} for [{binding.unit}]"
-                )
-            source_port = port_lookup.get((
-                binding.source_component,
-                binding.source_port,
-            ))
-            target_port = port_lookup.get((
-                binding.target_component,
-                binding.target_port,
-            ))
-            if source_port is None or target_port is None:
-                issues.append(
-                    f"{prefix} references an undeclared semantic endpoint"
-                )
-            else:
-                if (
-                    source_port.port_type != binding.port_type
-                    or target_port.port_type != binding.port_type
-                ):
-                    issues.append(
-                        f"{prefix}.payload.port_type does not match both "
-                        "planned endpoints"
-                    )
-                if (
-                    binding.source_component,
-                    binding.source_port,
-                    binding.target_component,
-                    binding.target_port,
-                ) not in connection_keys:
-                    issues.append(
-                        f"{prefix} endpoints are not a planned connection"
-                    )
-            if binding.port_type in _GENERIC_PORT_TYPES:
-                issues.append(
-                    f"{prefix} must use a requirement-relevant dedicated "
-                    f"port type, not generic {binding.port_type}"
-                )
-            component_names = {item.name for item in components}
-            if binding.item_type in component_names:
-                issues.append(
-                    f"{prefix}.payload.item_type collides with planned "
-                    f"component {binding.item_type}"
-                )
-            if binding.port_type in component_names:
-                issues.append(
-                    f"{prefix}.payload.port_type collides with planned "
-                    f"component {binding.port_type}"
-                )
-            if binding.item_type == binding.port_type:
-                issues.append(
-                    f"{prefix} cannot use the same definition name for "
-                    "item_type and port_type"
-                )
-            if (
-                binding.target_component,
-                binding.requirement_id,
-            ) not in allocated_component_requirements:
-                issues.append(
-                    f"{prefix} target component is not allocated "
-                    f"{binding.requirement_id}"
-                )
-            if obligation is not None:
-                if binding.unit != obligation.unit:
-                    issues.append(
-                        f"{prefix}.payload.unit does not preserve "
-                        f"{obligation.unit}"
-                    )
-                if not semantic_binding_matches_subject(binding, obligation):
-                    issues.append(
-                        f"{prefix} feature/attribute names do not preserve "
-                        "the frozen subject"
-                    )
-            if binding.runtime_attribute == binding.threshold_attribute:
-                issues.append(
-                    f"{prefix} runtime and threshold attributes must differ"
-                )
-            payload_key = (
-                binding.item_type,
-                binding.port_feature,
-            )
-            prior_payload = port_payloads.setdefault(
-                binding.port_type, payload_key
-            )
-            if prior_payload != payload_key:
-                issues.append(
-                    f"port type {binding.port_type} has conflicting "
-                    "semantic payload plans"
-                )
-            feature_key = (
-                binding.value_type,
-                binding.unit,
-            )
-            prior_feature = item_features.setdefault(
-                (binding.item_type, binding.item_feature),
-                feature_key,
-            )
-            if prior_feature != feature_key:
-                issues.append(
-                    f"item feature {binding.item_type}."
-                    f"{binding.item_feature} has conflicting type/unit plans"
-                )
-        for obligation_id in sorted(
-            set(obligations_by_id) - seen_binding_ids
-        ):
-            issues.append(
-                f"{obligation_id} has no typed semantic binding"
-            )
-
-        # Source-derived semantic bindings own the typed data chain.  The
-        # activated-constraint plan is the sole constraint writer. Reconcile
-        # both views by semantic identity rather than by LLM-chosen names.
-        explicit_constraints = [
-            ConstraintPlan.from_dict(item, requirements=requirements)
-            for item in (payload.get("constraints") or ())
-            if isinstance(item, Mapping)
-        ]
-        semantic_by_id = {
-            item.obligation_id: item for item in semantic_obligations
-        }
-        constraint_reconciliations: list[str] = []
-        derived_constraints: list[ConstraintPlan] = []
-        derived_attributes: dict[str, list[AttributePlan]] = {}
-        explicit_by_semantics: dict[
-            tuple[str, str, str, str, str], list[ConstraintPlan]
-        ] = {}
-        for constraint in explicit_constraints:
-            semantic_key = (
-                constraint.source_requirement_id or "",
-                constraint.owner,
-                constraint.lhs,
-                constraint.operator,
-                constraint.rhs,
-            )
-            explicit_by_semantics.setdefault(semantic_key, []).append(
-                constraint
-            )
-        for semantic_key, matches in explicit_by_semantics.items():
-            if len(matches) > 1:
-                issues.append(
-                    "duplicate semantic constraint identity "
-                    + "::".join(semantic_key)
-                    + ": "
-                    + ", ".join(item.constraint_id for item in matches)
-                )
-
-        reconciled_bindings: list[SemanticBindingPlan] = []
-        for binding in semantic_bindings:
-            obligation = semantic_by_id.get(binding.obligation_id)
-            if obligation is None:
-                reconciled_bindings.append(binding)
-                continue
-            derived_attributes.setdefault(
-                binding.target_component, []
-            ).extend([
-                AttributePlan(
-                    name=binding.runtime_attribute,
-                    value_type=binding.value_type,
-                    unit=binding.unit,
-                    role="RUNTIME_MEASUREMENT",
-                    input_binding=binding.source_path,
-                    provenance="FROZEN_REQUIREMENT",
-                    source_requirement_id=binding.requirement_id,
-                    source_digest=obligation.source_digest,
-                ),
-                AttributePlan(
-                    name=binding.threshold_attribute,
-                    value_type=binding.value_type,
-                    unit=binding.unit,
-                    role="FROZEN_THRESHOLD",
-                    initial_value=(
-                        f"{obligation.threshold:g} [{obligation.unit}]"
-                    ),
-                    provenance="FROZEN_REQUIREMENT",
-                    source_requirement_id=binding.requirement_id,
-                    source_digest=obligation.source_digest,
-                ),
-            ])
-            semantic_key = (
-                binding.requirement_id,
-                binding.target_component,
-                binding.runtime_attribute,
-                obligation.operator,
-                binding.threshold_attribute,
-            )
-            matches = explicit_by_semantics.get(semantic_key, [])
-            if len(matches) == 1:
-                canonical = matches[0]
-                if (
-                    obligation.activation_kind == "CONTEXTUAL"
-                    and canonical.activation_kind != "STATE_ACTIVE"
-                ):
-                    issues.append(
-                        f"{binding.obligation_id} preserves contextual clause "
-                        f"{obligation.activation_clause!r} but its canonical "
-                        "constraint is not STATE_ACTIVE"
-                    )
-                if binding.constraint_name != canonical.constraint_id:
-                    constraint_reconciliations.append(
-                        f"{binding.target_component}."
-                        f"{binding.constraint_name} -> "
-                        f"{canonical.constraint_id} "
-                        f"({binding.obligation_id})"
-                    )
-                    binding = replace(
-                        binding,
-                        constraint_name=canonical.constraint_id,
-                    )
-            elif not matches:
-                if obligation.activation_kind == "CONTEXTUAL":
-                    issues.append(
-                        f"{binding.obligation_id} contextual bound "
-                        f"{obligation.activation_clause!r} requires exactly "
-                        "one matching STATE_ACTIVE constraint"
-                    )
-                else:
-                    derived_constraints.append(ConstraintPlan(
-                        constraint_id=binding.constraint_name,
-                        owner=binding.target_component,
-                        lhs=binding.runtime_attribute,
-                        operator=obligation.operator,
-                        rhs=binding.threshold_attribute,
-                        activation_kind="ALWAYS",
-                        provenance="FROZEN_REQUIREMENT",
-                        verification_tier="PARAMETRIC_SWEEP",
-                        source_requirement_id=binding.requirement_id,
-                        source_digest=obligation.source_digest,
-                    ))
-            reconciled_bindings.append(binding)
-        semantic_bindings = reconciled_bindings
-        if derived_attributes:
-            enriched_components: list[ComponentPlan] = []
-            for component in components:
-                by_name = {
-                    item.name: item for item in component.attributes
-                }
-                for item in derived_attributes.get(component.name, ()):
-                    by_name[item.name] = item
-                enriched_components.append(replace(
-                    component,
-                    attributes=tuple(by_name.values()),
-                ))
-            components = enriched_components
-        constraint_plans = tuple([
-            *explicit_constraints,
-            *derived_constraints,
-        ])
-        issues.extend(validate_constraint_plan(
-            constraint_plans,
-            components,
-            requirements,
-        ))
-        advisories = tuple(
-            state_execution_advisories(constraint_plans, components)
+            ),
         )
+        components = list(compiled_constraints.components)
+        semantic_obligations = compiled_constraints.semantic_obligations
+        semantic_bindings = compiled_constraints.semantic_bindings
+        constraint_plans = compiled_constraints.constraints
+        constraint_reconciliations = (
+            compiled_constraints.identity_reconciliations
+        )
+        issues.extend(compiled_constraints.issues)
+        advisories = compiled_constraints.advisories
         raw_behaviors = payload.get("behaviors")
         archived_schema = str(payload.get("schema_version") or "").strip()
         action_effects = parse_action_effects(payload.get("action_effects"))
@@ -1163,147 +1166,13 @@ class ModelGenerationPlan:
             require_executable_responses=not legacy_behavior_schema,
         ))
         if require_source_anchored_paths:
-            components_by_name = {
-                component.name: component for component in components
-            }
-            for source_requirement in requirements:
-                source_text = " ".join(
-                    str(source_requirement or "").split()
-                )
-                source_low = source_text.lower()
-                source_ids = _req_ids((source_text,))
-                deadline = re.search(
-                    r"\bwithin\s+(\d+(?:\.\d+)?)\s*(?:seconds?|s)\b",
-                    source_text,
-                    flags=re.IGNORECASE,
-                )
-                if not deadline:
-                    continue
-                for req_id in source_ids:
-                    if "FUNC" not in req_id:
-                        continue
-                    if (
-                        "health report" in source_low
-                        and any(token in source_low for token in (
-                            "landing", "post-flight",
-                        ))
-                    ):
-                        family = "report"
-                    elif (
-                        "waypoint" in source_low
-                        and any(token in source_low for token in (
-                            "modification command", "waypoint-modification",
-                            "revised waypoint",
-                        ))
-                    ):
-                        family = "waypoint"
-                    else:
-                        continue
-                    matching_behaviors = [
-                        behavior for behavior in planned_behaviors
-                        if behavior.source_requirement_id == req_id
-                    ]
-                    behavior_chain_ok = False
-                    for behavior in matching_behaviors:
-                        response_states = {
-                            state.state_id: state
-                            for state in behavior.states
-                            if state.role == "RESPONSE"
-                            and (state.entry_action or state.do_action)
-                        }
-                        for transition in behavior.transitions:
-                            state = response_states.get(transition.target)
-                            if state is None:
-                                continue
-                            action_text = " ".join(filter(None, (
-                                state.entry_action, state.do_action,
-                            ))).lower()
-                            trigger_text = transition.trigger.lower()
-                            if family == "report":
-                                behavior_chain_ok = (
-                                    any(token in action_text for token in (
-                                        "report", "health", "postflight",
-                                        "telemetry",
-                                    ))
-                                    and "land" in trigger_text
-                                    and "complet" in trigger_text
-                                )
-                            else:
-                                behavior_chain_ok = (
-                                    any(token in action_text for token in (
-                                        "waypoint", "sequence", "revise",
-                                        "update", "navigate",
-                                    ))
-                                    and "waypoint" in trigger_text
-                                    and any(token in trigger_text for token in (
-                                        "modification", "revision", "revised",
-                                        "update",
-                                    ))
-                                    and (
-                                        "valid" not in source_low
-                                        or "valid" in trigger_text
-                                    )
-                                )
-                            if behavior_chain_ok:
-                                break
-                        if behavior_chain_ok:
-                            break
-                    if not behavior_chain_ok:
-                        issues.append(
-                            f"{req_id} timed functional plan requires a "
-                            f"source-linked reachable {family} response with "
-                            "the qualified causal trigger"
-                        )
-
-                    expected_seconds = float(deadline.group(1))
-                    timing_attributes: set[tuple[str, str]] = set()
-                    for behavior in matching_behaviors:
-                        component = components_by_name.get(behavior.owner)
-                        if component is None:
-                            continue
-                        for attribute in component.attributes:
-                            value_match = re.search(
-                                r"[-+]?\d+(?:\.\d+)?",
-                                str(attribute.initial_value or ""),
-                            )
-                            name_low = attribute.name.lower()
-                            if (
-                                value_match
-                                and abs(
-                                    float(value_match.group(0))
-                                    - expected_seconds
-                                ) < 1e-9
-                                and attribute.unit.lower() == "s"
-                                and family in name_low
-                                and any(token in name_low for token in (
-                                    "latency", "delay", "time",
-                                ))
-                            ):
-                                timing_attributes.add((
-                                    behavior.owner, attribute.name,
-                                ))
-                    matching_constraints = [
-                        constraint for constraint in constraint_plans
-                        if constraint.source_requirement_id == req_id
-                    ]
-                    if not timing_attributes:
-                        issues.append(
-                            f"{req_id} timed functional plan requires a "
-                            f"source-linked {family} latency bound of "
-                            f"{deadline.group(1)} [s] on the behavior owner"
-                        )
-                    elif not any(
-                        (constraint.owner, constraint.lhs)
-                        in timing_attributes
-                        or (constraint.owner, constraint.rhs)
-                        in timing_attributes
-                        for constraint in matching_constraints
-                    ):
-                        issues.append(
-                            f"{req_id} timed functional plan requires a "
-                            "source-linked constraint that references its "
-                            "planned latency bound"
-                        )
+            _validate_timed_functional_paths(
+                requirements,
+                planned_behaviors,
+                components,
+                constraint_plans,
+                issues,
+            )
         ordinary_event_symbols = collect_planned_event_symbols(
             planned_behaviors,
             components=components,
@@ -1343,6 +1212,17 @@ class ModelGenerationPlan:
                 if item.requirement_id in requirement_source_by_id
                 else item
                 for item in requirement_realizations
+            )
+        if require_source_anchored_paths:
+            # Runs here rather than beside the other behaviour checks because
+            # it reads the intent each realization records, so realizations
+            # must already be parsed.
+            _validate_planned_functional_responses(
+                requirements,
+                planned_behaviors,
+                components,
+                requirement_realizations,
+                issues,
             )
         if requirement_realizations or require_source_anchored_paths:
             structural_obligations, structural_issues = (
@@ -1939,6 +1819,52 @@ def attach_ag_behavior_obligations(
     )
 
 
+PASSIVE_MARKER_RE = re.compile(
+    r"(?m)^[ \t]*//\s*PLAN-PASSIVE\s+(?P<name>[A-Za-z_]\w*)\s*:"
+)
+
+
+def passive_components_in_text(sysml_text: str) -> set[str]:
+    """Part-definition names the committed model itself declares passive.
+
+    The declaration is a `// PLAN-PASSIVE <PartDef>: <reason>` comment inside
+    the part def, written by :func:`materialize_passive_components` from the
+    generation plan. It lives in the model text so that every downstream reader
+    -- the reachability simulator in particular -- sees the same decision the
+    planner recorded, without needing the plan object.
+    """
+    return {m.group("name") for m in PASSIVE_MARKER_RE.finditer(sysml_text or "")}
+
+
+def materialize_passive_components(
+    sysml_text: str, components: Sequence["ComponentPlan"]
+) -> tuple[str, list[str]]:
+    """Write a `// PLAN-PASSIVE` marker into each passive component's part def.
+
+    Idempotent: a marker already present is left alone. Returns the new text
+    and the names materialised on this call.
+    """
+    from ..utils.sysml_text_utils import find_block_end
+    text = sysml_text or ""
+    already = passive_components_in_text(text)
+    written: list[str] = []
+    for component in components:
+        if not component.passive or component.name in already:
+            continue
+        m = re.search(rf"\bpart\s+def\s+{re.escape(component.name)}\b[^{{;]*\{{", text)
+        if m is None:
+            continue
+        brace = text.index("{", m.start())
+        # indent: reuse the part def line's indent plus four spaces
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        indent = re.match(r"[ \t]*", text[line_start:m.start()]).group(0) + "    "
+        reason = " ".join(component.passive_rationale.split()) or "purely structural body"
+        marker = f"\n{indent}// PLAN-PASSIVE {component.name}: {reason}"
+        text = text[:brace + 1] + marker + text[brace + 1:]
+        written.append(component.name)
+    return text, written
+
+
 def apply_generation_plan(
     model_text: str,
     plan: ModelGenerationPlan,
@@ -2042,6 +1968,9 @@ def apply_generation_plan(
         for line, reason in port_validation.rejected
     )
     working_text = port_merge.merged_text
+    working_text, passive_written = materialize_passive_components(
+        working_text, plan.components
+    )
     directory = build_port_directory(working_text)
     existing = parse_connects(working_text)
 

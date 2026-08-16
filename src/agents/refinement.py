@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import time
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from copy import deepcopy
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from .dse_injectors import (
     build_dse_design_constraints as _build_dse_design_constraints,
 )
@@ -17,15 +21,19 @@ from .orchestrator_support import (
     _inject_missing_guard_attrs,
     _scenario_src_instance,
 )
+from .refinement_transaction import (
+    _RefinementRequest,
+    _RefinementTransaction,
+)
+from .refinement_intelligence import (
+    RefinementIntelligence,
+    RuntimeRefinementIntelligence,
+)
 from ..dse.design_space import DesignConfiguration
-from ..simulation.connect_auditor import audit_connects
-from ..simulation.connectivity_fixer import (
-    build_connectivity_prompt,
-    build_port_directory,
-    extract_connect_lines,
-    merge_connects,
-    parse_connects,
-    validate_connects,
+from ..simulation.connectivity_fixer import audit_connects
+from ..simulation.connectivity_reconciliation import (
+    ConnectivityProposalError,
+    reconcile_connectivity,
 )
 from ..simulation.error_localizer import (
     build_fix_prompt,
@@ -33,13 +41,6 @@ from ..simulation.error_localizer import (
     merge_fixed_chunk,
 )
 from ..simulation.levenshtein_fixer import format_hints_for_llm, try_fix_sema_errors
-from ..simulation.port_fixer import (
-    build_port_fix_prompt,
-    collect_port_defs,
-    extract_port_additions,
-    merge_port_additions,
-    validate_port_additions,
-)
 from ..simulation.syntax_checker import SyntaxCheckResult, check_syntax
 from ..simulation.transition_fixer import (
     build_state_machine_summary,
@@ -60,13 +61,368 @@ from ..sysml.text_normalization import (
 from ..utils.sysml_text_utils import get_sysml_text
 
 
-class RefinementMixin:
-    @staticmethod
-    def _count_connects(model_text: str) -> int:
-        """Number of `connect a.p to b.q` statements in the model text."""
-        return len(re.findall(r"\bconnect\b", model_text, re.IGNORECASE))
+@dataclass(frozen=True)
+class ModelRevision:
+    """Immutable authority for one exact SysML model revision."""
+
+    name: str
+    sysml: str
+    digest: str
+    _metadata: Dict[str, Any] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+
+    @classmethod
+    def capture(cls, model: SysMLModel) -> "ModelRevision":
+        text = get_sysml_text(model)
+        return cls(
+            name=str(getattr(model, "name", None) or "System"),
+            sysml=text,
+            digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            _metadata=deepcopy(dict(getattr(model, "metadata", None) or {})),
+        )
+
+    def materialize(self) -> SysMLModel:
+        expected = hashlib.sha256(self.sysml.encode("utf-8")).hexdigest()
+        if expected != self.digest:
+            raise ValueError("model revision digest does not match its SysML text")
+        model = build_lite_model(self.sysml, model_name=self.name)
+        model.metadata.update(deepcopy(self._metadata))
+        model.metadata["last_sysml_text"] = self.sysml
+        return model
 
 
+@dataclass(frozen=True)
+class RefinementClosureRequest:
+    base: ModelRevision
+    requirements: tuple[str, ...]
+    dse_best_config: Optional[DesignConfiguration] = None
+    preserve_connectivity: bool = False
+
+
+@dataclass(frozen=True)
+class RefinedRevision:
+    revision: ModelRevision
+    score: float
+    requirements: tuple[str, ...]
+    dse_best_config: Optional[DesignConfiguration]
+    _simulation: Any = field(repr=False, compare=False)
+    evidence: Mapping[str, Any] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
+    def materialize(self) -> tuple[SysMLModel, float, Any]:
+        return self.revision.materialize(), self.score, deepcopy(self._simulation)
+
+
+@dataclass(frozen=True)
+class ProjectedRevision:
+    refined: RefinedRevision
+    revision: ModelRevision
+    score: float
+    projection_disposition: str
+    parameter_evidence: Mapping[str, Any]
+    _simulation: Any = field(repr=False, compare=False)
+
+    def materialize(self) -> tuple[SysMLModel, float, Any]:
+        return self.revision.materialize(), self.score, deepcopy(self._simulation)
+
+
+@dataclass(frozen=True)
+class RefinementClosureOutcome:
+    projected: ProjectedRevision
+    revision: ModelRevision
+    score: float
+    evidence: Mapping[str, Any]
+    _simulation: Any = field(repr=False, compare=False)
+
+    def materialize(self) -> tuple[SysMLModel, float, Any]:
+        return self.revision.materialize(), self.score, deepcopy(self._simulation)
+
+
+class RefinementClosure:
+    """Three-stage typestate interface for Refinement Closure."""
+
+    def __init__(
+        self,
+        runtime: Any,
+        *,
+        intelligence: Optional[RefinementIntelligence] = None,
+        simulation_runner: Optional[Callable[[str, str], SimulationResult]] = None,
+        verification_gap_audit: Optional[
+            Callable[[str, str], List[str]]
+        ] = None,
+        functional_gap_audit: Optional[
+            Callable[[str, str], List[str]]
+        ] = None,
+    ) -> None:
+        self.__implementation = _RefinementEngine(
+            runtime,
+            intelligence=intelligence,
+            simulation_runner=simulation_runner,
+            verification_gap_audit=verification_gap_audit,
+            functional_gap_audit=functional_gap_audit,
+        )
+
+    def refine(self, request: RefinementClosureRequest) -> RefinedRevision:
+        model = request.base.materialize()
+        implementation = self.__implementation
+        implementation._begin_refinement_observation()
+        refined, score, simulation = implementation._iterative_refinement(
+            model,
+            list(request.requirements),
+            dse_best_config=request.dse_best_config,
+            connectivity_floor=request.preserve_connectivity,
+        )
+        return RefinedRevision(
+            revision=ModelRevision.capture(refined),
+            score=float(score),
+            requirements=request.requirements,
+            dse_best_config=request.dse_best_config,
+            evidence=implementation._refinement_evidence(
+                request.base,
+                refined,
+                simulation,
+            ),
+            _simulation=deepcopy(simulation),
+        )
+
+    def project_parameters(
+        self,
+        refined: RefinedRevision,
+        platform_profile: Optional[Mapping[str, Any]],
+    ) -> ProjectedRevision:
+        model, score, simulation = refined.materialize()
+        disposition = "NOT_REQUESTED"
+        parameter_evidence: Dict[str, Any] = {
+            "status": disposition,
+            "model_digest": refined.revision.digest,
+        }
+        if platform_profile is not None:
+            model, score, simulation = self.__implementation._sitl_refinement_loop(
+                model,
+                list(refined.requirements),
+                score,
+                simulation,
+                max_iters=2,
+            )
+            disposition = "APPLIED"
+            from ..sitl.parameter_projection import merge_base_parameters
+            from ..sitl.requirement_linker import RequirementLinker
+
+            bundle = RequirementLinker(
+                model,
+                llm=None,
+                verbose=self.__implementation.verbose,
+            ).compile_evidence()
+            profile_digest = hashlib.sha256(json.dumps(
+                dict(platform_profile),
+                sort_keys=True,
+                default=lambda value: (
+                    sorted(value) if isinstance(value, set) else str(value)
+                ),
+            ).encode("utf-8")).hexdigest()
+            parameter_evidence = {
+                "status": disposition,
+                "model_digest": bundle.model_digest,
+                "platform_profile_digest": profile_digest,
+                "parm_file": merge_base_parameters(
+                    bundle.parm_file,
+                    platform_profile.get("base_sitl_params", {}) or {},
+                ),
+                "coverage": bundle.coverage,
+            }
+        return ProjectedRevision(
+            refined=refined,
+            revision=ModelRevision.capture(model),
+            score=float(score),
+            projection_disposition=disposition,
+            parameter_evidence=MappingProxyType(parameter_evidence),
+            _simulation=deepcopy(simulation),
+        )
+
+    def close(
+        self,
+        projected: ProjectedRevision,
+        *,
+        dse_best_config: Optional[DesignConfiguration] = None,
+    ) -> RefinementClosureOutcome:
+        model, score, simulation = projected.materialize()
+        implementation = self.__implementation
+        model, score, simulation = implementation._functional_closure_pass(
+            model,
+            simulation,
+            score,
+            list(projected.refined.requirements),
+            dse_best_config=(
+                dse_best_config
+                if dse_best_config is not None
+                else projected.refined.dse_best_config
+            ),
+            max_iters=2,
+        )
+        evidence = _freeze_evidence(
+            deepcopy(implementation.last_functional_closure or {})
+        )
+        return RefinementClosureOutcome(
+            projected=projected,
+            revision=ModelRevision.capture(model),
+            score=float(score),
+            evidence=evidence,
+            _simulation=deepcopy(simulation),
+        )
+
+    def simulate(self, model_text: str, model_name: str) -> SimulationResult:
+        return self.__implementation._run_simulation(model_text, model_name)
+
+    def verify_terminal(self, model_text: str, model_name: str) -> None:
+        self.__implementation._verify_terminal_functional_closure(
+            model_text, model_name
+        )
+
+
+def _freeze_evidence(value: Any) -> Any:
+    """Recursively freeze JSON-like stage evidence before it crosses the seam."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({
+            str(key): _freeze_evidence(item)
+            for key, item in value.items()
+        })
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_evidence(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_evidence(item) for item in value)
+    return deepcopy(value)
+
+
+class _RefinementEngine:
+    """Private implementation behind :class:`RefinementClosure`."""
+
+    def __init__(
+        self,
+        runtime: Any,
+        *,
+        intelligence: Optional[RefinementIntelligence] = None,
+        simulation_runner: Optional[Callable[[str, str], SimulationResult]] = None,
+        verification_gap_audit: Optional[
+            Callable[[str, str], List[str]]
+        ] = None,
+        functional_gap_audit: Optional[
+            Callable[[str, str], List[str]]
+        ] = None,
+    ) -> None:
+        object.__setattr__(self, "_runtime", runtime)
+        object.__setattr__(
+            self,
+            "_intelligence",
+            intelligence or RuntimeRefinementIntelligence(runtime),
+        )
+        object.__setattr__(self, "_simulation_runner", simulation_runner)
+        object.__setattr__(self, "_verification_gap_audit", verification_gap_audit)
+        object.__setattr__(self, "_functional_gap_audit", functional_gap_audit)
+        object.__setattr__(self, "_refinement_observations", [])
+
+    def _begin_refinement_observation(self) -> None:
+        self._refinement_observations = []
+
+    def _observe(self, event: Mapping[str, Any]) -> None:
+        self._refinement_observations.append(deepcopy(dict(event)))
+
+    def _refinement_evidence(
+        self,
+        base: ModelRevision,
+        refined: SysMLModel,
+        simulation: Any,
+    ) -> Mapping[str, Any]:
+        text = get_sysml_text(refined)
+        syntax = check_syntax(text)
+        failed = (
+            len(simulation.failed_scenarios())
+            if simulation is not None
+            and callable(getattr(simulation, "failed_scenarios", None))
+            else None
+        )
+        return _freeze_evidence({
+            "base_model_digest": base.digest,
+            "result_model_digest": hashlib.sha256(
+                text.encode("utf-8")
+            ).hexdigest(),
+            "syntax_error_count": syntax.total_errors(),
+            "failed_scenario_count": failed,
+            "events": self._refinement_observations,
+        })
+
+    @property
+    def state(self) -> Any:
+        return self._runtime.state
+
+    @property
+    def sim_validator(self) -> Any:
+        return self._runtime.sim_validator
+
+    @property
+    def quality_threshold(self) -> float:
+        return self._runtime.quality_threshold
+
+    @property
+    def max_iterations(self) -> int:
+        return self._runtime.max_iterations
+
+    @property
+    def rule_weight(self) -> float:
+        return self._runtime.rule_weight
+
+    @property
+    def llm_weight(self) -> float:
+        return self._runtime.llm_weight
+
+    @property
+    def use_surgical_refinement(self) -> bool:
+        return self._runtime.use_surgical_refinement
+
+    @property
+    def verbose(self) -> bool:
+        return self._runtime.verbose
+
+    @property
+    def last_requirement_input(self) -> Any:
+        return self._runtime.last_requirement_input
+
+    @property
+    def last_functional_closure(self) -> Any:
+        return self._runtime.last_functional_closure
+
+    @last_functional_closure.setter
+    def last_functional_closure(self, value: Any) -> None:
+        self._runtime.last_functional_closure = value
+
+    @property
+    def last_plan_conformance_rejections(self) -> Any:
+        return self._runtime.last_plan_conformance_rejections
+
+    def _append_pipeline_state_list(self, field_name: str, value: Any) -> int:
+        return self._runtime._append_pipeline_state_list(field_name, value)
+
+    def _enforce_terminal_generation_plan(self, model: Any, text: str):
+        return self._runtime._enforce_terminal_generation_plan(model, text)
+
+    def _validate_terminal_structural_obligations(
+        self,
+        model: SysMLModel,
+        model_text: str,
+        model_name: str,
+    ):
+        return self._runtime._validate_terminal_structural_obligations(
+            model,
+            model_text,
+            model_name,
+        )
+
+    def _restore_generation_plan_metadata(self, model: SysMLModel) -> None:
+        self._runtime._restore_generation_plan_metadata(model)
+
+    def _print_iteration_summary(self, **payload: Any) -> None:
+        self._runtime._print_iteration_summary(**payload)
     def _verification_gap_issues(self, sysml_text: str, model_name: str) -> List[str]:
         """Static verification-readiness audit (best-effort, no LLM).
 
@@ -75,6 +431,8 @@ class RefinementMixin:
         audit can never break the refinement loop.
         """
         try:
+            if self._verification_gap_audit is not None:
+                return list(self._verification_gap_audit(sysml_text, model_name))
             from .verification_audit import verification_gap_issues
             return verification_gap_issues(
                 sysml_text,
@@ -83,6 +441,36 @@ class RefinementMixin:
             )
         except Exception:
             return []
+
+
+    def _planned_response_intents(self) -> Dict[str, str]:
+        """{REQ_XXX_NNN: response_intent} from the active generation plan.
+
+        The audit rebuilds the model from its text and so cannot read the
+        intents off model metadata; they are handed over from the plan here.
+        """
+        plan = getattr(self._runtime, "_active_model_generation_plan", None) or {}
+        out: Dict[str, str] = {}
+        for item in plan.get("requirement_realizations") or ():
+            if not isinstance(item, Mapping):
+                continue
+            rid = str(item.get("requirement_id") or "").strip().upper().replace("-", "_")
+            intent = str(item.get("response_intent") or "").strip().lower()
+            if rid and intent:
+                out[rid] = intent
+        return out
+
+
+    def _unmeasurable_requirement_ids(self) -> Optional[set[str]]:
+        """IDs the extractor flagged as carrying no measurable criterion.
+
+        Present only on the extraction path; a frozen input records none, so
+        on the frozen path this returns an empty set and changes nothing.
+        """
+        ids = (self.last_requirement_input or {}).get("unmeasurable_req_ids")
+        if not isinstance(ids, (list, tuple, set)):
+            return set()
+        return {str(req_id) for req_id in ids}
 
 
     def _active_requirement_ids(self) -> Optional[set[str]]:
@@ -100,10 +488,14 @@ class RefinementMixin:
     ) -> List[str]:
         """Functional subset of model-fixable verification gaps (fail closed)."""
         try:
+            if self._functional_gap_audit is not None:
+                return list(self._functional_gap_audit(sysml_text, model_name))
             from .verification_audit import functional_verification_gap_issues
             return functional_verification_gap_issues(
                 sysml_text, model_name, strict=True,
                 allowed_req_ids=self._active_requirement_ids(),
+                unmeasurable_req_ids=self._unmeasurable_requirement_ids(),
+                planned_intents=self._planned_response_intents(),
             )
         except Exception as exc:
             raise RuntimeError(
@@ -116,6 +508,34 @@ class RefinementMixin:
         return sorted(set(re.findall(
             r"\bREQ[_-]FUNC[_-]\d+\b", "\n".join(map(str, issues)), re.IGNORECASE
         )))
+
+
+    def _generation_plan_provenance(self) -> Dict[str, Any]:
+        """What the frozen plan was, and what it cost to arrive at one.
+
+        A fail-closed run cannot otherwise answer whether a plan obligation
+        fired and the model was corrected, or never fired at all — the
+        attempt record lives in metadata a failed run never publishes.
+        """
+        plan = dict(
+            getattr(self._runtime, "_active_model_generation_plan", None) or {}
+        )
+        state = getattr(self._runtime, "state", None)
+        metadata = dict(
+            getattr(getattr(state, "current_model", None), "metadata", None)
+            or {}
+        )
+        return {
+            "plan_status": plan.get("status"),
+            "plan_issues": list(plan.get("issues") or ()),
+            "planned_event_symbols": [
+                str(symbol.get("name"))
+                for symbol in (plan.get("planned_event_symbols") or ())
+                if isinstance(symbol, Mapping)
+            ],
+            "step1_plan_retries": metadata.get("step1_plan_retries", 0),
+            "step1_plan_attempts": metadata.get("step1_plan_attempts"),
+        }
 
 
     def _verify_terminal_functional_closure(
@@ -149,6 +569,17 @@ class RefinementMixin:
             # the exact model that failed is gone.
             error.functional_closure = closure
             error.terminal_model_text = model_text
+            error.model_name = model_name
+            # The run dies here, so the pipeline state never reaches a caller.
+            # Every repair the frozen plan refused is the diagnosis for this
+            # exact failure and has to travel with it.
+            error.plan_conformance_rejections = [
+                dict(item)
+                for item in (self.last_plan_conformance_rejections or ())
+            ]
+            error.generation_plan_provenance = (
+                self._generation_plan_provenance()
+            )
             raise error
 
 
@@ -245,7 +676,7 @@ class RefinementMixin:
                     continue
                 surgical_audit = SurgicalAudit()
                 repaired = attempt_surgical_refinement(
-                    llm=self.llm,
+                    llm=self._intelligence,
                     model_text=full_text,
                     issues=gaps,
                     feedback=(
@@ -288,6 +719,16 @@ class RefinementMixin:
                     context_record["generation_plan_issues"] = list(
                         plan_conformance.get("issues") or ()
                     )
+                    self._append_pipeline_state_list(
+                        "plan_conformance_rejections", {
+                            "stage": "FUNCTIONAL_CLOSURE",
+                            "pass": idx + 1,
+                            "target_req_ids": self._gap_req_ids(gaps),
+                            "issues": list(
+                                plan_conformance.get("issues") or ()
+                            ),
+                        }
+                    )
                     print(
                         "  │    ⚠ rejected: terminal generation-plan "
                         "conformance failed",
@@ -304,7 +745,7 @@ class RefinementMixin:
                 candidate_text = get_sysml_text(candidate)
                 cand_syntax = check_syntax(candidate_text)
                 cand_sim = self._run_simulation(candidate_text, model_name)
-                cand_eval = self.evaluator.evaluate(
+                cand_eval = self._intelligence.evaluate(
                     config=DesignConfiguration(
                         name=f"functional_closure_{idx + 1}", parameters={}
                     ),
@@ -319,13 +760,19 @@ class RefinementMixin:
                 )
                 after_ids = set(self._gap_req_ids(remaining))
                 progress = after_ids < before_ids
-                regressed = (
-                    cand_syntax.has_errors
-                    or len(cand_sim.failed_scenarios())
+                regression_reasons: List[str] = []
+                if cand_syntax.has_errors:
+                    regression_reasons.append("SYNTAX_ERRORS")
+                if (
+                    len(cand_sim.failed_scenarios())
                     > len(current_sim.failed_scenarios())
-                    or behavioral_result_regressed(current_sim, cand_sim)
-                    or cand_eval.weighted_total < current_score - 0.05
-                )
+                ):
+                    regression_reasons.append("SIMULATION_FAILURE_COUNT")
+                if behavioral_result_regressed(current_sim, cand_sim):
+                    regression_reasons.append("BEHAVIORAL_SIMULATION")
+                if cand_eval.weighted_total < current_score - 0.05:
+                    regression_reasons.append("RULE_SCORE")
+                regressed = bool(regression_reasons)
                 if progress and not regressed:
                     current = candidate
                     current_sim = cand_sim
@@ -345,6 +792,8 @@ class RefinementMixin:
                     )
                     context_record["status"] = "REJECTED"
                     context_record["post_merge_reason"] = why
+                    if regression_reasons:
+                        context_record["regression_reasons"] = regression_reasons
                     print(f"  │    ⚠ rejected: {why}", flush=True)
 
         remaining_ids = self._gap_req_ids(gaps)
@@ -412,6 +861,11 @@ class RefinementMixin:
                 "target_req_ids": self._gap_req_ids(verify_gaps),
                 "llm_invoked": False,
             })
+            self._observe({
+                "kind": "VERIFICATION_ANCHOR",
+                "decision": "BLOCKED",
+                "reason": "dependency_closed_context_unresolved",
+            })
             print(
                 "  ⚠ Anchor pass blocked: dependency-closed owner context "
                 "could not be resolved",
@@ -420,7 +874,7 @@ class RefinementMixin:
             return current_model, sim_result, False
         surgical_audit = SurgicalAudit()
         anchored = attempt_surgical_refinement(
-            llm=self.llm,
+            llm=self._intelligence,
             model_text=full_text,
             issues=verify_gaps,
             verbose=self.verbose,
@@ -436,6 +890,11 @@ class RefinementMixin:
             "verification_anchor_attempts", attempt_record
         )
         if anchored is None:
+            self._observe({
+                "kind": "VERIFICATION_ANCHOR",
+                "decision": "REJECTED",
+                "reason": "no_candidate",
+            })
             print("  ⚠ Anchor pass not applicable (LLM output failed "
                   "the surgical gates)", flush=True)
             return current_model, sim_result, False
@@ -445,7 +904,7 @@ class RefinementMixin:
         self._restore_generation_plan_metadata(anchor_model)
         anchor_sim = self._run_simulation(
             anchored.merged_text, current_model.name)
-        anchor_eval = self.evaluator.evaluate(
+        anchor_eval = self._intelligence.evaluate(
             config=DesignConfiguration(name="anchor_pass", parameters={}),
             model=anchor_model,
             dse_config=dse_best_config,
@@ -463,6 +922,12 @@ class RefinementMixin:
         )
         if not regressed and len(remaining) < len(verify_gaps):
             attempt_record["status"] = "ACCEPTED"
+            self._observe({
+                "kind": "VERIFICATION_ANCHOR",
+                "decision": "ACCEPTED",
+                "gaps_before": len(verify_gaps),
+                "gaps_after": len(remaining),
+            })
             print(f"  ✓ Anchor pass accepted: verification gaps "
                   f"{len(verify_gaps)} → {len(remaining)}", flush=True)
             return anchor_model, anchor_sim, True
@@ -472,6 +937,13 @@ class RefinementMixin:
             "regression" if regressed
             else "no_verification_gap_reduction"
         )
+        self._observe({
+            "kind": "VERIFICATION_ANCHOR",
+            "decision": "REJECTED",
+            "reason": attempt_record["post_merge_reason"],
+            "gaps_before": len(verify_gaps),
+            "gaps_after": len(remaining),
+        })
         print("  ⚠ Anchor pass rejected (no gap reduction or "
               "regression) — keeping the original model", flush=True)
         return current_model, sim_result, False
@@ -497,7 +969,7 @@ class RefinementMixin:
         if rule_score >= self.quality_threshold or veto_fired:
             return rule_score, None, None, veto_fired
 
-        cot_eval = self.cot.evaluate_design(
+        cot_eval = self._intelligence.evaluate_design(
             model_text=current_model.to_sysml_text(),
             requirements=requirements,
         )
@@ -578,7 +1050,7 @@ class RefinementMixin:
         print(f"  └─ Simulation fully resolved ✓", flush=True)
         # Re-evaluate with the fixed sim so the returned score
         # reflects the model's true post-fix quality.
-        eval_after = self.evaluator.evaluate(
+        eval_after = self._intelligence.evaluate(
             config=DesignConfiguration(
                 name=f"iteration_{iteration}_fixed",
                 parameters={},
@@ -603,7 +1075,7 @@ class RefinementMixin:
             )
         )
         if anchor_accepted:
-            score = self.evaluator.evaluate(
+            score = self._intelligence.evaluate(
                 config=DesignConfiguration(
                     name=f"iteration_{iteration}_fixed_anchor",
                     parameters={},
@@ -616,255 +1088,6 @@ class RefinementMixin:
                 requirements=requirements,
             ).weighted_total
         return True, current_model, score, sim_result
-
-
-    def _generate_refinement_candidate(
-        self,
-        current_model: SysMLModel,
-        current_sysml: str,
-        eval_result,
-        refinement_feedback: str,
-        requirements: List[str],
-    ) -> Optional[SysMLModel]:
-        """Surgical refinement first: the LLM returns only the blocks it
-        changes; the merge is syntax-gated and cannot shed connects on
-        untouched components (prevention, not the after-the-fact rejection
-        the full rewrite needs).  Falls back to the legacy whole-model
-        rewrite on any failure.  Returns the candidate model or None."""
-        if self.use_surgical_refinement:
-            from ..simulation.surgical_refiner import (
-                SurgicalAudit,
-                attempt_surgical_refinement,
-            )
-            surgical = attempt_surgical_refinement(
-                llm=self.llm,
-                model_text=current_sysml,
-                issues=eval_result.issues + eval_result.recommendations,
-                feedback=refinement_feedback,
-                verbose=self.verbose,
-                audit=SurgicalAudit(),
-            )
-            if surgical is not None:
-                print(f"  ✓ Surgical refinement: {surgical.summary()}", flush=True)
-                candidate = build_lite_model(
-                    surgical.merged_text, model_name=current_model.name
-                )
-                raw_plan = (
-                    getattr(current_model, "metadata", None) or {}
-                ).get("whole_model_generation_plan")
-                if isinstance(raw_plan, Mapping):
-                    if getattr(candidate, "metadata", None) is None:
-                        candidate.metadata = {}
-                    candidate.metadata["whole_model_generation_plan"] = dict(
-                        raw_plan
-                    )
-                    history = (
-                        getattr(current_model, "metadata", None) or {}
-                    ).get("plan_application_history")
-                    if isinstance(history, list):
-                        candidate.metadata["plan_application_history"] = [
-                            dict(item)
-                            for item in history
-                            if isinstance(item, Mapping)
-                        ]
-                return candidate
-            print("  ⚠ Surgical refinement not applicable — "
-                  "falling back to full rewrite", flush=True)
-
-        refine_result = self.design_agent.run({
-            "system_name": current_model.name,
-            "requirements": requirements,
-            "existing_model": current_model,
-            "refinement_feedback": refinement_feedback,
-            "refinement_issues": eval_result.issues + eval_result.recommendations,
-            "verbose": self.verbose,
-        })
-        if (refine_result.success
-                and isinstance(refine_result.output, _SysMLModelTypes)):
-            candidate = refine_result.output
-            raw_plan = (
-                getattr(current_model, "metadata", None) or {}
-            ).get("whole_model_generation_plan")
-            if (
-                isinstance(raw_plan, Mapping)
-                and "whole_model_generation_plan"
-                not in (getattr(candidate, "metadata", None) or {})
-            ):
-                if getattr(candidate, "metadata", None) is None:
-                    candidate.metadata = {}
-                candidate.metadata["whole_model_generation_plan"] = dict(
-                    raw_plan
-                )
-            history = (
-                getattr(current_model, "metadata", None) or {}
-            ).get("plan_application_history")
-            if isinstance(history, list):
-                if getattr(candidate, "metadata", None) is None:
-                    candidate.metadata = {}
-                candidate.metadata["plan_application_history"] = [
-                    dict(item)
-                    for item in history
-                    if isinstance(item, Mapping)
-                ]
-            return candidate
-        return None
-
-
-    def _accept_refinement_candidate(
-        self,
-        *,
-        candidate: SysMLModel,
-        current_sysml: str,
-        rule_score: float,
-        dse_best_config: Optional[DesignConfiguration],
-        requirements: List[str],
-        connectivity_floor: bool,
-    ) -> Optional[SysMLModel]:
-        """P0 regression prevention + connectivity floor.
-
-        The candidate is evaluated with the SAME inputs as rule_score (sim +
-        syntax + mcts_config) — omitting sim_result makes
-        behavioral_verification fall back to 1.0 and omitting mcts_config
-        changes the weight denominator; both bias the comparison toward
-        accepting the candidate.  check_syntax and _run_simulation are local
-        (no LLM cost).  Under ``connectivity_floor`` any candidate that sheds
-        connect statements relative to the model it was refined from is
-        rejected — the resolved variation model arrives fully wired and a
-        full LLM rewrite tends to drop connects on converted components.
-        Returns the accepted candidate (after the simulation inner loop) or
-        None when rejected."""
-        cand_sysml = get_sysml_text(candidate)
-        raw_plan = (
-            getattr(candidate, "metadata", None) or {}
-        ).get("whole_model_generation_plan")
-        if isinstance(raw_plan, Mapping):
-            from ..prototyping.generation_plan import (
-                PLAN_APPLICATION_HISTORY_KEY,
-                ModelGenerationPlan,
-                append_plan_application_history,
-                apply_generation_plan,
-            )
-
-            planned_candidate, conformance = apply_generation_plan(
-                cand_sysml,
-                ModelGenerationPlan.from_dict(raw_plan),
-            )
-            if conformance.get("status") != "PASS":
-                print(
-                    "  ⚠ Refinement violates the frozen typed structure "
-                    f"({len(conformance.get('issues', ())) or 1} issue(s)) "
-                    "— rejected before simulation repair",
-                    flush=True,
-                )
-                return None
-            if planned_candidate != cand_sysml:
-                cand_sysml = planned_candidate
-                self._sync_model_text(candidate, cand_sysml)
-        cand_syntax = check_syntax(cand_sysml)
-        cand_sim = self._run_simulation(cand_sysml, candidate.name)
-        candidate_eval = self.evaluator.evaluate(
-            config=DesignConfiguration(name="candidate", parameters={}),
-            model=candidate,
-            dse_config=dse_best_config,
-            syntax_result=cand_syntax,
-            sim_result=cand_sim,
-            requirements=requirements,
-        )
-        delta = candidate_eval.weighted_total - rule_score
-        delta_str = f"{delta:+.3f}"
-        if connectivity_floor:
-            cur_connects = self._count_connects(current_sysml)
-            cand_connects = self._count_connects(cand_sysml)
-            if cand_connects < cur_connects:
-                print(
-                    f"  ⚠ Refinement dropped connectivity "
-                    f"({cur_connects} → {cand_connects} connects) — "
-                    f"rejected to preserve resolved variation wiring",
-                    flush=True,
-                )
-                return None
-        if candidate_eval.weighted_total >= rule_score - 0.05:
-            print(
-                f"  ✓ Refinement accepted  "
-                f"rule: {rule_score:.3f} → {candidate_eval.weighted_total:.3f} "
-                f"({delta_str})",
-                flush=True,
-            )
-            if isinstance(raw_plan, Mapping):
-                if getattr(candidate, "metadata", None) is None:
-                    candidate.metadata = {}
-                history = append_plan_application_history(
-                    candidate.metadata,
-                    conformance,
-                    stage="ACCEPTED_REFINEMENT",
-                )
-                conformance[PLAN_APPLICATION_HISTORY_KEY] = history
-                candidate.metadata["generation_plan_conformance"] = (
-                    conformance
-                )
-            # ── Simulation inner loop ── re-run simulation on the accepted
-            # candidate and attempt up to MAX_SIM_INNER_ITERS targeted fixes
-            # before handing the model back to the outer loop.
-            refined = self._sim_refinement_loop(
-                candidate, requirements, max_iters=3
-            )
-            if getattr(refined, "metadata", None) is None:
-                refined.metadata = {}
-            refined.metadata["_accepted_refinement_rule_score"] = (
-                candidate_eval.weighted_total
-            )
-            return refined
-        print(
-            f"  ⚠ Refinement regression detected "
-            f"(rule: {rule_score:.3f} → {candidate_eval.weighted_total:.3f}), "
-            f"keeping current model",
-            flush=True,
-        )
-        return None
-
-
-    def _attempt_refinement(
-        self,
-        *,
-        current_model: SysMLModel,
-        current_sysml: str,
-        eval_result,
-        cot_eval,
-        persistent: List[str],
-        mcts_constraints: str,
-        sim_issues: List[str],
-        requirements: List[str],
-        rule_score: float,
-        dse_best_config: Optional[DesignConfiguration],
-        connectivity_floor: bool,
-    ) -> SysMLModel:
-        """One LLM refinement step: build the feedback prompt, generate a
-        candidate (surgical first, full rewrite fallback), and adopt it only
-        when the regression and connectivity guards accept it.  Returns the
-        model to carry into the next iteration."""
-        print(f"\n  ⟳  Refining model …", flush=True)
-        refinement_feedback = self._build_refinement_feedback(
-            eval_result,
-            cot_eval.final_answer if cot_eval else "",
-            persistent_issues=persistent,
-            mcts_constraints=mcts_constraints,
-            sim_issues=sim_issues,
-        )
-        candidate = self._generate_refinement_candidate(
-            current_model, current_sysml, eval_result,
-            refinement_feedback, requirements,
-        )
-        if candidate is None:
-            return current_model
-        accepted = self._accept_refinement_candidate(
-            candidate=candidate,
-            current_sysml=current_sysml,
-            rule_score=rule_score,
-            dse_best_config=dse_best_config,
-            requirements=requirements,
-            connectivity_floor=connectivity_floor,
-        )
-        return accepted if accepted is not None else current_model
 
 
     def _iterative_refinement(
@@ -947,7 +1170,7 @@ class RefinementMixin:
 
             # ── Rule-based evaluation (pass cached syntax + sim results;
             #    requirements enable requirement-derived dimension weights) ──
-            eval_result = self.evaluator.evaluate(
+            eval_result = self._intelligence.evaluate(
                 config=DesignConfiguration(
                     name=f"iteration_{iteration}",
                     parameters={},
@@ -973,8 +1196,7 @@ class RefinementMixin:
             # How much the pass/fail verdict depends on the weighting at all —
             # sampled over the weight simplex (answers "would another weighting
             # flip the outcome?").  Defensive: test doubles may not provide it.
-            _rob_fn = getattr(self.evaluator, "verdict_robustness", None)
-            verdict_rob = _rob_fn(eval_result) if callable(_rob_fn) else None
+            verdict_rob = self._intelligence.verdict_robustness(eval_result)
 
             # ── LLM evaluation (skip when rule score already sufficient OR
             #    when a [VETO] fired in the rule evaluator) ─────────────────
@@ -1134,24 +1356,50 @@ class RefinementMixin:
             has_llm_feedback = cot_eval is not None and bool(cot_eval.final_answer)
 
             if has_issues or has_llm_feedback:
-                current_model = self._attempt_refinement(
+                transaction = _RefinementTransaction(
+                    intelligence=self._intelligence,
+                    simulate=self._run_simulation,
+                    repair_simulation=self._sim_refinement_loop,
+                    use_surgical_refinement=self.use_surgical_refinement,
+                    verbose=self.verbose,
+                )
+                outcome = transaction.execute(_RefinementRequest(
                     current_model=current_model,
-                    current_sysml=current_sysml,
-                    eval_result=eval_result,
-                    cot_eval=cot_eval,
-                    persistent=persistent,
+                    evaluation=eval_result,
+                    cot_feedback=(
+                        cot_eval.final_answer if cot_eval else ""
+                    ),
+                    persistent_issues=persistent,
                     mcts_constraints=mcts_constraints,
-                    sim_issues=sim_issues,
+                    simulation_issues=sim_issues,
                     requirements=requirements,
                     rule_score=rule_score,
                     dse_best_config=dse_best_config,
                     connectivity_floor=connectivity_floor,
-                )
-                accepted_score = (
-                    getattr(current_model, "metadata", {}) or {}
-                ).pop("_accepted_refinement_rule_score", None)
+                ))
+                self._observe({
+                    "kind": "CANDIDATE_ADMISSION",
+                    "iteration": iteration + 1,
+                    "decision": outcome.decision.value,
+                    "candidate_rule_score": outcome.candidate_rule_score,
+                    "plan_conformance_issues": list(
+                        outcome.plan_conformance_issues
+                    ),
+                })
+                if outcome.plan_conformance_issues:
+                    self._append_pipeline_state_list(
+                        "plan_conformance_rejections", {
+                            "stage": "ITERATIVE_REFINEMENT",
+                            "iteration": iteration + 1,
+                            "decision": outcome.decision.value,
+                            "issues": list(outcome.plan_conformance_issues),
+                        }
+                    )
+                current_model = outcome.model
+                accepted_score = outcome.candidate_rule_score
                 if (
-                    isinstance(accepted_score, (int, float))
+                    outcome.accepted
+                    and isinstance(accepted_score, (int, float))
                     and float(accepted_score) > best_score
                 ):
                     # The last allowed iteration has no next pass in which to
@@ -1213,7 +1461,11 @@ class RefinementMixin:
               f"{'es' if max_iters > 1 else ''})")
 
         for it in range(max_iters):
-            linker = RequirementLinker(current, llm=self.llm, verbose=self.verbose)
+            linker = RequirementLinker(
+                current,
+                llm=self._intelligence,
+                verbose=self.verbose,
+            )
             items = linker.unresolved_feedback()
 
             if not items:
@@ -1232,7 +1484,7 @@ class RefinementMixin:
                 break
             last_sig = sig
 
-            refine_result = self.design_agent.run({
+            refine_result = self._intelligence.generate({
                 "system_name": current.name,
                 "requirements": requirements,
                 "existing_model": current,
@@ -1251,7 +1503,7 @@ class RefinementMixin:
             cand_sysml = get_sysml_text(candidate)
             cand_syntax = check_syntax(cand_sysml)
             cand_sim = self._run_simulation(cand_sysml, candidate.name)
-            cand_eval = self.evaluator.evaluate(
+            cand_eval = self._intelligence.evaluate(
                 config=DesignConfiguration(name="sitl_candidate", parameters={}),
                 model=candidate,
                 syntax_result=cand_syntax,
@@ -1270,99 +1522,6 @@ class RefinementMixin:
 
         print(f"  {'─'*62}", flush=True)
         return current, cur_score, cur_sim
-
-
-    def _port_fixer_fallback(
-        self,
-        sysml: str,
-        directory,
-        failed_payload: List[Dict],
-        isolated_parts,
-        current: SysMLModel,
-    ):
-        """connectivity_fixer found no usable connects — fall back to
-        port_fixer: add missing port declarations on part defs, then retry
-        connectivity once with the widened port directory.
-
-        Returns ``(sysml, merge, outcome)`` where outcome is:
-          "merged" — a validated connect merge is ready to apply;
-          "retry"  — intermediate text persisted, caller continues next pass;
-          "stop"   — unrecoverable, caller breaks out of the loop.
-        """
-        print(f"  │  ⚠ no valid connections — trying port fixer …",
-              flush=True)
-        port_defs  = collect_port_defs(sysml)
-        port_prompt = build_port_fix_prompt(
-            directory, port_defs, failed_payload
-        )
-        try:
-            port_raw = self.llm.chat(
-                port_prompt, system_prompt=_PORT_FIX_SYSTEM
-            )
-        except Exception as exc:
-            print(f"  │  ✗ LLM error in port fixer: {exc} — stopping",
-                  flush=True)
-            return sysml, None, "stop"
-
-        port_items = extract_port_additions(port_raw)
-        port_val   = validate_port_additions(
-            port_items, directory, port_defs
-        )
-        for item in port_val.accepted:
-            print(f"  │    + {item.part_def}: {item.to_sysml()}",
-                  flush=True)
-        for raw_line, reason in port_val.rejected:
-            print(f"  │    ✗ port rejected: {raw_line}  — {reason}",
-                  flush=True)
-
-        if not port_val.accepted:
-            print(f"  │  ⚠ no valid ports to add — stopping",
-                  flush=True)
-            return sysml, None, "stop"
-
-        port_merge = merge_port_additions(sysml, port_val.accepted)
-        sysml = port_merge.merged_text
-        print(
-            f"  │  ✓ added {port_merge.n_added} port(s): "
-            f"{', '.join(port_merge.added_descriptions)}",
-            flush=True,
-        )
-
-        # Rebuild directory with the new ports and retry connectivity.
-        directory = build_port_directory(sysml)
-        existing  = parse_connects(sysml)
-        try:
-            raw2 = self.llm.chat(
-                build_connectivity_prompt(
-                    directory, existing, failed_payload,
-                    isolated_parts=isolated_parts,
-                ),
-                system_prompt=_CONNECTIVITY_FIX_SYSTEM,
-            )
-        except Exception as exc:
-            print(f"  │  ✗ LLM error in post-port connect: {exc}",
-                  flush=True)
-            # Persist the port additions; let next pass try connects.
-            self._sync_model_text(current, sysml)
-            return sysml, None, "retry"
-
-        cand_lines2 = extract_connect_lines(raw2)
-        validation2 = validate_connects(cand_lines2, directory, existing)
-        for stmt in validation2.accepted:
-            print(f"  │    + {stmt.to_sysml()}", flush=True)
-        for line, reason in validation2.rejected:
-            print(f"  │    ✗ rejected: {line}  — {reason}", flush=True)
-
-        if not validation2.accepted:
-            print(
-                f"  │  ⚠ no valid connections after port fix"
-                f" — persisting ports for next pass",
-                flush=True,
-            )
-            self._sync_model_text(current, sysml)
-            return sysml, None, "retry"
-
-        return sysml, merge_connects(sysml, validation2.accepted), "merged"
 
 
     def _finalize_sim_loop(self, current: SysMLModel, max_iters: int) -> SysMLModel:
@@ -1604,7 +1763,7 @@ class RefinementMixin:
             # ports so existing connects are traversable as written — resolves 'connected but signal
             # direction may be wrong' cheaply, so only genuinely-missing connections reach the LLM
             # step below (avoids escalating direction errors to slow LLM refinement). Idempotent.
-            from ..simulation.direction_fixer import fix_signal_directions
+            from ..simulation.connectivity_fixer import fix_signal_directions
             direction_candidate, _n_dir, _dir_names = fix_signal_directions(sysml)
             if _n_dir:
                 direction_sim = self._run_simulation(
@@ -1681,7 +1840,7 @@ class RefinementMixin:
             # connect (e.g. payloadStatus payload→flightController). Add those deterministically
             # (validated: type/direction/single-driver) BEFORE spending an LLM call. Resolves the
             # common churn cheaply; only genuinely-ambiguous gaps reach the LLM below.
-            from ..simulation.direction_fixer import fix_missing_connects
+            from ..simulation.connectivity_fixer import fix_missing_connects
             _fp = [{"src": _scenario_src_instance(r.scenario_name),
                     "tgts": list(r.unreachable_targets)} for r in failed]
             _mc_text, _n_mc, _mc_lines = fix_missing_connects(sysml, _fp)
@@ -1724,8 +1883,6 @@ class RefinementMixin:
             # match, single-driver in-ports) before merging.
             print(f"  │  ⟳  Fixing connectivity (surgical) …", flush=True)
 
-            directory = build_port_directory(sysml)
-            existing  = parse_connects(sysml)
             failed_payload = [
                 {
                     "name": r.scenario_name,
@@ -1734,62 +1891,70 @@ class RefinementMixin:
                 }
                 for r in failed
             ]
-            conn_prompt = build_connectivity_prompt(
-                directory, existing, failed_payload,
-                isolated_parts=sim_result.isolated_parts,
-            )
-
             try:
-                raw = self.llm.chat(conn_prompt, system_prompt=_CONNECTIVITY_FIX_SYSTEM)
-            except Exception as exc:
-                print(f"  │  ✗ LLM error: {exc} — keeping candidate", flush=True)
-                continue
-
-            cand_lines = extract_connect_lines(raw)
-            validation = validate_connects(cand_lines, directory, existing)
-
-            for stmt in validation.accepted:
-                print(f"  │    + {stmt.to_sysml()}", flush=True)
-            for line, reason in validation.rejected:
-                print(f"  │    ✗ rejected: {line}  — {reason}", flush=True)
-
-            if not validation.accepted:
-                pre_fallback_text = sysml
-                sysml, merge, outcome = self._port_fixer_fallback(
-                    sysml, directory, failed_payload,
-                    sim_result.isolated_parts, current,
+                reconciliation = reconcile_connectivity(
+                    sysml,
+                    failed_scenarios=failed_payload,
+                    isolated_parts=sim_result.isolated_parts,
+                    propose=lambda prompt, system_prompt: self._intelligence.chat(
+                        prompt,
+                        system_prompt=system_prompt,
+                    ),
+                    connectivity_system_prompt=_CONNECTIVITY_FIX_SYSTEM,
+                    port_system_prompt=_PORT_FIX_SYSTEM,
                 )
-                if outcome == "stop":
-                    break
-                if outcome == "retry":
-                    candidate_sim = self._run_simulation(sysml, current.name)
+            except ConnectivityProposalError as exc:
+                reconciliation = exc.partial
+                print(f"  │  ✗ LLM error: {exc.__cause__ or exc}", flush=True)
+                if reconciliation.changed:
+                    candidate_sim = self._run_simulation(
+                        reconciliation.model_text,
+                        current.name,
+                    )
                     if (
                         self._simulation_quality_key(candidate_sim)
                         > self._simulation_quality_key(sim_result)
                     ):
-                        self._sync_model_text(current, sysml)
+                        self._sync_model_text(
+                            current,
+                            reconciliation.model_text,
+                        )
                     else:
-                        self._sync_model_text(current, pre_fallback_text)
                         self._record_rejected_connectivity_edit(
                             current,
                             source="PORT_ONLY_FALLBACK",
                             before=sim_result,
                             after=candidate_sim,
                         )
-                    continue
-            else:
-                merge = merge_connects(sysml, validation.accepted)
+                continue
+
+            for item in reconciliation.added_ports:
+                print(f"  │    + {item.part_def}: {item.to_sysml()}", flush=True)
+            for stmt in reconciliation.added_connections:
+                print(f"  │    + {stmt.to_sysml()}", flush=True)
+            for diagnostic in reconciliation.diagnostics:
+                print(
+                    f"  │    ✗ rejected: {diagnostic.detail}",
+                    flush=True,
+                )
+
+            if not reconciliation.changed:
+                print(f"  │  ⚠ no valid connectivity proposal — stopping", flush=True)
+                break
 
             # Type/direction validity is necessary but not sufficient. Commit the
             # edit only when it improves actual reachability/behavior evidence.
-            candidate_sim = self._run_simulation(merge.merged_text, current.name)
+            candidate_sim = self._run_simulation(
+                reconciliation.model_text,
+                current.name,
+            )
             if (
                 self._simulation_quality_key(candidate_sim)
                 > self._simulation_quality_key(sim_result)
             ):
-                self._sync_model_text(current, merge.merged_text)
+                self._sync_model_text(current, reconciliation.model_text)
                 print(
-                    f"  │  ✓ added {merge.n_added} validated connection(s); "
+                    "  │  ✓ accepted validated connectivity repair; "
                     "simulation improved",
                     flush=True,
                 )
@@ -1801,7 +1966,7 @@ class RefinementMixin:
                     after=candidate_sim,
                 )
                 print(
-                    f"  │  ↩ rejected {merge.n_added} validated connection(s): "
+                    "  │  ↩ rejected validated connectivity repair: "
                     "simulation did not improve",
                     flush=True,
                 )
@@ -1832,7 +1997,6 @@ class RefinementMixin:
         if not result.has_violations:
             return sysml_text, model
 
-        W = 62
         print(f"\n  ┌─ [CONNECT-AUDIT]  {result.n_removed} invalid connect(s) removed",
               flush=True)
         for v in result.violations:
@@ -1916,7 +2080,10 @@ class RefinementMixin:
 
                 prompt = build_transition_prompt(info, stuck_state, fired, expected)
                 try:
-                    raw = self.llm.chat(prompt, system_prompt=_TRANSITION_FIX_SYSTEM)
+                    raw = self._intelligence.chat(
+                        prompt,
+                        system_prompt=_TRANSITION_FIX_SYSTEM,
+                    )
                 except Exception as exc:
                     print(f"  │    ✗ LLM error: {exc}", flush=True)
                     continue
@@ -2232,7 +2399,7 @@ class RefinementMixin:
 
         t0 = time.perf_counter()
         try:
-            raw_fix = self.llm.chat(
+            raw_fix = self._intelligence.chat(
                 prompt, system_prompt=_SURGICAL_FIX_SYSTEM
             )
         except Exception as exc:
@@ -2385,9 +2552,12 @@ class RefinementMixin:
     def _run_simulation(self, sysml_text: str, model_name: str) -> SimulationResult:
         """Run simulation and attach fixed requirement-path evidence."""
         try:
-            result = self.sim_validator.validate(
-                sysml_text, model_name=model_name
-            )
+            if self._simulation_runner is not None:
+                result = self._simulation_runner(sysml_text, model_name)
+            else:
+                result = self.sim_validator.validate(
+                    sysml_text, model_name=model_name
+                )
             raw_plan = getattr(
                 self, "_active_model_generation_plan", None
             )
@@ -2521,61 +2691,3 @@ class RefinementMixin:
             )
 
         return issues
-
-
-    @staticmethod
-    def _build_refinement_feedback(
-        eval_result: Any,
-        cot_feedback: str,
-        persistent_issues: Optional[List[str]] = None,
-        mcts_constraints: str = "",
-        sim_issues: Optional[List[str]] = None,
-    ) -> str:
-        """Combine evaluator issues, simulation failures, and LLM feedback into
-        a refinement-oriented prompt section.
-
-        Args:
-            eval_result:        Rule-based evaluation result (issues + recommendations).
-            cot_feedback:       LLM chain-of-thought final answer (may be empty).
-            persistent_issues:  Issues that have appeared in more than one iteration.
-            mcts_constraints:   Architectural decisions from MCTS (non-negotiable).
-            sim_issues:         Behavioral simulation failures from SimulationValidator.
-        """
-        lines = []
-
-        # MCTS decisions come first — they are non-negotiable architectural constraints
-        if mcts_constraints:
-            lines.append(mcts_constraints)
-            lines.append("")
-
-        lines.append("Refinement targets:")
-        for issue in eval_result.issues:
-            lines.append(f"- {issue}")
-        for rec in eval_result.recommendations:
-            lines.append(f"- {rec}")
-
-        # Simulation failures: these are structural connectivity gaps found by
-        # running the port-connection graph against operational scenarios.
-        if sim_issues:
-            lines.append("")
-            lines.append(
-                "Behavioral simulation failures (port-connection reachability check):\n"
-                "  The following operational scenarios have no directed signal path in the model.\n"
-                "  Add `connect <source_part>::<port> to <target_part>::<port>;` statements\n"
-                "  to establish the missing paths."
-            )
-            for iss in sim_issues:
-                lines.append(f"- [SIM] {iss}")
-
-        if persistent_issues:
-            lines.append("")
-            lines.append(
-                "Persistent issues (appeared in multiple iterations — escalate priority):"
-            )
-            for iss in persistent_issues:
-                lines.append(f"- [PERSISTENT] {iss}")
-        if cot_feedback:
-            lines.append("")
-            lines.append("LLM evaluation summary:")
-            lines.append(cot_feedback)
-        return "\n".join(lines)

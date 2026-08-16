@@ -25,8 +25,9 @@ Key design decisions vs. the old Syside_AST_Parser version:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Set, Dict, List, Optional
 
 from ..utils.suppressed import record_suppressed
 
@@ -79,6 +80,12 @@ class BehavioralGraph:
     ports: Dict[str, PortNode] = field(default_factory=dict)
     actions: Dict[str, ActionNode] = field(default_factory=dict)
     connections: List[ConnectionEdge] = field(default_factory=list)
+    # PartDefinition names the model declares passive via a
+    # `// PLAN-PASSIVE <PartDef>: <reason>` marker (written from the generation
+    # plan). A passive body exchanges nothing, so scenario generation must not
+    # expect any path into or out of it. Read from the text here so that the
+    # decision the planner recorded reaches the simulator without a plan object.
+    passive_defs: Set[str] = field(default_factory=set)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +164,12 @@ def extract_behavioral_graph(
     Returns an empty BehavioralGraph if syside is unavailable or parsing fails.
     """
     bg = BehavioralGraph()
+    bg.passive_defs = {
+        m.group(1)
+        for m in re.finditer(
+            r"(?m)^[ \t]*//\s*PLAN-PASSIVE\s+([A-Za-z_]\w*)\s*:", sysml_text or ""
+        )
+    }
 
     if not _SYSIDE_OK:
         return bg

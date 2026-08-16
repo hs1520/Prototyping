@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from ..utils.req_id import normalise_req_id
+from ..utils.req_id import normalise_req_id, source_requirements_by_id
 from ..utils.sysml_text_utils import find_block_end
 from .event_symbols import (
     PlannedEventSymbol,
@@ -24,18 +24,8 @@ from .event_symbols import (
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_]\w*$")
-_REQ_ID = re.compile(r"\bREQ[-_][A-Za-z]+[-_]\d+\b", re.IGNORECASE)
 _TRIGGER_KINDS = {"ACCEPT", "GUARD"}
 _STATE_ROLES = {"INITIAL", "NORMAL", "RESPONSE", "FAULT"}
-
-
-def _source_map(requirements: Sequence[str]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for raw in requirements:
-        source = str(raw or "").strip()
-        for match in _REQ_ID.findall(source):
-            result[normalise_req_id(match)] = source
-    return result
 
 
 @dataclass(frozen=True)
@@ -131,7 +121,7 @@ class PlannedBehavior:
             or ""
         ).strip()
         req_id = normalise_req_id(req_id) if req_id else None
-        source = _source_map(requirements).get(req_id or "")
+        source = source_requirements_by_id(requirements).get(req_id or "")
         archived_digest = (
             provenance.get("source_digest")
             or value.get("source_digest")
@@ -200,7 +190,7 @@ def validate_planned_behaviors(
 ) -> list[str]:
     """Validate referential integrity before any SysML text is generated."""
     issues: list[str] = []
-    sources = _source_map(requirements)
+    sources = source_requirements_by_id(requirements)
     seen_behaviors: set[tuple[str, str]] = set()
     globally_named: set[str] = set()
     ports_by_owner = component_port_names or {}

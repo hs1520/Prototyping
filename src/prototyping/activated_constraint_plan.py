@@ -10,10 +10,21 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import Any, AbstractSet, Iterable, Mapping, Sequence
 
-from ..utils.req_id import normalise_req_id
+from .requirement_semantics import (
+    RequirementSemanticObligation,
+    SemanticBindingPlan,
+    compile_requirement_semantic_obligations,
+    quantity_type_for_unit,
+    semantic_binding_matches_subject,
+)
+from ..utils.req_id import (
+    normalise_req_id,
+    source_requirements_by_id,
+    strip_req_ids,
+)
 from ..utils.sysml_text_utils import find_block_end
 
 
@@ -67,6 +78,7 @@ VERIFICATION_TIERS = {
 #: pilot_n6_20260802/seed-3, the only seed that planned equality state
 #: constraints and the only one in its arm to lose the qualification gate.
 _LIVE_BOUNDARY_OPERATORS = frozenset({"<=", ">=", "<", ">"})
+_GENERIC_PORT_TYPES = frozenset({"DataPort", "StatusPort", "CommandPort"})
 
 
 def _state_execution_obstacle(constraint, lhs) -> str | None:
@@ -83,14 +95,26 @@ def _state_execution_obstacle(constraint, lhs) -> str | None:
             f"`{constraint.operator}` has no live satisfaction boundary to "
             "execute against"
         )
-    # Deliberately NOT checked here: the executor also demands the subject be an
-    # attribute bound to a dotted input path, and rejects `LOCAL_STATE` values
-    # that carry only an initial value. The two components already disagreed on
-    # that before this change — `test_state_active_property_is_serialized_inside_
-    # owning_state` plans exactly such a constraint and the validator has always
-    # passed it. Aligning them would reject plans that are legal today, and it is
-    # not established which side is wrong: the executor may be over-strict rather
-    # than the plan over-permissive. Reported, not silently repaired.
+    # The executor also demands the subject be an attribute bound to a dotted
+    # input path (behavioral_sim._run_state_active_constraint_scenario: no
+    # binding -> "Runtime subject X is not bound to an input data path"). This
+    # was deliberately left unchecked for a time because it was not established
+    # which side was wrong. Repeated end-to-end probes on LLM-extracted
+    # requirement sets (2026-08-16) settled it: the executor is right. An
+    # unbound subject cannot be swept, the scenario fails, the row lands
+    # behavioral_sim_failed, and the closure repair that would add the binding
+    # is refused by plan conformance as an unplanned element -- a dead lock the
+    # frozen requirement set never hit only because its equivalent constraint
+    # was anchored by the datasheet tier as well. Aligning the two: an unbound
+    # subject is an obstacle to STATE_EXECUTION, and the constraint must claim
+    # INSPECTION instead (still emitted, still inspectable, not counted as
+    # discharged execution evidence), or the plan must bind the subject.
+    if lhs is not None and not lhs.input_binding:
+        return (
+            f"subject {lhs.name} has no input binding, so the state executor "
+            "cannot sweep it; bind it to a port item feature in "
+            "semantic_bindings or claim INSPECTION"
+        )
     return None
 
 
@@ -136,7 +160,6 @@ def state_execution_advisories(
 _IDENTIFIER = re.compile(r"^[A-Za-z_]\w*$")
 _QUALIFIED = re.compile(r"^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*$")
 _NUMBER = re.compile(r"^[-+]?\d+(?:\.\d+)?$")
-_REQ_ID = re.compile(r"\bREQ[-_][A-Za-z]+[-_]\d+\b", re.IGNORECASE)
 _ASSERT = re.compile(
     r"\bassert\s+constraint\s+(?P<name>[A-Za-z_]\w*)\s*\{"
 )
@@ -166,15 +189,6 @@ _PLAN_COMMENT = re.compile(
 )
 
 
-def _source_map(requirements: Sequence[str]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for raw in requirements:
-        source = str(raw or "").strip()
-        for match in _REQ_ID.findall(source):
-            result[normalise_req_id(match)] = source
-    return result
-
-
 def _source_digest(source: str) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
@@ -183,10 +197,22 @@ def _normalise_expression(value: str) -> str:
     return " ".join(str(value or "").split())
 
 
+# Requirement text written by people, or extracted by a model, spells a
+# negative bound with the typographic minus U+2212 ("−10 °C") at least as
+# often as with the ASCII hyphen-minus; a plan spells it with the hyphen. Both
+# have to read as the same number, or a bound copied faithfully from the
+# requirement is refused as absent from it.
+_MINUS_VARIANTS = str.maketrans({"\u2212": "-", "\u2013": "-", "\u2014": "-"})
+
+
+def _ascii_minus(text: str) -> str:
+    return text.translate(_MINUS_VARIANTS)
+
+
 def _numeric(value: str | None) -> float | None:
     if value is None:
         return None
-    match = re.search(r"[-+]?\d+(?:\.\d+)?", str(value))
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", _ascii_minus(str(value)))
     if match is None:
         return None
     try:
@@ -228,12 +254,22 @@ def _unit_tokens(source: str) -> set[str]:
             r"m/s|km/h|"
             r"\b(?:ms|s|m|km|m_s|km_h|N|V|A|W|Hz|kg|g|percent|"
             r"metres?|meters?|seconds?|milliseconds?|kilometres?|kilometers?|"
-            r"degrees?|deg|minutes?|min)\b|%",
+            r"degrees?|deg|minutes?|min|degc|celsius)\b|%|°C|°",
             source,
             flags=re.IGNORECASE,
         )
     }
     aliases = {
+        # An extracted requirement may spell the unit as the symbol "°"
+        # where a frozen one wrote "degree"; both must resolve to the same
+        # token, or every plan constraint on a symbol-spelled bound is refused.
+        "°": "deg",
+        # Temperature. An extracted requirement writes "-10 °C to +45 °C";
+        # a plan may spell it "°C", "degC" or "celsius". All resolve to one
+        # token. Ordered before the bare "°" alternative in the regex above,
+        # or "°C" is only ever seen as an angle followed by a stray letter.
+        "°c": "degc",
+        "celsius": "degc",
         "metre": "m",
         "metres": "m",
         "meter": "m",
@@ -278,7 +314,7 @@ class AttributePlan:
         *,
         requirements: Sequence[str] = (),
     ) -> "AttributePlan":
-        sources = _source_map(requirements)
+        sources = source_requirements_by_id(requirements)
         req_id = str(
             value.get("source_requirement_id")
             or value.get("requirement_id")
@@ -392,7 +428,7 @@ class ConstraintPlan:
                 provenance or "DESIGN_DECISION"
             ).strip().upper()
         req_id = normalise_req_id(req_id) if req_id else None
-        source = _source_map(requirements).get(req_id or "")
+        source = source_requirements_by_id(requirements).get(req_id or "")
         archived_digest = None
         if isinstance(provenance, Mapping):
             archived_digest = provenance.get("source_digest")
@@ -461,6 +497,367 @@ class ConstraintPlan:
         }
 
 
+@dataclass(frozen=True)
+class ConstraintPlanningContext:
+    """Architecture facts required to compile semantic constraints."""
+
+    components: Sequence[Any]
+    port_lookup: Mapping[tuple[str, str], Any]
+    connection_keys: AbstractSet[tuple[str, str, str, str]]
+    allocated_component_requirements: AbstractSet[tuple[str, str]]
+
+
+@dataclass(frozen=True)
+class CompiledConstraintPlan:
+    """Complete semantic-binding and activated-constraint compilation."""
+
+    components: tuple[Any, ...]
+    semantic_obligations: tuple[RequirementSemanticObligation, ...]
+    semantic_bindings: tuple[SemanticBindingPlan, ...]
+    constraints: tuple[ConstraintPlan, ...]
+    identity_reconciliations: tuple[str, ...]
+    issues: tuple[str, ...]
+    advisories: tuple[str, ...]
+
+
+def compile_constraint_plan(
+    payload: Mapping[str, Any],
+    *,
+    requirements: Sequence[str],
+    context: ConstraintPlanningContext,
+) -> CompiledConstraintPlan:
+    """Compile semantic bindings, attributes, and constraints as one unit.
+
+    This is the sole construction path for requirement-derived constraint
+    knowledge.  It validates the typed data chain against the architecture,
+    reconciles explicit and derived constraint identities, enriches component
+    attributes, and returns all diagnostics through one result.
+    """
+    issues: list[str] = []
+    components = list(context.components)
+    archived_obligations = tuple(
+        RequirementSemanticObligation.from_dict(dict(item))
+        for item in (payload.get("semantic_obligations") or ())
+        if isinstance(item, Mapping)
+    )
+    semantic_obligations = (
+        compile_requirement_semantic_obligations(requirements)
+        if requirements else archived_obligations
+    )
+    raw_bindings = payload.get("semantic_bindings")
+    if not isinstance(raw_bindings, Sequence) or isinstance(
+        raw_bindings, (str, bytes)
+    ):
+        raw_bindings = ()
+        if semantic_obligations:
+            issues.append(
+                "semantic_bindings must contain one typed binding for "
+                "each semantic obligation"
+            )
+
+    bindings: list[SemanticBindingPlan] = []
+    obligations_by_id = {
+        item.obligation_id: item for item in semantic_obligations
+    }
+    seen_binding_ids: set[str] = set()
+    port_payloads: dict[str, tuple[str, str]] = {}
+    item_features: dict[tuple[str, str], tuple[str, str]] = {}
+    component_names = {item.name for item in components}
+    for index, raw in enumerate(raw_bindings):
+        if not isinstance(raw, Mapping):
+            issues.append(f"semantic_bindings[{index}] must be an object")
+            continue
+        binding = SemanticBindingPlan.from_dict(raw)
+        bindings.append(binding)
+        prefix = f"semantic_bindings[{index}]"
+        obligation = obligations_by_id.get(binding.obligation_id)
+        if obligation is None:
+            issues.append(
+                f"{prefix} references unknown obligation "
+                f"{binding.obligation_id!r}"
+            )
+        elif binding.requirement_id != obligation.requirement_id:
+            issues.append(
+                f"{prefix} requirement_id does not match "
+                f"{binding.obligation_id}"
+            )
+        if binding.obligation_id in seen_binding_ids:
+            issues.append(
+                f"duplicate semantic binding for {binding.obligation_id}"
+            )
+        seen_binding_ids.add(binding.obligation_id)
+
+        identifier_fields = {
+            "source.component": binding.source_component,
+            "source.port": binding.source_port,
+            "target.component": binding.target_component,
+            "target.port": binding.target_port,
+            "payload.port_type": binding.port_type,
+            "payload.port_feature": binding.port_feature,
+            "payload.item_type": binding.item_type,
+            "payload.item_feature": binding.item_feature,
+            "target.runtime_attribute": binding.runtime_attribute,
+            "constraint.threshold_attribute": binding.threshold_attribute,
+            "constraint.name": binding.constraint_name,
+        }
+        for field_name, field_value in identifier_fields.items():
+            if not _IDENTIFIER.fullmatch(field_value):
+                issues.append(
+                    f"{prefix}.{field_name} is not a SysML identifier"
+                )
+        if not _QUALIFIED.fullmatch(binding.value_type):
+            issues.append(
+                f"{prefix}.payload.value_type is not a SysML type"
+            )
+        expected_quantity_type = quantity_type_for_unit(binding.unit)
+        if expected_quantity_type is None:
+            issues.append(
+                f"{prefix}.payload.unit {binding.unit!r} has no supported "
+                "SysML v2 ISQ quantity-type mapping"
+            )
+        elif binding.value_type != expected_quantity_type:
+            issues.append(
+                f"{prefix}.payload.value_type must be "
+                f"{expected_quantity_type} for [{binding.unit}]"
+            )
+
+        source_port = context.port_lookup.get((
+            binding.source_component,
+            binding.source_port,
+        ))
+        target_port = context.port_lookup.get((
+            binding.target_component,
+            binding.target_port,
+        ))
+        if source_port is None or target_port is None:
+            issues.append(f"{prefix} references an undeclared semantic endpoint")
+        else:
+            if (
+                source_port.port_type != binding.port_type
+                or target_port.port_type != binding.port_type
+            ):
+                issues.append(
+                    f"{prefix}.payload.port_type does not match both "
+                    "planned endpoints"
+                )
+            if (
+                binding.source_component,
+                binding.source_port,
+                binding.target_component,
+                binding.target_port,
+            ) not in context.connection_keys:
+                issues.append(
+                    f"{prefix} endpoints are not a planned connection"
+                )
+        if binding.port_type in _GENERIC_PORT_TYPES:
+            issues.append(
+                f"{prefix} must use a requirement-relevant dedicated "
+                f"port type, not generic {binding.port_type}"
+            )
+        if binding.item_type in component_names:
+            issues.append(
+                f"{prefix}.payload.item_type collides with planned "
+                f"component {binding.item_type}"
+            )
+        if binding.port_type in component_names:
+            issues.append(
+                f"{prefix}.payload.port_type collides with planned "
+                f"component {binding.port_type}"
+            )
+        if binding.item_type == binding.port_type:
+            issues.append(
+                f"{prefix} cannot use the same definition name for "
+                "item_type and port_type"
+            )
+        if (
+            binding.target_component,
+            binding.requirement_id,
+        ) not in context.allocated_component_requirements:
+            issues.append(
+                f"{prefix} target component is not allocated "
+                f"{binding.requirement_id}"
+            )
+        if obligation is not None:
+            if binding.unit != obligation.unit:
+                issues.append(
+                    f"{prefix}.payload.unit does not preserve "
+                    f"{obligation.unit}"
+                )
+            if not semantic_binding_matches_subject(binding, obligation):
+                issues.append(
+                    f"{prefix} feature/attribute names do not preserve "
+                    "the frozen subject"
+                )
+        if binding.runtime_attribute == binding.threshold_attribute:
+            issues.append(
+                f"{prefix} runtime and threshold attributes must differ"
+            )
+        payload_key = (binding.item_type, binding.port_feature)
+        prior_payload = port_payloads.setdefault(
+            binding.port_type,
+            payload_key,
+        )
+        if prior_payload != payload_key:
+            issues.append(
+                f"port type {binding.port_type} has conflicting "
+                "semantic payload plans"
+            )
+        feature_key = (binding.value_type, binding.unit)
+        prior_feature = item_features.setdefault(
+            (binding.item_type, binding.item_feature),
+            feature_key,
+        )
+        if prior_feature != feature_key:
+            issues.append(
+                f"item feature {binding.item_type}."
+                f"{binding.item_feature} has conflicting type/unit plans"
+            )
+
+    for obligation_id in sorted(set(obligations_by_id) - seen_binding_ids):
+        issues.append(f"{obligation_id} has no typed semantic binding")
+
+    explicit_constraints = [
+        ConstraintPlan.from_dict(item, requirements=requirements)
+        for item in (payload.get("constraints") or ())
+        if isinstance(item, Mapping)
+    ]
+    semantic_by_id = {
+        item.obligation_id: item for item in semantic_obligations
+    }
+    reconciliations: list[str] = []
+    derived_constraints: list[ConstraintPlan] = []
+    derived_attributes: dict[str, list[AttributePlan]] = {}
+    explicit_by_semantics: dict[
+        tuple[str, str, str, str, str], list[ConstraintPlan]
+    ] = {}
+    for constraint in explicit_constraints:
+        semantic_key = (
+            constraint.source_requirement_id or "",
+            constraint.owner,
+            constraint.lhs,
+            constraint.operator,
+            constraint.rhs,
+        )
+        explicit_by_semantics.setdefault(semantic_key, []).append(constraint)
+    for semantic_key, matches in explicit_by_semantics.items():
+        if len(matches) > 1:
+            issues.append(
+                "duplicate semantic constraint identity "
+                + "::".join(semantic_key)
+                + ": "
+                + ", ".join(item.constraint_id for item in matches)
+            )
+
+    reconciled_bindings: list[SemanticBindingPlan] = []
+    for binding in bindings:
+        obligation = semantic_by_id.get(binding.obligation_id)
+        if obligation is None:
+            reconciled_bindings.append(binding)
+            continue
+        derived_attributes.setdefault(binding.target_component, []).extend([
+            AttributePlan(
+                name=binding.runtime_attribute,
+                value_type=binding.value_type,
+                unit=binding.unit,
+                role="RUNTIME_MEASUREMENT",
+                input_binding=binding.source_path,
+                provenance="FROZEN_REQUIREMENT",
+                source_requirement_id=binding.requirement_id,
+                source_digest=obligation.source_digest,
+            ),
+            AttributePlan(
+                name=binding.threshold_attribute,
+                value_type=binding.value_type,
+                unit=binding.unit,
+                role="FROZEN_THRESHOLD",
+                initial_value=f"{obligation.threshold:g} [{obligation.unit}]",
+                provenance="FROZEN_REQUIREMENT",
+                source_requirement_id=binding.requirement_id,
+                source_digest=obligation.source_digest,
+            ),
+        ])
+        semantic_key = (
+            binding.requirement_id,
+            binding.target_component,
+            binding.runtime_attribute,
+            obligation.operator,
+            binding.threshold_attribute,
+        )
+        matches = explicit_by_semantics.get(semantic_key, [])
+        if len(matches) == 1:
+            canonical = matches[0]
+            if (
+                obligation.activation_kind == "CONTEXTUAL"
+                and canonical.activation_kind != "STATE_ACTIVE"
+            ):
+                issues.append(
+                    f"{binding.obligation_id} preserves contextual clause "
+                    f"{obligation.activation_clause!r} but its canonical "
+                    "constraint is not STATE_ACTIVE"
+                )
+            if binding.constraint_name != canonical.constraint_id:
+                reconciliations.append(
+                    f"{binding.target_component}."
+                    f"{binding.constraint_name} -> "
+                    f"{canonical.constraint_id} "
+                    f"({binding.obligation_id})"
+                )
+                binding = replace(
+                    binding,
+                    constraint_name=canonical.constraint_id,
+                )
+        elif not matches:
+            if obligation.activation_kind == "CONTEXTUAL":
+                issues.append(
+                    f"{binding.obligation_id} contextual bound "
+                    f"{obligation.activation_clause!r} requires exactly "
+                    "one matching STATE_ACTIVE constraint"
+                )
+            else:
+                derived_constraints.append(ConstraintPlan(
+                    constraint_id=binding.constraint_name,
+                    owner=binding.target_component,
+                    lhs=binding.runtime_attribute,
+                    operator=obligation.operator,
+                    rhs=binding.threshold_attribute,
+                    activation_kind="ALWAYS",
+                    provenance="FROZEN_REQUIREMENT",
+                    verification_tier="PARAMETRIC_SWEEP",
+                    source_requirement_id=binding.requirement_id,
+                    source_digest=obligation.source_digest,
+                ))
+        reconciled_bindings.append(binding)
+
+    if derived_attributes:
+        enriched_components: list[Any] = []
+        for component in components:
+            by_name = {item.name: item for item in component.attributes}
+            for item in derived_attributes.get(component.name, ()):
+                by_name[item.name] = item
+            enriched_components.append(replace(
+                component,
+                attributes=tuple(by_name.values()),
+            ))
+        components = enriched_components
+
+    constraints = tuple([*explicit_constraints, *derived_constraints])
+    issues.extend(validate_constraint_plan(
+        constraints,
+        components,
+        requirements,
+    ))
+    advisories = tuple(state_execution_advisories(constraints, components))
+    return CompiledConstraintPlan(
+        components=tuple(components),
+        semantic_obligations=tuple(semantic_obligations),
+        semantic_bindings=tuple(reconciled_bindings),
+        constraints=constraints,
+        identity_reconciliations=tuple(reconciliations),
+        issues=tuple(issues),
+        advisories=advisories,
+    )
+
+
 def validate_constraint_plan(
     constraints: Sequence[ConstraintPlan],
     components: Sequence[Any],
@@ -474,7 +871,7 @@ def validate_constraint_plan(
         for component in components
         for attribute in component.attributes
     }
-    sources = _source_map(requirements)
+    sources = source_requirements_by_id(requirements)
     for component in components:
         names: set[str] = set()
         for index, attribute in enumerate(component.attributes):
@@ -589,11 +986,20 @@ def validate_constraint_plan(
             lhs is not None
             and lhs.role == "RUNTIME_MEASUREMENT"
             and not lhs.input_binding
-            and constraint.verification_tier != "STATE_EXECUTION"
         ):
+            # No tier is exempt. STATE_EXECUTION used to be, on the reasoning
+            # that the state executor supplied the value; it does not -- it
+            # reads the bound input like every other tier, and an unbound
+            # runtime measurement under a STATE_ACTIVE constraint fails at
+            # simulation ("runtime subject X is not bound to an input") after
+            # the plan is frozen, when the only repair that would help (a new
+            # binding) is one the plan-conformance gate must refuse. Raising it
+            # here puts the obligation where the LLM can still meet it.
             issues.append(
-                f"{prefix} external runtime measurement {lhs.name} "
-                "has no input binding"
+                f"{prefix} runtime measurement {lhs.name} has no input "
+                "binding; a RUNTIME_MEASUREMENT attribute used in a constraint "
+                "must be bound to a port item feature in semantic_bindings, "
+                "or its role must be changed to a value the design fixes"
             )
         if (
             constraint.provenance == "FROZEN_REQUIREMENT"
@@ -609,7 +1015,7 @@ def validate_constraint_plan(
                     _numeric(rhs.initial_value)
                     if rhs is not None else _numeric(constraint.rhs)
                 )
-                source_without_id = _REQ_ID.sub("", source)
+                source_without_id = _ascii_minus(strip_req_ids(source))
                 source_numbers = {
                     float(item)
                     for item in re.findall(
@@ -916,10 +1322,6 @@ def _activation_issue(
             f"behavior {behavior_name} cannot be parsed"
         )
     behavior_body = owner_body[opening + 1:closing]
-    declared_states = set(re.findall(
-        r"\bstate\s+(?!def\b)([A-Za-z_]\w*)\b",
-        behavior_body,
-    ))
     initial = re.search(
         r"\btransition\s+initial\s+then\s+([A-Za-z_]\w*)\s*;",
         behavior_body,

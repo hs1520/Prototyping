@@ -16,7 +16,8 @@ from ..dse.design_space import (
 )
 from ..simulation.syntax_checker import check_syntax
 from ..sysml.model import SysMLModel
-from ..utils.sysml_text_utils import get_sysml_text
+from ..utils.sysml_text_utils import get_sysml_text, set_sysml_text
+from .refinement import ModelRevision, RefinementClosureRequest
 
 
 class ExplorationMixin:
@@ -104,7 +105,7 @@ class ExplorationMixin:
                     base_text = get_sysml_text(final_model)
                     injected, ok = inject_realization_analysis(base_text, realization["_report"])
                     if ok:
-                        self._sync_model_text(final_model, injected)
+                        set_sysml_text(final_model, injected)
                         print("  [realization] injected RealizationPackage into final model")
                 except Exception as e:
                     print(f"  ⚠ realization model injection skipped ({e})")
@@ -202,18 +203,20 @@ class ExplorationMixin:
         # ── Phase 4-5: Refinement with DSE constraints ────────────────────────
         print("Phase 4-5: Iterative Refinement (DSE-grounded)")
         print("-" * 40)
-        final_model, final_score, final_sim = self._iterative_refinement(
-            model, requirements, dse_best_config=best_config,
-            connectivity_floor=self.use_variation_dse,
+        refined = self.refinement_closure.refine(
+            RefinementClosureRequest(
+                base=ModelRevision.capture(model),
+                requirements=tuple(requirements),
+                dse_best_config=best_config,
+                preserve_connectivity=self.use_variation_dse,
+            )
         )
-        final_model, final_score, final_sim = self._functional_closure_pass(
-            final_model,
-            final_sim,
-            final_score,
-            requirements,
+        projected = self.refinement_closure.project_parameters(refined, None)
+        closure = self.refinement_closure.close(
+            projected,
             dse_best_config=best_config,
-            max_iters=2,
         )
+        final_model, final_score, final_sim = closure.materialize()
         self.state.current_model = final_model
         print(f"  ✓ Final design score: {final_score:.3f}\n")
 
@@ -272,7 +275,7 @@ class ExplorationMixin:
                 final_model, get_sysml_text(final_model)
             )
         )
-        pre_ag_sim = self._run_simulation(
+        pre_ag_sim = self.refinement_closure.simulate(
             pre_ag_sysml, self.state.system_name
         )
         final_sysml = self._reconcile_guided_ag_contract_layer(
@@ -283,7 +286,7 @@ class ExplorationMixin:
         final_sysml = collaboration_artifacts.pop(
             "_terminal_model_sysml", final_sysml
         )
-        self._verify_terminal_functional_closure(
+        self.refinement_closure.verify_terminal(
             final_sysml, self.state.system_name
         )
         final_model, final_score, final_sim, terminal_consistency = (
@@ -389,6 +392,9 @@ class ExplorationMixin:
             "functional_closure": dict(self.last_functional_closure or {}),
             "verification_anchor_attempts": list(
                 self.last_verification_anchor_attempts
+            ),
+            "plan_conformance_rejections": list(
+                self.last_plan_conformance_rejections
             ),
             # ── DSE-specific fields ───────────────────────────────────────────
             "design_space_summary": design_space.get_summary(),
@@ -704,7 +710,7 @@ class ExplorationMixin:
                     if objective_families(requirements) else "model-existing"
                 )
             if introduced:
-                self._sync_model_text(model, text)
+                set_sysml_text(model, text)
                 print("  [variation-DSE] added mandatory catalog architecture seed "
                       "beside pre-existing variation points")
             return model
@@ -752,7 +758,7 @@ class ExplorationMixin:
                 self.last_variation_proposal_source = "catalog-seed-not-required"
 
         if introduced:
-            self._sync_model_text(model, text)
+            set_sysml_text(model, text)
             print(f"  [variation-DSE] surgically introduced {len(introduced)} variation "
                   f"point(s) (connects preserved): {introduced}")
         return model

@@ -20,6 +20,7 @@ Outputs ``logs/benchmark_<timestamp>.json`` with per-run records + aggregates.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 import sys
@@ -93,9 +94,74 @@ SYSTEMS: Dict[str, Dict[str, Any]] = {
 HEADLINE_METRICS = ("final_score", "reachability", "iterations", "llm_calls", "llm_total_tokens")
 
 
-def run_one(provider: str, spec: Dict[str, Any], seed: int, dse_mode: str) -> Dict[str, Any]:
+def _archive_failure(
+    error: BaseException,
+    out_dir: Path,
+    spec: Dict[str, Any],
+    seed: int,
+    record: Dict[str, Any],
+) -> None:
+    """Persist the rejected model and the evidence that rejected it.
+
+    A fail-closed verdict is correct, but it kills the run before any artifact
+    is written, so the exact revision that failed used to be lost and only the
+    requirement ids survived. The gates already attach their evidence to the
+    error; this writes it down.
+    """
+    model_text = getattr(error, "terminal_model_text", None)
+    closure = getattr(error, "functional_closure", None)
+    rejections = getattr(error, "plan_conformance_rejections", None)
+    provenance = getattr(error, "generation_plan_provenance", None)
+    if (
+        model_text is None and closure is None
+        and rejections is None and provenance is None
+    ):
+        return
+
+    failed_dir = out_dir / "failed_runs"
+    failed_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{spec['system_name']}_seed{seed}"
+    if isinstance(model_text, str) and model_text:
+        model_path = failed_dir / f"{stem}.sysml"
+        model_path.write_text(model_text, encoding="utf-8")
+        record["failed_model_path"] = str(model_path)
+        record["failed_model_digest"] = hashlib.sha256(
+            model_text.encode("utf-8")
+        ).hexdigest()
+    evidence = {
+        "system": spec["system_name"],
+        "seed": seed,
+        "error": f"{type(error).__name__}: {error}",
+        "functional_closure": closure,
+        "plan_conformance_rejections": rejections,
+        "generation_plan_provenance": provenance,
+    }
+    evidence_path = failed_dir / f"{stem}.evidence.json"
+    evidence_path.write_text(
+        json.dumps(evidence, indent=2, default=str), encoding="utf-8"
+    )
+    record["failed_evidence_path"] = str(evidence_path)
+    if isinstance(closure, dict):
+        record["functional_closure_status"] = closure.get("status")
+        record["remaining_functional_gaps"] = list(
+            closure.get("remaining_gap_req_ids") or ()
+        )
+    if isinstance(rejections, list):
+        record["plan_conformance_rejections"] = len(rejections)
+    if isinstance(provenance, dict):
+        record["plan_status"] = provenance.get("plan_status")
+        record["step1_plan_retries"] = provenance.get("step1_plan_retries")
+
+
+def run_one(
+    provider: str,
+    spec: Dict[str, Any],
+    seed: int,
+    dse_mode: str,
+    out_dir: Path,
+) -> Dict[str, Any]:
     """One benchmark run → flat record (never raises; failures are recorded)."""
-    from src.prototyping.pipeline import PrototypingPipeline
+    from src.app.pipeline import PrototypingPipeline
     from src.prototyping.provider_factory import create_llm
 
     started = time.time()
@@ -106,15 +172,32 @@ def run_one(provider: str, spec: Dict[str, Any], seed: int, dse_mode: str) -> Di
         "dse_mode": dse_mode,
     }
     try:
-        llm = create_llm(provider=provider)
+        provider_kwargs = (
+            {"seed": seed}
+            if provider.strip().lower() in {"vertex", "gemini"}
+            else None
+        )
+        llm = create_llm(
+            provider=provider,
+            provider_kwargs=provider_kwargs,
+        )
+        record.update({
+            "llm_model": getattr(llm, "model", None),
+            "provider_seed": getattr(llm, "seed", None),
+            "langsmith_enabled": bool(
+                getattr(llm, "langsmith_enabled", False)
+            ),
+        })
         pipeline = PrototypingPipeline(llm=llm, dse_mode=dse_mode)
         gen = pipeline.generate_system(
             system_name=spec["system_name"],
             description=spec["description"],
-            additional_requirements=spec["requirements"],
+            frozen_requirements=spec["requirements"],
         )
         result = pipeline.explore_design_space(gen, mcts_seed=seed)
         report = pipeline.build_run_report(result)
+        closure = result.get("functional_closure") or {}
+        qualification = result.get("model_qualification") or {}
         record.update({
             "ok": True,
             "final_score": report.get("final_score"),
@@ -124,9 +207,21 @@ def run_one(provider: str, spec: Dict[str, Any], seed: int, dse_mode: str) -> Di
             "best_config": report.get("best_config"),
             "llm_calls": (report.get("llm_usage") or {}).get("calls"),
             "llm_total_tokens": (report.get("llm_usage") or {}).get("total_tokens"),
+            "qualification_status": qualification.get("status"),
+            "functional_closure_status": closure.get("status"),
+            "remaining_functional_gaps": list(
+                closure.get("remaining_gap_req_ids") or ()
+            ),
+            "verification_anchor_attempts": len(
+                result.get("verification_anchor_attempts") or ()
+            ),
         })
     except Exception as e:
         record.update({"ok": False, "error": f"{type(e).__name__}: {e}"})
+        try:
+            _archive_failure(e, out_dir, spec, seed, record)
+        except Exception as archive_error:   # never mask the real failure
+            record["archive_error"] = f"{type(archive_error).__name__}: {archive_error}"
     record["elapsed_s"] = round(time.time() - started, 1)
     return record
 
@@ -160,11 +255,15 @@ def main() -> int:
     ap.add_argument("--out-dir", default="logs")
     args = ap.parse_args()
 
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     records: List[Dict[str, Any]] = []
     for name in args.systems:
         for seed in range(args.seeds):
             print(f"\n=== benchmark: {name} seed={seed} ({args.provider}, {args.dse_mode}) ===")
-            records.append(run_one(args.provider, SYSTEMS[name], seed, args.dse_mode))
+            records.append(
+                run_one(args.provider, SYSTEMS[name], seed, args.dse_mode, out_dir)
+            )
 
     result = {
         "provider": args.provider,
@@ -173,8 +272,6 @@ def main() -> int:
         "records": records,
         "aggregate": aggregate(records),
     }
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"benchmark_{time.strftime('%Y%m%d_%H%M%S')}.json"
     path.write_text(json.dumps(result, indent=2, default=str))
 

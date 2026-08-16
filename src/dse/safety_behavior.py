@@ -21,7 +21,7 @@ import re
 from typing import Dict, List, Set
 
 from ..simulation.state_extractor import extract_state_machines
-from ..utils.sysml_text_utils import find_block_end
+from .requirement_trace import extract_requirement_trace
 
 BEHAVIORALLY_VERIFIED = "behaviorally-verified"
 BEHAVIORALLY_VIOLATED = "behaviorally-violated"
@@ -75,28 +75,8 @@ _SAFE_STATE_KW = ("failsafe", "fail_safe", "safe", "abort", "lock", "disarm", "r
                   "return", "land", "hold", "emergency", "parachute", "contingency")
 _SAFETY_REQ_KW = ("safe", "fail", "abort", "lock", "disarm", "emergency", "parachute",
                   "prohibit", "inhibit", "contingency", "geofence")
-_REQ_ID_RE = re.compile(r"REQ[-_][A-Z]+[-_]\d+")
-_SATISFY_RE = re.compile(r"satisfy\s+(?:requirement\s+)?(\w*REQ[_-]\w+)", re.IGNORECASE)
-
-
-def _norm(rid: str) -> str:
-    return rid.upper().replace("_", "-")
-
-
 def is_safety_req(rid: str, text: str) -> bool:
     return "SAFE" in rid.upper() or any(k in text.lower() for k in _SAFETY_REQ_KW)
-
-
-def _req_owner_parts(model_text: str) -> Dict[str, Set[str]]:
-    """{req_id: {part def names whose body declares `satisfy <req>`}}."""
-    out: Dict[str, Set[str]] = {}
-    for m in re.finditer(r"\bpart\s+def\s+(\w+)\s*(?::>[^{]*)?\{", model_text):
-        brace = model_text.index("{", m.start())
-        end = find_block_end(model_text, brace)
-        body = model_text[brace + 1:end] if end != -1 else ""
-        for sm in _SATISFY_RE.finditer(body):
-            out.setdefault(_norm(sm.group(1)), set()).add(m.group(1))
-    return out
 
 
 def reachable_states(sm) -> Set[str]:
@@ -144,12 +124,12 @@ def safety_behavior_status(model_text: str, requirements: List[str],
     by_part: Dict[str, list] = {}
     for sm in extract_state_machines(model_text):
         by_part.setdefault(sm.owner_part, []).append(sm)
-    text = {m.group(0).replace("_", "-"): r for r in requirements
-            for m in [_REQ_ID_RE.search(r)] if m}
+    trace = extract_requirement_trace(model_text, requirements)
+    text = trace.source_by_id
     collapsed = collapsed_response_categories(model_text)   # categories sharing one command
 
     out: Dict[str, str] = {}
-    for rid, parts in _req_owner_parts(model_text).items():
+    for rid, parts in trace.owners.items():
         if not is_safety_req(rid, text.get(rid, rid)):
             continue
         sms = [sm for p in parts for sm in by_part.get(p, [])]

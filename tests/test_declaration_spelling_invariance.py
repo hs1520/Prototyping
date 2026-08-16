@@ -60,12 +60,12 @@ def test_the_semantic_binder_sees_every_spelling(declaration):
     d for d in ATTRIBUTE_SPELLINGS if "=" in d and "Boolean" not in d
 ])
 def test_the_design_ontology_sees_every_numeric_spelling(declaration):
-    from src.dse.domain_objective import _ATTR_RE
+    from src.dse.domain_objective import resolve_design_attributes
 
-    match = _ATTR_RE.search(declaration)
-    assert match is not None, "a numeric attribute written this way is skipped"
-    assert match.group(1) == "currentSeparation"
-    assert match.group(2) == "5.0"
+    resolved = resolve_design_attributes(declaration)
+    assert resolved.attributes, "a numeric attribute written this way is skipped"
+    assert resolved.attributes[0].name == "currentSeparation"
+    assert resolved.attributes[0].value == 5.0
 
 
 @pytest.mark.parametrize("transition", [

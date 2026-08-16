@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Tuple
 
 Vector = List[float]
 Matrix = List[List[float]]

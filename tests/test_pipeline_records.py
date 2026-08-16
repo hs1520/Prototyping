@@ -5,6 +5,10 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 
 from src.agents.orchestrator import Orchestrator
+from src.agents.planned_action_lifecycle import (
+    PlannedActionPreparation,
+    observe_terminal_actions,
+)
 from src.agents.pipeline_records import (
     DesignHandoffRecord,
     GenerationContext,
@@ -57,6 +61,40 @@ def test_runtime_state_history_is_bounded_to_one_generation_run():
         topic="pipeline.runtime.state"
     )) == 1
     assert orchestrator.last_functional_closure is None
+
+
+def test_planned_action_values_are_published_for_provenance_not_control_flow():
+    orchestrator = Orchestrator(_NoCallLLM())
+    before = orchestrator._runtime_board.records(topic="pipeline.runtime.state")
+    preparation = PlannedActionPreparation(
+        model_text="",
+        changed=False,
+        syntax_disposition="NOT_CHECKED",
+    )
+    observation = observe_terminal_actions(
+        preparation,
+        "",
+        requirements=(),
+    )
+
+    orchestrator._publish_pipeline_state(
+        "planned_action_preparation", preparation
+    )
+    orchestrator._publish_pipeline_state(
+        "planned_action_observation", observation
+    )
+
+    records = orchestrator._runtime_board.records(topic="pipeline.runtime.state")
+    assert len(records) == len(before) + 2
+    assert [item.payload["changed_field"] for item in records[-2:]] == [
+        "planned_action_preparation",
+        "planned_action_observation",
+    ]
+    state = orchestrator._pipeline_state
+    assert state.planned_action_preparation == preparation
+    assert state.planned_action_observation == observation
+    assert not hasattr(orchestrator, "last_action_effects")
+    assert not hasattr(orchestrator, "last_action_semantics_audit")
 
 
 def test_design_handoff_is_resolved_from_its_typed_board_record():

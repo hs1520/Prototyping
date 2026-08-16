@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
+
+if TYPE_CHECKING:
+    from .planned_action_lifecycle import (
+        PlannedActionObservation,
+        PlannedActionPreparation,
+    )
 
 
 @dataclass
@@ -53,13 +59,14 @@ class PipelineRuntimeState:
     variation_proposal_source: Any = None
     functional_closure: Any = None
     verification_anchor_attempts: list[Dict[str, Any]] = field(default_factory=list)
+    plan_conformance_rejections: list[Dict[str, Any]] = field(default_factory=list)
     requirement_semantic_analysis: Any = None
     requirement_input: Dict[str, Any] = field(default_factory=dict)
     ag_authoring_attempts: list[Dict[str, Any]] = field(default_factory=list)
     ag_binding_report: Any = None
     ag_non_degradation: Any = None
-    action_semantics_audit: Any = None
-    action_effects: tuple = ()
+    planned_action_preparation: Optional["PlannedActionPreparation"] = None
+    planned_action_observation: Optional["PlannedActionObservation"] = None
     estimator_calibration: Any = None
     ag_generation_plan: Optional[AGGenerationPlanRecord] = None
     model_generation_plan: Optional[ModelGenerationPlanRecord] = None
@@ -78,6 +85,9 @@ class GenerationContext:
     final_model: Any = None
     final_score: Any = None
     final_sim: Any = None
+    refined_revision: Any = None
+    projected_revision: Any = None
+    refinement_closure_outcome: Any = None
     pre_terminal_score: Any = None
     pre_ag_sysml: str = ""
     pre_ag_sim: Any = None
@@ -90,4 +100,6 @@ class GenerationContext:
     model_qualification: Any = None
     verification_plan: Any = None
     assurance_artifacts: Dict[str, Any] = field(default_factory=dict)
+    planned_action_preparation: Optional["PlannedActionPreparation"] = None
+    planned_action_observation: Optional["PlannedActionObservation"] = None
     result: Dict[str, Any] = field(default_factory=dict)

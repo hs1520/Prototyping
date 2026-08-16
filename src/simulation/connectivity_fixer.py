@@ -65,7 +65,7 @@ class PortDirectory:
         return inst in self.instances
 
 
-@dataclass
+@dataclass(frozen=True)
 class ConnectStmt:
     src_inst: str
     src_port: str
@@ -90,6 +90,24 @@ class ConnMergeResult:
     merged_text: str
     n_added: int
     added_lines: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ConnectViolation:
+    stmt: ConnectStmt
+    code: str
+    reason: str
+
+    def summary(self) -> str:
+        return f"{self.stmt.to_sysml()} — {self.reason}"
+
+
+@dataclass
+class ConnectivityAudit:
+    has_violations: bool
+    n_removed: int
+    violations: List[ConnectViolation] = field(default_factory=list)
+    cleaned_text: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -172,66 +190,143 @@ def build_port_directory(sysml_text: str) -> PortDirectory:
     return directory
 
 
-def _parse_connects_via_syside(sysml_text: str) -> Optional[List[ConnectStmt]]:
-    """Connections from the parse; None when Syside cannot answer.
+_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\r\n]*", re.DOTALL)
 
-    Anchoring on ConnectionUsage removes a whole class of false positive that a
-    free-text pattern cannot avoid: prose inside a requirement `doc` comment can
-    read like a declaration, and a scan of transitions in one archived model did
-    match a sentence from REQ_SAFE_004's text. Endpoint identity still comes
-    from each end's own CST text, which is exactly `a.x`, so the split is on a
-    node the parser has already delimited rather than on a guess about where a
-    statement begins and ends.
-    """
-    try:
-        import syside
-    except ImportError:
-        return None
-    try:
-        model, _diagnostics = syside.try_load_model(sysml_source=str(sysml_text))
-    except Exception:
-        return None
-    out: List[ConnectStmt] = []
-    try:
-        for connection in model.nodes(syside.ConnectionUsage):
-            ends = list(getattr(connection, "connector_ends", None) or [])
-            if len(ends) != 2:
-                continue
-            parsed = []
-            for end in ends:
-                node = getattr(end, "cst_node", None)
-                if node is None:
-                    break
-                parts = str(node.text(sysml_text)).strip().split(".")
-                if len(parts) != 2 or not all(parts):
-                    break
-                parsed.append((parts[0], parts[1]))
-            if len(parsed) == 2:
-                out.append(ConnectStmt(
-                    parsed[0][0], parsed[0][1], parsed[1][0], parsed[1][1]
-                ))
-    except Exception:
-        return None
-    return out
+
+def _code_without_comments(sysml_text: str) -> str:
+    """Mask comments while preserving offsets and line structure."""
+    return _COMMENT_RE.sub(
+        lambda match: "".join(
+            "\n" if character == "\n" else " " for character in match.group(0)
+        ),
+        sysml_text,
+    )
 
 
 def parse_connects(sysml_text: str) -> List[ConnectStmt]:
-    """解析文本中所有 `connect a.x to b.y;`。
+    """Return every declared `connect a.x to b.y;`, excluding comment prose.
 
-    Prefers the parser; the regex remains for environments without Syside.
+    This exact declaration grammar is intentionally parsed lexically. Syside
+    coalesces repeated anonymous ConnectionUsage nodes in some partial models,
+    while the comment mask prevents the false positives that motivated the old
+    parser-first implementation.
     """
-    parsed = _parse_connects_via_syside(sysml_text)
-    if parsed is not None:
-        return parsed
-    out: List[ConnectStmt] = []
-    for m in _CONNECT_RE.finditer(sysml_text):
-        out.append(ConnectStmt(m.group(1), m.group(2), m.group(3), m.group(4)))
-    return out
+    code = _code_without_comments(sysml_text or "")
+    return [
+        ConnectStmt(
+            match.group(1), match.group(2), match.group(3), match.group(4)
+        )
+        for match in _CONNECT_RE.finditer(code)
+    ]
+# ---------------------------------------------------------------------------
+# 校验：规则只在这里定义；候选校验和全模型审计共享同一判定。
+# ---------------------------------------------------------------------------
+
+_DUPLICATE = "DUPLICATE"
+_UNKNOWN_SOURCE_INSTANCE = "UNKNOWN_SOURCE_INSTANCE"
+_UNKNOWN_TARGET_INSTANCE = "UNKNOWN_TARGET_INSTANCE"
+_UNKNOWN_SOURCE_PORT = "UNKNOWN_SOURCE_PORT"
+_UNKNOWN_TARGET_PORT = "UNKNOWN_TARGET_PORT"
+_SOURCE_DIRECTION = "SOURCE_DIRECTION"
+_TARGET_DIRECTION = "TARGET_DIRECTION"
+_TYPE_MISMATCH = "TYPE_MISMATCH"
+_MULTIPLE_DRIVERS = "MULTIPLE_DRIVERS"
 
 
-# ---------------------------------------------------------------------------
-# 校验
-# ---------------------------------------------------------------------------
+def _connection_violation_code(
+    stmt: ConnectStmt,
+    directory: PortDirectory,
+    accepted_keys: Set[Tuple[str, str, str, str]],
+    driven_in: Set[Tuple[str, str]],
+) -> str:
+    if stmt.key() in accepted_keys:
+        return _DUPLICATE
+    if not directory.has_instance(stmt.src_inst):
+        return _UNKNOWN_SOURCE_INSTANCE
+    if not directory.has_instance(stmt.tgt_inst):
+        return _UNKNOWN_TARGET_INSTANCE
+    src_info = directory.port(stmt.src_inst, stmt.src_port)
+    tgt_info = directory.port(stmt.tgt_inst, stmt.tgt_port)
+    if src_info is None:
+        return _UNKNOWN_SOURCE_PORT
+    if tgt_info is None:
+        return _UNKNOWN_TARGET_PORT
+    if src_info.direction not in ("out", "inout"):
+        return _SOURCE_DIRECTION
+    if tgt_info.direction not in ("in", "inout"):
+        return _TARGET_DIRECTION
+    if (
+        src_info.port_type
+        and tgt_info.port_type
+        and src_info.port_type != tgt_info.port_type
+    ):
+        return _TYPE_MISMATCH
+    if (
+        tgt_info.direction == "in"
+        and (stmt.tgt_inst, stmt.tgt_port) in driven_in
+    ):
+        return _MULTIPLE_DRIVERS
+    return ""
+
+
+def _candidate_reason(
+    code: str, stmt: ConnectStmt, directory: PortDirectory
+) -> str:
+    src_info = directory.port(stmt.src_inst, stmt.src_port)
+    tgt_info = directory.port(stmt.tgt_inst, stmt.tgt_port)
+    return {
+        _DUPLICATE: "与现有连接重复",
+        _UNKNOWN_SOURCE_INSTANCE: f"未知实例 '{stmt.src_inst}'",
+        _UNKNOWN_TARGET_INSTANCE: f"未知实例 '{stmt.tgt_inst}'",
+        _UNKNOWN_SOURCE_PORT: (
+            f"'{stmt.src_inst}' 无端口 '{stmt.src_port}'(禁止凭空造端口)"
+        ),
+        _UNKNOWN_TARGET_PORT: (
+            f"'{stmt.tgt_inst}' 无端口 '{stmt.tgt_port}'(禁止凭空造端口)"
+        ),
+        _SOURCE_DIRECTION: (
+            f"源端口 '{stmt.src_port}' 方向为 {src_info.direction}(需 out/inout)"
+            if src_info else "源端口方向无效"
+        ),
+        _TARGET_DIRECTION: (
+            f"目标端口 '{stmt.tgt_port}' 方向为 {tgt_info.direction}(需 in/inout)"
+            if tgt_info else "目标端口方向无效"
+        ),
+        _TYPE_MISMATCH: (
+            f"端口类型不匹配({src_info.port_type} ≠ {tgt_info.port_type})"
+            if src_info and tgt_info else "端口类型不匹配"
+        ),
+        _MULTIPLE_DRIVERS: (
+            f"目标 in 端口 '{stmt.tgt_inst}.{stmt.tgt_port}' 已被驱动(禁止双源)"
+        ),
+    }[code]
+
+
+def _audit_reason(code: str, stmt: ConnectStmt, directory: PortDirectory) -> str:
+    src_info = directory.port(stmt.src_inst, stmt.src_port)
+    tgt_info = directory.port(stmt.tgt_inst, stmt.tgt_port)
+    return {
+        _DUPLICATE: "duplicate connect",
+        _UNKNOWN_SOURCE_INSTANCE: f"unknown instance '{stmt.src_inst}'",
+        _UNKNOWN_TARGET_INSTANCE: f"unknown instance '{stmt.tgt_inst}'",
+        _UNKNOWN_SOURCE_PORT: f"'{stmt.src_inst}' has no port '{stmt.src_port}'",
+        _UNKNOWN_TARGET_PORT: f"'{stmt.tgt_inst}' has no port '{stmt.tgt_port}'",
+        _SOURCE_DIRECTION: (
+            f"source port '{stmt.src_port}' direction is "
+            f"{src_info.direction if src_info else 'unknown'} (need out/inout)"
+        ),
+        _TARGET_DIRECTION: (
+            f"target port '{stmt.tgt_port}' direction is "
+            f"{tgt_info.direction if tgt_info else 'unknown'} (need in/inout)"
+        ),
+        _TYPE_MISMATCH: (
+            f"port type mismatch ({src_info.port_type} ≠ {tgt_info.port_type})"
+            if src_info and tgt_info else "port type mismatch"
+        ),
+        _MULTIPLE_DRIVERS: (
+            f"target in-port '{stmt.tgt_inst}.{stmt.tgt_port}' already driven"
+        ),
+    }[code]
 
 def validate_connects(
     candidate_lines: List[str],
@@ -265,60 +360,197 @@ def validate_connects(
             continue
 
         stmt = ConnectStmt(m.group(1), m.group(2), m.group(3), m.group(4))
-
-        # 规则 5:重复
-        if stmt.key() in existing_keys:
-            result.rejected.append((line, "与现有连接重复"))
-            continue
-
-        # 规则 1:实例 + 端口必须已存在(禁止凭空造端口)
-        src_info = directory.port(stmt.src_inst, stmt.src_port)
-        tgt_info = directory.port(stmt.tgt_inst, stmt.tgt_port)
-        if not directory.has_instance(stmt.src_inst):
-            result.rejected.append((line, f"未知实例 '{stmt.src_inst}'"))
-            continue
-        if not directory.has_instance(stmt.tgt_inst):
-            result.rejected.append((line, f"未知实例 '{stmt.tgt_inst}'"))
-            continue
-        if src_info is None:
-            result.rejected.append(
-                (line, f"'{stmt.src_inst}' 无端口 '{stmt.src_port}'(禁止凭空造端口)"))
-            continue
-        if tgt_info is None:
-            result.rejected.append(
-                (line, f"'{stmt.tgt_inst}' 无端口 '{stmt.tgt_port}'(禁止凭空造端口)"))
-            continue
-
-        # 规则 2:方向
-        if src_info.direction not in ("out", "inout"):
-            result.rejected.append(
-                (line, f"源端口 '{stmt.src_port}' 方向为 {src_info.direction}(需 out/inout)"))
-            continue
-        if tgt_info.direction not in ("in", "inout"):
-            result.rejected.append(
-                (line, f"目标端口 '{stmt.tgt_port}' 方向为 {tgt_info.direction}(需 in/inout)"))
-            continue
-
-        # 规则 3:端口类型一致(任一端无类型则跳过——继承来的无类型端口无类型可比)
-        if (src_info.port_type and tgt_info.port_type
-                and src_info.port_type != tgt_info.port_type):
-            result.rejected.append(
-                (line, f"端口类型不匹配({src_info.port_type} ≠ {tgt_info.port_type})"))
-            continue
-
-        # 规则 4:纯 in 目标端口单源
-        if tgt_info.direction == "in" and (stmt.tgt_inst, stmt.tgt_port) in driven_in:
-            result.rejected.append(
-                (line, f"目标 in 端口 '{stmt.tgt_inst}.{stmt.tgt_port}' 已被驱动(禁止双源)"))
+        code = _connection_violation_code(
+            stmt, directory, existing_keys, driven_in
+        )
+        if code:
+            result.rejected.append((
+                line, _candidate_reason(code, stmt, directory)
+            ))
             continue
 
         # 通过 —— 接受,并更新状态防止本轮内部冲突
+        tgt_info = directory.port(stmt.tgt_inst, stmt.tgt_port)
         result.accepted.append(stmt)
         existing_keys.add(stmt.key())
-        if tgt_info.direction == "in":
+        if tgt_info is not None and tgt_info.direction == "in":
             driven_in.add((stmt.tgt_inst, stmt.tgt_port))
 
     return result
+
+
+def audit_connects(sysml_text: str) -> ConnectivityAudit:
+    """Audit and remove invalid connects using the canonical five rules."""
+    directory = build_port_directory(sysml_text)
+    accepted_keys: Set[Tuple[str, str, str, str]] = set()
+    driven_in: Set[Tuple[str, str]] = set()
+    violations: List[ConnectViolation] = []
+    occurrence_counts: Dict[Tuple[str, str, str, str], int] = {}
+    invalid_occurrences: Set[
+        Tuple[Tuple[str, str, str, str], int]
+    ] = set()
+
+    for stmt in parse_connects(sysml_text):
+        occurrence = occurrence_counts.get(stmt.key(), 0) + 1
+        occurrence_counts[stmt.key()] = occurrence
+        code = _connection_violation_code(
+            stmt, directory, accepted_keys, driven_in
+        )
+        if code:
+            violations.append(ConnectViolation(
+                stmt=stmt,
+                code=code,
+                reason=_audit_reason(code, stmt, directory),
+            ))
+            invalid_occurrences.add((stmt.key(), occurrence))
+            continue
+        accepted_keys.add(stmt.key())
+        target = directory.port(stmt.tgt_inst, stmt.tgt_port)
+        if target is not None and target.direction == "in":
+            driven_in.add((stmt.tgt_inst, stmt.tgt_port))
+
+    if not invalid_occurrences:
+        cleaned = sysml_text
+    else:
+        cleaned_lines: List[str] = []
+        seen_lines: Dict[Tuple[str, str, str, str], int] = {}
+        for line in sysml_text.split("\n"):
+            match = _CONNECT_RE.search(line)
+            if match:
+                key = tuple(match.groups())
+                occurrence = seen_lines.get(key, 0) + 1
+                seen_lines[key] = occurrence
+                if (key, occurrence) in invalid_occurrences:
+                    continue
+            cleaned_lines.append(line)
+        cleaned = "\n".join(cleaned_lines)
+    return ConnectivityAudit(
+        has_violations=bool(violations),
+        n_removed=len(violations),
+        violations=violations,
+        cleaned_text=cleaned,
+    )
+
+
+def _widen_port_in_definition(
+    text: str, definition_name: str, port_name: str
+) -> Tuple[str, bool]:
+    for match in _PART_DEF_RE.finditer(text):
+        if match.group(1) != definition_name:
+            continue
+        brace = text.find("{", match.start(), match.end())
+        end = _block_end(text, brace)
+        if end == -1:
+            return text, False
+        block = text[brace:end]
+        updated = re.sub(
+            rf"\b(in|out)\s+port\s+{re.escape(port_name)}\b",
+            f"inout port {port_name}",
+            block,
+            count=1,
+        )
+        if updated == block:
+            return text, False
+        return text[:brace] + updated + text[end:], True
+    return text, False
+
+
+def fix_signal_directions(sysml_text: str) -> Tuple[str, int, List[str]]:
+    """Widen only ports that block the direction of an existing connect."""
+    directory = build_port_directory(sysml_text)
+    widen: Dict[Tuple[str, str], str] = {}
+    for connection in parse_connects(sysml_text):
+        source = directory.port(connection.src_inst, connection.src_port)
+        target = directory.port(connection.tgt_inst, connection.tgt_port)
+        if source is not None and source.direction == "in":
+            definition = directory.instance_type.get(connection.src_inst)
+            if definition:
+                widen[(definition, connection.src_port)] = "src→egress"
+        if target is not None and target.direction == "out":
+            definition = directory.instance_type.get(connection.tgt_inst)
+            if definition:
+                widen[(definition, connection.tgt_port)] = "tgt→ingress"
+
+    output = sysml_text
+    fixed: List[str] = []
+    for definition_name, port_name in widen:
+        output, changed = _widen_port_in_definition(
+            output, definition_name, port_name
+        )
+        if changed:
+            fixed.append(f"{definition_name}.{port_name}")
+    return output, len(fixed), fixed
+
+
+def fix_missing_connects(
+    sysml_text: str, failed_payload
+) -> Tuple[str, int, List[str]]:
+    """Add deterministic same-name or unambiguous same-type feedback paths."""
+    directory = build_port_directory(sysml_text)
+    existing = parse_connects(sysml_text)
+    candidate_lines: List[str] = []
+    seen: Set[Tuple[str, str, str, str]] = set()
+    for failure in failed_payload or []:
+        source_instance = failure.get("src")
+        if not source_instance or source_instance not in directory.instances:
+            continue
+        source_ports = directory.instances.get(source_instance, {})
+        for target_instance in failure.get("tgts", []):
+            target_ports = directory.instances.get(target_instance, {})
+            matched = False
+            for name, source in source_ports.items():
+                target = target_ports.get(name)
+                if (
+                    source.direction in ("out", "inout")
+                    and target is not None
+                    and target.direction in ("in", "inout")
+                    and target.port_type == source.port_type
+                ):
+                    key = (source_instance, name, target_instance, name)
+                    if key not in seen:
+                        seen.add(key)
+                        candidate_lines.append(
+                            f"connect {source_instance}.{name} to "
+                            f"{target_instance}.{name};"
+                        )
+                    matched = True
+                    break
+            if matched:
+                continue
+            outputs: Dict[str, List[str]] = {}
+            inputs: Dict[str, List[str]] = {}
+            for name, source in source_ports.items():
+                if source.direction in ("out", "inout"):
+                    outputs.setdefault(source.port_type, []).append(name)
+            for name, target in target_ports.items():
+                if target.direction in ("in", "inout"):
+                    inputs.setdefault(target.port_type, []).append(name)
+            for port_type, output_names in outputs.items():
+                input_names = inputs.get(port_type, [])
+                if len(output_names) == 1 and len(input_names) == 1:
+                    source_port, target_port = output_names[0], input_names[0]
+                    key = (
+                        source_instance, source_port,
+                        target_instance, target_port,
+                    )
+                    if key not in seen:
+                        seen.add(key)
+                        candidate_lines.append(
+                            f"connect {source_instance}.{source_port} to "
+                            f"{target_instance}.{target_port};"
+                        )
+                    break
+    if not candidate_lines:
+        return sysml_text, 0, []
+    validation = validate_connects(candidate_lines, directory, existing)
+    if not validation.accepted:
+        return sysml_text, 0, []
+    merged = merge_connects(sysml_text, validation.accepted)
+    return (
+        merged.merged_text,
+        merged.n_added,
+        [connection.to_sysml() for connection in validation.accepted],
+    )
 
 
 # ---------------------------------------------------------------------------
