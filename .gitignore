@@ -75,3 +75,9 @@ gazebo_poc/generated/
 # MAVLink telemetry logs (SITL runtime artifacts)
 *.tlog
 *.tlog.raw
+
+# local tooling state (not part of the submission)
+.agents/
+.codegraph/
+CONTEXT.md
+skills-lock.json
