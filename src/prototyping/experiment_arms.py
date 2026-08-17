@@ -177,7 +177,20 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # is passive is now a recorded design decision rather than a default the
 # simulator assumes and the planner cannot express. Archived models carry no
 # marker and keep their scenarios and scores; only a plan that declares
-# passivity changes anything. This changes what the model is asked, so v20 and v21 are not
+# passivity changes anything.
+# One consequence of accepting the degree sign in the unit vocabulary had to be
+# closed on the model side: an extracted plan then wrote `[°]` and `[°C]` into
+# the model, which are not SysML tokens (a parse error, and one that reparents
+# every later declaration, exactly as `[%]` did before it was mapped). The
+# generation stage committed such a model with the syntax check failing as a
+# qualification verdict rather than a gate, and the exploration stage's
+# variation injector -- which requires a clean parse -- then rejected the
+# catalogue seed and reported it as "could not form two variants" (two archival
+# attempts on the extraction path stopped exactly there). Every place a plan
+# unit is serialised into model text now goes through sysml_unit_name(), and
+# the table maps ° -> deg and °C -> degC (both resolve under `import SI::*`).
+# The frozen set's units (s, m, kg, percent) were already legal tokens, which
+# is why the missing mapping was never observed. This changes what the model is asked, so v20 and v21 are not
 # poolable; every archived pilot in the artefact tree ran at v20 or earlier.
 COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v21"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"

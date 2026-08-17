@@ -229,6 +229,12 @@ def _numeric(value: str | None) -> float | None:
 # Requirement text still states units in prose; _unit_tokens accepts those.
 _SYSML_UNIT_NAMES = {
     "%": "percent",
+    # The degree sign is not a SysML token at all: `[°]` is a parse error and
+    # `[°C]` reparents everything after it, exactly as `[%]` does. Requirement
+    # text and an LLM-extracted plan both spell angles and temperatures with the
+    # sign; the model must carry the SI/ISQ identifiers, which parse and resolve
+    # (verified: deg, degC, rad, K, percent all clean under `import SI::*`).
+    "°": "deg", "°c": "degC", "degc": "degC", "celsius": "degC",
     "second": "s", "seconds": "s",
     "millisecond": "ms", "milliseconds": "ms",
     "minute": "min", "minutes": "min",
@@ -770,7 +776,7 @@ def compile_constraint_plan(
                 value_type=binding.value_type,
                 unit=binding.unit,
                 role="FROZEN_THRESHOLD",
-                initial_value=f"{obligation.threshold:g} [{obligation.unit}]",
+                initial_value=f"{obligation.threshold:g} [{sysml_unit_name(obligation.unit)}]",
                 provenance="FROZEN_REQUIREMENT",
                 source_requirement_id=binding.requirement_id,
                 source_digest=obligation.source_digest,
@@ -1397,7 +1403,7 @@ def materialize_planned_attributes(
                 and _NUMBER.fullmatch(initializer)
                 and attribute.unit not in {"", "1"}
             ):
-                initializer = f"{initializer} [{attribute.unit}]"
+                initializer = f"{initializer} [{sysml_unit_name(attribute.unit)}]"
             desired = (
                 f"attribute {attribute.name} : {attribute.value_type}"
                 + (f" = {initializer}" if initializer else "")

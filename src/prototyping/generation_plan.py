@@ -44,6 +44,7 @@ from .activated_constraint_plan import (
     compile_constraint_plan,
     materialize_planned_attributes,
     materialize_planned_constraints,
+    sysml_unit_name,
 )
 from .planned_behavior import (
     PlannedBehavior,
@@ -1485,7 +1486,7 @@ class ModelGenerationPlan:
                     f"- {obligation.obligation_id} "
                     f"[{obligation.requirement_id}]: maintain {subject} "
                     f"{obligation.operator} {obligation.threshold:g} "
-                    f"[{obligation.unit}]"
+                    f"[{sysml_unit_name(obligation.unit)}]"
                 )
         if self.semantic_bindings:
             lines.append("")
@@ -1501,7 +1502,7 @@ class ModelGenerationPlan:
                     f"  payload {binding.port_type}."
                     f"{binding.port_feature} : {binding.item_type}; "
                     f"{binding.item_type}.{binding.item_feature} : "
-                    f"{binding.value_type} [{binding.unit}]",
+                    f"{binding.value_type} [{sysml_unit_name(binding.unit)}]",
                     f"  bind {binding.target_component}."
                     f"{binding.runtime_attribute} = {binding.source_path}; "
                     f"threshold {binding.threshold_attribute}; "
