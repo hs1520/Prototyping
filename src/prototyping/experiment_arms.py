@@ -190,7 +190,14 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # unit is serialised into model text now goes through sysml_unit_name(), and
 # the table maps ° -> deg and °C -> degC (both resolve under `import SI::*`).
 # The frozen set's units (s, m, kg, percent) were already legal tokens, which
-# is why the missing mapping was never observed. This changes what the model is asked, so v20 and v21 are not
+# is why the missing mapping was never observed.
+# The self-test trigger rule in _has_required_trigger required the word
+# "selftest" in the TRIGGER context as well as a start-of-life word, which held
+# only when the transition itself was named startSelfTest; a transition named
+# powerOn firing accept PowerOnEvent into a state whose entry action is
+# selfTest -- the same design -- was refused. The response being a self-test is
+# already established by the marker match; the rule now checks only that the
+# trigger is a start-of-life event. This changes what the model is asked, so v20 and v21 are not
 # poolable; every archived pilot in the artefact tree ran at v20 or earlier.
 COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v21"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"

@@ -235,10 +235,15 @@ def _has_required_trigger(req_text: str, record: _ProducedResponse) -> bool:
         valid_qualified = "valid" not in text or "valid" in context
         return waypoint_event and valid_qualified
     if any(k in text for k in ("self-test", "self test", "self-check", "self check")):
-        return (
-            any(k in context for k in ("selftest", "selfcheck"))
-            and any(k in context for k in ("poweron", "startup", "start"))
-        )
+        # The response being a self-test is already established by the marker
+        # match that produced this record; what this rule guards is that the
+        # self-test state is entered by a start-of-life event and not by an
+        # unrelated command. Requiring "selftest" in the TRIGGER context as well
+        # only passed when the transition happened to be named startSelfTest
+        # (the frozen set's models); a transition named powerOn firing accept
+        # PowerOnEvent into a state whose entry action is selfTest is the same
+        # design and must pass.
+        return any(k in context for k in ("poweron", "powerup", "startup", "start", "boot", "init"))
     return True
 
 
