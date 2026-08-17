@@ -83,8 +83,21 @@ def retire_stale_parm(parm_path: str) -> bool:
     return True
 
 
-def require_authoritative_functional_closure(model_sysml: str) -> list[str]:
-    """Reject publication while model-fixable FUNC gaps remain."""
+def require_authoritative_functional_closure(
+    model_sysml: str,
+    *,
+    unmeasurable_req_ids=None,
+    planned_intents=None,
+) -> list[str]:
+    """Reject publication while model-fixable FUNC gaps remain.
+
+    Reads the same two signals the pipeline's own terminal closure gate reads
+    -- the plan's recorded response intents and the extractor's
+    no-measurable-criterion flags -- so that a requirement the pipeline
+    correctly classified as offering nothing to anchor to is not re-raised
+    here as a model gap. Both are None on the frozen path (no frozen
+    requirement is unmeasurable), so that path is unchanged.
+    """
     from src.agents.verification_audit import functional_verification_gap_issues
     from src.simulation.syntax_checker import check_syntax
 
@@ -96,7 +109,9 @@ def require_authoritative_functional_closure(model_sysml: str) -> list[str]:
             "authoritative run blocked: final model fails syntax/semantic validation"
         )
     functional_gaps = functional_verification_gap_issues(
-        model_sysml, SYSTEM, strict=True
+        model_sysml, SYSTEM, strict=True,
+        unmeasurable_req_ids=unmeasurable_req_ids,
+        planned_intents=planned_intents,
     )
     ids = sorted(set(
         match.group(0)
@@ -184,8 +199,22 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
             orch, "last_recommended_estimator_feasible", None
         )
     final_sysml = res.get("model_sysml") or ""
-    # Independent final publication gate (do not trust only run metadata).
-    require_authoritative_functional_closure(final_sysml)
+    # Independent final publication gate (do not trust only run metadata) --
+    # but read the same plan/extractor context the pipeline's gate read.
+    _ri = getattr(orch, "last_requirement_input", None) or {}
+    _plan = getattr(orch, "_active_model_generation_plan", None) or {}
+    _intents = {}
+    for _item in _plan.get("requirement_realizations") or ():
+        if isinstance(_item, dict):
+            _rid = str(_item.get("requirement_id") or "").strip().upper().replace("-", "_")
+            _iv = str(_item.get("response_intent") or "").strip().lower()
+            if _rid and _iv:
+                _intents[_rid] = _iv
+    require_authoritative_functional_closure(
+        final_sysml,
+        unmeasurable_req_ids=_ri.get("unmeasurable_req_ids") if isinstance(_ri, dict) else None,
+        planned_intents=_intents or None,
+    )
     requirements = list(res.get("requirements") or [])
     parm_text = _parm_text(rec)
     out = {
