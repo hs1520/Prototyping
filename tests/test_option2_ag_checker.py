@@ -457,3 +457,34 @@ def test_extraction_survives_every_meaning_preserving_rewrite():
             f"extraction changed under {label!r}: the same model, spelled "
             "differently, produced a different A/G graph"
         )
+
+
+def test_unnamed_transitions_are_extracted_and_pass():
+    """``transition first idle accept X then done;`` is legal SysML v2: the
+    transition name is optional.  The extractor used to require one and parsed
+    zero transitions from a model spelled this way, so a correct realisation was
+    reported as having no reachable trigger, no reachable response and no
+    trigger-response path (pilot_n6_4bb7544 seed 1, R2-BBAG).  The same model
+    with and without transition names must extract the same transitions and
+    reach the same verdict."""
+    import re as _re
+    named = REQ_SAFE_005_SYSML
+    unnamed = _re.sub(r"\btransition\s+\w+\s+first\b", "transition first", named)
+    assert unnamed != named, "fixture must contain named transitions"
+    assert "transition first" in unnamed
+
+    g_named = extract_ag_graph(named, revision=7)
+    g_unnamed = extract_ag_graph(unnamed, revision=7)
+    named_transitions = {
+        (b.name, t.source, t.trigger, t.target)
+        for b in g_named.behaviors for t in b.transitions
+    }
+    unnamed_transitions = {
+        (b.name, t.source, t.trigger, t.target)
+        for b in g_unnamed.behaviors for t in b.transitions
+    }
+    assert named_transitions, "fixture must have transitions"
+    assert unnamed_transitions == named_transitions
+
+    report = check_ag_graph(g_unnamed)
+    assert report.verdict == "PASS", _codes(report)

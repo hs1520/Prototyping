@@ -83,8 +83,17 @@ _STATE_DEF_RE = re.compile(r"\bstate\s+def\s+(\w+)\s*\{")
 _ASSERT_CONSTRAINT_RE = re.compile(
     r"\bassert\s+constraint\s+(\w+)\s*\{([^{}]*)\}"
 )
+# The transition name is optional in SysML v2 (``TransitionUsage =
+# 'transition' ( UsageDeclaration 'first' )? ...``, and a UsageDeclaration may
+# be empty), so ``transition first idle accept X then done;`` is legal and the
+# syntax gate accepts it.  The pattern used to demand ``transition <name>
+# first``; on a model that spelled every transition without a name it parsed
+# zero transitions, so the realisation had no reachable trigger, no reachable
+# response and no trigger-response path -- three diagnostics and a failed
+# qualification raised against a model that was right.  Measured on one
+# archived pilot seed (pilot_n6_4bb7544, seed 1, R2-BBAG).
 _TRANSITION_RE = re.compile(
-    r"\btransition\s+\w+\s+first\s+(\w+)\s+accept\s+(\w+)"
+    r"\btransition\b(?:\s+(?!first\b)\w+)?\s+first\s+(\w+)\s+accept\s+(\w+)"
     r"(?:\s+if\s+(.+?))?\s+then\s+(\w+)\s*;",
     re.DOTALL,
 )
