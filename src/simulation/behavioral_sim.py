@@ -1430,6 +1430,39 @@ def _run_parametric_constraint_scenario(
     elif op in (">=", ">"):
         sweep_end = rhs_f - abs(rhs_f) * 0.15 - 1.0   # always < rhs_f regardless of sign
         step_size = (sweep_end - lhs_f) / _N_STEPS
+    elif op == "==":
+        # A configuration pin: the planned value is the only point where the
+        # constraint holds, so boundary liveness is not a one-sided sweep but
+        # a three-point probe -- hold at the pinned value, violate on either
+        # side of it. The old behaviour reported the operator as unsupported,
+        # so every ``value == planned`` constraint failed behaviour execution
+        # mechanically, whatever the model said.
+        delta = abs(rhs_f) * 0.05 + 0.5
+        result.timeline.append(
+            f"Probing {c.lhs}: hold at {rhs_f:g}, "
+            f"expect violation at {rhs_f - delta:g} and {rhs_f + delta:g} "
+            f"(limit: == {rhs_f:g})"
+        )
+        if not eval_op(lhs_f, op, rhs_f):
+            result.violations.append(
+                f"Initial value {c.lhs}={lhs_f:g} already violates "
+                f"constraint ({lhs_f:g} == {rhs_f:g} is false)."
+            )
+            return result
+        below_ok = not eval_op(rhs_f - delta, op, rhs_f)
+        above_ok = not eval_op(rhs_f + delta, op, rhs_f)
+        if below_ok and above_ok:
+            result.timeline.append(
+                f"  holds at {rhs_f:g}; violated at both probes  "
+                f"(boundary live — deviating from {rhs_f:g} triggers "
+                f"violation)"
+            )
+            result.passed = True
+        else:
+            result.violations.append(
+                f"Equality probe not live around {rhs_f:g}."
+            )
+        return result
     else:
         result.violations.append(f"Unsupported operator '{op}' for parametric sweep.")
         return result
