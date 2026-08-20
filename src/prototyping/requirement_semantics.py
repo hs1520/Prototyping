@@ -115,8 +115,11 @@ _NUMERIC_VALUE_RE = re.compile(
 _PATH_RE = re.compile(
     r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$"
 )
+# The transition name is optional in SysML v2, so it is captured only when
+# present; an unnamed guarded transition must not escape the late-response
+# check (it used to: the pattern demanded a name).
 _TRANSITION_GUARD_RE = re.compile(
-    r"\btransition\s+(?P<name>[A-Za-z_]\w*)"
+    r"\btransition\b(?:\s+(?P<name>(?!first\b)[A-Za-z_]\w*))?"
     r"(?P<body>[^;]*?\bif\s+(?P<guard>.*?)\s+then\s+"
     r"(?P<target>[A-Za-z_]\w*)\s*;)",
     re.DOTALL,
@@ -292,7 +295,8 @@ def _late_response_guards(
     issues: list[str] = []
     for transition in _TRANSITION_GUARD_RE.finditer(block):
         response_name = (
-            transition.group("name") + " " + transition.group("target")
+            (transition.group("name") or "")
+            + " " + transition.group("target")
         )
         response_terms = set(_identifier_terms(response_name))
         if not ({"avoid", "avoidance", "maintain"} & response_terms):

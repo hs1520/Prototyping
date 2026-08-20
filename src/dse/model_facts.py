@@ -96,7 +96,7 @@ def _redundancy_facts(text: str) -> RedundancyFacts:
     )
     voting_patterns = (
         re.compile(
-            r"\btransition\s+\w+\s+first\s+\w+"
+            r"\btransition\b(?:\s+(?!first\b)\w+)?\s+first\s+\w+"
             r"(?:\s+accept\s+[^;]+?)?"
             r"\s+if\s+([^;]+?)\s+then\s+\w+\s*;",
             re.IGNORECASE | re.DOTALL,

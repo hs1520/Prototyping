@@ -814,12 +814,27 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
             # as a monitor (→ false "No fault transitions found").  Guards survive
             # the degraded parse (local refs + literals); accepts do not.  Recover
             # the trigger name from the source text, keyed on the transition name.
-            if accept_trigger is None and tr.name:
+            if accept_trigger is None:
                 import re as _re
-                _m = _re.search(
-                    r"\btransition\s+" + _re.escape(tr.name)
-                    + r"\b[^;{}]*?\baccept\s+(\w+)", state_source
-                )
+                if tr.name:
+                    _pattern = (
+                        r"\btransition\s+" + _re.escape(tr.name)
+                        + r"\b[^;{}]*?\baccept\s+(\w+)"
+                    )
+                else:
+                    # The transition name is optional in SysML v2; an unnamed
+                    # transition is keyed on its source and target states
+                    # instead, so it does not silently lose its trigger and
+                    # collapse an event-driven machine into a monitor.
+                    _pattern = (
+                        r"\btransition\b\s+first\s+"
+                        + _re.escape(src_name or "")
+                        + r"\b[^;{}]*?\baccept\s+(\w+)"
+                        + r"[^;{}]*?\bthen\s+"
+                        + _re.escape(tgt_name or "")
+                        + r"\s*;"
+                    )
+                _m = _re.search(_pattern, state_source)
                 if _m:
                     accept_trigger = _m.group(1)
 

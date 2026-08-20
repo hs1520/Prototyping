@@ -217,8 +217,10 @@ _STAKEHOLDER_REQ = re.compile(r"^REQ[_-][A-Za-z]+[_-]\d+$", re.IGNORECASE)
 #: The `accept` clause is optional because the bounded A/G profile emits
 #: `first X accept Sig if guard then Y`, which is legal SysML v2; a pattern
 #: requiring `if` immediately after the source state cannot see it.
+#: The transition name is optional in SysML v2, so the pattern does not
+#: require one -- the accept lesson above applies to the name as well.
 _GUARDED_TRANSITION = re.compile(
-    r"\btransition\s+\w+\s+first\s+\w+"
+    r"\btransition\b(?:\s+(?!first\b)\w+)?\s+first\s+\w+"
     r"(?:\s+accept\s+[^;]+?)?"
     r"\s+if\s+[^;]+?\s+then\s+\w+\s*;",
     re.IGNORECASE | re.DOTALL,

@@ -103,7 +103,10 @@ def _behavior_tokens(model_text: str, behavior: str) -> set[tuple[str, str]]:
         (kind, item)
         for kind, pattern in (
             ("state", r"\bstate\s+(\w+)"),
-            ("transition", r"\btransition\s+(\w+)"),
+            # The name is optional; on `transition first idle ...` the old
+            # pattern captured the keyword `first` as a bogus identity token,
+            # so a renamed-to-unnamed rewrite read as an identity change.
+            ("transition", r"\btransition\s+(?!first\b)(\w+)"),
             # Skip the optional usage label so the bare
             # `entry action deployParachute;` and the typed
             # `entry action onParachute : deployParachute;` yield the same

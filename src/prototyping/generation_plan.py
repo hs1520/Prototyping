@@ -107,6 +107,18 @@ _SI_UNIT_NAMES = {
 # exactly three ``No Feature named 'deg'/'degC'`` reference errors.
 _UNIT_RESOLUTIONS: dict[str, tuple[str, str]] = {
     "deg": ("alias deg for SI::degree;", ""),
+    # SI declares prefixed units selectively (mm, cm, km, kW exist; ms does
+    # not), so the millisecond is defined here by SI's own ConversionByPrefix
+    # pattern rather than aliased.
+    "ms": (
+        "attribute ms : DurationUnit {\n"
+        "        :>> unitConversion : ConversionByPrefix {\n"
+        "            :>> prefix = milli;\n"
+        "            :>> referenceUnit = s;\n"
+        "        }\n"
+        "    }",
+        "MeasurementReferences,ISQ",
+    ),
     "degC": (
         "alias degC for SI::'degree celsius (temperature difference)';", ""
     ),
@@ -238,8 +250,8 @@ def materialize_standard_library_imports(
             ) is not None
         if not already:
             resolutions.append(construct)
-        if extra_namespace:
-            required.setdefault(extra_namespace, set()).add(token)
+        for namespace in filter(None, extra_namespace.split(",")):
+            required.setdefault(namespace, set()).add(token)
     required = {
         namespace: names for namespace, names in required.items() if names
     }
