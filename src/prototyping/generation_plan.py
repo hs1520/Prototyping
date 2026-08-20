@@ -196,6 +196,79 @@ def normalise_planned_port_types(
     return text, changes
 
 
+def materialize_planned_port_definitions(
+    model_text: str,
+    components: Sequence["ComponentPlan"],
+    connections: Sequence["ConnectionPlan"],
+) -> tuple[str, list[str]]:
+    """Emit a ``port def`` for every planned port type the text does not declare.
+
+    The plan owns a planned port's type, and enforcement acts on that
+    ownership twice: `normalise_planned_port_types` retypes a declared port to
+    the planned type, and the port-addition path adds missing planned ports
+    with it. Neither used to materialise the type's definition, so enforcing
+    the plan could itself create a dangling reference -- measured: a run whose
+    ports were deterministically retyped ``DataPort -> SensorStatusPort``
+    committed with two ``No Type named 'SensorStatusPort'`` errors, and a
+    planned addition whose type was undeclared was rejected outright. Only
+    types the plan names are materialised; a type the model invented stays
+    undeclared and is reported, not legalised.
+
+    The payload item is included when every planned connection touching ports
+    of that type agrees on one item type that the text declares; otherwise the
+    definition is emitted bare, which resolves the reference without inventing
+    a payload the plan does not support.
+    """
+    text = str(model_text)
+    declared = {
+        m.group(1) for m in re.finditer(r"\bport\s+def\s+(\w+)", text)
+    }
+    port_item: dict[str, set[str]] = {}
+    port_of: dict[tuple[str, str], str] = {
+        (component.name, port.name): port.port_type
+        for component in components
+        for port in getattr(component, "ports", ())
+    }
+    for connection in connections:
+        for end_component, end_port in (
+            (connection.source_component, connection.source_port),
+            (connection.target_component, connection.target_port),
+        ):
+            port_type = port_of.get((end_component, end_port))
+            if port_type is not None:
+                port_item.setdefault(port_type, set()).add(
+                    connection.item_type
+                )
+    additions: list[str] = []
+    for port_type in sorted(
+        {p for p in port_of.values()} - declared
+    ):
+        items = port_item.get(port_type, set())
+        payload = None
+        if len(items) == 1:
+            (candidate,) = items
+            if re.search(
+                rf"\b(?:item|part|attribute)\s+def\s+{re.escape(candidate)}\b",
+                text,
+            ):
+                payload = candidate
+        if payload is not None:
+            additions.append(
+                f"port def {port_type} {{ item payload : {payload}; }}"
+            )
+        else:
+            additions.append(f"port def {port_type};")
+    if not additions:
+        return text, []
+    package = re.search(r"\bpackage\s+[A-Za-z_]\w*\s*\{", text)
+    if package is None:
+        return text, []
+    opening = text.find("{", package.start(), package.end())
+    insertion = "".join(f"\n    {line}" for line in additions) + "\n"
+    text = text[:opening + 1] + insertion + text[opening + 1:]
+    return text, additions
+
+
 def materialize_standard_library_imports(
     model_text: str,
 ) -> tuple[str, dict[str, Any]]:
@@ -1999,6 +2072,9 @@ def apply_generation_plan(
     semantic_text, retyped_ports = normalise_planned_port_types(
         semantic_text, plan.components
     )
+    semantic_text, added_port_defs = materialize_planned_port_definitions(
+        semantic_text, plan.components, plan.connections
+    )
 
     planned_port_additions: list[PortAdd] = []
     for component in plan.components:
@@ -2322,6 +2398,7 @@ def apply_generation_plan(
             port_merge.added_descriptions
         ),
         "deterministically_retyped_ports": list(retyped_ports),
+        "deterministically_added_port_defs": list(added_port_defs),
         "semantic_binding_conformance": (
             semantic_binding_conformance
         ),

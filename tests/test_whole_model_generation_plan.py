@@ -116,6 +116,68 @@ def test_terminal_compiler_closes_root_standard_library_imports():
     assert not strict.warnings
 
 
+def test_planned_port_retype_materialises_the_planned_definition():
+    """Enforcing a planned port type must not create a dangling reference.
+    Measured before this existed: retyping DataPort -> SensorStatusPort left
+    two `No Type named 'SensorStatusPort'` errors on a committed model,
+    because the planned type had no definition in the text."""
+    from src.prototyping.generation_plan import (
+        materialize_planned_port_definitions,
+    )
+
+    class _Port:
+        def __init__(self, name, port_type):
+            self.name = name
+            self.direction = "out"
+            self.port_type = port_type
+
+    class _Comp:
+        def __init__(self, name, ports):
+            self.name = name
+            self.ports = ports
+
+    class _Conn:
+        def __init__(self, sc, sp, tc, tp, item):
+            self.source_component = sc
+            self.source_port = sp
+            self.target_component = tc
+            self.target_port = tp
+            self.item_type = item
+
+    model = """package P {
+        item def SensorStatusData;
+        part def Perception { out port sensorStatus : SensorStatusPort; }
+        part def Monitor { in port sensorStatus : SensorStatusPort; }
+    }"""
+    comps = [
+        _Comp("Perception", [_Port("sensorStatus", "SensorStatusPort")]),
+        _Comp("Monitor", [_Port("sensorStatus", "SensorStatusPort")]),
+    ]
+    conns = [_Conn("Perception", "sensorStatus", "Monitor", "sensorStatus",
+                   "SensorStatusData")]
+
+    updated, added = materialize_planned_port_definitions(model, comps, conns)
+
+    assert added == [
+        "port def SensorStatusPort { item payload : SensorStatusData; }"
+    ]
+    strict = check_syntax(
+        updated, fail_closed=True, filter_stdlib_diagnostics=False,
+    )
+    assert not strict.has_errors, strict.short_summary()
+
+    # idempotent, and an unplanned type is never legalised
+    again, more = materialize_planned_port_definitions(updated, comps, conns)
+    assert again == updated and more == []
+    stray = updated.replace(
+        "item def SensorStatusData;",
+        "item def SensorStatusData;\n"
+        "        part def Rogue { out port x : InventedPort; }",
+    )
+    _, added2 = materialize_planned_port_definitions(stray, comps, conns)
+    assert all("InventedPort" not in line for line in added2)
+
+
 def test_terminal_compiler_resolves_project_unit_tokens():
     """`deg`, `degC` and `percent` are project tokens, not SI-library names:
     the SI library names the angle unit `degree` and defines no percent unit,
