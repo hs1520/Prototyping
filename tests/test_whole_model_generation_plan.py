@@ -116,6 +116,41 @@ def test_terminal_compiler_closes_root_standard_library_imports():
     assert not strict.warnings
 
 
+def test_terminal_compiler_resolves_project_unit_tokens():
+    """`deg`, `degC` and `percent` are project tokens, not SI-library names:
+    the SI library names the angle unit `degree` and defines no percent unit,
+    so `import SI::*` alone leaves `[deg]`/`[degC]`/`[percent]` as reference
+    errors (measured on the archived extraction run: qualification failed
+    SYSML_SYNTAX_AND_SEMANTICS on exactly those). The import closure must emit
+    the aliases and the conversion-defined percent, and the result must be
+    clean under the strict, unfiltered check."""
+    model = """package P {
+        part def Controller {
+            attribute heading : Real = 30.0 [deg];
+            attribute temp : Real = 5.0 [degC];
+            attribute soc : Real = 20.0 [percent];
+        }
+        part controller : Controller;
+    }"""
+
+    updated, report = materialize_standard_library_imports(model)
+
+    assert "alias deg for SI::degree;" in updated
+    assert "alias degC for SI::'degree celsius (temperature difference)';" \
+        in updated
+    assert "attribute percent : DimensionOneUnit" in updated
+    assert "private import MeasurementReferences::*;" in updated
+    assert report["added_unit_resolutions"]
+    strict = check_syntax(
+        updated, fail_closed=True, filter_stdlib_diagnostics=False,
+    )
+    assert not strict.has_errors, strict.short_summary()
+
+    again, second = materialize_standard_library_imports(updated)
+    assert again == updated
+    assert second["added_unit_resolutions"] == []
+
+
 def test_terminal_compiler_does_not_duplicate_sufficient_member_imports():
     model = """package P {
         private import ScalarValues::Boolean;

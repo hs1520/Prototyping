@@ -231,9 +231,14 @@ _SYSML_UNIT_NAMES = {
     "%": "percent",
     # The degree sign is not a SysML token at all: `[°]` is a parse error and
     # `[°C]` reparents everything after it, exactly as `[%]` does. Requirement
-    # text and an LLM-extracted plan both spell angles and temperatures with the
-    # sign; the model must carry the SI/ISQ identifiers, which parse and resolve
-    # (verified: deg, degC, rad, K, percent all clean under `import SI::*`).
+    # text and an LLM-extracted plan both spell angles and temperatures with
+    # the sign, so the model carries ASCII tokens instead. `deg`, `degC` and
+    # `percent` are NOT names in the standard SI library (it names the angle
+    # unit `degree` and defines no percent unit; measured: three reference
+    # errors on the archived extraction run) -- their resolution is closed by
+    # `generation_plan.materialize_standard_library_imports`, which emits an
+    # alias onto the SI unit where one exists and a conversion-defined percent
+    # against `MeasurementReferences::one` where none does.
     "°": "deg", "°c": "degC", "degc": "degC", "celsius": "degC",
     "second": "s", "seconds": "s",
     "millisecond": "ms", "milliseconds": "ms",

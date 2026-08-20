@@ -89,7 +89,36 @@ _STANDARD_LIBRARY_TYPES = {
 }
 _SI_UNIT_NAMES = {
     "A", "C", "Hz", "J", "K", "N", "Pa", "V", "W",
-    "cm", "deg", "g", "h", "kg", "km", "m", "min", "mm", "ms", "rad", "s",
+    "cm", "deg", "degC", "g", "h", "kg", "km", "m", "min", "mm", "ms",
+    "percent", "rad", "s",
+}
+
+# Project unit tokens that are NOT names in the standard SI library and
+# therefore do not resolve under ``import SI::*`` alone.  The SI library names
+# the angle unit ``degree`` (symbol ``'°'``) and the Celsius interval unit
+# ``'degree celsius (temperature difference)'`` (symbol ``'°C'``), and it
+# defines no percent unit at all -- its dimensionless unit is
+# ``MeasurementReferences::one``.  The emitter keeps the ASCII tokens (every
+# reader of ``[<token>]`` brackets depends on word characters) and closes
+# resolution here instead: an alias onto the standard unit where one exists,
+# and a conversion-defined unit against ``one`` where none does, following the
+# pattern SI itself uses for ``degree``.  Measured before this existed: the
+# archived extraction run's qualification failed SYSML_SYNTAX_AND_SEMANTICS on
+# exactly three ``No Feature named 'deg'/'degC'`` reference errors.
+_UNIT_RESOLUTIONS: dict[str, tuple[str, str]] = {
+    "deg": ("alias deg for SI::degree;", ""),
+    "degC": (
+        "alias degC for SI::'degree celsius (temperature difference)';", ""
+    ),
+    "percent": (
+        "attribute percent : DimensionOneUnit {\n"
+        "        :>> unitConversion : ConversionByConvention {\n"
+        "            :>> referenceUnit = one;\n"
+        "            :>> conversionFactor = 0.01;\n"
+        "        }\n"
+        "    }",
+        "MeasurementReferences",
+    ),
 }
 
 
@@ -198,6 +227,19 @@ def materialize_standard_library_imports(
     }
     if unit_tokens & _SI_UNIT_NAMES:
         required["SI"] = unit_tokens & _SI_UNIT_NAMES
+    resolutions: list[str] = []
+    for token in sorted(unit_tokens & set(_UNIT_RESOLUTIONS)):
+        construct, extra_namespace = _UNIT_RESOLUTIONS[token]
+        if construct.split()[0] == "alias":
+            already = f"alias {token} for" in body
+        else:
+            already = re.search(
+                rf"\battribute\s+{re.escape(token)}\s*:", body
+            ) is not None
+        if not already:
+            resolutions.append(construct)
+        if extra_namespace:
+            required.setdefault(extra_namespace, set()).add(token)
     required = {
         namespace: names for namespace, names in required.items() if names
     }
@@ -212,8 +254,12 @@ def materialize_standard_library_imports(
         if "*" in imported or "**" in imported or names <= imported:
             continue
         additions.append(f"private import {namespace}::*;")
-    if additions:
-        insertion = "".join(f"\n    {line}" for line in additions) + "\n"
+    if additions or resolutions:
+        insertion = (
+            "".join(f"\n    {line}" for line in additions)
+            + "".join(f"\n    {line}" for line in resolutions)
+            + "\n"
+        )
         text = text[:opening + 1] + insertion + text[opening + 1:]
     return text, {
         "artifact_role": "STANDARD_LIBRARY_IMPORT_CLOSURE",
@@ -221,6 +267,7 @@ def materialize_standard_library_imports(
         "root_package": package.group(1),
         "required_packages": sorted(required),
         "added_imports": additions,
+        "added_unit_resolutions": resolutions,
         "issues": [],
     }
 
