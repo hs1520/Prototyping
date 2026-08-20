@@ -413,6 +413,104 @@ def append_plan_application_history(
     return history
 
 
+# Reserved words of the KerML and SysML v2 textual notations, verified
+# against the parser: each is rejected as a declared name in at least one
+# of the positions the plan renders (attribute, action, item, port, part).
+# `nonunique` and `ordered` parse as attribute names but not as definition
+# names; the set keeps them because the plan does not track which position
+# a name will reach.
+SYSML_RESERVED_WORDS: frozenset[str] = frozenset("""
+about abstract accept action actor after alias all allocate allocation
+analysis and as assert assign assume at attribute bind binding by calc case
+comment concern connect connection constraint crosses decide def default
+defined dependency derived do doc else end entry enum event exhibit exit
+expose false filter first flow for fork frame from hastype if implies import
+in include individual inout interface istype item join language library
+locale loop merge message meta metadata new nonunique not null objective
+occurrence of or ordered out package parallel part perform port private
+protected public redefines ref references rendering rep require requirement
+return satisfy send snapshot specializes stakeholder standard state subject
+subsets succession terminate then timeslice to transition true until use
+variant variation verification verify via view viewpoint when while xor
+""".split())
+
+
+def _reserved_word_issues(
+    components: Sequence["ComponentPlan"],
+    planned_behaviors: Sequence[Any],
+    event_symbols: Sequence[Any],
+    constraints: Sequence[Any],
+) -> list[str]:
+    """Reject plan identifiers the language cannot declare as names.
+
+    Every name below is rendered verbatim into SysML text by a
+    materialisation step that runs after the last syntax gate, so a
+    reserved word here becomes a parser error in the committed model.
+    Planning time is the cheapest place to refuse it."""
+    named: list[tuple[str, str]] = []
+    for component in components:
+        named.append((component.name, f"component {component.name}"))
+        for port in component.ports:
+            named.append(
+                (port.name, f"port {component.name}.{port.name}")
+            )
+            named.append((
+                str(port.port_type or ""),
+                f"port type of {component.name}.{port.name}",
+            ))
+        for attribute in component.attributes:
+            named.append((
+                attribute.name,
+                f"attribute {component.name}.{attribute.name}",
+            ))
+    for behavior in planned_behaviors:
+        named.append(
+            (behavior.behavior_id, f"behavior {behavior.behavior_id}")
+        )
+        for state in behavior.states:
+            named.append((
+                state.state_id,
+                f"state {behavior.behavior_id}.{state.state_id}",
+            ))
+            for action in (state.entry_action, state.do_action):
+                if action:
+                    named.append((
+                        action,
+                        f"action '{action}' of state {state.state_id} "
+                        f"in behavior {behavior.behavior_id}",
+                    ))
+        for transition in behavior.transitions:
+            if transition.transition_id:
+                named.append((
+                    transition.transition_id,
+                    f"transition {transition.transition_id} "
+                    f"in behavior {behavior.behavior_id}",
+                ))
+            if transition.trigger_kind == "ACCEPT" and transition.trigger:
+                named.append((
+                    transition.trigger,
+                    f"trigger {transition.trigger} "
+                    f"in behavior {behavior.behavior_id}",
+                ))
+    for symbol in event_symbols:
+        named.append((symbol.name, f"planned event symbol {symbol.name}"))
+    for constraint in constraints:
+        named.append(
+            (constraint.constraint_id,
+             f"constraint {constraint.constraint_id}")
+        )
+    issues: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for name, where in named:
+        if name in SYSML_RESERVED_WORDS and (name, where) not in seen:
+            seen.add((name, where))
+            issues.append(
+                f"{where} is named with the reserved word '{name}', "
+                "which SysML cannot declare; choose another identifier"
+            )
+    return issues
+
+
 def validate_part_definition_fragment(
     fragment: str,
     plan: "ModelGenerationPlan",
@@ -1367,6 +1465,12 @@ class ModelGenerationPlan:
             ordinary_event_symbols,
             planned_behaviors,
             components=components,
+        ))
+        issues.extend(_reserved_word_issues(
+            components,
+            planned_behaviors,
+            ordinary_event_symbols,
+            constraint_plans,
         ))
         raw_realizations = payload.get("requirement_realizations")
         if not isinstance(raw_realizations, Sequence) or isinstance(
