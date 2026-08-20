@@ -436,11 +436,13 @@ Rules:
   attributes. A port and an attribute MUST NOT share a name.
 - A purely structural body -- an airframe, chassis, fuselage, enclosure -- that
   carries other parts but exchanges no signals, commands or power in this model
-  is declared `"passive": true` with a `passive_rationale`, and plans NO ports.
-  Do not invent a port for such a component to give it a connection; the
-  reachability check will not expect a path into a declared-passive body. A
-  structural body that DOES host powered or sensing equipment in this model
-  is not passive: give it the ports that equipment needs and connect them.
+  is declared `"passive": true` with a `passive_rationale`, and plans exactly
+  one port: `structuralMount` (direction `inout`, type `StructuralMountPort`),
+  its structural attachment point. Plan no other ports on it and do not invent
+  a signal, command or power port to give it a connection; the reachability
+  check will not expect a path into a declared-passive body. A structural body
+  that DOES host powered or sensing equipment in this model is not passive:
+  give it the ports that equipment needs and connect them.
 - Every non-external `in` port must have exactly one connection source.
 - Every non-external `out` port must have at least one connection consumer.
 - A connection's source/target port types must be identical.
@@ -619,9 +621,10 @@ Rules:
   do NOT declare the mode attribute and do NOT generate any `enum def` here.
   The behavioral step (Step 4) is solely responsible for defining the enum and
   injecting the mode attribute via `// ATTR OWNER:`. Leave no placeholder — just omit it.
-- Structural/passive parts (Airframe, Chassis, Frame, Fuselage, Housing, etc.) MUST use
-  only `DataPort` for their ports — never protocol-derived types (MAVLinkPort, etc.).
-  This ensures the connectivity fixer can always wire them to a power or environmental source.
+- A part carrying the `// PLAN-PASSIVE` marker (Airframe, Chassis, Frame, Fuselage,
+  Housing, etc.) declares exactly one port, its structural attachment point:
+  `inout port structuralMount : StructuralMountPort;` — that name, that type,
+  and no other ports on that part.
 - Use valid SysML v2 syntax throughout.
 - Safety interconnect ports (MANDATORY — add these whenever the component type is present):
     • If a SafetyMonitor part def is defined:

@@ -532,6 +532,17 @@ def _req_ids(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(found)
 
 
+#: The one port a passive structural component plans: a structural attachment
+#: point. The port definition is emitted with no features, which is the
+#: standard's own way of saying nothing can be exchanged through it (a port's
+#: features specify what an interaction may exchange; zero features, zero
+#: exchange) -- so the passive convention and the port coexist. The name and
+#: type are fixed so that the planned port, the prompt guidance and the
+#: conformance check all agree on one spelling.
+STRUCTURAL_MOUNT_PORT_NAME = "structuralMount"
+STRUCTURAL_MOUNT_PORT_TYPE = "StructuralMountPort"
+
+
 @dataclass(frozen=True)
 class PortPlan:
     name: str
@@ -695,12 +706,31 @@ def _compile_architecture_section(
                 f"{name} is declared passive without a passive_rationale; a "
                 "decision to plan no interfaces for a component must say why"
             )
-        if passive and ports:
-            issues.append(
-                f"{name} is declared passive but plans {len(ports)} port(s); a "
-                "passive structural body exchanges nothing, so either drop the "
-                "ports or drop the passive declaration"
-            )
+        if passive:
+            extra = [
+                port.name for port in ports
+                if port.name != STRUCTURAL_MOUNT_PORT_NAME
+            ]
+            if extra:
+                issues.append(
+                    f"{name} is declared passive but plans ports "
+                    f"{extra}; a passive structural body carries exactly one "
+                    f"structural attachment port, "
+                    f"{STRUCTURAL_MOUNT_PORT_NAME} : "
+                    f"{STRUCTURAL_MOUNT_PORT_TYPE}, and nothing else"
+                )
+            # The attachment port is planned, not optional: a structural body
+            # legitimately exposes a mounting interface (a port is the
+            # standard's connection point for interactions, mechanical ones
+            # included), and leaving it unplanned made every generator that
+            # sensibly wrote one non-conformant.
+            ports = [
+                PortPlan(
+                    name=STRUCTURAL_MOUNT_PORT_NAME,
+                    direction="inout",
+                    port_type=STRUCTURAL_MOUNT_PORT_TYPE,
+                )
+            ]
         components.append(ComponentPlan(
             name=name,
             responsibility=responsibility,

@@ -73,3 +73,53 @@ def test_declared_passive_part_generates_no_scenarios():
     without = auto_detect_scenarios(graph(passive=True))
     assert any("airframe" in s.target_nodes for s in with_expectation)
     assert not any("airframe" in s.target_nodes or "airframe" in s.entry_nodes for s in without)
+
+
+def test_passive_component_plans_exactly_the_structural_mount():
+    """A passive body plans one structural attachment port -- fixed name and
+    type -- because a mounting interface is a legitimate connection point (the
+    standard's ports are interaction points, mechanical ones included), and
+    leaving it unplanned made every generator that sensibly wrote one
+    non-conformant (measured: two consecutive end-to-end draws added an
+    unplanned airframe mount port). The emitted port definition has no
+    features, so nothing can be exchanged through it and the passive marker
+    stays true."""
+    from src.prototyping.generation_plan import (
+        STRUCTURAL_MOUNT_PORT_NAME,
+        STRUCTURAL_MOUNT_PORT_TYPE,
+        ModelGenerationPlan,
+    )
+    payload = {
+        "components": [
+            {
+                "name": "Airframe",
+                "responsibility": "carry the parts",
+                "requirements": ["REQ-CONS-001"],
+                "ports": [],
+                "attributes": [],
+                "passive": True,
+                "passive_rationale": "structural body; exchanges nothing",
+            },
+            {
+                "name": "Controller",
+                "responsibility": "control",
+                "requirements": ["REQ-FUNC-001"],
+                "ports": [{"name": "cmd", "direction": "out",
+                           "type": "DataPort"}],
+                "attributes": [],
+            },
+        ],
+        "connections": [],
+    }
+    plan = ModelGenerationPlan.from_payload(payload)
+    airframe = next(c for c in plan.components if c.name == "Airframe")
+    assert [p.name for p in airframe.ports] == [STRUCTURAL_MOUNT_PORT_NAME]
+    assert airframe.ports[0].port_type == STRUCTURAL_MOUNT_PORT_TYPE
+    assert airframe.ports[0].direction == "inout"
+    # a passive component planning any OTHER port is an issue
+    payload["components"][0]["ports"] = [
+        {"name": "power", "direction": "in", "type": "DataPort"}
+    ]
+    plan2 = ModelGenerationPlan.from_payload(payload)
+    assert any("passive" in issue and "power" in issue
+               for issue in plan2.issues)
