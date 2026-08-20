@@ -1,9 +1,9 @@
-"""Traceability-only verification defs for quantities the model calc set cannot evaluate.
+"""Traceability-only verification usages for quantities the model calc set cannot evaluate.
 
 Speed needs a drag/thrust model the estimator does not expose, range needs a
 non-zero design cruise speed, altitude is a geofence CONFIG bound. Fabricating an
 `assert` for these would invent physics; the emitter instead declares the
-verification ROUTE in-model (requirement usage + verification def whose doc names
+verification ROUTE in-model (requirement usage + verification usage whose doc names
 the responsible tier), so the model states HOW every quantified requirement is
 verified — evaluable or not.
 """
@@ -39,9 +39,9 @@ def test_non_evaluable_quantities_get_traceability_verification_defs():
     # Evaluable closure unchanged: endurance/MTOW keep their asserts.
     assert "assert constraint enduranceMeetsReq" in out
     assert "assert constraint mtowWithinReq" in out
-    # Non-evaluable quantities: verification def + tier note, NO fabricated assert.
-    assert "verification def REQ_PERF_003_check" in out
-    assert "verification def REQ_CONS_001_check" in out
+    # Non-evaluable quantities: verification usage + tier note, NO fabricated assert.
+    assert "verification req_perf_003_check" in out
+    assert "verification req_cons_001_check" in out
     assert "forward_flight tier" in out
     assert "geofence parameter consistency" in out
     assert "speedMeetsReq" not in out          # no invented speed assert
@@ -51,5 +51,5 @@ def test_non_evaluable_quantities_get_traceability_verification_defs():
 def test_evaluable_requirements_are_not_duplicated_as_traceability_defs():
     out, ok = inject_endurance_analysis(_MODEL, _REQS, design=_DESIGN)
     assert ok
-    # Endurance already has an evaluable verification def — exactly one.
-    assert out.count("verification def REQ_PERF_002_check") == 1
+    # Endurance already has an evaluable verification usage — exactly one.
+    assert out.count("verification req_perf_002_check") == 1

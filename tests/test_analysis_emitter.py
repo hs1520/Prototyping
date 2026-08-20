@@ -143,10 +143,13 @@ def test_no_range_clause_or_false_satisfy_for_altitude_requirement():
     assert ok
     assert "rangeMeetsReq" not in out and "RangeM(" not in out   # altitude ≠ flight range
     assert "satisfy req_cons_001" not in out                      # no false satisfy
-    # Altitude legitimately gets a TRACEABILITY-ONLY verification def (usage +
-    # tier note, no assert) — the model declares its verification route (L1
-    # geofence) without fabricating an evaluable capability check.
-    assert "verification def REQ_CONS_001_check" in out
+    # Altitude legitimately gets a TRACEABILITY-ONLY verification usage
+    # (tier note, no assert) — the model declares its verification route (L1
+    # geofence) without fabricating an evaluable capability check. The usage
+    # form (not `verification def`) is what the strict syntax check accepts
+    # without a subsetting-accessibility warning.
+    assert "verification req_cons_001_check" in out
+    assert "verification def" not in out
     assert "altitudeWithinReq" not in out                         # still no invented assert
 
 
@@ -325,7 +328,7 @@ def test_bound_closure_is_automator_evaluable():
 
 def test_evidence_chain_satisfy_on_design_plus_verify():
     """Issue #4: the DESIGN element (recommendedDesign) satisfies the requirement, and a
-    verification def `verify`s it — not a bare `satisfy` floating in the analysis block."""
+    verification usage `verify`s it — not a bare `satisfy` floating in the analysis block."""
     from src.dse.analysis_emitter import inject_endurance_analysis
     from src.dse.domain_objective import DesignInputs
     d = DesignInputs(payload_mass_kg=2.0, battery_capacity_mah=22000, battery_cells=4,
@@ -337,6 +340,6 @@ def test_evidence_chain_satisfy_on_design_plus_verify():
     assert ok
     design_block = out.split("part recommendedDesign {", 1)[1].split("        }", 1)[0]
     assert "satisfy req_perf_002" in design_block        # DESIGN satisfies (not the analysis block)
-    assert "verification def REQ_PERF_002_check" in out  # explicit verification
+    assert "verification req_perf_002_check" in out      # explicit verification
     assert "verify req_perf_002;" in out                 # verify linkage to the requirement
     assert "assert constraint enduranceMeetsReq" in out  # evaluable evidence retained

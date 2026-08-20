@@ -27,6 +27,10 @@ from .physics_estimator import (
     ETA_DRIVE, FOM, G, RHO, ROTOR_MASS_COEF, USABLE,
 )
 
+# Name of the tool-authored wrapper this emitter injects; other validators
+# reference it to recognise the block as pipeline-owned, not model content.
+ANALYSIS_CLOSURE_DEF_NAME = "DseDesignAnalysis"
+
 _USAGE_RE = re.compile(r"\bpart\s+(\w+)\s*:\s*(\w+)\s*;")
 # Endurance(...) argument order ↔ DesignInputs field name
 _ARG_ORDER = ("battery_capacity_mah", "battery_cells", "rotor_count",
@@ -259,7 +263,11 @@ def inject_endurance_analysis(
         # verification VERIFIES it (objective → verify), with the assert above as the evaluable
         # evidence — not a bare `satisfy` floating in the analysis block.
         satisfied.append(rid.lower())
-        members.append(f"        verification def {rid}_check {{ objective {rid.lower()}_obj "
+        # A `verification def` whose objective verifies a sibling requirement
+        # usage draws a subsetting-accessibility warning from the validator (a
+        # definition does not feature its owner's usages); the verification
+        # USAGE form is featured by the owning part and is warning-free.
+        members.append(f"        verification {rid.lower()}_check {{ objective {rid.lower()}_obj "
                        f"{{ verify {rid.lower()}; }} }}")
 
     # endurance (perf, >=) — the required trigger
@@ -309,7 +317,7 @@ def inject_endurance_analysis(
             seen.add(rid)
         trace_decls.append(f"        requirement {rid.lower()} : {rid};")
         trace_members.append(
-            f"        verification def {rid}_check {{\n"
+            f"        verification {rid.lower()}_check {{\n"
             f"            doc /* Traceability: verified at the {tier_note}. The model calc set\n"
             f"               cannot evaluate this quantity without assumed constants, so no\n"
             f"               assert is emitted here; execution evidence lives in the\n"
@@ -331,7 +339,10 @@ def inject_endurance_analysis(
         # mistaken for a system component and wired up by the connectivity refiner. Only the legacy
         # path (no parts, just refs into the root scope) may inline into the root body.
         if wrap or design_attr_lines is not None:
-            frag = f"\n{note}    part def DseDesignAnalysis {{\n{core}\n    }}\n"
+            frag = (
+                f"\n{note}    part def {ANALYSIS_CLOSURE_DEF_NAME} "
+                f"{{\n{core}\n    }}\n"
+            )
         else:                                         # legacy nested → straight into the root body
             frag = f"\n        {note}{core}\n"
         return text[:end] + frag + text[end:]

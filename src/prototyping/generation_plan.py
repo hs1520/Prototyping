@@ -465,7 +465,18 @@ def _is_planned_assembly_container(
             model_text[opening + 1:closing],
         )
     }
-    return bool(usage_types) and usage_types <= planned_components
+    if not usage_types:
+        return False
+    from .structural_obligations import part_def_bases, specializes
+    bases = part_def_bases(model_text)
+    return all(
+        usage_type in planned_components
+        or any(
+            specializes(usage_type, planned, bases)
+            for planned in planned_components
+        )
+        for usage_type in usage_types
+    )
 
 
 def _definition_contract_report(
@@ -499,11 +510,23 @@ def _definition_contract_report(
                 + ", ".join(wrong)
             )
 
+    from .structural_obligations import part_def_bases, specializes
+    from ..dse.analysis_emitter import ANALYSIS_CLOSURE_DEF_NAME
+    bases = part_def_bases(model_text)
     unplanned = sorted(
         name
         for name, kinds in by_name.items()
         if "part def" in kinds
         and name not in planned_components
+        # The DSE analysis closure is authored by the pipeline itself, not
+        # by the model generator the plan audits.
+        and name != ANALYSIS_CLOSURE_DEF_NAME
+        # A definition specialising a planned component (`Impl :> Planned`)
+        # is an implementation of that plan entry, not a foreign element.
+        and not any(
+            specializes(name, planned, bases)
+            for planned in planned_components
+        )
         and not _is_planned_assembly_container(
             model_text, name, planned_components
         )
@@ -2059,9 +2082,26 @@ def apply_generation_plan(
         plan.components,
     )
     directory = build_port_directory(semantic_text)
+    from .structural_obligations import part_def_bases
+    type_bases = part_def_bases(semantic_text)
     instances_by_type: dict[str, list[str]] = {}
     for instance, component_type in directory.instance_type.items():
-        instances_by_type.setdefault(component_type, []).append(instance)
+        # Index the usage under its declared type and every definition that
+        # type transitively specialises: a usage retyped to a catalogue
+        # implementation (`Impl :> Planned`) is still a usage of the planned
+        # definition by the language's own subtyping.
+        indexed = {component_type}
+        frontier = [component_type]
+        while frontier:
+            current = frontier.pop()
+            for base in type_bases.get(current, ()):
+                if base not in indexed:
+                    indexed.add(base)
+                    frontier.append(base)
+        for name in indexed:
+            bucket = instances_by_type.setdefault(name, [])
+            if instance not in bucket:
+                bucket.append(instance)
 
     issues = list(plan.issues)
     if semantic_binding_conformance["status"] == "FAIL":
@@ -2111,7 +2151,31 @@ def apply_generation_plan(
         usage = resolve(component.name)
         if usage is None:
             continue
-        existing_ports = directory.instances.get(usage, {})
+        existing_ports = dict(directory.instances.get(usage, {}))
+        # A retyped usage's own definition may declare no ports and inherit
+        # them all; a port declared anywhere up the specialisation chain
+        # already exists and must be neither reported missing nor re-added.
+        usage_type = directory.instance_type.get(usage)
+        seen_types: set[str] = set()
+        frontier = [usage_type] if usage_type else []
+        while frontier:
+            current = frontier.pop()
+            if not current or current in seen_types:
+                continue
+            seen_types.add(current)
+            block = re.search(
+                rf"\bpart\s+def\s+{re.escape(current)}\b[^{{;]*\{{", semantic_text
+            )
+            if block is not None:
+                brace = semantic_text.index("{", block.start())
+                end = find_block_end(semantic_text, brace)
+                if end != -1:
+                    for m in re.finditer(
+                        r"\b(?:in|out|inout)\s+port\s+(\w+)\s*:",
+                        semantic_text[brace:end],
+                    ):
+                        existing_ports.setdefault(m.group(1), "declared")
+            frontier.extend(type_bases.get(current, ()))
         for port in component.ports:
             if port.name not in existing_ports:
                 planned_port_additions.append(PortAdd(
@@ -2281,9 +2345,23 @@ def apply_generation_plan(
     issues.extend(f"planned connect missing: {item}" for item in missing)
 
     planned_component_types = {item.name for item in plan.components}
+    from .structural_obligations import specializes
+    final_type_bases = part_def_bases(final_text)
+
+    def _planned_type_of(component_type: str) -> str | None:
+        # A usage retyped to `Impl :> Planned` is, by the language's own
+        # subtyping, still a usage of the planned definition.
+        if component_type in planned_component_types:
+            return component_type
+        for planned in planned_component_types:
+            if specializes(component_type, planned, final_type_bases):
+                return planned
+        return None
+
     actual_by_type: dict[str, list[str]] = {}
     for instance, component_type in actual_instance_types.items():
-        actual_by_type.setdefault(component_type, []).append(instance)
+        planned_type = _planned_type_of(component_type) or component_type
+        actual_by_type.setdefault(planned_type, []).append(instance)
     missing_components = sorted(
         component
         for component in planned_component_types
@@ -2297,7 +2375,7 @@ def apply_generation_plan(
     unplanned_components = sorted(
         f"{instance} : {component_type}"
         for instance, component_type in actual_instance_types.items()
-        if component_type not in planned_component_types
+        if _planned_type_of(component_type) is None
     )
 
     planned_ports = {
@@ -2312,13 +2390,13 @@ def apply_generation_plan(
     }
     actual_ports = {
         (
-            component_type,
+            _planned_type_of(component_type),
             port.name,
             port.direction,
             str(port.port_type or ""),
         )
         for instance, component_type in actual_instance_types.items()
-        if component_type in planned_component_types
+        if _planned_type_of(component_type) is not None
         for port in final_directory.instances.get(instance, {}).values()
     }
     missing_ports = sorted(

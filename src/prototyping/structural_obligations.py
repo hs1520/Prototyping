@@ -19,6 +19,48 @@ from ..utils.sysml_text_utils import find_block_end
 
 _STRUCTURAL_CATEGORIES = ("REQ_FUNC_", "REQ_SAFE_", "REQ_INTF_", "REQ_OPER_")
 
+_PART_DEF_BASES_RE = re.compile(
+    r"\bpart\s+def\s+(\w+)\s*:>\s*([\w:,\s]+?)\s*[{;]"
+)
+
+
+def part_def_bases(model_text: str) -> dict[str, tuple[str, ...]]:
+    """Map each part definition to the definitions it specialises (`:>`)."""
+    bases: dict[str, tuple[str, ...]] = {}
+    for match in _PART_DEF_BASES_RE.finditer(model_text or ""):
+        names = tuple(
+            item.strip().rsplit("::", 1)[-1]
+            for item in match.group(2).split(",")
+            if item.strip()
+        )
+        if names:
+            bases[match.group(1)] = names
+    return bases
+
+
+def specializes(def_name: str, target: str,
+                bases: dict[str, tuple[str, ...]]) -> bool:
+    """True when *def_name* is *target* or transitively specialises it.
+
+    A usage retyped to a catalogue implementation (``Impl :> Planned``) is
+    still, by the language's own subtyping, a usage of the planned
+    definition; a reader that matches definition names exactly reports the
+    planned component as missing and the implementation as unplanned on a
+    model that is right. Measured on an archived end-to-end run.
+    """
+    seen: set[str] = set()
+    frontier = [def_name]
+    while frontier:
+        current = frontier.pop()
+        if current == target:
+            return True
+        if current in seen:
+            continue
+        seen.add(current)
+        frontier.extend(bases.get(current, ()))
+    return False
+
+
 
 @dataclass(frozen=True)
 class StructuralConnectionRef:
@@ -889,9 +931,21 @@ def validate_structural_obligations(
         model_text,
         root_package=model_name,
     )
+    bases = part_def_bases(model_text)
     usages_by_definition: dict[str, list[str]] = {}
     for usage_name, part in graph.parts.items():
-        usages_by_definition.setdefault(part.def_name, []).append(usage_name)
+        indexed = {part.def_name}
+        frontier = [part.def_name]
+        while frontier:
+            current = frontier.pop()
+            for base in bases.get(current, ()):
+                if base not in indexed:
+                    indexed.add(base)
+                    frontier.append(base)
+        for def_name in indexed:
+            bucket = usages_by_definition.setdefault(def_name, [])
+            if usage_name not in bucket:
+                bucket.append(usage_name)
     for usages in usages_by_definition.values():
         usages.sort()
 
