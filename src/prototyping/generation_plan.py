@@ -136,7 +136,7 @@ _UNIT_RESOLUTIONS: dict[str, tuple[str, str]] = {
 
 _DECLARED_PORT = re.compile(
     r"\b(?P<direction>in|out|inout)\s+port\s+(?P<name>[A-Za-z_]\w*)"
-    r"\s*:\s*(?P<type>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*;"
+    r"(?:\s*:\s*(?P<type>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*))?\s*;"
 )
 
 
@@ -150,7 +150,10 @@ def normalise_planned_port_types(
     used to satisfy the "does this port exist?" test, which looks only at the
     name, so nothing added it and nothing corrected it — and conformance then
     reported the same port as BOTH a missing planned port and an unplanned one.
-    Four such pairs failed one measured run.
+    Four such pairs failed one measured run. An UNTYPED declaration
+    (`in port environmentExposure;` — legal grammar) is the same case: the
+    grammar makes the type optional, so a planned port declared without one
+    is retyped to the planned type, not reported as a missing/unplanned pair.
 
     Direction is deliberately not rewritten. A wrong direction changes what the
     connections mean, which is a design question rather than a notation one.

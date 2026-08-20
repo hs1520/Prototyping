@@ -92,3 +92,33 @@ def test_verification_emission_is_warning_free():
     }"""
     r = check_syntax(probe, fail_closed=True, filter_stdlib_diagnostics=False)
     assert not r.has_errors and not r.warnings
+
+
+def test_untyped_planned_port_is_retyped_not_reported_twice():
+    """`in port environmentExposure;` is legal grammar (the type is
+    optional). A planned port declared untyped is retyped to the planned
+    type, not reported as a missing/unplanned pair (observed on an archived
+    run's terminal audit)."""
+    from src.prototyping.generation_plan import normalise_planned_port_types
+
+    model = """package P {
+        port def EnvironmentPort;
+        part def Airframe {
+            in port environmentExposure;
+        }
+        part airframe : Airframe;
+    }"""
+    payload = {
+        "components": [
+            {"name": "Airframe", "responsibility": "structure",
+             "requirements": ["REQ-CONS-002"],
+             "ports": [{"name": "environmentExposure", "direction": "in",
+                        "type": "EnvironmentPort"}],
+             "attributes": []},
+        ],
+        "connections": [],
+    }
+    plan = ModelGenerationPlan.from_payload(payload)
+    updated, changes = normalise_planned_port_types(model, plan.components)
+    assert "in port environmentExposure : EnvironmentPort;" in updated
+    assert changes
