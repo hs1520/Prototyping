@@ -16,6 +16,7 @@ Method vocabulary follows the systems-engineering IADT convention
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -74,6 +75,18 @@ _GAZEBO_KWS = (
 
 _BEHAVIORAL_TEXT_KWS = ("phase", "sequence", "sequential", "state", "mode", "transition")
 _INITIALIZATION_KWS = ("power-on", "power on", "default", "initial", "startup", "start-up")
+# An inhibition requirement ("shall not transition...", "prevent arming while
+# ...") is anchored by the transition that is NOT taken -- a guard or a
+# fault-path transition -- never by initial-state semantics. One measured run
+# routed such a requirement into the initialization branch because its text
+# happened to contain "power-on" (naming the phase, not a default state), and
+# the branch then failed a model whose inhibition anchor existed and whose
+# scenarios all passed.
+_INHIBITION_RE = re.compile(
+    r"\bshall\s+not\b|\binhibit\w*\b|\bprevent\w*\b|\bsuppress\w*\b"
+    r"|\block\s*-?\s*out\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -417,7 +430,11 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         # that machine's initialisation as the requirement's evidence.
         planned_intent = planned_intents.get(_norm_req_id(rid))
         obliges_response = bool(planned_intent) and planned_intent != "none"
-        if not obliges_response and any(k in low for k in _INITIALIZATION_KWS):
+        if (
+            not obliges_response
+            and not _INHIBITION_RE.search(low)
+            and any(k in low for k in _INITIALIZATION_KWS)
+        ):
             compact_low = "".join(ch for ch in low if ch.isalnum())
             init_candidates = [
                 sm for sm in owner_machines

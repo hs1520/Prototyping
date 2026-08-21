@@ -438,6 +438,10 @@ class _RefinementEngine:
                 sysml_text,
                 model_name,
                 allowed_req_ids=self._active_requirement_ids(),
+                # The audit rebuilds the model from its text, which carries no
+                # plan metadata; the intents must be handed over or the matrix
+                # treats every planned response as an initialization candidate.
+                planned_intents=self._planned_response_intents(),
             )
         except Exception:
             return []
