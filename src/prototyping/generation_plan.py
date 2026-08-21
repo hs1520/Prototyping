@@ -416,26 +416,7 @@ def append_plan_application_history(
     return history
 
 
-# Reserved words of the KerML and SysML v2 textual notations, verified
-# against the parser: each is rejected as a declared name in at least one
-# of the positions the plan renders (attribute, action, item, port, part).
-# `nonunique` and `ordered` parse as attribute names but not as definition
-# names; the set keeps them because the plan does not track which position
-# a name will reach.
-SYSML_RESERVED_WORDS: frozenset[str] = frozenset("""
-about abstract accept action actor after alias all allocate allocation
-analysis and as assert assign assume at attribute bind binding by calc case
-comment concern connect connection constraint crosses decide def default
-defined dependency derived do doc else end entry enum event exhibit exit
-expose false filter first flow for fork frame from hastype if implies import
-in include individual inout interface istype item join language library
-locale loop merge message meta metadata new nonunique not null objective
-occurrence of or ordered out package parallel part perform port private
-protected public redefines ref references rendering rep require requirement
-return satisfy send snapshot specializes stakeholder standard state subject
-subsets succession terminate then timeslice to transition true until use
-variant variation verification verify via view viewpoint when while xor
-""".split())
+from .sysml_reserved import SYSML_RESERVED_WORDS  # noqa: F401  (re-export)
 
 
 def _reserved_word_issues(

@@ -142,6 +142,12 @@ def _sysml_identifier(value: str) -> str:
     token = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value)
     if not token or token[0].isdigit():
         token = f"id_{token}"
+    # A reserved word survives the character wash but not the parser; most
+    # emitted names are prefixed or suffixed by construction, and this guard
+    # covers the ones rendered bare (e.g. the response-set enum name).
+    from .sysml_reserved import SYSML_RESERVED_WORDS
+    if token in SYSML_RESERVED_WORDS:
+        token = f"id_{token}"
     return token
 
 

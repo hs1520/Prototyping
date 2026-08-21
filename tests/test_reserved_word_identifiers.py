@@ -104,3 +104,20 @@ def test_reserved_word_list_agrees_with_the_parser():
             filter_stdlib_diagnostics=False,
         ).has_errors
         assert accepted, word
+
+
+def test_ag_decision_identifier_rejects_reserved_words():
+    from src.prototyping.ag_decision import DecisionError, _identifier
+    import pytest as _pytest
+    assert _identifier("deployParachute", "f") == "deployParachute"
+    with _pytest.raises(DecisionError):
+        _identifier("return", "f")
+    with _pytest.raises(DecisionError):
+        _identifier("state", "f")
+
+
+def test_ag_emitter_sanitiser_never_emits_a_reserved_word():
+    from src.prototyping.ag_emitter import _sysml_identifier
+    assert _sysml_identifier("state") == "id_state"
+    assert _sysml_identifier("safe-mode") == "safe_mode"
+    assert _sysml_identifier("3phase") == "id_3phase"

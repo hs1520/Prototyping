@@ -105,3 +105,39 @@ def test_default_state_requirement_passes_with_entry_lock_on_initial_state():
     rows = build_matrix(lite, None, RequirementLinker(lite).compile_evidence())
     row = {r.req_id: r for r in rows}["REQ_SAFE_008"]
     assert "behavioral_sim" in row.tiers, row.evidence
+
+
+def test_shared_inhibition_predicate_covers_both_former_vocabularies():
+    """The matrix and the verification audit once kept diverging inhibition
+    keyword lists; a phrasing in their difference was routed to different
+    evidence standards. One shared predicate now serves both."""
+    from src.prototyping.verification_obligations import (
+        is_inhibition_requirement,
+    )
+    for text in (
+        "The system shall not transition to the armed state during self-test.",
+        "The interlock shall block arming while the hatch is open.",
+        "The controller shall prevent motor start below minimum voltage.",
+        "The actuator shall inhibit release during transport.",
+        "A lockout shall apply until the self-test completes.",
+    ):
+        assert is_inhibition_requirement(text), text
+    for text in (
+        "The actuator shall default to the locked state upon power-on.",
+        "The system shall report status every second.",
+    ):
+        assert not is_inhibition_requirement(text), text
+
+
+def test_block_phrasing_is_not_routed_to_the_initialization_branch():
+    model = _MODEL.replace(
+        "doc /* The system shall not transition to the armed or airborne state\n"
+        "               if any onboard sensor reports a failure during the power-on\n"
+        "               self-test sequence. */",
+        "doc /* The system shall block the transition to the armed state if a\n"
+        "               sensor fails during the power-on self-test sequence. */",
+    )
+    lite = build_lite_model(model, model_name="DeliveryUAV")
+    rows = build_matrix(lite, None, RequirementLinker(lite).compile_evidence())
+    row = {r.req_id: r for r in rows}["REQ_SAFE_004"]
+    assert "behavioral_sim_failed" not in row.tiers, row.evidence

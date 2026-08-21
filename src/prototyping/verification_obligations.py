@@ -12,6 +12,24 @@ from dataclasses import dataclass, field
 from typing import FrozenSet, Iterable, Tuple
 
 
+# An inhibition requirement ("shall not transition...", "shall block arming
+# while...") is anchored by the response that is withheld -- a guard or a
+# fault-path transition -- never by initial-state semantics. Every reader
+# that routes requirements by this distinction uses this one predicate; two
+# modules once kept diverging keyword lists, and a phrasing in their
+# difference would have been routed to different evidence standards.
+_INHIBITION_RE = re.compile(
+    r"\bshall\s+not\b|\binhibit\w*\b|\bprevent\w*\b|\bsuppress\w*\b"
+    r"|\bblock\w*\b|\block\s*-?\s*out\b|\blockout\b",
+    re.IGNORECASE,
+)
+
+
+def is_inhibition_requirement(text: str) -> bool:
+    """True when the requirement is phrased as an inhibition."""
+    return bool(_INHIBITION_RE.search(text or ""))
+
+
 _QUANTITY_RE = re.compile(
     r"(?P<value>[+-]?\d+(?:\.\d+)?)\s*(?:consecutive\s+)?"
     r"(?P<unit>milliseconds?|ms|seconds?|secs?|s|minutes?|mins?|min|"

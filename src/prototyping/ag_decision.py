@@ -186,6 +186,14 @@ def _identifier(value: Any, field: str) -> str:
     text = str(value or "").strip()
     if not re.fullmatch(r"[A-Za-z_]\w*", text):
         raise DecisionError(f"{field} must be a bare identifier, got {value!r}")
+    # A decided name is rendered into SysML text; a reserved word there is a
+    # parser error after every gate that could have refused it cheaply.
+    from .sysml_reserved import SYSML_RESERVED_WORDS
+    if text in SYSML_RESERVED_WORDS:
+        raise DecisionError(
+            f"{field} must not be a SysML reserved word, got {value!r}; "
+            "choose another identifier"
+        )
     return text
 
 

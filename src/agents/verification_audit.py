@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 from typing import Mapping, Iterable, List, Optional
 
+from ..prototyping.verification_obligations import is_inhibition_requirement
 from ..utils.req_id import normalise_req_id
 
 _ISSUE_PREFIX = "[VERIFY-GAP]"
@@ -151,7 +152,14 @@ def verification_gap_issues(
             continue
         default_guidance = ""
         low = text.lower()
-        if any(k in low for k in ("power-on", "power on", "default", "startup", "start-up")):
+        # Inhibition phrasing wins over power-on/default keywords: a phrase
+        # like "shall not transition ... during the power-on self-test"
+        # names the phase, not a default state, and the matrix routes it the
+        # same way (is_inhibition_requirement is the single shared test).
+        if not is_inhibition_requirement(low) and any(
+            k in low
+            for k in ("power-on", "power on", "default", "startup", "start-up")
+        ):
             default_guidance = (
                 " For a power-on/default-state requirement, model an explicit initial state "
                 "and a consistent Boolean attribute. A single-state invariant is allowed; "
@@ -159,8 +167,7 @@ def verification_gap_issues(
                 "release/re-lock transitions so no state is unreachable. Tie the default "
                 "state to an entry action or explicit initial attribute value."
             )
-        elif any(k in low for k in ("inhibit", "prevent", "block", "suppress", "shall not release",
-                                     "shall not actuate", "lock out", "lockout")):
+        elif is_inhibition_requirement(low):
             # An inhibition requirement is satisfied by the transition that is
             # NOT taken. Repeated probe runs showed the surgical LLM adding a
             # response action for it instead, which the simulator cannot credit:
