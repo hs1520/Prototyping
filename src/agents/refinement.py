@@ -2546,6 +2546,21 @@ class _RefinementEngine:
     # ------------------------------------------------------------------
     # Simulation helpers
     # ------------------------------------------------------------------
+    def _active_plan_payload(self) -> Optional[Mapping]:
+        """The typed generation plan, wherever the runtime holds it.
+
+        The plan attribute lives on the orchestrator runtime, not on this
+        engine. Reading it from `self` alone left the requirement-traced
+        reachability score unset on every archived run, so the evaluator's
+        documented trace-first structural term silently fell back to the
+        untraced role heuristic --- whose scenario count scales with component
+        richness and is not comparable across configurations."""
+        for holder in (self, getattr(self, "_runtime", None)):
+            raw = getattr(holder, "_active_model_generation_plan", None)
+            if isinstance(raw, Mapping):
+                return raw
+        return None
+
     def _run_simulation(self, sysml_text: str, model_name: str) -> SimulationResult:
         """Run simulation and attach fixed requirement-path evidence."""
         try:
@@ -2555,9 +2570,7 @@ class _RefinementEngine:
                 result = self.sim_validator.validate(
                     sysml_text, model_name=model_name
                 )
-            raw_plan = getattr(
-                self, "_active_model_generation_plan", None
-            )
+            raw_plan = self._active_plan_payload()
             if isinstance(raw_plan, Mapping):
                 from ..prototyping.generation_plan import ModelGenerationPlan
                 from ..prototyping.structural_obligations import (
