@@ -14,7 +14,6 @@ from ..dse.requirement_spec import RANGE, SPEED, extract_requirements
 from .bottom_up import RealizedDesign, realized_total_mass_kg
 from .forward_flight import DEFAULT_DRAG_AREA, G, RHO, power_at_speed, range_estimate, speed_grid
 
-FORWARD_FLIGHT_SCOPE_FAMILIES = {"speed", "range"}
 FIDELITY = "lumped_forward_flight"
 NOTE = (
     "lumped forward-flight momentum model; equivalent drag area assumed "

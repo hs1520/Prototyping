@@ -21,23 +21,20 @@ from __future__ import annotations
 
 import argparse
 import re
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dotenv import load_dotenv
 
-from src.prototyping.ag_assurance import route_failure_diagnostics  # noqa: E402
-from src.prototyping.ag_contracts import check_ag_graph  # noqa: E402
-from src.prototyping.ag_extractor import extract_ag_graph  # noqa: E402
-from src.prototyping.ag_repair import (  # noqa: E402
+from src.prototyping.ag_assurance import route_failure_diagnostics
+from src.prototyping.ag_contracts import check_ag_graph
+from src.prototyping.ag_extractor import extract_ag_graph
+from src.prototyping.ag_repair import (
     attempt_dependency_closed_ag_repair,
 )
-from src.prototyping.blackboard import Blackboard, RecordType  # noqa: E402
-from src.prototyping.context_builder import ContextBuilder  # noqa: E402
-from src.prototyping.provider_factory import create_llm  # noqa: E402
-from src.prototyping.task_session import TaskSessionRegistry  # noqa: E402
+from src.prototyping.blackboard import Blackboard, RecordType
+from src.prototyping.context_builder import ContextBuilder
+from src.prototyping.provider_factory import create_llm
+from src.prototyping.task_session import TaskSessionRegistry
 
 DEFAULT_MODEL = (
     "examples/output/decided_roles_3chain_20260726/seed-0/R2-BBAG/"

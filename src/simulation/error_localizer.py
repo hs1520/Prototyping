@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
-from .levenshtein_fixer import SysMLVocab, build_vocab
+from .levenshtein_fixer import SysMLVocab, _UNIT_BRACKET_RE, build_vocab
 from .syntax_checker import condense_diagnostic
 from ..sysml import text_normalization
 
@@ -313,7 +313,6 @@ _BOOL_HINT_RE = re.compile(
 _BOOL_PREFIX_RE = re.compile(r"^(?:is|has|should|can|must)[A-Z]")
 
 # 单位括号 [...] — 用于把 `[bit]` 这类单位名与 guard 状态变量区分开
-_UNIT_BRACKET_RE = re.compile(r'\[([^\]]*)\]')
 
 
 def _infer_attr_decl(name: str) -> str:

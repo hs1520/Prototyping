@@ -20,7 +20,6 @@ Outputs ``logs/benchmark_<timestamp>.json`` with per-run records + aggregates.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import statistics
 import sys
@@ -28,9 +27,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+from src.utils.digest import sha256_text
 
 # ── Benchmark suite ─────────────────────────────────────────────────────────
 # Each spec is deliberately self-contained (name, description, requirements)
@@ -125,9 +122,7 @@ def _archive_failure(
         model_path = failed_dir / f"{stem}.sysml"
         model_path.write_text(model_text, encoding="utf-8")
         record["failed_model_path"] = str(model_path)
-        record["failed_model_digest"] = hashlib.sha256(
-            model_text.encode("utf-8")
-        ).hexdigest()
+        record["failed_model_digest"] = sha256_text(model_text)
     evidence = {
         "system": spec["system_name"],
         "seed": seed,

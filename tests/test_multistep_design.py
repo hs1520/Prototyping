@@ -549,7 +549,6 @@ class TestMultistepGeneratePipeline:
 
     def _make_agent(self, responses: List[str], monkeypatch):
         """Build a DesignAgent with a queued mock LLM and a no-op parser."""
-        import src.agents.design_agent as da_module
         from src.agents.design_agent import DesignAgent
 
         llm = QueuedMockLLM(responses)
@@ -1287,7 +1286,6 @@ class TestMultistepGeneratePipeline:
     def test_semantic_requirement_is_bound_in_plan_and_routed_to_interfaces(
         self, monkeypatch
     ):
-        from src.prototyping.generation_plan import ModelGenerationPlan
 
         requirement = (
             "REQ-FUNC-002: The system shall maintain at least 5 metres "
@@ -1840,7 +1838,6 @@ state def ExtraBehavior {
 
 
 def test_range_floor_is_not_emitted_as_opposite_always_on_constraint():
-    from src.agents.design_agent import DesignAgent
 
     text = """package D {
         part def Airframe {

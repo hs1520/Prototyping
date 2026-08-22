@@ -3,6 +3,13 @@ from __future__ import annotations
 
 import re
 
+#: A bare SysML identifier (whole-string match via ``fullmatch``).
+IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$")
+#: ``part def <Name> {`` — named part definition with an opening body brace.
+PART_DEF_RE = re.compile(r"\bpart\s+def\s+(\w+)\s*\{")
+#: ``state def <Name> {`` — named state definition with an opening body brace.
+STATE_DEF_RE = re.compile(r"\bstate\s+def\s+(\w+)\s*\{")
+
 
 def find_block_end(text: str, start: int) -> int:
     """Return the index of the closing '}' matching the '{' at *start*.

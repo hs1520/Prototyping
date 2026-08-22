@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from ..dse.design_space import DesignSpace
 from ..sysml.model import SysMLModel
 from ..sysml.lite_model import SysMLLiteModel
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import PART_DEF_RE, find_block_end
 
 # Accept both model types wherever SysMLModel is checked
 _SysMLModelTypes = (SysMLModel, SysMLLiteModel)
@@ -71,9 +71,7 @@ _GUARD_VAR_RE = re.compile(
 _BOOL_GUARD_RE = re.compile(
     r'\bif\s+(\w+)\s*\n',
 )
-_PART_DEF_BLOCK_RE = re.compile(
-    r'\bpart\s+def\s+(\w+)\s*\{'
-)
+_PART_DEF_BLOCK_RE = PART_DEF_RE
 _ATTR_DECL_RE = re.compile(
     r'\battribute\s+(\w+)\s*:'
 )

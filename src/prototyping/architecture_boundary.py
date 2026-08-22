@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Mapping
 
 from .ag_emitter import AGChainSpec
+from .experiment_arms import REVISED_EXPERIMENT_NAMESPACE
 from .frozen_artifact_protocol import (
     canonical_artifact_digest,
     has_review_markers,
@@ -28,7 +29,7 @@ from ..utils.req_id import normalise_req_id
 ARCHITECTURE_BOUNDARY_ROLE = "ARCHITECTURE_BOUNDARY"
 BOUNDARY_STATUS_DRAFT = "DRAFT_FOR_SUPERVISOR_REVIEW"
 BOUNDARY_STATUS_FROZEN = "FROZEN"
-_NAMESPACE = "BLACKBOARD_AG_V1"
+_NAMESPACE = REVISED_EXPERIMENT_NAMESPACE
 _SCHEMA_VERSION = "1.0"
 def architecture_boundary_digest(boundary: Mapping[str, Any]) -> str:
     """Digest the boundary content, excluding the self-referential digest field.

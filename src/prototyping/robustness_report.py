@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from statistics import mean
+from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 ROBUSTNESS_REPORT_SCHEMA_VERSION = "1.0"
@@ -85,7 +86,7 @@ def count_committed_obligations(model_text: str) -> Dict[str, int]:
 def measure_model(
     model_text: str,
     declared_requirements: Sequence[str] = (),
-    out_of_scope: Mapping[str, str] = {},
+    out_of_scope: Mapping[str, str] = MappingProxyType({}),
 ) -> Dict[str, Any]:
     """Pattern conformance + traceability for one committed model.
 
@@ -186,7 +187,7 @@ def build_robustness_report(
     pilot_dir: Path | str,
     *,
     declared_requirements: Sequence[str] = (),
-    out_of_scope: Mapping[str, str] = {},
+    out_of_scope: Mapping[str, str] = MappingProxyType({}),
 ) -> Dict[str, Any]:
     """Per-run and per-arm robustness across an archived pilot directory."""
     root = Path(pilot_dir)

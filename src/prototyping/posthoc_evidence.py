@@ -7,13 +7,14 @@ independent/blind-review flag, and never chooses a per-run failure class.
 from __future__ import annotations
 
 import copy
-import hashlib
 from pathlib import Path
 import re
 from typing import Any, Mapping
 
 from .ag_gold_template import validate_frozen_gold
 from .artifact_store import atomic_write_json, read_json_object
+from .experiment_arms import REVISED_EXPERIMENT_NAMESPACE, RevisedExperimentArm
+from ..utils.digest import sha256_text
 from .architecture_boundary import (
     architecture_boundary_digest,
     validate_frozen_boundary,
@@ -30,8 +31,8 @@ from .evaluation_readiness import (
 from .requirement_inputs import normalise_requirement_id
 
 
-_NAMESPACE = "BLACKBOARD_AG_V1"
-_R2 = "R2-BBAG"
+_NAMESPACE = REVISED_EXPERIMENT_NAMESPACE
+_R2 = RevisedExperimentArm.SEMANTIC_ASSURANCE.value
 _RESPONSIBILITY_CANDIDATES = {
     "SafetyResponseArbiterContract": (
         "When criticalPropulsionFailureDetected is asserted while airborne, "
@@ -54,7 +55,6 @@ _RESPONSIBILITY_CANDIDATES = {
 
 
 _read_json = read_json_object
-_write_json = atomic_write_json
 
 
 def _source_by_chain(config: Mapping[str, Any]) -> dict[str, str]:
@@ -147,7 +147,7 @@ def load_completed_pilot(
 
         model_path = directory / "shared_model_final.sysml"
         model = model_path.read_text(encoding="utf-8")
-        model_digest = hashlib.sha256(model.encode("utf-8")).hexdigest()
+        model_digest = sha256_text(model)
         predictions: dict[str, Any] = {}
         for chain_id in selected_chains:
             if chain_id not in sources or chain_id not in source_digests:
@@ -231,8 +231,8 @@ def prepare_review_materials(
             raise ValueError(f"{chain_id}: gold source bytes differ from pilot config")
         boundary_path = review / f"architecture_boundary.{chain_id}.json"
         gold_path = review / f"gold.{chain_id}.json"
-        _write_json(boundary_path, boundary)
-        _write_json(gold_path, gold)
+        atomic_write_json(boundary_path, boundary)
+        atomic_write_json(gold_path, gold)
         files[f"architecture_boundary.{chain_id}"] = str(boundary_path)
         files[f"gold.{chain_id}"] = str(gold_path)
 
@@ -240,7 +240,7 @@ def prepare_review_materials(
     if taxonomy.get("status") == "FROZEN":
         raise ValueError("prepare-review accepts a DRAFT taxonomy only")
     taxonomy_path = review / "failure_taxonomy.json"
-    _write_json(taxonomy_path, taxonomy)
+    atomic_write_json(taxonomy_path, taxonomy)
     files["failure_taxonomy"] = str(taxonomy_path)
 
     review_manifest = {
@@ -268,7 +268,7 @@ def prepare_review_materials(
             "select_failure_labels": False,
         },
     }
-    _write_json(out / "review_manifest.json", review_manifest)
+    atomic_write_json(out / "review_manifest.json", review_manifest)
     (out / "HUMAN_REVIEW_CHECKLIST.md").write_text(
         _review_checklist(selected_chains), encoding="utf-8"
     )
@@ -331,7 +331,7 @@ def stamp_human_digest(*, path: str | Path, kind: str) -> str:
             "human attestations are incomplete; digest not written: "
             + "; ".join(problems)
         )
-    _write_json(artifact_path, without_digest)
+    atomic_write_json(artifact_path, without_digest)
     return str(without_digest["artifact_digest"])
 
 
@@ -355,7 +355,7 @@ def bind_gold_provenance(
         "requirement_set_digest"
     ]
     gold["architecture_boundary_digest"] = boundary["artifact_digest"]
-    _write_json(gold_file, gold)
+    atomic_write_json(gold_file, gold)
     return validate_frozen_gold(gold)
 
 
@@ -413,7 +413,7 @@ def build_blind_materials(
                 )
             safe_run = run_id.replace(":", "__")
             packet_path = blind / "packets" / f"{safe_run}__{chain_id}.json"
-            _write_json(packet_path, packet)
+            atomic_write_json(packet_path, packet)
             label = {
                 "schema_version": "1.0",
                 "artifact_role": "BLIND_FAILURE_LABEL",
@@ -439,7 +439,7 @@ def build_blind_materials(
             label_path = root / "operator_only" / "label_templates" / (
                 f"{safe_run}__{chain_id}.json"
             )
-            _write_json(label_path, label)
+            atomic_write_json(label_path, label)
             packets.append(packet)
             label_templates.append(label)
     summary = {
@@ -449,7 +449,7 @@ def build_blind_materials(
         "reviewer_visible_directory": str(blind),
         "operator_only_directory": str(root / "operator_only"),
     }
-    _write_json(root / "blind_materials_manifest.json", summary)
+    atomic_write_json(root / "blind_materials_manifest.json", summary)
     return summary
 
 
@@ -508,7 +508,7 @@ def stamp_blind_label_digests(*, evidence_dir: str | Path) -> list[str]:
             "human labels must exactly cover all generated blind packets"
         )
     for path, candidate in prepared:
-        _write_json(path, candidate)
+        atomic_write_json(path, candidate)
     return [str(path) for path, _candidate in prepared]
 
 
@@ -557,8 +557,8 @@ def build_readiness_from_disk(
         "failure_taxonomy": taxonomy,
     }
     readiness = build_evaluation_readiness_manifest(**bundle)
-    _write_json(root / "operator_only" / "evaluation_readiness.json", readiness)
-    _write_json(root / "operator_only" / "source_evidence_bundle.json", bundle)
+    atomic_write_json(root / "operator_only" / "evaluation_readiness.json", readiness)
+    atomic_write_json(root / "operator_only" / "source_evidence_bundle.json", bundle)
     if readiness["evaluation_ready"]:
         require_evaluation_ready(readiness, evidence_bundle=bundle)
     return readiness

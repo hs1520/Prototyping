@@ -39,7 +39,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-from ..utils.sysml_text_utils import find_block_end as _block_end
+from ..utils.sysml_text_utils import STATE_DEF_RE, find_block_end as _block_end
 
 
 # ---------------------------------------------------------------------------
@@ -117,12 +117,10 @@ class TxMergeResult:
 # 正则
 # ---------------------------------------------------------------------------
 
-_STATE_DEF_RE = re.compile(r'\bstate\s+def\s+(\w+)\s*\{')
 _STATE_DECL_RE = re.compile(r'\bstate\s+(\w+)\s*(?:\{|;)')
 _ENUM_DEF_RE = re.compile(r'\benum\s+def\s+(\w+)\s*\{([^}]*)\}', re.DOTALL)
 _ENUM_VAL_RE = re.compile(r'\benum\s+(\w+)\s*;')
 _ACTION_DEF_RE = re.compile(r'\baction\s+def\s+(\w+)')
-_LEGACY_EVENT_DEF_RE = re.compile(r'\battribute\s+def\s+(\w+)\s*;')
 _ITEM_EVENT_DEF_RE = re.compile(r'\bitem\s+def\s+(\w+)\s*;')
 
 # transition <name> first <src> if <guard> then <tgt> ;  (guard-based)
@@ -142,9 +140,6 @@ _TX_ACCEPT_RE = re.compile(
     r'then\s+(\w+)\s*;',
     re.DOTALL,
 )
-
-# Pattern to read a transition name from a single-line proposal (for parsing LLM output)
-_TX_NAME_RE = re.compile(r'\btransition\s+(\w+)\b')
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +162,7 @@ def build_state_machine_summary(
     Returns None when the state machine cannot be found.
     """
     sm_match: Optional[re.Match] = None
-    for m in _STATE_DEF_RE.finditer(sysml_text):
+    for m in STATE_DEF_RE.finditer(sysml_text):
         if m.group(1) == sm_name:
             sm_match = m
             break

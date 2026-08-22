@@ -3,18 +3,16 @@ Quick smoke-test: run requirement_linker against the AutonomousDrone model
 and print the generated .parm file + coverage report.
 """
 
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from src.prototyping.provider_factory import create_llm
 from src.app.pipeline import PrototypingPipeline
 from src.sitl.requirement_linker import RequirementLinker
 
-from examples.drone_system_v2 import DRONE_DESCRIPTION, DRONE_REQUIREMENTS
+from drone_system_v2 import DRONE_DESCRIPTION, DRONE_REQUIREMENTS
 
 
 def main():
-    import pickle, pathlib
+    import pathlib
+    import pickle
     cache = pathlib.Path("/tmp/drone_model_cache.pkl")
     if cache.exists():
         print("[cache hit] loading model from /tmp/drone_model_cache.pkl")

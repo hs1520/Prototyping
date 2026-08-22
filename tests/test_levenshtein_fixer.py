@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import sys
 
-import src.simulation.levenshtein_fixer as _mod
 from src.simulation.levenshtein_fixer import (
     levenshtein,
     build_vocab,

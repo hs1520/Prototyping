@@ -18,23 +18,28 @@ the human reviewer's responsibility, which is why every field carries a review n
 """
 from __future__ import annotations
 
-import hashlib
+import json
+from pathlib import Path
 from typing import Any, Dict, Mapping
 
 from .ag_emitter import AGChainSpec, AGComponentSpec
+from .experiment_arms import REVISED_EXPERIMENT_NAMESPACE
 from .frozen_artifact_protocol import (
     has_review_markers,
     is_sha256,
     validate_frozen_envelope,
 )
+from ..utils.digest import sha256_text
 from ..utils.req_id import normalise_req_id
 
 GOLD_ROLE = "EVALUATOR_GOLD"
 GOLD_STATUS_DRAFT = "DRAFT_FOR_SUPERVISOR_REVIEW"
 GOLD_STATUS_FROZEN = "FROZEN"
 GOLD_SCHEMA_VERSION = "3.0"
+
+
 def _digest(text: str) -> str:
-    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+    return sha256_text(text or "")
 
 
 def _gold_realization_paths(
@@ -226,7 +231,7 @@ def build_gold_draft(
     }
 
 
-_REQUIRED_NAMESPACE = "BLACKBOARD_AG_V1"
+_REQUIRED_NAMESPACE = REVISED_EXPERIMENT_NAMESPACE
 
 
 def _contains_key(obj: Any, target: str) -> bool:
@@ -618,9 +623,6 @@ def frozen_gold_gate(
     a frozen experiment configuration, requirement and architecture digests, the
     complete selected chain/run sets, and blind labels.
     """
-    import json
-    from pathlib import Path
-
     from .ag_chains import select_ag_chains
 
     chains = select_ag_chains(requirements)

@@ -33,7 +33,6 @@ REPORT_ROLE = "POSTHOC_DESCRIPTIVE_PILOT_REPORT"
 
 
 _read_json = read_json_object
-_write_json = atomic_write_json
 
 
 def _index(
@@ -558,5 +557,5 @@ def evaluate_ready_pilot_from_disk(
         coordination_metrics_by_run=coordination,
     )
     output = operator / "posthoc_descriptive_report.json"
-    _write_json(output, report)
+    atomic_write_json(output, report)
     return report

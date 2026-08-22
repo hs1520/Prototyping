@@ -21,7 +21,6 @@ from src.simulation.state_extractor import (
     GuardCondition, StateMachineDef, StateNode, TransitionDef,
     VarRef, Const, BinOp, extract_state_machines, _SYSIDE_OK,
 )
-import src.simulation.behavioral_sim as bsim
 from src.simulation.behavioral_sim import (
     _build_driver_plans, _guard_endpoints, _build_test_sequence,
     run_behavioral_simulation,

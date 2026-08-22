@@ -15,3 +15,21 @@ requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]
 include = ["src", "src.*"]
+
+# Lint config (ruff). Deliberately conservative: pyflakes + pycodestyle errors
+# only, so a clean run means "no dead imports / undefined names / syntax
+# hazards" without imposing a formatting migration on the existing style.
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+# Accepted existing style, not defects: one-line `if x: return` bodies (E701/E702),
+# a few deliberate lambdas and short names in tests (E731/E741).
+ignore = ["E701", "E702", "E731", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test modules that stub sys.modules before importing src (see tests/_dep_stubs.py)
+# legitimately import below module-level code.
+"tests/*" = ["E402"]

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
 
 from src.dse.design_space import DesignConfiguration
 from src.dse.pipeline_adapter import run_bilevel_dse

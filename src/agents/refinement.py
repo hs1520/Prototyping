@@ -58,6 +58,7 @@ from ..sysml.text_normalization import (
     strip_code_fences,
     strip_readonly_keyword,
 )
+from ..utils.digest import sha256_text
 from ..utils.sysml_text_utils import get_sysml_text
 
 
@@ -78,12 +79,12 @@ class ModelRevision:
         return cls(
             name=str(getattr(model, "name", None) or "System"),
             sysml=text,
-            digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            digest=sha256_text(text),
             _metadata=deepcopy(dict(getattr(model, "metadata", None) or {})),
         )
 
     def materialize(self) -> SysMLModel:
-        expected = hashlib.sha256(self.sysml.encode("utf-8")).hexdigest()
+        expected = sha256_text(self.sysml)
         if expected != self.digest:
             raise ValueError("model revision digest does not match its SysML text")
         model = build_lite_model(self.sysml, model_name=self.name)
@@ -344,9 +345,7 @@ class _RefinementEngine:
         )
         return _freeze_evidence({
             "base_model_digest": base.digest,
-            "result_model_digest": hashlib.sha256(
-                text.encode("utf-8")
-            ).hexdigest(),
+            "result_model_digest": sha256_text(text),
             "syntax_error_count": syntax.total_errors(),
             "failed_scenario_count": failed,
             "events": self._refinement_observations,
@@ -557,9 +556,7 @@ class _RefinementEngine:
                 "OPEN" if remaining_ids else "CLOSED"
             ),
             "remaining_gap_req_ids": remaining_ids,
-            "terminal_model_digest": hashlib.sha256(
-                model_text.encode("utf-8")
-            ).hexdigest(),
+            "terminal_model_digest": sha256_text(model_text),
             "terminal_audit_issues": list(gaps),
         })
         self.last_functional_closure = closure
@@ -625,9 +622,7 @@ class _RefinementEngine:
                 "attempts": 0,
                 "accepted_repairs": 0,
                 "repair_contexts": [],
-                "closure_model_digest": hashlib.sha256(
-                    text.encode("utf-8")
-                ).hexdigest(),
+                "closure_model_digest": sha256_text(text),
             }
             return current, current_score, current_sim
 
@@ -809,9 +804,7 @@ class _RefinementEngine:
             "attempts": attempts,
             "accepted_repairs": accepted,
             "repair_contexts": repair_contexts,
-            "closure_model_digest": hashlib.sha256(
-                get_sysml_text(current).encode("utf-8")
-            ).hexdigest(),
+            "closure_model_digest": sha256_text(get_sysml_text(current)),
         }
         if remaining_ids:
             print(
@@ -1051,7 +1044,7 @@ class _RefinementEngine:
         if sim_result.failed_scenarios():
             return False, current_model, score, sim_result
 
-        print(f"  └─ Simulation fully resolved ✓", flush=True)
+        print("  └─ Simulation fully resolved ✓", flush=True)
         # Re-evaluate with the fixed sim so the returned score
         # reflects the model's true post-fix quality.
         eval_after = self._intelligence.evaluate(
@@ -1148,7 +1141,7 @@ class _RefinementEngine:
         )
         if self.verbose and mcts_constraints:
             print(f"\n  {'─'*60}")
-            print(f"  [DEBUG] MCTS constraints injected into every refinement prompt")
+            print("  [DEBUG] MCTS constraints injected into every refinement prompt")
             print(f"  {'─'*60}")
             print(mcts_constraints)
 
@@ -1330,8 +1323,8 @@ class _RefinementEngine:
                 remaining = self.max_iterations - iteration - 1
                 if remaining == 0:
                     print(
-                        f"  ⚠ Surgical fix insufficient — no iterations remaining, "
-                        f"returning the improved terminal model for final re-evaluation",
+                        "  ⚠ Surgical fix insufficient — no iterations remaining, "
+                        "returning the improved terminal model for final re-evaluation",
                         flush=True,
                     )
                     return current_model, score, sim_result
@@ -1474,7 +1467,7 @@ class _RefinementEngine:
 
             if not items:
                 print(f"  │  Pass {it+1}/{max_iters}  ✓ all SITL parameters resolved")
-                print(f"  └─ SITL-L1 clean", flush=True)
+                print("  └─ SITL-L1 clean", flush=True)
                 break
 
             print(f"  │  Pass {it+1}/{max_iters}  {len(items)} unresolved parameter(s):",
@@ -1484,7 +1477,7 @@ class _RefinementEngine:
 
             sig = frozenset((i["req_id"], i["param"]) for i in items)
             if sig == last_sig:
-                print(f"  └─ ⚠ no progress (same unresolved set) — stopping", flush=True)
+                print("  └─ ⚠ no progress (same unresolved set) — stopping", flush=True)
                 break
             last_sig = sig
 
@@ -1498,7 +1491,7 @@ class _RefinementEngine:
             })
             if not (refine_result.success
                     and isinstance(refine_result.output, _SysMLModelTypes)):
-                print(f"  └─ ⚠ refinement produced no usable model — stopping", flush=True)
+                print("  └─ ⚠ refinement produced no usable model — stopping", flush=True)
                 break
 
             candidate = refine_result.output
@@ -1553,11 +1546,11 @@ class _RefinementEngine:
                 current.metadata = {}
             current.metadata["sim_warnings"] = warning_text
 
-            print(f"  └─ ⚠  Simulation warnings attached to model:", flush=True)
+            print("  └─ ⚠  Simulation warnings attached to model:", flush=True)
             for line in warning_lines:
                 print(f"       {line}")
         else:
-            print(f"  └─ Simulation fully resolved ✓", flush=True)
+            print("  └─ Simulation fully resolved ✓", flush=True)
 
         print(f"  {'─'*62}", flush=True)
         return current
@@ -1812,7 +1805,7 @@ class _RefinementEngine:
             )
 
             if not failed:
-                print(f"  └─ Simulation fully resolved ✓", flush=True)
+                print("  └─ Simulation fully resolved ✓", flush=True)
                 return current
 
             # ── Persistent tracking ────────────────────────────────────
@@ -1885,7 +1878,7 @@ class _RefinementEngine:
             # LLM may return only `connect` lines; each is then validated
             # programmatically (no fabricated ports, correct direction, type
             # match, single-driver in-ports) before merging.
-            print(f"  │  ⟳  Fixing connectivity (surgical) …", flush=True)
+            print("  │  ⟳  Fixing connectivity (surgical) …", flush=True)
 
             failed_payload = [
                 {
@@ -1943,7 +1936,7 @@ class _RefinementEngine:
                 )
 
             if not reconciliation.changed:
-                print(f"  │  ⚠ no valid connectivity proposal — stopping", flush=True)
+                print("  │  ⚠ no valid connectivity proposal — stopping", flush=True)
                 break
 
             # Type/direction validity is necessary but not sufficient. Commit the
@@ -2005,7 +1998,7 @@ class _RefinementEngine:
               flush=True)
         for v in result.violations:
             print(f"  │  ✗ {v.summary()}", flush=True)
-        print(f"  └─ cleaned text passed to simulation", flush=True)
+        print("  └─ cleaned text passed to simulation", flush=True)
 
         # Persist cleaned text into model metadata
         self._sync_model_text(model, result.cleaned_text)
@@ -2121,7 +2114,7 @@ class _RefinementEngine:
                 any_accepted = True
 
             if not any_accepted:
-                print(f"  │  ⚠ no fix accepted — stopping transition repair",
+                print("  │  ⚠ no fix accepted — stopping transition repair",
                       flush=True)
                 break
 
@@ -2195,7 +2188,7 @@ class _RefinementEngine:
                     self._sync_model_text(working_model, working_sysml)
                     latest_result = re_checked
                     if not latest_result.has_errors:
-                        print(f"  └─ [RO-FIX]  ✓ all errors resolved", flush=True)
+                        print("  └─ [RO-FIX]  ✓ all errors resolved", flush=True)
                         return working_sysml, latest_result, lev_hints, True
                     print(
                         f"  └─ [RO-FIX]  {latest_result.total_errors()} error(s) remain"
@@ -2221,7 +2214,7 @@ class _RefinementEngine:
                 self._sync_model_text(working_model, working_sysml)
                 latest_result = re_checked
                 if not latest_result.has_errors:
-                    print(f"  └─ [KW-FIX]  ✓ all errors resolved", flush=True)
+                    print("  └─ [KW-FIX]  ✓ all errors resolved", flush=True)
                     return working_sysml, latest_result, lev_hints, True
                 print(
                     f"  └─ [KW-FIX]  {latest_result.total_errors()} error(s) remain"
@@ -2251,7 +2244,7 @@ class _RefinementEngine:
                     self._sync_model_text(working_model, working_sysml)
                     latest_result = re_checked
                     if not latest_result.has_errors:
-                        print(f"  └─ [NOT-FIX]  ✓ all errors resolved", flush=True)
+                        print("  └─ [NOT-FIX]  ✓ all errors resolved", flush=True)
                         return working_sysml, latest_result, lev_hints, True
                     print(
                         f"  └─ [NOT-FIX]  {latest_result.total_errors()} error(s) remain"
@@ -2290,8 +2283,8 @@ class _RefinementEngine:
 
                     if not re_checked.has_errors:
                         print(
-                            f"  └─ [LEV-FIX]  ✓ all errors resolved"
-                            f" — LLM fix loop skipped",
+                            "  └─ [LEV-FIX]  ✓ all errors resolved"
+                            " — LLM fix loop skipped",
                             flush=True,
                         )
                         return working_sysml, re_checked, lev_hints, True
@@ -2332,7 +2325,7 @@ class _RefinementEngine:
                         flush=True,
                     )
                     if not re_checked.has_errors:
-                        print(f"  └─ [ATTR-INJ]  ✓ all errors resolved", flush=True)
+                        print("  └─ [ATTR-INJ]  ✓ all errors resolved", flush=True)
                         return working_sysml, re_checked, lev_hints, True
                     print(
                         f"  └─ [ATTR-INJ]  {re_checked.total_errors()} error(s) remain"
@@ -2399,7 +2392,7 @@ class _RefinementEngine:
             f" {100 * prompt_lines // max(model_total_lines, 1)}% of model)",
             flush=True,
         )
-        print(f"  ║  │  ↳ calling LLM …", flush=True)
+        print("  ║  │  ↳ calling LLM …", flush=True)
 
         t0 = time.perf_counter()
         try:
@@ -2464,7 +2457,7 @@ class _RefinementEngine:
         result = check_syntax(sysml_text)
 
         if not result.has_errors:
-            print(f"  ✓ [SYNTAX]  no errors  (syside: 0 parser, 0 sema)", flush=True)
+            print("  ✓ [SYNTAX]  no errors  (syside: 0 parser, 0 sema)", flush=True)
             return sysml_text, None, result
 
         working_sysml = sysml_text
@@ -2528,7 +2521,7 @@ class _RefinementEngine:
             # 更新 model metadata，让后续流程读到最新文本
             self._sync_model_text(working_model, working_sysml)
 
-            print(f"  ║\n  ║  re-checking syntax …", flush=True)
+            print("  ║\n  ║  re-checking syntax …", flush=True)
             latest_result = check_syntax(working_sysml)
 
             if not latest_result.has_errors:

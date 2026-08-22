@@ -8,12 +8,6 @@ Usage:
     python examples/drone_system.py
 """
 
-import sys
-import os
-
-# Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from src.app.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
 
@@ -86,7 +80,7 @@ def main():
     if len(result['requirements']) > 5:
         print(f"  ... and {len(result['requirements']) - 5} more")
 
-    print(f"\nModel Summary:")
+    print("\nModel Summary:")
     summary = result['model_summary']
     print(f"  Part definitions: {summary['part_definitions_count']}")
     print(f"  Requirement definitions: {summary['requirement_definitions_count']}")
@@ -94,12 +88,12 @@ def main():
     print(f"  Parts: {', '.join(part_names) if part_names else '(none)'}")
 
     sim = result['simulation_result']
-    print(f"\nSimulation:")
+    print("\nSimulation:")
     print(f"  Reachability: {sim.reachability_score:.3f}  "
           f"({len(sim.passed_scenarios())}/{len(sim.scenario_results)} scenarios passed)")
 
     if result['evaluation_history']:
-        print(f"\nConvergence history:")
+        print("\nConvergence history:")
         for ev in result['evaluation_history']:
             bar = "█" * int(ev['score'] * 20)
             print(f"  Iter {ev['iteration']}: {ev['score']:.3f} {bar}")

@@ -8,11 +8,6 @@ Usage:
     python examples/smart_building.py
 """
 
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import itertools
 
 from src.app.pipeline import PrototypingPipeline
@@ -165,10 +160,10 @@ def demonstrate_design_space_exploration():
     print(f"Explored {len(space.configurations)} configurations")
 
     print(f"\nBest configuration: {best_config.name}")
-    print(f"Parameters:")
+    print("Parameters:")
     for k, v in best_config.parameters.items():
         print(f"  {k}: {v}")
-    print(f"Scores:")
+    print("Scores:")
     for k, v in best_config.scores.items():
         print(f"  {k}: {v:.3f}")
     print(f"Overall score: {best_config.overall_score:.3f}")

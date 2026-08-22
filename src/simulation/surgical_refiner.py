@@ -19,13 +19,13 @@ never uses that fallback.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..simulation.syntax_checker import check_syntax
+from ..utils.digest import sha256_text
 from ..utils.sysml_text_utils import find_block_end
 
 # Top-level definition keywords we can identify for replace-by-name merging.
@@ -422,7 +422,7 @@ def _packet_digest_valid(packet: Mapping[str, Any]) -> bool:
     canonical = json.dumps(
         canonical_packet, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
-    actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    actual = sha256_text(canonical)
     return actual == expected
 
 
@@ -707,8 +707,8 @@ def build_dependency_closed_context(
         "    " + item.replace("\n", "\n    ") for item in body_items
     )
     context_text = f"package {package_name} {{\n{indented}\n}}"
-    context_digest = hashlib.sha256(context_text.encode("utf-8")).hexdigest()
-    full_digest = hashlib.sha256(model_text.encode("utf-8")).hexdigest()
+    context_digest = sha256_text(context_text)
+    full_digest = sha256_text(model_text)
     return RepairContextSlice(
         text=context_text,
         target_req_ids=tuple(sorted(target_req_ids)),
@@ -727,10 +727,6 @@ def build_dependency_closed_context(
 # ---------------------------------------------------------------------------
 # Gated attempt (the orchestrator entry point)
 # ---------------------------------------------------------------------------
-
-def _count_connects(text: str) -> int:
-    return len(re.findall(r"\bconnect\b", text, re.IGNORECASE))
-
 
 _REQ_DEF_RE = re.compile(r"\brequirement\s+def\s+([A-Za-z_]\w*)")
 
@@ -812,9 +808,7 @@ def attempt_surgical_refinement(
     audit.packet_provided = repair_packet is not None
     audit.full_model_line_count = len(model_text.splitlines())
     if context_slice is not None:
-        if context_slice.full_model_digest != hashlib.sha256(
-            model_text.encode("utf-8")
-        ).hexdigest():
+        if context_slice.full_model_digest != sha256_text(model_text):
             audit.reject("repair_context_full_model_digest_mismatch")
             return None
         if not _issue_req_ids(issues) <= set(context_slice.target_req_ids):

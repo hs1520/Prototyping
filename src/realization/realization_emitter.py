@@ -119,8 +119,8 @@ def emit_realization_package(report: ClosureReport,
         f"{(metrics.range_m / (metrics.endurance_min * 60.0)) if metrics.endurance_min > 0 else 0.0:.9f};\n"
         + "\n".join(asserts) + "\n"
         + "\n".join(satisfies) + "\n"
-        + f"    }}\n"
-        f"}}"
+        + "    }\n"
+        "}"
     )
     return (sysml, not check_syntax(sysml).has_errors)
 

@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
 from .design_space import DesignConfiguration
-from .diagnostics import diagnose as _diagnose_impl
+from .diagnostics import _STAKEHOLDER_REQ, diagnose as _diagnose_impl
 from .eval_helpers import (
     _has_numeric_unit_attr,
     _build_port_type_map,
@@ -210,7 +210,6 @@ DIMENSION_VETO_FLOORS: Dict[str, Tuple[float, str]] = {
 #: Distinguishes the frozen requirement set from A/G contract definitions, which
 #: are also `requirement def` but are assurance structure rather than the thing
 #: being assured.
-_STAKEHOLDER_REQ = re.compile(r"^REQ[_-][A-Za-z]+[_-]\d+$", re.IGNORECASE)
 
 
 #: A guard-based transition, the structural stand-in for a fault transition.

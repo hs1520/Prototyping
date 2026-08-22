@@ -26,22 +26,19 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import src.config  # noqa: F401,E402  (loads .env)
-from run_revised_experiment import FROZEN_REQUIREMENTS  # noqa: E402
-from src.app.pipeline import PrototypingPipeline  # noqa: E402
-from src.prototyping.provider_factory import create_llm  # noqa: E402
-from src.app.revised_pilot import (  # noqa: E402
+import src.config  # noqa: F401  (loads .env)
+from run_revised_experiment import FROZEN_REQUIREMENTS
+from src.app.pipeline import PrototypingPipeline
+from src.prototyping.provider_factory import create_llm
+from src.app.revised_pilot import (
     R2_INTERVENTION_VERSION_BY_MODE,
     REVISED_PILOT_ARMS,
     RevisedPilotConfig,
     _validate_run_result,
 )
-from src.prototyping.run_artifacts import (  # noqa: E402
+from src.prototyping.run_artifacts import (
     write_revised_run_artifacts,
 )
 
@@ -253,12 +250,13 @@ def main() -> int:
     path = written.get("requirement_traceability")
     if path:
         trace = json.loads(Path(path).read_text()).get("traceability") or {}
+        out_of_scope_items = [
+            item.get("requirement")
+            for item in trace.get("out_of_scope_requirements") or ()
+        ]
         print(f"  traceability       "
               f"{trace.get('fully_traced')}/{trace.get('requirements')} in scope, "
-              f"out_of_scope={[
-                  item.get('requirement')
-                  for item in trace.get('out_of_scope_requirements') or ()
-              ]}")
+              f"out_of_scope={out_of_scope_items}")
     print(f"  artifacts          {len(written)} files in {out}")
     print("DIAGNOSTIC ONLY — not experiment evidence")
     return 0

@@ -8,6 +8,7 @@ from ..simulation.validator import SimulationResult
 from ..sysml.lite_model import build_lite_model
 from ..sysml.model import SysMLModel
 from ..utils.sysml_text_utils import get_sysml_text, set_sysml_text
+from ..utils.tokens import estimate_tokens
 from .pipeline_records import DesignHandoffRecord
 
 
@@ -274,13 +275,13 @@ class CollaborationMixin:
                     session,
                     "user",
                     envelope_text,
-                    token_count=max(1, len(envelope_text) // 4),
+                    token_count=estimate_tokens(envelope_text),
                 )
                 self._append_session_message(
                     session,
                     "assistant",
                     reasoning or "DesignAgent returned a model candidate.",
-                    token_count=max(1, len(reasoning) // 4) if reasoning else 1,
+                    token_count=estimate_tokens(reasoning) if reasoning else 1,
                 )
             except Exception as exc:
                 self._reject_design_handoff(
@@ -434,7 +435,7 @@ class CollaborationMixin:
         envelope_text = envelope.render_for_prompt()
         self._append_session_message(
             session,
-            "user", envelope_text, token_count=max(1, len(envelope_text) // 4)
+            "user", envelope_text, token_count=estimate_tokens(envelope_text)
         )
         summary = (
             f"Planned verification for {plan['planned']} requirement(s); "
@@ -444,7 +445,7 @@ class CollaborationMixin:
             session,
             "assistant",
             summary,
-            token_count=max(1, len(summary) // 4),
+            token_count=estimate_tokens(summary),
         )
         result_record = self.blackboard.publish(
             RecordType.RESULT,
@@ -819,7 +820,7 @@ class CollaborationMixin:
                 session,
                 str(message.get("role", "user")),
                 content,
-                token_count=max(1, len(content) // 4),
+                token_count=estimate_tokens(content),
             )
         response = event.get("response", {})
         reply = str(response.get("content", ""))
@@ -828,7 +829,7 @@ class CollaborationMixin:
             session,
             "assistant",
             reply,
-            token_count=completion_tokens or max(1, len(reply) // 4),
+            token_count=completion_tokens or estimate_tokens(reply),
         )
 
 

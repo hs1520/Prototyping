@@ -7,12 +7,13 @@ LLMs through complex MBSE design reasoning tasks.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from ..utils.digest import sha256_text
 from .interface import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
@@ -1319,28 +1320,6 @@ Output the complete model in a single ```sysml code block. No prose after the bl
 """
 
 
-MCTS_REDUNDANCY_GROUNDING_TEMPLATE = """You have ONE task: add {redundancy_level} hardware redundancy to the SysML v2 model below.
-
-Rules (strict):
-- DO NOT remove, rename, or restructure any existing element.
-- DO NOT change any port, attribute, action def, existing state def, satisfy link, or connect.
-- ONLY add new content inside the target part def.
-- Use valid SysML v2 syntax (doc /* */ not doc = ""; state names globally unique).
-
-Target part def: {target_part}
-
-What to add (copy exactly, then adjust state/transition names if needed to avoid duplicates):
-{redundancy_instructions}
-
-Current SysML model:
-```sysml
-{sysml_text}
-```
-
-Return the COMPLETE updated model in a single ```sysml code block. No prose before or after.
-"""
-
-
 @dataclass
 class ThoughtStep:
     """A single step in a Chain of Thought reasoning process."""
@@ -1424,12 +1403,10 @@ class ChainOfThoughtPrompter:
 
         fixed_block = ""
         if fixed_requirements:
-            import re as _re
             # Compute next available ID per category from fixed list
-            from collections import defaultdict
             max_num: dict = defaultdict(int)
             for req in fixed_requirements:
-                m = _re.match(r"REQ-([A-Z]+)-(\d+):", req.strip())
+                m = re.match(r"REQ-([A-Z]+)-(\d+):", req.strip())
                 if m:
                     max_num[m.group(1)] = max(max_num[m.group(1)], int(m.group(2)))
 
@@ -1761,9 +1738,7 @@ comments and blank lines, do not repeat declarations, start immediately with
     def _parse_cot_response(self, response_text: str) -> CoTResult:
         """Parse an LLM response to extract CoT steps, SysML, and JSON."""
         result = CoTResult(final_answer=response_text)
-        response_digest = hashlib.sha256(
-            (response_text or "").encode("utf-8")
-        ).hexdigest()
+        response_digest = sha256_text(response_text or "")
 
         # Extract SysML code blocks
         sysml_pattern = r"```sysml\n(.*?)```"

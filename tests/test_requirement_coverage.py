@@ -7,8 +7,7 @@ doesn't overclaim verification of functional/safety/interface behaviour it can't
 from __future__ import annotations
 
 from src.dse.requirement_coverage import (
-    ALLOCATED_ONLY, ANALYSIS_VERIFIED, QUANTITATIVE, UNALLOCATED,
-    classify_requirement_coverage, coverage_summary,
+    ALLOCATED_ONLY, ANALYSIS_VERIFIED, QUANTITATIVE, classify_requirement_coverage, coverage_summary,
 )
 from src.dse.safety_behavior import BEHAVIOR_ABSENT
 

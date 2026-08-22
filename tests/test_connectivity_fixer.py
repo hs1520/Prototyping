@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import sys
 
-import src.simulation.connectivity_fixer as _mod
 from src.simulation.connectivity_fixer import (
     build_port_directory,
     parse_connects,

@@ -306,7 +306,7 @@ def test_the_runner_carries_the_scope_declaration_with_its_reason(tmp_path):
 
     assert DECLARED_OUT_OF_SCOPE["REQ_FUNC_002"], "declaration must state a reason"
 
-    written = write_revised_run_artifacts(
+    write_revised_run_artifacts(
         {
             "revised_experiment": {
                 "experiment_namespace": "BLACKBOARD_AG_V1",

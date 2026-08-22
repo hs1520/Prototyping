@@ -9,13 +9,13 @@ renaming plan-owned members.
 """
 from __future__ import annotations
 
-import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
 from ..utils.req_id import normalise_req_id, source_requirements_by_id
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.digest import sha256_text
+from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end
 from .event_symbols import (
     PlannedEventSymbol,
     collect_planned_event_symbols,
@@ -23,7 +23,6 @@ from .event_symbols import (
 )
 
 
-_IDENTIFIER = re.compile(r"^[A-Za-z_]\w*$")
 _TRIGGER_KINDS = {"ACCEPT", "GUARD"}
 _STATE_ROLES = {"INITIAL", "NORMAL", "RESPONSE", "FAULT"}
 
@@ -54,12 +53,7 @@ class PlannedState:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "state_id": self.state_id,
-            "role": self.role,
-            "entry_action": self.entry_action,
-            "do_action": self.do_action,
-        }
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -85,13 +79,7 @@ class PlannedTransition:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "transition_id": self.transition_id,
-            "source": self.source,
-            "target": self.target,
-            "trigger_kind": self.trigger_kind,
-            "trigger": self.trigger,
-        }
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -149,19 +137,12 @@ class PlannedBehavior:
             ).strip().upper(),
             source_requirement_id=req_id,
             source_digest=(
-                hashlib.sha256(source.encode("utf-8")).hexdigest()
+                sha256_text(source)
                 if source else (
                     str(archived_digest).strip()
                     if archived_digest not in (None, "") else None
                 )
             ),
-        )
-
-    @property
-    def activation_refs(self) -> tuple[str, ...]:
-        return tuple(
-            f"{self.behavior_id}::{state.state_id}"
-            for state in self.states
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -211,15 +192,15 @@ def validate_planned_behaviors(
         globally_named.add(behavior.behavior_id)
         if behavior.owner not in component_names:
             issues.append(f"{prefix}.owner is not a planned component")
-        if not _IDENTIFIER.fullmatch(behavior.behavior_id):
+        if not IDENTIFIER_RE.fullmatch(behavior.behavior_id):
             issues.append(f"{prefix}.behavior_id is not a SysML identifier")
-        if not _IDENTIFIER.fullmatch(behavior.initial_state):
+        if not IDENTIFIER_RE.fullmatch(behavior.initial_state):
             issues.append(f"{prefix}.initial_state is not a SysML identifier")
 
         state_ids: list[str] = []
         for state_index, state in enumerate(behavior.states):
             state_prefix = f"{prefix}.states[{state_index}]"
-            if not _IDENTIFIER.fullmatch(state.state_id):
+            if not IDENTIFIER_RE.fullmatch(state.state_id):
                 issues.append(
                     f"{state_prefix}.state_id is not a SysML identifier"
                 )
@@ -227,14 +208,14 @@ def validate_planned_behaviors(
                 issues.append(f"{state_prefix}.role is unsupported")
             if (
                 state.entry_action is not None
-                and not _IDENTIFIER.fullmatch(state.entry_action)
+                and not IDENTIFIER_RE.fullmatch(state.entry_action)
             ):
                 issues.append(
                     f"{state_prefix}.entry_action is not a SysML identifier"
                 )
             if (
                 state.do_action is not None
-                and not _IDENTIFIER.fullmatch(state.do_action)
+                and not IDENTIFIER_RE.fullmatch(state.do_action)
             ):
                 issues.append(
                     f"{state_prefix}.do_action is not a SysML identifier"
@@ -273,7 +254,7 @@ def validate_planned_behaviors(
             transition_prefix = (
                 f"{prefix}.transitions[{transition_index}]"
             )
-            if not _IDENTIFIER.fullmatch(transition.transition_id):
+            if not IDENTIFIER_RE.fullmatch(transition.transition_id):
                 issues.append(
                     f"{transition_prefix}.transition_id is not a SysML "
                     "identifier"
@@ -297,7 +278,7 @@ def validate_planned_behaviors(
                 )
             if (
                 transition.trigger_kind == "ACCEPT"
-                and not _IDENTIFIER.fullmatch(transition.trigger)
+                and not IDENTIFIER_RE.fullmatch(transition.trigger)
             ):
                 issues.append(
                     f"{transition_prefix}.trigger must name a SysML event "

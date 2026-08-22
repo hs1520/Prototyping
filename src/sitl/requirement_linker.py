@@ -26,12 +26,12 @@ Maps SysML requirements to ArduPilot parameters and SITL test specs.
 
 from __future__ import annotations
 
-import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Dict, List, Optional, Any, Mapping, Tuple
 
+from src.utils.digest import sha256_text
 from src.sysml.lite_model import SysMLLiteModel
 from src.sitl.sitl_specs import InjectSpec, VerifySpec
 
@@ -1194,7 +1194,7 @@ class RequirementLinker:
             for key, value in self.coverage_stats().items()
         })
         self._evidence_bundle = RequirementEvidenceBundle(
-            model_digest=hashlib.sha256(model_text.encode("utf-8")).hexdigest(),
+            model_digest=sha256_text(model_text),
             requirement_texts=MappingProxyType(dict(self._req_texts)),
             satisfying_parts=MappingProxyType({
                 req_id: tuple(parts)
@@ -1603,13 +1603,13 @@ class RequirementLinker:
             for param_name, raw_value in cat["ardu_params"].items():
                 if raw_value == "@guard":
                     val = pre_guard_val if pre_guard_val is not None \
-                          else f"<unresolved:guard>"
+                          else "<unresolved:guard>"
                     src = pre_guard_src
 
                 elif raw_value == "@attr_match":
                     # AttrMatcher 已预解析（含单位换算）
                     val = pre_attr_val if pre_attr_val is not None \
-                          else f"<unresolved:attr_match>"
+                          else "<unresolved:attr_match>"
                     src = pre_attr_src
 
                 elif isinstance(raw_value, str) and (

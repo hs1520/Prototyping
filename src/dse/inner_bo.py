@@ -13,6 +13,7 @@ matrices stay tiny (n_init + n_iter points). Extensible to D dimensions later.
 from __future__ import annotations
 
 import math
+from statistics import NormalDist
 import random
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
@@ -66,16 +67,11 @@ def _chol_solve(L: Matrix, b: Vector) -> Vector:
 
 
 # ---------------------------------------------------------------------------
-# Standard normal helpers (for Expected Improvement)
+# Standard normal (for Expected Improvement) — stdlib, still numpy/scipy-free
 # ---------------------------------------------------------------------------
 
 
-def _norm_pdf(z: float) -> float:
-    return math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
-
-
-def _norm_cdf(z: float) -> float:
-    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+_STD_NORMAL = NormalDist()
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +132,7 @@ class BayesianOptimizer:
             return 0.0
         improvement = mean - best - self.xi
         z = improvement / sigma
-        return improvement * _norm_cdf(z) + sigma * _norm_pdf(z)
+        return improvement * _STD_NORMAL.cdf(z) + sigma * _STD_NORMAL.pdf(z)
 
     def optimize(self) -> BOResult:
         # initial design

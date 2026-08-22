@@ -4,7 +4,7 @@ from __future__ import annotations
 import dataclasses
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..llm.chain_of_thought import CoTResult
 from ..sysml.lite_model import SysMLLiteModel
@@ -18,7 +18,7 @@ from ..sysml.text_normalization import (
     fix_capability_semantics,
     fix_safety_action_semantics,
 )
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import PART_DEF_RE, find_block_end
 from .refinement_authoring import RefinementAuthoring, RefinementRequest
 
 
@@ -311,7 +311,6 @@ class GeneratedModelAdmission:
         ):
             return sysml_text, 0
 
-        part_start_re = re.compile(r"\bpart\s+def\s+(\w+)\s*\{")
         state_re = re.compile(
             r"\bstate\s+(\w*(?:SelfTest|SelfCheck)\w*)\s*;",
             re.IGNORECASE,
@@ -319,7 +318,7 @@ class GeneratedModelAdmission:
         result = sysml_text
         cursor = 0
         while True:
-            part_match = part_start_re.search(result, cursor)
+            part_match = PART_DEF_RE.search(result, cursor)
             if not part_match:
                 return result, 0
             brace_pos = result.index("{", part_match.start())
@@ -424,13 +423,12 @@ class GeneratedModelAdmission:
 
         result = sysml_text
         fixes = 0
-        part_start_re = re.compile(r"\bpart\s+def\s+(\w+)\s*\{")
 
         for req_id, state_pattern in req_families:
             target_name: Optional[str] = None
             cursor = 0
             while True:
-                part_match = part_start_re.search(result, cursor)
+                part_match = PART_DEF_RE.search(result, cursor)
                 if not part_match:
                     break
                 brace_pos = result.index("{", part_match.start())

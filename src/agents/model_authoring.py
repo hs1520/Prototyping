@@ -380,7 +380,7 @@ class ModelAuthoring:
         metadata["parts_fragment_length"] = len(parts_fragment)
         if verbose:
             print(f"\n  {'─'*60}")
-            print(f"  [DEBUG] Step 2 — Part Definitions (SysML fragment)")
+            print("  [DEBUG] Step 2 — Part Definitions (SysML fragment)")
             print(f"  {'─'*60}")
             print(parts_fragment)
         return step2, parts_fragment
@@ -443,7 +443,7 @@ class ModelAuthoring:
         metadata["interfaces_fragment_length"] = len(interfaces_fragment)
         if verbose:
             print(f"\n  {'─'*60}")
-            print(f"  [DEBUG] Step 3 — Interface & Flow Definitions (SysML fragment)")
+            print("  [DEBUG] Step 3 — Interface & Flow Definitions (SysML fragment)")
             print(f"  {'─'*60}")
             if interfaces_fragment:
                 print(interfaces_fragment)
@@ -477,8 +477,8 @@ class ModelAuthoring:
             metadata["behavior_fragment_length"] = 0
 
             if verbose:
-                print(f"\n  [DEBUG] Step 4 — Behavioral Model: skipped "
-                      f"(no FUNC/SAFE requirements)")
+                print("\n  [DEBUG] Step 4 — Behavioral Model: skipped "
+                      "(no FUNC/SAFE requirements)")
             return None, ""
 
         ctx4 = step_context("behavior")
@@ -595,7 +595,7 @@ class ModelAuthoring:
         metadata["behavior_fragment_length"] = len(behavior_fragment)
         if verbose:
             print(f"\n  {'─'*60}")
-            print(f"  [DEBUG] Step 4 — Behavioral Model (SysML fragment)")
+            print("  [DEBUG] Step 4 — Behavioral Model (SysML fragment)")
             print(f"  {'─'*60}")
             print(behavior_fragment)
         return step4, behavior_fragment

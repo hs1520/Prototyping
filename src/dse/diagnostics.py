@@ -30,7 +30,7 @@ from ..sysml.model import DiagnosticSeverity, SysMLModel
 
 #: A stakeholder requirement id, as distinct from an A/G contract definition.
 #: Both are `requirement def`; only the first is what the model is judged to
-#: cover. Mirrors `_STAKEHOLDER_REQ` in dse.evaluator.
+#: cover. Single source; dse.evaluator imports this pattern.
 _STAKEHOLDER_REQ = re.compile(r"^REQ[_-][A-Za-z]+[_-]\d+$", re.IGNORECASE)
 
 

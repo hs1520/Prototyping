@@ -14,7 +14,6 @@ requirement to one response action and the same evidence becomes a gate; under
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -27,6 +26,7 @@ from .action_effects import (
     PROFILE_VERSION,
     PlannedActionEffect,
 )
+from ..utils.digest import sha256_text
 from ..utils.sysml_text_utils import find_block_end
 from ..simulation.extractor import extract_behavioral_graph
 from ..simulation.state_extractor import extract_state_machines
@@ -266,7 +266,7 @@ def analyze_action_semantics(
     exists to measure.
     """
     text = model_text or ""
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    digest = sha256_text(text)
     report = ActionSemanticsReport(profile=profile, source_model_sha256=digest)
     if profile == OFF or not text.strip():
         report.summary = _empty_summary()

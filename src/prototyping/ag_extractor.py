@@ -41,7 +41,7 @@ from .ag_contracts import (
     Span,
 )
 from .blackboard import text_digest
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import STATE_DEF_RE as _STATE_DEF_RE, find_block_end
 
 _REQ_DEF_RE = re.compile(r"\brequirement\s+def\s+(\w+)\s*\{")
 #: `attribute <name> : <Type>[::<Type>][ [unit] ] [= <number> [ [unit] ]];`
@@ -79,7 +79,6 @@ _DEP_RE = re.compile(
 _SATISFY_RE = re.compile(
     r"\bsatisfy\s+requirement\s+\w+\s*:\s*(\w+)\s+by\s+(\w+)\s*;"
 )
-_STATE_DEF_RE = re.compile(r"\bstate\s+def\s+(\w+)\s*\{")
 _ASSERT_CONSTRAINT_RE = re.compile(
     r"\bassert\s+constraint\s+(\w+)\s*\{([^{}]*)\}"
 )

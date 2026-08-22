@@ -8,7 +8,6 @@ unnamed spelling against the named one.
 """
 from __future__ import annotations
 
-import re
 
 _NAMED = """
 state def M {

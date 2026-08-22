@@ -206,8 +206,7 @@ class GuardCondition:
             if not names and self.attribute:
                 names = [self.attribute]
             # de-dupe preserving order
-            seen: set = set()
-            return [n for n in names if not (n in seen or seen.add(n))]
+            return list(dict.fromkeys(names))
         attrs: List[str] = []
         for op in self.operands:
             attrs.extend(op.involved_attributes())

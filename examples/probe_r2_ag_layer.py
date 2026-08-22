@@ -24,18 +24,15 @@ end, when the chains are already stable.
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dotenv import load_dotenv
 
-from run_revised_experiment import FROZEN_REQUIREMENTS  # noqa: E402
-from src.agents.orchestrator import Orchestrator  # noqa: E402
-from src.prototyping.ag_contracts import check_ag_graph  # noqa: E402
-from src.prototyping.ag_extractor import extract_ag_graphs  # noqa: E402
-from src.prototyping.provider_factory import create_llm  # noqa: E402
+from run_revised_experiment import FROZEN_REQUIREMENTS
+from src.agents.orchestrator import Orchestrator
+from src.prototyping.ag_contracts import check_ag_graph
+from src.prototyping.ag_extractor import extract_ag_graphs
+from src.prototyping.provider_factory import create_llm
 
 
 def main() -> int:

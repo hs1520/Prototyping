@@ -1,13 +1,13 @@
 """Deterministic provenance fingerprints for cross-stage verification artifacts."""
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import uuid
 from dataclasses import asdict, is_dataclass
 from typing import Any, Mapping
 
+from ..utils.digest import sha256_text
 from ..utils.sysml_text_utils import find_block_end
 
 
@@ -21,10 +21,6 @@ def _json_default(value: Any) -> Any:
     if isinstance(value, tuple):
         return list(value)
     raise TypeError(f"cannot fingerprint {type(value).__name__}")
-
-
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def sha256_json(value: Any) -> str:

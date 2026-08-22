@@ -18,13 +18,11 @@ spirit: imports no LLM, no runtime extractor/checker, and no gold.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping
+
+from .ag_traceability import _fraction
 
 ROBUSTNESS_ROLE = "AG_ROBUSTNESS_METRICS"
-
-
-def _fraction(numerator: int, denominator: int) -> Optional[float]:
-    return round(numerator / denominator, 4) if denominator else None
 
 
 def compute_robustness_metrics(assurance: Mapping[str, Any]) -> Dict[str, Any]:

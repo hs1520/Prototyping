@@ -74,7 +74,6 @@ class PortMergeResult:
 # 正则
 # ---------------------------------------------------------------------------
 
-_PART_DEF_RE = re.compile(r'\bpart\s+def\s+(\w+)\s*\{')
 _PORT_DEF_RE = re.compile(r'\bport\s+def\s+(\w+)')
 # LLM 输出格式: <PartName>: <direction> port <name> : <Type>;
 _LINE_RE = re.compile(

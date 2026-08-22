@@ -7,6 +7,9 @@ framework, combining all components into a unified workflow.
 
 from __future__ import annotations
 
+import json
+import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..agents.orchestrator import Orchestrator
@@ -523,10 +526,6 @@ class PrototypingPipeline:
         Best-effort: any failure is reported but never breaks the pipeline.
         Returns the path written, or None.
         """
-        import json
-        import time
-        from pathlib import Path
-
         try:
             report = self.build_run_report(result)
             out_dir = Path(directory)

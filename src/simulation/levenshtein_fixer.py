@@ -32,7 +32,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-from ..utils.sysml_text_utils import find_block_end as _block_end
+from ..utils.sysml_text_utils import PART_DEF_RE, find_block_end as _block_end
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,6 @@ _DEF_BLOCK_RE = re.compile(
 )
 
 # Scope 2 — part def blocks (need body extraction)
-_PART_DEF_BODY_RE = re.compile(r'\bpart\s+def\s+(\w+)\s*\{')
 
 # Scope 3 — part usage lines: `part <inst> : <DefName>;`
 _USAGE_RE = re.compile(r'\bpart\s+(?!def\b)(\w+)\s*:\s*(\w+)\s*;')
@@ -204,7 +203,7 @@ def build_vocab(sysml_text: str) -> SysMLVocab:
         v.type_vocab.add(m.group(1))
 
     # ── Scope 2 + line ranges ─────────────────────────────────────────────────
-    for pm in _PART_DEF_BODY_RE.finditer(sysml_text):
+    for pm in PART_DEF_RE.finditer(sysml_text):
         def_name = pm.group(1)
         brace_pos = sysml_text.index('{', pm.start())
         end_pos   = _block_end(sysml_text, brace_pos)

@@ -341,9 +341,9 @@ class CoordinateFrame:
             lines.append(f"    :>> mRefs = ({refs});")
         if self.steps:
             step_strs = ", ".join(str(s) for s in self.steps)
-            lines.append(f"    :>> transformation : TranslationRotationSequence {{")
+            lines.append("    :>> transformation : TranslationRotationSequence {")
             lines.append(f"        :>> elements = ({step_strs});")
-            lines.append(f"    }}")
+            lines.append("    }")
         lines.append("}")
         return "\n".join(lines)
 

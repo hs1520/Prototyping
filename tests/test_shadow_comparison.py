@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pytest
 
 from src.dse.baselines import nsga2, random_search, weighted_sum_search
 from src.dse.mo_mcts import MultiObjectiveMCTS, dominates

@@ -57,7 +57,6 @@ class RetrievedContext:
                 return ""
             # Absolute file paths — show only the stem filename
             if raw.startswith("/") or (len(raw) > 2 and raw[1] == ":"):
-                from pathlib import Path
                 stem = Path(raw).name
                 # Still looks like an ID? suppress it.
                 return stem if stem and "#" not in stem else ""

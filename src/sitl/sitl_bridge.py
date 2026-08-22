@@ -17,7 +17,6 @@ Usage
 
 from __future__ import annotations
 
-import os
 import subprocess
 import textwrap
 import time
@@ -219,9 +218,9 @@ class SITLBridge:
         self._gazebo_started_by_us = True
         time.sleep(wait_s)
         if not self._gazebo_container_running():
-            print(f"  ✗ Gazebo 容器启动后未能保持运行")
+            print("  ✗ Gazebo 容器启动后未能保持运行")
             return False
-        print(f"  ✓ Gazebo 容器已就绪")
+        print("  ✓ Gazebo 容器已就绪")
         return True
 
     def _stop_gazebo(self) -> None:
@@ -287,7 +286,7 @@ class SITLBridge:
             s = socket.create_connection(("127.0.0.1", 5760), timeout=3)
             s.close()
         except OSError:
-            print(f"  ✗ SITL 启动超时，端口 5760 无响应")
+            print("  ✗ SITL 启动超时，端口 5760 无响应")
             self.stop_sitl()
             return False
 
@@ -320,11 +319,11 @@ class SITLBridge:
             pass
 
         if not ready:
-            print(f"  ✗ SITL 启动后 EKF 未就绪（无绝对位置估计），放弃本次启动")
+            print("  ✗ SITL 启动后 EKF 未就绪（无绝对位置估计），放弃本次启动")
             self.stop_sitl()
             return False
 
-        print(f"  ✓ SITL 已就绪（EKF 绝对位置已锁定），监听 tcp:127.0.0.1:5760")
+        print("  ✓ SITL 已就绪（EKF 绝对位置已锁定），监听 tcp:127.0.0.1:5760")
         return True
 
     def stop_sitl(self) -> None:

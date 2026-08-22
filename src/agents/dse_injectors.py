@@ -25,7 +25,6 @@ from ..utils.sysml_text_utils import find_block_end
 _CTRL_KWS   = {"controller", "flight", "control", "nav", "autopilot"}
 _CF_KWS     = {"controlfrequency", "controlfreq", "loopfrequency", "samplingfrequency"}
 _SENSOR_KWS = {"sensor", "perception", "detector", "camera", "lidar", "imu", "gps", "radar"}
-_SAFETY_KWS = {"safety", "monitor", "fault", "health"}
 
 
 def apply_best_config_to_model(

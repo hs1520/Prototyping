@@ -22,13 +22,10 @@ import json
 import re
 from pathlib import Path
 import subprocess
-import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from src.dse.design_space import DesignConfiguration  # noqa: E402
-from src.dse.evaluator import DesignEvaluator  # noqa: E402
-from src.sysml.lite_model import build_lite_model  # noqa: E402
+from src.dse.design_space import DesignConfiguration
+from src.dse.evaluator import DesignEvaluator
+from src.sysml.lite_model import build_lite_model
 
 ARMS = ("R0-CURRENT", "R1-BBCTX", "R2-BBAG")
 

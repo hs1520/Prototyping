@@ -6,24 +6,9 @@ with the legacy scalar MCTS.
 """
 from __future__ import annotations
 
-import sys
-from types import ModuleType
+from tests._dep_stubs import install_missing_dep_stubs
 
-for _name, _attrs in [
-    ("dotenv", {"load_dotenv": lambda *a, **kw: None}),
-    ("pinecone", {"Pinecone": type("Pinecone", (), {"__init__": lambda self, **kw: None})}),
-    ("syside", {}),
-]:
-    if _name not in sys.modules:
-        try:  # prefer the real package — a stub here poisons later test files
-            __import__(_name)
-            continue
-        except ImportError:
-            pass
-        _mod = ModuleType(_name)
-        for _k, _v in _attrs.items():
-            setattr(_mod, _k, _v)
-        sys.modules[_name] = _mod
+install_missing_dep_stubs()
 
 from src.dse.design_space import (
     DEFAULT_DIMENSION_WEIGHTS,

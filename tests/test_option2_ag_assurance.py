@@ -717,9 +717,6 @@ def test_preservation_guards_every_realizing_state_def_not_just_named_behaviors(
         "entry action setParachuteResponseSelectedAndIssue"
         "ParachuteDeploymentCommand;"
     )
-    broken = model.replace(f"{{ {action} }}", "").replace(
-        "state parachuteDeploymentSelected \n", "state parachuteDeploymentSelected;\n"
-    )
     graph, report = _check(model.replace(action, ""))
     routed = route_failure_diagnostics(
         report.diagnostics,

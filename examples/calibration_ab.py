@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from src.dse.physics_estimator import DesignInputs, calibrated, clear_calibration, endurance_min
+from src.dse.physics_estimator import calibrated, clear_calibration, endurance_min
 from src.dse.variation_dse import run_variation_dse
 from src.realization.estimator_calibration import catalog_rank_check, fit_from_catalog
 

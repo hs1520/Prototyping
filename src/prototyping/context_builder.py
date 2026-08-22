@@ -1,12 +1,13 @@
 """Deterministic, revision-pinned context construction for Agent tasks."""
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 
 from .blackboard import Blackboard, RecordType
+from ..utils.digest import sha256_text
+from ..utils.tokens import estimate_tokens
 
 
 _EVALUATOR_ONLY_ROLES = {
@@ -270,7 +271,7 @@ class ContextBuilder:
             dict(fields), ensure_ascii=False, sort_keys=True,
             separators=(",", ":"), default=str,
         )
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return sha256_text(raw)
 
     def build(
         self,
@@ -365,7 +366,7 @@ class ContextBuilder:
             "kind": "committed_sysml_slice",
             "model_revision": current.revision,
             "model_digest": current.model_digest,
-            "content_digest": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "content_digest": sha256_text(content),
         },)
         record_context = tuple({
             "record_id": record.record_id,
@@ -398,7 +399,7 @@ class ContextBuilder:
             "record_context": record_context,
         }
         envelope = ContextEnvelope(**base, envelope_digest=self._digest(base))
-        estimated_tokens = max(1, len(envelope.render_for_prompt()) // 4)
+        estimated_tokens = estimate_tokens(envelope.render_for_prompt())
         if estimated_tokens > envelope.token_budget:
             if allow_deterministic_truncation and content:
                 # Required typed records and source requirements have priority.
@@ -419,9 +420,7 @@ class ContextBuilder:
                 envelope = ContextEnvelope(
                     **base, envelope_digest=self._digest(base)
                 )
-                estimated_tokens = max(
-                    1, len(envelope.render_for_prompt()) // 4
-                )
+                estimated_tokens = estimate_tokens(envelope.render_for_prompt())
             if estimated_tokens > envelope.token_budget:
                 raise ValueError(
                     "ContextEnvelope exceeds its token budget "

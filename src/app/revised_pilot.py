@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -24,11 +23,13 @@ from ..prototyping.action_effects import (
 )
 from ..prototyping.evaluation_protocol import build_descriptive_pilot_manifest
 from ..prototyping.artifact_store import atomic_write_json
+from ..utils.digest import sha256_text
 from ..prototyping.experiment_arms import (
     REVISED_EXPERIMENT_NAMESPACE,
     R2_DETERMINISTIC_GENERATION_MODE,
     R2_DETERMINISTIC_INTERVENTION_VERSION,
     R2_INTERVENTION_VERSION_BY_MODE,
+    RevisedExperimentArm,
 )
 from ..agents.typed_plan_generation import DEFAULT_MAXIMUM_PLAN_ATTEMPTS
 from ..prototyping.requirement_inputs import (
@@ -37,7 +38,11 @@ from ..prototyping.requirement_inputs import (
 )
 
 
-REVISED_PILOT_ARMS = ("R0-CURRENT", "R1-BBCTX", "R2-BBAG")
+REVISED_PILOT_ARMS = (
+    RevisedExperimentArm.CURRENT.value,
+    RevisedExperimentArm.BLACKBOARD_CONTEXT.value,
+    RevisedExperimentArm.SEMANTIC_ASSURANCE.value,
+)
 _EVALUATOR_ONLY_ROLE_TOKENS = {
     "evaluatorgold",
     "blindfailurereviewpacket",
@@ -60,10 +65,7 @@ def _json_digest(value: Mapping[str, Any]) -> str:
     raw = json.dumps(
         dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-_write_json = atomic_write_json
+    return sha256_text(raw)
 
 
 
@@ -465,7 +467,7 @@ def run_revised_pilot(
     config_digest = str(config_manifest["configuration_digest"])
     frozen = config.frozen_requirements()
     requirement_digest = str(frozen["requirement_set_digest"])
-    _write_json(out / "pilot_config.json", config_manifest)
+    atomic_write_json(out / "pilot_config.json", config_manifest)
 
     protocol = build_descriptive_pilot_manifest(
         [f"paired-seed-{seed}" for seed in config.seeds],
@@ -553,7 +555,7 @@ def run_revised_pilot(
                     r2_generation_mode=config.r2_generation_mode,
                     r2_intervention_version=config.r2_intervention_version,
                 )
-                _write_json(run_dir / "run_report.json", report)
+                atomic_write_json(run_dir / "run_report.json", report)
                 # Every arm archives what it has. Gating on the collaboration
                 # block meant R0-CURRENT — which has no blackboard by
                 # construction — archived no model, so a defect seen only in the
@@ -594,7 +596,7 @@ def run_revised_pilot(
                     )
                 )
                 if attempts:
-                    _write_json(
+                    atomic_write_json(
                         run_dir / "ag_authoring_attempts.json",
                         {
                             "schema_version": "1.0",
@@ -661,7 +663,7 @@ def run_revised_pilot(
                     if text:
                         (run_dir / label).write_text(text, encoding="utf-8")
                         failed_artifacts.append(label.split(".")[0])
-                _write_json(run_dir / "failure_context.json", {
+                atomic_write_json(run_dir / "failure_context.json", {
                     "schema_version": "1.0",
                     "artifact_role": "RUN_FAILURE_CONTEXT",
                     "error_type": type(exc).__name__,
@@ -679,7 +681,7 @@ def run_revised_pilot(
                     "error_message": str(exc),
                     "artifact_files": failed_artifacts,
                 }
-            _write_json(run_dir / "run_manifest.json", row)
+            atomic_write_json(run_dir / "run_manifest.json", row)
             rows.append(row)
 
     complete = all(row["status"] == "COMPLETED" for row in rows)
@@ -701,5 +703,5 @@ def run_revised_pilot(
         "runs": rows,
         "descriptive_summary": _aggregate(rows),
     }
-    _write_json(out / "pilot_manifest.json", manifest)
+    atomic_write_json(out / "pilot_manifest.json", manifest)
     return manifest

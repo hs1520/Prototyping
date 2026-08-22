@@ -5,9 +5,7 @@ Usage:
     .venv/bin/python examples/run_sitl_only.py
 """
 
-import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.sysml.lite_model import build_lite_model
 from src.sitl.sitl_bridge import SITLBridge, ARDUPILOT_COPTER_PROFILE

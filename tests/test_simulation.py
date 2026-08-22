@@ -12,11 +12,10 @@ or from an activated AI-prototyping environment:
 import os
 import pytest
 
-from src.simulation.validator import SimulationValidator, SimulationResult
+from src.simulation.validator import SimulationValidator
 from src.simulation.extractor import extract_behavioral_graph
 from src.simulation.exec_graph import build_exec_graph, reachable_from
 from src.simulation.scenarios import auto_detect_scenarios, DRONE_SCENARIOS, select_scenarios
-from src.simulation.simulator import ScenarioSimulator
 
 
 # ---------------------------------------------------------------------------

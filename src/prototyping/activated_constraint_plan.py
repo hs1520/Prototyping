@@ -8,7 +8,6 @@ instead of inventing a temporal expression language.
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass, replace
 from typing import Any, AbstractSet, Iterable, Mapping, Sequence
@@ -20,12 +19,13 @@ from .requirement_semantics import (
     quantity_type_for_unit,
     semantic_binding_matches_subject,
 )
+from ..utils.digest import sha256_text
 from ..utils.req_id import (
     normalise_req_id,
     source_requirements_by_id,
     strip_req_ids,
 )
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end
 
 
 #: Value types an attribute may be planned with. The plan has no way to declare
@@ -157,7 +157,6 @@ def state_execution_advisories(
     return advisories
 
 
-_IDENTIFIER = re.compile(r"^[A-Za-z_]\w*$")
 _QUALIFIED = re.compile(r"^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*$")
 _NUMBER = re.compile(r"^[-+]?\d+(?:\.\d+)?$")
 _ASSERT = re.compile(
@@ -189,8 +188,6 @@ _PLAN_COMMENT = re.compile(
 )
 
 
-def _source_digest(source: str) -> str:
-    return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
 def _normalise_expression(value: str) -> str:
@@ -351,7 +348,7 @@ class AttributePlan:
             ).strip().upper(),
             source_requirement_id=req_id,
             source_digest=(
-                _source_digest(source)
+                sha256_text(source)
                 if source else (
                     str(value.get("source_digest") or "").strip() or None
                 )
@@ -477,7 +474,7 @@ class ConstraintPlan:
             ).strip().upper(),
             source_requirement_id=req_id,
             source_digest=(
-                _source_digest(source)
+                sha256_text(source)
                 if source else (
                     str(archived_digest).strip()
                     if archived_digest not in (None, "") else None
@@ -612,7 +609,7 @@ def compile_constraint_plan(
             "constraint.name": binding.constraint_name,
         }
         for field_name, field_value in identifier_fields.items():
-            if not _IDENTIFIER.fullmatch(field_value):
+            if not IDENTIFIER_RE.fullmatch(field_value):
                 issues.append(
                     f"{prefix}.{field_name} is not a SysML identifier"
                 )
@@ -892,7 +889,7 @@ def validate_constraint_plan(
                     f"{component.name} attribute names must be unique"
                 )
             names.add(attribute.name)
-            if not _IDENTIFIER.fullmatch(attribute.name):
+            if not IDENTIFIER_RE.fullmatch(attribute.name):
                 issues.append(f"{prefix}.name is not a SysML identifier")
             if not _QUALIFIED.fullmatch(attribute.value_type):
                 issues.append(f"{prefix}.value_type is not a SysML type")
@@ -931,16 +928,16 @@ def validate_constraint_plan(
                 f"{constraint.owner}.{constraint.constraint_id}"
             )
         seen.add(key)
-        if not _IDENTIFIER.fullmatch(constraint.constraint_id):
+        if not IDENTIFIER_RE.fullmatch(constraint.constraint_id):
             issues.append(f"{prefix}.constraint_id is not a SysML identifier")
         if constraint.owner not in owners:
             issues.append(f"{prefix}.owner is not a planned component")
-        if not _IDENTIFIER.fullmatch(constraint.lhs):
+        if not IDENTIFIER_RE.fullmatch(constraint.lhs):
             issues.append(f"{prefix}.expression.lhs is not an attribute name")
         if constraint.operator not in {"<=", ">=", "<", ">", "=="}:
             issues.append(f"{prefix}.expression.operator is unsupported")
         if not (
-            _IDENTIFIER.fullmatch(constraint.rhs)
+            IDENTIFIER_RE.fullmatch(constraint.rhs)
             or _NUMBER.fullmatch(constraint.rhs)
         ):
             issues.append(f"{prefix}.expression.rhs is not a simple value")
@@ -1474,7 +1471,7 @@ def materialize_planned_constraints(
             continue
         orphan_candidates.add((item["owner"], comparison.group("lhs")))
         rhs = comparison.group("rhs")
-        if _IDENTIFIER.fullmatch(rhs):
+        if IDENTIFIER_RE.fullmatch(rhs):
             orphan_candidates.add((item["owner"], rhs))
     text = model_text
     removed: list[str] = []

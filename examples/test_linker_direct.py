@@ -2,9 +2,6 @@
 直接用上次生成的 SysML 文本测试 requirement_linker，不重跑 LLM。
 """
 
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from src.sysml.lite_model import build_lite_model
 from src.sitl.requirement_linker import RequirementLinker
 

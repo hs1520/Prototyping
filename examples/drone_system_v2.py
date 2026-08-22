@@ -15,11 +15,6 @@ Usage:
     python examples/drone_system_v2.py
 """
 
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from src.app.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
 from src.prototyping.requirement_inputs import build_frozen_requirement_set
@@ -355,14 +350,14 @@ def main():
         print(f"  … and {len(result['requirements']) - 6} more")
 
     summary = result['model_summary']
-    print(f"\nModel:")
+    print("\nModel:")
     print(f"  Part definitions       : {summary['part_definitions_count']}")
     print(f"  Requirement definitions: {summary['requirement_definitions_count']}")
     part_names = [p.name for p in result['model'].part_definitions]
     print(f"  Parts: {', '.join(part_names) if part_names else '(none)'}")
 
     sim = result['simulation_result']
-    print(f"\nSimulation:")
+    print("\nSimulation:")
     print(f"  Reachability : {sim.reachability_score:.3f}  "
           f"({len(sim.passed_scenarios())}/{len(sim.scenario_results)} scenarios)")
 
@@ -372,7 +367,7 @@ def main():
               f"({br.passed_count()}/{len(br.scenario_results)} state machines)")
 
     if result['evaluation_history']:
-        print(f"\nConvergence:")
+        print("\nConvergence:")
         for ev in result['evaluation_history']:
             bar = "█" * int(ev['score'] * 20)
             print(f"  Iter {ev['iteration']}: {ev['score']:.3f}  {bar}")

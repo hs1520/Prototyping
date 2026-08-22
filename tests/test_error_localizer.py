@@ -16,7 +16,6 @@ from src.simulation.error_localizer import (
     extract_error_context,
     merge_fixed_chunk,
     build_fix_prompt,
-    ErrorChunk,
 )
 from src.sysml.text_normalization import strip_code_fences
 
@@ -320,11 +319,11 @@ def test_missing_feature_hints():
     # batteryCharge 是连续量 → Real
     ok("battery_is_real",
        "attribute batteryCharge : Real = 0.0;" in prompt,
-       f"prompt has no Real decl for batteryCharge")
+       "prompt has no Real decl for batteryCharge")
     # sensorSelfTestFailed 暗示布尔 → Boolean
     ok("sensor_is_bool",
        "attribute sensorSelfTestFailed : Boolean = false;" in prompt,
-       f"prompt has no Boolean decl for sensorSelfTestFailed")
+       "prompt has no Boolean decl for sensorSelfTestFailed")
     # 明确指示不要绑到现成端口
     ok("explicit_no_rebind",
        "do NOT rebind the name to an existing port" in prompt)

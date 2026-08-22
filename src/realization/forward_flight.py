@@ -9,9 +9,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-RHO = 1.225
-G = 9.81
-FOM = 0.62                 # rotor figure of merit (matches src/dse/physics_estimator)
+# Deliberately the uncalibrated defaults: catalog calibration (set_calibration)
+# applies only inside physics_estimator's hover path, never to this lumped tier.
+from ..dse.physics_estimator import FOM, G, RHO
+
 DEFAULT_DRAG_AREA = 0.05   # m², equivalent flat-plate area f for a small multirotor
 MAX_GRID_SPEED_MPS = 60.0  # wide enough that speed checks are bounded by physics, not array length
 

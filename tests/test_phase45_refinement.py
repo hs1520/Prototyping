@@ -9,29 +9,16 @@
 """
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import pytest
 
+from tests._dep_stubs import install_missing_dep_stubs
+
 # Stub external dependencies (same pattern as other test files)
-for _name, _attrs in [
-    ("dotenv", {"load_dotenv": lambda *a, **kw: None}),
-    ("pinecone", {"Pinecone": type("Pinecone", (), {"__init__": lambda self, **kw: None})}),
-    ("syside", {}),
-]:
-    if _name not in sys.modules:
-        try:  # prefer the real package — a stub here poisons later test files
-            __import__(_name)
-            continue
-        except ImportError:
-            pass
-        _mod = ModuleType(_name)
-        for _k, _v in _attrs.items():
-            setattr(_mod, _k, _v)
-        sys.modules[_name] = _mod
+install_missing_dep_stubs()
 
 from src.agents.orchestrator import Orchestrator, PrototypingState  # noqa: F401 (Orchestrator used in tests)
 from src.agents.refinement import (

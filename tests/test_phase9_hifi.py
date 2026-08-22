@@ -6,7 +6,6 @@ untouched; environment absence reported not faked), and best-effort behavior.
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
 
 import src.agents.phase9_hifi as phase9
 from src.agents.orchestrator import Orchestrator

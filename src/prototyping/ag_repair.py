@@ -1,7 +1,7 @@
 """Fail-closed, dependency-closed surgical repair for routed A/G failures."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import re
 from typing import Any
 
@@ -12,6 +12,7 @@ from .blackboard import Blackboard, RecordType, TaskStatus
 from .context_builder import ContextBuilder
 from .task_session import SessionStatus, TaskSessionRegistry
 from ..utils.sysml_text_utils import find_block_end
+from ..utils.tokens import estimate_tokens
 from ..simulation.surgical_refiner import (
     SurgicalAudit,
     attempt_surgical_refinement,
@@ -32,7 +33,7 @@ class AGRepairDecision:
     whole_model_fallback_used: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return dict(self.__dict__)
+        return asdict(self)
 
 
 def _publish_decision(
@@ -79,20 +80,18 @@ class _CapturingChat:
     def chat(self, prompt: str, *, system_prompt: str = "", **kwargs: Any) -> str:
         if system_prompt:
             self._append("system", system_prompt)
-        self._append("user", prompt, token_count=max(1, len(prompt) // 4))
+        self._append("user", prompt, token_count=estimate_tokens(prompt))
         response = str(self._llm.chat(
             prompt, system_prompt=system_prompt, **kwargs
         ))
         self._append(
-            "assistant", response, token_count=max(1, len(response) // 4)
+            "assistant", response, token_count=estimate_tokens(response)
         )
         return response
 
 
 def _behavior_tokens(model_text: str, behavior: str) -> set[tuple[str, str]]:
     """Named behavior content that an A/G repair is never allowed to shed."""
-    from ..utils.sysml_text_utils import find_block_end
-
     match = re.search(rf"\bstate\s+def\s+{re.escape(behavior)}\s*\{{", model_text)
     if match is None:
         return set()

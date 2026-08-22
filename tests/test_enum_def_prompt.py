@@ -8,7 +8,6 @@ These tests verify that:
 They do NOT test the extractor or simulator (those are Layer 2+).
 """
 
-import pytest
 from src.llm.chain_of_thought import (
     ARCHITECTURE_DECOMPOSITION_TEMPLATE,
     BEHAVIOR_TEMPLATE,

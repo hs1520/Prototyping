@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import List, Optional
+from typing import List
 
 from src.agents.orchestrator import Orchestrator, PrototypingState
 from src.agents.refinement import ModelRevision, RefinementClosureRequest
@@ -380,7 +380,7 @@ class TestAttemptSurgicalRefinement:
         assert context is None
 
     def test_escalation_recovers_from_bad_low_temp_answer(self):
-        from src.llm.interface import LLMInterface, LLMResponse, Message
+        from src.llm.interface import LLMInterface, LLMResponse
 
         class _EscalatingLLM(LLMInterface):
             def __init__(self):

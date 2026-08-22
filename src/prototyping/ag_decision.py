@@ -43,7 +43,8 @@ from .ag_profile import (
     TIMED_PATTERN,
     TRIGGERED_PATTERNS,
 )
-from ..utils.sysml_text_utils import find_block_end
+from .ag_emitter import _capitalise
+from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end
 
 class DecisionError(ValueError):
     """The decisions are missing, malformed, or internally inconsistent."""
@@ -184,7 +185,7 @@ def extract_decisions(raw: str) -> Dict[str, Any]:
 
 def _identifier(value: Any, field: str) -> str:
     text = str(value or "").strip()
-    if not re.fullmatch(r"[A-Za-z_]\w*", text):
+    if not IDENTIFIER_RE.fullmatch(text):
         raise DecisionError(f"{field} must be a bare identifier, got {value!r}")
     # A decided name is rendered into SysML text; a reserved word there is a
     # parser error after every gate that could have refused it cheaply.
@@ -197,8 +198,6 @@ def _identifier(value: Any, field: str) -> str:
     return text
 
 
-def _capitalise(concept: str) -> str:
-    return concept[:1].upper() + concept[1:] if concept else concept
 
 
 def _bounded_expression(value: Any, field: str) -> str:
@@ -218,7 +217,7 @@ def _bounded_expression(value: Any, field: str) -> str:
     for token in tokens:
         if token in ("not", "and", "or"):
             continue
-        if not re.fullmatch(r"[A-Za-z_]\w*", token):
+        if not IDENTIFIER_RE.fullmatch(token):
             raise DecisionError(
                 f"{field} must use only concepts and not/and/or, got {value!r}"
             )

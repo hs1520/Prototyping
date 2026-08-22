@@ -428,7 +428,6 @@ def test_a_session_is_charged_for_each_turn_once_not_for_every_resend():
     transcript grows linearly. The budget would then measure resends rather than
     accumulated context. Real cumulative cost is the TokenLedger's job.
     """
-    from types import SimpleNamespace
 
     from src.agents.orchestrator import Orchestrator
 

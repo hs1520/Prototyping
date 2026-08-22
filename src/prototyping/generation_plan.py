@@ -7,7 +7,6 @@ this object is generation input and an auditable conformance expectation only.
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Mapping, Sequence
@@ -51,11 +50,12 @@ from .planned_behavior import (
     materialize_owned_planned_behaviors,
     validate_planned_behaviors,
 )
+from .sysml_reserved import SYSML_RESERVED_WORDS  # noqa: F401  (re-export)
+from ..utils.digest import sha256_text
 from ..utils.req_id import normalise_req_id
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end
 
 
-_IDENTIFIER = re.compile(r"^[A-Za-z_]\w*$")
 PLAN_APPLICATION_HISTORY_KEY = "plan_application_history"
 _STANDARD_LIBRARY_TYPES = {
     "ScalarValues": {
@@ -416,9 +416,6 @@ def append_plan_application_history(
     return history
 
 
-from .sysml_reserved import SYSML_RESERVED_WORDS  # noqa: F401  (re-export)
-
-
 def _reserved_word_issues(
     components: Sequence["ComponentPlan"],
     planned_behaviors: Sequence[Any],
@@ -746,7 +743,7 @@ def _compile_architecture_section(
             issues.append(f"components[{index}] must be an object")
             continue
         name = str(raw.get("name") or "").strip()
-        if not _IDENTIFIER.fullmatch(name):
+        if not IDENTIFIER_RE.fullmatch(name):
             issues.append(f"components[{index}].name is not a SysML identifier")
             continue
         responsibility = str(raw.get("responsibility") or "").strip()
@@ -762,7 +759,7 @@ def _compile_architecture_section(
             port_type = str(
                 port.get("type") or port.get("port_type") or "DataPort"
             ).strip()
-            if not _IDENTIFIER.fullmatch(port_name):
+            if not IDENTIFIER_RE.fullmatch(port_name):
                 issues.append(f"{name}.ports[{p_index}] has invalid name")
                 continue
             if direction not in {"in", "out", "inout"}:
@@ -770,7 +767,7 @@ def _compile_architecture_section(
                     f"{name}.{port_name} has invalid direction {direction!r}"
                 )
                 continue
-            if not _IDENTIFIER.fullmatch(port_type):
+            if not IDENTIFIER_RE.fullmatch(port_type):
                 issues.append(f"{name}.{port_name} has invalid port type")
                 continue
             ports.append(PortPlan(
@@ -789,7 +786,7 @@ def _compile_architecture_section(
                     attribute,
                     requirements=requirements,
                 )
-                if not _IDENTIFIER.fullmatch(planned_attribute.name):
+                if not IDENTIFIER_RE.fullmatch(planned_attribute.name):
                     issues.append(
                         f"{name} attribute name "
                         f"{planned_attribute.name!r} is not a SysML identifier"
@@ -892,7 +889,7 @@ def _compile_architecture_section(
         if source_port.port_type != target_port.port_type:
             issues.append(f"{sc}.{sp} and {tc}.{tp} have different port types")
         item_type = str(raw.get("item_type") or source_port.port_type).strip()
-        if not _IDENTIFIER.fullmatch(item_type):
+        if not IDENTIFIER_RE.fullmatch(item_type):
             issues.append(f"connections[{index}] has invalid item_type")
         elif item_type != source_port.port_type:
             issues.append(
@@ -1477,11 +1474,9 @@ class ModelGenerationPlan:
             requirement_realizations = tuple(
                 replace(
                     item,
-                    source_digest=hashlib.sha256(
-                        requirement_source_by_id[item.requirement_id].encode(
-                            "utf-8"
-                        )
-                    ).hexdigest(),
+                    source_digest=sha256_text(
+                        requirement_source_by_id[item.requirement_id]
+                    ),
                 )
                 if item.requirement_id in requirement_source_by_id
                 else item
@@ -2118,7 +2113,6 @@ def materialize_passive_components(
     Idempotent: a marker already present is left alone. Returns the new text
     and the names materialised on this call.
     """
-    from ..utils.sysml_text_utils import find_block_end
     text = sysml_text or ""
     already = passive_components_in_text(text)
     written: list[str] = []
@@ -2575,12 +2569,8 @@ def apply_generation_plan(
     report = {
         "schema_version": "4.0",
         "artifact_role": "GENERATION_PLAN_CONFORMANCE",
-        "input_model_digest": hashlib.sha256(
-            str(model_text or "").encode("utf-8")
-        ).hexdigest(),
-        "output_model_digest": hashlib.sha256(
-            final_text.encode("utf-8")
-        ).hexdigest(),
+        "input_model_digest": sha256_text(str(model_text or "")),
+        "output_model_digest": sha256_text(final_text),
         "status": (
             "PASS"
             if plan.status == "PASS" and not issues and not missing

@@ -24,7 +24,7 @@ from src.realization.estimator_calibration import (
     fit_from_catalog,
 )
 
-from .realization_fixtures import catalog, combo, frame, pack
+from .realization_fixtures import catalog, pack
 
 
 def test_set_calibration_rejects_unknown_keys_and_context_restores():

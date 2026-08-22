@@ -21,6 +21,7 @@ little. Traceability is the part of the claim that is both load-bearing and free
 """
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 TRACEABILITY_SCHEMA_VERSION = "1.1"
@@ -197,7 +198,7 @@ def compute_traceability(
     *,
     realization_links: Sequence[Mapping[str, Any]] = (),
     declared_requirements: Sequence[str] = (),
-    out_of_scope: Mapping[str, str] = {},
+    out_of_scope: Mapping[str, str] = MappingProxyType({}),
 ) -> Dict[str, Any]:
     """Traceability across every selected chain, plus the requirements with none.
 

@@ -62,7 +62,6 @@ from .ag_profile import (
     LOCKED_UNTIL_RELEASE_PATTERN,
     PATTERN_INVARIANT_ROLES,
     STARTUP_INHIBIT_PATTERN,
-    THRESHOLD_PATTERN,
     TIMED_PATTERN,
     TRIGGERED_PATTERNS as PROFILE_TRIGGERED_PATTERNS,
     UNTIMED_PATTERNS as PROFILE_UNTIMED_PATTERNS,
@@ -123,11 +122,6 @@ _ERROR_CODES = frozenset({
 })
 
 _TIMED_PATTERN = TIMED_PATTERN
-#: A trigger→response pattern that states no deadline. It shares the timed
-#: pattern's arbitration obligations and drops only the timing ones: the profile
-#: previously forced a requirement with a trigger, a response and a precedence
-#: relation but no deadline to be declared under a pattern that does not fit it.
-_THRESHOLD_PATTERN = THRESHOLD_PATTERN
 _TRIGGERED_PATTERNS = frozenset(PROFILE_TRIGGERED_PATTERNS)
 _INVARIANT_PATTERNS = frozenset(PROFILE_INVARIANT_PATTERNS)
 #: Every pattern that must not apportion a deadline — the untimed triggered

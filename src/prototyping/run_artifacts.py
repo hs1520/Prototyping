@@ -9,16 +9,15 @@ separate from the post-hoc evaluator boundary.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
 from .artifact_store import atomic_write_json
+from ..utils.digest import sha256_text
 from .run_metrics import compute_coordination_metrics
 
-_write_json = atomic_write_json
 
 
 def _write_jsonl(path: Path, rows: List[Mapping[str, Any]]) -> None:
@@ -91,10 +90,10 @@ def write_revised_run_artifacts(
 
     if board:
         p = out / "blackboard_snapshot.json"
-        _write_json(p, board)
+        atomic_write_json(p, board)
         record("blackboard_snapshot", p)
         p = out / "model_revision_log.json"
-        _write_json(p, board.get("model_revisions") or [])
+        atomic_write_json(p, board.get("model_revisions") or [])
         record("model_revision_log", p)
         p = out / "blackboard_event_log.jsonl"
         _write_jsonl(p, board.get("records") or [])
@@ -135,7 +134,7 @@ def write_revised_run_artifacts(
     ag_graph = run_result.get("ag_contract_graph")
     if ag_graph is not None:
         p = out / "ag_contract_graph.json"
-        _write_json(p, ag_graph)
+        atomic_write_json(p, ag_graph)
         record("ag_contract_graph", p)
         # A multi-chain run aggregates several independent A/G decompositions;
         # also emit each chain's own graph so the post-hoc evaluator can score it
@@ -143,13 +142,11 @@ def write_revised_run_artifacts(
         for chain in ag_graph.get("chains", ()) or ():
             req = chain.get("source_requirement") or "UNKNOWN"
             cp = out / f"ag_contract_graph.{req}.json"
-            _write_json(cp, chain)
+            atomic_write_json(cp, chain)
             record(f"ag_contract_graph.{req}", cp)
         if model_sysml is not None and ag_graph.get("chains"):
             terminal_text = str(model_sysml)
-            terminal_digest = hashlib.sha256(
-                terminal_text.encode("utf-8")
-            ).hexdigest()
+            terminal_digest = sha256_text(terminal_text)
             bundles: list[dict[str, str]] = []
             for chain in ag_graph.get("chains", ()) or ():
                 requirement = str(
@@ -180,7 +177,7 @@ def write_revised_run_artifacts(
                 "bundles": bundles,
             }
             manifest_path = out / "ag_replay_manifest.json"
-            _write_json(manifest_path, manifest)
+            atomic_write_json(manifest_path, manifest)
             record("ag_replay_manifest", manifest_path)
 
     for key, filename in (
@@ -199,7 +196,7 @@ def write_revised_run_artifacts(
         payload = run_result.get(key)
         if payload is not None:
             p = out / filename
-            _write_json(p, payload)
+            atomic_write_json(p, payload)
             record(key, p)
 
     if collaboration:
@@ -207,7 +204,7 @@ def write_revised_run_artifacts(
             collaboration, llm_usage=run_result.get("llm_usage")
         )
         p = out / "coordination_metrics.json"
-        _write_json(p, metrics)
+        atomic_write_json(p, metrics)
         record("coordination_metrics", p)
 
     # Requirement traceability, carried natively rather than reconstructed
@@ -229,7 +226,7 @@ def write_revised_run_artifacts(
         }
         measurement = measure_model(str(model_sysml), declared, out_of_scope)
         p = out / "requirement_traceability.json"
-        _write_json(p, {
+        atomic_write_json(p, {
             "artifact_role": "REQUIREMENT_TRACEABILITY",
             "measurement_boundary": (
                 "committed model only; no human gold, no blind review"

@@ -28,12 +28,16 @@ bundle. The global arm enum is deliberately not used as this gate.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
 from ..utils.req_id import normalise_req_id
 
+# Frozen literals, not imports: this gate is deliberately decoupled from the
+# live experiment configuration (see module docstring) so a change there can
+# never silently re-gate archived evaluations. Keep the module's import surface
+# at utils-only — tests/test_option2_ag_evaluation.py greps these import lines.
 PREDICTION_ROLE = "RUNTIME_A_G_PREDICTION"
 GOLD_ROLE = "EVALUATOR_GOLD"
 REVISED_NAMESPACE = "BLACKBOARD_AG_V1"

@@ -13,7 +13,7 @@ from ..sysml.text_normalization import (
     normalise_connect_syntax,
     strip_invalid_requirement_attrs,
 )
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import PART_DEF_RE, STATE_DEF_RE, find_block_end
 
 
 @dataclass(frozen=True)
@@ -319,11 +319,10 @@ class AssemblyFinalizer:
         if not assembled or not parts_fragment:
             return assembled, []
 
-        part_start_re = re.compile(r"\bpart\s+def\s+(\w+)\s*\{")
         extracted: List[Tuple[str, str]] = []
         cursor = 0
         while True:
-            match = part_start_re.search(parts_fragment, cursor)
+            match = PART_DEF_RE.search(parts_fragment, cursor)
             if not match:
                 break
             brace_pos = parts_fragment.index("{", match.start())
@@ -487,7 +486,6 @@ class AssemblyFinalizer:
         # ── 1. Extract state def blocks from behavior_fragment ──────────────
         # Pattern: optional "// OWNER: X" line, then "state def Name { ... }"
         owner_re = re.compile(r"//\s*OWNER:\s*(\w+)", re.IGNORECASE)
-        state_start_re = re.compile(r"\bstate\s+def\s+(\w+)\s*\{")
 
         # Walk behavior_fragment, collecting (owner, state_def_name, full_block)
         behavior_state_defs: List[Tuple[Optional[str], str, str]] = []
@@ -502,7 +500,7 @@ class AssemblyFinalizer:
                 continue
 
             # Check for state def
-            m_state = state_start_re.match(behavior_fragment, i)
+            m_state = STATE_DEF_RE.match(behavior_fragment, i)
             if m_state:
                 name = m_state.group(1)
                 brace_pos = behavior_fragment.index("{", m_state.start())

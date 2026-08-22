@@ -1,9 +1,9 @@
 """Quick connectivity check for calling AI with GitHub CLI authentication.
 
 Usage:
-    python tests/test_github.py
-    python tests/test_github.py --prompt "Write a quicksort in Python"
-    python tests/test_github.py --model openai/gpt-4.1-mini --show-json
+    python scripts/github_llm_probe.py
+    python scripts/github_llm_probe.py --prompt "Write a quicksort in Python"
+    python scripts/github_llm_probe.py --model openai/gpt-4.1-mini --show-json
 
 Prerequisites:
 - GitHub CLI installed: gh --version

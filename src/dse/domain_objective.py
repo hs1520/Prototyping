@@ -23,7 +23,8 @@ from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import find_block_end
 from .physics_estimator import DesignInputs, estimate, total_mass_kg
 from .requirement_spec import (
-    ENDURANCE, MASS_MTOW, PAYLOAD, RANGE, extract_requirements, max_spec, max_value,
+    ENDURANCE, MASS_MTOW, PAYLOAD, RANGE, _NUM_UNIT_RE, extract_requirements,
+    max_spec, max_value,
 )
 
 # quantity family -> substrings that imply it (checked in name + unit, lowercased)
@@ -116,7 +117,6 @@ _FIELD_CONCERN = {d.field: d.concern for d in DESIGN_ONTOLOGY if d.concern}
 DESIGN_FIELD_FAMILY = {d.field: d.family for d in DESIGN_ONTOLOGY if d.family}  # field → cost family
 _INNER_LOOP_FIELDS = tuple(d.field for d in DESIGN_ONTOLOGY if d.layer == "inner")
 
-_NUM_UNIT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([A-Za-z/%°]+(?:\s*/\s*[A-Za-z]+)?)?")
 #: `attribute <name> [: <Type>[::<Type>][ [unit] ]] = <number> [ [unit] ];`
 #: The type may be qualified (`ISQ::LengthValue`, which the A/G emitter writes)
 #: and may carry a unit suffix. A pattern accepting only a bare single-word type

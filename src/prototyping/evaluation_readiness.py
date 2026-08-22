@@ -9,8 +9,6 @@ arm metadata.
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 import re
 from typing import Any, Mapping, Sequence
 
@@ -22,7 +20,9 @@ from .architecture_boundary import (
 from .experiment_arms import (
     REVISED_EXPERIMENT_NAMESPACE,
     R2_INTERVENTION_VERSION_BY_MODE,
+    RevisedExperimentArm,
 )
+from ..utils.digest import sha256_text
 from .frozen_artifact_protocol import (
     canonical_artifact_digest,
     has_review_markers,
@@ -40,7 +40,7 @@ READINESS_ROLE = "POSTHOC_EVALUATION_READINESS_MANIFEST"
 FAILURE_TAXONOMY_ROLE = "FAILURE_TAXONOMY"
 BLIND_PACKET_ROLE = "BLIND_FAILURE_REVIEW_PACKET"
 BLIND_LABEL_ROLE = "BLIND_FAILURE_LABEL"
-R2_CONFIGURATION = "R2-BBAG"
+R2_CONFIGURATION = RevisedExperimentArm.SEMANTIC_ASSURANCE.value
 _TAXONOMY_DECISION_SEQUENCE = [
     "READINESS_GATE",
     "CONTRACT_INCOMPLETENESS",
@@ -240,7 +240,7 @@ def validate_blind_packet(packet: Mapping[str, Any]) -> list[str]:
             problems.append(
                 "blind packet review_material.source_requirement must be set"
             )
-        elif hashlib.sha256(source_text.encode("utf-8")).hexdigest() != packet.get(
+        elif sha256_text(source_text) != packet.get(
             "requirement_digest"
         ):
             problems.append(
@@ -248,7 +248,7 @@ def validate_blind_packet(packet: Mapping[str, Any]) -> list[str]:
             )
         if not isinstance(candidate_model, str) or not candidate_model:
             problems.append("blind packet review_material.candidate_model must be set")
-        elif hashlib.sha256(candidate_model.encode("utf-8")).hexdigest() != packet.get(
+        elif sha256_text(candidate_model) != packet.get(
             "model_digest"
         ):
             problems.append(
@@ -320,8 +320,8 @@ def build_blind_review_packet(
     if not model:
         raise ValueError("candidate_model must be non-empty")
 
-    requirement_digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
-    model_digest = hashlib.sha256(model.encode("utf-8")).hexdigest()
+    requirement_digest = sha256_text(source)
+    model_digest = sha256_text(model)
     if (
         expected_requirement_digest is not None
         and requirement_digest != expected_requirement_digest

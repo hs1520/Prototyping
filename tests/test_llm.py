@@ -8,7 +8,6 @@ import src.llm.interface as interface_module
 from src.llm.interface import (
     DEFAULT_TEMPERATURE,
     GeminiLLM,
-    GitHubCopilotLLM,
     LLMInterface,
     LLMResponse,
     Message,

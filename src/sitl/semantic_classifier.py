@@ -18,6 +18,8 @@ import json
 import re
 from typing import Dict, List, Optional, TYPE_CHECKING
 
+from src.utils.sysml_text_utils import STATE_DEF_RE
+
 if TYPE_CHECKING:
     from src.sysml.lite_model import SysMLLiteModel
     from src.llm.interface import LLMInterface
@@ -294,7 +296,7 @@ def _extract_state_def_snippets(model: "SysMLLiteModel") -> List[str]:
 
     snippets: List[str] = []
     # state def <Name> { ... }  — 用括号配对找闭合
-    for m in re.finditer(r'\bstate\s+def\s+(\w+)\s*\{', text):
+    for m in STATE_DEF_RE.finditer(text):
         name = m.group(1)
         brace_open = text.index('{', m.start())
         depth = 0

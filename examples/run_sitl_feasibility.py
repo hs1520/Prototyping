@@ -15,7 +15,6 @@ import argparse
 import re
 import signal
 import statistics
-import sys
 import time
 from pathlib import Path
 

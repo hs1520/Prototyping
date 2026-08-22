@@ -3,8 +3,7 @@
 不需要 SITL 运行。
 """
 
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import os
 
 from src.sysml.lite_model import build_lite_model
 from src.sitl.sitl_bridge import SITLBridge

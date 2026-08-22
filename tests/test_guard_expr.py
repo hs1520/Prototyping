@@ -22,7 +22,6 @@ from src.simulation.state_extractor import (
     Const, VarRef, BinOp, GuardCondition,
     extract_state_machines, _SYSIDE_OK,
 )
-from src.simulation.state_executor import StateMachineInstance
 from src.simulation.behavioral_sim import run_behavioral_simulation
 
 

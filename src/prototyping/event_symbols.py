@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from ..utils.sysml_text_utils import find_block_end
-from .namespace_integrity import _mask_comments_and_strings
+from .namespace_integrity import _depths, _mask_comments_and_strings
 
 
 @dataclass(frozen=True)
@@ -144,14 +144,7 @@ def _direct_declarations(
     start, end = _scope(text)
     body = text[start:end]
     masked = _mask_comments_and_strings(body)
-    depth = 0
-    depths: list[int] = []
-    for char in masked:
-        depths.append(depth)
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth = max(0, depth - 1)
+    depths = _depths(masked)
     result: list[dict[str, Any]] = []
     for match in _DEFINITION_RE.finditer(masked):
         if depths[match.start()] != 0 or match.group("name") != name:

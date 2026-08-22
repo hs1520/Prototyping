@@ -762,8 +762,8 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
                 else:
                     # fault state with no entry action — detection-only, pass
                     result.timeline.append(
-                        f"  detection-only fault state (no entry action — command "
-                        f"dispatch delegated to SafetyArbiter)  ✓"
+                        "  detection-only fault state (no entry action — command "
+                        "dispatch delegated to SafetyArbiter)  ✓"
                     )
 
             # ── Check 3: trigger at roughly the expected step ────────────────

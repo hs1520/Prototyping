@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Dict, List, Mapping, Tuple
+from typing import List, Mapping, Tuple
 
 from ..dse.domain_objective import resolve_design_attributes
 from ..dse.physics_estimator import DesignInputs, estimate

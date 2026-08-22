@@ -7,16 +7,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from typing import Any, Iterable, Mapping
 
+from ..utils.digest import sha256_text
 from ..utils.req_id import first_req_id, normalise_req_id
 
 
 FROZEN_REQUIREMENT_SCHEMA_VERSION = "1.0"
+
+
 def source_digest(text: str) -> str:
     """Stable digest of the stakeholder-owned source text."""
-    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+    return sha256_text(text or "")
 
 
 def normalise_requirement_id(value: str) -> str:
@@ -52,7 +54,7 @@ def requirement_set_digest(requirements: Iterable[str]) -> str:
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return sha256_text(payload)
 
 
 def build_requirement_dependency_graph(

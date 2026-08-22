@@ -83,7 +83,7 @@ def run(label, realizability, rank=None):
     )
     rec = res.recommended_choices.get("propulsionSystem", "?")
     print(f"\n[{label}]")
-    print(f"  front (estimator objectives):")
+    print("  front (estimator objectives):")
     for state, obj in res.pareto_front:
         v = state.get("propulsionSystem", "?")
         print(f"    {v:5} -> " + ", ".join(f"{k}={val:.3f}" for k, val in obj.items()))
