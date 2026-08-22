@@ -628,7 +628,7 @@ def _definition_span(
     name: str,
 ) -> tuple[int, int, int | None] | None:
     match = re.search(
-        rf"\b{re.escape(kind)}\s+def\s+{re.escape(name)}\s*(?P<tail>[;{{])",
+        rf"\b{re.escape(kind)}\s+def\s+{re.escape(name)}\b[^{{;]*(?P<tail>[;{{])",
         text,
     )
     if match is None:

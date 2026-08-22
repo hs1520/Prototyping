@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from ..simulation.syntax_checker import check_syntax
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import named_block_span
 from .physics_estimator import DesignInputs, estimate, total_mass_kg
 from .requirement_spec import (
     ENDURANCE, MASS_MTOW, PAYLOAD, RANGE, _NUM_UNIT_RE, extract_requirements,
@@ -209,13 +209,10 @@ def objective_families(requirements: List[str]) -> List[str]:
 def variant_design_inputs(model_text: str, type_name: str) -> Dict[str, float]:
     """{DesignInputs field: value} for the design-input attributes declared in part
     def ``type_name`` (e.g. massKg → mass_kg). Non-design attributes are ignored."""
-    pat = re.compile(rf"\bpart\s+def\s+{re.escape(type_name)}\s*(?::>[^{{]*)?\{{")
-    m = pat.search(model_text)
-    if not m:
+    span = named_block_span(model_text, "part", type_name)
+    if span is None:
         return {}
-    brace = model_text.index("{", m.start())
-    end = find_block_end(model_text, brace)
-    body = model_text[brace + 1 : end] if end != -1 else ""
+    body = model_text[span[0] + 1:span[1]]
     out: Dict[str, float] = {}
     for name, val, _unit in _ATTR_RE.findall(body):
         field = _DESIGN_ATTR_FIELD.get(name.lower())
@@ -324,13 +321,10 @@ def _point_fields(model_text: str, point) -> set:
 
 def _strip_attr_from_type(text: str, type_name: str, attr: str) -> str:
     """Remove `attribute <attr> : <T> = <v>;` from the body of part def <type_name>."""
-    m = re.search(rf"\bpart\s+def\s+{re.escape(type_name)}\b[^{{]*\{{", text)
-    if not m:
+    span = named_block_span(text, "part", type_name)
+    if span is None:
         return text
-    brace = text.index("{", m.start())
-    end = find_block_end(text, brace)
-    if end == -1:
-        return text
+    brace, end = span
     body = text[brace + 1:end]
     new_body = re.sub(rf"\s*attribute\s+{re.escape(attr)}\s*:\s*\w+\s*=\s*[^;]+;", "", body)
     return text[:brace + 1] + new_body + text[end:]

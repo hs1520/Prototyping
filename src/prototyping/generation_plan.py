@@ -53,7 +53,12 @@ from .planned_behavior import (
 from .sysml_reserved import SYSML_RESERVED_WORDS  # noqa: F401  (re-export)
 from ..utils.digest import sha256_text
 from ..utils.req_id import normalise_req_id
-from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end
+from ..utils.sysml_text_utils import (
+    IDENTIFIER_RE,
+    find_block_end,
+    named_block_span,
+    named_def_pattern,
+)
 
 
 PLAN_APPLICATION_HISTORY_KEY = "plan_application_history"
@@ -166,15 +171,10 @@ def normalise_planned_port_types(
         }
         if not planned:
             continue
-        match = re.search(
-            rf"\bpart\s+def\s+{re.escape(component.name)}\s*\{{", text
-        )
-        if match is None:
+        span = named_block_span(text, "part", component.name)
+        if span is None:
             continue
-        brace = text.index("{", match.start())
-        end = find_block_end(text, brace)
-        if end == -1:
-            continue
+        brace, end = span
         body = text[brace + 1:end]
         rewritten = []
         for declaration in _DECLARED_PORT.finditer(body):
@@ -527,16 +527,10 @@ def _is_planned_assembly_container(
     planned_components: set[str],
 ) -> bool:
     """Allow an unplanned wrapper only when it contains planned part usages."""
-    match = re.search(
-        rf"\bpart\s+def\s+{re.escape(definition_name)}\s*\{{",
-        model_text,
-    )
-    if match is None:
+    span = named_block_span(model_text, "part", definition_name)
+    if span is None:
         return False
-    opening = model_text.find("{", match.start(), match.end())
-    closing = find_block_end(model_text, opening)
-    if closing == -1:
-        return False
+    opening, closing = span
     usage_types = {
         item.group(1)
         for item in re.finditer(
@@ -2119,10 +2113,10 @@ def materialize_passive_components(
     for component in components:
         if not component.passive or component.name in already:
             continue
-        m = re.search(rf"\bpart\s+def\s+{re.escape(component.name)}\b[^{{;]*\{{", text)
+        m = named_def_pattern("part", component.name).search(text)
         if m is None:
             continue
-        brace = text.index("{", m.start())
+        brace = m.end() - 1
         # indent: reuse the part def line's indent plus four spaces
         line_start = text.rfind("\n", 0, m.start()) + 1
         indent = re.match(r"[ \t]*", text[line_start:m.start()]).group(0) + "    "
@@ -2245,18 +2239,14 @@ def apply_generation_plan(
             if not current or current in seen_types:
                 continue
             seen_types.add(current)
-            block = re.search(
-                rf"\bpart\s+def\s+{re.escape(current)}\b[^{{;]*\{{", semantic_text
-            )
-            if block is not None:
-                brace = semantic_text.index("{", block.start())
-                end = find_block_end(semantic_text, brace)
-                if end != -1:
-                    for m in re.finditer(
-                        r"\b(?:in|out|inout)\s+port\s+(\w+)\s*:",
-                        semantic_text[brace:end],
-                    ):
-                        existing_ports.setdefault(m.group(1), "declared")
+            span = named_block_span(semantic_text, "part", current)
+            if span is not None:
+                brace, end = span
+                for m in re.finditer(
+                    r"\b(?:in|out|inout)\s+port\s+(\w+)\s*:",
+                    semantic_text[brace:end],
+                ):
+                    existing_ports.setdefault(m.group(1), "declared")
             frontier.extend(type_bases.get(current, ()))
         for port in component.ports:
             if port.name not in existing_ports:

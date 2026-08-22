@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 from ..simulation.syntax_checker import check_syntax
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import named_block_span
 
 
 def _ports_used(model_text: str, usage: str) -> dict:
@@ -48,14 +48,11 @@ def _ports_used(model_text: str, usage: str) -> dict:
 def _ensure_interface_ports(model_text: str, type_name: str, ports: dict) -> str:
     """Declare any host-connected ports missing from the interface part def, so
     every variant (which specialises it) exposes them and connects stay valid."""
-    m = re.search(rf"\bpart\s+def\s+{re.escape(type_name)}\s*(?::>[^{{]*)?\{{", model_text)
-    if not m:
+    span = named_block_span(model_text, "part", type_name)
+    if span is None:
         return model_text
-    brace = model_text.index("{", m.start())
-    end = find_block_end(model_text, brace)
-    if end == -1:
-        return model_text
-    body = model_text[brace + 1 : end]
+    brace, end = span
+    body = model_text[brace + 1:end]
     existing = set(re.findall(r"\bport\s+(\w+)", body))
     additions = "".join(
         f"\n        {d if d != 'inout' else 'inout'} port {p};"

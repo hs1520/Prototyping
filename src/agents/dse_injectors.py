@@ -19,7 +19,7 @@ from typing import List
 
 from ..dse.design_space import DesignConfiguration
 from ..sysml.model import ElementRef, SysMLModel
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import named_block_span
 
 # ── Part-classification keyword sets ────────────────────────────────────────
 _CTRL_KWS   = {"controller", "flight", "control", "nav", "autopilot"}
@@ -134,17 +134,10 @@ def apply_inject_attrs_to_sysml_text(model: SysMLModel) -> None:
         if already_re.search(result):
             continue
 
-        part_def_re = re.compile(
-            rf"\bpart\s+def\s+{re.escape(part_name)}\s*\{{"
-        )
-        m_part = part_def_re.search(result)
-        if not m_part:
+        span = named_block_span(result, "part", part_name)
+        if span is None:
             continue
-
-        brace_open = result.index("{", m_part.start())
-        closing = find_block_end(result, brace_open)
-        if closing == -1:
-            continue
+        brace_open, closing = span
 
         unit_suffix = f" [{unit}]" if unit else ""
         attr_line = f"attribute {attr_name} : Real = {value}{unit_suffix};"

@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .state_extractor import GuardCondition, StateMachineDef, VarRef, extract_state_machines
 from .state_executor import StateMachineInstance
 from .constraint_checker import extract_constraints, ParsedConstraint, eval_op
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import find_block_end, named_block_span
 
 
 # ---------------------------------------------------------------------------
@@ -1513,14 +1513,10 @@ def _run_parametric_constraint_scenario(
 
 
 def _owner_part_body(sysml_text: str, owner: str) -> str:
-    match = re.search(
-        rf"\bpart\s+def\s+{re.escape(owner)}\s*\{{",
-        sysml_text,
-    )
-    if match is None:
+    span = named_block_span(sysml_text, "part", owner)
+    if span is None:
         return ""
-    opening = sysml_text.find("{", match.start(), match.end())
-    closing = find_block_end(sysml_text, opening)
+    opening, closing = span
     return (
         sysml_text[opening + 1:closing]
         if closing != -1 else ""
@@ -1532,18 +1528,10 @@ def _state_body_text(
     behavior_name: str,
     state_name: str,
 ) -> str:
-    behavior = re.search(
-        rf"\bstate\s+def\s+{re.escape(behavior_name)}\s*\{{",
-        owner_body,
-    )
-    if behavior is None:
+    behavior_span = named_block_span(owner_body, "state", behavior_name)
+    if behavior_span is None:
         return ""
-    behavior_opening = owner_body.find(
-        "{", behavior.start(), behavior.end()
-    )
-    behavior_closing = find_block_end(owner_body, behavior_opening)
-    if behavior_closing == -1:
-        return ""
+    behavior_opening, behavior_closing = behavior_span
     state = re.search(
         rf"\bstate\s+(?!def\b){re.escape(state_name)}\s*\{{",
         owner_body[behavior_opening + 1:behavior_closing],

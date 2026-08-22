@@ -11,7 +11,7 @@ from .ag_extractor import extract_ag_graphs
 from .blackboard import Blackboard, RecordType, TaskStatus
 from .context_builder import ContextBuilder
 from .task_session import SessionStatus, TaskSessionRegistry
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import find_block_end, named_block_span, named_def_pattern
 from ..utils.tokens import estimate_tokens
 from ..simulation.surgical_refiner import (
     SurgicalAudit,
@@ -92,12 +92,10 @@ class _CapturingChat:
 
 def _behavior_tokens(model_text: str, behavior: str) -> set[tuple[str, str]]:
     """Named behavior content that an A/G repair is never allowed to shed."""
-    match = re.search(rf"\bstate\s+def\s+{re.escape(behavior)}\s*\{{", model_text)
-    if match is None:
+    span = named_block_span(model_text, "state", behavior)
+    if span is None:
         return set()
-    brace = model_text.find("{", match.start())
-    end = find_block_end(model_text, brace)
-    body = model_text[brace + 1:end] if end != -1 else ""
+    body = model_text[span[0] + 1:span[1]]
     tokens = {
         (kind, item)
         for kind, pattern in (
@@ -475,9 +473,8 @@ def attempt_dependency_closed_ag_repair(
     # declarations.
     affected_behaviors = [
         str(item) for item in failure.get("affected_elements", ())
-        if re.search(
-            rf"\bstate\s+def\s+{re.escape(str(item))}\s*\{{",
-            board.current_model.model_text,
+        if named_def_pattern("state", str(item)).search(
+            board.current_model.model_text
         )
     ]
     behavior_preserved = all(

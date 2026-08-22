@@ -15,6 +15,7 @@ This module quantifies that, honestly, as a **detection + bounded repair** measu
 
 Computed from an R2 A/G trace (the `_build_ag_trace` result). Evaluator-only in
 spirit: imports no LLM, no runtime extractor/checker, and no gold.
+Kept deliberately: thesis baseline/evidence code, exercised by its own tests and invoked on demand rather than wired into the runtime pipeline. Do not remove as dead code.
 """
 from __future__ import annotations
 

@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence, Tuple
 
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import find_block_end, named_block_span
 
 from .ag_emitter import AGChainSpec, AGComponentSpec
 from .ag_profile import TIMED_PATTERN
@@ -506,17 +506,10 @@ def _definition_blocks(
 
 
 def _owner_span(text: str, owner_def: str) -> tuple[int, int] | None:
-    match = re.search(
-        rf"\bpart\s+def\s+{re.escape(owner_def)}\s*\{{",
-        text,
-    )
-    if match is None:
+    span = named_block_span(text, "part", owner_def)
+    if span is None:
         return None
-    opening = text.find("{", match.start())
-    closing = find_block_end(text, opening)
-    if opening == -1 or closing == -1:
-        return None
-    return opening + 1, closing
+    return span[0] + 1, span[1]
 
 
 def canonicalize_reserved_identity_conflicts(
@@ -746,19 +739,12 @@ def check_owned_behavior_obligation_conformance(
     checked: list[dict[str, Any]] = []
     issues: list[str] = []
     for obligation in plan.obligations:
-        owner_match = re.search(
-            rf"\bpart\s+def\s+{re.escape(obligation.owner_def)}\s*\{{",
-            model_text,
-        )
-        if owner_match is None:
+        owner_span = named_block_span(model_text, "part", obligation.owner_def)
+        if owner_span is None:
             owner_text = ""
         else:
-            opening = model_text.find("{", owner_match.start())
-            closing = find_block_end(model_text, opening)
-            owner_text = (
-                model_text[opening:closing + 1]
-                if closing != -1 else ""
-            )
+            opening, closing = owner_span
+            owner_text = model_text[opening:closing + 1]
         report = check_behavior_obligation_conformance(
             owner_text, BehaviorObligationPlan((obligation,))
         )

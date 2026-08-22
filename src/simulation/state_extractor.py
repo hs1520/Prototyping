@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..utils.suppressed import record_suppressed
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import find_block_end, named_def_pattern
 
 try:
     import syside as _syside
@@ -741,12 +741,9 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
 
     for sd in model.elements(_syside.StateDefinition):
         state_source = sysml_text
-        state_match = re.search(
-            rf"\bstate\s+def\s+{re.escape(str(sd.name))}\s*\{{",
-            sysml_text,
-        )
+        state_match = named_def_pattern("state", str(sd.name)).search(sysml_text)
         if state_match is not None:
-            state_open = sysml_text.find("{", state_match.start())
+            state_open = state_match.end() - 1
             state_close = find_block_end(sysml_text, state_open)
             if state_close != -1:
                 state_source = sysml_text[

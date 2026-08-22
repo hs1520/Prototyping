@@ -26,7 +26,7 @@ from ..prototyping.action_effects import (
 )
 from ..prototyping.action_semantics import analyze_action_semantics
 from ..simulation.syntax_checker import check_syntax
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import find_block_end, named_block_span
 
 
 # Scoped to one chain while the profile is proven end to end.  Widening this is
@@ -326,30 +326,24 @@ def _rewrite_owner_body(
 ) -> tuple[str, tuple[ActionDiagnostic, ...]]:
     diagnostics: list[ActionDiagnostic] = []
     updated = owner_body
-    action = re.compile(
-        rf"\baction\s+def\s+{re.escape(effect.action_def)}\s*\{{"
-    ).search(updated)
-    if action is None:
+    span = named_block_span(updated, "action", effect.action_def)
+    if span is None:
         diagnostics.append(_diagnostic("ACTION_NOT_FOUND", effect))
     else:
-        opening = updated.find("{", action.start())
-        closing = find_block_end(updated, opening)
-        if closing == -1:
-            diagnostics.append(_diagnostic("ACTION_NOT_FOUND", effect))
+        opening, closing = span
+        current = updated[opening + 1:closing]
+        send = f"send {effect.event_type}() to {effect.sender_port};"
+        if send in current:
+            diagnostics.append(_diagnostic("SEND_ALREADY_PRESENT", effect))
+        elif current.strip():
+            diagnostics.append(_diagnostic("NONEMPTY_BODY", effect))
         else:
-            current = updated[opening + 1:closing]
-            send = f"send {effect.event_type}() to {effect.sender_port};"
-            if send in current:
-                diagnostics.append(_diagnostic("SEND_ALREADY_PRESENT", effect))
-            elif current.strip():
-                diagnostics.append(_diagnostic("NONEMPTY_BODY", effect))
-            else:
-                updated = (
-                    updated[:opening + 1]
-                    + f" {send} "
-                    + updated[closing:]
-                )
-                diagnostics.append(_diagnostic("SEND_BODY_APPLIED", effect))
+            updated = (
+                updated[:opening + 1]
+                + f" {send} "
+                + updated[closing:]
+            )
+            diagnostics.append(_diagnostic("SEND_BODY_APPLIED", effect))
 
     typed = f"entry action {effect.usage_label} : {effect.action_def};"
     if typed in updated:

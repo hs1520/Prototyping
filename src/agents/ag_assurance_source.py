@@ -8,6 +8,7 @@ from ..sysml.lite_model import build_lite_model
 from ..sysml.model import SysMLModel
 from ..utils.sysml_text_utils import (
     get_sysml_text,
+    named_block_span,
     remove_named_package,
 )
 from .pipeline_records import AGPlanningHandoffRecord
@@ -1021,13 +1022,10 @@ class AGAssuranceMixin:
         robustness enhancement this measures. The output is gated and traced by the
         same pipeline; a malformed package fails the run closed.
         """
-        match = re.search(
-            rf"requirement\s+def\s+{re.escape(spec.source_requirement)}\b[^{{]*\{{"
-            r"(.*?)\}",
-            model_text,
-            re.DOTALL,
+        span = named_block_span(model_text, "requirement", spec.source_requirement)
+        requirement_body = (
+            model_text[span[0] + 1:span[1]].strip() if span else ""
         )
-        requirement_body = (match.group(1).strip() if match else "").strip()
         architecture_blocks = []
         for comp in spec.components:
             assumptions = list(dict.fromkeys(
@@ -1235,13 +1233,10 @@ class AGAssuranceMixin:
                 "entries", ()
             )
         ) or "  (none)"
-        match = re.search(
-            rf"requirement\s+def\s+{re.escape(spec.source_requirement)}\b[^{{]*\{{"
-            r"(.*?)\}",
-            model_text,
-            re.DOTALL,
+        span = named_block_span(model_text, "requirement", spec.source_requirement)
+        requirement_body = (
+            model_text[span[0] + 1:span[1]].strip() if span else ""
         )
-        requirement_body = (match.group(1).strip() if match else "").strip()
         system_prompt = (
             "You are a systems engineer making the decisions behind a bounded "
             "Assume-Guarantee decomposition. You do NOT write SysML — a renderer "

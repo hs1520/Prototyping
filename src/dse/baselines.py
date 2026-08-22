@@ -10,6 +10,7 @@ objectives, without touching the live scalar pipeline:
     engineer ONE design and hides the trade-off front.
 
 Both respect operator feasibility (so requirement-driven constraints apply equally).
+Kept deliberately: thesis baseline/evidence code, exercised by its own tests and invoked on demand rather than wired into the runtime pipeline. Do not remove as dead code.
 """
 from __future__ import annotations
 

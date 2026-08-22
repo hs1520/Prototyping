@@ -41,7 +41,11 @@ from .ag_contracts import (
     Span,
 )
 from .blackboard import text_digest
-from ..utils.sysml_text_utils import STATE_DEF_RE as _STATE_DEF_RE, find_block_end
+from ..utils.sysml_text_utils import (
+    STATE_DEF_RE as _STATE_DEF_RE,
+    find_block_end,
+    named_block_span,
+)
 
 _REQ_DEF_RE = re.compile(r"\brequirement\s+def\s+(\w+)\s*\{")
 #: `attribute <name> : <Type>[::<Type>][ [unit] ] [= <number> [ [unit] ]];`
@@ -358,13 +362,10 @@ def _extract_priority(text: str) -> Dict[str, object]:
     if not response_set or not trigger_match or not selected_match:
         return {}
     response_set_id = response_set.group(1)
-    enum_match = re.search(
-        rf"\benum\s+def\s+{re.escape(response_set_id)}\s*\{{", text
-    )
-    if not enum_match:
+    enum_span = named_block_span(text, "enum", response_set_id)
+    if enum_span is None:
         return {}
-    enum_brace = text.index("{", enum_match.start())
-    enum_end = find_block_end(text, enum_brace)
+    enum_brace, enum_end = enum_span
     members = re.findall(r"\benum\s+(\w+)\s*;", text[enum_brace + 1:enum_end])
     selected = selected_match.group(2)
     lower_members = re.findall(
@@ -472,16 +473,10 @@ def _extract_priority(text: str) -> Dict[str, object]:
     )
     selection_guarantees: set[str] = set()
     for contract_name in realizing_contracts:
-        realized_match = re.search(
-            rf"\brequirement\s+def\s+{re.escape(contract_name)}\s*\{{",
-            text,
-        )
-        if not realized_match:
+        realized_span = named_block_span(text, "requirement", contract_name)
+        if realized_span is None:
             continue
-        realized_brace = text.index("{", realized_match.start())
-        realized_end = find_block_end(text, realized_brace)
-        if realized_end == -1:
-            continue
+        realized_brace, realized_end = realized_span
         realized_body = text[realized_brace + 1:realized_end]
         for _constraint_name, expression in _REQUIRE_RE.findall(realized_body):
             concept = expression.strip()

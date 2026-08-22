@@ -42,6 +42,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from .design_space import DesignConfiguration
 from .diagnostics import _STAKEHOLDER_REQ, diagnose as _diagnose_impl
+from ..utils.sysml_text_utils import named_block_span
 from .eval_helpers import (
     _has_numeric_unit_attr,
     _build_port_type_map,
@@ -109,7 +110,18 @@ class EvaluationResult:
 #: safety_assurance counts guarded transitions from the parse rather than from a
 #: pattern that could not see an `accept` clause. Measured effect on 29 archived
 #: models: R1-BBCTX unchanged to the last digit, R2-BBAG +0.16.
-EVALUATOR_VERSION = "dimension-weights-v2"
+#: v3 -- safety_assurance is structural and requirement-anchored: the two
+#: lexical sub-metrics are removed (a 15 % sub-metric scored zero for two of
+#: three configurations because responses were not named with the template
+#: vocabulary), transition counting becomes per-requirement fault coverage
+#: (the count saturated for the configuration whose emitter renders one
+#: guarded transition per contract chain, regardless of which requirements
+#: were covered), and SAFE-part connectivity replaces the name-matched
+#: override path. behavioral_verification becomes trace-first like the
+#: structural term: requirement-tagged scenario pass rate preferred, so
+#: machine-rendered contract scenarios no longer dilute the denominator
+#: asymmetrically across configurations.
+EVALUATOR_VERSION = "dimension-weights-v3"
 
 
 DIMENSION_WEIGHTS: Dict[str, float] = {
@@ -723,12 +735,8 @@ class DesignEvaluator:
             # Fallback: scan part def body for `in/out/inout port` keyword.
             # Syside sometimes returns NONE for directions defined in port def
             # bodies rather than inline at the port usage site.
-            part_block_re = re.compile(
-                rf"\bpart\s+def\s+{re.escape(part.name)}\s*\{{(.*?)\n\s*\}}",
-                re.DOTALL,
-            )
-            m = part_block_re.search(text)
-            body = m.group(1) if m else ""
+            span = named_block_span(text, "part", part.name)
+            body = text[span[0] + 1:span[1]] if span else ""
             return bool(re.search(
                 r"\b(?:in|out|inout)\s+port\s+\w+", body, re.IGNORECASE
             ))
@@ -825,7 +833,24 @@ class DesignEvaluator:
 
         br = getattr(sim, "behavioral_result", None)
         if br is not None and getattr(br, "extracted_sm_count", 0) > 0:
-            behavioral = float(getattr(br, "sim_score", 1.0))
+            # Trace-first, mirroring the structural term: score the scenarios
+            # that trace to the requirement set, and fall back to the overall
+            # pass rate only when none carry the tag. Without this, scenarios
+            # a deterministic emitter renders from contract chains -- passing
+            # by construction -- dilute the denominator, and the dilution is
+            # asymmetric across configurations (measured: 13.0 scenarios per
+            # contract-arm cell against 5.3 for the baseline's).
+            scenarios = list(getattr(br, "scenario_results", ()) or ())
+            traced = [
+                item for item in scenarios
+                if "requirement_behavior" in (getattr(item, "tags", ()) or ())
+            ]
+            if traced:
+                behavioral = sum(
+                    1.0 for item in traced if getattr(item, "passed", False)
+                ) / len(traced)
+            else:
+                behavioral = float(getattr(br, "sim_score", 1.0))
         else:
             behavioral = 1.0  # no state machines → N/A
 
@@ -842,106 +867,112 @@ class DesignEvaluator:
         dse_config: Optional[DesignConfiguration],
     ) -> float:
         """
-        Four weighted sub-metrics (only applied when SAFE requirements exist):
-          state_machine_coverage (40 %) — state defs per SAFE requirement
-          fault_transitions      (25 %) — guarded transitions, from the parse
-          override_path          (20 %) — overrideCmd port present AND connected
-          emergency_actions      (15 %) — action defs for emergency behaviours
+        Three structural, requirement-anchored sub-metrics (applied only when
+        SAFE requirements exist):
 
-        Two of these are LEXICAL HEURISTICS, not structural checks, and the
-        distinction matters when reading the number. `override_path` looks for a
-        feature literally named `overrideCmd`, and `emergency_actions` looks for
-        action names containing emergency/autoland/failsafe. Both judge naming
-        intent, which no parser can answer — a model that implements the same
-        behaviour under different names scores lower for that reason alone.
+          state_machine_coverage (40 %) -- state defs per SAFE requirement
+          fault_coverage         (35 %) -- fraction of SAFE requirements whose
+                                           satisfying parts carry at least one
+                                           guarded transition (the behavioural
+                                           simulator's own definition of a
+                                           fault transition)
+          safety_connectivity    (25 %) -- fraction of SAFE-satisfying parts
+                                           with at least one connected instance
 
-        They are kept because they are informative on models that follow the
-        generation templates' vocabulary, and because this dimension ranks
-        candidates rather than deciding anything: the hard safety verdict is
-        SAFETY_PATTERN_CONFORMANCE in model_qualification, which checks topology
-        and never consults a name.
+        Every sub-metric is a fraction over the requirement set or the parts
+        that satisfy it, so the denominator is fixed by the frozen input and
+        comparable across configurations; none consults a name. The two
+        lexical sub-metrics this dimension used to carry (a port literally
+        named overrideCmd, action names containing emergency/failsafe/...)
+        scored zero for models that implemented the same behaviour under their
+        own vocabulary, and the transition COUNT it used to reward saturated
+        for whichever configuration emitted the most transitions regardless of
+        which requirements they covered.
         """
         safe_reqs = [r for r in model.requirement_definitions if "_SAFE_" in r.name]
         if not safe_reqs:
-            return 1.0  # no safety requirements — dimension N/A
+            return 1.0  # no safety requirements -- dimension N/A
 
         n_safe = len(safe_reqs)
         text = _sysml_text(model)
 
-        # ── State-machine coverage (tighter — 1:1 with SAFE reqs) ────────
-        # Was: state_defs / max(n_safe / 1.5, 1) — 3 SAFE reqs only need 2 states
-        # Now: state_defs / n_safe — every SAFE req should have its own state def
+        # -- State-machine coverage: state defs per SAFE requirement ------
         n_sd = self._syside_count("StateDefinition")
         state_defs = n_sd if n_sd is not None else len(re.findall(r"\bstate\s+def\s+\w+", text))
         state_cov = min(1.0, state_defs / max(n_safe, 1))
 
-        # ── Fault transitions (SysML v2: first/then syntax) ─────────────
-        # Counts guard-based transitions (`first X [accept Sig] if <guard>
-        # then Y`) regardless of target-state naming.  In the generation
-        # pipeline, nominal phase chains are driven by `accept CMD_*` alone
-        # while guard transitions appear only in fault monitors / safety
-        # arbiters — so "guard transition" is the structural definition of a
-        # fault transition.  Filtering by target name (Fault/Fail/Emergency…)
-        # missed the template's XxxDetected / ArbXxxMode naming and scored 0
-        # systematically; min(1.0, …) caps any over-count.
-        #
-        # The optional `accept` clause is what the bounded A/G profile emits —
-        # `first awaitingResponse accept CriticalPropulsionFailureDetectedSignal
-        # if criticalPropulsionFailureDetected then …` is legal SysML v2 and is
-        # exactly the shape this metric wants to count, but a pattern requiring
-        # `if` immediately after the source state could not see it. Every A/G
-        # chain scored 0 on this sub-metric for that reason alone, which read as
-        # the assurance layer having no fault transitions when it has nothing
-        # but.
-        # Ask the parser, not a pattern: a guard is a TransitionFeatureMembership
-        # whose kind is Guard, which is what "guarded transition" means in the
-        # language rather than in one spelling of it. The regex stays as the
-        # fallback for environments without Syside, and had to learn about the
-        # optional `accept` clause the hard way — every A/G chain scored 0 on
-        # this sub-metric because a legal spelling was invisible to it.
-        fault_tx = self._syside_guarded_transitions()
-        if fault_tx is None:
-            fault_tx = len(_GUARDED_TRANSITION.findall(text))
-        fault_tx_score = min(1.0, fault_tx / max(n_safe, 1))
+        # -- Fault coverage: per-requirement, shape-neutral ---------------
+        # A SAFE requirement counts as covered when a part that satisfies it
+        # carries a behavioural safety anchor in its own body: a guarded
+        # transition (a triggered fail-safe) or a state definition (an
+        # invariant pattern -- a start-up inhibit or a lock-until-release is
+        # anchored by a latch or default-locked machine and legitimately has
+        # no fault transition). Coverage is judged against the requirement
+        # set: a SAFE requirement no part satisfies is uncovered, and a
+        # hundred anchors serving one requirement cover exactly that one.
+        # Whether the anchored behaviour EXECUTES correctly is the
+        # behavioural-verification dimension's question, not this one's.
+        def _part_body(name: str) -> str:
+            span = named_block_span(text, "part", name)
+            return text[span[0] + 1:span[1]] if span else ""
 
-        # ── Override-command path (LEXICAL: matches the name, not a role) ──
-        has_override_port = bool(re.search(r"\boverrideCmd\b", text))
-        # Also check it appears in a connect statement (SysML v2 dot notation)
-        override_connected = bool(re.search(
-            r"\bconnect\s+\w+\.overrideCmd\s+to|to\s+\w+\.overrideCmd\b",
-            text, re.IGNORECASE,
-        ))
-        override_score = (0.5 if has_override_port else 0.0) + (0.5 if override_connected else 0.0)
+        # Satisfy links are read from each part's own body text: the lite
+        # model does not populate satisfied_requirements on every path, and
+        # the text is the committed artefact anyway.
+        satisfy_re = re.compile(r"\bsatisfy\s+(?:requirement\s+)?([\w:]+)\s*;")
+        parts_by_req: Dict[str, list] = {}
+        for part in model.part_definitions:
+            for req in satisfy_re.findall(_part_body(part.name)):
+                parts_by_req.setdefault(req.split("::")[-1], []).append(part)
 
-        # ── Emergency action defs (tighter — 1 per 1.5 SAFE reqs) ────────
-        # Was: emerg_actions / max(n_safe / 3.0, 1) — 6 SAFE reqs only need 2 actions
-        # Now: emerg_actions / max(n_safe / 1.5, 1)
-        _emerg_kws = ("emergency", "autoland", "emergland", "emergstop", "shutdown", "failsafe")
-        sm_obj = getattr(self, "_syside_model", None)
-        if sm_obj is not None and _SYSIDE_EVAL_OK:
-            ad_cls = getattr(_syside_eval, "ActionDefinition", None)
-            if ad_cls is not None:
-                emerg_actions = sum(
-                    1 for ad in sm_obj.nodes(ad_cls)
-                    if any(kw in (ad.name or "").lower() for kw in _emerg_kws)
-                )
-            else:
-                emerg_actions = len(re.findall(
-                    r"action\s+def\s+\w*(?:emergency|autoLand|emergLand|emergStop|shutdown|failsafe)\w*",
-                    text, re.IGNORECASE,
-                ))
+        def _satisfying_parts(req_name: str) -> list:
+            return [
+                part
+                for key, items in parts_by_req.items()
+                if req_name in key or key in req_name
+                for part in items
+            ]
+
+        state_def_re = re.compile(r"\bstate\s+def\s+\w+")
+        covered = 0
+        for req in safe_reqs:
+            for part in _satisfying_parts(req.name):
+                part_text = _part_body(part.name)
+                if (
+                    _GUARDED_TRANSITION.search(part_text)
+                    or state_def_re.search(part_text)
+                ):
+                    covered += 1
+                    break
+        fault_coverage = covered / n_safe
+
+        # -- Safety connectivity: SAFE-satisfying parts are wired ---------
+        safe_part_names = {
+            part.name
+            for req in safe_reqs
+            for part in _satisfying_parts(req.name)
+        }
+        if safe_part_names:
+            part_usage_re = re.compile(r"\bpart\s+(\w+)\s*:\s*(\w+)\s*;")
+            instances_of: Dict[str, set] = {}
+            for m in part_usage_re.finditer(text):
+                instances_of.setdefault(m.group(2), set()).add(m.group(1))
+            connected_instances: set = set()
+            for stmt in parse_connects(text):
+                connected_instances.add(stmt.src_inst)
+                connected_instances.add(stmt.tgt_inst)
+            wired = sum(
+                1 for name in safe_part_names
+                if instances_of.get(name, set()) & connected_instances
+            )
+            safety_connectivity = wired / len(safe_part_names)
         else:
-            emerg_actions = len(re.findall(
-                r"action\s+def\s+\w*(?:emergency|autoLand|emergLand|emergStop|shutdown|failsafe)\w*",
-                text, re.IGNORECASE,
-            ))
-        emerg_score = min(1.0, emerg_actions / max(n_safe / 1.5, 1))
+            safety_connectivity = 0.0
 
         return (
             0.40 * state_cov
-            + 0.25 * fault_tx_score
-            + 0.20 * override_score
-            + 0.15 * emerg_score
+            + 0.35 * fault_coverage
+            + 0.25 * safety_connectivity
         )
 
     # ------------------------------------------------------------------
@@ -982,15 +1013,11 @@ class DesignEvaluator:
         if intf_parts:
             intf_port_types: List[str] = []
             for pname in intf_parts:
-                block_re = re.compile(
-                    rf"\bpart\s+def\s+{re.escape(pname)}\s*\{{(.*?)\n\s*\}}",
-                    re.DOTALL,
-                )
-                m = block_re.search(text)
-                if m:
+                span = named_block_span(text, "part", pname)
+                if span:
                     intf_port_types += re.findall(
                         r"(?:in|out|inout)\s+port\s+\w+\s*:\s*(\w+)",
-                        m.group(1), re.IGNORECASE,
+                        text[span[0] + 1:span[1]], re.IGNORECASE,
                     )
             if intf_port_types:
                 n_generic = sum(
@@ -1039,14 +1066,10 @@ class DesignEvaluator:
                 # Text fallback: count directed port keywords in part def body.
                 # Mirrors _has_directed_port — handles direction=NONE from syside
                 # when direction is declared in a port def body rather than inline.
-                part_block_re = re.compile(
-                    rf"\bpart\s+def\s+{re.escape(part.name)}\s*\{{(.*?)\n\s*\}}",
-                    re.DOTALL,
-                )
-                m = part_block_re.search(text)
-                if not m or not part.ports:
+                span = named_block_span(text, "part", part.name)
+                if span is None or not part.ports:
                     return False
-                body = m.group(1)
+                body = text[span[0] + 1:span[1]]
                 directed_count = len(re.findall(
                     r"\b(?:in|out|inout)\s+port\s+\w+", body, re.IGNORECASE
                 ))

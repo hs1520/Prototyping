@@ -5,10 +5,42 @@ import re
 
 #: A bare SysML identifier (whole-string match via ``fullmatch``).
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$")
-#: ``part def <Name> {`` — named part definition with an opening body brace.
-PART_DEF_RE = re.compile(r"\bpart\s+def\s+(\w+)\s*\{")
-#: ``state def <Name> {`` — named state definition with an opening body brace.
-STATE_DEF_RE = re.compile(r"\bstate\s+def\s+(\w+)\s*\{")
+#: Header tail between a definition name and its body brace. Tolerates
+#: specialization (``:> Super``) and any other header text, but never crosses a
+#: ``;`` (a bodiless declaration) or another brace. The DSE variation layer
+#: emits ``part def LidarSuite :> SensorSuite { ... }``, so a lookup that
+#: requires the brace to follow the name immediately silently misses real
+#: blocks in variated models.
+_DEF_HEADER_TAIL = r"\b[^{;]*\{"
+#: ``part def <Name> ... {`` — named part definition with an opening body brace.
+PART_DEF_RE = re.compile(r"\bpart\s+def\s+(\w+)" + _DEF_HEADER_TAIL)
+#: ``state def <Name> ... {`` — named state definition with an opening body brace.
+STATE_DEF_RE = re.compile(r"\bstate\s+def\s+(\w+)" + _DEF_HEADER_TAIL)
+
+
+def named_def_pattern(kind: str, name: str) -> re.Pattern[str]:
+    """``<kind> def <name> ... {`` for one specific definition name.
+
+    The single supertype-tolerant convention for locating a named definition's
+    body. ``kind`` may be an alternation such as ``"(?:part|item)"``.
+    """
+    return re.compile(rf"\b{kind}\s+def\s+{re.escape(name)}{_DEF_HEADER_TAIL}")
+
+
+def named_block_span(text: str, kind: str, name: str) -> tuple[int, int] | None:
+    """``(opening_brace, closing_brace)`` of ``<kind> def <name> { ... }``.
+
+    Returns ``None`` when the definition is absent, bodiless, or unbalanced.
+    The body is ``text[opening + 1:closing]``.
+    """
+    match = named_def_pattern(kind, name).search(text)
+    if match is None:
+        return None
+    opening = match.end() - 1
+    closing = find_block_end(text, opening)
+    if closing == -1:
+        return None
+    return opening, closing
 
 
 def find_block_end(text: str, start: int) -> int:

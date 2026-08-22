@@ -16,7 +16,7 @@ import re
 from typing import Optional, Tuple
 
 from ..simulation.syntax_checker import check_syntax
-from ..utils.sysml_text_utils import find_block_end
+from ..utils.sysml_text_utils import PART_DEF_RE, find_block_end, named_block_span
 from .domain_objective import (
     DESIGN_DEFAULTS, DESIGN_FIELD_ATTR, endurance_target, mass_limit, max_rated_payload,
     range_requirement, variant_design_inputs,
@@ -122,8 +122,8 @@ def _root_part_def(text: str) -> Optional[Tuple[str, int, int]]:
     """(name, brace_index, close_brace_index) of the part def owning the most part
     usages — the system assembly the analysis closure attaches to."""
     best = None
-    for m in re.finditer(r"\bpart\s+def\s+(\w+)\s*(?::>[^{]*)?\{", text):
-        brace = text.index("{", m.start())
+    for m in PART_DEF_RE.finditer(text):
+        brace = m.end() - 1
         end = find_block_end(text, brace)
         if end == -1:
             continue
@@ -134,12 +134,10 @@ def _root_part_def(text: str) -> Optional[Tuple[str, int, int]]:
 
 
 def _inject_attr_into_type(text: str, type_name: str, attr: str, value: float) -> Tuple[str, bool]:
-    m = re.search(rf"\bpart\s+def\s+{re.escape(type_name)}\s*(?::>[^{{]*)?\{{", text)
-    if not m:
+    span = named_block_span(text, "part", type_name)
+    if span is None:
         return text, False
-    end = find_block_end(text, text.index("{", m.start()))
-    if end == -1:
-        return text, False
+    end = span[1]
     return text[:end] + f" attribute {attr} : Real = {value};" + text[end:], True
 
 

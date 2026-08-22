@@ -15,7 +15,7 @@ from typing import Any, Mapping, Sequence
 
 from ..utils.req_id import normalise_req_id, source_requirements_by_id
 from ..utils.digest import sha256_text
-from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end
+from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end, named_block_span
 from .event_symbols import (
     PlannedEventSymbol,
     collect_planned_event_symbols,
@@ -536,14 +536,8 @@ def materialize_planned_behaviors(
 
 
 def _owner_body(text: str, owner: str) -> tuple[int, int] | None:
-    match = re.search(
-        rf"\bpart\s+def\s+{re.escape(owner)}\s*\{{", text
-    )
-    if match is None:
-        return None
-    opening = text.find("{", match.start(), match.end())
-    closing = find_block_end(text, opening)
-    return (opening + 1, closing) if closing != -1 else None
+    span = named_block_span(text, "part", owner)
+    return (span[0] + 1, span[1]) if span else None
 
 
 def _behavior_block(

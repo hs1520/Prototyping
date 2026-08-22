@@ -17,6 +17,7 @@ Two pieces the redesign flagged as missing:
 
 The live SITL run is intended only for the Pareto front (a handful of designs),
 which is exactly what the calibration needs.
+Kept deliberately: thesis baseline/evidence code, exercised by its own tests and invoked on demand rather than wired into the runtime pipeline. Do not remove as dead code.
 """
 from __future__ import annotations
 

@@ -25,7 +25,7 @@ from ..utils.req_id import (
     source_requirements_by_id,
     strip_req_ids,
 )
-from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end
+from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end, named_def_pattern
 
 
 #: Value types an attribute may be planned with. The plan has no way to declare
@@ -1173,9 +1173,8 @@ def _activation_state_span(
         return None, (
             f"{constraint.owner}.{constraint.constraint_id}: owner is absent"
         )
-    behavior_match = re.search(
-        rf"\bstate\s+def\s+{re.escape(behavior_name)}\s*\{{",
-        text[owner_span[2] + 1:owner_span[3]],
+    behavior_match = named_def_pattern("state", behavior_name).search(
+        text[owner_span[2] + 1:owner_span[3]]
     )
     if behavior_match is None:
         return None, (
@@ -1263,10 +1262,7 @@ def _ensure_activation_state_body(
         return text, False
     owner_body_start = owner_span[2] + 1
     owner_body = text[owner_body_start:owner_span[3]]
-    behavior = re.search(
-        rf"\bstate\s+def\s+{re.escape(behavior_name)}\s*\{{",
-        owner_body,
-    )
+    behavior = named_def_pattern("state", behavior_name).search(owner_body)
     if behavior is None:
         return text, False
     behavior_opening = text.find(
@@ -1311,10 +1307,7 @@ def _activation_issue(
         )
     owner_body_start = owner_span[2] + 1
     owner_body = text[owner_body_start:owner_span[3]]
-    behavior_match = re.search(
-        rf"\bstate\s+def\s+{re.escape(behavior_name)}\s*\{{",
-        owner_body,
-    )
+    behavior_match = named_def_pattern("state", behavior_name).search(owner_body)
     if behavior_match is None:
         return (
             f"{constraint.owner}.{constraint.constraint_id}: activation "

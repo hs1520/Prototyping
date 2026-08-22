@@ -45,7 +45,6 @@ Changelog vs original:
     - GeometryShape dataclass (Cylinder, Box, Cone, Sphere, etc.)
     - CsgOperation dataclass for differencesOf / intersectionsOf / unionsOf
     - ItemUsage class for "item :>> shape : Cylinder { ... }" constructs
-    - SpatialPartUsage subclass of PartUsage carrying coordinateFrame + is_sub_spatial
     - SysMLModel.metadata_definitions list for metadata def support
 """
 
@@ -1185,62 +1184,6 @@ class PartUsage(Usage):
         lines.append("}")
         return "\n".join(lines)
 
-
-@dataclass
-class SpatialPartUsage(PartUsage):
-    """
-    A PartUsage that also carries spatial positioning information.
-
-    is_sub_spatial: True when declared with ':> subSpatialParts'
-    coordinate_frame: the attached :>> coordinateFrame { ... } block
-    items: item members (e.g. shape assignments)
-    nested_attributes: additional attribute usages inside this part
-    csg_operation: optional CSG Boolean operation applied to this part's shape
-    generalizations_sub: extra :> references (e.g. :> subSpatialParts)
-    """
-    usage_kind: str = "part"
-    is_sub_spatial: bool = False
-    coordinate_frame: Optional[CoordinateFrame] = None
-    items: List[ItemUsage] = field(default_factory=list)
-    nested_attributes: List[AttributeUsage] = field(default_factory=list)
-    csg_operation: Optional[CsgOperation] = None
-    # inner spatial sub-parts (for recursive spatial containment)
-    sub_parts: List["SpatialPartUsage"] = field(default_factory=list)
-    # documentation string
-    doc: str = ""
-
-    def __str__(self) -> str:
-        vis = self._visibility_prefix()
-        type_str = f" : {self.part_ref.display()}" if self.part_ref else ""
-        sub_suffix = " :> subSpatialParts" if self.is_sub_spatial else ""
-        mult = f"[{self.multiplicity}]" if self.multiplicity and str(self.multiplicity) != "1" else ""
-
-        has_body = (
-            self.doc or self.items or self.coordinate_frame
-            or self.nested_attributes or self.csg_operation or self.sub_parts
-        )
-        if not has_body:
-            return f"{vis}part {self.name}{mult}{type_str}{sub_suffix};"
-
-        lines = [f"{vis}part {self.name}{mult}{type_str}{sub_suffix} {{"]
-        if self.doc:
-            lines.append(f"    doc /* {self.doc} */")
-        for na in self.nested_attributes:
-            lines.append(f"    {na}")
-        for item in self.items:
-            for ln in str(item).splitlines():
-                lines.append(f"    {ln}")
-        for sp in self.sub_parts:
-            for ln in str(sp).splitlines():
-                lines.append(f"    {ln}")
-        if self.csg_operation:
-            for ln in str(self.csg_operation).splitlines():
-                lines.append(f"    {ln}")
-        if self.coordinate_frame:
-            for ln in str(self.coordinate_frame).splitlines():
-                lines.append(f"    {ln}")
-        lines.append("}")
-        return "\n".join(lines)
 
 
 @dataclass

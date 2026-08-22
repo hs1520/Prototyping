@@ -14,6 +14,7 @@ import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .design_space import DesignConfiguration
+from ..utils.sysml_text_utils import named_block_span
 from .eval_helpers import (
     _HAS_NX,
     _has_numeric_unit_attr,
@@ -119,14 +120,11 @@ def diagnose(
 
     generic_ports: List[str] = []
     for pname in intf_boundary:
-        block_m = re.search(
-            rf"\bpart\s+def\s+{re.escape(pname)}\s*\{{(.*?)\n\s*\}}",
-            text, re.DOTALL,
-        )
-        if block_m:
+        span = named_block_span(text, "part", pname)
+        if span:
             generic_ports += re.findall(
                 r"(?:in|out|inout)\s+port\s+(\w+)\s*:\s*(?:DataPort|RfPort|RFPort)\b",
-                block_m.group(1), re.IGNORECASE,
+                text[span[0] + 1:span[1]], re.IGNORECASE,
             )
 
     if generic_ports:
