@@ -20,11 +20,11 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from ..simulation.syntax_checker import check_syntax
-from ..utils.sysml_text_utils import named_block_span
+from ..utils.sysml_text_utils import PART_DEF_RE, find_block_end, named_block_span
 from .physics_estimator import DesignInputs, estimate, total_mass_kg
 from .requirement_spec import (
     ENDURANCE, MASS_MTOW, PAYLOAD, RANGE, _NUM_UNIT_RE, extract_requirements,
-    max_spec, max_value,
+    max_spec, max_value, min_spec,
 )
 
 # quantity family -> substrings that imply it (checked in name + unit, lowercased)
@@ -129,6 +129,69 @@ _ATTR_RE = re.compile(
 )
 _REQ_ID_RE = re.compile(r"REQ[-_][A-Z]+[-_]\d+")
 
+# ── Committed-design resolution (single source of truth for read AND write) ────────
+# A resolved model retains every variant `part def X :> Base { ... }` — the Pareto
+# alternatives the trade study formally references — plus the one binding
+# `part <usage> : <ChosenImpl>;` per variation point. The committed design is what
+# the BINDINGS say; an unbound specialised def is documented alternative space.
+# Flat text scans (the old reader, the old capacity write-back heuristic) cannot
+# tell the two apart, which mis-reported the first-declared alternative as the
+# committed design. These helpers resolve bindings the SysML way instead.
+_PART_USAGE_RE = re.compile(
+    r"\bpart\s+(?!def\b)(\w+)\s*:\s*(\w+)\s*(?:\[[^\]]*\]\s*)?[;{]"
+)
+#: Blocks whose part usages are NOT assembly bindings: the trade study binds every
+#: Pareto alternative via `part altN { part <point> : <Impl>; }` inside its
+#: `analysis def`, and calc/verification defs may declare attribute-shaped params.
+_NON_ASSEMBLY_BLOCK_RE = re.compile(
+    r"\b(?:analysis|calc|verification)\s+def\s+\w+[^{;]*\{"
+)
+
+
+def _non_assembly_spans(text: str) -> List[Tuple[int, int]]:
+    """[start, end] body spans of analysis/calc/verification def blocks."""
+    spans: List[Tuple[int, int]] = []
+    for m in _NON_ASSEMBLY_BLOCK_RE.finditer(text):
+        end = find_block_end(text, m.end() - 1)
+        if end != -1:
+            spans.append((m.end() - 1, end))
+    return spans
+
+
+def _inside(pos: int, spans: List[Tuple[int, int]]) -> bool:
+    return any(s < pos < e for s, e in spans)
+
+
+def committed_bindings(model_text: str) -> List[Tuple[str, str]]:
+    """Ordered ``(usage_name, type_name)`` assembly bindings of *model_text*.
+
+    Scans ``part <name> : <Type>;`` usages outside analysis/calc/verification
+    blocks (whose nested usages formally cite ALTERNATIVES, not the committed
+    system). Order is document order; consumers needing last-wins merge apply it
+    themselves.
+    """
+    text = str(model_text or "")
+    masked = _non_assembly_spans(text)
+    return [
+        (m.group(1), m.group(2))
+        for m in _PART_USAGE_RE.finditer(text)
+        if not _inside(m.start(), masked)
+    ]
+
+
+def _unbound_variant_spans(text: str, bound_types: set) -> List[Tuple[int, int]]:
+    """Body spans of specialised (``:>``) part defs no assembly binding selects."""
+    spans: List[Tuple[int, int]] = []
+    for m in PART_DEF_RE.finditer(text):
+        if m.group(1) in bound_types:
+            continue
+        if ":>" not in text[m.start():m.end()]:
+            continue  # unspecialised def: a base/library type, not an alternative
+        end = find_block_end(text, m.end() - 1)
+        if end != -1:
+            spans.append((m.end() - 1, end))
+    return spans
+
 
 def _family_of(*tokens: str) -> str:
     blob = " ".join(t.lower() for t in tokens if t)
@@ -143,12 +206,30 @@ def resolve_design_attributes(model_text: str) -> ResolvedDesignAttributes:
 
     Downstream modules consume this result instead of importing the ontology's
     regexes, private maps, case rules or fallback classifier.
+
+    Binding-aware: when the model declares assembly bindings, attributes inside
+    an UNBOUND specialised variant def (a retained Pareto alternative) and inside
+    analysis/calc/verification blocks are excluded — the committed design is what
+    the bindings select, not whichever alternative happens to be declared first.
+    A model with no bindings (bare declarations, fixtures) keeps the flat scan.
     """
+    text = str(model_text or "")
+    bindings = committed_bindings(text)
+    excluded: List[Tuple[int, int]] = []
+    if bindings:
+        bound_types = {t for _, t in bindings}
+        excluded = (
+            _unbound_variant_spans(text, bound_types)
+            + _non_assembly_spans(text)
+        )
     attributes: list[ObservedDesignAttribute] = []
     field_values: Dict[str, float] = dict(DESIGN_DEFAULTS)
     family_values: Dict[str, Tuple[str, float]] = {}
     seen_fields: set[str] = set()
-    for name, raw_value, unit in _ATTR_RE.findall(str(model_text or "")):
+    for match in _ATTR_RE.finditer(text):
+        if excluded and _inside(match.start(), excluded):
+            continue
+        name, raw_value, unit = match.groups()
         value = float(raw_value)
         field = _DESIGN_ATTR_FIELD.get(name.lower(), "")
         family = DESIGN_FIELD_FAMILY.get(field, "") or _family_of(
@@ -305,9 +386,11 @@ def range_requirement(requirements: List[str]) -> Tuple[Optional[str], float]:
 
 
 def mass_limit(requirements: List[str]) -> Tuple[Optional[str], float]:
-    """(req_id, MTOW limit kg) — the largest "<=" MASS_MTOW spec (gross take-off mass), NOT a
-    payload sub-bound; (None, 0.0) if no MTOW limit."""
-    s = max_spec(extract_requirements(requirements), MASS_MTOW, "<=")
+    """(req_id, MTOW limit kg) — the TIGHTEST "<=" MASS_MTOW spec (gross take-off mass),
+    NOT a payload sub-bound; (None, 0.0) if no MTOW limit. A conjunction of upper bounds
+    is governed by its minimum: taking the largest admitted designs that violated the
+    stricter requirement."""
+    s = min_spec(extract_requirements(requirements), MASS_MTOW, "<=")
     return (s.req_id, s.value) if s else (None, 0.0)
 
 

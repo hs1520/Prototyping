@@ -97,14 +97,69 @@ def test_bilevel_inner_bo_sizes_battery_capacity():
     assert "batteryCapacityMah" in res.concrete_model      # inner-optimized value written back
 
 
-def test_capacity_write_back_prefers_cells_then_falls_back():
+def test_capacity_write_back_targets_the_bound_variant():
     from src.dse.variation_dse import _write_back_capacity
-    # power variant (has batteryCells) → capacity written there
-    with_cells = "package P { part def V :> B { attribute batteryCells : Real = 6.0; } }"
-    assert "batteryCapacityMah : Real = 12000.0" in _write_back_capacity(with_cells, 12000.0)
-    # no cells anywhere → fall back to the first specialised variant part def
-    no_cells = "package P { part def V :> B { attribute rotorCount : Real = 6.0; } }"
-    assert "batteryCapacityMah : Real = 9000.0" in _write_back_capacity(no_cells, 9000.0)
+    # Two retained alternatives; only Chosen is bound. The capacity must land in
+    # Chosen even though Loser declares batteryCells and is declared FIRST — the
+    # old flat heuristic wrote it into Loser, so the archived model asserted a
+    # capacity for a design that was never selected.
+    m = (
+        "package P {\n"
+        "  part def Loser :> B { attribute batteryCells : Real = 4.0; }\n"
+        "  part def Chosen :> B { attribute batteryCells : Real = 6.0; }\n"
+        "  part power : Chosen;\n"
+        "}"
+    )
+    out = _write_back_capacity(m, 12000.0, ["Chosen"])
+    chosen_body = out.split("part def Chosen")[1].split("}")[0]
+    loser_body = out.split("part def Loser")[1].split("}")[0]
+    assert "batteryCapacityMah : Real = 12000.0" in chosen_body
+    assert "batteryCapacityMah" not in loser_body
+    # bound type without batteryCells → still the bound def, never a flat fallback
+    m2 = (
+        "package P {\n"
+        "  part def OtherLoser :> B { attribute batteryCells : Real = 4.0; }\n"
+        "  part def Frame :> B { attribute rotorCount : Real = 6.0; }\n"
+        "  part frame : Frame;\n"
+        "}"
+    )
+    out2 = _write_back_capacity(m2, 9000.0, ["Frame"])
+    assert "batteryCapacityMah : Real = 9000.0" in out2.split("part def Frame")[1].split("}")[0]
+    # no bindings (degenerate untyped-variant space) → text unchanged
+    assert _write_back_capacity(m, 9000.0, []) == m
+
+
+def test_resolved_model_reads_as_the_committed_design():
+    """Regression for the archived-model authority defect (run 33e359ca shape):
+    retained Pareto alternatives and trade-study alt bindings must not leak into
+    the committed design a reader resolves from the final model text."""
+    from src.dse.domain_objective import committed_bindings, resolve_design_attributes
+
+    m = (
+        "package Drone {\n"
+        "  part def PropulsionSystem;\n"
+        "  part def Catalog_r4 :> PropulsionSystem {"
+        " attribute rotorCount : Real = 4.0;"
+        " attribute rotorRadiusM : Real = 0.1905;"
+        " attribute batteryCells : Real = 4.0; }\n"
+        "  part def Catalog_r6 :> PropulsionSystem {"
+        " attribute rotorCount : Real = 6.0;"
+        " attribute rotorRadiusM : Real = 0.2032;"
+        " attribute batteryCells : Real = 6.0;"
+        " attribute batteryCapacityMah : Real = 16000.0; }\n"
+        "  part propulsionSystem : Catalog_r6;\n"
+        "  analysis def DesignTradeStudy {\n"
+        "    part alt0Design { part propulsionSystem : Catalog_r4; }\n"
+        "    part alt1Design { part propulsionSystem : Catalog_r6; }\n"
+        "  }\n"
+        "}"
+    )
+    assert committed_bindings(m) == [("propulsionSystem", "Catalog_r6")]
+    r = resolve_design_attributes(m)
+    assert r.field_values["rotor_count"] == 6.0
+    assert r.field_values["rotor_radius_m"] == 0.2032
+    assert r.field_values["battery_cells"] == 6.0
+    assert r.field_values["battery_capacity_mah"] == 16000.0
 
 
 def test_recommendation_weights_track_requirement_emphasis():
@@ -439,3 +494,16 @@ def test_dse_layer_does_not_import_realization():
         if "src.realization" in text or "..realization" in text or " import realization" in text:
             offenders.append(path.name)
     assert offenders == []
+
+
+def test_capacity_write_back_materialises_bodiless_bound_def():
+    from src.dse.variation_dse import _write_back_capacity
+    m = "package P {\n  part def Frame_light :> Airframe;\n  part frame : Frame_light;\n}"
+    out = _write_back_capacity(m, 12000.0, ["Frame_light"])
+    assert "part def Frame_light :> Airframe { attribute batteryCapacityMah : Real = 12000.0; }" in out
+
+
+def test_committed_bindings_accepts_multiplicity():
+    from src.dse.domain_objective import committed_bindings
+    m = "package P { part def R6 :> Base { attribute rotorCount : Real = 6.0; } part rotors : R6[1]; }"
+    assert ("rotors", "R6") in committed_bindings(m)

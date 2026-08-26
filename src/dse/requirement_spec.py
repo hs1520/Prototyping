@@ -224,6 +224,17 @@ def max_spec(specs: List[ReqSpec], quantity: str, operator: Optional[str] = None
     return best
 
 
+def min_spec(specs: List[ReqSpec], quantity: str, operator: Optional[str] = None) -> Optional[ReqSpec]:
+    """Smallest-value spec of ``quantity`` — the BINDING bound for a conjunction of
+    "<=" limits (every limit must hold, so the tightest one governs)."""
+    best: Optional[ReqSpec] = None
+    for s in specs:
+        if s.quantity == quantity and (operator is None or s.operator == operator) \
+                and (best is None or s.value < best.value):
+            best = s
+    return best
+
+
 _REQDOC_RE = re.compile(
     r"(requirement\s+def\s+(REQ[-_][A-Z]+[-_]\d+)\s*\{\s*doc\s*/\*)(.*?)(\*/)",
     re.DOTALL | re.IGNORECASE)

@@ -401,6 +401,13 @@ class DesignEvaluator:
         dims = sorted(result.criteria_scores)
         if not dims:
             return 1.0
+        # A fired veto caps weighted_total below the threshold regardless of
+        # weighting, so the verdict is weight-independent BY CONSTRUCTION and
+        # the honest robustness is 1.0. Sampling raw criteria_scores (which the
+        # veto does not cap) against the capped nominal would instead report
+        # "the weighting decides" for a verdict the weighting cannot change.
+        if any(issue.startswith("[VETO]") for issue in result.issues):
+            return 1.0
         nominal_pass = result.weighted_total >= thr
         rng = _random.Random(random_seed)
         agree = 0

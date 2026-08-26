@@ -15,11 +15,12 @@ import itertools
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..simulation.syntax_checker import check_syntax
 from ..utils.suppressed import record_suppressed
-from ..utils.sysml_text_utils import find_block_end, get_sysml_text
+from ..utils.sysml_text_utils import get_sysml_text, named_block_span
+from .analysis_emitter import _inject_attr_into_type
 from .domain_objective import (
     DESIGN_DEFAULTS,
     architecture_design,
@@ -159,27 +160,56 @@ def _pareto_members(
     ]
 
 
-def _write_back_capacity(model_text: str, capacity_mah: float) -> str:
+def _write_back_capacity(
+    model_text: str, capacity_mah: float, bound_types: Sequence[str] = (),
+) -> str:
     """Inject the inner-BO battery capacity into the resolved model so downstream
-    (SITL params, reports) reads it. Prefer the part def declaring batteryCells (the
-    power variant); else fall back to the first specialised variant part def."""
-    ins = f" attribute batteryCapacityMah : Real = {capacity_mah};"
-    fallback_end = None
-    for m in re.finditer(r"\bpart\s+def\s+\w+\s*(?::>[^{]*)?\{", model_text):
-        brace = model_text.index("{", m.start())
-        end = find_block_end(model_text, brace)
-        if end == -1:
+    (SITL params, reports) reads it.
+
+    The capacity belongs to the design the recommendation BOUND, so it is written
+    into a bound variant's type def — the one declaring ``batteryCells`` (the
+    power owner) first, else the first bound def without a capacity. A flat
+    first-specialised-def heuristic previously landed it in the first RETAINED
+    Pareto alternative instead of the chosen one, so the archived model asserted
+    a capacity for a design that was never selected. Without ``bound_types``
+    (degenerate spaces with untyped variants) the text is returned unchanged.
+    """
+    ordered = list(dict.fromkeys(t for t in bound_types if t))
+    fallback = None
+    for type_name in ordered:
+        span = named_block_span(model_text, "part", type_name)
+        if span is None:
+            # A bodiless bound def (`part def X :> Y;`) still owns the design:
+            # materialise a body rather than silently dropping the capacity
+            # (which would fly SITL at the 5000 mAh default, not the optimum).
+            decl = re.search(
+                rf"\bpart\s+def\s+{re.escape(type_name)}\b[^{{;\n]*;", model_text
+            )
+            if decl is not None:
+                head = model_text[decl.start():decl.end() - 1]
+                body = (
+                    f"{head} {{ attribute batteryCapacityMah : Real = "
+                    f"{float(capacity_mah)}; }}"
+                )
+                return (
+                    model_text[:decl.start()] + body + model_text[decl.end():]
+                )
             continue
-        header = model_text[m.start():brace]
-        body = model_text[brace + 1:end]
+        body = model_text[span[0] + 1:span[1]]
         if "batteryCapacityMah" in body:
-            continue  # already present
+            return model_text  # already declared on a bound type — idempotent
         if "batteryCells" in body:
-            return model_text[:end] + ins + model_text[end:]   # power variant — best home
-        if ":>" in header and fallback_end is None:
-            fallback_end = end                                  # first specialised variant
-    if fallback_end is not None:
-        return model_text[:fallback_end] + ins + model_text[fallback_end:]
+            injected, ok = _inject_attr_into_type(
+                model_text, type_name, "batteryCapacityMah", float(capacity_mah)
+            )
+            return injected if ok else model_text
+        if fallback is None:
+            fallback = type_name
+    if fallback is not None:
+        injected, ok = _inject_attr_into_type(
+            model_text, fallback, "batteryCapacityMah", float(capacity_mah)
+        )
+        return injected if ok else model_text
     return model_text
 
 
@@ -424,6 +454,12 @@ def run_variation_dse(
             f"performance-feasible designs also satisfy MTOW <= {mtow_limit:g} kg"
         )
 
+    # A raising predicate is NOT an engineering "no": count the failures and
+    # attribute them, or a systematic code fault (renamed catalog field,
+    # division by zero in the estimator) empties the feasible set and gets
+    # published as the substantive verdict "no Pareto member closes Phase 8".
+    # record_suppressed alone was invisible — no run artifact writes it.
+    gate_errors: Dict[str, int] = {"realizability": 0, "recommendability": 0}
     mapping_compliant = list(estimator_feasible)
     if realizability is not None:
         mapping_compliant = []
@@ -432,6 +468,7 @@ def run_variation_dse(
                 if bool(realizability(_resolve_di(member[0]))):
                     mapping_compliant.append(member)
             except Exception as exc:
+                gate_errors["realizability"] += 1
                 record_suppressed("variation_dse.realizability", exc)
 
     phase8_closable = list(mapping_compliant)
@@ -442,7 +479,23 @@ def run_variation_dse(
                 if bool(recommendability(_resolve_di(member[0]))):
                     phase8_closable.append(member)
             except Exception as exc:
+                gate_errors["recommendability"] += 1
                 record_suppressed("variation_dse.recommendability", exc)
+
+    if gate_errors["realizability"]:
+        notes.append(
+            f"GATE ERROR: realizability predicate raised on "
+            f"{gate_errors['realizability']}/{len(estimator_feasible)} "
+            "design(s) — those were dropped as infeasible; the constrained "
+            "front may be incomplete for a CODE reason, not a design reason"
+        )
+    if gate_errors["recommendability"]:
+        notes.append(
+            f"GATE ERROR: recommendability predicate raised on "
+            f"{gate_errors['recommendability']}/{len(mapping_compliant)} "
+            "design(s) — those were dropped as unclosable; the constrained "
+            "front may be incomplete for a CODE reason, not a design reason"
+        )
 
     official_front = _pareto_members(phase8_closable, names)
     rec_weights = _recommendation_weights(names, requirements)
@@ -496,15 +549,29 @@ def run_variation_dse(
                 "performance + MTOW gate"
             )
         elif realizability is not None and not mapping_compliant:
-            notes.append(
-                "NO_RECOMMENDABLE_DESIGN: estimator-feasible designs exist, but none "
-                "is catalog mapping-compliant"
-            )
+            if estimator_feasible and gate_errors["realizability"] == len(estimator_feasible):
+                notes.append(
+                    "NO_RECOMMENDABLE_DESIGN: the realizability predicate raised "
+                    "on EVERY estimator-feasible design — this is a code/catalog "
+                    "failure, NOT evidence that no design is mapping-compliant"
+                )
+            else:
+                notes.append(
+                    "NO_RECOMMENDABLE_DESIGN: estimator-feasible designs exist, but none "
+                    "is catalog mapping-compliant"
+                )
         elif recommendability is not None and not phase8_closable:
-            notes.append(
-                "NO_RECOMMENDABLE_DESIGN: estimator-feasible, mapping-compliant designs "
-                "exist, but none closes Phase 8"
-            )
+            if mapping_compliant and gate_errors["recommendability"] == len(mapping_compliant):
+                notes.append(
+                    "NO_RECOMMENDABLE_DESIGN: the recommendability predicate raised "
+                    "on EVERY mapping-compliant design — this is a code failure, "
+                    "NOT evidence that no design closes Phase 8"
+                )
+            else:
+                notes.append(
+                    "NO_RECOMMENDABLE_DESIGN: estimator-feasible, mapping-compliant designs "
+                    "exist, but none closes Phase 8"
+                )
         else:
             notes.append("NO_RECOMMENDABLE_DESIGN: constrained feasible set is empty")
         recommended_by = "none" if (realizability is not None or recommendability is not None) else None
@@ -519,20 +586,23 @@ def run_variation_dse(
         f"official_pareto={len(official_front)}"
     )
     recommended_estimator_feasible = True if rec_state is not None else None
-    concrete = base_text if rec_state is None else resolve_model(base_text, ok, dict(rec_state))
-    rec_cap = None if rec_state is None else inner_cap.get(tuple(sorted(rec_state.items())))
-    if rec_cap is not None:
-        wb = _write_back_capacity(concrete, rec_cap)
-        if not check_syntax(wb).has_errors:
-            concrete = wb   # inner-optimized capacity now lives in the model
-
-    # Resolve each Pareto member to concrete design inputs (inner-optimized capacity) so
-    # the recommendation can be presented as a SysML trade study over real alternatives.
     def _bindings(state: State) -> Dict[str, str]:
         """{point_id: chosen variant's impl type name} — the variant defs this design uses."""
         s = dict(state)
         return {p.point_id: p.type_of(s[p.point_id])
                 for p in ok if p.point_id in s and p.type_of(s[p.point_id])}
+
+    concrete = base_text if rec_state is None else resolve_model(base_text, ok, dict(rec_state))
+    rec_cap = None if rec_state is None else inner_cap.get(tuple(sorted(rec_state.items())))
+    if rec_cap is not None:
+        wb = _write_back_capacity(
+            concrete, rec_cap, list(_bindings(dict(rec_state)).values())
+        )
+        if not check_syntax(wb).has_errors:
+            concrete = wb   # inner-optimized capacity now lives in the BOUND variant
+
+    # Resolve each Pareto member to concrete design inputs (inner-optimized capacity) so
+    # the recommendation can be presented as a SysML trade study over real alternatives.
 
     pareto_designs: List[Tuple[DesignInputs, Objectives]] = []
     pareto_bindings: List[Dict[str, str]] = []
