@@ -13,7 +13,12 @@ from ..sysml.text_normalization import (
     normalise_connect_syntax,
     strip_invalid_requirement_attrs,
 )
-from ..utils.sysml_text_utils import PART_DEF_RE, STATE_DEF_RE, find_block_end
+from ..utils.sysml_text_utils import (
+    PART_DEF_RE,
+    STATE_DEF_RE,
+    find_block_end,
+    named_def_pattern,
+)
 
 
 @dataclass(frozen=True)
@@ -552,10 +557,7 @@ class AssemblyFinalizer:
                 continue  # cannot determine owner — skip
 
             # Find the part def block for target_part in assembled
-            part_def_re = re.compile(
-                r"\bpart\s+def\s+" + re.escape(target_part) + r"\s*\{"
-            )
-            m_part = part_def_re.search(result)
+            m_part = named_def_pattern("part", target_part).search(result)
             if not m_part:
                 continue  # part not found — skip
 

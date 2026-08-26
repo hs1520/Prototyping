@@ -18,7 +18,7 @@ from ..sysml.text_normalization import (
     fix_capability_semantics,
     fix_safety_action_semantics,
 )
-from ..utils.sysml_text_utils import PART_DEF_RE, find_block_end
+from ..utils.sysml_text_utils import PART_DEF_RE, find_block_end, named_def_pattern
 from .refinement_authoring import RefinementAuthoring, RefinementRequest
 
 
@@ -355,10 +355,9 @@ class GeneratedModelAdmission:
             if action_match is None:
                 # Re-find the owner block after the state expansion and add the
                 # declaration immediately inside it.
-                owner_match = re.search(
-                    r"\bpart\s+def\s+" + re.escape(part_match.group(1)) + r"\s*\{",
-                    result,
-                )
+                owner_match = named_def_pattern(
+                    "part", part_match.group(1)
+                ).search(result)
                 if owner_match:
                     owner_open = result.index("{", owner_match.start())
                     result = (
@@ -455,10 +454,7 @@ class GeneratedModelAdmission:
             # If the only occurrence is already in the correct block, preserve
             # the model byte-for-byte. Otherwise relocate to keep exactly one
             # satisfy usage, as required by the integration contract.
-            target_match = re.search(
-                r"\bpart\s+def\s+" + re.escape(target_name) + r"\s*\{",
-                result,
-            )
+            target_match = named_def_pattern("part", target_name).search(result)
             if not target_match:
                 continue
             target_end = find_block_end(result, result.index("{", target_match.start()))
@@ -468,10 +464,7 @@ class GeneratedModelAdmission:
                 continue
 
             result = satisfy_re.sub("", result)
-            target_match = re.search(
-                r"\bpart\s+def\s+" + re.escape(target_name) + r"\s*\{",
-                result,
-            )
+            target_match = named_def_pattern("part", target_name).search(result)
             if not target_match:
                 continue
             brace_pos = result.index("{", target_match.start())

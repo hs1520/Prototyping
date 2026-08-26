@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Set, Tuple
 
 from .connectivity_fixer import PortDirectory
-from ..utils.sysml_text_utils import find_block_end as _block_end
+from ..utils.sysml_text_utils import named_block_span
 
 
 # ---------------------------------------------------------------------------
@@ -276,11 +276,10 @@ def merge_port_additions(
     insertions: List[Tuple[int, str]] = []
     for pname, items in by_part.items():
         # Locate the part def block
-        m = re.search(rf'\bpart\s+def\s+{re.escape(pname)}\s*\{{', text)
-        if m is None:
+        span = named_block_span(text, "part", pname)
+        if span is None:
             continue
-        brace = text.index('{', m.start())
-        end = _block_end(text, brace)
+        brace, end = span
         body = text[brace + 1: end]
 
         # Find indent and insertion position

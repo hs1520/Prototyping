@@ -11,7 +11,6 @@ and requirement-anchored: name-blind, quantity-blind, and shape-neutral
 transition anchors a triggered fail-safe)."""
 from __future__ import annotations
 
-import statistics
 
 from src.dse.evaluator import (
     DesignConfiguration,

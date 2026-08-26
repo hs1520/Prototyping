@@ -68,3 +68,18 @@ def test_named_pattern_never_crosses_statements():
     # a bodiless declaration followed by an unrelated block must not merge
     text = "part def A;\npart def B { attribute x; }\n"
     assert named_def_pattern("part", "A").search(text) is None
+
+
+def test_header_tail_never_crosses_newlines():
+    # Prose in a comment must not mint a phantom def that swallows the next
+    # block (observed in two archived pilot models: `// "Every part def MUST
+    # have >= 1 satisfy link"` captured name MUST + the following block).
+    text = (
+        'package P {\n'
+        '  // Added to satisfy the rule: "Every part def MUST have >= 1 satisfy link"\n'
+        '  requirement def REQ_FUNC_001 { attribute x : Real = 1.0; }\n'
+        '  part def Real_one { attribute y : Real = 2.0; }\n'
+        '}\n'
+    )
+    assert [m.group(1) for m in PART_DEF_RE.finditer(text)] == ["Real_one"]
+    assert named_def_pattern("part", "MUST").search(text) is None

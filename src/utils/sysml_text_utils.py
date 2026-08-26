@@ -7,11 +7,15 @@ import re
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$")
 #: Header tail between a definition name and its body brace. Tolerates
 #: specialization (``:> Super``) and any other header text, but never crosses a
-#: ``;`` (a bodiless declaration) or another brace. The DSE variation layer
-#: emits ``part def LidarSuite :> SensorSuite { ... }``, so a lookup that
-#: requires the brace to follow the name immediately silently misses real
-#: blocks in variated models.
-_DEF_HEADER_TAIL = r"\b[^{;]*\{"
+#: ``;`` (a bodiless declaration), another brace, or a NEWLINE. The DSE
+#: variation layer emits ``part def LidarSuite :> SensorSuite { ... }``, so a
+#: lookup that requires the brace to follow the name immediately silently
+#: misses real blocks in variated models. The newline bound matters just as
+#: much: prose such as ``// "Every part def MUST have >= 1 satisfy link"``
+#: otherwise mints a phantom def named ``MUST`` that swallows the NEXT block's
+#: braces (observed in two archived pilot models). Emitters write single-line
+#: headers, so the bound costs nothing.
+_DEF_HEADER_TAIL = r"\b[^{;\n]*\{"
 #: ``part def <Name> ... {`` — named part definition with an opening body brace.
 PART_DEF_RE = re.compile(r"\bpart\s+def\s+(\w+)" + _DEF_HEADER_TAIL)
 #: ``state def <Name> ... {`` — named state definition with an opening body brace.
