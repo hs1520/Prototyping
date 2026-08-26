@@ -627,6 +627,12 @@ Rules:
   `inout port structuralMount : StructuralMountPort;` — that name, that type,
   and no other ports on that part.
 - Use valid SysML v2 syntax throughout.
+- EXTENSION CONTRACT: a port BEYOND the frozen plan is rejected unless it is
+  declared on a PLANNED component and carries its justification in the body:
+  `in port <name> : <Type> {{ doc /* <why>; satisfies REQ_XXX_NNN */ }}`.
+  Prefer declaring every port in the plan; use this only for a genuinely
+  emergent need (e.g. a status feedback the plan missed). Silent additions fail
+  plan conformance.
 - Safety interconnect ports (MANDATORY — add these whenever the component type is present):
     • If a SafetyMonitor part def is defined:
         – The main controller/autopilot part def MUST declare `in port overrideCmd : DataPort;`
@@ -1287,6 +1293,10 @@ Assembly rules:
    (d) Connect the main controller to the communication system for uplink/downlink.
    RULE: For a system with N part defs, include at least max(N − 1, INTF_req_count) connects.
    Do NOT leave any out port without at least one connect to a consumer.
+   EXTENSION CONTRACT: a connect BEYOND the frozen plan passes conformance ONLY
+   when it links planned parts through an added port that carries an in-body
+   `doc /* <why>; satisfies REQ_XXX_NNN */` justification. Rewiring planned
+   ports, or any silent addition, fails plan conformance.
    FAN-IN PROHIBITION (critical): Each `in port` must receive from exactly ONE source.
    Never write two connect statements that both target the same port.
      ✗ WRONG (fan-in):

@@ -2476,20 +2476,118 @@ def apply_generation_plan(
         for component, name, direction, port_type
         in planned_ports - actual_ports
     )
+    unplanned_port_tuples = sorted(actual_ports - planned_ports)
     unplanned_ports = sorted(
         f"{component}.{name} ({direction}:{port_type})"
         for component, name, direction, port_type
-        in actual_ports - planned_ports
+        in unplanned_port_tuples
     )
 
     expected_key_set = set(expected_keys)
+    unplanned_connection_tuples = sorted(final_connections - expected_key_set)
     unplanned_connections = sorted(
         ".".join((src, source_port))
         + " -> "
         + ".".join((target, target_port))
         for src, source_port, target, target_port
-        in final_connections - expected_key_set
+        in unplanned_connection_tuples
     )
+
+    # ── Extension contract (specialization semantics + declared deviation) ──
+    # The plan's inventory is the MANDATORY core: planned elements missing or
+    # contradicted stay FAIL. An ADDITION, however, is what SysML v2
+    # specialization permits by construction — provided it is (a) conservative
+    # (a new port on a planned component; a connect between planned parts
+    # through that port; nothing planned touched) and (b) DECLARED in the
+    # model itself via an in-body ``doc /* rationale; satisfies REQ_... */``
+    # on the added port. A silent addition remains FAIL — the anti-fabrication
+    # discipline is unchanged; only the closed-world "inventory equality"
+    # becomes the open-world "consistent specialization + justified extension"
+    # (same objectivity rule the variation-point admission already applies).
+    planned_port_names = {(c, n) for c, n, _, _ in planned_ports}
+    missing_port_names = {(c, n) for c, n, _, _ in planned_ports - actual_ports}
+    owner_actual_types: dict[str, list[str]] = {}
+    for _instance, _ctype in actual_instance_types.items():
+        _planned = _planned_type_of(_ctype)
+        if _planned is not None:
+            owner_actual_types.setdefault(_planned, []).append(_ctype)
+
+    def _extension_justification(
+        component: str, name: str, direction: str, port_type: str,
+    ) -> str | None:
+        """The declared rationale of an added port, or None if undeclared."""
+        pattern = re.compile(
+            rf"\b{re.escape(direction)}\s+port\s+{re.escape(name)}\s*:"
+            rf"\s*{re.escape(port_type)}\s*\{{"
+        )
+        for type_name in owner_actual_types.get(component, ()):
+            span = named_block_span(final_text, "part", type_name)
+            segment = final_text[span[0] + 1:span[1]] if span else ""
+            match = pattern.search(segment)
+            if match is None:
+                continue
+            end = find_block_end(segment, match.end() - 1)
+            body = segment[match.end():end] if end != -1 else ""
+            doc = re.search(r"doc\s*/\*(.*?)\*/", body, re.DOTALL)
+            if doc and doc.group(1).strip() and re.search(
+                r"REQ[-_][A-Z]+[-_]\d+", doc.group(1)
+            ):
+                return " ".join(doc.group(1).split())
+        return None
+
+    justified_port_pairs: set[tuple[str, str]] = set()
+    justified_extension_ports: list[str] = []
+    unjustified_port_tuples: list[tuple[str, str, str, str]] = []
+    for component, name, direction, port_type in unplanned_port_tuples:
+        # Redefining a PLANNED port under a different direction/type is a
+        # contradiction, never a justifiable extension.
+        conflict = (component, name) in missing_port_names
+        rationale = (
+            None if conflict
+            else _extension_justification(component, name, direction, port_type)
+        )
+        if rationale is not None:
+            justified_port_pairs.add((component, name))
+            justified_extension_ports.append(
+                f"{component}.{name} ({direction}:{port_type}) — {rationale}"
+            )
+        else:
+            unjustified_port_tuples.append(
+                (component, name, direction, port_type)
+            )
+
+    justified_connection_keys: set[tuple[str, str, str, str]] = set()
+    justified_extension_connections: list[str] = []
+    unjustified_connection_tuples: list[tuple[str, str, str, str]] = []
+    for src, source_port, target, target_port in unplanned_connection_tuples:
+        src_planned = _planned_type_of(actual_instance_types.get(src, ""))
+        tgt_planned = _planned_type_of(actual_instance_types.get(target, ""))
+        endpoint_pairs = (
+            (src_planned, source_port), (tgt_planned, target_port),
+        )
+        conservative = src_planned is not None and tgt_planned is not None
+        extension_endpoints = [
+            pair for pair in endpoint_pairs
+            if pair in justified_port_pairs
+        ]
+        unaccounted = [
+            pair for pair in endpoint_pairs
+            if pair not in justified_port_pairs
+            and pair not in planned_port_names
+        ]
+        # A justified connection must SERVE a declared extension port and may
+        # not touch anything unaccounted for; rewiring planned ports only is
+        # an alteration of the planned information flow, not an extension.
+        if conservative and extension_endpoints and not unaccounted:
+            key = (src, source_port, target, target_port)
+            justified_connection_keys.add(key)
+            justified_extension_connections.append(
+                f"{src}.{source_port} -> {target}.{target_port}"
+            )
+        else:
+            unjustified_connection_tuples.append(
+                (src, source_port, target, target_port)
+            )
 
     internalized_external_ports: list[str] = []
     for component in plan.components:
@@ -2500,11 +2598,15 @@ def apply_generation_plan(
         for port in component.ports:
             if not port.external:
                 continue
+            # Connections that ARE the justified extension do not violate the
+            # planned boundary: the external role is an inherited feature the
+            # extension adds a reader/writer to, not one it removes.
+            unjustified_final = final_connections - justified_connection_keys
             if (
                 port.direction in {"in", "inout"}
                 and any(
                     target == usage and target_port == port.name
-                    for _, _, target, target_port in final_connections
+                    for _, _, target, target_port in unjustified_final
                 )
             ):
                 internalized_external_ports.append(
@@ -2514,7 +2616,7 @@ def apply_generation_plan(
                 port.direction in {"out", "inout"}
                 and any(
                     source == usage and source_port == port.name
-                    for source, source_port, _, _ in final_connections
+                    for source, source_port, _, _ in unjustified_final
                 )
             ):
                 internalized_external_ports.append(
@@ -2532,9 +2634,14 @@ def apply_generation_plan(
         f"unplanned component usage: {item}" for item in unplanned_components
     )
     issues.extend(f"planned port missing: {item}" for item in missing_ports)
-    issues.extend(f"unplanned port: {item}" for item in unplanned_ports)
     issues.extend(
-        f"unplanned connection: {item}" for item in unplanned_connections
+        f"unplanned port: {component}.{name} ({direction}:{port_type})"
+        for component, name, direction, port_type in unjustified_port_tuples
+    )
+    issues.extend(
+        f"unplanned connection: {src}.{source_port} -> {target}.{target_port}"
+        for src, source_port, target, target_port
+        in unjustified_connection_tuples
     )
     issues.extend(
         f"external boundary violation: {item}"
@@ -2557,8 +2664,16 @@ def apply_generation_plan(
         for item in definition_contract["unplanned_part_definitions"]
     )
     report = {
-        "schema_version": "4.0",
+        "schema_version": "4.1",
         "artifact_role": "GENERATION_PLAN_CONFORMANCE",
+        "extension_contract": (
+            "specialization-consistent additions carrying an in-body "
+            "doc /* rationale; satisfies REQ_... */ on the added port are "
+            "JUSTIFIED_EXTENSIONs, not violations; silent or planned-element-"
+            "touching additions remain FAIL"
+        ),
+        "justified_extension_ports": justified_extension_ports,
+        "justified_extension_connections": justified_extension_connections,
         "input_model_digest": sha256_text(str(model_text or "")),
         "output_model_digest": sha256_text(final_text),
         "status": (

@@ -827,3 +827,95 @@ def test_a_wrong_direction_is_left_alone_because_it_is_a_design_question():
 
     assert text == model
     assert changes == []
+
+
+def test_terminal_conformance_admits_justified_conservative_extension():
+    """Extension contract (schema 4.1): a specialization-consistent addition
+    carrying an in-body doc /* rationale; satisfies REQ_... */ is a
+    JUSTIFIED_EXTENSION, not a violation."""
+    plan = ModelGenerationPlan.from_payload(
+        _PAYLOAD,
+        requirements=["REQ_FUNC_001: propagate status."],
+    )
+    model = """package P {
+        port def DataPort;
+        part def Producer {
+            out port status : DataPort;
+            out port extra : DataPort { doc /* status feedback the plan missed; satisfies REQ_FUNC_001 */ }
+        }
+        part def Consumer {
+            in port status : DataPort;
+            in port extraIn : DataPort { doc /* receives the declared feedback; satisfies REQ_FUNC_001 */ }
+        }
+        part producer : Producer;
+        part consumer : Consumer;
+        connect producer.status to consumer.status;
+        connect producer.extra to consumer.extraIn;
+    }"""
+
+    _, report = apply_generation_plan(model, plan)
+
+    assert report["status"] == "PASS"
+    assert len(report["justified_extension_ports"]) == 2
+    assert report["justified_extension_connections"] == [
+        "producer.extra -> consumer.extraIn"
+    ]
+    # raw inventory keeps its meaning; the ISSUES are what got reclassified
+    assert len(report["unplanned_ports"]) == 2
+    assert not any("unplanned" in issue for issue in report["issues"])
+
+
+def test_extension_without_requirement_link_still_fails():
+    plan = ModelGenerationPlan.from_payload(
+        _PAYLOAD,
+        requirements=["REQ_FUNC_001: propagate status."],
+    )
+    model = """package P {
+        port def DataPort;
+        part def Producer {
+            out port status : DataPort;
+            out port extra : DataPort { doc /* felt like it */ }
+        }
+        part def Consumer { in port status : DataPort; }
+        part producer : Producer;
+        part consumer : Consumer;
+        connect producer.status to consumer.status;
+    }"""
+
+    _, report = apply_generation_plan(model, plan)
+
+    assert report["status"] == "FAIL"
+    assert any("unplanned port" in issue for issue in report["issues"])
+    assert report["justified_extension_ports"] == []
+
+
+def test_rewiring_planned_ports_is_not_an_extension():
+    plan = ModelGenerationPlan.from_payload(
+        _PAYLOAD,
+        requirements=["REQ_FUNC_001: propagate status."],
+    )
+    # an unplanned connection between purely PLANNED ports alters the planned
+    # information flow — never justifiable as an extension
+    model = """package P {
+        port def DataPort;
+        part def Producer { out port status : DataPort; }
+        part def Consumer {
+            in port status : DataPort;
+            in port statusIn2 : DataPort { doc /* second sink; satisfies REQ_FUNC_001 */ }
+        }
+        part producer : Producer;
+        part consumer : Consumer;
+        connect producer.status to consumer.status;
+        connect producer.status to consumer.statusIn2;
+    }"""
+
+    _, report = apply_generation_plan(model, plan)
+    # the port itself is justified; the connection is too (it serves the
+    # declared extension through planned source) — but a connection touching
+    # NO extension port must fail:
+    model2 = model.replace(
+        " { doc /* second sink; satisfies REQ_FUNC_001 */ }", ";"
+    )
+    _, report2 = apply_generation_plan(model2, plan)
+    assert report2["status"] == "FAIL"
+    assert any("unplanned connection" in i for i in report2["issues"])

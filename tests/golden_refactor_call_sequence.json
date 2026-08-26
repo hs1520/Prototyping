@@ -19,7 +19,7 @@
       "ordinal": 3,
       "system_prompt_digest": "d5286d9e3aeb9a8c318e100dbbc6fa8a337bf6ee1bd04a8fa9f3e859ed02c079",
       "temperature": 0.3,
-      "user_prompt_digest": "97eb6dc7bddb0bc3657a2ba41177ef1e3ec3c27b581495b509c50f6cd289d38f"
+      "user_prompt_digest": "e173737d2462e1d7dd725acf15c9b94d873b1e798a7d573b5537471fa3c098e6"
     },
     {
       "max_tokens": 20480,
@@ -40,7 +40,7 @@
       "ordinal": 6,
       "system_prompt_digest": "f4d35d02a165c22b3747132869386dfe41d247c64ca83a3189e4bde63a3291e4",
       "temperature": 0.2,
-      "user_prompt_digest": "5676cf49fc13cb0b05bd72dc3c545be11f057b8220c12a40c9df0c8cb50dcbcf"
+      "user_prompt_digest": "319de7289ad792ae1d1175d5db29de52e4dcd8bbc796c7f595d67c85863163b1"
     }
   ],
   "R1-BBCTX": [
@@ -63,7 +63,7 @@
       "ordinal": 3,
       "system_prompt_digest": "d5286d9e3aeb9a8c318e100dbbc6fa8a337bf6ee1bd04a8fa9f3e859ed02c079",
       "temperature": 0.3,
-      "user_prompt_digest": "9ed5060abb343a4990c17dc97a6c9cbc9b26837c45d2a24f49a064c274b29c5d"
+      "user_prompt_digest": "64b47330a5042a4d8d37fde78434fa524c29f3e512abfbe4d3f30eaa1ce0423f"
     },
     {
       "max_tokens": 20480,
@@ -84,7 +84,7 @@
       "ordinal": 6,
       "system_prompt_digest": "f4d35d02a165c22b3747132869386dfe41d247c64ca83a3189e4bde63a3291e4",
       "temperature": 0.2,
-      "user_prompt_digest": "5676cf49fc13cb0b05bd72dc3c545be11f057b8220c12a40c9df0c8cb50dcbcf"
+      "user_prompt_digest": "319de7289ad792ae1d1175d5db29de52e4dcd8bbc796c7f595d67c85863163b1"
     }
   ],
   "R2-BBAG": [
@@ -128,7 +128,7 @@
       "ordinal": 6,
       "system_prompt_digest": "d5286d9e3aeb9a8c318e100dbbc6fa8a337bf6ee1bd04a8fa9f3e859ed02c079",
       "temperature": 0.3,
-      "user_prompt_digest": "225d7f992da90c381631a98a68fd2794cf391df4938106e2ef7bd9601a029a95"
+      "user_prompt_digest": "fa58e738cc71a235264796cdb6fe729679f656c7da9a9a66f02050ef942be852"
     },
     {
       "max_tokens": 20480,
@@ -149,7 +149,7 @@
       "ordinal": 9,
       "system_prompt_digest": "f4d35d02a165c22b3747132869386dfe41d247c64ca83a3189e4bde63a3291e4",
       "temperature": 0.2,
-      "user_prompt_digest": "6f82f7ff2ba6d6740cc06b8c91fa8d03d62f531ace28d6a0346da3986c3a62c9"
+      "user_prompt_digest": "ae867c2adc8efc7b9cde30441dc98e2064d7f7a0e2eb8bf1114867d2693a7438"
     }
   ]
 }
