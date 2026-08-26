@@ -47,8 +47,22 @@ def emit_realization_package(report: ClosureReport,
     asserts = []
     satisfies = []
     req_decls = []
+    realized_attr = {
+        "time": "realizedEnduranceMin",
+        "range": "realizedRangeM",
+        "mass": "realizedMassKg",
+        "speed": "realizedCruiseSpeedMps",
+    }
     for i, v in enumerate(report.per_requirement or ()):
         if getattr(v, "scope", "closure") != "closure":
+            continue
+        attr = realized_attr.get(v.family)
+        if attr is None:
+            # payload (hover-throttle margin) has no realized attribute on
+            # RealizedDesign to assert against. The old fallback asserted
+            # realizedEnduranceMin >= <payload target> — vacuously true — and
+            # then `satisfy`d a requirement the closure report judged UNMET.
+            # No assertion is better than a fabricated one.
             continue
         req_name = v.req_id.replace("-", "_")
         req_decls.append(
@@ -56,15 +70,12 @@ def emit_realization_package(report: ClosureReport,
             f"    requirement {req_name.lower()} : {req_name};"
         )
         op = "<=" if v.family == "mass" else ">="
-        attr = {
-            "time": "realizedEnduranceMin",
-            "range": "realizedRangeM",
-            "mass": "realizedMassKg",
-            "speed": "realizedCruiseSpeedMps",
-        }.get(v.family, "realizedEnduranceMin")
         cname = f"realizationCloses{i}"
         asserts.append(f"        assert constraint {cname} {{ {attr} {op} {float(v.target)} }}")
-        satisfies.append(f"        satisfy {v.req_id.replace('-', '_').lower()};")
+        if v.met:
+            # `satisfy` is a formal satisfaction claim; an UNMET verdict keeps
+            # its (false) assert as the honest record but claims nothing.
+            satisfies.append(f"        satisfy {v.req_id.replace('-', '_').lower()};")
     if not asserts:
         asserts.append("        assert constraint realizationCloses { realizedEnduranceMin >= 0.0 }")
     sysml = (

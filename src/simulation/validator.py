@@ -131,7 +131,10 @@ class SimulationResult:
             if self.requirement_reachability_score is not None
             else self.reachability_score
         )
-        if self.behavioral_result is None or self.behavioral_result.extracted_sm_count == 0:
+        # Gate on "any behavioral scenario ran", not on the state-machine count:
+        # constraint-sweep scenarios are collected even for models with zero
+        # state defs, and their failures must not be discarded from the score.
+        if self.behavioral_result is None or not self.behavioral_result.scenario_results:
             return structural
         return 0.6 * structural + 0.4 * self.behavioral_score
 
@@ -153,7 +156,7 @@ class SimulationResult:
         if self.isolated_parts:
             lines.append(f"  Isolated parts:  {', '.join(self.isolated_parts)}"
                          f"  ({len(self.isolated_parts)} part(s) with no connections)")
-        if self.behavioral_result and self.behavioral_result.extracted_sm_count > 0:
+        if self.behavioral_result and self.behavioral_result.scenario_results:
             lines.append(f"  Behavioral Score:  {self.behavioral_score:.3f}"
                          f"  ({self.behavioral_result.passed_count()}/"
                          f"{len(self.behavioral_result.scenario_results)} SM scenarios)")
@@ -174,7 +177,7 @@ class SimulationResult:
             for r in self.passed_scenarios():
                 path_str = " → ".join(r.path) if r.path else "(direct)"
                 lines.append(f"    ✓ {r.scenario_name}: {path_str[:80]}")
-        if self.behavioral_result and self.behavioral_result.extracted_sm_count > 0:
+        if self.behavioral_result and self.behavioral_result.scenario_results:
             lines.append("")
             lines += self.behavioral_result.summary_lines()
         if self.recommendations:

@@ -184,7 +184,7 @@ class ReportingMixin:
 
         # ── Behavioral simulation (state machine) block ───────────────────
         br = getattr(sim_result, "behavioral_result", None)
-        if br is not None and br.extracted_sm_count > 0:
+        if br is not None and br.scenario_results:
             b_passed = br.passed_count()
             b_total  = len(br.scenario_results)
             b_icon   = score_icon(br.sim_score)
@@ -320,7 +320,7 @@ class ReportingMixin:
 
         # ── Behavioral simulation (state machine) detail report ───────────
         br = getattr(sim_result, "behavioral_result", None)
-        if br is not None and br.extracted_sm_count > 0:
+        if br is not None and br.scenario_results:
             b_passed = br.passed_count()
             b_total  = len(br.scenario_results)
             print(f"\n  ╔{'═'*W}╗")

@@ -1007,12 +1007,21 @@ def _run_accept_emergency_scenario(
     # This is a model design issue (missing guard conditions), not a simulator failure.
     nominal_triggers = {cmd for cmd, _ in graph.get(emrg_tr.source, [])}
     if emrg_tr.accept_trigger in nominal_triggers:
+        # Untestable, not passed: crediting an unexecuted branch as PASS made
+        # the one genuinely ambiguous transition the one with a free pass.
+        # Mirror the parametric-constraint rule — an untestable scenario leaves
+        # the denominator (tag consumed by _compute_score), and the ambiguity
+        # itself is surfaced as an issue for the refinement loop to see.
         r.timeline.append(
-            f"⚠ SKIP: trigger '{emrg_tr.accept_trigger}' is shared by a nominal "
-            f"transition from '{emrg_tr.source}' — non-deterministic without guard "
-            f"conditions; cannot reliably test emergency branch."
+            f"⚠ UNTESTABLE: trigger '{emrg_tr.accept_trigger}' is shared by a "
+            f"nominal transition from '{emrg_tr.source}' — non-deterministic "
+            f"without guard conditions; emergency branch cannot be driven."
         )
-        r.passed = True
+        r.passed = False
+        r.violations.append(
+            f"Ambiguous accept trigger '{emrg_tr.accept_trigger}' on "
+            f"'{emrg_tr.source}': shared by nominal and emergency transitions"
+        )
         r.tags.append("trigger_conflict")
         return r
 
@@ -1132,23 +1141,24 @@ def _run_cross_component_scenario(
         )
         return r
 
-    # 在 sm_flight 里找最近可达的 source 状态（nominal 链上最早有 send_cmd 转移的节点）
+    # 在 sm_flight 里找最近可达的 source 状态（nominal 链上最早有 send_cmd 转移的节点）。
+    # 用多重图 + BFS：单后继字典会把同一 source 的多条 nominal 出边塌缩成最后一条,
+    # 分叉型状态机上贪心游走会死胡同 → 假 FAIL(权重最高的场景)。
     nominal_trs_flight, _ = _classify_accept_transitions(sm_flight)
-    nominal_graph_flight = {
-        t.source: (t.accept_trigger, t.target)
-        for t in nominal_trs_flight
-        if t.source and t.target and t.accept_trigger
-    }
+    multigraph_flight = _build_nominal_multigraph(nominal_trs_flight)
 
-    # 找到最近的可触发 send_cmd 的状态（不限于 fault 目标）
+    # 找到最近的可触发 send_cmd 的状态（不限于 fault 目标）：BFS 最短命令序列
     emrg_sources = {t.source for t in all_trs_flight if t.source}
-    nav_cmds, state, visited = [], sm_flight.initial_state, set()
-    while state not in emrg_sources and state not in visited:
-        if state not in nominal_graph_flight:
-            break
-        visited.add(state)
-        cmd, state = nominal_graph_flight[state]
-        nav_cmds.append(cmd)
+    nav_cmds, state = None, sm_flight.initial_state
+    if state in emrg_sources:
+        nav_cmds = []
+    else:
+        for target in sorted(emrg_sources):
+            cmds = _bfs_nav_cmds(multigraph_flight, sm_flight.initial_state, target)
+            if cmds is not None and (nav_cmds is None or len(cmds) < len(nav_cmds)):
+                nav_cmds, state = cmds, target
+    if nav_cmds is None:
+        nav_cmds, state = [], sm_flight.initial_state
 
     if state not in emrg_sources:
         r.violations.append(
@@ -1664,23 +1674,19 @@ def _run_state_active_constraint_scenario(
                 f"Cannot resolve state constraint RHS {c.rhs}"
             )
     if rhs_value is not None:
-        epsilon = max(abs(float(rhs_value)) * 0.01, 0.01)
-        on_valid_side = (
-            float(rhs_value) + epsilon
-            if c.operator in {">=", ">"}
-            else float(rhs_value) - epsilon
-        )
-        on_invalid_side = (
-            float(rhs_value) - epsilon
-            if c.operator in {">=", ">"}
-            else float(rhs_value) + epsilon
-        )
-        if (
-            not eval_op(on_valid_side, c.operator, float(rhs_value))
-            or eval_op(on_invalid_side, c.operator, float(rhs_value))
-        ):
+        # No epsilon perturbation here, deliberately: probing rhs±ε against rhs
+        # itself is an arithmetic tautology for the ordering operators — it can
+        # never fail and therefore proved nothing while claiming to prove a
+        # "live boundary". Ordering-operator liveness is a theorem (rhs+ε and
+        # rhs−ε always land on opposite sides), and the plan gate
+        # (_LIVE_BOUNDARY_OPERATORS in activated_constraint_plan) already
+        # rejects the operators for which it fails by construction. What this
+        # scenario actually establishes is recorded honestly below: the RHS
+        # resolves to a number and the activation state carries a response.
+        if c.operator not in {">=", ">", "<=", "<"}:
             result.violations.append(
-                f"Constraint boundary {c.operator} {rhs_value:g} is not live"
+                f"Constraint operator {c.operator} has no live satisfaction "
+                "boundary to execute against"
             )
         else:
             response_label = (
@@ -1695,8 +1701,9 @@ def _run_state_active_constraint_scenario(
                 f"{response_label} executes"
             )
             result.timeline.append(
-                f"Runtime input {c.lhs} evaluated at live boundary "
-                f"{c.operator} {rhs_value:g}"
+                f"Runtime input {c.lhs} bound against threshold "
+                f"{c.operator} {rhs_value:g} (RHS resolved; boundary "
+                "liveness holds by construction for ordering operators)"
             )
     result.passed = not result.violations
     return result
@@ -1784,6 +1791,11 @@ def _compute_score(results: List[BehavioralScenarioResult]) -> float:
     total_w  = 0.0
     passed_w = 0.0
     for r in results:
+        if "trigger_conflict" in r.tags:
+            # Untestable (ambiguous trigger): excluded from the denominator —
+            # neither a free PASS nor a penalised FAIL; the ambiguity is
+            # reported through the scenario's issues instead.
+            continue
         if "cross_component" in r.tags:
             w = 1.5          # 响应链完整性：故障检测后必须能送达执行器，比 nominal 更关键
         elif "emergency" in r.tags:
@@ -1795,7 +1807,9 @@ def _compute_score(results: List[BehavioralScenarioResult]) -> float:
         total_w  += w
         if r.passed:
             passed_w += w
-    return passed_w / total_w if total_w > 0 else 0.0
+    # total_w == 0 now also covers "every scenario was untestable" (all
+    # excluded above) — neutral like the no-scenarios case, not a zero score.
+    return passed_w / total_w if total_w > 0 else 1.0
 
 
 # ---------------------------------------------------------------------------

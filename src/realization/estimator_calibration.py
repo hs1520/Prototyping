@@ -127,6 +127,12 @@ def calibration_grid(catalog: ComponentCatalog = DEFAULT_CATALOG,
                     continue  # cannot hover — outside the bench curve
                 del power_w  # bench power column can differ from V·I; endurance uses current
                 area = frame.arms * math.pi * radius_m ** 2
+                # KNOWN APPROXIMATION (deliberately unchanged 2026-08-26): CELL_V
+                # rates Li-ion packs at LiPo 3.7 V/cell. The fitted calibration
+                # values cited by the dissertation (0.829 / 15.2%) were produced
+                # with this constant; correcting it here would silently diverge
+                # the code from the archived claims. Use pack.operating_voltage_v()
+                # if this is ever refit. forward_flight_check already uses it.
                 v_nom = pack.cells * CELL_V
                 total_a = current_a * frame.arms + AVIONICS_POWER_W / v_nom
                 ds_endurance = (pack.capacity_mah / 1000.0 * USABLE) / total_a * 60.0

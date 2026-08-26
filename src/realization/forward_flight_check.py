@@ -55,6 +55,9 @@ def forward_flight_verdicts(
         rotor_radius_m,
         rd.pack.capacity_mah,
         rd.pack.cells,
+        # Li-ion packs are 3.6 V/cell nominal — the 3.7 default silently rated
+        # them as LiPo, inflating usable energy (and range verdicts) by ~2.8%.
+        cell_v=rd.pack.operating_voltage_v() / rd.pack.cells,
     )
     realized_range_m = range_result.range_km * 1000.0
     max_speed = max_sustainable_speed_mps(rd, mass_kg, rotor_radius_m)
@@ -114,6 +117,6 @@ def _forward_power_limit_w(rd: RealizedDesign) -> float:
     power envelope.
     """
     motor_limit_w = max(p.power_w for p in rd.combo.curve) * rd.rotor_count
-    pack_voltage_v = rd.pack.cells * 3.7
+    pack_voltage_v = rd.pack.operating_voltage_v()
     pack_limit_w = (rd.pack.capacity_mah / 1000.0) * rd.pack.c_rating * pack_voltage_v
     return min(motor_limit_w, pack_limit_w)
