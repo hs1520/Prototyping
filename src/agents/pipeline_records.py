@@ -103,3 +103,39 @@ class GenerationContext:
     planned_action_preparation: Optional["PlannedActionPreparation"] = None
     planned_action_observation: Optional["PlannedActionObservation"] = None
     result: Dict[str, Any] = field(default_factory=dict)
+
+
+def publish_handoff_transition(
+    blackboard: Any,
+    topic: str,
+    producer: str,
+    handoff: Any,
+    status: str,
+) -> None:
+    """Terminate a handoff AUDITABLY: mutate the live typed record and publish
+    the transition on the same topic.
+
+    The opening ``publish_typed`` snapshots its payload while the handoff is
+    ACTIVE and payloads are immutable (digest-bound), so mutating only the
+    typed object left every archived event log showing both handoffs as
+    permanently ACTIVE — a rejected handoff was indistinguishable from a
+    completed one post-hoc. The follow-up record is the blackboard-idiomatic
+    fix: history is appended, never edited.
+    """
+    from ..prototyping.blackboard import RecordType
+
+    handoff.status = status
+    blackboard.publish(
+        RecordType.CONTROL,
+        topic,
+        producer,
+        {
+            "record_schema": f"{type(handoff).__name__}Transition",
+            "task_id": handoff.task_id,
+            "envelope_id": handoff.envelope_id,
+            "session_id": handoff.session_id,
+            "status": status,
+        },
+        task_id=handoff.task_id,
+        session_id=handoff.session_id,
+    )

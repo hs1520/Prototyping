@@ -11,7 +11,7 @@ from ..utils.sysml_text_utils import (
     named_block_span,
     remove_named_package,
 )
-from .pipeline_records import AGPlanningHandoffRecord
+from .pipeline_records import AGPlanningHandoffRecord, publish_handoff_transition
 
 
 def _shared_check_syntax(*args, **kwargs):
@@ -169,9 +169,15 @@ class AGAssuranceMixin:
         self.ag_input_dispositions = {}
         planning_session = self._open_ag_planning_session(requirements)
         try:
-            return self._compile_ag_generation_plan(selected, requirements)
-        finally:
-            self._close_ag_planning_session(planning_session)
+            plan = self._compile_ag_generation_plan(selected, requirements)
+        except BaseException:
+            # Fail closed on the board too: a planning task whose compilation
+            # raised must not be archived as a successful ACCEPTED handoff
+            # (run_metrics counts COMPLETED sessions as successful handoffs).
+            self._close_ag_planning_session(planning_session, success=False)
+            raise
+        self._close_ag_planning_session(planning_session, success=True)
+        return plan
 
 
     def _open_ag_planning_session(self, requirements: List[str]) -> Optional[Any]:
@@ -250,8 +256,17 @@ class AGAssuranceMixin:
         return handoff
 
 
-    def _close_ag_planning_session(self, handoff: Optional[Any]) -> None:
-        """Publish the typed planning result and close the session."""
+    def _close_ag_planning_session(
+        self, handoff: Optional[Any], *, success: bool = True,
+    ) -> None:
+        """Publish the typed planning result and close the session.
+
+        ``success`` mirrors the design handoff's rule (``collaboration.py``):
+        the archived result/task/session statuses are derived from the actual
+        outcome, never hard-coded — a compilation that failed closed must be
+        archived as REJECTED, or the coordination metrics count it as a
+        successful migrated handoff.
+        """
         if not handoff:
             return
         from ..prototyping.blackboard import RecordType, TaskStatus
@@ -266,30 +281,37 @@ class AGAssuranceMixin:
             "agent.ag_planning.result",
             "AGPlanningAgent",
             {
-                "success": True,
+                "success": success,
                 "context_envelope_id": envelope.envelope_id,
                 "context_envelope_digest": envelope.envelope_digest,
                 "transcript_digest": session.transcript_digest,
                 "included_record_ids": list(envelope.included_record_ids),
                 "decision_attempts": len(self.last_ag_authoring_attempts),
-                "accepted_status": "ACCEPTED",
+                "accepted_status": "ACCEPTED" if success else "REJECTED",
             },
             task_id=task.task_id,
             session_id=session.session_id,
         )
+        task_status = TaskStatus.COMPLETED if success else TaskStatus.REJECTED
+        session_status = (
+            SessionStatus.COMPLETED if success else SessionStatus.REJECTED
+        )
         if task.status is TaskStatus.ACTIVE:
             self.blackboard.transition_task(
                 task.task_id,
-                TaskStatus.COMPLETED,
+                task_status,
                 producer="AGPlanningAgent",
                 result_record_ids=(record.record_id,),
             )
         if session.status is SessionStatus.OPEN:
             session.close(
-                SessionStatus.COMPLETED,
+                session_status,
                 output_record_ids=(record.record_id,),
             )
-        handoff.status = "COMPLETED"
+        publish_handoff_transition(
+            self.blackboard, self.AG_PLANNING_HANDOFF_TOPIC, "Orchestrator",
+            handoff, "COMPLETED" if success else "REJECTED",
+        )
 
 
     def _compile_ag_generation_plan(

@@ -9,7 +9,7 @@ from ..sysml.lite_model import build_lite_model
 from ..sysml.model import SysMLModel
 from ..utils.sysml_text_utils import get_sysml_text, set_sysml_text
 from ..utils.tokens import estimate_tokens
-from .pipeline_records import DesignHandoffRecord
+from .pipeline_records import DesignHandoffRecord, publish_handoff_transition
 
 
 class CollaborationMixin:
@@ -330,7 +330,10 @@ class CollaborationMixin:
         self.task_sessions.stale_after_commit(
             committed.revision, committed.model_digest
         )
-        handoff.status = "COMPLETED" if success else "REJECTED"
+        publish_handoff_transition(
+            self.blackboard, self.DESIGN_HANDOFF_TOPIC, "Orchestrator",
+            handoff, "COMPLETED" if success else "REJECTED",
+        )
 
 
     def _reject_design_handoff(self, reason: str, *, producer: str) -> None:
@@ -363,7 +366,10 @@ class CollaborationMixin:
             )
         elif record.record_id not in session.output_record_ids:
             session.output_record_ids.append(record.record_id)
-        handoff.status = "REJECTED"
+        publish_handoff_transition(
+            self.blackboard, self.DESIGN_HANDOFF_TOPIC, producer,
+            handoff, "REJECTED",
+        )
 
 
     def _run_verification_handoff(self) -> Optional[Dict[str, Any]]:

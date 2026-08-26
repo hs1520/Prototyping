@@ -76,7 +76,14 @@ class RequirementsDesignMixin:
                     for match in re.findall(r"REQ[-_][A-Z]+[-_]\d+", str(warning), re.I)
                 )
         if isinstance(self.last_requirement_input, dict):
-            self.last_requirement_input["unmeasurable_req_ids"] = sorted(unmeasurable)
+            # Assign THROUGH the state property, never in place: the getter
+            # returns the live dict shared (via dataclasses.replace) by every
+            # published runtime-state revision, so an in-place write edited the
+            # archived history retroactively and published no new revision —
+            # the audit trail could not reconstruct what the closure gate saw.
+            updated = dict(self.last_requirement_input)
+            updated["unmeasurable_req_ids"] = sorted(unmeasurable)
+            self.last_requirement_input = updated
 
         if validation["issues"]:
             for issue in validation["issues"][:5]:
