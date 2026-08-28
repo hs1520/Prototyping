@@ -1,0 +1,314 @@
+{
+  "pilot_batches": {
+    "pilot_n6_0c26731_20260821_1030/seed-0/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-0/R1-BBCTX": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-0/R2-BBAG": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-1/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-1/R1-BBCTX": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-1/R2-BBAG": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-2/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-2/R1-BBCTX": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-2/R2-BBAG": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-3/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-3/R1-BBCTX": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-4/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-4/R1-BBCTX": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_1030/seed-5/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-0/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-0/R1-BBCTX": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-0/R2-BBAG": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-1/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-1/R1-BBCTX": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-1/R2-BBAG": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-2/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-2/R1-BBCTX": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-2/R2-BBAG": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-3/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-3/R1-BBCTX": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-3/R2-BBAG": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-4/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-4/R1-BBCTX": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-4/R2-BBAG": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-5/R0-CURRENT": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-5/R1-BBCTX": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    },
+    "pilot_n6_0c26731_20260821_2204/seed-5/R2-BBAG": {
+      "REQ-FUNC-002": {
+        "keyword": null,
+        "recorded": "behaviorally-verified"
+      }
+    }
+  },
+  "canonical_runs": {
+    "0507a2f7-f639-47ec-9cef-2dcda7e1b872": {
+      "requirement_count": 29,
+      "verdict_differences": {
+        "REQ-FUNC-002": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-005": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-007": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        }
+      }
+    },
+    "24891142-71ef-4272-b626-dced58fc3603": {
+      "requirement_count": 29,
+      "verdict_differences": {
+        "REQ-FUNC-002": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-005": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-007": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        }
+      }
+    },
+    "988797ae-da93-4b8f-9d26-55ce15a56643": {
+      "requirement_count": 29,
+      "verdict_differences": {
+        "REQ-FUNC-002": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-005": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-007": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        }
+      }
+    },
+    "add6166a-b056-4931-88cb-45d1010321a5": {
+      "requirement_count": 29,
+      "verdict_differences": {
+        "REQ-FUNC-002": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-005": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-007": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        }
+      }
+    },
+    "ef492bc0-6e31-4dea-8c9f-a88343d10906": {
+      "requirement_count": 29,
+      "verdict_differences": {
+        "REQ-FUNC-002": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-005": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-007": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        }
+      }
+    },
+    "f99ac140-4116-482b-bf08-1af64cddbdea": {
+      "requirement_count": 29,
+      "verdict_differences": {
+        "REQ-FUNC-002": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-005": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        },
+        "REQ-FUNC-007": {
+          "keyword": null,
+          "recorded": "behaviorally-verified"
+        }
+      }
+    },
+    "fc9f76ee-0e33-4532-929e-b74a107ba6e7": {
+      "requirement_count": 31,
+      "verdict_differences": {
+        "REQ-FUNC-002": {
+          "keyword": "behaviorally-verified",
+          "recorded": null
+        }
+      },
+      "closure_gaps_keyword": [
+        "[VERIFY-GAP] REQ_FUNC_004 has no verification anchor at any tier — it will land UNASSIGNED in the verification matrix. Requirement: \"The AutonomousDrone shall maintain a precision hover at the designated delivery coordinates.\". Fix inside the part def that satisfies it: add EITHER (a) an attribute or state-machine guard carrying the requirement's explicit threshold/default so the parameter linker can anchor it (configuration/safety semantics, e.g. a power-on default state or a numeric limit), OR (b) a state-machine transition whose accept event or guard implements the real trigger and whose reachable target-state entry action invokes the required response so the behavioural simulator can exercise it. An action declaration alone is not an anchor. Preserve trigger qualifiers such as valid-command and landing-completed; when the requirement says `within N seconds`, also model max/current latency attributes and an assert constraint carrying that bound. Do NOT invent physics calcs, do NOT add or remove requirement defs, and do NOT fake external evidence.",
+        "[VERIFY-GAP] REQ_FUNC_006 has no verification anchor at any tier — it will land UNASSIGNED in the verification matrix. Requirement: \"The AutonomousDrone shall mechanically inhibit payload release while a delivery-abort condition is active.\". Fix inside the part def that satisfies it: add EITHER (a) an attribute or state-machine guard carrying the requirement's explicit threshold/default so the parameter linker can anchor it (configuration/safety semantics, e.g. a power-on default state or a numeric limit), OR (b) a state-machine transition whose accept event or guard implements the real trigger and whose reachable target-state entry action invokes the required response so the behavioural simulator can exercise it. An action declaration alone is not an anchor. Preserve trigger qualifiers such as valid-command and landing-completed; when the requirement says `within N seconds`, also model max/current latency attributes and an assert constraint carrying that bound. Do NOT invent physics calcs, do NOT add or remove requirement defs, and do NOT fake external evidence. This is an INHIBITION requirement: it is satisfied when a response is withheld while a condition holds. Model it as a Boolean attribute for the inhibiting condition on the owning part (e.g. deliveryAbortActive : Boolean = false) and EITHER a guard `if not <condition>` on the transition that would otherwise perform the response, OR a transition from the response state back to the safe/secured state that fires on the condition. Do not add a new response action; the anchor is the guarded or reverting transition, which the behavioural simulator exercises by sweeping the condition across true and false."
+      ],
+      "closure_gaps_recorded": []
+    }
+  }
+}

@@ -1,0 +1,600 @@
+{
+  "schema_version": "9.0",
+  "artifact_role": "WHOLE_MODEL_GENERATION_PLAN",
+  "semantic_authority": "GENERATION_INPUT_ONLY_COMMITTED_SYSML_WINS",
+  "source": "LLM_TYPED_JSON_RETRY",
+  "status": "PASS",
+  "components": [
+    {
+      "name": "EquipmentMonitor",
+      "responsibility": "Detects equipment faults and reports status to the central controller.",
+      "requirements": [
+        "REQ_FUNC_001"
+      ],
+      "ports": [
+        {
+          "name": "equipmentStatus",
+          "direction": "out",
+          "type": "EquipmentStatusPort",
+          "external": false
+        }
+      ],
+      "attributes": [],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "OperatorInterface",
+      "responsibility": "Provides alerts and notifications to on-duty operators.",
+      "requirements": [
+        "REQ_FUNC_001"
+      ],
+      "ports": [
+        {
+          "name": "alertCmd",
+          "direction": "in",
+          "type": "AlertCmdPort",
+          "external": false
+        }
+      ],
+      "attributes": [],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "FireAlarmInterface",
+      "responsibility": "Receives and validates external fire-alarm signals.",
+      "requirements": [
+        "REQ_FUNC_002"
+      ],
+      "ports": [
+        {
+          "name": "fireAlarmSignal",
+          "direction": "out",
+          "type": "FireAlarmPort",
+          "external": false
+        }
+      ],
+      "attributes": [],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "DoorController",
+      "responsibility": "Manages the locking mechanisms of emergency exit doors.",
+      "requirements": [
+        "REQ_FUNC_002"
+      ],
+      "ports": [
+        {
+          "name": "doorUnlockCmd",
+          "direction": "in",
+          "type": "DoorCmdPort",
+          "external": false
+        }
+      ],
+      "attributes": [],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "BmsController",
+      "responsibility": "Coordinates building management functions, executes self-tests, and triggers emergency responses.",
+      "requirements": [
+        "REQ_FUNC_001",
+        "REQ_FUNC_002",
+        "REQ_FUNC_003"
+      ],
+      "ports": [
+        {
+          "name": "equipmentStatus",
+          "direction": "in",
+          "type": "EquipmentStatusPort",
+          "external": false
+        },
+        {
+          "name": "alertCmd",
+          "direction": "out",
+          "type": "AlertCmdPort",
+          "external": false
+        },
+        {
+          "name": "fireAlarmSignal",
+          "direction": "in",
+          "type": "FireAlarmPort",
+          "external": false
+        },
+        {
+          "name": "doorUnlockCmd",
+          "direction": "out",
+          "type": "DoorCmdPort",
+          "external": false
+        },
+        {
+          "name": "energyReport",
+          "direction": "in",
+          "type": "EnergyReportPort",
+          "external": false
+        }
+      ],
+      "attributes": [
+        {
+          "name": "alertLatency",
+          "value_type": "Real",
+          "unit": "min",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "5",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_FUNC_001",
+          "source_digest": "1c4cb479afc0a08299688dd7ad04552cc846b1ce4ba35ffa8b96b98bc4694667"
+        }
+      ],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "EnergyMonitor",
+      "responsibility": "Continuously monitors and reports the total energy consumption of the building.",
+      "requirements": [
+        "REQ_FUNC_004"
+      ],
+      "ports": [
+        {
+          "name": "buildingEnergy",
+          "direction": "in",
+          "type": "EnergyPort",
+          "external": true
+        },
+        {
+          "name": "energyReport",
+          "direction": "out",
+          "type": "EnergyReportPort",
+          "external": false
+        }
+      ],
+      "attributes": [],
+      "passive": false,
+      "passive_rationale": ""
+    }
+  ],
+  "connections": [
+    {
+      "source": {
+        "component": "EquipmentMonitor",
+        "port": "equipmentStatus"
+      },
+      "target": {
+        "component": "BmsController",
+        "port": "equipmentStatus"
+      },
+      "item_type": "EquipmentStatusPort",
+      "requirements": [
+        "REQ_FUNC_001"
+      ]
+    },
+    {
+      "source": {
+        "component": "BmsController",
+        "port": "alertCmd"
+      },
+      "target": {
+        "component": "OperatorInterface",
+        "port": "alertCmd"
+      },
+      "item_type": "AlertCmdPort",
+      "requirements": [
+        "REQ_FUNC_001"
+      ]
+    },
+    {
+      "source": {
+        "component": "FireAlarmInterface",
+        "port": "fireAlarmSignal"
+      },
+      "target": {
+        "component": "BmsController",
+        "port": "fireAlarmSignal"
+      },
+      "item_type": "FireAlarmPort",
+      "requirements": [
+        "REQ_FUNC_002"
+      ]
+    },
+    {
+      "source": {
+        "component": "BmsController",
+        "port": "doorUnlockCmd"
+      },
+      "target": {
+        "component": "DoorController",
+        "port": "doorUnlockCmd"
+      },
+      "item_type": "DoorCmdPort",
+      "requirements": [
+        "REQ_FUNC_002"
+      ]
+    },
+    {
+      "source": {
+        "component": "EnergyMonitor",
+        "port": "energyReport"
+      },
+      "target": {
+        "component": "BmsController",
+        "port": "energyReport"
+      },
+      "item_type": "EnergyReportPort",
+      "requirements": [
+        "REQ_FUNC_004"
+      ]
+    }
+  ],
+  "requirement_realizations": [
+    {
+      "requirement_id": "REQ_FUNC_001",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "detecting an equipment fault",
+      "effect_concept": "alert the on-duty operators",
+      "connection_path": [
+        {
+          "source_component": "EquipmentMonitor",
+          "source_port": "equipmentStatus",
+          "target_component": "BmsController",
+          "target_port": "equipmentStatus",
+          "item_type": "EquipmentStatusPort"
+        },
+        {
+          "source_component": "BmsController",
+          "source_port": "alertCmd",
+          "target_component": "OperatorInterface",
+          "target_port": "alertCmd",
+          "item_type": "AlertCmdPort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "1c4cb479afc0a08299688dd7ad04552cc846b1ce4ba35ffa8b96b98bc4694667",
+      "response_intent": "alert",
+      "response_intent_rationale": "",
+      "response_markers": [
+        "alert"
+      ]
+    },
+    {
+      "requirement_id": "REQ_FUNC_002",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "receiving a validated fire-alarm signal",
+      "effect_concept": "unlock all emergency exit doors",
+      "connection_path": [
+        {
+          "source_component": "FireAlarmInterface",
+          "source_port": "fireAlarmSignal",
+          "target_component": "BmsController",
+          "target_port": "fireAlarmSignal",
+          "item_type": "FireAlarmPort"
+        },
+        {
+          "source_component": "BmsController",
+          "source_port": "doorUnlockCmd",
+          "target_component": "DoorController",
+          "target_port": "doorUnlockCmd",
+          "item_type": "DoorCmdPort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "eec072a08a9c800c93e841b2e9f689fcb26d8c38f4dbfaf5e29dac810916593d",
+      "response_intent": "unlock",
+      "response_intent_rationale": "",
+      "response_markers": [
+        "unlock"
+      ]
+    },
+    {
+      "requirement_id": "REQ_FUNC_003",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "trigger_concept": "prior to entering service",
+      "effect_concept": "execute an automated self-test",
+      "connection_path": [],
+      "owner_component": "BmsController",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "ServiceBehavior",
+      "source_digest": "712674facdc65fed8ce3c683be780595bd0a8faa08eb98a20435edd1dbbb3070",
+      "response_intent": "self_test",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_FUNC_004",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "trigger_concept": "continuously",
+      "effect_concept": "monitor total energy consumption",
+      "connection_path": [],
+      "owner_component": "EnergyMonitor",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "EnergyBehavior",
+      "source_digest": "d292db3f85e7628c1af1a0efe79764cedf675825b14ebd40f1b1f366a3eb66cd",
+      "response_intent": "none",
+      "response_intent_rationale": "Continuous monitoring condition without a discrete event-driven response.",
+      "response_markers": []
+    }
+  ],
+  "structural_obligations": [
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_001_001",
+      "requirement_id": "REQ_FUNC_001",
+      "source_component": "EquipmentMonitor",
+      "target_component": "OperatorInterface",
+      "required_components": [
+        "EquipmentMonitor",
+        "BmsController",
+        "OperatorInterface"
+      ],
+      "required_connections": [
+        {
+          "source_component": "EquipmentMonitor",
+          "source_port": "equipmentStatus",
+          "target_component": "BmsController",
+          "target_port": "equipmentStatus",
+          "item_type": "EquipmentStatusPort"
+        },
+        {
+          "source_component": "BmsController",
+          "source_port": "alertCmd",
+          "target_component": "OperatorInterface",
+          "target_port": "alertCmd",
+          "item_type": "AlertCmdPort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "detecting an equipment fault",
+      "effect_concept": "alert the on-duty operators",
+      "source_digest": "1c4cb479afc0a08299688dd7ad04552cc846b1ce4ba35ffa8b96b98bc4694667",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_002_001",
+      "requirement_id": "REQ_FUNC_002",
+      "source_component": "FireAlarmInterface",
+      "target_component": "DoorController",
+      "required_components": [
+        "FireAlarmInterface",
+        "BmsController",
+        "DoorController"
+      ],
+      "required_connections": [
+        {
+          "source_component": "FireAlarmInterface",
+          "source_port": "fireAlarmSignal",
+          "target_component": "BmsController",
+          "target_port": "fireAlarmSignal",
+          "item_type": "FireAlarmPort"
+        },
+        {
+          "source_component": "BmsController",
+          "source_port": "doorUnlockCmd",
+          "target_component": "DoorController",
+          "target_port": "doorUnlockCmd",
+          "item_type": "DoorCmdPort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "receiving a validated fire-alarm signal",
+      "effect_concept": "unlock all emergency exit doors",
+      "source_digest": "eec072a08a9c800c93e841b2e9f689fcb26d8c38f4dbfaf5e29dac810916593d",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_003_001",
+      "requirement_id": "REQ_FUNC_003",
+      "source_component": "BmsController",
+      "target_component": "BmsController",
+      "required_components": [
+        "BmsController"
+      ],
+      "required_connections": [],
+      "entry_kind": "SOURCE_ANCHORED_LOCAL_BEHAVIOR",
+      "trigger_concept": "prior to entering service",
+      "effect_concept": "execute an automated self-test",
+      "source_digest": "712674facdc65fed8ce3c683be780595bd0a8faa08eb98a20435edd1dbbb3070",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "ServiceBehavior"
+    },
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_004_001",
+      "requirement_id": "REQ_FUNC_004",
+      "source_component": "EnergyMonitor",
+      "target_component": "EnergyMonitor",
+      "required_components": [
+        "EnergyMonitor"
+      ],
+      "required_connections": [],
+      "entry_kind": "SOURCE_ANCHORED_LOCAL_BEHAVIOR",
+      "trigger_concept": "continuously",
+      "effect_concept": "monitor total energy consumption",
+      "source_digest": "d292db3f85e7628c1af1a0efe79764cedf675825b14ebd40f1b1f366a3eb66cd",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "EnergyBehavior"
+    }
+  ],
+  "semantic_obligations": [],
+  "semantic_bindings": [],
+  "constraints": [
+    {
+      "constraint_id": "alertLatencyConstraint",
+      "owner": "BmsController",
+      "expression": {
+        "lhs": "alertLatency",
+        "operator": "<=",
+        "rhs": "5"
+      },
+      "activation": {
+        "kind": "STATE_ACTIVE",
+        "reference": "ServiceBehavior::FaultAlert"
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_001",
+        "source_digest": "1c4cb479afc0a08299688dd7ad04552cc846b1ce4ba35ffa8b96b98bc4694667"
+      },
+      "verification_tier": "INSPECTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    }
+  ],
+  "behaviors": [
+    {
+      "owner": "BmsController",
+      "behavior_id": "ServiceBehavior",
+      "initial_state": "Init",
+      "states": [
+        {
+          "state_id": "Init",
+          "role": "INITIAL",
+          "entry_action": null,
+          "do_action": null
+        },
+        {
+          "state_id": "SelfTest",
+          "role": "RESPONSE",
+          "entry_action": "executeSelfTest",
+          "do_action": null
+        },
+        {
+          "state_id": "Normal",
+          "role": "NORMAL",
+          "entry_action": null,
+          "do_action": "monitorSystem"
+        },
+        {
+          "state_id": "FaultAlert",
+          "role": "FAULT",
+          "entry_action": "alertOperators",
+          "do_action": null
+        },
+        {
+          "state_id": "FireEmergency",
+          "role": "RESPONSE",
+          "entry_action": "unlockDoors",
+          "do_action": null
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "startSelfTest",
+          "source": "Init",
+          "target": "SelfTest",
+          "trigger_kind": "ACCEPT",
+          "trigger": "powerOn"
+        },
+        {
+          "transition_id": "testPassed",
+          "source": "SelfTest",
+          "target": "Normal",
+          "trigger_kind": "ACCEPT",
+          "trigger": "selfTestPassed"
+        },
+        {
+          "transition_id": "faultDetected",
+          "source": "Normal",
+          "target": "FaultAlert",
+          "trigger_kind": "ACCEPT",
+          "trigger": "equipmentFaultDetected"
+        },
+        {
+          "transition_id": "fireAlarmValidated",
+          "source": "Normal",
+          "target": "FireEmergency",
+          "trigger_kind": "ACCEPT",
+          "trigger": "fireAlarmSignalReceived"
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_001",
+        "source_digest": "1c4cb479afc0a08299688dd7ad04552cc846b1ce4ba35ffa8b96b98bc4694667"
+      }
+    },
+    {
+      "owner": "EnergyMonitor",
+      "behavior_id": "EnergyBehavior",
+      "initial_state": "Init",
+      "states": [
+        {
+          "state_id": "Init",
+          "role": "INITIAL",
+          "entry_action": null,
+          "do_action": null
+        },
+        {
+          "state_id": "Monitoring",
+          "role": "NORMAL",
+          "entry_action": null,
+          "do_action": "monitorEnergy"
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "startMonitoring",
+          "source": "Init",
+          "target": "Monitoring",
+          "trigger_kind": "ACCEPT",
+          "trigger": "powerOn"
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_004",
+        "source_digest": "d292db3f85e7628c1af1a0efe79764cedf675825b14ebd40f1b1f366a3eb66cd"
+      }
+    }
+  ],
+  "behavior_obligations": [],
+  "planned_event_symbols": [
+    {
+      "name": "equipmentFaultDetected",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::BmsController::ServiceBehavior"
+      ]
+    },
+    {
+      "name": "fireAlarmSignalReceived",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::BmsController::ServiceBehavior"
+      ]
+    },
+    {
+      "name": "powerOn",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::BmsController::ServiceBehavior",
+        "BEHAVIOR::EnergyMonitor::EnergyBehavior"
+      ]
+    },
+    {
+      "name": "selfTestPassed",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::BmsController::ServiceBehavior"
+      ]
+    }
+  ],
+  "behavior_identity_reconciliations": [],
+  "constraint_identity_reconciliations": [],
+  "issues": [],
+  "advisories": []
+}
