@@ -919,3 +919,159 @@ def test_rewiring_planned_ports_is_not_an_extension():
     _, report2 = apply_generation_plan(model2, plan)
     assert report2["status"] == "FAIL"
     assert any("unplanned connection" in i for i in report2["issues"])
+
+
+# ---------------------------------------------------------------------------
+# Declared (out-of-vocabulary) response intents and the unverifiable record
+# ---------------------------------------------------------------------------
+
+_ALERT_REQ = (
+    "REQ-FUNC-001: The system shall alert the operators within 5 minutes "
+    "of an equipment fault."
+)
+
+
+def _alert_payload() -> dict:
+    """A plan whose FUNC requirement obliges a response outside the built-in
+    intent table (alert), realized locally with a reachable alert action."""
+    payload = copy.deepcopy(_PAYLOAD)
+    payload["components"][0]["responsibility"] = (
+        "Monitors equipment and alerts the operators."
+    )
+    payload["requirement_realizations"] = [{
+        "requirement_id": "REQ_FUNC_001",
+        "realization_kind": "LOCAL_BEHAVIOR",
+        "trigger_concept": "an equipment fault",
+        "effect_concept": "alert the operators",
+        "owner_component": "Producer",
+        "behavior_kind": "STATE_DEF",
+        "behavior_name": "AlertBehavior",
+        "response_intent": "alert",
+        "response_markers": ["alert"],
+        "connection_path": [],
+    }]
+    payload["behaviors"] = [{
+        "owner": "Producer",
+        "behavior_id": "AlertBehavior",
+        "initial_state": "monitoring",
+        "states": [
+            {"state_id": "monitoring", "role": "INITIAL"},
+            {
+                "state_id": "alerting",
+                "role": "RESPONSE",
+                "entry_action": "alertOperators",
+            },
+        ],
+        "transitions": [{
+            "transition_id": "onFault",
+            "source": "monitoring",
+            "target": "alerting",
+            "trigger_kind": "ACCEPT",
+            "trigger": "EquipmentFaultDetected",
+        }],
+        "provenance": {
+            "kind": "FROZEN_REQUIREMENT",
+            "requirement_id": "REQ_FUNC_001",
+        },
+    }]
+    return payload
+
+
+def test_declared_intent_with_anchored_markers_and_reachable_response_passes():
+    plan = ModelGenerationPlan.from_payload(
+        _alert_payload(),
+        requirements=[_ALERT_REQ],
+        require_source_anchored_paths=True,
+    )
+    assert not plan.issues
+
+
+def test_out_of_vocabulary_intent_without_markers_is_a_plan_defect():
+    payload = _alert_payload()
+    payload["requirement_realizations"][0]["response_markers"] = []
+
+    plan = ModelGenerationPlan.from_payload(
+        payload, requirements=[_ALERT_REQ],
+        require_source_anchored_paths=True,
+    )
+
+    assert any(
+        "REQ_FUNC_001 response_intent 'alert'" in issue
+        and "declares no response_markers" in issue
+        for issue in plan.issues
+    )
+
+
+def test_a_marker_not_anchored_in_the_effect_phrase_is_refused():
+    """The anti-self-grading rule: the planner cannot declare a marker its
+    own behaviours happen to satisfy unless the requirement's effect phrase
+    names it."""
+    payload = _alert_payload()
+    payload["requirement_realizations"][0]["response_markers"] = ["hovering"]
+
+    plan = ModelGenerationPlan.from_payload(
+        payload, requirements=[_ALERT_REQ],
+        require_source_anchored_paths=True,
+    )
+
+    assert any(
+        "share no content word with the copied effect phrase" in issue
+        for issue in plan.issues
+    )
+
+
+def test_declared_intent_still_demands_a_reachable_declared_response():
+    """Declared markers buy checkability, not a pass: the plan must still
+    carry a reachable state producing the declared response."""
+    payload = _alert_payload()
+    payload["behaviors"][0]["states"][1] = {
+        "state_id": "alerting", "role": "RESPONSE",
+    }  # response state no longer produces the alert action
+
+    plan = ModelGenerationPlan.from_payload(
+        payload, requirements=[_ALERT_REQ],
+        require_source_anchored_paths=True,
+    )
+
+    assert any(
+        "REQ_FUNC_001 needs a planned alert response" in issue
+        for issue in plan.issues
+    )
+
+
+def test_unverifiable_requires_a_rationale_and_then_obliges_no_behavior():
+    payload = _alert_payload()
+    realization = payload["requirement_realizations"][0]
+    realization["response_intent"] = "unverifiable"
+    realization["response_markers"] = []
+    payload["behaviors"] = []
+
+    missing = ModelGenerationPlan.from_payload(
+        payload, requirements=[_ALERT_REQ],
+        require_source_anchored_paths=True,
+    )
+    assert any(
+        "records response_intent 'unverifiable' without a "
+        "response_intent_rationale" in issue
+        for issue in missing.issues
+    )
+
+    realization["response_intent_rationale"] = (
+        "the alert deadline is a latency property no reachable-action "
+        "marker can evidence"
+    )
+    reasoned = ModelGenerationPlan.from_payload(
+        payload, requirements=[_ALERT_REQ],
+        require_source_anchored_paths=True,
+    )
+    assert not any("response_intent" in issue for issue in reasoned.issues)
+    assert not any("needs a planned" in issue for issue in reasoned.issues)
+
+
+def test_response_markers_survive_the_plan_serialisation_round_trip():
+    plan = ModelGenerationPlan.from_payload(
+        _alert_payload(), requirements=[_ALERT_REQ],
+        require_source_anchored_paths=True,
+    )
+    realization = plan.requirement_realizations[0].to_dict()
+    assert realization["response_markers"] == ["alert"]

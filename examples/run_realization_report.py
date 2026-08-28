@@ -88,6 +88,7 @@ def require_authoritative_functional_closure(
     *,
     unmeasurable_req_ids=None,
     planned_intents=None,
+    planned_markers=None,
 ) -> list[str]:
     """Reject publication while model-fixable FUNC gaps remain.
 
@@ -112,6 +113,7 @@ def require_authoritative_functional_closure(
         model_sysml, SYSTEM, strict=True,
         unmeasurable_req_ids=unmeasurable_req_ids,
         planned_intents=planned_intents,
+        planned_markers=planned_markers,
     )
     ids = sorted(set(
         match.group(0)
@@ -204,16 +206,25 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
     _ri = getattr(orch, "last_requirement_input", None) or {}
     _plan = getattr(orch, "_active_model_generation_plan", None) or {}
     _intents = {}
+    _markers = {}
     for _item in _plan.get("requirement_realizations") or ():
         if isinstance(_item, dict):
             _rid = str(_item.get("requirement_id") or "").strip().upper().replace("-", "_")
             _iv = str(_item.get("response_intent") or "").strip().lower()
             if _rid and _iv:
                 _intents[_rid] = _iv
+            _mv = _item.get("response_markers")
+            if _rid and isinstance(_mv, (list, tuple)):
+                _ms = frozenset(
+                    str(v or "").strip().lower() for v in _mv if str(v or "").strip()
+                )
+                if _ms:
+                    _markers[_rid] = _ms
     require_authoritative_functional_closure(
         final_sysml,
         unmeasurable_req_ids=_ri.get("unmeasurable_req_ids") if isinstance(_ri, dict) else None,
         planned_intents=_intents or None,
+        planned_markers=_markers or None,
     )
     requirements = list(res.get("requirements") or [])
     parm_text = _parm_text(rec)

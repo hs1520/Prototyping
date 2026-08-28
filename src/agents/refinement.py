@@ -441,6 +441,7 @@ class _RefinementEngine:
                 # plan metadata; the intents must be handed over or the matrix
                 # treats every planned response as an initialization candidate.
                 planned_intents=self._planned_response_intents(),
+                planned_markers=self._planned_response_markers(),
             )
         except Exception:
             return []
@@ -461,6 +462,30 @@ class _RefinementEngine:
             intent = str(item.get("response_intent") or "").strip().lower()
             if rid and intent:
                 out[rid] = intent
+        return out
+
+
+    def _planned_response_markers(self) -> Dict[str, frozenset]:
+        """{REQ_XXX_NNN: declared response_markers} from the active plan.
+
+        Only declared (out-of-vocabulary) intents carry markers; handed over
+        beside the intents for the same reason — the audit's rebuilt model
+        has no plan metadata to read them from.
+        """
+        plan = getattr(self._runtime, "_active_model_generation_plan", None) or {}
+        out: Dict[str, frozenset] = {}
+        for item in plan.get("requirement_realizations") or ():
+            if not isinstance(item, Mapping):
+                continue
+            rid = str(item.get("requirement_id") or "").strip().upper().replace("-", "_")
+            raw = item.get("response_markers")
+            if not rid or not isinstance(raw, (list, tuple)):
+                continue
+            markers = frozenset(
+                str(v or "").strip().lower() for v in raw if str(v or "").strip()
+            )
+            if markers:
+                out[rid] = markers
         return out
 
 
@@ -499,6 +524,7 @@ class _RefinementEngine:
                 allowed_req_ids=self._active_requirement_ids(),
                 unmeasurable_req_ids=self._unmeasurable_requirement_ids(),
                 planned_intents=self._planned_response_intents(),
+                planned_markers=self._planned_response_markers(),
             )
         except Exception as exc:
             raise RuntimeError(

@@ -339,8 +339,9 @@ Return exactly one JSON object in a ```json block using this schema:
       "owner_component": "<LOCAL_BEHAVIOR owner; empty for CAUSAL_PATH>",
       "behavior_kind": "<STATE_DEF|ACTION_DEF for LOCAL_BEHAVIOR; otherwise empty>",
       "behavior_name": "<planned behavior identifier for LOCAL_BEHAVIOR; otherwise empty>",
-      "response_intent": "<FUNC requirements only: release|return|land|navigate|report|self_test|none; empty for other categories>",
-      "response_intent_rationale": "<required when response_intent is none: why this requirement obliges no discrete response>",
+      "response_intent": "<FUNC requirements only: release|return|land|navigate|report|self_test|none|unverifiable, or a short declared domain response; empty for other categories>",
+      "response_intent_rationale": "<required when response_intent is none or unverifiable: why no checkable discrete response is planned>",
+      "response_markers": ["<only with a declared domain response outside the built-in set: lowercase action-name fragments, each sharing a content word with the copied effect_concept; empty otherwise>"],
       "connection_path": [
         {{
           "source_component": "<component>",
@@ -508,21 +509,33 @@ Rules:
   copied from that frozen requirement. Do not infer either phrase from component
   names or graph topology.
 - For every FUNC requirement, `response_intent` records the discrete response
-  the requirement obliges, from the closed set release, return, land,
-  navigate, report, self_test, none. Decide it from what the requirement
-  actually asks the system to DO, not from words that merely appear in it: a
-  requirement to receive a waypoint list, hold a hover, or maintain a link
-  obliges no discrete response and is `none`; a requirement to actuate the
-  release mechanism is `release`; to fly a path is `navigate`. A requirement
-  that states a continuous condition with no number, unit or threshold and no
-  event that starts a response is almost always `none`; do not invent a
-  response for it. When you record
-  an intent other than `none`, the owning component MUST also carry a planned
-  behavior whose reachable state runs an action named for that response
-  (release, navigate, land, rtb, report, selftest), or the plan will be
-  refused. When you record `none`, give the reason in
-  `response_intent_rationale`. Leave both fields empty for SAFE, INTF and OPER
-  requirements.
+  the requirement obliges. Use a built-in intent when one fits: release,
+  return, land, navigate, report, self_test. Decide it from what the
+  requirement actually asks the system to DO, not from words that merely
+  appear in it: a requirement to receive a waypoint list, hold a hover, or
+  maintain a link obliges no discrete response and is `none`; a requirement
+  to actuate the release mechanism is `release`; to fly a path is
+  `navigate`. A requirement that states a continuous condition with no
+  number, unit or threshold and no event that starts a response is almost
+  always `none`; do not invent a response for it. When the obliged response
+  is real but no built-in intent names it (an alert, an unlock), record a
+  short domain intent of your own AND declare `response_markers`: the
+  lowercase action-name fragments by which a reachable state's action will
+  show that response. Each declared marker must share a content word with
+  the copied `effect_concept`, or the plan is refused — the markers must be
+  derived from the requirement's own effect phrase, never from a behaviour
+  you already planned. `response_markers` stays empty for built-in intents;
+  the checker's own marker table governs those. Whenever you record an
+  intent other than `none` or `unverifiable`, the owning component MUST also
+  carry a planned behavior whose reachable state runs an action matching
+  that response (built-in intents: release, navigate, land, rtb, report,
+  selftest; a declared intent: one of its markers), or the plan will be
+  refused. Record `unverifiable` only as a last resort, when a discrete
+  response is obliged but no reachable-action name can evidence it; the
+  obligation then stays open in the verification matrix rather than being
+  checked. When you record `none` or `unverifiable`, give the reason in
+  `response_intent_rationale`. Leave all three fields empty for SAFE, INTF
+  and OPER requirements.
 - Each `connection_path` must be ordered and component-contiguous. Every edge
   must exactly reuse one entry in `connections`, including its `item_type`, and
   that connection must trace the same requirement ID.

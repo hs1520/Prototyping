@@ -355,3 +355,97 @@ def test_self_test_requires_reachable_action_from_power_on_context():
         "state PhaseSelfTest;",
     )
     assert functional_behavior_status(no_action, reqs)["REQ-FUNC-009"] == BEHAVIOR_ABSENT
+
+
+# ---------------------------------------------------------------------------
+# Declared (out-of-vocabulary) intents and the honesty values none/unverifiable
+# ---------------------------------------------------------------------------
+
+_ALERT_MODEL = """package D {
+    requirement def REQ_FUNC_020 {
+        doc /* Alert the operators within 5 minutes of an equipment fault. */
+    }
+    part def BMS {
+        action def raiseFaultAlert { }
+        attribute faultDetected : Real = 0.0;
+        state def M {
+            state Monitoring;
+            state Alerting { entry action alertOperators : raiseFaultAlert; }
+            transition initial then Monitoring;
+            transition f first Monitoring if faultDetected > 0.5 then Alerting;
+        }
+        satisfy requirement REQ_FUNC_020;
+    }
+}"""
+_ALERT_REQS = [
+    "REQ-FUNC-020: Alert the operators within 5 minutes of an equipment fault."
+]
+
+
+def test_declared_markers_verify_an_out_of_vocabulary_response():
+    """A domain response outside the built-in table (alert) is checkable when
+    the plan declared its markers: the same reachable-action check runs
+    against them. Without a declaration the keyword table knows no alert
+    intent, so the requirement is left to the base classifier."""
+    st = functional_behavior_status(
+        _ALERT_MODEL, _ALERT_REQS,
+        planned_intents={"REQ_FUNC_020": "alert"},
+        planned_markers={"REQ_FUNC_020": frozenset({"alert"})},
+    )
+    assert st["REQ-FUNC-020"] == BEHAVIORALLY_VERIFIED
+
+    undeclared = functional_behavior_status(
+        _ALERT_MODEL, _ALERT_REQS,
+        planned_intents={"REQ_FUNC_020": "alert"},
+    )
+    assert "REQ-FUNC-020" not in undeclared
+
+
+def test_declared_markers_hold_the_model_to_the_declared_response():
+    """Declared markers are an obligation, not a pass: a model whose reachable
+    states never produce the declared response is behavior-absent."""
+    silent = _ALERT_MODEL.replace(
+        "state Alerting { entry action alertOperators : raiseFaultAlert; }",
+        "state Alerting;",
+    )
+    st = functional_behavior_status(
+        silent, _ALERT_REQS,
+        planned_intents={"REQ_FUNC_020": "alert"},
+        planned_markers={"REQ_FUNC_020": frozenset({"alert"})},
+    )
+    assert st["REQ-FUNC-020"] == BEHAVIOR_ABSENT
+
+
+def test_unverifiable_holds_the_model_to_nothing_like_none():
+    """"unverifiable" records a real obligation the gate cannot check; the
+    gate then asks the model for nothing (the matrix reports the row under
+    its own tier instead)."""
+    for recorded in ("none", "unverifiable"):
+        st = functional_behavior_status(
+            _ALERT_MODEL, _ALERT_REQS,
+            planned_intents={"REQ_FUNC_020": recorded},
+        )
+        assert "REQ-FUNC-020" not in st, recorded
+
+
+def test_recorded_intents_are_read_in_the_underscore_key_form():
+    """Every producer keys planned_intents REQ_XXX_NNN while the trace ids
+    are hyphenated; the lookup must bridge that or every recorded decision
+    is silently ignored (which is exactly what happened before this test)."""
+    model = _MODEL  # REQ_FUNC_011 release is verified by keyword inference
+    st = functional_behavior_status(
+        model, _REQS, planned_intents={"REQ_FUNC_011": "none"}
+    )
+    assert "REQ-FUNC-011" not in st  # the recorded "none" must win
+
+
+def test_marker_anchoring_is_lexical_and_refuses_convenient_markers():
+    from src.dse.functional_behavior import marker_anchored_in_effect
+
+    effect = "alert the operators within 5 minutes of an equipment fault"
+    assert marker_anchored_in_effect("alert", effect)
+    assert marker_anchored_in_effect("notifyOperator", effect)   # shares "operator"
+    assert marker_anchored_in_effect("fault-alert", effect)
+    assert not marker_anchored_in_effect("hovering", effect)     # self-grading
+    assert not marker_anchored_in_effect("with", effect)         # stopword/too generic
+    assert not marker_anchored_in_effect("", effect)

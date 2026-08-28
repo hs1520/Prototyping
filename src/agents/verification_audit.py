@@ -80,6 +80,7 @@ def verification_gap_issues(
     allowed_req_ids: Optional[Iterable[str]] = None,
     unmeasurable_req_ids: Optional[Iterable[str]] = None,
     planned_intents: Optional[Mapping[str, str]] = None,
+    planned_markers: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> List[str]:
     """Return surgical-refinement issues for requirements no verification tier anchors.
 
@@ -98,6 +99,10 @@ def verification_gap_issues(
         rows = build_matrix(
             lite, None, linker.compile_evidence(),
             planned_intents=dict(planned_intents) if planned_intents else None,
+            planned_markers=(
+                {k: frozenset(v) for k, v in planned_markers.items()}
+                if planned_markers else None
+            ),
         )
     except Exception:
         if strict:
@@ -131,6 +136,19 @@ def verification_gap_issues(
             # does not provide. The row stays UNASSIGNED in the matrix -- the
             # gap is real -- but it is a requirement-side gap, not a
             # model-side one, and it does not block closure.
+            continue
+        if not behavioral_failed and "planned_unverifiable_response" in row.tiers:
+            # The planner recorded that a discrete response IS obliged but no
+            # reachable-action marker can evidence it. No surgical repair can
+            # make the gate check what its vocabulary cannot express, so
+            # asking for one would fail-close the run with no way out. The
+            # row stays UNASSIGNED and carries its own tier in the matrix --
+            # the gap is real and stays visible -- but it is a
+            # gate-capability gap, not a model-side one. What keeps this from
+            # becoming a closure dodge is that the record is not free: plan
+            # validation demands a rationale for it, and the planning prompt
+            # offers declared response_markers as the sanctioned route for
+            # any response a reachable action CAN evidence.
             continue
         text = " ".join((row.text or "").split())[:220]
         if _phase8_will_anchor(row.req_id, text):
@@ -213,6 +231,7 @@ def functional_verification_gap_issues(
     allowed_req_ids: Optional[Iterable[str]] = None,
     unmeasurable_req_ids: Optional[Iterable[str]] = None,
     planned_intents: Optional[Mapping[str, str]] = None,
+    planned_markers: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> List[str]:
     """Model-fixable functional gaps that require a dedicated closure pass.
 
@@ -227,6 +246,7 @@ def functional_verification_gap_issues(
             allowed_req_ids=allowed_req_ids,
             unmeasurable_req_ids=unmeasurable_req_ids,
             planned_intents=planned_intents,
+            planned_markers=planned_markers,
         )
         if _FUNC_GAP_RE.search(issue)
     ]

@@ -199,7 +199,31 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # already established by the marker match; the rule now checks only that the
 # trigger is a start-of-life event. This changes what the model is asked, so v20 and v21 are not
 # poolable; every archived pilot in the artefact tree ran at v20 or earlier.
-COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v21"
+# v22 opens the v21 response-intent vocabulary at both honesty boundaries. The
+# closed set pinned "what the gate can check" and "what the plan can express"
+# to the same six intents, which forced a requirement obliging a response the
+# table does not name (an alert, an unlock) to be recorded as `none` — a plan
+# record that contradicts the requirement text. Two additions, no removals:
+# (1) a FUNC realization may record an out-of-vocabulary intent by declaring
+# `response_markers`, the lowercase action-name fragments a reachable state's
+# action must show; each marker must share a content word with the copied
+# effect_concept (the anti-self-grading rule — the same lexical-anchoring
+# discipline the plan applies to connection-path endpoints), and the plan
+# validator and closure gate then run the ordinary reachable-action check
+# against the declared markers. Built-in intents ignore declared markers; the
+# checker's table keeps its authority over them. (2) `response_intent` may
+# record `unverifiable` with a rationale when a response IS obliged but no
+# reachable-action name can evidence it; the gate holds the model to nothing,
+# and the matrix reports the row under its own `planned_unverifiable_response`
+# tier instead of the dishonest `none`. The planning prompt gained the field
+# and both rules, which moves the user-prompt digest of every planning call on
+# every arm (golden_refactor_call_sequence.json ordinals 1/2/4/5;
+# system-prompt digests unchanged). On the frozen path nothing fires: every
+# frozen FUNC requirement's response is named by the built-in table, so v22
+# plans of frozen inputs differ from v21 only in prompt text, not in any
+# recorded decision — still not poolable, because the prompt is part of the
+# treatment.
+COMMON_GENERATION_PIPELINE_VERSION = "typed-whole-model-plan-v22"
 R2_DETERMINISTIC_GENERATION_MODE = "DETERMINISTIC_SPEC_EMITTER"
 R2_DETERMINISTIC_INTERVENTION_VERSION = (
     "r2-bbag-whole-model-guided-deterministic-v3"

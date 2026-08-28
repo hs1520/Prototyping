@@ -134,13 +134,21 @@ class RequirementRealizationPlan:
     # The discrete response a functional requirement obliges, decided by the
     # planner from the requirement text and recorded here so that the plan
     # validator and the terminal closure gate read the same decision instead
-    # of each inferring it from keywords. One of RESPONSE_INTENTS, or "" when
-    # the requirement is not functional; "none" is a valid decision and means
-    # the requirement obliges no discrete response (a continuous property, a
-    # data-reception duty, a hover). "none" must be accompanied by a
-    # non-empty response_intent_rationale.
+    # of each inferring it from keywords. One of RESPONSE_INTENTS, a declared
+    # domain intent accompanied by response_markers, or "" when the
+    # requirement is not functional. "none" is a valid decision and means the
+    # requirement obliges no discrete response (a continuous property, a
+    # data-reception duty, a hover); "unverifiable" means a response is
+    # obliged but no reachable-action marker can evidence it. Both must be
+    # accompanied by a non-empty response_intent_rationale.
     response_intent: str = ""
     response_intent_rationale: str = ""
+    # Declared evidence markers for an intent outside the built-in table:
+    # lowercase name fragments by which a reachable state's action shows the
+    # response. Required (and each lexically anchored in effect_concept) when
+    # response_intent is out-of-vocabulary; ignored for built-in intents,
+    # whose markers stay the checker's authority.
+    response_markers: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -157,6 +165,7 @@ class RequirementRealizationPlan:
             "source_digest": self.source_digest,
             "response_intent": self.response_intent,
             "response_intent_rationale": self.response_intent_rationale,
+            "response_markers": list(self.response_markers),
         }
 
     @classmethod
@@ -197,6 +206,23 @@ class RequirementRealizationPlan:
             response_intent_rationale=str(
                 value.get("response_intent_rationale") or ""
             ).strip(),
+            response_markers=tuple(
+                marker
+                for marker in (
+                    str(item or "").strip().lower()
+                    for item in (
+                        value.get("response_markers")
+                        if isinstance(
+                            value.get("response_markers"), Sequence
+                        )
+                        and not isinstance(
+                            value.get("response_markers"), (str, bytes)
+                        )
+                        else ()
+                    )
+                )
+                if marker
+            ),
         )
 
 

@@ -992,12 +992,23 @@ def _validate_planned_functional_responses(
     Which response a requirement obliges is the planner's recorded decision
     (``response_intent`` on its realization), not a keyword inference: the
     same LLM that plans the behaviours decides what each functional
-    requirement asks for, in a closed vocabulary the gate can check, and may
-    record "none" with a reason. A functional realization that records no
-    intent, an unknown one, or "none" without a rationale is a plan defect.
+    requirement asks for, in a vocabulary the gate can check, and may record
+    "none" or "unverifiable" with a reason. An intent outside the built-in
+    table is admitted only as a declared intent: it must carry
+    ``response_markers``, each lexically anchored in the realization's copied
+    effect phrase, and the gate then runs its reachable-action check against
+    those markers. The anchoring rule is what keeps a declared intent from
+    grading itself — the planner cannot declare a marker its own behaviours
+    happen to satisfy unless the requirement's effect phrase names it. A
+    functional realization that records "none"/"unverifiable" without a
+    rationale, or an out-of-vocabulary intent without anchored markers, is a
+    plan defect. Markers declared alongside a built-in intent are ignored:
+    the built-in table keeps its authority over what evidences release,
+    navigate and the rest.
     """
     from ..dse.functional_behavior import (
-        RESPONSE_INTENTS, is_safety_req, planned_response_intent,
+        RESPONSE_INTENTS, is_safety_req, marker_anchored_in_effect,
+        planned_response_intent,
     )
 
     owners_by_requirement: dict[str, set[str]] = {}
@@ -1007,6 +1018,8 @@ def _validate_planned_functional_responses(
 
     intent_by_requirement: dict[str, str] = {}
     rationale_by_requirement: dict[str, str] = {}
+    markers_by_requirement: dict[str, tuple[str, ...]] = {}
+    effect_by_requirement: dict[str, str] = {}
     behavior_by_requirement: dict[str, tuple[str, str]] = {}
     for realization in realizations:
         intent_by_requirement[realization.requirement_id] = (
@@ -1014,6 +1027,12 @@ def _validate_planned_functional_responses(
         )
         rationale_by_requirement[realization.requirement_id] = (
             realization.response_intent_rationale
+        )
+        markers_by_requirement[realization.requirement_id] = (
+            realization.response_markers
+        )
+        effect_by_requirement[realization.requirement_id] = (
+            realization.effect_concept
         )
         if realization.behavior_name:
             behavior_by_requirement[realization.requirement_id] = (
@@ -1028,25 +1047,55 @@ def _validate_planned_functional_responses(
             ):
                 continue
             recorded = intent_by_requirement.get(req_id) or None
+            declared = markers_by_requirement.get(req_id) or ()
             # A missing realization, or one with a blank intent, means the
             # planner recorded nothing: fall back to keyword inference below
             # rather than refusing, so plans archived before the field
             # existed remain valid and the check still fires for a FUNC
             # requirement the plan omitted altogether.
+            if recorded in ("none", "unverifiable") and not (
+                rationale_by_requirement.get(req_id)
+            ):
+                issues.append(
+                    f"{req_id} records response_intent {recorded!r} without "
+                    "a response_intent_rationale; a decision to plan no "
+                    "checkable response must say why"
+                )
+                continue
             if recorded is not None and recorded not in RESPONSE_INTENTS:
-                issues.append(
-                    f"{req_id} response_intent {recorded!r} is not one of "
-                    f"{sorted(RESPONSE_INTENTS)}"
+                # Out-of-vocabulary intent: admissible only as a declared
+                # intent that carries its own evidence markers, each
+                # lexically anchored in the copied effect phrase (the
+                # anti-self-grading rule; see the docstring).
+                if not declared:
+                    issues.append(
+                        f"{req_id} response_intent {recorded!r} is not one "
+                        f"of {sorted(RESPONSE_INTENTS)} and declares no "
+                        "response_markers; an out-of-vocabulary intent must "
+                        "declare the lowercase action-name markers by which "
+                        "a reachable state will show its response"
+                    )
+                    continue
+                effect = (
+                    effect_by_requirement.get(req_id) or source_text
                 )
-                continue
-            if recorded == "none" and not rationale_by_requirement.get(req_id):
-                issues.append(
-                    f"{req_id} records response_intent 'none' without a "
-                    "response_intent_rationale; a decision to plan no "
-                    "response must say why"
-                )
-                continue
-            intent = planned_response_intent(req_id, source_text, recorded)
+                unanchored = [
+                    marker for marker in declared
+                    if not marker_anchored_in_effect(marker, effect)
+                ]
+                if unanchored:
+                    issues.append(
+                        f"{req_id} response_markers {unanchored!r} share no "
+                        "content word with the copied effect phrase "
+                        f"{effect!r}; a declared marker must be visibly "
+                        "derived from the requirement's own effect, not "
+                        "from a behaviour the plan happens to contain"
+                    )
+                    continue
+            intent = planned_response_intent(
+                req_id, source_text, recorded,
+                declared_markers=declared or None,
+            )
             if intent is None:
                 continue
             intent_name, markers = intent

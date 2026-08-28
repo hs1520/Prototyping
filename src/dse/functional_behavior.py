@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Mapping, Dict, List, Protocol, Sequence, Set
+from typing import Iterable, Mapping, Dict, List, Protocol, Sequence, Set
 
 from ..simulation.state_extractor import extract_state_machines
 from .requirement_trace import dse_req_id, extract_requirement_trace
@@ -65,17 +65,73 @@ _FUNC_INTENT_PRIORITY = (
     "report", "self_test", "release", "return", "land", "navigate"
 )
 
-# The closed set of values a planner may record as a functional requirement's
+# The built-in values a planner may record as a functional requirement's
 # response intent. "none" is a legitimate decision: the requirement obliges no
 # discrete response (a continuous property, a data-reception duty, a hover).
-# The set is closed because the closure gate has exactly one way of checking
-# each member; an intent it cannot check cannot be honoured.
-RESPONSE_INTENTS: frozenset[str] = frozenset(_FUNC_INTENT) | {"none"}
+# "unverifiable" is the honest record for the opposite failure: the requirement
+# DOES oblige a discrete response, but no reachable-action marker can evidence
+# it, so the gate holds the model to nothing while the matrix reports the
+# uncovered obligation instead of pretending there is none. The set used to be
+# closed because the marker table below was the only source of checkable
+# evidence; a planner may now also record an intent outside this set by
+# declaring its own ``response_markers``, each lexically anchored in the
+# requirement's copied effect phrase — the gate then runs the same
+# reachable-action check against the declared markers.
+RESPONSE_INTENTS: frozenset[str] = frozenset(_FUNC_INTENT) | {
+    "none", "unverifiable",
+}
+
+# Words too generic to anchor a declared marker: a marker justified only by
+# one of these is a marker justified by nothing.
+_ANCHOR_STOPWORDS = frozenset((
+    "the", "a", "an", "of", "to", "and", "or", "for", "with", "within",
+    "shall", "must", "will", "upon", "from", "into", "that", "this", "when",
+    "after", "before", "system", "shall", "then", "its", "their", "each",
+    "every", "all", "any",
+))
+
+
+def _normalise_marker(marker: str) -> str:
+    """Lowercase alphanumeric form used for matching against action names."""
+    return re.sub(r"[^a-z0-9]+", "", str(marker or "").lower())
+
+
+def _anchor_words(effect_concept: str) -> frozenset[str]:
+    """Content words of the copied effect phrase, with naive plural stems."""
+    words = set()
+    for word in re.findall(r"[a-z0-9]+", str(effect_concept or "").lower()):
+        if len(word) < 4 or word in _ANCHOR_STOPWORDS:
+            continue
+        words.add(word)
+        if word.endswith("s") and len(word) > 4:
+            words.add(word[:-1])
+    return frozenset(words)
+
+
+def marker_anchored_in_effect(marker: str, effect_concept: str) -> bool:
+    """True when a declared marker shares a content word with the copied
+    effect phrase.
+
+    This is the anti-self-grading rule for declared (out-of-vocabulary)
+    intents: the same LLM that plans the behaviours also declares what counts
+    as their evidence, so the declaration must be visibly derived from the
+    requirement's own effect phrase — the same lexical-representation
+    discipline the plan already applies to connection-path endpoints. A
+    marker like "alert" is anchored in "alert operators within 5 minutes";
+    "hovering" is not, however convenient it would be to match.
+    """
+    normalised = _normalise_marker(marker)
+    if len(normalised) < 3:
+        return False
+    for word in _anchor_words(effect_concept):
+        if word in normalised or normalised in word:
+            return True
+    return False
 
 
 def response_markers(intent: str) -> frozenset[str] | None:
-    """The model-side markers that satisfy a planned intent, or None for
-    "none" / unknown."""
+    """The model-side markers that satisfy a built-in planned intent, or None
+    for "none" / "unverifiable" / declared (out-of-vocabulary) intents."""
     entry = _FUNC_INTENT.get((intent or "").lower())
     return frozenset(entry[1]) if entry else None
 
@@ -99,8 +155,36 @@ def planned_intents_from_model(model) -> "Dict[str, str]":
     return out
 
 
+def planned_markers_from_model(model) -> "Dict[str, frozenset[str]]":
+    """{requirement id: declared response_markers} read from the generation
+    plan a committed model carries in its metadata, or {} when the model
+    carries no plan. Only realizations that declare markers appear; built-in
+    intents carry none and keep the built-in table's authority."""
+    meta = getattr(model, "metadata", None) or {}
+    plan = meta.get("whole_model_generation_plan") if isinstance(meta, dict) else None
+    if not isinstance(plan, dict):
+        return {}
+    out: Dict[str, frozenset[str]] = {}
+    for item in plan.get("requirement_realizations") or ():
+        if not isinstance(item, dict):
+            continue
+        rid = str(item.get("requirement_id") or "").strip().upper().replace("-", "_")
+        raw = item.get("response_markers")
+        if not rid or not isinstance(raw, (list, tuple)):
+            continue
+        markers = frozenset(
+            m for m in (_normalise_marker(v) for v in raw) if m
+        )
+        if markers:
+            out[rid] = markers
+    return out
+
+
 def planned_response_intent(
-    req_id: str, req_text: str, planned: str | None
+    req_id: str,
+    req_text: str,
+    planned: str | None,
+    declared_markers: "Iterable[str] | None" = None,
 ) -> tuple[str, frozenset[str]] | None:
     """The response intent for one requirement, preferring the planner's
     recorded decision over keyword inference.
@@ -109,19 +193,32 @@ def planned_response_intent(
     this requirement, or None when no plan is available (legacy runs, or a
     requirement the plan did not cover). A recorded "none" means the planner
     decided the requirement obliges no discrete response, and the gate then
-    asks for none. Only when nothing was recorded does the keyword table
-    decide, so archived runs planned before this field existed keep the same
-    verdicts they had.
+    asks for none; "unverifiable" means a response is obliged but no
+    reachable-action marker can evidence it, so the gate likewise holds the
+    model to nothing (the matrix reports the uncovered obligation
+    separately). A recorded intent outside the built-in table is honoured
+    when the plan declared its own ``response_markers`` — the gate runs the
+    same reachable-action check against them; a built-in intent always uses
+    the built-in markers, so a planner cannot re-define what evidences
+    release or navigate. Only when nothing usable was recorded does the
+    keyword table decide, so archived runs planned before these fields
+    existed keep the same verdicts they had.
     """
     if planned is not None:
         planned = planned.strip().lower()
-        if planned == "none":
+        if planned in ("none", "unverifiable"):
             return None
         markers = response_markers(planned)
         if markers is not None:
             return planned, markers
-        # An unrecognised recorded value is treated as absent rather than as
-        # a silent pass: fall through to inference.
+        if declared_markers:
+            declared = frozenset(
+                m for m in (_normalise_marker(v) for v in declared_markers) if m
+            )
+            if declared:
+                return planned, declared
+        # An unrecognised recorded value with no declared markers is treated
+        # as absent rather than as a silent pass: fall through to inference.
     return functional_response_intent(req_id, req_text)
 
 
@@ -287,6 +384,7 @@ def functional_behavior_status(
     model_text: str,
     requirements: List[str],
     planned_intents: "Mapping[str, str] | None" = None,
+    planned_markers: "Mapping[str, Iterable[str]] | None" = None,
 ) -> Dict[str, str]:
     """{functional req_id: behaviour status} for FUNC requirements with a recognised
     actuation/sequencing intent (excludes safety reqs — those go through safety_behavior).
@@ -295,7 +393,9 @@ def functional_behavior_status(
     generation plan recorded. When given, it decides which response each
     requirement is held to (a recorded "none" means: hold it to none). When
     absent, the keyword table decides, so archived runs planned before the
-    field existed keep their verdicts."""
+    field existed keep their verdicts. ``planned_markers`` carries the
+    declared ``response_markers`` for intents outside the built-in table;
+    the same reachable-action check then runs against them."""
     produced = _produced_response_records(model_text)
     has_state_machines = bool(extract_state_machines(model_text))
     trace = extract_requirement_trace(model_text, requirements)
@@ -305,8 +405,13 @@ def functional_behavior_status(
     out: Dict[str, str] = {}
     for rid in satisfied:
         txt = text.get(rid, rid).lower()
-        planned = planned_intents.get(rid) if planned_intents else None
-        intent = planned_response_intent(rid, txt, planned)
+        # The trace's ids are hyphenated (dse_req_id display form); every
+        # producer of these mappings keys them REQ_XXX_NNN. Looking up the
+        # raw rid silently ignored every recorded intent.
+        key = rid.upper().replace("-", "_")
+        planned = planned_intents.get(key) if planned_intents else None
+        declared = planned_markers.get(key) if planned_markers else None
+        intent = planned_response_intent(rid, txt, planned, declared)
         if intent is None:
             continue                                       # no recognised functional intent
         markers: Set[str] = set(intent[1])

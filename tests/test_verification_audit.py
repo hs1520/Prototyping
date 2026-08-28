@@ -153,3 +153,56 @@ def test_anchor_gate_rejects_a_new_behavioral_failure():
     after = SimpleNamespace(behavioral_result=after_behavior)
 
     assert behavioral_result_regressed(before, after)
+
+
+# ---------------------------------------------------------------------------
+# Declared (out-of-vocabulary) response intents and the unverifiable record
+# ---------------------------------------------------------------------------
+
+_UNLOCK_MODEL = """package D {
+    requirement def REQ_FUNC_030 {
+        doc /* Unlock the payload bay door when commanded by the operator. */
+    }
+    part def BayController {
+        action def CmdUnlock { }
+        state def M {
+            state Locked;
+            state Unlocked { entry action unlockDoor; }
+            transition initial then Locked;
+            transition u first Locked accept CmdUnlock then Unlocked;
+        }
+        satisfy requirement REQ_FUNC_030;
+    }
+}"""
+
+
+def test_declared_markers_close_a_gap_the_builtin_table_cannot_see():
+    """"unlock" is outside the built-in intent table, so without the plan's
+    declaration the reachable unlock action anchors nothing and the row is
+    flagged; with the declared intent and marker the same model closes."""
+    assert any(
+        "REQ_FUNC_030" in issue
+        for issue in verification_gap_issues(_UNLOCK_MODEL, model_name="D")
+    )
+    assert verification_gap_issues(
+        _UNLOCK_MODEL, model_name="D",
+        planned_intents={"REQ_FUNC_030": "unlock"},
+        planned_markers={"REQ_FUNC_030": ["unlock"]},
+    ) == []
+
+
+def test_unverifiable_record_is_a_gate_capability_gap_not_a_model_gap():
+    """A recorded "unverifiable" keeps the row out of the surgical queue (no
+    repair can make the gate check what its vocabulary cannot express), but
+    only the explicit record buys that — the same model without it is still
+    flagged, so the exclusion cannot fail open."""
+    no_response = _UNLOCK_MODEL.replace("{ entry action unlockDoor; }", ";")
+
+    assert verification_gap_issues(
+        no_response, model_name="D",
+        planned_intents={"REQ_FUNC_030": "unverifiable"},
+    ) == []
+    assert any(
+        "REQ_FUNC_030" in issue
+        for issue in verification_gap_issues(no_response, model_name="D")
+    )

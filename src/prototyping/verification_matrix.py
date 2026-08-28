@@ -49,6 +49,9 @@ TIER_METHOD: Dict[str, str] = {
     "gazebo_deferred": "Test (Gazebo — planned, see SITL_INTEGRATION_DESIGN S8/T9)",
     "inspection_analysis": "Inspection/Analysis (outside simulation scope)",
     "planned_no_response": "Plan records no discrete response obliged",
+    "planned_unverifiable_response": (
+        "Plan records an obliged response the closure gate cannot check"
+    ),
 }
 
 _VERIFIED_TIERS = {"l2_sitl", "gazebo", "l1_param", "datasheet", "forward_flight", "behavioral_sim"}
@@ -167,7 +170,8 @@ def _record_behavioral_outcome(
 def build_matrix(model, realization: Optional[dict], requirement_evidence,
                  gazebo: Optional[dict] = None,
                  l1_results=None, l2_results=None,
-                 planned_intents: Optional[Dict[str, str]] = None) -> List[MatrixRow]:
+                 planned_intents: Optional[Dict[str, str]] = None,
+                 planned_markers: Optional[Dict[str, frozenset]] = None) -> List[MatrixRow]:
     """Derive the per-requirement verification assignment from existing artifacts.
 
     ``realization`` is the Phase 8 dict (``realization_run.json``'s "realization"
@@ -183,6 +187,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         BEHAVIORALLY_VERIFIED,
         functional_behavior_status,
         planned_intents_from_model,
+        planned_markers_from_model,
     )
 
     from src.sitl.requirement_linker import RequirementEvidenceBundle
@@ -336,6 +341,8 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
     # a caller that holds the plan passes the intents in.
     if planned_intents is None:
         planned_intents = planned_intents_from_model(model)
+    if planned_markers is None:
+        planned_markers = planned_markers_from_model(model)
     functional_status = {
         _norm_req_id(rid): status
         for rid, status in functional_behavior_status(
@@ -345,6 +352,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                 for rid in universe
             ],
             planned_intents=planned_intents,
+            planned_markers=planned_markers,
         ).items()
     }
     # A functional requirement the generation plan recorded as obliging no
@@ -352,13 +360,26 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
     # decision, not about the design; the row's status is unchanged here and
     # the terminal closure audit decides, together with the extractor's own
     # "no measurable criterion" flag, whether such a row is a model gap or a
-    # requirement that offers nothing to anchor to.
+    # requirement that offers nothing to anchor to. An "unverifiable" record
+    # is the opposite honesty case — a response IS obliged but the gate has
+    # no reachable-action marker that can evidence it — and gets its own
+    # tier, so the uncovered obligation stays visible in the matrix instead
+    # of masquerading as "no response obliged".
     for rid in universe:
-        if planned_intents.get(_norm_req_id(rid)) == "none":
+        recorded_intent = planned_intents.get(_norm_req_id(rid))
+        if recorded_intent == "none":
             tiers[rid].add("planned_no_response")
             evidence[rid].append(
                 "generation plan records response_intent=none for this "
                 "requirement (no discrete response obliged)"
+            )
+        elif recorded_intent == "unverifiable":
+            tiers[rid].add("planned_unverifiable_response")
+            evidence[rid].append(
+                "generation plan records response_intent=unverifiable: a "
+                "discrete response is obliged but no reachable-action "
+                "marker can evidence it (gate-capability gap, not a model "
+                "gap; the obligation remains open for external review)"
             )
 
     for rid in universe:
