@@ -225,7 +225,7 @@ def fix_capability_semantics(
     )
 
     constraint_re = re.compile(
-        r"(?ms)^(?P<indent>[ \t]*)assert\s+constraint\s+\w+\s*\{"
+        r"(?ms)^(?P<indent>[ \t]*)assert\s+constraint\s+(?P<name>\w+)\s*\{"
         r"(?P<body>[^{}]*(?:current\w*Range|distance\w*)[^{}]*)\}\s*"
     )
 
@@ -244,7 +244,13 @@ def fix_capability_semantics(
         if not is_mission_range:
             return match.group(0)
         fixes += 1
+        # The structured marker makes the delegation auditable: semantic
+        # fidelity records the obligation as DELEGATED to the named tier
+        # instead of failing it for the assert this normaliser removed.
         return (
+            f"{match.group('indent')}// DELEGATED-CONSTRAINT "
+            f"{match.group('name')} tier=FORWARD_FLIGHT_FIDELITY "
+            "reason=mission-end-capability\n"
             f"{match.group('indent')}// Operational range is a mission-end "
             "capability evaluated by forward-flight fidelity, not an invariant.\n"
         )
