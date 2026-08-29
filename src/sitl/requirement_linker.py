@@ -1524,8 +1524,11 @@ class RequirementLinker:
                     if expr is None:
                         continue
                     val, report = compiler.evaluate(expr)
-                    if not report.fatal and val is not None:
-                        result.setdefault(part_name, {})[attr_name] = float(val)
+                    if not report.fatal:
+                        from src.utils.syside_utils import coerce_static_number
+                        number = coerce_static_number(val)
+                        if number is not None:
+                            result.setdefault(part_name, {})[attr_name] = number
                 except Exception as exc:
                     from src.utils.suppressed import record_suppressed
                     record_suppressed("sitl.requirement_linker.syside_attr_node", exc)

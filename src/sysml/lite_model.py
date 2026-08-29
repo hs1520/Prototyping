@@ -232,9 +232,17 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                             compiler_ok = False
                             try:
                                 val, report = compiler.evaluate(fve)
-                                if not report.fatal and val is not None:
-                                    default_val = float(val)
-                                    compiler_ok = True
+                                if not report.fatal:
+                                    # Reference-chain initializers evaluate to
+                                    # the referenced node, not a scalar — no
+                                    # static value, not an error.
+                                    from ..utils.syside_utils import (
+                                        coerce_static_number,
+                                    )
+                                    number = coerce_static_number(val)
+                                    if number is not None:
+                                        default_val = number
+                                        compiler_ok = True
                             except Exception as exc:
                                 record_suppressed("sysml.lite_model.attr_compiler_eval", exc)
 

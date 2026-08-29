@@ -103,51 +103,21 @@ _STANDARD_LIBRARY_TYPES = {
         "DimensionOneValue",
     },
 }
-_SI_UNIT_NAMES = {
-    "A", "C", "Hz", "J", "K", "N", "Pa", "V", "W",
-    "cm", "deg", "degC", "g", "h", "kg", "km", "m", "min", "mm", "ms",
-    "percent", "rad", "s",
-}
+# Unit emission tokens and their resolutions come from the single registry
+# (unit_registry.py).  The emitter keeps ASCII tokens (every reader of
+# ``[<token>]`` brackets depends on word characters — that is why ``m/s``
+# becomes ``m_s`` in model text) and resolution is closed by injecting an
+# alias onto the standard SI unit where one exists (deg, degC, m_s, km_h) or
+# a conversion-defined unit where none does (ms, percent).  Measured twice
+# before this was centralised: the archived extraction run failed on
+# ``deg``/``degC`` reference errors, and ablation pilot 2 failed on ``m_s``.
+from .unit_registry import (  # noqa: E402
+    EMISSION_TOKENS as _REGISTRY_EMISSION_TOKENS,
+    RESOLUTIONS as _REGISTRY_RESOLUTIONS,
+)
 
-# Project unit tokens that are NOT names in the standard SI library and
-# therefore do not resolve under ``import SI::*`` alone.  The SI library names
-# the angle unit ``degree`` (symbol ``'°'``) and the Celsius interval unit
-# ``'degree celsius (temperature difference)'`` (symbol ``'°C'``), and it
-# defines no percent unit at all -- its dimensionless unit is
-# ``MeasurementReferences::one``.  The emitter keeps the ASCII tokens (every
-# reader of ``[<token>]`` brackets depends on word characters) and closes
-# resolution here instead: an alias onto the standard unit where one exists,
-# and a conversion-defined unit against ``one`` where none does, following the
-# pattern SI itself uses for ``degree``.  Measured before this existed: the
-# archived extraction run's qualification failed SYSML_SYNTAX_AND_SEMANTICS on
-# exactly three ``No Feature named 'deg'/'degC'`` reference errors.
-_UNIT_RESOLUTIONS: dict[str, tuple[str, str]] = {
-    "deg": ("alias deg for SI::degree;", ""),
-    # SI declares prefixed units selectively (mm, cm, km, kW exist; ms does
-    # not), so the millisecond is defined here by SI's own ConversionByPrefix
-    # pattern rather than aliased.
-    "ms": (
-        "attribute ms : DurationUnit {\n"
-        "        :>> unitConversion : ConversionByPrefix {\n"
-        "            :>> prefix = milli;\n"
-        "            :>> referenceUnit = s;\n"
-        "        }\n"
-        "    }",
-        "MeasurementReferences,ISQ",
-    ),
-    "degC": (
-        "alias degC for SI::'degree celsius (temperature difference)';", ""
-    ),
-    "percent": (
-        "attribute percent : DimensionOneUnit {\n"
-        "        :>> unitConversion : ConversionByConvention {\n"
-        "            :>> referenceUnit = one;\n"
-        "            :>> conversionFactor = 0.01;\n"
-        "        }\n"
-        "    }",
-        "MeasurementReferences",
-    ),
-}
+_SI_UNIT_NAMES = set(_REGISTRY_EMISSION_TOKENS)
+_UNIT_RESOLUTIONS: dict[str, tuple[str, str]] = dict(_REGISTRY_RESOLUTIONS)
 
 
 _DECLARED_PORT = re.compile(

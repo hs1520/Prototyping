@@ -127,3 +127,70 @@ def test_unit_resolutions_stay_within_the_unit_vocabulary():
     assert not orphans, (
         f"_UNIT_RESOLUTIONS entries missing from _SI_UNIT_NAMES: {orphans}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Unit registry: single authority, end-to-end through syside (pilot 2 failed
+# on `m_s` because emission, resolution, and comparison each had their own
+# partial table).
+# ---------------------------------------------------------------------------
+
+
+def test_every_registry_unit_survives_syside_with_its_resolution():
+    from src.prototyping.unit_registry import RESOLUTIONS, UNITS
+
+    constructs = "\n    ".join(
+        construct for construct, _ns in RESOLUTIONS.values()
+    )
+    lines = [
+        f"attribute u{i} : Real = 1.0 [{unit.emission}];"
+        for i, unit in enumerate(UNITS)
+    ]
+    lines += [
+        f"attribute q{i} : {unit.quantity_type} = 1.0 [{unit.emission}];"
+        for i, unit in enumerate(UNITS)
+        if unit.quantity_type
+    ]
+    text = (
+        "package RegistryProbe {\n"
+        "    private import ISQ::*;\n"
+        "    private import MeasurementReferences::*;\n"
+        "    private import SI::*;\n"
+        "    private import ScalarValues::*;\n"
+        f"    {constructs}\n"
+        "    part def P {\n"
+        + "".join(f"        {line}\n" for line in lines)
+        + "    }\n}\n"
+    )
+    result = check_syntax(text, filter_stdlib_diagnostics=False)
+    messages = [
+        error.get("message")
+        for error in list(result.parser_errors) + list(result.sema_errors)
+    ]
+    assert not messages, (
+        f"registry emission tokens / quantity pairings failed syside: {messages}"
+    )
+
+
+def test_registry_views_and_consumers_agree():
+    from src.prototyping.activated_constraint_plan import sysml_unit_name
+    from src.prototyping.requirement_semantics import (
+        _normalise_unit,
+        quantity_type_for_unit,
+    )
+    from src.prototyping.unit_registry import (
+        EMISSION_TOKENS,
+        RESOLUTIONS,
+        UNITS,
+    )
+
+    assert _SI_UNIT_NAMES == set(EMISSION_TOKENS)
+    assert _UNIT_RESOLUTIONS == RESOLUTIONS
+    for unit in UNITS:
+        # Emission and comparison are inverses through the registry: what the
+        # pipeline writes into brackets canonicalises back to what the
+        # obligation carries.
+        assert sysml_unit_name(unit.canonical) == unit.emission
+        assert _normalise_unit(unit.emission) == unit.canonical
+        assert quantity_type_for_unit(unit.emission) == unit.quantity_type
+        assert quantity_type_for_unit(unit.canonical) == unit.quantity_type

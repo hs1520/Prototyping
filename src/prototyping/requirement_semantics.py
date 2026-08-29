@@ -109,56 +109,23 @@ _STOPWORDS = {
     # so one stray connective would make an obligation unbindable.
     "and", "for", "of", "to", "including", "system",
 }
-_UNIT_CANONICAL = {
-    "millisecond": "ms",
-    "milliseconds": "ms",
-    "ms": "ms",
-    "second": "s",
-    "seconds": "s",
-    "s": "s",
-    "metre": "m",
-    "metres": "m",
-    "meter": "m",
-    "meters": "m",
-    "m": "m",
-    "kilometre": "km",
-    "kilometres": "km",
-    "kilometer": "km",
-    "kilometers": "km",
-    "km": "km",
-    "degree": "deg",
-    "degrees": "deg",
-    "deg": "deg",
-    "percent": "%",
-    "%": "%",
-    "hertz": "Hz",
-    "hz": "Hz",
-    "minute": "min",
-    "minutes": "min",
-    "min": "min",
-    "m/s": "m/s",
-    "kilogram": "kg",
-    "kilograms": "kg",
-    "kg": "kg",
-}
-# Binding validation refuses any unit without a quantity-type mapping
-# (activated_constraint_plan: "unit has no supported SysML v2 ISQ
-# quantity-type mapping"), so every unit the bound patterns can emit MUST
-# have an entry here.  Each pairing is syside-verified — see
-# tests/test_stdlib_vocabulary.py for the type names and the deg alias /
-# percent definition materialised via generation_plan._UNIT_RESOLUTIONS.
-_UNIT_QUANTITY_TYPES = {
-    "m": "LengthValue",
-    "km": "LengthValue",
-    "s": "DurationValue",
-    "ms": "DurationValue",
-    "min": "DurationValue",
-    "Hz": "FrequencyValue",
-    "m/s": "SpeedValue",
-    "kg": "MassValue",
-    "deg": "AngularMeasureValue",
-    "%": "DimensionOneValue",
-}
+# Unit identity comes from the single registry (unit_registry.py) — the
+# ablation pilots showed what fragmenting it costs: `m/s` was planned as
+# "m/s", authored as "[m_s]", never resolved, and compared unequal.  Binding
+# validation refuses any unit without a quantity-type mapping, so every unit
+# the bound patterns can emit carries one there, syside-verified end to end
+# by tests/test_stdlib_vocabulary.py.
+from .unit_registry import (  # noqa: E402
+    CANONICAL_BY_SPELLING as _UNIT_CANONICAL,
+    EMISSION_BY_SPELLING as _UNIT_EMISSION,
+    QUANTITY_TYPE_BY_CANONICAL as _UNIT_QUANTITY_TYPES,
+)
+
+
+def _emission_unit(value: str | None) -> str:
+    """The identifier-safe token written inside model brackets for a unit."""
+    raw = str(value or "").strip()
+    return _UNIT_EMISSION.get(raw.lower(), raw)
 _PART_DEF_RE = re.compile(r"\bpart\s+def\s+(?P<name>[A-Za-z_]\w*)\s*\{")
 _PORT_RE = re.compile(
     r"\b(?P<direction>in|out|inout)\s+port\s+"
@@ -1186,7 +1153,7 @@ def _ensure_owner_binding(
     )
     threshold_statement = (
         f"attribute {binding.threshold_attribute} : {binding.value_type} = "
-        f"{obligation.threshold:g} [{obligation.unit}];"
+        f"{obligation.threshold:g} [{_emission_unit(obligation.unit)}];"
     )
     statements = (
         (binding.runtime_attribute, runtime_statement),
@@ -1305,7 +1272,15 @@ def _check_materialized_binding(
         _numeric_value(threshold.group("value"), {})
         if threshold is not None else None
     )
-    if numeric != (obligation.threshold, obligation.unit):
+    # The model carries the emission token (m_s), the obligation the canonical
+    # spelling (m/s) — equality is judged on canonical identity, same as the
+    # assertion check below.
+    preserved = (
+        numeric is not None
+        and numeric[0] == obligation.threshold
+        and _normalise_unit(numeric[1]) == _normalise_unit(obligation.unit)
+    )
+    if not preserved:
         issues.append(
             f"{binding.target_component}.{binding.threshold_attribute} does "
             "not preserve the frozen threshold and unit"
@@ -1318,7 +1293,13 @@ def materialize_semantic_bindings(
     bindings: Sequence[SemanticBindingPlan],
     obligations: Sequence[RequirementSemanticObligation],
 ) -> tuple[str, dict[str, Any]]:
-    """Transactionally materialize the frozen typed semantic data chain."""
+    """Materialize the frozen typed semantic data chain, one transaction per binding.
+
+    ``transaction_committed`` is True only when every binding (and every
+    obligation's coverage) succeeded; a failing binding reverts itself without
+    discarding its healthy siblings, and the returned text is always the text
+    the report describes.
+    """
     original = str(model_text or "")
     obligations_by_id = {
         item.obligation_id: item for item in obligations
@@ -1332,31 +1313,40 @@ def materialize_semantic_bindings(
         working = _ensure_quantity_imports(
             working, changes, issues
         )
+    # Each binding is its own transaction: ensure on a candidate copy, commit
+    # only when the materialized chain checks out, revert only that binding
+    # otherwise.  Pilot 2 measured what all-or-nothing semantics cost here:
+    # two m/s bindings failed on a unit token, the shared rollback discarded
+    # seven healthy bindings with them, and the reported conformance described
+    # a working copy the published model never contained.  The returned text
+    # and this report now always describe each other.
     for binding in bindings:
         obligation = obligations_by_id.get(binding.obligation_id)
         if obligation is None:
-            issues.append(
+            binding_issues = [
                 f"{binding.obligation_id} has no frozen semantic obligation"
-            )
-            continue
-        working = _ensure_item_feature(
-            working, binding, changes, issues
-        )
-        working = _ensure_port_payload(
-            working, binding, changes, issues
-        )
-        working = _ensure_owner_binding(
-            working, binding, obligation, changes, issues
-        )
-
-    for binding in bindings:
-        obligation = obligations_by_id.get(binding.obligation_id)
-        binding_issues = (
-            _check_materialized_binding(working, binding, obligation)
-            if obligation is not None else [
-                "frozen semantic obligation is missing"
             ]
-        )
+        else:
+            candidate = working
+            candidate_changes: list[str] = []
+            binding_issues = []
+            candidate = _ensure_item_feature(
+                candidate, binding, candidate_changes, binding_issues
+            )
+            candidate = _ensure_port_payload(
+                candidate, binding, candidate_changes, binding_issues
+            )
+            candidate = _ensure_owner_binding(
+                candidate, binding, obligation, candidate_changes,
+                binding_issues,
+            )
+            binding_issues = list(dict.fromkeys(
+                binding_issues
+                + _check_materialized_binding(candidate, binding, obligation)
+            ))
+            if not binding_issues:
+                working = candidate
+                changes.extend(candidate_changes)
         results.append({
             "obligation_id": binding.obligation_id,
             "requirement_id": binding.requirement_id,
@@ -1374,8 +1364,8 @@ def materialize_semantic_bindings(
         issues.append(f"{obligation_id} has no typed semantic binding")
 
     committed = not issues
-    output = working if committed else original
-    return (working if committed else original), {
+    output = working
+    return working, {
         "schema_version": "1.0",
         "artifact_role": "TYPED_SEMANTIC_BINDING_CONFORMANCE",
         "status": (

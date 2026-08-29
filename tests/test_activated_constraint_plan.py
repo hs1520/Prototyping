@@ -912,5 +912,11 @@ def test_long_unit_spellings_are_emitted_as_resolvable_sysml_names():
             f"[{expected}]; assert constraint K {{ a == 1 }} }} }}"
         )
         assert not check_syntax(src).has_errors, expected
-    # a unit already valid is left alone
-    assert sysml_unit_name("m/s") == "m/s"
+    # Slash units are NOT left alone: `[m/s]` breaks every word-character
+    # bracket reader, so the registry emits the identifier-safe token and
+    # closes its resolution with `alias m_s for SI::'m/s'` (ablation pilot 2
+    # failed on exactly this passthrough).
+    assert sysml_unit_name("m/s") == "m_s"
+    assert sysml_unit_name("km/h") == "km_h"
+    # a token already identifier-safe is left alone
+    assert sysml_unit_name("kg") == "kg"

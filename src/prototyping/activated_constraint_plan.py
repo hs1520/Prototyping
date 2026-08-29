@@ -229,28 +229,16 @@ def _numeric(value: str | None) -> float | None:
 # state machines that follow from their owning part. The long and plural
 # spellings parse but resolve to nothing ("No Feature named 'degree' found").
 # Requirement text still states units in prose; _unit_tokens accepts those.
-_SYSML_UNIT_NAMES = {
-    "%": "percent",
-    # The degree sign is not a SysML token at all: `[°]` is a parse error and
-    # `[°C]` reparents everything after it, exactly as `[%]` does. Requirement
-    # text and an LLM-extracted plan both spell angles and temperatures with
-    # the sign, so the model carries ASCII tokens instead. `deg`, `degC` and
-    # `percent` are NOT names in the standard SI library (it names the angle
-    # unit `degree` and defines no percent unit; measured: three reference
-    # errors on the archived extraction run) -- their resolution is closed by
-    # `generation_plan.materialize_standard_library_imports`, which emits an
-    # alias onto the SI unit where one exists and a conversion-defined percent
-    # against `MeasurementReferences::one` where none does.
-    "°": "deg", "°c": "degC", "degc": "degC", "celsius": "degC",
-    "second": "s", "seconds": "s",
-    "millisecond": "ms", "milliseconds": "ms",
-    "minute": "min", "minutes": "min",
-    "hour": "h", "hours": "h",
-    "degree": "deg", "degrees": "deg",
-    "meter": "m", "meters": "m", "metre": "m", "metres": "m",
-    "kilometer": "km", "kilometers": "km",
-    "kilometre": "km", "kilometres": "km",
-}
+# The emission map comes from the single unit registry.  The degree sign,
+# `%`, and slashes are not SysML tokens at all (`[°]` is a parse error,
+# `[°C]`/`[%]` reparent everything after them, `[m/s]` breaks every
+# word-character bracket reader), so the model carries ASCII tokens instead
+# (deg, degC, percent, m_s, km_h) and their resolution is closed by
+# `generation_plan.materialize_standard_library_imports` via the registry's
+# alias/definition constructs.  Measured twice: the archived extraction run
+# failed on `deg`/`degC` reference errors; ablation pilot 2 failed on `m_s`
+# because it was emitted here without a registry entry to resolve it.
+from .unit_registry import EMISSION_BY_SPELLING as _SYSML_UNIT_NAMES
 
 
 def sysml_unit_name(unit: str) -> str:

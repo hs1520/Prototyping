@@ -13,6 +13,29 @@ except ImportError:
     SYSIDE_OK = False
 
 
+def coerce_static_number(value) -> float | None:
+    """A static scalar from a syside evaluation result, or None.
+
+    ``Compiler.evaluate`` returns the referenced node itself (an
+    ``AttributeUsage``) when an initializer is a feature-reference chain — the
+    typed semantic bindings write exactly those (``attribute currentX : T =
+    channel.payload.feature;``).  Such an initializer has no static scalar;
+    that is data, not an error, so callers must not ``float()`` blindly (the
+    ablation pilot recorded 369 suppressed TypeErrors from three sites doing
+    just that).
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
 def extract_attr_values(text: str) -> Dict[str, float]:
     """Evaluate every AttributeUsage expression in *text* via the syside Compiler.
 
@@ -32,8 +55,10 @@ def extract_attr_values(text: str) -> Dict[str, float]:
                 if expr is None:
                     continue
                 val, report = compiler.evaluate(expr)
-                if not report.fatal and val is not None:
-                    out[attr.name] = float(val)
+                if not report.fatal:
+                    number = coerce_static_number(val)
+                    if number is not None:
+                        out[attr.name] = number
             except Exception as exc:
                 record_suppressed("utils.syside_utils.attr_eval", exc)
     except Exception as exc:

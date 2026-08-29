@@ -414,3 +414,116 @@ def test_no_supported_numeric_clause_is_not_overclaimed_or_failed():
     assert checks["REQUIREMENT_MODEL_SEMANTIC_FIDELITY"][
         "status"
     ] == "NOT_APPLICABLE"
+
+
+# ---------------------------------------------------------------------------
+# Per-binding transaction semantics (ablation pilot 2: two m/s bindings failed
+# on a unit token, the shared rollback discarded seven healthy bindings with
+# them, and the reported conformance described a working copy the published
+# model never contained).
+# ---------------------------------------------------------------------------
+
+_TWO_REQ = (
+    _REQUIREMENT,
+    "REQ-PERF-003: The system shall achieve a cruise airspeed of at least "
+    "18 m/s in nil-wind conditions.",
+)
+
+
+def _speed_binding(target_component: str = "Controller"):
+    return SemanticBindingPlan.from_dict({
+        "obligation_id": "SEM_REQ_PERF_003_001",
+        "requirement_id": "REQ_PERF_003",
+        "source": {"component": "Perception", "port": "airspeed"},
+        "target": {
+            "component": target_component,
+            "port": "airspeed",
+            "runtime_attribute": "currentCruiseAirspeed",
+        },
+        "payload": {
+            "port_type": "AirspeedPort",
+            "port_feature": "payload",
+            "item_type": "AirspeedData",
+            "item_feature": "cruiseAirspeed",
+            "value_type": "SpeedValue",
+            "unit": "m/s",
+        },
+        "constraint": {
+            "name": "keepAirspeed",
+            "threshold_attribute": "minCruiseAirspeed",
+        },
+    })
+
+
+_TWO_BINDING_MODEL = """package P {
+    private import ISQ::*;
+    private import SI::*;
+    item def ObstacleData;
+    port def ObstaclePort;
+    item def AirspeedData;
+    port def AirspeedPort;
+    requirement def REQ_FUNC_002;
+    requirement def REQ_PERF_003;
+    part def Perception {
+        out port obstacleData : ObstaclePort;
+        out port airspeed : AirspeedPort;
+    }
+    part def Controller {
+        in port obstacleData : ObstaclePort;
+        in port airspeed : AirspeedPort;
+        attribute currentSeparation : Real = 5 [m];
+        attribute currentCruiseAirspeed : Real = 18 [m_s];
+        satisfy requirement REQ_FUNC_002;
+        satisfy requirement REQ_PERF_003;
+    }
+    part perception : Perception;
+    part controller : Controller;
+    connect perception.obstacleData to controller.obstacleData;
+    connect perception.airspeed to controller.airspeed;
+}"""
+
+
+def test_a_failing_binding_reverts_alone_and_healthy_siblings_commit():
+    obligations = compile_requirement_semantic_obligations(_TWO_REQ)
+    bindings = (_binding(), _speed_binding(target_component="Ghost"))
+
+    materialized, conformance = materialize_semantic_bindings(
+        _TWO_BINDING_MODEL, bindings, obligations
+    )
+
+    assert conformance["transaction_committed"] is False
+    assert conformance["planned_binding_count"] == 2
+    assert conformance["materialized_binding_count"] == 1
+    statuses = {
+        item["obligation_id"]: item["status"]
+        for item in conformance["results"]
+    }
+    assert statuses == {
+        "SEM_REQ_FUNC_002_001": "PASS",
+        "SEM_REQ_PERF_003_001": "FAIL",
+    }
+    # The healthy binding's chain landed in the RETURNED text …
+    assert "attribute separation : LengthValue;" in materialized
+    assert "minimumSeparation" in materialized
+    # … the failing one's owner-side artifacts did not.
+    assert "minCruiseAirspeed" not in materialized
+    # And the report describes the returned text, not a discarded copy.
+    report = validate_semantic_bindings(materialized, bindings, obligations)
+    assert report["materialized_binding_count"] == 1
+
+
+def test_slash_units_materialize_as_registry_tokens_and_validate():
+    obligations = compile_requirement_semantic_obligations(_TWO_REQ)
+    bindings = (_binding(), _speed_binding())
+
+    materialized, conformance = materialize_semantic_bindings(
+        _TWO_BINDING_MODEL, bindings, obligations
+    )
+
+    assert conformance["transaction_committed"] is True
+    assert conformance["materialized_binding_count"] == 2
+    # The frozen threshold is written with the identifier-safe token, and the
+    # canonical/emission split no longer breaks the preservation check.
+    assert "attribute minCruiseAirspeed : SpeedValue = 18 [m_s];" in materialized
+    report = validate_semantic_bindings(materialized, bindings, obligations)
+    assert report["status"] == "PASS"
