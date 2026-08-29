@@ -251,7 +251,20 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             )
             tiers[rid].add(tier)
             state = "PASS" if outcome is True else "FAIL" if outcome is False else "planned, not executed"
-            evidence[rid].append(f"L1 param consistency ({state}): {names}")
+            # A spec whose every parameter is a static harness constant (e.g. a
+            # port-matched protocol/config entry: SERIAL0_PROTOCOL, GPS_INJECT_TO)
+            # carries no model-derived number. It is real config-level evidence
+            # for the tier, but it must not close the requirement's obligations —
+            # an encrypted-link requirement is not "verified" by one protocol
+            # param. Model-derived L1 rows (threshold/attr readback) keep the
+            # full-closure claim.
+            # Unknown provenance counts as model-derived (only an affirmative
+            # all-"static" param set downgrades to a config-level claim).
+            model_derived = any(
+                getattr(p, "source", "") != "static" for p in spec.params
+            )
+            suffix = "" if model_derived else " (config-level; obligations not closed)"
+            evidence[rid].append(f"L1 param consistency ({state}): {names}{suffix}")
             claims[rid].append(EvidenceClaim(
                 description=evidence[rid][-1],
                 status=(
@@ -259,7 +272,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                     else "failed" if outcome is False
                     else "planned"
                 ),
-                all_obligations=True,
+                all_obligations=model_derived,
             ))
         elif spec.tier == "TRACE":
             blocked.add(rid)
@@ -386,6 +399,12 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         # A TRACE-blocked requirement's guard assignment is the WRONG-family guard
         # the gate rejected — it must not earn a behavioral-sim tier from it.
         assigned = None if rid in blocked else guard_assignment.get(rid)
+        # An accept-event pseudo-guard exists to route the SITL L2 spec; it is
+        # NOT a behavioral-sim anchor. Falling through keeps the honest
+        # initialization/functional routing: "default to locked upon power-on"
+        # must be an initial-state invariant, not event reachability.
+        if assigned is not None and getattr(assigned, "kind", "") == "accept_event":
+            assigned = None
         low = f"{rid} {req_texts.get(rid, '')}".lower()
         if assigned:
             attr = assigned.attribute

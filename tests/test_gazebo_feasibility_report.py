@@ -295,3 +295,126 @@ def test_overall_status_distinguishes_uncalibrated_from_dynamics_infeasible():
         [{"status": "PLANNED"}],
         dry_run=False,
     ) == "PARTIAL"
+
+
+def test_flight_quality_checks_route_with_numeric_limits():
+    planned = rgf._planned_gazebo_reqs([
+        "REQ-PERF-001: The system shall maintain roll and pitch attitude "
+        "deviations within 0.5 degree RMS during steady cruise flight at all "
+        "authorised speeds. [V: Gazebo attitude logging / HIL]",
+        "REQ-PERF-003: The system shall achieve a cruise airspeed of at least "
+        "18 m/s in nil-wind, level-flight conditions.",
+        "REQ-FUNC-003: The system shall transport payloads with a gross mass "
+        "of up to 1.5 kg while maintaining a hover throttle margin of at "
+        "least 30 percent and roll and pitch RMS within 1.0 degree.",
+    ])
+    by_check = {item["check"]: item for item in planned}
+    assert by_check["cruise_attitude"]["req_id"] == "REQ-PERF-001"
+    assert by_check["cruise_attitude"]["max_rms_deg"] == 0.5
+    assert by_check["cruise_speed"]["req_id"] == "REQ-PERF-003"
+    assert by_check["cruise_speed"]["min_speed_mps"] == 18.0
+    assert by_check["payload_attitude"]["req_id"] == "REQ-FUNC-003"
+    assert by_check["payload_attitude"]["max_rms_deg"] == 1.0
+    assert by_check["payload_attitude"]["min_margin_pct"] == 30.0
+
+
+_QUALITY_REQS = [
+    "REQ-PERF-001: The system shall maintain roll and pitch attitude "
+    "deviations within 0.5 degree RMS during steady cruise flight at all "
+    "authorised speeds.",
+    "REQ-PERF-003: The system shall achieve a cruise airspeed of at least "
+    "18 m/s in nil-wind, level-flight conditions.",
+    "REQ-FUNC-003: The system shall transport payloads with a gross mass of "
+    "up to 1.5 kg while maintaining a hover throttle margin of at least 30 "
+    "percent and roll and pitch RMS within 1.0 degree.",
+]
+
+_QUALITY_LIVE = {
+    "nilwind_dash_speed_mps": 21.3,
+    "nilwind_dash_peak_mps": 23.9,
+    "cruise_attitude_rms_deg": 0.31,
+    "cruise_attitude_roll_rms_deg": 0.22,
+    "cruise_attitude_pitch_rms_deg": 0.31,
+    "cruise_attitude_samples": 88,
+    "cruise_attitude_mean_speed_mps": 19.7,
+    "hover_attitude_rms_deg": 0.44,
+    "hover_attitude_samples": 132,
+    "hover_attitude_with_payload": True,
+    "hover_throttle_pct": 38.0,
+    "payload_mass_kg": 1.5,
+}
+
+
+def test_flight_quality_checks_judge_pass_partial_and_scope_caveats():
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    results = {r["check"]: r for r in rgf._req_results(_QUALITY_LIVE, planned)}
+
+    assert results["cruise_speed"]["status"] == "PASS"
+    assert "nil-wind" in results["cruise_speed"]["message"]
+
+    assert results["cruise_attitude"]["status"] == "PARTIAL"
+    assert "not swept" in results["cruise_attitude"]["message"]
+
+    assert results["payload_attitude"]["status"] == "PARTIAL"
+    assert "margin" in results["payload_attitude"]["message"]
+    assert "carry-hover" in results["payload_attitude"]["message"]
+
+
+def test_flight_quality_checks_fail_on_violated_limits():
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE)
+    live.update({
+        "nilwind_dash_speed_mps": 12.4,     # below 18
+        "cruise_attitude_rms_deg": 0.9,     # above 0.5
+        "hover_throttle_pct": 80.0,         # margin 20 < 30
+    })
+    results = {r["check"]: r for r in rgf._req_results(live, planned)}
+    assert results["cruise_speed"]["status"] == "FAIL"
+    assert results["cruise_attitude"]["status"] == "FAIL"
+    assert results["payload_attitude"]["status"] == "FAIL"
+
+
+def test_flight_quality_checks_stay_planned_without_measurements():
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    results = {r["check"]: r for r in rgf._req_results({}, planned)}
+    assert results["cruise_speed"]["status"] == "PLANNED"
+    assert results["cruise_attitude"]["status"] == "PLANNED"
+    assert results["payload_attitude"]["status"] == "PLANNED"
+
+
+def test_payload_attitude_requires_payload_actually_attached():
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE)
+    live["hover_attitude_with_payload"] = False
+    results = {r["check"]: r for r in rgf._req_results(live, planned)}
+    # hover attitude measured without the payload must not judge FUNC-003
+    assert results["payload_attitude"]["status"] == "PLANNED"
+
+
+def test_coordinate_chain_delay_supersedes_command_delay():
+    planned = rgf._planned_gazebo_reqs([
+        "REQ-PERF-005: The mechanical payload release actuation shall complete "
+        "within 2.0 seconds from the moment the delivery coordinate condition "
+        "is satisfied.",
+    ])
+    live = {
+        "payload_release_commanded": True,
+        "payload_release_detected": True,
+        "payload_observer_available": True,
+        "payload_release_delay_s": 0.68,
+        "payload_coordinate_to_separation_delay_s": 0.91,
+    }
+    result = rgf._req_results(live, planned)[0]
+    assert result["check"] == "timed_actuation"
+    assert result["status"] == "PARTIAL"
+    assert "delivery-coordinate condition satisfied" in result["message"]
+    assert "harness" in result["message"]
+
+    live["payload_coordinate_to_separation_delay_s"] = 2.5  # over the 2 s limit
+    result = rgf._req_results(live, planned)[0]
+    assert result["status"] == "FAIL"
+
+    del live["payload_coordinate_to_separation_delay_s"]
+    result = rgf._req_results(live, planned)[0]
+    assert result["status"] == "PARTIAL"
+    assert "coordinate-condition detection was not exercised" in result["message"]

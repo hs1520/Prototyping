@@ -25,8 +25,11 @@ class GuardMatcher:
     """
     按 guard 内容匹配（与 REQ ID 无关）。
 
-    operators     : 匹配的比较运算符列表；["bool"] 代表 bool_true guard
-    var_keywords  : guard 变量名（小写）必须包含其中任一关键词
+    operators     : 匹配的比较运算符列表；["bool"] 代表 bool_true guard；
+                    "event" 代表 accept 事件驱动的转移（无 guard，按事件
+                    类型名匹配 var_keywords —— 事件驱动与 guard 驱动是同一
+                    行为语义的两种合法 SysML 写法，只认 guard 会漏掉前者）
+    var_keywords  : guard 变量名/accept 事件名（小写）必须包含其中任一关键词
     threshold_min : 阈值下界（comparison guard）
     threshold_max : 阈值上界（comparison guard）
     action_kws    : 可选，进一步用 entry action 名区分同类 guard（如区分
@@ -47,10 +50,15 @@ class AttrMatcher:
     attr_keywords : 属性名（小写）必须包含其中任一关键词
     part_keywords : 可选，part 名（小写）必须包含其中任一关键词（防止跨部件误匹配）
     multiplier    : 单位换算系数（如 km→m 用 1000，m/s→cm/s 用 100）
+    allow_port_match : 属性不命中时允许按 port 名匹配（同一 attr_keywords）。
+                    port 没有数值，只有 ardu_params 全为静态值的条目才允许
+                    开启——接口/配置类需求（RTCM、MAVLink）在模型里合法地
+                    只声明 port 不声明属性，只认属性会漏掉它们。
     """
     attr_keywords: List[str]
     part_keywords: List[str] = field(default_factory=list)
     multiplier: float = 1.0
+    allow_port_match: bool = False
 
 
 @dataclass
@@ -87,6 +95,12 @@ class ContentEntry:
     notes: str = ""
     req_text_kws: List[str] = field(default_factory=list)
     req_text_exclude_kws: List[str] = field(default_factory=list)
+    # 可选的附加 L2 用例：主 tier 保持 L1（参数一致性证据不动），额外生成
+    # 一条 L2 行为检查（如 FENCE 缩尺执法测试）。二者是同一需求的两类证据，
+    # 用两个 tier 字段而不是改写主 tier，避免已有 L1 证据语义漂移。
+    l2_inject: Optional[Any] = None
+    l2_verify: Optional[Any] = None
+    l2_notes: str = ""
 
 
 def _noop_l1() -> Dict[str, Any]:
@@ -280,13 +294,20 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         notes="MAV_CMD_DO_PARACHUTE RELEASE → SERVO_OUTPUT_RAW.servo8_raw≈2000.",
     ),
 
-    # ── Safety: payload abort lock（bool: deliveryAbortConditionActive）
+    # ── Safety: payload abort lock（bool guard 或 accept 事件，如
+    #    deliveryAbortConditionActive / accept AbortConditionActive）
+    #    var_keywords 不含 "delivery"：accept 面开放后，release 触发器
+    #    （DeliveryCoordinateSatisfied）也含 "delivery"，会被错误吸入；
+    #    abort/lock/payload/gripper 足以覆盖 bool 与 event 两种写法。
+    #    req_text 门挡掉同族 release 类需求（FUNC/PERF 的释放条款）。
     ContentEntry(
         semantic_tag="PAYLOAD_ABORT_LOCK",
         guard_matcher=GuardMatcher(
-            operators=["bool"],
-            var_keywords=["payload", "abort", "delivery", "lock", "gripper"],
+            operators=["bool", "event"],
+            var_keywords=["payload", "abort", "lock", "gripper"],
         ),
+        req_text_kws=["abort", "lock"],
+        req_text_exclude_kws=["release the payload", "release actuation"],
         ardu_params={
             "GRIP_ENABLE": 1,
             "GRIP_TYPE": 1,           # 1 = servo gripper
@@ -323,7 +344,49 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         notes="Payload abort → MAV_CMD_DO_GRIPPER GRAB → SERVO_OUTPUT_RAW.servo7_raw≈1000 (lock).",
     ),
 
+    # ── Safety: payload power-on default lock（accept PowerOnEvent → 默认锁定态）
+    #    验证的是飞控栈侧的等价命题：夹爪已配置且上电后、未解锁前，
+    #    SERVO7 输出停在锁定 PWM（GRIP_NEUTRAL=GRIP_GRAB=1000，经验证
+    #    ArduPilot 上电即驱动 neutral 位），且从未出现 release PWM。
+    #    机械默认态本身属检验域；这里主张的只是 flight-stack 侧配置+输出。
+    ContentEntry(
+        semantic_tag="PAYLOAD_POWERON_LOCK",
+        guard_matcher=GuardMatcher(
+            operators=["bool", "event"],
+            var_keywords=["power", "poweron", "boot", "startup"],
+        ),
+        req_text_kws=["power-on", "power on", "default"],
+        ardu_params={
+            "GRIP_ENABLE": 1,
+            "GRIP_TYPE": 1,
+            "SERVO7_FUNCTION": 28,
+            "GRIP_RELEASE": 2000,
+            "GRIP_GRAB": 1000,
+            "GRIP_NEUTRAL": 1000,   # neutral=locked：上电输出即锁定位
+        },
+        tier="L2",
+        inject=InjectSpec(
+            kind="set_param",
+            # 不起飞、不解锁：检查的就是 power-on 且 before-arming 的输出。
+            # 参数已由启动 .parm 装载（AP_Gripper 在 init 读 GRIP_ENABLE，
+            # 运行时改写不生效——boot defaults 是唯一可靠路径）；这里只留
+            # settle 让 SERVO_OUTPUT_RAW 流稳定。
+            params={"_settle_s": 3.0},
+            pre_takeoff_m=0.0,
+        ),
+        verify=VerifySpec(
+            kind="assert_servo_pwm",
+            args={"channel": 7, "target_pwm": 1000, "tol": 50},
+            timeout=10.0,
+        ),
+        notes="Power-on (disarmed) gripper output at locked PWM (GRIP_NEUTRAL=GRAB=1000); release PWM never driven before arming.",
+    ),
+
     # ── Constraint: max altitude（attr: maxAltitude）
+    #    L1（主 tier）：模型值 → FENCE_ALT_MAX 参数一致性。
+    #    附加 L2：缩尺执法测试——起飞后把 FENCE_ALT_MAX 压到机体之下，
+    #    断言飞控栈立刻执行围栏动作（RTL；RTL 不可用时降落）。验证的是
+    #    执法机制存在且被行使；120m 数值本身仍由 L1 主张（缩尺不重放数值）。
     ContentEntry(
         semantic_tag="ALTITUDE_FENCE",
         attr_matcher=AttrMatcher(
@@ -335,6 +398,26 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         **_noop_l1(),
         notes="maxAltitude attribute → FENCE_ALT_MAX.",
         req_text_kws=["altitude", "height", "ceiling", "above ground", "agl", "vertical"],
+        l2_inject=InjectSpec(
+            kind="set_param",
+            # 起飞到 15m（force_arm_and_takeoff 会临时关围栏、到高度后恢复），
+            # 再把 ALT_MAX 压到 10m → 即刻越界 → FENCE_ACTION=1（RTL）。
+            # 经验证：ALT_MAX 写入后 <1s 内 "Max Alt fence breached" → RTL。
+            params={"FENCE_ACTION": 1, "FENCE_ALT_MAX": 10, "FENCE_ENABLE": 1,
+                    "_settle_s": 1.0},
+            pre_takeoff_m=15.0,
+        ),
+        l2_verify=VerifySpec(
+            kind="wait_mode",
+            args={"mode": "RTL", "fallback": "LAND"},
+            timeout=30.0,
+        ),
+        l2_notes=(
+            "Scaled fence-enforcement check: lower FENCE_ALT_MAX below current "
+            "altitude in flight; flight stack must execute the fence action "
+            "(RTL/LAND). Mechanism evidence only — the 120 m value is claimed "
+            "by the L1 param row, not by this scaled test."
+        ),
     ),
 
     # ── Performance: control loop rate（attr: controlFrequency）
@@ -352,13 +435,16 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         req_text_kws=["loop", "frequency", "hz", "control rate", "refresh"],
     ),
 
-    # ── Interface: MAVLink protocol（attr: encryptionKeyLength 或 part 名含 comm）
+    # ── Interface: MAVLink protocol（attr 或 port: mavlinkTelemetry 等；
+    #    通信类 part 合法地只声明 port —— allow_port_match 让配置级 L1
+    #    证据（SERIAL0_PROTOCOL=2，全静态值）不依赖属性存在）
     ContentEntry(
         semantic_tag="MAVLINK_PROTOCOL",
         attr_matcher=AttrMatcher(
             attr_keywords=["encryption", "protocol", "mavlink", "keylength",
                            "serial", "maxoperational"],
             part_keywords=["communication", "comm", "link", "gcs"],
+            allow_port_match=True,
         ),
         ardu_params={"SERIAL0_PROTOCOL": 2},
         tier="L1",
@@ -408,17 +494,20 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         req_text_kws=["radius", "range", "geofence", "boundary", "distance"],
     ),
 
-    # ── Interface: RTCM GNSS corrections（attr: 含 gps/gnss 的 part）
+    # ── Interface: RTCM GNSS corrections（attr 或 port: gnssCorrections 等；
+    #    感知类 part 合法地只声明 port。GPS_INJECT_TO=127 是配置级证据——
+    #    飞控栈已配置接收/转发 RTCM 注入；亚米精度按需求 V 标注仍归 RTK bench）
     ContentEntry(
         semantic_tag="RTCM_GPS",
         attr_matcher=AttrMatcher(
             attr_keywords=["gnss", "gps", "correction", "rtcm", "differential"],
             part_keywords=["perception", "navigation", "gnss", "gps", "sensor"],
+            allow_port_match=True,
         ),
         ardu_params={"GPS_INJECT_TO": 127},
         tier="L1",
         **_noop_l1(),
-        notes="RTCM/GNSS part → GPS_INJECT_TO=127 (broadcast corrections).",
+        notes="RTCM/GNSS part → GPS_INJECT_TO=127 (accept/forward RTCM corrections); config-level evidence only.",
         req_text_kws=["rtcm", "gnss", "gps", "correction", "differential", "positioning"],
     ),
 ]

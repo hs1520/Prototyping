@@ -446,6 +446,8 @@ def _model_guard(bridge: SITLBridge, req_id: str) -> str | None:
     assigned = bridge.requirement_evidence.guard_assignments.get(req_id)
     if not assigned:
         return None
+    if assigned.kind == "accept_event":
+        return f"accept {assigned.attribute}"
     if assigned.kind == "bool_true" or not assigned.operator or assigned.threshold is None:
         return f"{assigned.attribute} (bool)"
     return f"{assigned.attribute} {assigned.operator} {assigned.threshold}"

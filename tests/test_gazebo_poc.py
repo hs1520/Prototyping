@@ -348,3 +348,51 @@ def test_motor_failure_upgrades_redundancy_req_to_flight_verified():
     # inconclusive (flight errored) → also NOT flight-verified (a transient can't earn the green)
     gv3 = {"status": "ok", "motor_failure_tolerant": None, "redundancy_req": "REQ-SAFE-007"}
     assert classify_requirement_coverage(model, reqs, gazebo=gv3)["REQ-SAFE-007"] != FLIGHT_VERIFIED
+
+
+def test_attitude_rms_deg_centres_each_axis_on_its_own_mean():
+    import math
+    from gazebo_poc.run_flight import _attitude_rms_deg
+
+    # constant offset (forward-dash trim pitch) must NOT count as deviation
+    samples = [(0.0, math.radians(-8.0))] * 10
+    rms = _attitude_rms_deg(samples)
+    assert rms["n"] == 10
+    assert rms["rms_deg"] == 0.0
+
+    # symmetric ±1° square wave about the mean → RMS exactly 1°
+    one = math.radians(1.0)
+    samples = [(one, 0.0), (-one, 0.0)] * 8
+    rms = _attitude_rms_deg(samples)
+    assert abs(rms["roll_rms_deg"] - 1.0) < 1e-9
+    assert abs(rms["pitch_rms_deg"]) < 1e-9
+    assert abs(rms["rms_deg"] - 1.0) < 1e-9
+
+
+def test_attitude_rms_deg_needs_at_least_two_samples():
+    from gazebo_poc.run_flight import _attitude_rms_deg
+
+    assert _attitude_rms_deg([])["rms_deg"] is None
+    assert _attitude_rms_deg([(0.1, 0.2)])["rms_deg"] is None
+
+
+def test_attitude_sampler_dedupes_on_time_boot_ms():
+    from types import SimpleNamespace
+
+    from gazebo_poc.run_flight import _AttitudeSampler
+
+    att = SimpleNamespace(roll=0.01, pitch=0.02, time_boot_ms=1000)
+    m = SimpleNamespace(messages={"ATTITUDE": att})
+    sampler = _AttitudeSampler()
+    sampler.sample(m)
+    sampler.sample(m)                       # same message → deduped
+    assert len(sampler.samples) == 1
+
+    m.messages["ATTITUDE"] = SimpleNamespace(roll=0.03, pitch=0.04,
+                                             time_boot_ms=1100)
+    sampler.sample(m)
+    assert len(sampler.samples) == 2
+    assert sampler.samples[-1] == (0.03, 0.04)
+
+    sampler.sample(SimpleNamespace(messages={}))   # no ATTITUDE yet → no-op
+    assert len(sampler.samples) == 2

@@ -92,6 +92,18 @@ def _planned_gazebo_reqs(requirements: list[str]) -> list[dict[str, Any]]:
         elif "within" in low and "second" in low and any(k in low for k in ("deploy", "release", "actuat", "lock")):
             check = "timed_actuation"
             reason = "timed actuator behavior needs synchronized high-fidelity execution"
+        elif (("attitude" in low or "roll and pitch" in low)
+              and ("rms" in low or "deviation" in low)):
+            if any(k in low for k in ("payload", "transport")):
+                check = "payload_attitude"
+                reason = ("payload-carry attitude and hover-throttle margin need "
+                          "closed-loop flight dynamics")
+            else:
+                check = "cruise_attitude"
+                reason = "cruise attitude RMS needs closed-loop flight dynamics"
+        elif ("airspeed" in low or "cruise" in low) and "at least" in low and "m/s" in low:
+            check = "cruise_speed"
+            reason = "nil-wind top-speed dash needs closed-loop flight dynamics"
         if check:
             item: dict[str, Any] = {
                 "req_id": rid,
@@ -115,6 +127,18 @@ def _planned_gazebo_reqs(requirements: list[str]) -> list[dict[str, Any]]:
             elif check == "positional_release":
                 item["max_error_m"] = _number_after(
                     r"within\s+(\d+(?:\.\d+)?)\s*(?:metres?|meters?)", low
+                )
+            elif check in ("cruise_attitude", "payload_attitude"):
+                item["max_rms_deg"] = _number_after(
+                    r"within\s+(\d+(?:\.\d+)?)\s*degree", low
+                )
+                if check == "payload_attitude":
+                    item["min_margin_pct"] = _number_after(
+                        r"margin of at least\s+(\d+(?:\.\d+)?)\s*percent", low
+                    )
+            elif check == "cruise_speed":
+                item["min_speed_mps"] = _number_after(
+                    r"at least\s+(\d+(?:\.\d+)?)\s*m/s", low
                 )
             planned.append(item)
     return planned
@@ -212,6 +236,9 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
     timing_req = _payload_timing_req(planned)
     position_req = _planned_check(planned, "positional_release")
     parachute_req = _parachute_timing_req(planned)
+    cruise_att_req = _planned_check(planned, "cruise_attitude")
+    payload_att_req = _planned_check(planned, "payload_attitude")
+    speed_req = _planned_check(planned, "cruise_speed")
     wind_mps = float(wind_req.get("wind_mps") or 0.0)
     min_groundspeed = wind_req.get("min_groundspeed_mps")
     payload_release = timing_req is not None or position_req is not None
@@ -233,6 +260,13 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         positional_tolerance_m=float((position_req or {}).get("max_error_m") or 1.0),
         parachute_deploy=parachute_req is not None,
         parachute_max_delay_s=float((parachute_req or {}).get("max_delay_s") or 0.5),
+        measure_attitude=(cruise_att_req is not None
+                          or payload_att_req is not None),
+        # extend the pre-wind (nil-wind) dash so top speed and cruise attitude
+        # are sampled from a built-up plateau rather than the 7 s direction probe
+        nilwind_dash_s=(
+            15.0 if (speed_req is not None or cruise_att_req is not None) else 0.0
+        ),
     )
     result = dict(run_flight.LAST_RESULT)
     result["return_code"] = rc
@@ -326,25 +360,39 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
     if gazebo and timing_req and gazebo.get("payload_release_commanded"):
         rid = str(timing_req["req_id"])
         delay = gazebo.get("payload_release_delay_s")
+        chain = gazebo.get("payload_coordinate_to_separation_delay_s")
         limit = float(timing_req.get("max_delay_s") or 0.0)
         detected = bool(gazebo.get("payload_release_detected"))
         observer_available = bool(gazebo.get("payload_observer_available"))
-        meets = detected and delay is not None and float(delay) <= limit
-        covered.add(rid)
-        results.append({
-            "req_id": rid,
-            "check": "timed_actuation",
-            # Physical command-to-separation timing is measured. Geographic
-            # condition detection remains a separate mission-logic concern.
-            "status": (
-                "PARTIAL" if meets else "FAIL" if observer_available else "INCONCLUSIVE"
-            ),
-            "message": (
+        if chain is not None:
+            # Full requirement interval: coordinate condition satisfied →
+            # physical separation. The condition was evaluated by the harness,
+            # not by generated mission logic — hence still PARTIAL.
+            meets = detected and float(chain) <= limit
+            message = (
+                f"delivery-coordinate condition satisfied → physical detachable-joint "
+                f"separation delay={float(chain):.3f} s (limit {limit:.1f} s; "
+                f"command→separation {delay} s, detected={detected}); the coordinate "
+                "condition was evaluated by the harness, not by generated mission logic"
+            )
+        else:
+            meets = detected and delay is not None and float(delay) <= limit
+            message = (
                 f"MAV_CMD_DO_GRIPPER to physical detachable-joint separation "
                 f"delay={delay} s (limit {limit:.1f} s, detected={detected}, "
                 f"observer_available={observer_available}); "
                 "coordinate-condition detection was not exercised"
+            )
+        covered.add(rid)
+        results.append({
+            "req_id": rid,
+            "check": "timed_actuation",
+            # Physical timing is measured; condition ownership stays with the
+            # harness, so the ceiling remains PARTIAL.
+            "status": (
+                "PARTIAL" if meets else "FAIL" if observer_available else "INCONCLUSIVE"
             ),
+            "message": message,
         })
 
     position_req = _planned_check(planned, "positional_release")
@@ -384,6 +432,88 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                 f"MAV_CMD_DO_PARACHUTE to Gazebo parachute model creation/attachment "
                 f"delay={delay} s (limit {limit:.1f} s, observed={observed}); critical-failure "
                 "detection and precedence were not injected by this subcheck"
+            ),
+        })
+
+    speed_req = _planned_check(planned, "cruise_speed")
+    if gazebo and speed_req and gazebo.get("nilwind_dash_speed_mps") is not None:
+        rid = str(speed_req["req_id"])
+        speed = float(gazebo["nilwind_dash_speed_mps"])
+        peak = gazebo.get("nilwind_dash_peak_mps")
+        minimum = float(speed_req.get("min_speed_mps") or 0.0)
+        met = speed >= minimum
+        covered.add(rid)
+        results.append({
+            "req_id": rid,
+            "check": "cruise_speed",
+            # Nil wind → ground speed equals airspeed; ALT_HOLD keeps level
+            # flight. The measured condition is exactly the requirement's.
+            "status": "PASS" if met else "FAIL",
+            "message": (
+                f"Gazebo nil-wind level dash held {speed:.2f} m/s mean ground speed "
+                f"(peak {float(peak):.2f} m/s; requirement >= {minimum:.1f} m/s); "
+                "no wind injected during this segment, altitude held in ALT_HOLD, "
+                "ground speed = airspeed in nil wind"
+                if peak is not None else
+                f"Gazebo nil-wind level dash held {speed:.2f} m/s mean ground speed "
+                f"(requirement >= {minimum:.1f} m/s)"
+            ),
+        })
+
+    catt_req = _planned_check(planned, "cruise_attitude")
+    if gazebo and catt_req and gazebo.get("cruise_attitude_rms_deg") is not None:
+        rid = str(catt_req["req_id"])
+        rms = float(gazebo["cruise_attitude_rms_deg"])
+        limit = float(catt_req.get("max_rms_deg") or 0.0)
+        mean_speed = gazebo.get("cruise_attitude_mean_speed_mps")
+        met = rms <= limit
+        covered.add(rid)
+        results.append({
+            "req_id": rid,
+            "check": "cruise_attitude",
+            # One cruise point is measured; "at all authorised speeds" is a
+            # sweep this single dash does not cover.
+            "status": "PARTIAL" if met else "FAIL",
+            "message": (
+                f"Gazebo cruise attitude RMS {rms:.3f} deg about the window mean "
+                f"(roll {gazebo.get('cruise_attitude_roll_rms_deg'):.3f} / pitch "
+                f"{gazebo.get('cruise_attitude_pitch_rms_deg'):.3f} deg, "
+                f"n={gazebo.get('cruise_attitude_samples')}) during the nil-wind dash "
+                f"at ~{mean_speed if mean_speed is None else round(float(mean_speed), 1)} m/s "
+                f"(limit {limit:.1f} deg RMS); single speed point — 'all authorised "
+                "speeds' not swept"
+            ),
+        })
+
+    patt_req = _planned_check(planned, "payload_attitude")
+    if (gazebo and patt_req and gazebo.get("hover_attitude_rms_deg") is not None
+            and gazebo.get("hover_attitude_with_payload")):
+        rid = str(patt_req["req_id"])
+        rms = float(gazebo["hover_attitude_rms_deg"])
+        limit = float(patt_req.get("max_rms_deg") or 0.0)
+        margin_req = patt_req.get("min_margin_pct")
+        throttle = gazebo.get("hover_throttle_pct")
+        margin = None if throttle is None else 100.0 - float(throttle)
+        rms_ok = rms <= limit
+        margin_ok = (
+            margin_req is None
+            or (margin is not None and margin >= float(margin_req))
+        )
+        met = rms_ok and margin_ok
+        covered.add(rid)
+        results.append({
+            "req_id": rid,
+            "check": "payload_attitude",
+            # Carry-hover only: transport also includes cruise, which this
+            # window does not cover.
+            "status": "PARTIAL" if met else "FAIL",
+            "message": (
+                f"Gazebo hover with {gazebo.get('payload_mass_kg')} kg payload attached: "
+                f"attitude RMS {rms:.3f} deg (limit {limit:.1f} deg, "
+                f"n={gazebo.get('hover_attitude_samples')}), hover throttle "
+                f"{throttle}% -> margin {margin if margin is None else round(margin, 1)}%"
+                + (f" (required >= {float(margin_req):.0f}%)" if margin_req is not None else "")
+                + "; carry-hover window only — cruise-transport attitude not swept"
             ),
         })
 
@@ -504,6 +634,16 @@ def _write_report(report: dict[str, Any]) -> None:
         f"(met={g.get('payload_release_position_met')})",
         f"- Parachute deployment: model_observed={g.get('parachute_model_observed')}, "
         f"delay={g.get('parachute_deploy_delay_s')} s",
+        f"- Nil-wind dash: {g.get('nilwind_dash_speed_mps')} m/s mean "
+        f"(peak {g.get('nilwind_dash_peak_mps')} m/s)",
+        f"- Cruise attitude RMS: {g.get('cruise_attitude_rms_deg')} deg "
+        f"(n={g.get('cruise_attitude_samples')}, "
+        f"~{g.get('cruise_attitude_mean_speed_mps')} m/s)",
+        f"- Hover attitude RMS: {g.get('hover_attitude_rms_deg')} deg "
+        f"(with_payload={g.get('hover_attitude_with_payload')}, "
+        f"n={g.get('hover_attitude_samples')})",
+        f"- Coordinate→separation delay: "
+        f"{g.get('payload_coordinate_to_separation_delay_s')} s",
         f"- Obstacle avoidance: lidar={g.get('obstacle_lidar_available')}, "
         f"minimum_separation={g.get('obstacle_min_distance_m')} m, "
         f"final_groundspeed={g.get('obstacle_final_groundspeed_mps')} m/s, "

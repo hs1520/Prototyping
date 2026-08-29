@@ -411,6 +411,49 @@ def _cleanup(proc):
 LAST_RESULT: dict = {}
 
 
+def _attitude_rms_deg(samples) -> dict:
+    """Roll/pitch RMS deviation about the window mean, in degrees.
+
+    "Attitude deviations ... RMS" in the requirements means variation around the
+    trim/commanded attitude, not the absolute pitch of a forward dash — so each
+    axis is centred on its own window mean before the RMS is taken.
+    """
+    import math
+    n = len(samples)
+    if n < 2:
+        return {"n": n, "roll_rms_deg": None, "pitch_rms_deg": None, "rms_deg": None}
+    rolls = [s[0] for s in samples]
+    pitches = [s[1] for s in samples]
+    out = {}
+    for name, vals in (("roll", rolls), ("pitch", pitches)):
+        mean = sum(vals) / n
+        var = sum((v - mean) ** 2 for v in vals) / n
+        out[f"{name}_rms_deg"] = math.degrees(math.sqrt(var))
+    out["n"] = n
+    out["rms_deg"] = max(out["roll_rms_deg"], out["pitch_rms_deg"])
+    return out
+
+
+class _AttitudeSampler:
+    """Collect ATTITUDE messages off pymavlink's parse cache without stealing
+    messages from the blocking recv_match loops (every parsed message lands in
+    ``m.messages`` regardless of which filtered read consumed it)."""
+
+    def __init__(self):
+        self.samples = []
+        self._last_boot_ms = None
+
+    def sample(self, m) -> None:
+        att = m.messages.get("ATTITUDE") if hasattr(m, "messages") else None
+        if att is None:
+            return
+        boot_ms = getattr(att, "time_boot_ms", None)
+        if boot_ms is not None and boot_ms == self._last_boot_ms:
+            return
+        self._last_boot_ms = boot_ms
+        self.samples.append((float(att.roll), float(att.pitch)))
+
+
 def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
          rotor_count=4, calibrate=False, fail_rotor=None, max_thrust_g=None,
          hover_throttle=None, wind_mps=0.0, wind_min_groundspeed_mps=None,
@@ -420,7 +463,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
          obstacle_avoidance=False, obstacle_detection_range_m=15.0,
          obstacle_response_threshold_m=5.0,
          obstacle_min_separation_m=None,
-         obstacle_approach_speed_mps=1.5) -> int:
+         obstacle_approach_speed_mps=1.5,
+         measure_attitude=False, nilwind_dash_s=0.0) -> int:
     LAST_RESULT.clear()
     out = Path("gazebo_poc/generated")
     tdir = Path("gazebo_poc/templates")
@@ -661,6 +705,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
 
         peak = 0.0
         thr, rels = [], []
+        hover_att = _AttitudeSampler() if measure_attitude else None
         cap_proc, cap_path = None, Path("gazebo_poc/generated/jointstate.txt")
         topic = ("/world/iris_runway/model/iris_with_gimbal/model/"
                  "iris_with_standoffs/joint_state")    # nested model — has rotor_*_joint
@@ -673,6 +718,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             peak = max(peak, rel)
             if time.time() > t_end - 18:          # sample steady-state in the final 18 s
                 thr.append(v.throttle); rels.append(rel)
+                if hover_att is not None:
+                    hover_att.sample(m)
                 if cap_proc is None:              # capture rotor RPM while hovering
                     cap_proc = subprocess.Popen(
                         ["docker", "exec", _CONTAINER, "gz", "topic", "-e", "-t", topic],
@@ -698,12 +745,28 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 rc(alt_hold_stick(rel))
                 if time.time() > t_end - 18:
                     thr.append(v.throttle); rels.append(rel)
+                    if hover_att is not None:
+                        hover_att.sample(m)
                     if cap_proc is None:
                         cap_proc = subprocess.Popen(
                             ["docker", "exec", _CONTAINER, "gz", "topic", "-e", "-t", topic],
                             stdout=open(cap_path, "w"), stderr=subprocess.DEVNULL)
         if cap_proc:
             cap_proc.terminate()
+        if hover_att is not None:
+            hover_rms = _attitude_rms_deg(hover_att.samples)
+            LAST_RESULT.update({
+                "hover_attitude_samples": hover_rms["n"],
+                "hover_attitude_roll_rms_deg": hover_rms["roll_rms_deg"],
+                "hover_attitude_pitch_rms_deg": hover_rms["pitch_rms_deg"],
+                "hover_attitude_rms_deg": hover_rms["rms_deg"],
+                # payload (if any) is still attached during this window — the
+                # release happens after hover sampling, so these are carry stats.
+                "hover_attitude_with_payload": bool(
+                    payload_release and payload_mass_kg > 0
+                ),
+            })
+            print(f"[att] hover RMS: {hover_rms}", flush=True)
         rotor_rad_s = _parse_rotor_velocity(cap_path)
         hover_rpm = rotor_rad_s * 9.5493
         print(f"[sitl] climb peak={peak:.2f} m; steady hover sampled. "
@@ -716,6 +779,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             release_target = None
             release_position = None
             release_position_error = None
+            condition_met_mono = None
             if positional_release:
                 m.set_mode("ALT_HOLD")
                 wait(lambda h: h.custom_mode == ALT_HOLD, 6, "ALT_HOLD for release approach")
@@ -752,6 +816,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                             pitch = 1470 if release_position_error < 2.0 else 1420
                             rc(alt_hold_stick(hud.alt - alt0), pitch=pitch)
                         if release_position_error <= positional_tolerance_m:
+                            # the delivery coordinate condition is first satisfied
+                            # HERE — the PERF-005 clock starts at this moment.
+                            condition_met_mono = time.monotonic()
                             break
                 rc(alt_hold_stick(rels[-1] if rels else TGT))
 
@@ -775,11 +842,20 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                         and payload_z < payload_z0 - 0.15):
                     release_delay = time.monotonic() - release_started
                     break
+            coordinate_chain_delay = None
+            if condition_met_mono is not None and release_delay is not None:
+                # coordinate-condition satisfied → physical separation, the
+                # full PERF-005 interval (harness owns the condition check).
+                coordinate_chain_delay = (
+                    release_started + release_delay - condition_met_mono
+                )
             LAST_RESULT.update({
                 "payload_release_commanded": True,
                 "payload_observer_available": payload_z0 is not None,
                 "payload_release_detected": release_delay is not None,
                 "payload_release_delay_s": release_delay,
+                "payload_condition_met": condition_met_mono is not None,
+                "payload_coordinate_to_separation_delay_s": coordinate_chain_delay,
                 "payload_z_before_m": payload_z0,
                 "payload_z_after_m": payload_z,
                 "payload_mass_kg": payload_mass_kg,
@@ -1017,12 +1093,24 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         # ArduPilot reports NED while Gazebo uses ENU-like world axes; the
         # ArduPilotPlugin transform maps (world x, world y) -> (NED x, -NED y).
         baseline_vectors = []
+        nilwind_speeds = []
+        cruise_att = _AttitudeSampler() if measure_attitude else None
         if wind_mps > 0:
-            t_baseline = time.time() + 7
+            # The pre-injection segment IS the nil-wind dash: extend it when a
+            # nil-wind cruise measurement (speed and/or attitude RMS) was asked
+            # for, and sample the tail once the speed has built up.
+            baseline_s = max(7.0, float(nilwind_dash_s or 0.0))
+            t0_baseline = time.time()
+            t_baseline = t0_baseline + baseline_s
+            tail_start = t0_baseline + baseline_s * 0.5
             while time.time() < t_baseline:
                 rel_msg = m.recv_match(type="VFR_HUD", blocking=True, timeout=1)
                 if rel_msg is not None:
                     rc(alt_hold_stick(rel_msg.alt - alt0), pitch=_FWD_PITCH)
+                    if time.time() >= tail_start:
+                        nilwind_speeds.append(float(rel_msg.groundspeed))
+                        if cruise_att is not None:
+                            cruise_att.sample(m)
                 pos = m.recv_match(type="LOCAL_POSITION_NED", blocking=True, timeout=1)
                 if pos is not None and (pos.vx * pos.vx + pos.vy * pos.vy) > 1.0:
                     baseline_vectors.append((float(pos.vx), float(pos.vy)))
@@ -1059,6 +1147,11 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             rc(alt_hold_stick(rel), pitch=_FWD_PITCH)  # nose down → fly forward (env-tunable)
             if time.time() > t_end - 9:             # steady-state last 9 s
                 spds.append(v.groundspeed)
+                if wind_mps <= 0:
+                    # no wind was ever injected → this dash IS the nil-wind run
+                    nilwind_speeds.append(float(v.groundspeed))
+                    if cruise_att is not None:
+                        cruise_att.sample(m)
                 if wind_mps > 0:
                     pos = m.recv_match(type="LOCAL_POSITION_NED", blocking=True, timeout=1)
                     if pos is not None:
@@ -1073,6 +1166,30 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         fwd_rpm = fwd_rad_s * 9.5493
         ns = max(1, len(spds) // 2)
         fwd_speed = sum(spds[-ns:]) / ns if spds else 0.0
+        if nilwind_speeds:
+            ntail = max(1, len(nilwind_speeds) // 2)
+            nil_speed = sum(nilwind_speeds[-ntail:]) / ntail
+            LAST_RESULT.update({
+                "nilwind_dash_speed_mps": nil_speed,
+                "nilwind_dash_peak_mps": max(nilwind_speeds),
+                "nilwind_dash_samples": len(nilwind_speeds),
+            })
+            print(f"[nilwind] dash speed={nil_speed:.1f} m/s "
+                  f"(peak {max(nilwind_speeds):.1f}, n={len(nilwind_speeds)})",
+                  flush=True)
+        if cruise_att is not None:
+            cruise_rms = _attitude_rms_deg(cruise_att.samples)
+            LAST_RESULT.update({
+                "cruise_attitude_samples": cruise_rms["n"],
+                "cruise_attitude_roll_rms_deg": cruise_rms["roll_rms_deg"],
+                "cruise_attitude_pitch_rms_deg": cruise_rms["pitch_rms_deg"],
+                "cruise_attitude_rms_deg": cruise_rms["rms_deg"],
+                "cruise_attitude_mean_speed_mps": (
+                    sum(nilwind_speeds) / len(nilwind_speeds)
+                    if nilwind_speeds else None
+                ),
+            })
+            print(f"[att] cruise RMS: {cruise_rms}", flush=True)
         if wind_mps > 0:
             wind_ned = LAST_RESULT.get("wind_ned_xy_mps")
             alignment = None

@@ -85,6 +85,22 @@ class GuardEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class AcceptEventGuard:
+    """Pseudo-guard for an accept-event transition (no boolean guard).
+
+    Event-driven and guard-driven state machines are two legal SysML spellings
+    of the same behavioral semantics; representing accepts as guard-shaped
+    records lets the exclusive-claim machinery treat both uniformly.
+    ``attribute`` carries the accepted event type name (e.g.
+    ``AbortConditionActive``) so keyword matching and claim keys work unchanged.
+    """
+    attribute: str
+    kind: str = "accept_event"
+    operator: str = "accept"
+    threshold: Any = None
+
+
+@dataclass(frozen=True, slots=True)
 class RequirementEvidenceBundle:
     """Immutable, revision-bound input for SITL and verification consumers."""
 
@@ -138,6 +154,8 @@ class RequirementLinker:
         self._guard_map: Dict[str, List[Any]] = self._build_guard_map()
         # part_name → {attr_name: float}
         self._attr_map: Dict[str, Dict[str, float]] = self._build_attr_map()
+        # part_name → [port_name, ...]（attr 缺席时的接口/配置类匹配面）
+        self._port_map: Dict[str, List[str]] = self._build_port_map()
         # semantic_tag → ContentEntry（供 Layer 2/3 反查）
         self._tag_to_entry: Dict[str, ContentEntry] = _TAG_TO_ENTRY
         # part_name → List[SynthesizedSpec]（AST 合成，主层）
@@ -251,8 +269,24 @@ class RequirementLinker:
 
         A guard already claimed by another requirement is skipped unless
         ``allow_claimed`` — the caller enables that only for same-family
-        sharing.  Returns True when an assignment was made."""
+        sharing.  Returns True when an assignment was made.
+
+        Entries may carry ``req_text_kws`` / ``req_text_exclude_kws`` gates
+        (the guard-side mirror of the attr-path text gate): a same-family
+        requirement about the OPPOSITE response (e.g. "release the payload")
+        must not claim a lock-semantics guard merely because both satisfy the
+        same part."""
+        req_text = self._requirement_match_text(req_id)
+        req_blob = f"{req_id} {req_text}".lower()
         for entry in entries:
+            if entry.req_text_kws and req_text and not any(
+                kw in req_blob for kw in entry.req_text_kws
+            ):
+                continue
+            if entry.req_text_exclude_kws and any(
+                kw in req_blob for kw in entry.req_text_exclude_kws
+            ):
+                continue
             gm = entry.guard_matcher
             for pname in part_names:
                 for guard in self._guard_map.get(pname, []):
@@ -436,7 +470,7 @@ class RequirementLinker:
         guard_val / attr_val：匹配时已解析的数值，存入 _resolved_* 键，
         供 _resolve_all 跳过 threshold_slot 机制直接使用。
         """
-        return {
+        result = {
             "semantic_tag":        entry.semantic_tag,
             "threshold_slot":      None,          # 内容匹配不再需要
             "ardu_params":         entry.ardu_params,
@@ -453,17 +487,38 @@ class RequirementLinker:
                 "notes":   entry.notes,
             },
         }
+        if entry.l2_inject is not None and entry.l2_verify is not None:
+            # 附加 L2 行为检查（主 tier 的参数一致性证据保持不变）
+            result["l2_test"] = {
+                "tier":   "L2",
+                "inject": entry.l2_inject,
+                "verify": entry.l2_verify,
+                "notes":  entry.l2_notes,
+            }
+        return result
 
     def _guard_satisfies(self, guard, gm: GuardMatcher,
                           part_name: str) -> bool:
-        """判断一条 guard 是否匹配 GuardMatcher。"""
+        """判断一条 guard（或 accept 伪 guard）是否匹配 GuardMatcher。"""
         kind = getattr(guard, "kind", "")
         var  = getattr(guard, "attribute", "").lower()
 
-        if "bool" in gm.operators:
-            # bool_true guard
-            if kind != "bool_true":
+        if kind == "accept_event":
+            # accept 事件转移：仅显式声明 "event" 的条目可匹配；
+            # 按事件类型名做关键词匹配，action_kws 检查目标态 entry action。
+            if "event" not in gm.operators:
                 return False
+            if not any(kw in var for kw in gm.var_keywords):
+                return False
+            if gm.action_kws:
+                action = self._find_guard_action(part_name, guard)
+                if not action or not any(
+                    kw in action.lower() for kw in gm.action_kws
+                ):
+                    return False
+            return True
+
+        if "bool" in gm.operators and kind == "bool_true":
             if not any(kw in var for kw in gm.var_keywords):
                 return False
             # 可选：检查 entry action 关键词
@@ -474,6 +529,9 @@ class RequirementLinker:
                 ):
                     return False
             return True
+        if "bool" in gm.operators and "event" not in gm.operators:
+            # bool 专属条目遇到非 bool guard：保持原有拒绝语义
+            return False
 
         # comparison guard
         if kind != "comparison":
@@ -496,8 +554,20 @@ class RequirementLinker:
         try:
             from src.simulation.state_extractor import extract_state_machines
             text = self._model.to_sysml_text() or ""
+            wanted_event = (
+                getattr(guard, "attribute", "")
+                if getattr(guard, "kind", "") == "accept_event" else None
+            )
             for sm in extract_state_machines(text):
                 if sm.owner_part != part_name:
+                    continue
+                if wanted_event is not None:
+                    for tr in sm.transitions:
+                        if tr.is_initial or tr.accept_trigger != wanted_event:
+                            continue
+                        action = sm.entry_action_for_state(tr.target or "")
+                        if action:
+                            return action
                     continue
                 for tr in sm.fault_transitions():
                     for g in tr.guards:
@@ -520,16 +590,28 @@ class RequirementLinker:
             from src.simulation.state_extractor import extract_state_machines
             text = self._model.to_sysml_text() or ""
             fallback_action = ""
+            wanted_event = (
+                getattr(guard, "attribute", "")
+                if getattr(guard, "kind", "") == "accept_event" else None
+            )
             for sm in extract_state_machines(text):
                 if sm.owner_part != part_name:
                     continue
-                for tr in sm.fault_transitions():
-                    if not any(
-                        getattr(g, "attribute", "") == getattr(guard, "attribute", "")
-                        and getattr(g, "operator", "") == getattr(guard, "operator", "")
-                        for g in tr.guards
-                    ):
-                        continue
+                if wanted_event is not None:
+                    matched = [
+                        tr for tr in sm.transitions
+                        if not tr.is_initial and tr.accept_trigger == wanted_event
+                    ]
+                else:
+                    matched = [
+                        tr for tr in sm.fault_transitions()
+                        if any(
+                            getattr(g, "attribute", "") == getattr(guard, "attribute", "")
+                            and getattr(g, "operator", "") == getattr(guard, "operator", "")
+                            for g in tr.guards
+                        )
+                    ]
+                for tr in matched:
                     state = next((s for s in sm.states if s.name == (tr.target or "")), None)
                     if state is None:
                         continue
@@ -654,8 +736,33 @@ class RequirementLinker:
                     return self._entry_to_dict(
                         entry, attr_val=resolved, attr_src=src
                     )
+                # ── Port 匹配（attr 未命中时）：接口类 part 合法地只声明
+                # port。port 没有数值，动态 token（@guard/@attr_match/@attr:）
+                # 无从解析，因此静态 ardu_params 是硬前提——即使条目误开
+                # allow_port_match 也不放行，落入诚实的 no-mapping。
+                if am.allow_port_match and not self._has_dynamic_params(entry):
+                    for port_name in self._port_map.get(pname, []):
+                        if not any(
+                            kw in port_name.lower() for kw in am.attr_keywords
+                        ):
+                            continue
+                        if self._verbose:
+                            print(f"  [CONTENT] {req_id} → {entry.semantic_tag} "
+                                  f"port={pname}.{port_name} (static params)")
+                        return self._entry_to_dict(
+                            entry, attr_val=None,
+                            attr_src=f"port:{pname}.{port_name}",
+                        )
 
         return None
+
+    @staticmethod
+    def _has_dynamic_params(entry: ContentEntry) -> bool:
+        """True when any ardu_params value needs a model-resolved number."""
+        return any(
+            isinstance(value, str) and value.startswith("@")
+            for value in entry.ardu_params.values()
+        )
 
     def _requirement_match_text(self, req_id: str) -> str:
         """Requirement prose used for semantic matching, without method tags.
@@ -937,7 +1044,7 @@ class RequirementLinker:
             return "SENSOR"
         if tag == "PARACHUTE_DEPLOY":
             return "PARACHUTE"
-        if tag == "PAYLOAD_ABORT_LOCK":
+        if tag.startswith("PAYLOAD_"):
             return "PAYLOAD"
         if tag in {"ALTITUDE_FENCE", "RADIUS_FENCE"}:
             return "GEOFENCE"
@@ -1263,6 +1370,18 @@ class RequirementLinker:
                 notes=st.get("notes", ""),
                 params=tuple(resolved_by_req.get(req_id, [])),
             ))
+            l2 = cat.get("l2_test")
+            if l2 is not None:
+                # 同一需求的附加 L2 行为检查（如 FENCE 缩尺执法）；参数
+                # 已由主 spec 携带并写入启动 .parm，这里不重复。
+                specs.append(SITLTestSpec(
+                    req_id=req_id,
+                    tier="L2",
+                    inject=l2.get("inject"),
+                    verify=l2.get("verify"),
+                    notes=l2.get("notes", ""),
+                    params=(),
+                ))
         return specs
 
     # ------------------------------------------------------------------
@@ -1481,6 +1600,16 @@ class RequirementLinker:
             for sm in state_machines:
                 for trans in sm.fault_transitions():
                     guard_map.setdefault(sm.owner_part, []).extend(trans.guards)
+                # accept 事件驱动的转移没有 guard，fault_transitions() 收不到；
+                # 以伪 guard 形式并入，让事件驱动写法与 guard 写法共享同一条
+                # 独占分配/匹配管线（只有显式声明 "event" operator 的条目会
+                # 匹配它们，存量 bool/comparison 条目行为不变）。
+                for trans in sm.transitions:
+                    if trans.is_initial or trans.guards or not trans.accept_trigger:
+                        continue
+                    guard_map.setdefault(sm.owner_part, []).append(
+                        AcceptEventGuard(attribute=str(trans.accept_trigger))
+                    )
         except Exception as exc:
             from src.utils.suppressed import record_suppressed
             record_suppressed("sitl.requirement_linker.guard_map", exc)
@@ -1537,6 +1666,25 @@ class RequirementLinker:
             from src.utils.suppressed import record_suppressed
             record_suppressed("sitl.requirement_linker.syside_attr_map", exc)
             pass
+        return result
+
+    def _build_port_map(self) -> Dict[str, List[str]]:
+        """part_name → [port names]。
+
+        接口/配置类需求的 satisfy 目标（CommunicationSystem、PerceptionSystem）
+        在 SysML 里合法地只声明 port（``in port gnssCorrections``）而无属性；
+        AttrMatcher 声明 ``allow_port_match`` 时以 port 名为匹配面。port 无
+        数值，因此只允许全静态 ardu_params 的条目走这条路（_match_by_content
+        强制检查）。
+        """
+        result: Dict[str, List[str]] = {}
+        for part in self._model.part_definitions:
+            names = [
+                str(port.name) for port in getattr(part, "ports", [])
+                if getattr(port, "name", None)
+            ]
+            if names:
+                result[part.name] = names
         return result
 
     def _build_attr_map(self) -> Dict[str, Dict[str, float]]:
