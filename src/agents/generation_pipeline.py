@@ -198,6 +198,19 @@ class GenerationPipelineMixin:
         )
 
     def _phase_ag_reconciliation(self, c: GenerationContext) -> None:
+        # Redundant redeclarations of inherited ports are semantically inert
+        # but each one costs a namespace-distinguishability warning at the
+        # zero-warning terminal qualification (run 00e4d333: ten of them).
+        from ..sysml.text_normalization import strip_redundant_inherited_ports
+        c.pre_ag_sysml, n_stripped = strip_redundant_inherited_ports(
+            c.pre_ag_sysml
+        )
+        if n_stripped:
+            print(
+                f"  ⟳ stripped {n_stripped} redundant inherited port "
+                "redeclaration(s) — no LLM needed",
+                flush=True,
+            )
         c.final_sysml = self._reconcile_guided_ag_contract_layer(
             c.pre_ag_sysml, c.requirements
         )

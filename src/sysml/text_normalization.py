@@ -32,6 +32,7 @@ NORMALIZATION_RULE_ORDER = {
     "surgical_repair": ("strip_code_fences",),
     "ag_authored_planning": ("strip_ag_implementation",),
     "ag_terminal_binding": ("strip_named_item_definitions",),
+    "terminal_commit": ("strip_redundant_inherited_ports",),
 }
 
 
@@ -391,3 +392,106 @@ def fix_c_style_negation(sysml_text: str) -> str:
     enforced on provider output.
     """
     return _C_NEGATION_RE.sub("not ", sysml_text)
+
+
+_PART_DEF_HEADER_RE = re.compile(
+    r"\bpart\s+def\s+(?P<name>\w+)\s*"
+    r"(?::>\s*(?P<parents>\w+(?:\s*,\s*\w+)*))?\s*\{"
+)
+_PORT_DECLARATION_RE = re.compile(
+    r"\b(?P<direction>in|out|inout)\s+port\s+(?P<name>\w+)\s*"
+    r"(?::\s*(?P<type>[\w:]+))?\s*;"
+)
+
+
+def strip_redundant_inherited_ports(sysml_text: str) -> Tuple[str, int]:
+    """Remove port redeclarations identical to an inherited declaration.
+
+    A part def specialising a host (``X :> Host``) inherits the host's ports;
+    redeclaring one with the same name, direction, and type is semantically
+    redundant and trips syside's namespace-distinguishability warning for
+    every copy.  Measured: run 00e4d333 carried ten such warnings — an LLM
+    refinement pass had decorated each catalog variant with the inherited
+    ``propulsionStatus`` port — and the terminal qualification's zero-warning
+    policy failed the run on them.  Only exact matches are removed; a
+    declaration that differs in direction or type is left for the checker to
+    judge.
+    """
+    text = str(sysml_text or "")
+
+    definitions: list[tuple[str, int, int, tuple[str, ...]]] = []
+    for header in _PART_DEF_HEADER_RE.finditer(text):
+        opening = text.find("{", header.start(), header.end() + 1)
+        closing = find_block_end(text, opening)
+        if closing == -1:
+            continue
+        parents = tuple(
+            parent.strip()
+            for parent in (header.group("parents") or "").split(",")
+            if parent.strip()
+        )
+        definitions.append(
+            (header.group("name"), opening + 1, closing, parents)
+        )
+
+    def innermost_owner(position: int) -> int | None:
+        owner, owner_size = None, None
+        for index, (_name, start, end, _parents) in enumerate(definitions):
+            if start <= position < end:
+                size = end - start
+                if owner_size is None or size < owner_size:
+                    owner, owner_size = index, size
+        return owner
+
+    ports_by_definition: dict[int, dict[str, tuple[str, str, int, int]]] = {}
+    for match in _PORT_DECLARATION_RE.finditer(text):
+        owner = innermost_owner(match.start())
+        if owner is None:
+            continue
+        ports_by_definition.setdefault(owner, {})[match.group("name")] = (
+            match.group("direction"),
+            match.group("type") or "",
+            match.start(),
+            match.end(),
+        )
+
+    by_name = {
+        definitions[index][0]: index for index in range(len(definitions))
+    }
+
+    def inherited_ports(index: int) -> dict[str, tuple[str, str]]:
+        collected: dict[str, tuple[str, str]] = {}
+        frontier = list(definitions[index][3])
+        seen: set[str] = set()
+        while frontier:
+            parent = frontier.pop()
+            if parent in seen or parent not in by_name:
+                continue
+            seen.add(parent)
+            parent_index = by_name[parent]
+            for name, (direction, port_type, _s, _e) in (
+                ports_by_definition.get(parent_index, {})
+            ).items():
+                collected.setdefault(name, (direction, port_type))
+            frontier.extend(definitions[parent_index][3])
+        return collected
+
+    removals: list[tuple[int, int]] = []
+    for index, (_name, _start, _end, parents) in enumerate(definitions):
+        if not parents:
+            continue
+        inherited = inherited_ports(index)
+        for name, (direction, port_type, start, end) in (
+            ports_by_definition.get(index, {})
+        ).items():
+            if inherited.get(name) == (direction, port_type):
+                removals.append((start, end))
+
+    if not removals:
+        return text, 0
+    output = text
+    for start, end in sorted(removals, reverse=True):
+        tail = output[end:]
+        output = output[:start].rstrip(" ") + tail.lstrip(" ") \
+            if tail[:1] not in ("\n", "") else output[:start].rstrip(" ") + tail
+    return output, len(removals)

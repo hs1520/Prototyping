@@ -279,6 +279,18 @@ class ExplorationMixin:
         pre_ag_sim = self.refinement_closure.simulate(
             pre_ag_sysml, self.state.system_name
         )
+        # Same terminal normalisation as the generate path: inherited-port
+        # redeclarations are inert but fail the zero-warning qualification.
+        from ..sysml.text_normalization import strip_redundant_inherited_ports
+        pre_ag_sysml, n_stripped = strip_redundant_inherited_ports(
+            pre_ag_sysml
+        )
+        if n_stripped:
+            print(
+                f"  ⟳ stripped {n_stripped} redundant inherited port "
+                "redeclaration(s) — no LLM needed",
+                flush=True,
+            )
         final_sysml = self._reconcile_guided_ag_contract_layer(
             pre_ag_sysml, requirements
         )

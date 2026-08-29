@@ -24,6 +24,10 @@ def test_normalization_rule_order_is_explicit():
         ),
         "surgical_repair": ("strip_code_fences",),
         "ag_authored_planning": ("strip_ag_implementation",),
+        # Terminal-commit normalisation added 2026-08-29: inherited-port
+        # redeclarations are inert but fail the zero-warning qualification
+        # (run 00e4d333, ten of them).
+        "terminal_commit": ("strip_redundant_inherited_ports",),
         "ag_terminal_binding": ("strip_named_item_definitions",),
     }
 
