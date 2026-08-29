@@ -26,6 +26,8 @@ class InitializationMixin:
         verbose: bool = False,
         use_variation_dse: bool = False,
         use_surgical_refinement: bool = True,
+        use_deterministic_fixers: bool = True,
+        design_generation_mode: str = "multistep",
         realization_inject: bool = False,
         estimator_calibration: bool = True,
         phase9_hifi: Optional[str] = None,
@@ -144,11 +146,19 @@ class InitializationMixin:
         # falls back to the legacy whole-model rewrite when no valid merge is
         # produced. Disable to force the legacy path (tests / A-B comparison).
         self.use_surgical_refinement = use_surgical_refinement
+        # Deterministic, LLM-free fixes (Tier-0 syntax fixes; connectivity
+        # direction-widening and missing-connect injection) run before any LLM
+        # repair. Disable to force LLM-only repair — the ablation that measures
+        # what the fixer chain saves in calls, failures, and score.
+        self.use_deterministic_fixers = use_deterministic_fixers
 
         # Initialize specialized agents
         self.requirements_agent = RequirementsAgent(llm, rag_retriever)
         self.design_agent = DesignAgent(
-            llm, rag_retriever, maximum_plan_attempts=maximum_plan_attempts
+            llm,
+            rag_retriever,
+            maximum_plan_attempts=maximum_plan_attempts,
+            generation_mode=design_generation_mode,
         )
         # Pass quality_threshold so the evaluator's veto cap is consistent with
         # the orchestrator's refinement gate (cap = threshold − 0.05).

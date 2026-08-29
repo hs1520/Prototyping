@@ -380,6 +380,12 @@ class _RefinementEngine:
         return self._runtime.use_surgical_refinement
 
     @property
+    def use_deterministic_fixers(self) -> bool:
+        # getattr default: stub runtimes in older tests predate this flag and
+        # must keep the production behaviour (fixers ON).
+        return getattr(self._runtime, "use_deterministic_fixers", True)
+
+    @property
     def verbose(self) -> bool:
         return self._runtime.verbose
 
@@ -1786,37 +1792,39 @@ class _RefinementEngine:
             # ports so existing connects are traversable as written — resolves 'connected but signal
             # direction may be wrong' cheaply, so only genuinely-missing connections reach the LLM
             # step below (avoids escalating direction errors to slow LLM refinement). Idempotent.
-            from ..simulation.connectivity_fixer import fix_signal_directions
-            direction_candidate, _n_dir, _dir_names = fix_signal_directions(sysml)
-            if _n_dir:
-                direction_sim = self._run_simulation(
-                    direction_candidate, current.name
-                )
-                if (
-                    self._simulation_quality_key(direction_sim)
-                    > self._simulation_quality_key(baseline_sim)
-                ):
-                    sysml = direction_candidate
-                    baseline_sim = direction_sim
-                    print(
-                        f"  │  ⟳  direction fix (deterministic): widened "
-                        f"{_n_dir} port(s) → inout: {', '.join(_dir_names)}; "
-                        "simulation improved",
-                        flush=True,
+            # Gated by use_deterministic_fixers (ablation: LLM-only repair).
+            if self.use_deterministic_fixers:
+                from ..simulation.connectivity_fixer import fix_signal_directions
+                direction_candidate, _n_dir, _dir_names = fix_signal_directions(sysml)
+                if _n_dir:
+                    direction_sim = self._run_simulation(
+                        direction_candidate, current.name
                     )
-                    self._sync_model_text(current, sysml)
-                else:
-                    self._record_rejected_connectivity_edit(
-                        current,
-                        source="DETERMINISTIC_DIRECTION_WIDENING",
-                        before=baseline_sim,
-                        after=direction_sim,
-                    )
-                    print(
-                        "  │  ↩ rejected deterministic direction widening: "
-                        "simulation did not improve",
-                        flush=True,
-                    )
+                    if (
+                        self._simulation_quality_key(direction_sim)
+                        > self._simulation_quality_key(baseline_sim)
+                    ):
+                        sysml = direction_candidate
+                        baseline_sim = direction_sim
+                        print(
+                            f"  │  ⟳  direction fix (deterministic): widened "
+                            f"{_n_dir} port(s) → inout: {', '.join(_dir_names)}; "
+                            "simulation improved",
+                            flush=True,
+                        )
+                        self._sync_model_text(current, sysml)
+                    else:
+                        self._record_rejected_connectivity_edit(
+                            current,
+                            source="DETERMINISTIC_DIRECTION_WIDENING",
+                            before=baseline_sim,
+                            after=direction_sim,
+                        )
+                        print(
+                            "  │  ↩ rejected deterministic direction widening: "
+                            "simulation did not improve",
+                            flush=True,
+                        )
             sim_result = baseline_sim
             failed = sim_result.failed_scenarios()
 
@@ -1863,36 +1871,38 @@ class _RefinementEngine:
             # connect (e.g. payloadStatus payload→flightController). Add those deterministically
             # (validated: type/direction/single-driver) BEFORE spending an LLM call. Resolves the
             # common churn cheaply; only genuinely-ambiguous gaps reach the LLM below.
-            from ..simulation.connectivity_fixer import fix_missing_connects
-            _fp = [{"src": _scenario_src_instance(r.scenario_name),
-                    "tgts": list(r.unreachable_targets)} for r in failed]
-            _mc_text, _n_mc, _mc_lines = fix_missing_connects(sysml, _fp)
-            if _n_mc:
-                print(f"  │  ⟳  connect fix (deterministic): added {_n_mc} — "
-                      f"{'; '.join(_mc_lines)}", flush=True)
-                candidate_sim = self._run_simulation(_mc_text, current.name)
-                if (
-                    self._simulation_quality_key(candidate_sim)
-                    > self._simulation_quality_key(sim_result)
-                ):
-                    sysml = _mc_text
-                    self._sync_model_text(current, sysml)
-                    sim_result = candidate_sim
-                    failed = sim_result.failed_scenarios()
-                else:
-                    self._record_rejected_connectivity_edit(
-                        current,
-                        source="DETERMINISTIC_MISSING_CONNECT",
-                        before=sim_result,
-                        after=candidate_sim,
-                    )
-                    print(
-                        "  │  ↩ rejected deterministic connect edit: "
-                        "simulation did not improve",
-                        flush=True,
-                    )
-                if not failed and not sim_result.isolated_parts:
-                    continue                      # resolved deterministically → skip the LLM step
+            # Gated by use_deterministic_fixers (ablation: LLM-only repair).
+            if self.use_deterministic_fixers:
+                from ..simulation.connectivity_fixer import fix_missing_connects
+                _fp = [{"src": _scenario_src_instance(r.scenario_name),
+                        "tgts": list(r.unreachable_targets)} for r in failed]
+                _mc_text, _n_mc, _mc_lines = fix_missing_connects(sysml, _fp)
+                if _n_mc:
+                    print(f"  │  ⟳  connect fix (deterministic): added {_n_mc} — "
+                          f"{'; '.join(_mc_lines)}", flush=True)
+                    candidate_sim = self._run_simulation(_mc_text, current.name)
+                    if (
+                        self._simulation_quality_key(candidate_sim)
+                        > self._simulation_quality_key(sim_result)
+                    ):
+                        sysml = _mc_text
+                        self._sync_model_text(current, sysml)
+                        sim_result = candidate_sim
+                        failed = sim_result.failed_scenarios()
+                    else:
+                        self._record_rejected_connectivity_edit(
+                            current,
+                            source="DETERMINISTIC_MISSING_CONNECT",
+                            before=sim_result,
+                            after=candidate_sim,
+                        )
+                        print(
+                            "  │  ↩ rejected deterministic connect edit: "
+                            "simulation did not improve",
+                            flush=True,
+                        )
+                    if not failed and not sim_result.isolated_parts:
+                        continue                  # resolved deterministically → skip the LLM step
 
             if sim_iter == max_iters - 1:
                 # Last pass — no more LLM calls, attach warning and exit
@@ -2490,11 +2500,19 @@ class _RefinementEngine:
         working_model = current_model
         latest_result = result
         # ── Tier 0: deterministic fixes (RO-FIX / KW-FIX / LEV-FIX / ATTR-INJ) ─
-        working_sysml, latest_result, lev_hints, resolved = (
-            self._tier0_deterministic_fixes(working_sysml, working_model, latest_result)
-        )
-        if resolved:
-            return working_sysml, working_model, latest_result
+        if self.use_deterministic_fixers:
+            working_sysml, latest_result, lev_hints, resolved = (
+                self._tier0_deterministic_fixes(working_sysml, working_model, latest_result)
+            )
+            if resolved:
+                return working_sysml, working_model, latest_result
+        else:
+            lev_hints = []
+            print(
+                "  ⚠ [SYNTAX-GATE] Tier 0 deterministic fixes DISABLED "
+                "(ablation) — every error goes to the LLM",
+                flush=True,
+            )
 
         # ── Tier 1: 外科式 LLM 修复 ──────────────────────────────────────────
         # 只传错误块（~15 行）+ 精简声明摘要，而不是整个模型（~200 行）。

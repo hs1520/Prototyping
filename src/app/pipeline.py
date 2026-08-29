@@ -54,6 +54,9 @@ class PrototypingPipeline:
         parse_strict: bool = False,
         verbose: bool = False,
         dse_mode: str = "variation",
+        use_surgical_refinement: bool = True,
+        use_deterministic_fixers: bool = True,
+        design_generation_mode: str = "multistep",
         phase9_hifi: Optional[str] = None,
         revised_experiment_arm: Optional[Any] = None,
         r2_generation_mode: Optional[str] = None,
@@ -88,6 +91,13 @@ class PrototypingPipeline:
             quality_threshold=quality_threshold,
             max_iterations=max_iterations,
             verbose=verbose,
+            # Component ablation switches (experiments/ablation): surgical
+            # block-level refinement, the deterministic fixer chain, and the
+            # multistep-vs-single-shot generation mode. Defaults are the
+            # production pipeline; each arm flips exactly one.
+            use_surgical_refinement=use_surgical_refinement,
+            use_deterministic_fixers=use_deterministic_fixers,
+            design_generation_mode=design_generation_mode,
             revised_experiment_arm=revised_experiment_arm,
             r2_generation_mode=r2_generation_mode,
             r2_authored_syntax_max_attempts=r2_authored_syntax_max_attempts,
@@ -428,6 +438,10 @@ class PrototypingPipeline:
             "ag_non_degradation": result.get("ag_non_degradation"),
             "action_semantics_audit": result.get("action_semantics_audit"),
         }
+        # Ablation-arm provenance (experiments/ablation): present only when the
+        # harness stamped the run; ordinary runs carry no ablation key.
+        if result.get("ablation") is not None:
+            report["ablation"] = result.get("ablation")
         revised = result.get("revised_experiment")
         if revised:
             report["experiment_namespace"] = revised.get(

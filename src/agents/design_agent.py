@@ -27,6 +27,13 @@ from .generated_model_admission import (
 from .refinement_authoring import RefinementAuthoring, RefinementRequest
 
 
+#: Initial-generation modes. "multistep" is the production 5-step pipeline;
+#: "single_shot" is the pre-multistep legacy path (one prompt → whole model),
+#: retained as an ablation arm so the contribution of structured decomposition
+#: is measured rather than assumed.
+GENERATION_MODES = ("multistep", "single_shot")
+
+
 class DesignAgent(BaseAgent):
     """
     Agent responsible for architectural design generation.
@@ -47,6 +54,7 @@ class DesignAgent(BaseAgent):
         *,
         allow_legacy_architecture_plan: bool = False,
         maximum_plan_attempts: int = DEFAULT_MAXIMUM_PLAN_ATTEMPTS,
+        generation_mode: str = "multistep",
     ):
         super().__init__("DesignAgent", llm, rag_retriever)
         self.cot = ChainOfThoughtPrompter(llm)
@@ -56,6 +64,12 @@ class DesignAgent(BaseAgent):
         if int(maximum_plan_attempts) < 1:
             raise ValueError("maximum_plan_attempts must be at least 1")
         self.maximum_plan_attempts = int(maximum_plan_attempts)
+        if generation_mode not in GENERATION_MODES:
+            raise ValueError(
+                f"unknown generation_mode {generation_mode!r}; "
+                f"must be one of {GENERATION_MODES}"
+            )
+        self.generation_mode = generation_mode
 
     def run(self, task: Dict[str, Any]) -> AgentResult:
         """
@@ -97,6 +111,16 @@ class DesignAgent(BaseAgent):
                 verbose=verbose,
             )).response
             generation_metadata = {}
+        elif self.generation_mode == "single_shot":
+            # Ablation arm — one prompt produces the whole model. No typed plan
+            # exists, so plan-conformance / structural / semantic-fidelity gates
+            # downstream are inapplicable (they record None, not PASS).
+            cot_result, generation_metadata = self._single_shot_generate(
+                system_name=system_name,
+                requirements=requirements,
+                context=context,
+                verbose=verbose,
+            )
         else:
             # Generation mode — multi-step pipeline. Each SysML-authoring step
             # issues its own request; typed planning owns its separate bounded
@@ -156,6 +180,35 @@ class DesignAgent(BaseAgent):
         return result
 
 
+    def _single_shot_generate(
+        self,
+        system_name: str,
+        requirements: List[str],
+        context: str = "",
+        verbose: bool = False,
+    ) -> Tuple[Any, Dict[str, Any]]:
+        """Single-prompt whole-model generation (the pre-multistep legacy path).
+
+        Reuses ``ChainOfThoughtPrompter.generate_design`` verbatim so the
+        ablation compares against the pipeline's own historical single-shot
+        behaviour, not a prompt written for the experiment.  Admission, the
+        syntax gate, refinement, and evaluation downstream are unchanged.
+        """
+        if verbose:
+            print("\n  [DEBUG] single-shot generation — one prompt, no typed plan")
+        response = self.cot.generate_design(
+            system_name=system_name,
+            requirements=requirements,
+            context=context,
+        )
+        metadata: Dict[str, Any] = {
+            "generation_mode": "single_shot",
+            "generation_steps_completed": 1,
+            "degraded_steps": [],
+            "total_thought_steps": len(response.thought_steps),
+        }
+        return response, metadata
+
     def _multistep_generate(
         self,
         system_name: str,
@@ -183,6 +236,7 @@ class DesignAgent(BaseAgent):
         generation_metadata carries per-step diagnostics.
         """
         metadata: Dict[str, Any] = {
+            "generation_mode": "multistep",
             "generation_steps_completed": 0,
             "degraded_steps": [],
         }
