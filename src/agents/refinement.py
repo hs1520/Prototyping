@@ -440,7 +440,7 @@ class _RefinementEngine:
                 return list(self._verification_gap_audit(sysml_text, model_name))
             from .verification_audit import verification_gap_issues
             return verification_gap_issues(
-                sysml_text,
+                self._planned_materialization_shadow(sysml_text),
                 model_name,
                 allowed_req_ids=self._active_requirement_ids(),
                 # The audit rebuilds the model from its text, which carries no
@@ -452,6 +452,38 @@ class _RefinementEngine:
         except Exception:
             return []
 
+
+    def _planned_materialization_shadow(self, sysml_text: str) -> str:
+        """The text the terminal commit will actually audit, not the raw loop text.
+
+        Planned attributes and semantic bindings materialise only at the
+        terminal enforcement — deliberately after every LLM rewrite, so a
+        rewrite cannot shed them.  Auditing the raw mid-loop text therefore
+        flags gaps the plan is already committed to closing: the ablation
+        pilot burned a surgical anchor pass on REQ_CONS_001 whose 120 m
+        threshold attribute the terminal materialisation injected moments
+        later (audit on the terminal artifact: zero gaps).  The shadow is
+        advisory-only — the working text is never replaced here.
+        """
+        payload = self._active_plan_payload()
+        if not isinstance(payload, Mapping) or not payload.get("components"):
+            # A degenerate plan is not a no-op under apply_generation_plan —
+            # it actively prunes unplanned content — so only a plan that
+            # actually declares components may shape the audit shadow.
+            return sysml_text
+        try:
+            from ..prototyping.generation_plan import (
+                ModelGenerationPlan,
+                apply_generation_plan,
+            )
+            plan = ModelGenerationPlan.from_dict(payload)
+            planned_text, _conformance = apply_generation_plan(
+                sysml_text, plan
+            )
+            return planned_text or sysml_text
+        except Exception:
+            # Same best-effort contract as the audit itself.
+            return sysml_text
 
     def _planned_response_intents(self) -> Dict[str, str]:
         """{REQ_XXX_NNN: response_intent} from the active generation plan.
