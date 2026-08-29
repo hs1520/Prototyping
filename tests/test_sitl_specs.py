@@ -673,3 +673,48 @@ def test_disconnect_gcs_inject_and_render_honor_action_param():
     assert 'set_param(mav, "FS_GCS_ENABLE", 5.0)' in rendered
     default = render_inject(InjectSpec(kind="disconnect_gcs"))
     assert 'set_param(mav, "FS_GCS_ENABLE", 1.0)' in default
+
+
+def test_mavlink_command_inject_sends_pre_command_before_main_command():
+    from src.sitl.sitl_specs import InjectSpec, run_inject
+
+    sent = []
+
+    class _CmdMav:
+        target_system = 1
+        target_component = 1
+
+        class mav:  # noqa: N801 - pymavlink attribute shape
+            @staticmethod
+            def command_long_send(sys, comp, cmd, conf, *params):  # noqa: ARG004
+                sent.append((cmd, params[:2]))
+
+    ctx = SitlTestContext(mav=_CmdMav(), mavutil=SimpleNamespace(mavlink=SimpleNamespace()))
+    spec = InjectSpec(
+        kind="mavlink_command",
+        params={
+            "pre_command": 211, "pre_param1": 0, "pre_param2": 0,
+            "_pre_settle_s": 0.0,
+            "command": 211, "param1": 0, "param2": 1, "_settle_s": 0.0,
+        },
+        pre_takeoff_m=0.0,
+    )
+    run_inject(ctx, spec)
+
+    # RELEASE (param2=0) must precede the abort-GRAB (param2=1): asserting only
+    # the final PWM has no discriminating power when boot neutral == GRAB.
+    assert sent == [(211, (0.0, 0.0)), (211, (0.0, 1.0))]
+
+
+def test_mavlink_command_render_includes_pre_command_block_in_order():
+    from src.sitl.sitl_specs import InjectSpec
+
+    gripper = _TAG_TO_ENTRY["PAYLOAD_ABORT_LOCK"]
+    code = render_inject(gripper.inject)
+    assert "前置 MAVLink command 211" in code
+    assert code.index("前置 MAVLink command") < code.index("发送 MAVLink command 211")
+
+    # entries without pre_command render unchanged
+    plain = render_inject(InjectSpec(kind="mavlink_command",
+                                     params={"command": 208, "param1": 2}))
+    assert "前置" not in plain

@@ -392,17 +392,35 @@ def _inject_mavlink_command(ctx: TestContext, spec: InjectSpec) -> None:
     spec.params keys:
       command  — MAVLink 命令 ID（必填）
       param1..param7 — 命令参数（默认 0）
+      pre_command / pre_param1..pre_param7 / _pre_settle_s — 可选前置命令：
+        先发它并等 _pre_settle_s，再发主命令。用于需要状态转换判别力的
+        用例（如先 RELEASE 再 abort-GRAB——只断言终值时，若初值已等于
+        目标值，主命令没生效也会假绿）。
       other numeric keys — runtime params applied after takeoff, before command
     """
     _require_takeoff(ctx, spec)
 
     cmd_id = int(spec.params.get("command", 0))
     p = [float(spec.params.get(f"param{i}", 0)) for i in range(1, 8)]
-    command_keys = {"command", "_settle_s"} | {f"param{i}" for i in range(1, 8)}
+    command_keys = (
+        {"command", "_settle_s", "pre_command"}
+        | {f"param{i}" for i in range(1, 8)}
+        | {f"pre_param{i}" for i in range(1, 8)}
+    )
     for name, value in spec.params.items():
         if name in command_keys or name.startswith("_"):
             continue
         ctx.set_param(name, float(value))
+
+    pre_cmd = spec.params.get("pre_command")
+    if pre_cmd is not None:
+        pre = [float(spec.params.get(f"pre_param{i}", 0)) for i in range(1, 8)]
+        ctx.mav.mav.command_long_send(
+            ctx.mav.target_system, ctx.mav.target_component,
+            int(pre_cmd), 0,
+            pre[0], pre[1], pre[2], pre[3], pre[4], pre[5], pre[6],
+        )
+        time.sleep(float(spec.params.get("_pre_settle_s", 2.0)))
 
     ctx.mav.mav.command_long_send(
         ctx.mav.target_system, ctx.mav.target_component,
@@ -418,7 +436,11 @@ def _render_inject_mavlink_command(spec: InjectSpec) -> str:
     params = [float(spec.params.get(f"param{i}", 0)) for i in range(1, 8)]
     settle_s = float(spec.params.get("_settle_s", 1.5))
     pre = _render_require_takeoff(spec)
-    command_keys = {"command", "_settle_s"} | {f"param{i}" for i in range(1, 8)}
+    command_keys = (
+        {"command", "_settle_s", "pre_command"}
+        | {f"param{i}" for i in range(1, 8)}
+        | {f"pre_param{i}" for i in range(1, 8)}
+    )
     setup_lines = []
     for name, value in spec.params.items():
         if name in command_keys or name.startswith("_"):
@@ -426,7 +448,22 @@ def _render_inject_mavlink_command(spec: InjectSpec) -> str:
         setup_lines.append(f'print("  设置参数 {name}={float(value)}")')
         setup_lines.append(f'set_param(mav, "{name}", {float(value)})')
     setup = ("\n".join(setup_lines) + "\n") if setup_lines else ""
-    return pre + setup + textwrap.dedent(f"""\
+    pre_block = ""
+    pre_cmd = spec.params.get("pre_command")
+    if pre_cmd is not None:
+        pre_params = [float(spec.params.get(f"pre_param{i}", 0)) for i in range(1, 8)]
+        pre_settle = float(spec.params.get("_pre_settle_s", 2.0))
+        pre_block = textwrap.dedent(f"""\
+            print("  发送前置 MAVLink command {int(pre_cmd)} ...")
+            mav.mav.command_long_send(
+                mav.target_system, mav.target_component,
+                {int(pre_cmd)}, 0,
+                {pre_params[0]}, {pre_params[1]}, {pre_params[2]}, {pre_params[3]},
+                {pre_params[4]}, {pre_params[5]}, {pre_params[6]},
+            )
+            time.sleep({pre_settle})
+        """)
+    return pre + setup + pre_block + textwrap.dedent(f"""\
         print("  发送 MAVLink command {cmd_id} ...")
         mav.mav.command_long_send(
             mav.target_system, mav.target_component,

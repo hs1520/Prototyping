@@ -322,10 +322,18 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
             # MAV_CMD_DO_GRIPPER (211): param1=gripper_id(0), param2=action.
             # MAVLink GRIPPER_ACTIONS: 0=RELEASE, 1=GRAB. Requirement is payload-abort
             # → LOCK (hold the payload) = GRAB, so param2=1 is correct.
+            # 前置 RELEASE 建立状态转换判别力：boot .parm 里 GRIP_NEUTRAL=1000
+            # （POWERON_LOCK 条目）让上电输出即为锁定 PWM，只发 GRAB 断言终值
+            # 会假绿；先 RELEASE 到 2000 再 abort-GRAB 回 1000，同时更贴需求
+            # 语义（abort 时即使释放已在进行也保持/回到锁定）。
             params={
+                "pre_command": 211,
+                "pre_param1": 0,
+                "pre_param2": 0,        # RELEASE first (servo7 → 2000)
+                "_pre_settle_s": 2.0,
                 "command": 211,
                 "param1": 0,
-                "param2": 1,
+                "param2": 1,            # abort → GRAB (servo7 → 1000)
                 "_settle_s": 1.5,
                 "GRIP_ENABLE": 1,
                 "GRIP_TYPE": 1,
