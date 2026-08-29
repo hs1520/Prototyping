@@ -40,9 +40,14 @@ from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end, named_def_pa
 RESOLVABLE_VALUE_TYPES = frozenset({
     # ScalarValues
     "Boolean", "Integer", "Natural", "Rational", "Real", "String",
-    # ISQ / SI quantity values used by the emitters
+    # ISQ / SI quantity values used by the emitters.  Every entry is verified
+    # syside-resolvable (tests/test_stdlib_vocabulary.py) — this set once
+    # contained the phantom "AngleValue", which defeated the very check this
+    # docstring describes.  The standard library's angle type is
+    # AngularMeasureValue (and PlaneAngleValue).
     "DurationValue", "LengthValue", "MassValue", "TimeValue",
-    "SpeedValue", "AccelerationValue", "AngleValue", "TemperatureValue",
+    "SpeedValue", "AccelerationValue", "AngularMeasureValue",
+    "TemperatureValue",
     "ElectricCurrentValue", "PowerValue", "EnergyValue", "FrequencyValue",
 })
 

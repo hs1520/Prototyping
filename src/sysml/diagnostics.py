@@ -15,13 +15,17 @@ _STDLIB_TYPE_NAMES = {
     # ScalarValues (KerML)
     "Real", "Integer", "Boolean", "String", "Rational", "Complex",
     "ScalarValue", "NumericalValue",
-    # ISQ / SI units
+    # ISQ / SI units.  Only names that actually exist in the standard library
+    # belong here: suppressing a nonexistent name (AngleValue, VelocityValue,
+    # VoltageValue, CurrentValue, ChargeValue once sat here) hides a REAL
+    # reference error from the repair loop, so it survives silently until the
+    # unfiltered terminal qualification fails the run.  Membership is pinned by
+    # tests/test_stdlib_vocabulary.py.
     "ISQ", "SI", "LengthValue", "MassValue", "TimeValue", "DurationValue",
-    "SpeedValue", "VelocityValue", "AccelerationValue", "ForceValue",
+    "SpeedValue", "AccelerationValue", "ForceValue",
     "EnergyValue", "PowerValue", "FrequencyValue", "AngularMeasureValue",
-    "AngleValue", "ThermodynamicTemperatureValue", "TemperatureValue",
-    "VoltageValue",
-    "CurrentValue", "ChargeValue",
+    "PlaneAngleValue", "ThermodynamicTemperatureValue", "TemperatureValue",
+    "ElectricPotentialValue", "ElectricCurrentValue", "ElectricChargeValue",
     # SysML standard packages
     "SysML", "KerML", "ScalarValues", "Quantities",
     "Occurrences", "Transfers", "Connections",

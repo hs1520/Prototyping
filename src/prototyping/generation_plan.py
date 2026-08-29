@@ -71,25 +71,31 @@ _STANDARD_LIBRARY_TYPES = {
         "Real",
         "String",
     },
+    # Every name below is verified against syside with ``import ISQ::*`` et al.
+    # (tests/test_stdlib_vocabulary.py).  Plausible-but-nonexistent names
+    # (AngleValue, ChargeValue, CurrentValue, VelocityValue, VoltageValue) used
+    # to sit here: the import computation blessed them, materialisation wrote
+    # them faithfully, the in-loop checker suppressed the reference error, and
+    # only the unfiltered terminal qualification failed — NOT_QUALIFIED for a
+    # type the vocabulary itself invited (ablation pilot 20260829, AngleValue).
     "ISQ": {
         "AccelerationValue",
-        "AngleValue",
         "AngularMeasureValue",
-        "ChargeValue",
-        "CurrentValue",
         "DurationValue",
+        "ElectricChargeValue",
+        "ElectricCurrentValue",
+        "ElectricPotentialValue",
         "EnergyValue",
         "ForceValue",
         "FrequencyValue",
         "LengthValue",
         "MassValue",
+        "PlaneAngleValue",
         "PowerValue",
         "SpeedValue",
         "TemperatureValue",
         "ThermodynamicTemperatureValue",
         "TimeValue",
-        "VelocityValue",
-        "VoltageValue",
     },
 }
 _SI_UNIT_NAMES = {
