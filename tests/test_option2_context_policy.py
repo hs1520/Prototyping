@@ -1,11 +1,16 @@
 """The required-context policy is ablation-derived, and stays that way (§18-Q1).
 
-The intended method was to read required categories off observed failures. The
-archive has none: across every archived revised run every task is COMPLETED except
-ten BLOCKED by design (§11 routes an integration gap to BLOCKED), and no session is
-REJECTED or STALE. So "required" is given an operational meaning instead — remove
-the category and the task raises, returns nothing, or silently returns a worse
-answer — and every entry in `REQUIRED_CONTEXT_BY_ROLE` is re-derived here.
+The intended method was to read required categories off observed failures. When
+the policy was derived (2026-07-26) the archive had none: every archived task was
+COMPLETED except ten BLOCKED by design (§11 routes an integration gap to BLOCKED),
+and no session was REJECTED or STALE. So "required" is given an operational meaning
+instead — remove the category and the task raises, returns nothing, or silently
+returns a worse answer — and every entry in `REQUIRED_CONTEXT_BY_ROLE` is
+re-derived here.
+
+One archived run post-dates that derivation and does carry failures; the archive
+test below pins it as a named, superseded exception rather than letting it
+silently widen the premise.
 
 Without this file the policy would be a list of plausible-sounding categories, and
 §13's required-context-coverage metric would have a denominator nobody can justify.
@@ -193,21 +198,43 @@ def test_a_role_without_a_policy_is_not_scored_as_perfect():
     }
 
 
+# The one archived run allowed to carry failure statuses. Archived 2026-08-11
+# from the since-superseded commit its directory name records (pre-rewrite id):
+# its seed-1 R2 repair loop stormed against undischargeable diagnostics —
+# 3 REJECTED (`target_not_removed_or_regression`) and 14 BLOCKED
+# (`automatic_repair_budget_exhausted`). The corrected implementation's
+# reference batches (`pilot_n6_0c26731_20260821_*`) archive zero REJECTED, so
+# this run stays history, not precedent.
+_SUPERSEDED_FAILURE_RUN = "pilot_n6_4bb7544_20260811_2316"
+
+
 def test_the_archive_offered_no_context_failure_to_learn_from():
     """Pins the premise of the whole method, so a future reader does not assume
-    the policy was derived from failures that never happened."""
+    the policy was derived from failures that never happened.
+
+    The premise is dated, not eternal: the policy predates every archived
+    failure. `_SUPERSEDED_FAILURE_RUN` is the single post-derivation run that
+    carries any, and it is pinned by name so the invariant keeps failing for
+    new rejections instead of quietly absorbing them.
+    """
     import glob
     import json
 
     statuses: set[str] = set()
+    superseded: set[str] = set()
     for path in glob.glob("examples/output/*/seed-*/R*/blackboard_snapshot.json"):
         snapshot = json.load(open(path))
-        statuses.update(
+        found = {
             str(task.get("status")) for task in snapshot.get("tasks", ())
-        )
-    if not statuses:
+        }
+        if f"/{_SUPERSEDED_FAILURE_RUN}/" in path:
+            superseded |= found
+        else:
+            statuses |= found
+    if not (statuses or superseded):
         pytest.skip("no archived runs in this checkout")
     assert statuses <= {"COMPLETED", "BLOCKED"}, statuses
+    assert superseded <= {"COMPLETED", "BLOCKED", "REJECTED"}, superseded
 
 
 def test_the_repair_slice_carries_what_an_omission_fault_needs():
