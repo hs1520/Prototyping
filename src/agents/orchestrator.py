@@ -108,6 +108,7 @@ class Orchestrator(
         reset_suppressed()
         self._init_pipeline_state()
         self.last_verification_anchor_attempts = []
+        self.last_namespace_repair_attempts = []
         self.last_requirement_input = {}
         self._active_model_generation_plan = None
         self.state = PrototypingState(

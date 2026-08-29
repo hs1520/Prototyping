@@ -164,6 +164,32 @@ def check_user_namespace_integrity(model_text: str) -> dict[str, Any]:
     }
 
 
+def namespace_integrity_issues(model_text: str) -> list[str]:
+    """Refinement-actionable issues for non-distinguishable member names.
+
+    Feeds the same defect the terminal USER_NAMESPACE_INTEGRITY gate rejects
+    into the refinement loop while the author is still in session — measured
+    on run 33f87cc6, where an action def and a state def twice shared one
+    name in FlightController and the collision surfaced only at the
+    zero-warning terminal qualification.  A deterministic rename is unsafe
+    here (textual references to the shared name are ambiguous about which
+    declaration they meant), so the author repairs its own naming.
+    """
+    report = check_user_namespace_integrity(model_text)
+    issues: list[str] = []
+    for finding in report.get("duplicate_members") or ():
+        kinds = " + ".join(finding.get("kinds") or ())
+        issues.append(
+            f"[NAMESPACE] '{finding.get('name')}' is declared "
+            f"{finding.get('count')} times in {finding.get('scope')} "
+            f"({kinds}). Every direct member of a scope needs a unique "
+            "name: rename one declaration (for example give the action def "
+            "a distinct verb-phrase name, keeping the state def name) and "
+            "update every reference to the renamed declaration."
+        )
+    return issues
+
+
 def collect_package_definitions(
     model_text: str,
 ) -> list[dict[str, str]]:

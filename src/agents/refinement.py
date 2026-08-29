@@ -408,6 +408,13 @@ class _RefinementEngine:
     def _append_pipeline_state_list(self, field_name: str, value: Any) -> int:
         return self._runtime._append_pipeline_state_list(field_name, value)
 
+    def _replace_pipeline_state_list_item(
+        self, field_name: str, index: int, value: Any
+    ) -> None:
+        return self._runtime._replace_pipeline_state_list_item(
+            field_name, index, value
+        )
+
     def _enforce_terminal_generation_plan(self, model: Any, text: str):
         return self._runtime._enforce_terminal_generation_plan(model, text)
 
@@ -881,6 +888,111 @@ class _RefinementEngine:
         return current, current_score, current_sim
 
 
+    def _namespace_repair_pass(
+        self,
+        current_model: SysMLModel,
+        sim_result: Any,
+        rule_score: float,
+        requirements: List[str],
+        dse_best_config: Optional[DesignConfiguration],
+    ) -> tuple[SysMLModel, Any, bool]:
+        """One bounded surgical pass on clean exit for name collisions.
+
+        Mirrors the verification-anchor discipline: advisory, exactly one
+        LLM attempt, accepted only when the duplicate count actually falls
+        and nothing regresses (simulation, behaviour, rule score).  A
+        deterministic rename is deliberately not attempted — references to
+        the shared name are ambiguous about which declaration they meant.
+        """
+        from ..prototyping.namespace_integrity import (
+            check_user_namespace_integrity,
+            namespace_integrity_issues,
+        )
+
+        full_text = get_sysml_text(current_model)
+        issues = namespace_integrity_issues(full_text)
+        if not issues or not self.use_surgical_refinement:
+            return current_model, sim_result, False
+
+        print(f"  ~ Quality met, but {len(issues)} scope(s) carry "
+              "non-distinguishable member names — one surgical "
+              "namespace-repair pass", flush=True)
+        from ..simulation.surgical_refiner import (
+            SurgicalAudit,
+            attempt_surgical_refinement,
+        )
+        surgical_audit = SurgicalAudit()
+        repaired = attempt_surgical_refinement(
+            llm=self._intelligence,
+            model_text=full_text,
+            issues=issues,
+            verbose=self.verbose,
+            audit=surgical_audit,
+        )
+        attempt_record = {
+            "status": "CANDIDATE" if repaired is not None else "REJECTED",
+            "issues": list(issues),
+            "surgical_audit": surgical_audit.to_dict(),
+        }
+        attempt_index = self._append_pipeline_state_list(
+            "namespace_repair_attempts", attempt_record
+        )
+
+        def _finalize_namespace_record() -> None:
+            # The append publishes a snapshot; a later status mutation must be
+            # re-published or the archived record understates what happened.
+            self._replace_pipeline_state_list_item(
+                "namespace_repair_attempts", attempt_index, attempt_record
+            )
+
+        if repaired is None:
+            _finalize_namespace_record()
+            print("  ⚠ Namespace pass not applicable (LLM output failed "
+                  "the surgical gates)", flush=True)
+            return current_model, sim_result, False
+
+        repaired_model = build_lite_model(
+            repaired.merged_text, model_name=current_model.name)
+        self._restore_generation_plan_metadata(repaired_model)
+        repaired_sim = self._run_simulation(
+            repaired.merged_text, current_model.name)
+        repaired_eval = self._intelligence.evaluate(
+            config=DesignConfiguration(
+                name="namespace_repair_pass", parameters={}
+            ),
+            model=repaired_model,
+            dse_config=dse_best_config,
+            syntax_result=check_syntax(repaired.merged_text),
+            sim_result=repaired_sim,
+            requirements=requirements,
+        )
+        before = len(check_user_namespace_integrity(
+            full_text)["duplicate_members"])
+        after = len(check_user_namespace_integrity(
+            repaired.merged_text)["duplicate_members"])
+        from .verification_audit import behavioral_result_regressed
+        regressed = (
+            bool(repaired_sim.failed_scenarios())
+            or behavioral_result_regressed(sim_result, repaired_sim)
+            or repaired_eval.weighted_total < rule_score - 0.05
+        )
+        if not regressed and after < before:
+            attempt_record["status"] = "ACCEPTED"
+            _finalize_namespace_record()
+            print(f"  ✓ Namespace pass accepted: duplicate members "
+                  f"{before} → {after}", flush=True)
+            return repaired_model, repaired_sim, True
+
+        attempt_record["status"] = "REJECTED"
+        attempt_record["post_merge_reason"] = (
+            "regression" if regressed else "no_duplicate_reduction"
+        )
+        _finalize_namespace_record()
+        print("  ⚠ Namespace pass rejected "
+              f"({attempt_record['post_merge_reason']}) — keeping the "
+              "original model", flush=True)
+        return current_model, sim_result, False
+
     def _verification_anchor_pass(
         self,
         current_model: SysMLModel,
@@ -947,10 +1059,21 @@ class _RefinementEngine:
             "context": context.to_dict(),
             "surgical_audit": surgical_audit.to_dict(),
         }
-        self._append_pipeline_state_list(
+        anchor_attempt_index = self._append_pipeline_state_list(
             "verification_anchor_attempts", attempt_record
         )
+
+        def _finalize_anchor_record() -> None:
+            # Same record-fidelity rule as the namespace pass: the published
+            # snapshot must reflect the final status, not the append-time one.
+            self._replace_pipeline_state_list_item(
+                "verification_anchor_attempts",
+                anchor_attempt_index,
+                attempt_record,
+            )
+
         if anchored is None:
+            _finalize_anchor_record()
             self._observe({
                 "kind": "VERIFICATION_ANCHOR",
                 "decision": "REJECTED",
@@ -983,6 +1106,7 @@ class _RefinementEngine:
         )
         if not regressed and len(remaining) < len(verify_gaps):
             attempt_record["status"] = "ACCEPTED"
+            _finalize_anchor_record()
             self._observe({
                 "kind": "VERIFICATION_ANCHOR",
                 "decision": "ACCEPTED",
@@ -998,6 +1122,7 @@ class _RefinementEngine:
             "regression" if regressed
             else "no_verification_gap_reduction"
         )
+        _finalize_anchor_record()
         self._observe({
             "kind": "VERIFICATION_ANCHOR",
             "decision": "REJECTED",
@@ -1135,6 +1260,15 @@ class _RefinementEngine:
                 dse_best_config=dse_best_config,
             )
         )
+        current_model, sim_result, _namespace_repaired = (
+            self._namespace_repair_pass(
+                current_model=current_model,
+                sim_result=sim_result,
+                rule_score=score,
+                requirements=requirements,
+                dse_best_config=dse_best_config,
+            )
+        )
         if anchor_accepted:
             score = self._intelligence.evaluate(
                 config=DesignConfiguration(
@@ -1254,6 +1388,16 @@ class _RefinementEngine:
                 current_sysml, current_model.name)
             if verify_gaps and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(verify_gaps)
+            # Same advisory ride-along for non-distinguishable member names:
+            # the terminal USER_NAMESPACE_INTEGRITY gate rejects them, so the
+            # author sees them while still in session (run 33f87cc6 surfaced
+            # an action-def/state-def name collision only at qualification).
+            from ..prototyping.namespace_integrity import (
+                namespace_integrity_issues,
+            )
+            namespace_issues = namespace_integrity_issues(current_sysml)
+            if namespace_issues and isinstance(eval_result.issues, list):
+                eval_result.issues.extend(namespace_issues)
             # How much the pass/fail verdict depends on the weighting at all —
             # sampled over the weight simplex (answers "would another weighting
             # flip the outcome?").  Defensive: test doubles may not provide it.
@@ -1350,6 +1494,13 @@ class _RefinementEngine:
                         sim_result=sim_result,
                         rule_score=rule_score,
                         verify_gaps=verify_gaps,
+                        requirements=requirements,
+                        dse_best_config=dse_best_config,
+                    )
+                    current_model, sim_result, _ = self._namespace_repair_pass(
+                        current_model=current_model,
+                        sim_result=sim_result,
+                        rule_score=rule_score,
                         requirements=requirements,
                         dse_best_config=dse_best_config,
                     )
