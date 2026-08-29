@@ -1365,6 +1365,12 @@ class ModelGenerationPlan:
         ag_behavior_plan: BehaviorObligationPlan | None = None,
     ) -> "ModelGenerationPlan":
         issues: list[str] = []
+        # Planned-by-construction safety interconnect: both authoring prompts
+        # mandate this wiring, so the accepted plan carries it deterministically
+        # instead of depending on the model having repeated it (measured drift:
+        # pilot2 / run 219eb9bb failed conformance on exactly these ports).
+        from .mandated_wiring import augment_architecture_payload
+        payload, mandated_wiring_notes = augment_architecture_payload(payload)
         architecture = _compile_architecture_section(
             payload, requirements, issues
         )
@@ -1409,7 +1415,9 @@ class ModelGenerationPlan:
             compiled_constraints.identity_reconciliations
         )
         issues.extend(compiled_constraints.issues)
-        advisories = compiled_constraints.advisories
+        advisories = tuple(compiled_constraints.advisories) + tuple(
+            mandated_wiring_notes
+        )
         raw_behaviors = payload.get("behaviors")
         archived_schema = str(payload.get("schema_version") or "").strip()
         action_effects = parse_action_effects(payload.get("action_effects"))
