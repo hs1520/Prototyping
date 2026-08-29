@@ -1,5 +1,5 @@
 {
-  "captured": "2026-08-29",
+  "captured": "2026-08-29 (re-recorded after the airframe visual was made parametric)",
   "design": {
     "mass_kg": 5.54,
     "rotor_count": 6,
@@ -11,17 +11,16 @@
   },
   "nominal": {
     "hover_stable": true,
-    "hover_alt_m": 8.567249644886363,
-    "hover_throttle_pct": 42.81818181818182,
-    "hover_rpm": 2815.5132957605515,
+    "hover_alt_m": 8.68900146484375,
+    "hover_throttle_pct": 42.0,
+    "hover_rpm": 2800.9234387758956,
     "return_code": 0
   },
   "rotor_out": {
     "hover_stable": false,
-    "climb_peak_m": 1.32,
-    "hover_alt_m": 0.06627965856481481,
-    "hover_throttle_pct": 14.814814814814815,
-    "hover_rpm": 2689.117882910659,
+    "hover_alt_m": 0.7167184012276786,
+    "hover_throttle_pct": 88.3061224489796,
+    "hover_rpm": 3504.3248994184482,
     "return_code": 8,
     "note": "fail_rotor=0; reproduces motor_failure_tolerant=false and return code 8 recorded by runs f99ac140 and 00e4d333"
   }

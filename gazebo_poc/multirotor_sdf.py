@@ -43,7 +43,7 @@ _ROTOR_LINK = """    <link name='rotor_{i}'>
       <collision name='collision'><pose>0 0 0 0 0 0</pose>
         <geometry><cylinder><length>0.005</length><radius>0.1</radius></cylinder></geometry>
       </collision>
-      <visual name='visual'><geometry><mesh><scale>1 1 1</scale>
+      <visual name='visual'><geometry><mesh><scale>{pscale:.4f} {pscale:.4f} 1</scale>
         <uri>model://iris_with_standoffs/meshes/iris_prop_{prop}.dae</uri></mesh></geometry>
       </visual>
     </link>
@@ -55,6 +55,49 @@ _ROTOR_LINK = """    <link name='rotor_{i}'>
       </axis>
     </joint>
 """
+
+# The iris template's own rotor visual is drawn for a 0.1 m propeller, which is
+# the radius its collision cylinder also uses. Scaling the mesh by
+# rotor_radius_m / this value draws the propellers at the designed size.
+_IRIS_PROP_RADIUS_M = 0.1
+
+# The head of the iris template carries a quadrotor body mesh. For an N-rotor
+# airframe that shape is wrong, so the body visual is replaced by geometry
+# derived from the design: a central hub plus one arm reaching each rotor. This
+# is visual only -- collision, inertia and the LiftDrag areas are declared
+# separately and are untouched, so the flight is unchanged.
+_BODY_VISUAL = """      <visual name='hub_visual'>
+        <geometry><cylinder><radius>{hub_r:.4f}</radius><length>0.06</length></cylinder></geometry>
+        <material><ambient>0.08 0.08 0.09</ambient><diffuse>0.10 0.10 0.12</diffuse>
+          <specular>0.4 0.4 0.4 1</specular></material>
+      </visual>
+"""
+
+_ARM_VISUAL = """      <visual name='arm_{i}_visual'>
+        <pose>{mx:.4f} {my:.4f} 0.0 0 0 {yaw:.4f}</pose>
+        <geometry><box><size>{alen:.4f} {aw:.4f} 0.018</size></box></geometry>
+        <material><ambient>0.06 0.06 0.07</ambient><diffuse>0.09 0.09 0.10</diffuse>
+          <specular>0.3 0.3 0.3 1</specular></material>
+      </visual>
+"""
+
+
+def _airframe_visual(table, arm_len_m: float, rotor_radius_m: float) -> str:
+    """Hub-and-arms visual for the planned rotor layout."""
+    hub_r = max(0.06, 0.32 * arm_len_m)
+    body = _BODY_VISUAL.format(hub_r=hub_r)
+    for i, (ang, _spin) in enumerate(table):
+        th = math.radians(ang)
+        x, y = arm_len_m * math.cos(th), -arm_len_m * math.sin(th)
+        body += _ARM_VISUAL.format(
+            i=i,
+            mx=x / 2.0, my=y / 2.0,          # arm spans hub centre to rotor
+            yaw=math.atan2(y, x),
+            alen=arm_len_m,
+            aw=max(0.022, 0.10 * rotor_radius_m),
+        )
+    return body
+
 
 _LIFTDRAG = """    <plugin filename="gz-sim-lift-drag-system" name="gz::sim::systems::LiftDrag">
       <a0>0.3</a0><alpha_stall>1.4</alpha_stall><cla>4.2500</cla><cda>0.10</cda>
@@ -205,11 +248,20 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
         "          <iyy>0.015</iyy>\n          <iyz>0</iyz>\n          <izz>0.017</izz>",
         f"<ixx>{ixx:.6f}</ixx>\n          <ixy>0</ixy>\n          <ixz>0</ixz>\n"
         f"          <iyy>{iyy:.6f}</iyy>\n          <iyz>0</iyz>\n          <izz>{izz:.6f}</izz>")
+    # Draw the planned airframe instead of the template's quadrotor body mesh.
+    body_start = head.index("      <visual name='base_visual'>")
+    body_end = head.index("</visual>", body_start) + len("</visual>\n")
+    head = (head[:body_start]
+            + _airframe_visual(table, L, rotor_radius_m)
+            + head[body_end:])
+
+    pscale = rotor_radius_m / _IRIS_PROP_RADIUS_M
     rotors = ""
     for i, (ang, spin) in enumerate(table):
         th = math.radians(ang)
         x, y = L * math.cos(th), -L * math.sin(th)
-        rotors += _ROTOR_LINK.format(i=i, x=x, y=y, prop="ccw" if spin > 0 else "cw")
+        rotors += _ROTOR_LINK.format(i=i, x=x, y=y, pscale=pscale,
+                                     prop="ccw" if spin > 0 else "cw")
     standoffs = (head + rotors
                  + '    <plugin filename="gz-sim-joint-state-publisher-system"\n'
                    '      name="gz::sim::systems::JointStatePublisher"></plugin>\n'
