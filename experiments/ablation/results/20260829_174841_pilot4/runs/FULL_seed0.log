@@ -1,0 +1,843 @@
+
+============================================================
+[generate]  AutonomousDrone
+============================================================
+
+Phase 1: Requirements Input
+----------------------------------------
+  ✓ Loaded 29 frozen requirements
+
+Phase 2: Initial Design Generation
+----------------------------------------
+  [LLM] transient error after 173s (RuntimeError: Vertex provider error (ClientError): 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'Resource exhausted. Ple) — retry 1 in 8s
+  ✓ Generated model with 9 part definitions
+
+Phase 3: Iterative Refinement
+----------------------------------------
+
+  ┌─ [ATTR-INJ]  4 missing guard attribute(s) injected — no LLM needed
+  └─ [ATTR-INJ]  ✓ all errors resolved
+  Verdict robustness over the weight simplex: 100% of sampled weightings agree
+
+  ──────────────────────────────────────────────────────────────
+  Iteration 1  │  score=0.931  rule=0.931  llm= N/A 
+  ──────────────────────────────────────────────────────────────
+  [SYNTAX]  ✓ no errors
+  --------------------------------------------------------------
+  ✓ Syntactic valid   ██████████████████████████████  1.000
+  ✓ Req coverage      ██████████████████████████░░░░  0.880
+  ✓ Struct complete   ██████████████████████████████  1.000
+  ✓ Behav verificat   ██████████████████████████░░░░  0.874
+  ✓ Safety assurance  ██████████████████████████████  1.000
+  ✓ Interface quality  ██████████████████████████████  1.000
+  --------------------------------------------------------------
+  [STRUCTURAL-REQUIREMENT]  ~ 0.684  (13/19 frozen causal paths)
+  [STRUCTURAL-ADVISORY]     ✓ 0.889  (11/12 role scenarios)
+    ✓ [safety/emergency    ] emergency_propulsionSystem_to_flightController
+       propulsionSystem → flightController
+    ✓ [safety/emergency    ] emergency_safetyMonitor_to_flightController
+       safetyMonitor → flightController
+    ✓ [safety/power        ] power_powerSystem_to_payloadMechanism
+       powerSystem → flightController → payloadMechanism
+    ✓ [safety/power        ] power_powerSystem_to_propulsionSystem
+       powerSystem → flightController → propulsionSystem
+    ✓ [safety/power        ] power_powerSystem_to_safetyMonitor
+       powerSystem → flightController → communicationSystem → 
+    ✓ nominal (6 passed): perceptionSystem_to_, power_powerSystem_to, uplink_communication, telemetry_flightCont…
+    ✗ emergency_payloadMechanism_to_flightController  →  can't reach: flightController
+      ⚠ 'flightController' is connected to entry nodes but signal direction may be wrong
+  --------------------------------------------------------------
+  [BEHAVIORAL]  ✓ 1.000  (22/22 state machines)  extracted: 18
+    ✓ AttitudeDeviationsBehavior
+    ✓ FlightDurationBehavior
+    ✓ ForwardGroundSpeedBehavior
+    ✓ WaypointNavigationBehavior
+    ✓ AvoidanceManoeuvreBehavior
+    ✓ WaypointModificationBehavior
+    ✓ FlightControllerBehavior
+    ✓ MechanicallyLockedInitialization
+       entry action called: defaultToMechanicallyLockedState  
+    ✓ PayloadMechanismBehavior
+    ✓ PayloadMechanismBehavior
+       entry action called: maintainLock  ✓
+    ✓ HealthReportingBehavior
+    ✓ CommunicationSystemBehavior
+    ✓ PropulsionSystemBehavior
+       entry action called: maintainControlledFlight  ✓
+    ✓ BatteryRtbMonitor  val=24.496
+       Driving batterySoc: 85.00 → (threshold <= 25.0)
+       batterySoc at trigger: 24.496  (threshold: <= 25.0)
+    ✓ BatteryLandMonitor  val=14.412
+       Driving batterySoc: 85.00 → (threshold < 15.0)
+       batterySoc at trigger: 14.412  (threshold: < 15.0)
+    ✓ CommLossMonitor  val=10.084
+       Driving commLossTime: 0.00 → (threshold > 10.0)
+       commLossTime at trigger: 10.084  (threshold: > 10.0)
+    ✓ SensorPostMonitor  step=5
+       Flipping sensorSelfTestFailed to True at t=5
+    ✓ PropulsionFailureMonitor  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+    ✓ SafetyArbiter  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+       entry action called: onParachute  ✓
+    ✓ AttitudeDeviationsBehavior::SteadyCruiseFlight
+    ✓ FlightDurationBehavior::NominalCruiseWithMaxPayload
+    ✓ ForwardGroundSpeedBehavior::HeadwindOperation
+  ──────────────────────────────────────────────────────────────
+  ~ Quality threshold met (score=0.931) but reachability issues remain — forcing sim fix pass
+
+  ──────────────────────────────────────────────────────────────
+  ▶  Simulation inner loop  (max 2 passes)
+  │  ✓ restored plan-authorized ports/connections; fixed obligations remain 13/19
+  └─ ⚠ structural repair blocked: remaining issue requires a validated plan revision; unrestricted port/connect generation was not invoked
+  ⚠ Surgical fix insufficient (1 scenario(s) still failing) — escalating to LLM refinement (3 iteration(s) remaining)
+
+  ⟳  Refining model …
+  ⚠ Surgical refinement not applicable — falling back to full rewrite
+  ✓ Refinement accepted  rule: 0.931 → 0.930 (-0.002)
+
+  ──────────────────────────────────────────────────────────────
+  ▶  Simulation inner loop  (max 3 passes)
+  │  ✓ restored plan-authorized ports/connections; fixed obligations remain 19/19
+  └─ Frozen requirement structural obligations fully resolved ✓; heuristic role scenarios remain advisory
+  ✓ [SYNTAX]  no errors  (syside: 0 parser, 0 sema)
+  Verdict robustness over the weight simplex: 100% of sampled weightings agree
+
+  ──────────────────────────────────────────────────────────────
+  Iteration 2  │  score=0.930  rule=0.930  llm= N/A 
+  ──────────────────────────────────────────────────────────────
+  [SYNTAX]  ✓ no errors
+  --------------------------------------------------------------
+  ✓ Syntactic valid   ██████████████████████████████  1.000
+  ✓ Req coverage      ██████████████████████████░░░░  0.880
+  ✓ Struct complete   ██████████████████████████████  1.000
+  ✓ Behav verificat   ██████████████████████████░░░░  0.867
+  ✓ Safety assurance  ██████████████████████████████  1.000
+  ✓ Interface quality  ██████████████████████████████  1.000
+  --------------------------------------------------------------
+  [STRUCTURAL-REQUIREMENT]  ✓ 1.000  (19/19 frozen causal paths)
+  [STRUCTURAL-ADVISORY]     ✓ 0.889  (11/12 role scenarios)
+    ✓ [safety/emergency    ] emergency_propulsionSystem_to_flightController
+       propulsionSystem → flightController
+    ✓ [safety/emergency    ] emergency_safetyMonitor_to_flightController
+       safetyMonitor → flightController
+    ✓ [safety/power        ] power_powerSystem_to_payloadMechanism
+       powerSystem → flightController → payloadMechanism
+    ✓ [safety/power        ] power_powerSystem_to_propulsionSystem
+       powerSystem → flightController → propulsionSystem
+    ✓ [safety/power        ] power_powerSystem_to_safetyMonitor
+       powerSystem → flightController → communicationSystem → 
+    ✓ nominal (6 passed): perceptionSystem_to_, power_powerSystem_to, uplink_communication, telemetry_flightCont…
+    ✗ emergency_payloadMechanism_to_flightController  →  can't reach: flightController
+      ⚠ 'flightController' is connected to entry nodes but signal direction may be wrong
+  --------------------------------------------------------------
+  [BEHAVIORAL]  ✓ 0.930  (24/26 state machines)  extracted: 22
+    ✓ AttitudeDeviationsBehavior
+    ✓ FlightDurationBehavior
+    ✓ ForwardGroundSpeedBehavior
+    ✓ WaypointNavigationBehavior
+    ✓ AvoidanceManoeuvreBehavior
+    ✓ WaypointModificationBehavior
+    ✓ FlightControllerBehavior
+    ✓ MechanicallyLockedInitialization
+       entry action called: defaultToMechanicallyLockedState  
+    ✓ PayloadMechanismBehavior
+    ✓ PayloadMechanismBehavior
+       entry action called: maintainLock  ✓
+    ✓ DeliveryAbortLockManagement  step=5
+       Flipping deliveryAbortActive to True at t=5
+       entry action called: stop  ✓
+    ✓ HealthReportingBehavior
+    ✓ CommunicationSystemBehavior
+    ✗ OperationalFlightEnvelopeLink
+       ⚠ No initial state is declared
+    ✗ RfLinkEncryption
+       ⚠ No initial state is declared
+    ✓ PropulsionSystemBehavior
+       entry action called: maintainControlledFlight  ✓
+    ✓ PropulsionFaultTolerance  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+       entry action called: stop  ✓
+    ✓ BatteryRtbMonitor  val=24.496
+       Driving batterySoc: 85.00 → (threshold <= 25.0)
+       batterySoc at trigger: 24.496  (threshold: <= 25.0)
+    ✓ BatteryLandMonitor  val=14.412
+       Driving batterySoc: 85.00 → (threshold < 15.0)
+       batterySoc at trigger: 14.412  (threshold: < 15.0)
+    ✓ CommLossMonitor  val=10.084
+       Driving commLossTime: 0.00 → (threshold > 10.0)
+       commLossTime at trigger: 10.084  (threshold: > 10.0)
+    ✓ SensorPostMonitor  step=5
+       Flipping sensorSelfTestFailed to True at t=5
+    ✓ PropulsionFailureMonitor  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+    ✓ SafetyArbiter  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+       entry action called: onParachute  ✓
+    ✓ AttitudeDeviationsBehavior::SteadyCruiseFlight
+    ✓ FlightDurationBehavior::NominalCruiseWithMaxPayload
+    ✓ ForwardGroundSpeedBehavior::HeadwindOperation
+  --------------------------------------------------------------
+  Issues (1):
+    • RIFY-GAP] REQ_FUNC_008 has a behavioral verification ancho
+  ──────────────────────────────────────────────────────────────
+  ~ Quality threshold met (score=0.930) but behavioral issues remain — forcing sim fix pass
+
+  ──────────────────────────────────────────────────────────────
+  ▶  Simulation inner loop  (max 2 passes)
+  │  ✓ restored plan-authorized ports/connections; fixed obligations remain 19/19
+  └─ Frozen requirement structural obligations fully resolved ✓; heuristic role scenarios remain advisory
+  ⚠ Surgical fix insufficient (1 scenario(s) still failing) — escalating to LLM refinement (2 iteration(s) remaining)
+
+  ⟳  Refining model …
+  ✓ Surgical refinement: replaced 1 block(s) (CommunicationSystem)
+  ✓ Refinement accepted  rule: 0.930 → 0.951 (+0.021)
+
+  ──────────────────────────────────────────────────────────────
+  ▶  Simulation inner loop  (max 3 passes)
+  │  ✓ restored plan-authorized ports/connections; fixed obligations remain 17/19
+  └─ ⚠ structural repair blocked: remaining issue requires a validated plan revision; unrestricted port/connect generation was not invoked
+  ✓ [SYNTAX]  no errors  (syside: 0 parser, 0 sema)
+  Verdict robustness over the weight simplex: 100% of sampled weightings agree
+
+  ──────────────────────────────────────────────────────────────
+  Iteration 3  │  score=0.951  rule=0.951  llm= N/A 
+  ──────────────────────────────────────────────────────────────
+  [SYNTAX]  ✓ no errors
+  --------------------------------------------------------------
+  ✓ Syntactic valid   ██████████████████████████████  1.000
+  ✓ Req coverage      ██████████████████████████░░░░  0.880
+  ✓ Struct complete   ██████████████████████████████  1.000
+  ✓ Behav verificat   █████████████████████████████░  0.958
+  ✓ Safety assurance  ██████████████████████████████  1.000
+  ✓ Interface quality  ██████████████████████████████  1.000
+  --------------------------------------------------------------
+  [STRUCTURAL-REQUIREMENT]  ✓ 0.895  (17/19 frozen causal paths)
+  [STRUCTURAL-ADVISORY]     ✓ 0.889  (11/12 role scenarios)
+    ✓ [safety/emergency    ] emergency_propulsionSystem_to_flightController
+       propulsionSystem → flightController
+    ✓ [safety/emergency    ] emergency_safetyMonitor_to_flightController
+       safetyMonitor → flightController
+    ✓ [safety/power        ] power_powerSystem_to_payloadMechanism
+       powerSystem → flightController → payloadMechanism
+    ✓ [safety/power        ] power_powerSystem_to_propulsionSystem
+       powerSystem → flightController → propulsionSystem
+    ✓ [safety/power        ] power_powerSystem_to_safetyMonitor
+       powerSystem → flightController → communicationSystem → 
+    ✓ nominal (6 passed): perceptionSystem_to_, power_powerSystem_to, uplink_communication, telemetry_flightCont…
+    ✗ emergency_payloadMechanism_to_flightController  →  can't reach: flightController
+      ⚠ 'flightController' is connected to entry nodes but signal direction may be wrong
+  --------------------------------------------------------------
+  [BEHAVIORAL]  ✓ 1.000  (24/24 state machines)  extracted: 20
+    ✓ AttitudeDeviationsBehavior
+    ✓ FlightDurationBehavior
+    ✓ ForwardGroundSpeedBehavior
+    ✓ WaypointNavigationBehavior
+    ✓ AvoidanceManoeuvreBehavior
+    ✓ WaypointModificationBehavior
+    ✓ FlightControllerBehavior
+    ✓ MechanicallyLockedInitialization
+       entry action called: defaultToMechanicallyLockedState  
+    ✓ PayloadMechanismBehavior
+    ✓ PayloadMechanismBehavior
+       entry action called: maintainLock  ✓
+    ✓ DeliveryAbortLockManagement  step=5
+       Flipping deliveryAbortActive to True at t=5
+       entry action called: stop  ✓
+    ✓ HealthReportingBehavior
+    ✓ CommunicationSystemBehavior
+    ✓ PropulsionSystemBehavior
+       entry action called: maintainControlledFlight  ✓
+    ✓ PropulsionFaultTolerance  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+       entry action called: stop  ✓
+    ✓ BatteryRtbMonitor  val=24.496
+       Driving batterySoc: 85.00 → (threshold <= 25.0)
+       batterySoc at trigger: 24.496  (threshold: <= 25.0)
+    ✓ BatteryLandMonitor  val=14.412
+       Driving batterySoc: 85.00 → (threshold < 15.0)
+       batterySoc at trigger: 14.412  (threshold: < 15.0)
+    ✓ CommLossMonitor  val=10.084
+       Driving commLossTime: 0.00 → (threshold > 10.0)
+       commLossTime at trigger: 10.084  (threshold: > 10.0)
+    ✓ SensorPostMonitor  step=5
+       Flipping sensorSelfTestFailed to True at t=5
+    ✓ PropulsionFailureMonitor  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+    ✓ SafetyArbiter  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+       entry action called: onParachute  ✓
+    ✓ AttitudeDeviationsBehavior::SteadyCruiseFlight
+    ✓ FlightDurationBehavior::NominalCruiseWithMaxPayload
+    ✓ ForwardGroundSpeedBehavior::HeadwindOperation
+  ──────────────────────────────────────────────────────────────
+  ~ Quality threshold met (score=0.951) but reachability issues remain — forcing sim fix pass
+
+  ──────────────────────────────────────────────────────────────
+  ▶  Simulation inner loop  (max 2 passes)
+  │  ✓ restored plan-authorized ports/connections; fixed obligations remain 17/19
+  └─ ⚠ structural repair blocked: remaining issue requires a validated plan revision; unrestricted port/connect generation was not invoked
+  ⚠ Surgical fix insufficient (1 scenario(s) still failing) — escalating to LLM refinement (1 iteration(s) remaining)
+
+  ⟳  Refining model …
+  ⚠ Surgical refinement not applicable — falling back to full rewrite
+  ✓ Refinement accepted  rule: 0.951 → 0.961 (+0.010)
+
+  ──────────────────────────────────────────────────────────────
+  ▶  Simulation inner loop  (max 3 passes)
+  │  ✓ restored plan-authorized ports/connections; fixed obligations remain 19/19
+  └─ Frozen requirement structural obligations fully resolved ✓; heuristic role scenarios remain advisory
+  ✓ [SYNTAX]  no errors  (syside: 0 parser, 0 sema)
+  Verdict robustness over the weight simplex: 100% of sampled weightings agree
+
+  ──────────────────────────────────────────────────────────────
+  Iteration 4  │  score=0.961  rule=0.961  llm= N/A 
+  ──────────────────────────────────────────────────────────────
+  [SYNTAX]  ✓ no errors
+  --------------------------------------------------------------
+  ✓ Syntactic valid   ██████████████████████████████  1.000
+  ✓ Req coverage      ██████████████████████████░░░░  0.880
+  ✓ Struct complete   ██████████████████████████████  1.000
+  ✓ Behav verificat   ██████████████████████████████  1.000
+  ✓ Safety assurance  ██████████████████████████████  1.000
+  ✓ Interface quality  ██████████████████████████████  1.000
+  --------------------------------------------------------------
+  [STRUCTURAL-REQUIREMENT]  ✓ 1.000  (19/19 frozen causal paths)
+  [STRUCTURAL-ADVISORY]     ✓ 0.889  (11/12 role scenarios)
+    ✓ [safety/emergency    ] emergency_propulsionSystem_to_flightController
+       propulsionSystem → flightController
+    ✓ [safety/emergency    ] emergency_safetyMonitor_to_flightController
+       safetyMonitor → flightController
+    ✓ [safety/power        ] power_powerSystem_to_payloadMechanism
+       powerSystem → flightController → payloadMechanism
+    ✓ [safety/power        ] power_powerSystem_to_propulsionSystem
+       powerSystem → flightController → propulsionSystem
+    ✓ [safety/power        ] power_powerSystem_to_safetyMonitor
+       powerSystem → flightController → communicationSystem → 
+    ✓ nominal (6 passed): perceptionSystem_to_, power_powerSystem_to, uplink_communication, telemetry_flightCont…
+    ✗ emergency_payloadMechanism_to_flightController  →  can't reach: flightController
+      ⚠ 'flightController' is connected to entry nodes but signal direction may be wrong
+  --------------------------------------------------------------
+  [BEHAVIORAL]  ✓ 1.000  (26/26 state machines)  extracted: 22
+    ✓ AttitudeDeviationsBehavior
+    ✓ FlightDurationBehavior
+    ✓ ForwardGroundSpeedBehavior
+    ✓ WaypointNavigationBehavior
+    ✓ AvoidanceManoeuvreBehavior
+    ✓ WaypointModificationBehavior
+    ✓ FlightControllerBehavior
+    ✓ MechanicallyLockedInitialization
+       entry action called: defaultToMechanicallyLockedState  
+    ✓ PayloadMechanismBehavior
+    ✓ PayloadMechanismBehavior
+       entry action called: maintainLock  ✓
+    ✓ DeliveryAbortLockManagement  step=5
+       Flipping deliveryAbortActive to True at t=5
+       entry action called: stop  ✓
+    ✓ HealthReportingBehavior
+    ✓ CommunicationSystemBehavior
+    ✓ OperationalFlightEnvelopeLink
+    ✓ RfLinkEncryption
+    ✓ PropulsionSystemBehavior
+       entry action called: maintainControlledFlight  ✓
+    ✓ PropulsionFaultTolerance  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+       entry action called: stop  ✓
+    ✓ BatteryRtbMonitor  val=24.496
+       Driving batterySoc: 85.00 → (threshold <= 25.0)
+       batterySoc at trigger: 24.496  (threshold: <= 25.0)
+    ✓ BatteryLandMonitor  val=14.412
+       Driving batterySoc: 85.00 → (threshold < 15.0)
+       batterySoc at trigger: 14.412  (threshold: < 15.0)
+    ✓ CommLossMonitor  val=10.084
+       Driving commLossTime: 0.00 → (threshold > 10.0)
+       commLossTime at trigger: 10.084  (threshold: > 10.0)
+    ✓ SensorPostMonitor  step=5
+       Flipping sensorSelfTestFailed to True at t=5
+    ✓ PropulsionFailureMonitor  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+    ✓ SafetyArbiter  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+       entry action called: onParachute  ✓
+    ✓ AttitudeDeviationsBehavior::SteadyCruiseFlight
+    ✓ FlightDurationBehavior::NominalCruiseWithMaxPayload
+    ✓ ForwardGroundSpeedBehavior::HeadwindOperation
+  ──────────────────────────────────────────────────────────────
+  ✓ Quality threshold 0.75 reached
+  ✓ Final design score: 0.961
+
+Phase 4: Behavioral Reachability Simulation
+----------------------------------------
+
+  ╔══════════════════════════════════════════════════════════════╗
+  ║  FINAL SIMULATION REPORT  ─  AutonomousDrone              ║
+  ╠══════════════════════════════════════════════════════════════╣
+  ║  Requirement paths : 1.000  ████████████████████  19/19 frozen    ║
+  ║  Role diagnostic   : 0.889  ██████████████████░░  11/12 advisory  ║
+  ║  Graph              : 9 parts · 46 ports · 22 connections          ║
+  ╠══════════════════════════════════════════════════════════════╣
+  ║  ✓ [nominal|sensing] perceptionSystem_to_flightContro ║
+  ║      path: perceptionSystem → percept                        ║
+  ║  ✗ [safety|emergency] emergency_payloadMechanism_to_fl ║
+  ║      path: —                                                 ║
+  ║  ✓ [safety|emergency] emergency_propulsionSystem_to_fl ║
+  ║      path: propulsionSystem → propuls                        ║
+  ║  ✓ [safety|emergency] emergency_safetyMonitor_to_fligh ║
+  ║      path: safetyMonitor → safetyMoni                        ║
+  ║  ✓ [safety|power   ] power_powerSystem_to_payloadMech ║
+  ║      path: powerSystem → powerSystem.                        ║
+  ║  ✓ [safety|power   ] power_powerSystem_to_propulsionS ║
+  ║      path: powerSystem → powerSystem.                        ║
+  ║  ✓ [safety|power   ] power_powerSystem_to_safetyMonit ║
+  ║      path: powerSystem → powerSystem.                        ║
+  ║  ✓ [nominal|power  ] power_powerSystem_to_flightContr ║
+  ║      path: powerSystem → powerSystem.                        ║
+  ║  ✓ [nominal|comms  ] uplink_communicationSystem_to_fl ║
+  ║      path: communicationSystem → comm                        ║
+  ║  ✓ [nominal|comms  ] telemetry_flightController_to_co ║
+  ║      path: flightController → flightC                        ║
+  ║  ✓ [nominal|actuation] control_flightController_to_reco ║
+  ║      path: flightController → flightC                        ║
+  ║  ✓ [nominal|power  ] power_powerSystem_to_airframe    ║
+  ║      path: powerSystem → powerSystem.                        ║
+  ╠══════════════════════════════════════════════════════════════╣
+  ║  Recommendations:                                            ║
+  ║    • 'recoverySystem' has only input ports — ensure it has at║
+  ║    • least one output port or the model cannot propagate     ║
+  ║    • signals through it                                      ║
+  ║    • 'airframe' has only input ports — ensure it has at least║
+  ║    • one output port or the model cannot propagate signals   ║
+  ║    • through it                                              ║
+  ║    • Safety scenario                                         ║
+  ║    • 'emergency_payloadMechanism_to_flightController' failed ║
+  ║    • — missing safety signal path could be a critical design ║
+  ║    • flaw                                                    ║
+  ╚══════════════════════════════════════════════════════════════╝
+
+  ╔══════════════════════════════════════════════════════════════╗
+  ║  BEHAVIORAL SIMULATION  ─  State Machine Execution            ║
+  ║  Extracted 22 state machine(s)   Score: 100.00%   (26/26 passed)      ║
+  ╠══════════════════════════════════════════════════════════════╣
+  ║  ✓  AttitudeDeviationsBehavior                                ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → SteadyCruiseFlight  (accept CruiseComma  ║
+  ║  ······························································║
+  ║  ✓  FlightDurationBehavior                                    ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → NominalCruiseWithMaxPayload  (accept Ma  ║
+  ║  ······························································║
+  ║  ✓  ForwardGroundSpeedBehavior                                ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → HeadwindOperation  (accept HeadwindDete  ║
+  ║  ······························································║
+  ║  ✓  WaypointNavigationBehavior                                ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → NavigatingWaypoints  (accept Designated  ║
+  ║  ······························································║
+  ║  ✓  AvoidanceManoeuvreBehavior                                ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → AvoidingThreat  (accept CollisionThreat  ║
+  ║  ······························································║
+  ║  ✓  WaypointModificationBehavior                              ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → ModifyingWaypoint  (accept ValidWaypoin  ║
+  ║  ······························································║
+  ║  ✓  FlightControllerBehavior                                  ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → ReturnToBase  (accept NonCriticalContin  ║
+  ║  ······························································║
+  ║  ✓  MechanicallyLockedInitialization                          ║
+  ║      [t=2]  PowerOff → LockedState  (accept PowerOn)  → entry  ║
+  ║      entry action called: defaultToMechanicallyLockedState  ✓  ║
+  ║  ······························································║
+  ║  ✓  PayloadMechanismBehavior                                  ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → ReleasingPayload  (accept DeliveryCoord  ║
+  ║  ······························································║
+  ║  ✓  PayloadMechanismBehavior                                  ║
+  ║      [t=2]  Initial → LockedState  (accept DeliveryAbortCondi  ║
+  ║      entry action called: maintainLock  ✓                      ║
+  ║  ······························································║
+  ║  ✓  DeliveryAbortLockManagement                               ║
+  ║      Flipping deliveryAbortActive to True at t=5               ║
+  ║      [t=5]  nominal → fault  (deliveryAbortActive == true)  →  ║
+  ║      entry action called: stop  ✓                              ║
+  ║  ······························································║
+  ║  ✓  HealthReportingBehavior                                   ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → ReportingHealth  (accept AutomatedLandi  ║
+  ║  ······························································║
+  ║  ✓  CommunicationSystemBehavior                               ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → LinkManagement  (accept FlightEnvelopeE  ║
+  ║  ······························································║
+  ║  ✓  OperationalFlightEnvelopeLink                             ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → LinkActive  (accept FlightEnvelopeEnter  ║
+  ║  ······························································║
+  ║  ✓  RfLinkEncryption                                          ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → Encrypted  (accept PowerOn)  → entry: m  ║
+  ║  ······························································║
+  ║  ✓  PropulsionSystemBehavior                                  ║
+  ║      [t=2]  Initial → FaultTolerance  (accept PropulsionUnitF  ║
+  ║      entry action called: maintainControlledFlight  ✓          ║
+  ║  ······························································║
+  ║  ✓  PropulsionFaultTolerance                                  ║
+  ║      Flipping propulsionCriticalFailure to True at t=5         ║
+  ║      [t=5]  nominal → fault  (propulsionCriticalFailure == tr  ║
+  ║      entry action called: stop  ✓                              ║
+  ║  ······························································║
+  ║  ✓  BatteryRtbMonitor                                         ║
+  ║      Driving batterySoc: 85.00 → (threshold <= 25.0)           ║
+  ║      [t=60]  RtbNominal → RtbDetected  (batterySoc <= 25)      ║
+  ║      batterySoc at trigger: 24.496  (threshold: <= 25.0)       ║
+  ║  ······························································║
+  ║  ✓  BatteryLandMonitor                                        ║
+  ║      Driving batterySoc: 85.00 → (threshold < 15.0)            ║
+  ║      [t=60]  LandNominal → LandDetected  (batterySoc < 15)     ║
+  ║      batterySoc at trigger: 14.412  (threshold: < 15.0)        ║
+  ║  ······························································║
+  ║  ✓  CommLossMonitor                                           ║
+  ║      Driving commLossTime: 0.00 → (threshold > 10.0)           ║
+  ║      [t=60]  CommNominal → CommLossDetected  (commLossTime >   ║
+  ║      commLossTime at trigger: 10.084  (threshold: > 10.0)      ║
+  ║  ······························································║
+  ║  ✓  SensorPostMonitor                                         ║
+  ║      Flipping sensorSelfTestFailed to True at t=5              ║
+  ║      [t=5]  PostNominal → PostFailed  (sensorSelfTestFailed =  ║
+  ║  ······························································║
+  ║  ✓  PropulsionFailureMonitor                                  ║
+  ║      Flipping propulsionCriticalFailure to True at t=5         ║
+  ║      [t=5]  PropNominal → PropFailed  (propulsionCriticalFail  ║
+  ║  ······························································║
+  ║  ✓  SafetyArbiter                                             ║
+  ║      Flipping propulsionCriticalFailure to True at t=5         ║
+  ║      [t=5]  ArbNominal → ArbParachuteMode  (propulsionCritica  ║
+  ║      entry action called: onParachute  ✓                       ║
+  ║  ······························································║
+  ║  ✓  AttitudeDeviationsBehavior::SteadyCrui                    ║
+  ║      Reached AttitudeDeviationsBehavior::SteadyCruiseFlight;   ║
+  ║      Runtime input currentRollPitchAttitudeDeviations bound a  ║
+  ║  ······························································║
+  ║  ✓  FlightDurationBehavior::NominalCruiseW                    ║
+  ║      Reached FlightDurationBehavior::NominalCruiseWithMaxPayl  ║
+  ║      Runtime input currentFlight bound against threshold >= 2  ║
+  ║  ······························································║
+  ║  ✓  ForwardGroundSpeedBehavior::HeadwindOp                    ║
+  ║      Reached ForwardGroundSpeedBehavior::HeadwindOperation; s  ║
+  ║      Runtime input currentForwardGroundSpeed bound against th  ║
+  ║  ······························································║
+  ╚══════════════════════════════════════════════════════════════╝
+============================================================
+Generation Complete!
+  Final score:              0.961
+  Model qualification:      QUALIFIED
+  Requirement reachability: 1.000 (19/19 frozen paths)
+  Advisory role scenarios: 0.889 (11/12 scenarios)
+  Part definitions: 9
+  Requirements:     29
+  LLM usage:        11 calls, 158.5k prompt + 96.2k completion tokens, 1657s in LLM, 1 retries
+============================================================
+
+
+============================================================
+[explore]  AutonomousDrone
+============================================================
+
+Phase 3: Design Space Exploration
+----------------------------------------
+  [variation-DSE] injected mandatory evidence-backed catalog architecture seed on 'propulsionSystem' (10 architectures)
+  [variation-DSE] surgically introduced 1 variation point(s) (connects preserved): ['propulsionSystem']
+  [variation-DSE] estimator calibrated on catalog grid: fom_eff=0.587, ED=158 Wh/kg, endurance MAPE 24%→15% (n=27)
+  [variation-DSE] injected Automator-evaluable endurance analysis closure
+  [variation-DSE] injected DesignTradeStudy (1 alternatives)
+  [variation-DSE] explored ['propulsionSystem'] → recommended {'propulsionSystem': 'catalog_r6_p16_c6'}
+  [variation-DSE] inner BO sized battery → 16000 mAh
+     real quality: {'syntactic_validity': 1.0, 'requirement_coverage': 0.88, 'structural_completeness': 0.79, 'behavioral_verification': 1.0, 'safety_assurance': 0.92, 'interface_quality': 0.89}
+     note: search coverage: exhaustively evaluated 10/10 legal outer configurations
+     note: inner sizing: 8 architecture(s) used real catalog pack capacities; 2 remained exploratory-continuous
+     note: estimator gate: 7/7 performance-feasible designs also satisfy MTOW <= 8 kg
+     note: official Pareto rebuilt from 2 constrained-feasible design(s): 1 nondominated alternative(s)
+     note: recommendation selected by datasheet rank inside constrained Pareto
+     note: constraint pipeline: evaluated=10 -> estimator=7 -> catalog=5 -> phase8=2 -> official_pareto=1
+     note: weight-simplex sensitivity: nominal=propulsionSystem=catalog_r6_p16_c6 wins 100.0% of sampled weight space (2000 samples, chebyshev)
+  ✓ Explored 10 configurations in 10 iteration(s)
+  ✓ Pareto front size: 1
+  ✓ Pareto front (top 1):
+       [1] overall=0.722  (time_sat=1.00, cost_efficiency=0.44)
+          params: propulsionSystem=catalog_r6_p16_c6
+  ✓ Best config applied to model: {'propulsionSystem': 'catalog_r6_p16_c6'}
+
+Phase 4-5: Iterative Refinement (DSE-grounded)
+----------------------------------------
+  ✓ [SYNTAX]  no errors  (syside: 0 parser, 0 sema)
+  Verdict robustness over the weight simplex: 100% of sampled weightings agree
+
+  ──────────────────────────────────────────────────────────────
+  Iteration 1  │  score=0.914  rule=0.914  llm= N/A 
+  ──────────────────────────────────────────────────────────────
+  [SYNTAX]  ✓ no errors
+  --------------------------------------------------------------
+  ✓ Syntactic valid   ██████████████████████████████  1.000
+  ✓ Req coverage      ██████████████████████████░░░░  0.880
+  ~ Struct complete   ███████████████████████░░░░░░░  0.780
+  ✓ Behav verificat   ██████████████████████████████  1.000
+  ✓ Safety assurance  ████████████████████████████░░  0.917
+  ✓ Interface quality  ███████████████████████████░░░  0.890
+  --------------------------------------------------------------
+  [STRUCTURAL-REQUIREMENT]  ✓ 1.000  (19/19 frozen causal paths)
+  [STRUCTURAL-ADVISORY]     ✓ 0.900  (13/14 role scenarios)
+    ✓ [safety/emergency    ] emergency_safetyMonitor_to_flightController
+       safetyMonitor → flightController
+    ✓ [safety/power        ] power_powerSystem_to_payloadMechanism
+       powerSystem → flightController → payloadMechanism
+    ✓ [safety/power        ] power_powerSystem_to_safetyMonitor
+       powerSystem → flightController → communicationSystem → 
+    ✓ [safety/power        ] power_propulsionSystem_to_payloadMechanism
+       propulsionSystem → flightController → payloadMechanism
+    ✓ [safety/power        ] power_propulsionSystem_to_safetyMonitor
+       propulsionSystem → safetyMonitor
+    ✓ nominal (8 passed): perceptionSystem_to_, power_powerSystem_to, power_propulsionSyst, uplink_communication…
+    ✗ emergency_payloadMechanism_to_flightController  →  can't reach: flightController
+      ⚠ 'flightController' is connected to entry nodes but signal direction may be wrong
+  --------------------------------------------------------------
+  [BEHAVIORAL]  ✓ 1.000  (26/26 state machines)  extracted: 22
+    ✓ AttitudeDeviationsBehavior
+    ✓ FlightDurationBehavior
+    ✓ ForwardGroundSpeedBehavior
+    ✓ WaypointNavigationBehavior
+    ✓ AvoidanceManoeuvreBehavior
+    ✓ WaypointModificationBehavior
+    ✓ FlightControllerBehavior
+    ✓ MechanicallyLockedInitialization
+       entry action called: defaultToMechanicallyLockedState  
+    ✓ PayloadMechanismBehavior
+    ✓ PayloadMechanismBehavior
+       entry action called: maintainLock  ✓
+    ✓ DeliveryAbortLockManagement  step=5
+       Flipping deliveryAbortActive to True at t=5
+       entry action called: stop  ✓
+    ✓ HealthReportingBehavior
+    ✓ CommunicationSystemBehavior
+    ✓ OperationalFlightEnvelopeLink
+    ✓ RfLinkEncryption
+    ✓ PropulsionSystemBehavior
+       entry action called: maintainControlledFlight  ✓
+    ✓ PropulsionFaultTolerance  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+       entry action called: stop  ✓
+    ✓ BatteryRtbMonitor  val=24.496
+       Driving batterySoc: 85.00 → (threshold <= 25.0)
+       batterySoc at trigger: 24.496  (threshold: <= 25.0)
+    ✓ BatteryLandMonitor  val=14.412
+       Driving batterySoc: 85.00 → (threshold < 15.0)
+       batterySoc at trigger: 14.412  (threshold: < 15.0)
+    ✓ CommLossMonitor  val=10.084
+       Driving commLossTime: 0.00 → (threshold > 10.0)
+       commLossTime at trigger: 10.084  (threshold: > 10.0)
+    ✓ SensorPostMonitor  step=5
+       Flipping sensorSelfTestFailed to True at t=5
+    ✓ PropulsionFailureMonitor  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+    ✓ SafetyArbiter  step=5
+       Flipping propulsionCriticalFailure to True at t=5
+       entry action called: onParachute  ✓
+    ✓ AttitudeDeviationsBehavior::SteadyCruiseFlight
+    ✓ FlightDurationBehavior::NominalCruiseWithMaxPayload
+    ✓ ForwardGroundSpeedBehavior::HeadwindOperation
+  --------------------------------------------------------------
+  Issues (1):
+    • Parts with no ports: Catalog_r4_p15_c4PropulsionsystemImpl
+  --------------------------------------------------------------
+  Recommendations (top 1):
+    → Add at least one directed port (in/out/inout) to each
+       part def.
+  ──────────────────────────────────────────────────────────────
+  ✓ Quality threshold 0.75 reached
+  ✓ Final design score: 0.914
+
+Phase 6: Behavioral Reachability Simulation
+----------------------------------------
+
+  ╔══════════════════════════════════════════════════════════════╗
+  ║  FINAL SIMULATION REPORT  ─  AutonomousDrone              ║
+  ╠══════════════════════════════════════════════════════════════╣
+  ║  Requirement paths : 1.000  ████████████████████  19/19 frozen    ║
+  ║  Role diagnostic   : 0.900  ██████████████████░░  13/14 advisory  ║
+  ║  Graph              : 9 parts · 46 ports · 22 connections          ║
+  ╠══════════════════════════════════════════════════════════════╣
+  ║  ✓ [nominal|sensing] perceptionSystem_to_flightContro ║
+  ║      path: perceptionSystem → percept                        ║
+  ║  ✗ [safety|emergency] emergency_payloadMechanism_to_fl ║
+  ║      path: —                                                 ║
+  ║  ✓ [safety|emergency] emergency_safetyMonitor_to_fligh ║
+  ║      path: safetyMonitor → safetyMoni                        ║
+  ║  ✓ [safety|power   ] power_powerSystem_to_payloadMech ║
+  ║      path: powerSystem → powerSystem.                        ║
+  ║  ✓ [safety|power   ] power_powerSystem_to_safetyMonit ║
+  ║      path: powerSystem → powerSystem.                        ║
+  ║  ✓ [safety|power   ] power_propulsionSystem_to_payloa ║
+  ║      path: propulsionSystem → propuls                        ║
+  ║  ✓ [safety|power   ] power_propulsionSystem_to_safety ║
+  ║      path: propulsionSystem → propuls                        ║
+  ║  ✓ [nominal|power  ] power_powerSystem_to_flightContr ║
+  ║      path: powerSystem → powerSystem.                        ║
+  ║  ✓ [nominal|power  ] power_propulsionSystem_to_flight ║
+  ║      path: propulsionSystem → propuls                        ║
+  ║  ✓ [nominal|comms  ] uplink_communicationSystem_to_fl ║
+  ║      path: communicationSystem → comm                        ║
+  ║  ✓ [nominal|comms  ] telemetry_flightController_to_co ║
+  ║      path: flightController → flightC                        ║
+  ║  ✓ [nominal|actuation] control_flightController_to_reco ║
+  ║      path: flightController → flightC                        ║
+  ║  ✓ [nominal|power  ] power_powerSystem_to_airframe    ║
+  ║      path: powerSystem → powerSystem.                        ║
+  ║  ✓ [nominal|power  ] power_propulsionSystem_to_airfra ║
+  ║      path: propulsionSystem → propuls                        ║
+  ╠══════════════════════════════════════════════════════════════╣
+  ║  Recommendations:                                            ║
+  ║    • 'recoverySystem' has only input ports — ensure it has at║
+  ║    • least one output port or the model cannot propagate     ║
+  ║    • signals through it                                      ║
+  ║    • 'airframe' has only input ports — ensure it has at least║
+  ║    • one output port or the model cannot propagate signals   ║
+  ║    • through it                                              ║
+  ║    • Safety scenario                                         ║
+  ║    • 'emergency_payloadMechanism_to_flightController' failed ║
+  ║    • — missing safety signal path could be a critical design ║
+  ║    • flaw                                                    ║
+  ╚══════════════════════════════════════════════════════════════╝
+
+  ╔══════════════════════════════════════════════════════════════╗
+  ║  BEHAVIORAL SIMULATION  ─  State Machine Execution            ║
+  ║  Extracted 22 state machine(s)   Score: 100.00%   (26/26 passed)      ║
+  ╠══════════════════════════════════════════════════════════════╣
+  ║  ✓  AttitudeDeviationsBehavior                                ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → SteadyCruiseFlight  (accept CruiseComma  ║
+  ║  ······························································║
+  ║  ✓  FlightDurationBehavior                                    ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → NominalCruiseWithMaxPayload  (accept Ma  ║
+  ║  ······························································║
+  ║  ✓  ForwardGroundSpeedBehavior                                ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → HeadwindOperation  (accept HeadwindDete  ║
+  ║  ······························································║
+  ║  ✓  WaypointNavigationBehavior                                ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → NavigatingWaypoints  (accept Designated  ║
+  ║  ······························································║
+  ║  ✓  AvoidanceManoeuvreBehavior                                ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → AvoidingThreat  (accept CollisionThreat  ║
+  ║  ······························································║
+  ║  ✓  WaypointModificationBehavior                              ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → ModifyingWaypoint  (accept ValidWaypoin  ║
+  ║  ······························································║
+  ║  ✓  FlightControllerBehavior                                  ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → ReturnToBase  (accept NonCriticalContin  ║
+  ║  ······························································║
+  ║  ✓  MechanicallyLockedInitialization                          ║
+  ║      [t=2]  PowerOff → LockedState  (accept PowerOn)  → entry  ║
+  ║      entry action called: defaultToMechanicallyLockedState  ✓  ║
+  ║  ······························································║
+  ║  ✓  PayloadMechanismBehavior                                  ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → ReleasingPayload  (accept DeliveryCoord  ║
+  ║  ······························································║
+  ║  ✓  PayloadMechanismBehavior                                  ║
+  ║      [t=2]  Initial → LockedState  (accept DeliveryAbortCondi  ║
+  ║      entry action called: maintainLock  ✓                      ║
+  ║  ······························································║
+  ║  ✓  DeliveryAbortLockManagement                               ║
+  ║      Flipping deliveryAbortActive to True at t=5               ║
+  ║      [t=5]  nominal → fault  (deliveryAbortActive == true)  →  ║
+  ║      entry action called: stop  ✓                              ║
+  ║  ······························································║
+  ║  ✓  HealthReportingBehavior                                   ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → ReportingHealth  (accept AutomatedLandi  ║
+  ║  ······························································║
+  ║  ✓  CommunicationSystemBehavior                               ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → LinkManagement  (accept FlightEnvelopeE  ║
+  ║  ······························································║
+  ║  ✓  OperationalFlightEnvelopeLink                             ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → LinkActive  (accept FlightEnvelopeEnter  ║
+  ║  ······························································║
+  ║  ✓  RfLinkEncryption                                          ║
+  ║      Command sequence: 1/1 nominal transitions fired           ║
+  ║      [t=2]  Initial → Encrypted  (accept PowerOn)  → entry: m  ║
+  ║  ······························································║
+  ║  ✓  PropulsionSystemBehavior                                  ║
+  ║      [t=2]  Initial → FaultTolerance  (accept PropulsionUnitF  ║
+  ║      entry action called: maintainControlledFlight  ✓          ║
+  ║  ······························································║
+  ║  ✓  PropulsionFaultTolerance                                  ║
+  ║      Flipping propulsionCriticalFailure to True at t=5         ║
+  ║      [t=5]  nominal → fault  (propulsionCriticalFailure == tr  ║
+  ║      entry action called: stop  ✓                              ║
+  ║  ······························································║
+  ║  ✓  BatteryRtbMonitor                                         ║
+  ║      Driving batterySoc: 85.00 → (threshold <= 25.0)           ║
+  ║      [t=60]  RtbNominal → RtbDetected  (batterySoc <= 25)      ║
+  ║      batterySoc at trigger: 24.496  (threshold: <= 25.0)       ║
+  ║  ······························································║
+  ║  ✓  BatteryLandMonitor                                        ║
+  ║      Driving batterySoc: 85.00 → (threshold < 15.0)            ║
+  ║      [t=60]  LandNominal → LandDetected  (batterySoc < 15)     ║
+  ║      batterySoc at trigger: 14.412  (threshold: < 15.0)        ║
+  ║  ······························································║
+  ║  ✓  CommLossMonitor                                           ║
+  ║      Driving commLossTime: 0.00 → (threshold > 10.0)           ║
+  ║      [t=60]  CommNominal → CommLossDetected  (commLossTime >   ║
+  ║      commLossTime at trigger: 10.084  (threshold: > 10.0)      ║
+  ║  ······························································║
+  ║  ✓  SensorPostMonitor                                         ║
+  ║      Flipping sensorSelfTestFailed to True at t=5              ║
+  ║      [t=5]  PostNominal → PostFailed  (sensorSelfTestFailed =  ║
+  ║  ······························································║
+  ║  ✓  PropulsionFailureMonitor                                  ║
+  ║      Flipping propulsionCriticalFailure to True at t=5         ║
+  ║      [t=5]  PropNominal → PropFailed  (propulsionCriticalFail  ║
+  ║  ······························································║
+  ║  ✓  SafetyArbiter                                             ║
+  ║      Flipping propulsionCriticalFailure to True at t=5         ║
+  ║      [t=5]  ArbNominal → ArbParachuteMode  (propulsionCritica  ║
+  ║      entry action called: onParachute  ✓                       ║
+  ║  ······························································║
+  ║  ✓  AttitudeDeviationsBehavior::SteadyCrui                    ║
+  ║      Reached AttitudeDeviationsBehavior::SteadyCruiseFlight;   ║
+  ║      Runtime input currentRollPitchAttitudeDeviations bound a  ║
+  ║  ······························································║
+  ║  ✓  FlightDurationBehavior::NominalCruiseW                    ║
+  ║      Reached FlightDurationBehavior::NominalCruiseWithMaxPayl  ║
+  ║      Runtime input currentFlight bound against threshold >= 2  ║
+  ║  ······························································║
+  ║  ✓  ForwardGroundSpeedBehavior::HeadwindOp                    ║
+  ║      Reached ForwardGroundSpeedBehavior::HeadwindOperation; s  ║
+  ║      Runtime input currentForwardGroundSpeed bound against th  ║
+  ║  ······························································║
+  ╚══════════════════════════════════════════════════════════════╝
+Phase 7: DSE→SITL Verification (cases + L1)
+----------------------------------------
+  ✓ 11 verification case(s), L1 1/1 settable params in range, 1 .parm line(s)
+Phase 8: Realization (meet-in-the-middle)
+----------------------------------------
+  ✓ MEET-IN-THE-MIDDLE CLOSED — realizable + mass, payload, time closed; speed/range evaluated separately by lumped forward-flight fidelity (datasheet closure families: mass, payload, time; forward_flight families: range, speed; deferred families: altitude)
+============================================================
+Exploration Complete!
+  Final score:              0.914
+  Requirement reachability: 1.000 (19/19 frozen paths)
+  Advisory role scenarios: 0.900 (13/14 scenarios)
+  Part definitions: 20
+  Best config:      {'propulsionSystem': 'catalog_r6_p16_c6'}
+  LLM usage:        19 calls, 166.3k prompt + 96.7k completion tokens, 1707s in LLM, 1 retries
+============================================================
+
+  Model qualification:      QUALIFIED
