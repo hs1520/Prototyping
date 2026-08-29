@@ -1,0 +1,45 @@
+{
+  "aggregate": {
+    "FULL": {
+      "runs_ok": 1,
+      "runs_failed": 0,
+      "failed_seeds": [],
+      "final_score": {
+        "mean": 0.7,
+        "std": 0.0,
+        "n": 1
+      },
+      "reachability": {
+        "mean": 0.8824,
+        "std": 0.0,
+        "n": 1
+      },
+      "controlled_pass_rate": {
+        "mean": 0.8571,
+        "std": 0.0,
+        "n": 1
+      },
+      "iterations": {
+        "mean": 4.0,
+        "std": 0.0,
+        "n": 1
+      },
+      "llm_calls": {
+        "mean": 38.0,
+        "std": 0.0,
+        "n": 1
+      },
+      "llm_total_tokens": {
+        "mean": 312937.0,
+        "std": 0.0,
+        "n": 1
+      },
+      "elapsed_s": {
+        "mean": 1931.7,
+        "std": 0.0,
+        "n": 1
+      }
+    }
+  },
+  "paired_vs_baseline": {}
+}

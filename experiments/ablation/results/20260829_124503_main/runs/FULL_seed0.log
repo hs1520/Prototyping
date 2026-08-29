@@ -1,0 +1,12 @@
+
+============================================================
+[generate]  AutonomousDrone
+============================================================
+
+Phase 1: Requirements Input
+----------------------------------------
+  ✓ Loaded 29 frozen requirements
+
+Phase 2: Initial Design Generation
+----------------------------------------
+  [LLM] transient error after 1s (RuntimeError: Vertex provider error (ClientError): 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'Resource has been exhau) — retry 1 in 9s
