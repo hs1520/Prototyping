@@ -1,0 +1,7 @@
+# Recommended design SITL params; native SITL is architecture-nondiscriminating for endurance.
+BATT_CAPACITY        16000
+FRAME_CLASS          2
+FRAME_TYPE           1
+ARMING_CHECK         0
+DISARM_DELAY         0
+EK3_CHECK_SCALE      100

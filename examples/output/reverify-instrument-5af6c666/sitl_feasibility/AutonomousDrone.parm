@@ -1,0 +1,26 @@
+# Recommended design SITL params; native SITL is architecture-nondiscriminating for endurance.
+BATT_CAPACITY        16000
+FRAME_CLASS          2
+FRAME_TYPE           1
+ARMING_CHECK         0
+DISARM_DELAY         0
+EK3_CHECK_SCALE      100
+
+# Safety/L2 actuator params from requirement linker
+BATT_FS_LOW_PCT                25  # REQ_SAFE_001 (SafetyMonitor) [guard:<=:25.0 (attr:batterySoc)]
+BATT_FS_LOW_ACT                2  # REQ_SAFE_001 (SafetyMonitor) [static]
+BATT_FS_CRT_PCT                15  # REQ_SAFE_002 (SafetyMonitor) [guard:<:15.0 (attr:batterySoc)]
+BATT_FS_CRT_ACT                1  # REQ_SAFE_002 (SafetyMonitor) [static]
+WPNAV_SPEED                    1800  # REQ_PERF_003 (FlightController) [attr:FlightController.minCruiseAirspeed*100]
+SERIAL0_PROTOCOL               2  # REQ_FUNC_004 (CommunicationSystem) [static]
+GPS_INJECT_TO                  127  # REQ_INTF_002 (PerceptionSystem) [static]
+FS_GCS_ENABLE                  5  # REQ_SAFE_003 (SafetyMonitor) [static]
+FS_GCS_TIMEOUT                 10  # REQ_SAFE_003 (SafetyMonitor) [guard:>:10.0 (attr:commLossTime)]
+GRIP_ENABLE                    1  # REQ_SAFE_006 (PayloadMechanism) [static]
+GRIP_TYPE                      1  # REQ_SAFE_006 (PayloadMechanism) [static]
+SERVO7_FUNCTION                28  # REQ_SAFE_006 (PayloadMechanism) [static]
+GRIP_RELEASE                   2000  # REQ_SAFE_006 (PayloadMechanism) [static]
+GRIP_GRAB                      1000  # REQ_SAFE_006 (PayloadMechanism) [static]
+FENCE_ENABLE                   1  # REQ_CONS_001 (FlightController) [static]
+FENCE_ALT_MAX                  120  # REQ_CONS_001 (FlightController) [attr:FlightController.maxFlightAltitude]
+GRIP_NEUTRAL                   1000  # REQ_SAFE_008 (PayloadMechanism) [static]

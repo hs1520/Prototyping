@@ -1,0 +1,193 @@
+{
+  "generated_at": "2026-08-29T22:33:09Z",
+  "status": "FAIL",
+  "dry_run": false,
+  "include_single_motor_out": true,
+  "honesty_redline": "Gazebo verifies high-fidelity dynamics such as hover stability, forward dash, and one-motor-out behavior. Datasheet endurance/mass closure remains Phase 8; do not treat Gazebo as endurance validation.",
+  "requirements_source": "/Users/huangsongyi/VSCode/Prototyping/examples/output/reverify-instrument-5af6c666/final_model.sysml",
+  "recommended_design_inputs": {
+    "payload_mass_kg": 1.5,
+    "battery_capacity_mah": 16000.0,
+    "battery_cells": 6,
+    "rotor_count": 6,
+    "rotor_radius_m": 0.2032,
+    "cruise_speed_mps": 0.0
+  },
+  "source_provenance": {
+    "schema_version": 2,
+    "run_id": "5af6c666-7654-4ebe-b79e-75771895e7e5",
+    "model_sha256": "d891275b078b6f014cf6ca7a36f08da9f0f79376fe9b97cbcaf1d91fb8fd54f9",
+    "verification_model_sha256": "5118b8dd4aa31096adff5cabd20c222237d3470fac8ae1bd0f032369382f5418",
+    "requirements_sha256": "041b7a93b719ab3138062e6045540cab0acd8691759429de6f4bd09f571b4ffa",
+    "requirement_graph_sha256": "15e28e63f1bbee1e2430db6bafb34ea2bb8bc7693def2567d0efb55a2d434b9f",
+    "catalog_sha256": "8dbe547d1f08318ac4709d7365dfe8c726e0b40bbdf49dc17196b0cc27662021",
+    "recommended_design_sha256": "f1345532436c095ad783475d38fc927a8338685dfb2279ad618de857bc88f2f2",
+    "realized_components_sha256": "cc5543dbf3d306c8792333d82f0720c66120ab070744539be8c9900489180e7b",
+    "parm_sha256": "920bb98f899bb5ee1f25225c719829fbab7f1e810091a0c54c51302d691144b5"
+  },
+  "gazebo_design": {
+    "rotor_count": 6,
+    "rotor_radius_m": 0.2032,
+    "battery_capacity_mah": 16000.0,
+    "battery_cells": 6.0,
+    "mass_kg": 5.54,
+    "payload_mass_kg": 1.5,
+    "max_thrust_g": 2309.0,
+    "hover_throttle": 0.5405405405405405,
+    "source": "Phase 8 realized components when available; DSE recommendation otherwise"
+  },
+  "gazebo_result": {
+    "thrust_diagnostics": {
+      "required_per_rotor_n": 9.0579,
+      "model_max_per_rotor_n": 22.651290000000003,
+      "datasheet_max_per_rotor_n": 22.651290000000003,
+      "model_twr": 2.5007220216606503,
+      "datasheet_twr": 2.5007220216606503,
+      "hover_rad_s_required": 305.04876153383725,
+      "hover_rpm_required": 2913.002138515072,
+      "hover_rad_s_fraction_of_max": 0.6323642224927346,
+      "sdf_can_hover": true
+    },
+    "wind_requested_mps": 15.0,
+    "wind_min_groundspeed_mps": 2.0,
+    "wind_force_scale": 0.08150496389891697,
+    "wind_drag_area_assumption_m2": 0.05,
+    "wind_fidelity": "Gazebo closed-loop dynamics + lumped drag local linearization",
+    "takeoff_method": "guided_nav_takeoff_then_alt_hold_fallback",
+    "hover_attitude_samples": 313,
+    "hover_attitude_roll_rms_deg": 0.00830510606280452,
+    "hover_attitude_pitch_rms_deg": 0.008327629037248294,
+    "hover_attitude_rms_deg": 0.008327629037248294,
+    "hover_attitude_with_payload": true,
+    "payload_release_commanded": true,
+    "payload_observer_available": true,
+    "payload_release_detected": true,
+    "payload_release_delay_s": 0.6764863749995129,
+    "payload_condition_met": true,
+    "payload_coordinate_to_separation_delay_s": 1.2940674999990733,
+    "payload_z_before_m": 8.80278,
+    "payload_z_after_m": 8.31208,
+    "payload_mass_kg": 1.5,
+    "payload_release_target_ned_m": [
+      -1.967232458153055,
+      -9.558050088255383
+    ],
+    "payload_release_position_ned_m": [
+      -1.7922334671020508,
+      -8.778465270996094
+    ],
+    "payload_release_position_error_m": 0.7989850650481954,
+    "payload_release_position_met": true,
+    "payload_release_position_tolerance_m": 1.0,
+    "payload_release_fidelity": "MAV_CMD_DO_GRIPPER to Gazebo detachable-joint physical separation",
+    "wind_injected": true,
+    "wind_world_xy_mps": [
+      0.09398708824422795,
+      -14.999705544684648
+    ],
+    "wind_ned_xy_mps": [
+      0.09398708824422795,
+      14.999705544684648
+    ],
+    "wind_baseline_groundspeed_mps": 13.689136858208261,
+    "nilwind_dash_speed_mps": 20.971308785515863,
+    "nilwind_dash_peak_mps": 22.51474380493164,
+    "nilwind_dash_samples": 74,
+    "cruise_attitude_samples": 74,
+    "cruise_attitude_roll_rms_deg": 0.004920804069820478,
+    "cruise_attitude_pitch_rms_deg": 0.010392407613112128,
+    "cruise_attitude_rms_deg": 0.010392407613112128,
+    "cruise_attitude_mean_speed_mps": 19.084968102944863,
+    "wind_groundspeed_mps": 28.78498844570584,
+    "wind_headwind_alignment": 0.9999545502616829,
+    "wind_test_complete": true,
+    "parachute_commanded": true,
+    "parachute_observer_available": true,
+    "parachute_model_observed": true,
+    "parachute_deploy_delay_s": 0.040643791000547935,
+    "parachute_max_delay_s": 0.5,
+    "parachute_fidelity": "MAV_CMD_DO_PARACHUTE to Gazebo ParachutePlugin model creation/attachment",
+    "fwd_speed_mps": 28.78498844570584,
+    "fwd_power_w": 202.42523701613334,
+    "hover_power_w": 377.8668798462019,
+    "analytical_fwd_power_w": null,
+    "drag_area_m2": null,
+    "hover_stable": true,
+    "hover_throttle_pct": 37.94915254237288,
+    "hover_rpm": 2824.381600077119,
+    "hover_alt_m": 8.691359697762183,
+    "mass_kg": 5.54,
+    "rotor_radius_m": 0.2032,
+    "rotor_count": 6,
+    "capacity_mah": 16000.0,
+    "ok": true,
+    "failure_kind": null,
+    "return_code": 0,
+    "rpm_theory": 2913.0010969302616,
+    "rpm_pct_diff": -3.0422060927656536,
+    "rpm_within_ct_band": true,
+    "implied_ct": 0.12232983489988583,
+    "motor_failure_req": "REQ-SAFE-007",
+    "motor_failure_return_code": 8,
+    "motor_failure_tolerant": false,
+    "motor_failure_hover_alt_m": 0.0899658203125,
+    "motor_failure_hover_throttle_pct": 100.0
+  },
+  "req_results": [
+    {
+      "req_id": "REQ-SAFE-007",
+      "check": "single_motor_out",
+      "status": "FAIL",
+      "message": "Gazebo one-motor-out hover did not remain stable"
+    },
+    {
+      "req_id": "REQ-PERF-004",
+      "check": "wind_condition",
+      "status": "PARTIAL",
+      "message": "Gazebo closed-loop flight held 28.78 m/s ground speed in a 15.0 m/s injected headwind (minimum 2.0, opposition alignment=0.9999545502616829); WindEffects uses a lumped 0.05 m^2 drag-area local linearization"
+    },
+    {
+      "req_id": "REQ-PERF-005",
+      "check": "timed_actuation",
+      "status": "PARTIAL",
+      "message": "delivery-coordinate condition satisfied → physical detachable-joint separation delay=1.294 s (limit 2.0 s; command→separation 0.6764863749995129 s, detected=True); the coordinate condition was evaluated by the harness, not by generated mission logic"
+    },
+    {
+      "req_id": "REQ-FUNC-005",
+      "check": "positional_release",
+      "status": "PARTIAL",
+      "message": "Harness triggered physical payload release at horizontal position error 0.7989850650481954 m (limit 1.0 m); this exercises trajectory/position/actuator coupling but not generated mission-logic ownership of the trigger"
+    },
+    {
+      "req_id": "REQ-SAFE-005",
+      "check": "parachute_deploy_timing",
+      "status": "PARTIAL",
+      "message": "MAV_CMD_DO_PARACHUTE to Gazebo parachute model creation/attachment delay=0.040643791000547935 s (limit 0.5 s, observed=True); critical-failure detection and precedence were not injected by this subcheck"
+    },
+    {
+      "req_id": "REQ-PERF-003",
+      "check": "cruise_speed",
+      "status": "PASS",
+      "message": "Gazebo nil-wind level dash held 20.97 m/s mean ground speed (peak 22.51 m/s; requirement >= 18.0 m/s); no wind injected during this segment, altitude held in ALT_HOLD, ground speed = airspeed in nil wind"
+    },
+    {
+      "req_id": "REQ-PERF-001",
+      "check": "cruise_attitude",
+      "status": "PARTIAL",
+      "message": "Gazebo cruise attitude RMS 0.010 deg about the window mean (roll 0.005 / pitch 0.010 deg, n=74) during the nil-wind dash at ~19.1 m/s (limit 0.5 deg RMS); single speed point — 'all authorised speeds' not swept"
+    },
+    {
+      "req_id": "REQ-FUNC-003",
+      "check": "payload_attitude",
+      "status": "PARTIAL",
+      "message": "Gazebo hover with 1.5 kg payload attached: attitude RMS 0.008 deg (limit 1.0 deg, n=313), hover throttle 37.94915254237288% -> margin 62.1% (required >= 30%); carry-hover window only — cruise-transport attitude not swept"
+    },
+    {
+      "req_id": "REQ-FUNC-002",
+      "check": "obstacle_avoidance",
+      "message": "obstacle/contact physics are Gazebo-tier; no implemented Gazebo check has produced evidence yet",
+      "requirement_text": "REQ-FUNC-002: When approaching a stationary collision threat directly ahead within the forward sensor field of view at a closing speed no greater than 1.5 m/s, the system shall execute an avoidance manoeuvre following threat detection no later than 15 metres, maintaining an airframe-to-obstacle separation of at least 5 metres.",
+      "status": "PLANNED"
+    }
+  ]
+}
