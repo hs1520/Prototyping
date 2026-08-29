@@ -1365,6 +1365,7 @@ def _run_parametric_constraint_scenario(
     all_initial_values: Dict[str, float],
     guard_variables: set,
     readonly_vars: set,
+    measured_inputs: frozenset = frozenset(),
 ) -> Optional[BehavioralScenarioResult]:
     """
     Build a boundary-sweep scenario for one assert constraint.
@@ -1415,6 +1416,31 @@ def _run_parametric_constraint_scenario(
             ),
         ],
     )
+
+    if lhs_init is None and c.lhs in measured_inputs and rhs_val is not None:
+        # A typed-semantic-binding runtime attribute is a measured value: the
+        # binding convention initialises it from a reference chain into the
+        # measurement port and forbids a local literal.  Demanding a numeric
+        # initial value from it made every binding-bound ALWAYS constraint
+        # fail mechanically (authoritative run 00e4d333: six identical
+        # "Cannot sweep" failures).  The sweep's whole purpose is to supply
+        # measured inputs, so it provides the starting point inside the valid
+        # region itself; boundary liveness (criteria 2 and 3) is unchanged,
+        # and the synthesized start is recorded, never silent.
+        rhs_probe = float(rhs_val)
+        margin = abs(rhs_probe) * 0.15 + 1.0
+        if c.operator in ("<=", "<"):
+            lhs_init = rhs_probe - margin
+        elif c.operator in (">=", ">"):
+            lhs_init = rhs_probe + margin
+        else:
+            lhs_init = rhs_probe
+        result.tags.append("measured_input_start_synthesized")
+        result.timeline.append(
+            f"{c.lhs} is a measured input (reference-chain initializer): "
+            f"sweep supplies start value {float(lhs_init):g} inside the "
+            "valid region"
+        )
 
     if lhs_init is None:
         result.violations.append(
@@ -1734,6 +1760,20 @@ def _collect_constraint_scenarios(
                 pass
     all_initial_values.update(_extract_all_attrs(sysml_text))
 
+    # Attributes whose initializer is a reference chain are measured inputs
+    # (the typed-semantic-binding convention): they carry no local literal by
+    # design, so the parametric sweep supplies their value instead of
+    # demanding one.
+    measured_inputs = frozenset(
+        match.group("name")
+        for match in re.finditer(
+            r"\battribute\s+(?P<name>[A-Za-z_]\w*)\s*"
+            r"(?::\s*[\w:]+(?:\s*\[[^\]]*\])?)?\s*=\s*"
+            r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+\s*;",
+            sysml_text,
+        )
+    )
+
     # Variables already verified by state machine guards
     guard_variables: set = set()
     for sm in state_machines:
@@ -1774,7 +1814,8 @@ def _collect_constraint_scenarios(
         ):
             continue
         r = _run_parametric_constraint_scenario(
-            c, all_initial_values, guard_variables, readonly_vars
+            c, all_initial_values, guard_variables, readonly_vars,
+            measured_inputs=measured_inputs,
         )
         if r is not None:
             results.append(r)
