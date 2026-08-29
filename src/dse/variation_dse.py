@@ -36,7 +36,7 @@ from .domain_objective import (
 )
 from .inner_sizing import optimize_capacity, optimize_discrete_capacity
 from .physics_estimator import DesignInputs, total_mass_kg
-from .weighting import recommend as weighted_recommend
+from .weighting import recommend as weighted_recommend, sensitivity
 from .mo_mcts import MultiObjectiveMCTS, Objectives, State, dominates
 from .quality_eval import evaluate_design_quality
 from .variation_parser import (
@@ -109,11 +109,21 @@ class VariationDSEResult:
     recommendable_front_count: Optional[int] = None
     exploratory_choices: Dict[str, str] = field(default_factory=dict)
     exploratory_design: Optional["DesignInputs"] = None
+    # Weight-simplex sensitivity of the weight-stage pick over the official front
+    # (docs/DSE_REDESIGN.md §三-A). Diagnostic only: when recommended_by=="datasheet"
+    # the datasheet rank decides the final selection and the weights merely break
+    # ties, so reports must not credit the weights with that choice.
+    weight_sensitivity: Optional[Dict] = None
 
 
 def _design_quality(dims: Dict[str, float]) -> float:
     vals = [dims.get(d, 0.0) for d in _QUALITY_DIMS]
     return sum(vals) / len(vals)
+
+
+def _state_label(state: State) -> str:
+    """Stable identity for a front member's variant choices (sorted items)."""
+    return ",".join(f"{k}={v}" for k, v in sorted(state.items()))
 
 
 def _recommendation_weights(names, requirements) -> Dict[str, float]:
@@ -586,6 +596,35 @@ def run_variation_dse(
         f"official_pareto={len(official_front)}"
     )
     recommended_estimator_feasible = True if rec_state is not None else None
+
+    # Weight-simplex sensitivity over the official front, with the SAME scalarisation
+    # as the recommender above (method="chebyshev" — sensitivity() itself defaults to
+    # weighted_sum, which would report robustness of a pick this path never makes).
+    # A 1-member front is computed too: robustness == 100% is then the machine-readable
+    # evidence, not a skipped case.
+    weight_sensitivity: Optional[Dict] = None
+    if official_front:
+        sens = sensitivity(
+            official_front, rec_weights, label_fn=_state_label,
+            n_samples=2000, method="chebyshev", random_seed=random_seed,
+        )
+        weight_sensitivity = {
+            "nominal_label": sens.nominal_label,
+            "nominal_robustness": sens.nominal_robustness,
+            "selection_frequency": sens.selection_frequency,
+            "n_samples": sens.n_samples,
+            "method": "chebyshev",
+            "nominal_matches_recommendation": (
+                rec_state is not None
+                and _state_label(rec_state) == sens.nominal_label
+            ),
+        }
+        notes.append(
+            f"weight-simplex sensitivity: nominal={sens.nominal_label} wins "
+            f"{sens.nominal_robustness:.1%} of sampled weight space "
+            f"({sens.n_samples} samples, chebyshev)"
+        )
+
     def _bindings(state: State) -> Dict[str, str]:
         """{point_id: chosen variant's impl type name} — the variant defs this design uses."""
         s = dict(state)
@@ -653,4 +692,5 @@ def run_variation_dse(
         recommendable_front_count=phase8_count,
         exploratory_choices=dict(exploratory_state),
         exploratory_design=exploratory_design,
+        weight_sensitivity=weight_sensitivity,
     )

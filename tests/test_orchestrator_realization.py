@@ -131,6 +131,9 @@ def test_explore_phase8_returns_realization_and_can_inject(monkeypatch):
     })
     assert result["realization"]["verdict"] == "INFEASIBLE_REALIZATION"
     assert "UnrealizedDesign" in result["model_sysml"]
+    # run report carries the weight-sensitivity slot (None here — the faked
+    # exploration never ran the DSE), so the field reaches realization_run.json
+    assert "weight_sensitivity" in result
 
 
 def test_variation_dse_receives_best_effort_realizability_predicate(monkeypatch):

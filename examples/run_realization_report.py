@@ -243,6 +243,7 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
         "dse_constraint_counts": res.get("dse_constraint_counts"),
         "dse_search_coverage": res.get("dse_search_coverage"),
         "recommended_by": res.get("recommended_by"),
+        "weight_sensitivity": res.get("weight_sensitivity"),
         "recommended_estimator_feasible": res.get("recommended_estimator_feasible"),
         "recommendation_status": res.get("recommendation_status"),
         "recommendable_front_count": res.get("recommendable_front_count"),

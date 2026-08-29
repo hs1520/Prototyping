@@ -125,6 +125,7 @@ _STATE_FIELDS = {
     "last_recommended_realizable": "recommended_realizable",
     "last_realizable_front_count": "realizable_front_count",
     "last_recommended_by": "recommended_by",
+    "last_weight_sensitivity": "weight_sensitivity",
     "last_recommended_estimator_feasible": "recommended_estimator_feasible",
     "last_recommendation_status": "recommendation_status",
     "last_recommendable_front_count": "recommendable_front_count",

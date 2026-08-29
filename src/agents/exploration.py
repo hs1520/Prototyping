@@ -38,6 +38,7 @@ class ExplorationMixin:
         self.last_recommended_realizable = None
         self.last_realizable_front_count = None
         self.last_recommended_by = None
+        self.last_weight_sensitivity = None
         self.last_recommended_estimator_feasible = None
         self.last_recommendation_status = None
         self.last_recommendable_front_count = None
@@ -433,6 +434,7 @@ class ExplorationMixin:
             "recommended_estimator_feasible": getattr(self, "last_recommended_estimator_feasible", None),
             "recommendation_status": getattr(self, "last_recommendation_status", None),
             "recommendable_front_count": getattr(self, "last_recommendable_front_count", None),
+            "weight_sensitivity": getattr(self, "last_weight_sensitivity", None),
             "variation_proposal_source": getattr(self, "last_variation_proposal_source", None),
             "estimator_calibration": getattr(self, "last_estimator_calibration", None),
             "dse_verification": verification_artifact,
@@ -1141,6 +1143,7 @@ class ExplorationMixin:
         self.last_recommended_realizable = res.recommended_realizable
         self.last_realizable_front_count = res.realizable_front_count
         self.last_recommended_by = res.recommended_by
+        self.last_weight_sensitivity = res.weight_sensitivity
         self.last_recommended_estimator_feasible = res.recommended_estimator_feasible
         self.last_recommendation_status = res.recommendation_status
         self.last_recommendable_front_count = res.recommendable_front_count

@@ -59,6 +59,7 @@ class InitializationMixin:
         self.last_recommended_realizable = None
         self.last_realizable_front_count = None
         self.last_recommended_by = None
+        self.last_weight_sensitivity = None
         self.last_recommended_estimator_feasible = None
         self.last_recommendation_status = None
         self.last_recommendable_front_count = None

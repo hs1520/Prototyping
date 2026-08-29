@@ -49,6 +49,7 @@ class PipelineRuntimeState:
     recommended_realizable: Any = None
     realizable_front_count: Any = None
     recommended_by: Any = None
+    weight_sensitivity: Any = None
     recommended_estimator_feasible: Any = None
     recommendation_status: Any = None
     recommendable_front_count: Any = None
