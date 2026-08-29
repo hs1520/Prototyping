@@ -570,6 +570,12 @@ def _extract_part_attrs(part_def) -> Dict[str, Any]:
 # SendActionUsage extraction helpers
 # ---------------------------------------------------------------------------
 
+#: Sentinel distinguishing "candidate attribute name absent in this syside
+#: build" (expected fallback probing, silent) from "attribute present but
+#: access failed" (a real anomaly, recorded via record_suppressed).
+_CANDIDATE_ABSENT = object()
+
+
 def _extract_send_payload_name(sa) -> Optional[str]:
     """
     从 SendActionUsage.payload_argument 提取命令类型名。
@@ -581,10 +587,16 @@ def _extract_send_payload_name(sa) -> Optional[str]:
         pa = sa.payload_argument
         if pa is None:
             return None
-        # 按优先级尝试不同属性名
+        # 按优先级尝试不同属性名。候选名在当前 syside 版本里缺席是预期的探测
+        # 结果（每次提取都会发生），不是异常 —— 记录它曾把 suppressed 通道刷出
+        # 数千条噪声（ablation pilot: 324 条/run），淹没真正的异常。只有属性
+        # 存在但访问失败才记录。
         for attr in ("action_definitions", "definitions", "types"):
+            source = getattr(pa, attr, _CANDIDATE_ABSENT)
+            if source is _CANDIDATE_ABSENT:
+                continue
             try:
-                for defn in getattr(pa, attr):
+                for defn in source:
                     name = getattr(defn, "name", None)
                     if name:
                         return str(name)
@@ -635,11 +647,17 @@ def _iter_action_body(action_usage) -> List:
     if action_usage is None:
         return []
 
-    # 先拿到 ActionDefinition（typed by this usage）
+    # 先拿到 ActionDefinition（typed by this usage）。候选属性名缺席（例如
+    # 当前 syside 没有 owned_actions）是每次提取都会发生的预期探测结果，静默
+    # 跳过；只有属性存在但迭代失败才进 suppressed（ablation pilot 曾因此刷出
+    # 5265 条/run 的噪声，几乎把真异常淹没）。
     defs: List = []
     for attr in ("action_definitions", "definitions", "types"):
+        source = getattr(action_usage, attr, _CANDIDATE_ABSENT)
+        if source is _CANDIDATE_ABSENT:
+            continue
         try:
-            defs = [d for d in getattr(action_usage, attr)]
+            defs = [d for d in source]
             if defs:
                 break
         except Exception as exc:
@@ -650,8 +668,11 @@ def _iter_action_body(action_usage) -> List:
 
     for defn in defs:
         for attr in ("nested_actions", "owned_actions", "owned_members"):
+            source = getattr(defn, attr, _CANDIDATE_ABSENT)
+            if source is _CANDIDATE_ABSENT:
+                continue
             try:
-                for node in getattr(defn, attr):
+                for node in source:
                     nid = id(node)
                     if nid not in seen_ids:
                         seen_ids.add(nid)
