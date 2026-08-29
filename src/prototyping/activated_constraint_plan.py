@@ -47,7 +47,7 @@ RESOLVABLE_VALUE_TYPES = frozenset({
     # AngularMeasureValue (and PlaneAngleValue).
     "DurationValue", "LengthValue", "MassValue", "TimeValue",
     "SpeedValue", "AccelerationValue", "AngularMeasureValue",
-    "TemperatureValue",
+    "TemperatureValue", "DimensionOneValue",
     "ElectricCurrentValue", "PowerValue", "EnergyValue", "FrequencyValue",
 })
 

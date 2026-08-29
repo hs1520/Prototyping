@@ -418,3 +418,88 @@ def test_an_existing_declaration_is_rebound_not_duplicated():
     assert existing(
         "currentSeparation", "    attribute minSeparationThreshold : Real = 5;\n"
     ) is None
+
+
+# ---------------------------------------------------------------------------
+# Compiler coverage on the flagship requirement style (ablation pilot finding:
+# the base-form maintain/keep/ensure pattern compiled ZERO obligations from
+# all 29 drone_v2 requirements, so the semantic-fidelity layer ran vacuously
+# on the main experiment input).
+# ---------------------------------------------------------------------------
+
+
+def test_inflected_verbs_and_within_compile():
+    obligations = compile_requirement_semantic_obligations([
+        "REQ-PERF-001: The system shall maintain roll and pitch attitude "
+        "deviations within 0.5 degree RMS during steady cruise flight.",
+        "REQ-FUNC-002: ..., maintaining an airframe-to-obstacle separation "
+        "of at least 5 metres.",
+    ])
+    by_req = {item.requirement_id: item for item in obligations}
+    attitude = by_req["REQ_PERF_001"]
+    assert (attitude.operator, attitude.threshold, attitude.unit) == ("<=", 0.5, "deg")
+    assert attitude.activation_kind == "CONTEXTUAL"
+    assert "and" not in attitude.subject_terms
+    separation = by_req["REQ_FUNC_002"]
+    assert (separation.operator, separation.threshold, separation.unit) == (">=", 5.0, "m")
+    assert "to" not in separation.subject_terms
+
+
+def test_embedded_minmax_and_not_exceed_compile():
+    obligations = compile_requirement_semantic_obligations([
+        "REQ-PERF-004: The system shall maintain a minimum forward ground "
+        "speed of 2 m/s when operating in sustained headwinds.",
+        "REQ-CONS-001: The system shall not exceed a flight altitude of "
+        "120 metres above ground level at any point.",
+        "REQ-CONS-003: The system maximum take-off mass, including payload "
+        "and battery, shall not exceed 8.0 kg.",
+    ])
+    by_req = {item.requirement_id: item for item in obligations}
+    speed = by_req["REQ_PERF_004"]
+    assert (speed.operator, speed.threshold, speed.unit) == (">=", 2.0, "m/s")
+    altitude = by_req["REQ_CONS_001"]
+    assert (altitude.operator, altitude.threshold, altitude.unit) == ("<=", 120.0, "m")
+    assert set(altitude.subject_terms) == {"flight", "altitude"}
+    mass = by_req["REQ_CONS_003"]
+    assert (mass.operator, mass.threshold, mass.unit) == ("<=", 8.0, "kg")
+    assert "mass" in mass.subject_terms
+
+
+def test_triggers_and_scenario_envelopes_still_compile_to_nothing():
+    obligations = compile_requirement_semantic_obligations([
+        # Scenario envelope, no bound verb — NOT an invariant on the system.
+        "REQ-FUNC-002: When approaching a threat at a closing speed no "
+        "greater than 1.5 m/s, the system shall execute a manoeuvre.",
+        # Battery trigger threshold, not a maintained bound.
+        "REQ-SAFE-001: The system shall initiate return-to-base when the "
+        "battery state-of-charge reaches 25%.",
+        # Event-driven response latency, deliberately out of scope.
+        "REQ-SAFE-005: The system shall deploy the parachute within 0.5 "
+        "seconds of detecting a critical propulsion failure.",
+    ])
+    assert obligations == ()
+
+
+def test_flagship_drone_v2_requirements_compile_nonzero():
+    import sys
+    from pathlib import Path
+    sys.path.insert(
+        0, str(Path(__file__).resolve().parents[1] / "examples")
+    )
+    from drone_system_v2 import DRONE_REQUIREMENTS
+
+    obligations = compile_requirement_semantic_obligations(DRONE_REQUIREMENTS)
+    compiled_requirements = {item.requirement_id for item in obligations}
+    # The exact set the flagship input supports today; extending coverage may
+    # grow it, but silently regressing to vacuous must fail loudly.
+    assert compiled_requirements >= {
+        "REQ_FUNC_002", "REQ_FUNC_003", "REQ_PERF_001", "REQ_PERF_002",
+        "REQ_PERF_003", "REQ_PERF_004", "REQ_PERF_006",
+        "REQ_CONS_001", "REQ_CONS_003",
+    }
+    from src.prototyping.requirement_semantics import quantity_type_for_unit
+    for item in obligations:
+        assert quantity_type_for_unit(item.unit) is not None, (
+            f"{item.obligation_id}: unit {item.unit!r} lacks the "
+            "quantity-type mapping binding validation requires"
+        )

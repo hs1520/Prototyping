@@ -24,22 +24,76 @@ _REQ_ID_RE = re.compile(
     r"\bREQ[-_][A-Za-z]+[-_]\d+\b",
     re.IGNORECASE,
 )
+# Bound-declaring verbs, inflected: the flagship requirement set writes
+# "maintaining …" and "shall achieve/sustain …", and a base-form-only verb
+# list compiled ZERO obligations from all 29 drone_v2 requirements — the
+# entire semantic-fidelity layer ran vacuously on the main experiment input
+# (ablation pilot 20260829).  Every extension below stays anchored on an
+# explicit verb + comparator + number + unit; trigger conditions ("when …
+# reaches 25%") and scenario envelopes ("at a closing speed no greater than
+# 1.5 m/s") carry no bound verb and still compile to nothing, by design.
+_BOUND_VERBS = (
+    r"\b(?:maintain(?:s|ing)?|keep(?:s|ing)?|ensur(?:e|es|ing)|"
+    r"sustain(?:s|ing)?|achiev(?:e|es|ing))"
+)
+#: "m/s" and "minutes|min" must precede the bare "m" alternative or they are
+#: only ever seen as their prefixes (same lesson as activated_constraint_plan).
+_BOUND_UNITS = (
+    r"milliseconds?|ms|seconds?|s|minutes?|min|"
+    r"m/s|metres?|meters?|m|kilometres?|kilometers?|km|"
+    r"kilograms?|kg|degrees?|deg|percent|%|hertz|hz"
+)
+#: Where a bound clause may end.  The alternation lists clause connectives and
+#: common prepositions so trailing context ("… 18 m/s in nil-wind", "… 120
+#: metres above ground level") terminates the match instead of failing it.
+_CLAUSE_BOUNDARY = (
+    r"(?=\s+(?:while|when|during|after|before|unless|and|in|on|at|for|"
+    r"with|from|above|below|over|under|per|throughout)\b|[.,;]|$)"
+)
+_GE_COMPARATORS = {
+    "at least", "no less than", "minimum", "minimum of",
+}
 _MAINTAIN_BOUND_RE = re.compile(
-    r"\b(?:maintain|keep|ensure)\s+"
+    _BOUND_VERBS + r"\s+"
     r"(?:(?P<subject_before>[A-Za-z][A-Za-z0-9 _-]{0,80}?)\s+)?"
     r"(?P<comparator>"
     r"at\s+least|no\s+less\s+than|minimum(?:\s+of)?|"
-    r"at\s+most|no\s+more\s+than|maximum(?:\s+of)?"
+    r"at\s+most|no\s+more\s+than|no\s+greater\s+than|maximum(?:\s+of)?|"
+    r"within"
     r")\s+"
     r"(?P<value>\d+(?:\.\d+)?)\s*"
-    r"(?P<unit>"
-    r"milliseconds?|ms|seconds?|s|"
-    r"metres?|meters?|m|kilometres?|kilometers?|km|"
-    r"degrees?|deg|percent|%|hertz|hz"
-    r")"
+    r"(?P<unit>" + _BOUND_UNITS + r")"
+    r"(?:\s+RMS)?"
     r"(?:\s+of\s+(?P<subject_after>"
     r"[A-Za-z][A-Za-z0-9 _-]{0,80}?))?"
-    r"(?=\s+(?:while|when|during|after|before|unless|and)\b|[.,;]|$)",
+    + _CLAUSE_BOUNDARY,
+    re.IGNORECASE,
+)
+#: "maintain a minimum forward ground speed of 2 m/s" — the comparator
+#: precedes the subject, so the maintain rule (comparator directly before the
+#: value) cannot see it.
+_MINMAX_OF_BOUND_RE = re.compile(
+    _BOUND_VERBS + r"\s+"
+    r"(?:(?:a|an|the)\s+)?(?P<comparator>minimum|maximum)\s+"
+    r"(?P<subject>[A-Za-z][A-Za-z0-9 _-]{0,80}?)\s+of\s+"
+    r"(?P<value>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>" + _BOUND_UNITS + r")"
+    r"(?:\s+RMS)?"
+    + _CLAUSE_BOUNDARY,
+    re.IGNORECASE,
+)
+#: "shall not exceed a flight altitude of 120 metres" / "the maximum take-off
+#: mass … shall not exceed 8.0 kg" — an explicit upper bound with the subject
+#: on either side of the verb phrase.
+_NOT_EXCEED_BOUND_RE = re.compile(
+    r"(?:(?P<subject_before>[A-Za-z][A-Za-z0-9 _,()-]{0,90}?)\s+)?"
+    r"(?:shall|must)\s+not\s+exceed\s+"
+    r"(?:(?:a|an|the)\s+)?"
+    r"(?:(?P<subject_after>[A-Za-z][A-Za-z0-9 _-]{0,80}?)\s+of\s+)?"
+    r"(?P<value>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>" + _BOUND_UNITS + r")"
+    r"(?:\s+RMS)?"
+    + _CLAUSE_BOUNDARY,
     re.IGNORECASE,
 )
 _ACTIVATION_CLAUSE_RE = re.compile(
@@ -50,6 +104,10 @@ _ACTIVATION_CLAUSE_RE = re.compile(
 _STOPWORDS = {
     "a", "an", "the", "current", "required", "minimum", "maximum",
     "distance", "value", "level",
+    # Glue words the broadened bound patterns can sweep into a subject span.
+    # _matches_subject requires EVERY term to appear in the bound identifier,
+    # so one stray connective would make an obligation unbindable.
+    "and", "for", "of", "to", "including", "system",
 }
 _UNIT_CANONICAL = {
     "millisecond": "ms",
@@ -75,13 +133,31 @@ _UNIT_CANONICAL = {
     "%": "%",
     "hertz": "Hz",
     "hz": "Hz",
+    "minute": "min",
+    "minutes": "min",
+    "min": "min",
+    "m/s": "m/s",
+    "kilogram": "kg",
+    "kilograms": "kg",
+    "kg": "kg",
 }
+# Binding validation refuses any unit without a quantity-type mapping
+# (activated_constraint_plan: "unit has no supported SysML v2 ISQ
+# quantity-type mapping"), so every unit the bound patterns can emit MUST
+# have an entry here.  Each pairing is syside-verified — see
+# tests/test_stdlib_vocabulary.py for the type names and the deg alias /
+# percent definition materialised via generation_plan._UNIT_RESOLUTIONS.
 _UNIT_QUANTITY_TYPES = {
     "m": "LengthValue",
     "km": "LengthValue",
     "s": "DurationValue",
     "ms": "DurationValue",
+    "min": "DurationValue",
     "Hz": "FrequencyValue",
+    "m/s": "SpeedValue",
+    "kg": "MassValue",
+    "deg": "AngularMeasureValue",
+    "%": "DimensionOneValue",
 }
 _PART_DEF_RE = re.compile(r"\bpart\s+def\s+(?P<name>[A-Za-z_]\w*)\s*\{")
 _PORT_RE = re.compile(
@@ -568,30 +644,58 @@ def compile_requirement_semantic_obligations(
             continue
         requirement_id = normalise_req_id(req_match.group(0))
         body = source.split(":", 1)[1].strip() if ":" in source else source
-        matches = list(_MAINTAIN_BOUND_RE.finditer(body))
-        for index, match in enumerate(matches, 1):
+        # (span start, span end, subject text, operator, match) per rule; the
+        # rules partition the phrasings (a comparator directly before the value
+        # vs an embedded min/max subject vs a not-exceed verb phrase), but the
+        # span-overlap drop below keeps a future pattern change from double
+        # compiling one clause.
+        found: list[tuple[int, int, str, str, "re.Match[str]"]] = []
+        for match in _MAINTAIN_BOUND_RE.finditer(body):
             subject = (
                 match.group("subject_after")
                 or match.group("subject_before")
                 or ""
             )
-            terms = _subject_terms(subject)
-            if not terms:
-                continue
             comparator = " ".join(
                 match.group("comparator").lower().split()
             )
+            operator = ">=" if comparator in _GE_COMPARATORS else "<="
+            found.append(
+                (match.start(), match.end(), subject, operator, match)
+            )
+        for match in _MINMAX_OF_BOUND_RE.finditer(body):
             operator = (
                 ">="
-                if comparator in {
-                    "at least", "no less than", "minimum", "minimum of",
-                }
+                if match.group("comparator").lower() == "minimum"
                 else "<="
             )
-            raw_unit = match.group("unit").lower()
-            activation_match = _ACTIVATION_CLAUSE_RE.match(
-                body[match.end():]
+            found.append((
+                match.start(), match.end(),
+                match.group("subject"), operator, match,
+            ))
+        for match in _NOT_EXCEED_BOUND_RE.finditer(body):
+            subject = (
+                match.group("subject_after")
+                or match.group("subject_before")
+                or ""
             )
+            found.append(
+                (match.start(), match.end(), subject, "<=", match)
+            )
+
+        found.sort(key=lambda item: (item[0], item[1]))
+        index = 0
+        previous_end = -1
+        for start, end, subject, operator, match in found:
+            if start < previous_end:
+                continue   # a longer earlier match already compiled this span
+            terms = _subject_terms(subject)
+            if not terms:
+                continue
+            previous_end = end
+            index += 1
+            raw_unit = match.group("unit").lower()
+            activation_match = _ACTIVATION_CLAUSE_RE.match(body[end:])
             activation_clause = (
                 " ".join(activation_match.group("clause").split())
                 if activation_match else None

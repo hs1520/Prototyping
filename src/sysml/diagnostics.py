@@ -26,6 +26,7 @@ _STDLIB_TYPE_NAMES = {
     "EnergyValue", "PowerValue", "FrequencyValue", "AngularMeasureValue",
     "PlaneAngleValue", "ThermodynamicTemperatureValue", "TemperatureValue",
     "ElectricPotentialValue", "ElectricCurrentValue", "ElectricChargeValue",
+    "DimensionOneValue",
     # SysML standard packages
     "SysML", "KerML", "ScalarValues", "Quantities",
     "Occurrences", "Transfers", "Connections",

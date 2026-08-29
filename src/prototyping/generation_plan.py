@@ -97,6 +97,11 @@ _STANDARD_LIBRARY_TYPES = {
         "ThermodynamicTemperatureValue",
         "TimeValue",
     },
+    # DimensionOneValue backs percent-unit bindings; syside resolves it from
+    # MeasurementReferences, not ISQ.
+    "MeasurementReferences": {
+        "DimensionOneValue",
+    },
 }
 _SI_UNIT_NAMES = {
     "A", "C", "Hz", "J", "K", "N", "Pa", "V", "W",
