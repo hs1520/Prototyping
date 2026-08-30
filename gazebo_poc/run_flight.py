@@ -28,6 +28,8 @@ from gazebo_poc.steady_state import steady_state
 _IMG = "headless_gazebo"
 _CONTAINER = "ai_prototyping_gazebo"
 _HOME = "-35.363262,149.165237,584,0"
+_HOME_LAT, _HOME_LON = (float(_HOME.split(",")[0]),
+                        float(_HOME.split(",")[1]))
 _FWD_PITCH = int(os.environ.get("FWD_PITCH", "1330"))   # RC2 for the forward dash (lower = faster)
 _ARDUCOPTER = os.path.expanduser("~/PycharmProjects/ardupilot/build/sitl/bin/arducopter")
 # gz resolves model:// via GZ_SIM_RESOURCE_PATH=/ardupilot_gazebo/models — NOT the
@@ -624,7 +626,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
          mission_model_text=None,
          delivery_abort_before_release=False,
          navigation_accuracy=False,
-         gps_noise_m=None,
+         gps_bias_m=None,
          extra_parms="") -> int:
     LAST_RESULT.clear()
     # When the generated model is supplied it OWNS the mission decisions: the
@@ -754,13 +756,18 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
     print("[docker] container up, gz sim loading our airframe ...", flush=True)
     time.sleep(8)
 
-    if gps_noise_m is not None:
-        # SITL's simulated GPS is NOISE-FREE by default (SIM_GPS1_NOISE=0), so a
-        # CEP measured on it excludes the GNSS error that dominates real
-        # navigation accuracy — it measures the control loop and nothing else.
-        # Stating the injected noise with the number is the only way the number
-        # means anything.
-        extra_parms = (extra_parms or "") + f"SIM_GPS1_NOISE {float(gps_noise_m):.3f}\n"
+    if gps_bias_m is not None:
+        # SITL has NO random horizontal GPS error. In SIM_GPS.cpp the latitude
+        # and longitude are passed through from truth; SIM_GPS1_NOISE appears
+        # exactly once, on ALTITUDE, as a deterministic sine:
+        #     d.altitude = altitude + params.noise * sinf(now_ms * 0.0005f) + ...
+        # The only horizontal term is GLTCH, a CONSTANT offset added to lat/lon
+        # in degrees. It is a bias, not scatter — but it is enough to prove the
+        # CEP chain registers GNSS error at all, which is what makes "this rig
+        # has none" a finding rather than an untested assumption.
+        _DEG_PER_M = 1.0 / 111320.0
+        extra_parms = ((extra_parms or "")
+                       + f"SIM_GPS1_GLTCH_X {float(gps_bias_m) * _DEG_PER_M:.9f}\n")
     parm = out / "poc.parm"
     gripper_channel = max(6, rotor_count) if payload_release else None
     gripper_servo = gripper_channel + 1 if gripper_channel is not None else None
@@ -1220,17 +1227,37 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     )
                 else:
                     n0, e0, d0 = float(origin.x), float(origin.y), float(origin.z)
+                    # The requirement says "designated GPS waypoints", which are
+                    # ABSOLUTE. Commanding local-NED offsets instead makes a GNSS
+                    # bias unobservable: the local origin is derived from the same
+                    # biased fix, so the error cancels and the measurement reports
+                    # the control loop no matter how wrong the GNSS is. Measured
+                    # directly: a 1.5 m injected bias showed up at the sensor
+                    # (raw-versus-fused 1.508 m) and moved the local-frame result
+                    # by 0.000 m.
+                    #
+                    # So the waypoints are designated in GLOBAL coordinates, and
+                    # derived from Gazebo GROUND TRUTH rather than from the fix —
+                    # a point designated on a map does not move because the
+                    # receiver is biased.
+                    true_n0, true_e0 = world0[0], -world0[1]
+                    lat_scale = 1.0 / 111320.0
+                    lon_scale = lat_scale / math.cos(math.radians(_HOME_LAT))
+                    alt_rel = float(rels[-1]) if rels else TGT
                     legs = []
                     for leg_index, (dn, de) in enumerate(_cep_targets()):
-                        tn, te = n0 + dn, e0 + de
+                        tn, te = n0 + dn, e0 + de      # local target, for arrival only
+                        des_lat = _HOME_LAT + (true_n0 + dn) * lat_scale
+                        des_lon = _HOME_LON + (true_e0 + de) * lon_scale
                         arrived = False
                         deadline = time.time() + 40.0
                         while time.time() < deadline:
-                            m.mav.set_position_target_local_ned_send(
+                            m.mav.set_position_target_global_int_send(
                                 0, m.target_system, m.target_component,
-                                mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+                                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
                                 0b0000111111111000,          # position only
-                                tn, te, d0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                int(des_lat * 1e7), int(des_lon * 1e7), alt_rel,
+                                0, 0, 0, 0, 0, 0, 0, 0,
                             )
                             pos = m.recv_match(type="LOCAL_POSITION_NED",
                                                blocking=True, timeout=1)
@@ -1246,10 +1273,11 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                         # settle before sampling: a fly-through is not an arrival
                         settle_end = time.time() + 4.0
                         while time.time() < settle_end:
-                            m.mav.set_position_target_local_ned_send(
+                            m.mav.set_position_target_global_int_send(
                                 0, m.target_system, m.target_component,
-                                mavutil.mavlink.MAV_FRAME_LOCAL_NED,
-                                0b0000111111111000, tn, te, d0,
+                                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                                0b0000111111111000,
+                                int(des_lat * 1e7), int(des_lon * 1e7), alt_rel,
                                 0, 0, 0, 0, 0, 0, 0, 0)
                             m.recv_match(type="LOCAL_POSITION_NED",
                                          blocking=True, timeout=1)
@@ -1302,20 +1330,26 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                             [leg["raw_gnss_minus_fused_m"] for leg in legs
                              if leg.get("raw_gnss_minus_fused_m") is not None]
                         ),
-                        "cep_gps_noise_m": (
-                            0.0 if gps_noise_m is None else float(gps_noise_m)
+                        "cep_gps_bias_m": (
+                            0.0 if gps_bias_m is None else float(gps_bias_m)
                         ),
                         "cep_basis": (
                             "median horizontal error between the commanded waypoint "
                             "and Gazebo ground truth; the EKF-reported error is "
                             "recorded alongside and their difference is the "
                             "estimator/GPS contribution. "
-                            + ("SIM_GPS1_NOISE was left at its default of 0, so "
-                               "this EXCLUDES GNSS error and measures the position "
-                               "loop alone — it is a floor, not a navigation CEP"
-                               if gps_noise_m is None else
-                               f"SIM_GPS1_NOISE={float(gps_noise_m):.2f} m was "
-                               "injected, so GNSS error is represented")
+                            + ("no GNSS error was injected, and SITL has no random "
+                               "horizontal GPS error to begin with, so this "
+                               "EXCLUDES the term that dominates a real CEP — it "
+                               "is a floor, not a navigation CEP"
+                               if gps_bias_m is None else
+                               f"a {float(gps_bias_m):.2f} m constant GNSS bias was "
+                               "injected via SIM_GPS1_GLTCH_X and DID reach the "
+                               "raw fix, yet the fused estimate stayed within "
+                               "centimetres of ground truth and the navigation "
+                               "error did not move — the estimate in this rig does "
+                               "not follow the GPS, so no GNSS perturbation makes "
+                               "this a navigation CEP")
                         ),
                     })
                     print(f"[nav] CEP={LAST_RESULT['cep_m']} m over "
