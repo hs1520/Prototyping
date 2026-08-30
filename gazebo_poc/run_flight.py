@@ -13,6 +13,7 @@ Run: PYTHONPATH=. python gazebo_poc/run_flight.py
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import subprocess
@@ -170,6 +171,27 @@ def _parm_text(frame_class: int, hover_throttle: float | None,
 #: transient has passed, and it runs until that window is steady or the cap is
 #: reached. Reporting a speed from a still-accelerating dash is what made the
 #: 2026-08-30 run's "cruise speed" a function of the dash duration.
+#: A hover is "controlled" only if the attitude controller is still tracking.
+#: Altitude alone cannot say so: a one-motor-out hexa was recorded holding
+#: 9.93 m to +/-0.06 m while its attitude RMS was 13.5 deg — a wobble 1500x the
+#: nominal 0.009 deg, which no reading of "maintain controlled flight" covers,
+#: and which an altitude-only check passed.
+#:
+#: The bound is an engineering judgement, not a requirement value: an order of
+#: magnitude above the 0.5 deg RMS the requirements ask of steady cruise, and
+#: far below the tilt authority, so it separates "tracking with reduced margin"
+#: from "not tracking". It is reported with every verdict so a reader can
+#: disagree with it.
+#:
+#: This does NOT make one run sufficient. Four runs of the same one-motor-out
+#: configuration produced attitude RMS of 1.59, 13.46 and 19.56 deg (one run
+#: unmeasured) and steady altitudes of 1.17, 6.27, 9.93 and 10.00 m: the
+#: scenario is bistable, and BOTH signals vary. Adding attitude catches a
+#: flight altitude alone would pass; settling the requirement needs the
+#: scenario repeated and the distribution reported.
+_HOVER_ATTITUDE_RMS_LIMIT_DEG = 5.0
+
+
 _DASH_SETTLE_S = 6.0
 _DASH_WINDOW_S = 10.0
 _DASH_MAX_S = 45.0
@@ -363,6 +385,48 @@ def _parse_model_z(output: str) -> float | None:
 def _payload_z() -> float | None:
     result = _sh("docker", "exec", _CONTAINER, "gz", "model", "-m", "payload_box", "-p")
     return _parse_model_z(result.stdout) if result.returncode == 0 else None
+
+
+
+def _parse_model_xy(output: str) -> tuple | None:
+    """Ground-truth horizontal position from ``gz model -p``."""
+    number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+    match = re.search(rf"XYZ\s*\(m\)[^\n]*\]\s*\n\s*\[\s*({number})\s+({number})\s+{number}\s*\]",
+                      output, re.I)
+    if match:
+        return float(match.group(1)), float(match.group(2))
+    match = re.search(rf"\[\s*({number})\s+({number})\s+{number}\s*\]", output)
+    return (float(match.group(1)), float(match.group(2))) if match else None
+
+
+def _vehicle_xy() -> tuple | None:
+    result = _sh("docker", "exec", _CONTAINER, "gz", "model",
+                 "-m", "iris_with_gimbal", "-p")
+    return _parse_model_xy(result.stdout) if result.returncode == 0 else None
+
+
+#: Waypoints for the navigation-accuracy survey, as (north, east) metres from
+#: the hover point. Eight points on a 15 m ring: CEP is a median, so it needs
+#: several samples, and a ring exercises every heading rather than one axis.
+_CEP_RING_RADIUS_M = 15.0
+_CEP_POINTS = 8
+
+
+def _cep_targets(radius_m: float = _CEP_RING_RADIUS_M, count: int = _CEP_POINTS):
+    return [
+        (radius_m * math.cos(2 * math.pi * i / count),
+         radius_m * math.sin(2 * math.pi * i / count))
+        for i in range(count)
+    ]
+
+
+def _median(values):
+    ordered = sorted(values)
+    n = len(ordered)
+    if not n:
+        return None
+    mid = n // 2
+    return ordered[mid] if n % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
 
 
 def _publish_wind(world_x: float, world_y: float) -> bool:
@@ -559,6 +623,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
          wind_force_scale_override=None,
          mission_model_text=None,
          delivery_abort_before_release=False,
+         navigation_accuracy=False,
+         gps_noise_m=None,
          extra_parms="") -> int:
     LAST_RESULT.clear()
     # When the generated model is supplied it OWNS the mission decisions: the
@@ -688,6 +754,13 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
     print("[docker] container up, gz sim loading our airframe ...", flush=True)
     time.sleep(8)
 
+    if gps_noise_m is not None:
+        # SITL's simulated GPS is NOISE-FREE by default (SIM_GPS1_NOISE=0), so a
+        # CEP measured on it excludes the GNSS error that dominates real
+        # navigation accuracy — it measures the control loop and nothing else.
+        # Stating the injected noise with the number is the only way the number
+        # means anything.
+        extra_parms = (extra_parms or "") + f"SIM_GPS1_NOISE {float(gps_noise_m):.3f}\n"
     parm = out / "poc.parm"
     gripper_channel = max(6, rotor_count) if payload_release else None
     gripper_servo = gripper_channel + 1 if gripper_channel is not None else None
@@ -1121,6 +1194,142 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 f"delay={release_delay} s z={payload_z0}->{payload_z}",
                 flush=True,
             )
+
+        if navigation_accuracy:
+            # CEP is a NAVIGATION claim: where the vehicle actually ends up
+            # versus where it was told to go. Comparing the EKF's own estimate
+            # against the commanded target only measures the position
+            # controller — the EKF believes it arrived even when it did not.
+            # So the error is taken from Gazebo ground truth, and the EKF's
+            # view is recorded beside it; the gap between them IS the
+            # GPS/estimator contribution the requirement is about.
+            if not guided_held:
+                LAST_RESULT["cep_unavailable_reason"] = (
+                    "GUIDED did not hold, so no commanded waypoint was flown"
+                )
+                print("[nav] GUIDED not held — navigation accuracy not measurable",
+                      flush=True)
+            else:
+                m.set_mode("GUIDED")
+                mode_holds(GUIDED)
+                origin = m.recv_match(type="LOCAL_POSITION_NED", blocking=True, timeout=5)
+                world0 = _vehicle_xy()
+                if origin is None or world0 is None:
+                    LAST_RESULT["cep_unavailable_reason"] = (
+                        "no LOCAL_POSITION_NED or no Gazebo ground-truth pose"
+                    )
+                else:
+                    n0, e0, d0 = float(origin.x), float(origin.y), float(origin.z)
+                    legs = []
+                    for leg_index, (dn, de) in enumerate(_cep_targets()):
+                        tn, te = n0 + dn, e0 + de
+                        arrived = False
+                        deadline = time.time() + 40.0
+                        while time.time() < deadline:
+                            m.mav.set_position_target_local_ned_send(
+                                0, m.target_system, m.target_component,
+                                mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+                                0b0000111111111000,          # position only
+                                tn, te, d0, 0, 0, 0, 0, 0, 0, 0, 0,
+                            )
+                            pos = m.recv_match(type="LOCAL_POSITION_NED",
+                                               blocking=True, timeout=1)
+                            if pos is None:
+                                continue
+                            if math.hypot(float(pos.x) - tn, float(pos.y) - te) < 1.5:
+                                arrived = True
+                                break
+                        if not arrived:
+                            print(f"[nav] leg {leg_index}: never reached the commanded "
+                                  "point; excluded from CEP", flush=True)
+                            continue
+                        # settle before sampling: a fly-through is not an arrival
+                        settle_end = time.time() + 4.0
+                        while time.time() < settle_end:
+                            m.mav.set_position_target_local_ned_send(
+                                0, m.target_system, m.target_component,
+                                mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+                                0b0000111111111000, tn, te, d0,
+                                0, 0, 0, 0, 0, 0, 0, 0)
+                            m.recv_match(type="LOCAL_POSITION_NED",
+                                         blocking=True, timeout=1)
+                        # How much GNSS noise actually reaches the link, and how
+                        # much of it survives the estimator. Without this a CEP
+                        # that ignores injected noise looks like a robust result
+                        # instead of an unverified filtering claim.
+                        raw_spread = []
+                        for _ in range(12):
+                            raw = m.recv_match(type="GPS_RAW_INT", blocking=True, timeout=1)
+                            fused = m.recv_match(type="GLOBAL_POSITION_INT",
+                                                 blocking=True, timeout=1)
+                            if raw is None or fused is None:
+                                continue
+                            dlat = (raw.lat - fused.lat) * 1e-7 * 111320.0
+                            dlon = ((raw.lon - fused.lon) * 1e-7 * 111320.0
+                                    * math.cos(math.radians(fused.lat * 1e-7)))
+                            raw_spread.append(math.hypot(dlat, dlon))
+                        pos = m.recv_match(type="LOCAL_POSITION_NED",
+                                           blocking=True, timeout=3)
+                        truth = _vehicle_xy()
+                        if pos is None or truth is None:
+                            continue
+                        # ArduPilotPlugin maps Gazebo world (x, y) to NED (x, -y)
+                        expected = (world0[0] + dn, world0[1] - de)
+                        err_truth = math.hypot(truth[0] - expected[0],
+                                               truth[1] - expected[1])
+                        err_ekf = math.hypot(float(pos.x) - tn, float(pos.y) - te)
+                        legs.append({
+                            "leg": leg_index,
+                            "target_ned_m": [round(dn, 3), round(de, 3)],
+                            "truth_error_m": round(err_truth, 4),
+                            "ekf_error_m": round(err_ekf, 4),
+                            "raw_gnss_minus_fused_m": (
+                                round(_median(raw_spread), 4) if raw_spread else None
+                            ),
+                        })
+                        print(f"[nav] leg {leg_index}: ground-truth error "
+                              f"{err_truth:.3f} m, EKF-reported {err_ekf:.3f} m",
+                              flush=True)
+                    truth_errors = [leg["truth_error_m"] for leg in legs]
+                    ekf_errors = [leg["ekf_error_m"] for leg in legs]
+                    LAST_RESULT.update({
+                        "cep_legs": legs,
+                        "cep_samples": len(legs),
+                        "cep_m": _median(truth_errors),
+                        "cep_max_error_m": max(truth_errors) if truth_errors else None,
+                        "cep_ekf_m": _median(ekf_errors),
+                        "cep_raw_gnss_scatter_m": _median(
+                            [leg["raw_gnss_minus_fused_m"] for leg in legs
+                             if leg.get("raw_gnss_minus_fused_m") is not None]
+                        ),
+                        "cep_gps_noise_m": (
+                            0.0 if gps_noise_m is None else float(gps_noise_m)
+                        ),
+                        "cep_basis": (
+                            "median horizontal error between the commanded waypoint "
+                            "and Gazebo ground truth; the EKF-reported error is "
+                            "recorded alongside and their difference is the "
+                            "estimator/GPS contribution. "
+                            + ("SIM_GPS1_NOISE was left at its default of 0, so "
+                               "this EXCLUDES GNSS error and measures the position "
+                               "loop alone — it is a floor, not a navigation CEP"
+                               if gps_noise_m is None else
+                               f"SIM_GPS1_NOISE={float(gps_noise_m):.2f} m was "
+                               "injected, so GNSS error is represented")
+                        ),
+                    })
+                    print(f"[nav] CEP={LAST_RESULT['cep_m']} m over "
+                          f"{len(legs)} commanded waypoints "
+                          f"(EKF-reported median {LAST_RESULT['cep_ekf_m']} m)",
+                          flush=True)
+            m.mav.rc_channels_override_send(m.target_system, m.target_component, *([0] * 8))
+            _cleanup(proc)
+            n = max(1, len(thr) // 3)
+            hov_thr = sum(thr[-n:]) / n
+            hov_alt = sum(rels[-n:]) / n
+            LAST_RESULT.update(hover_stable=True, hover_throttle_pct=hov_thr,
+                               hover_alt_m=hov_alt, ok=True, failure_kind=None)
+            return 0
 
         if obstacle_avoidance:
             sensor_range = float(obstacle_detection_range_m)
@@ -1610,7 +1819,20 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         # stable = SUSTAINED altitude near target + small band. A crashed/grounded vehicle has
         # band≈0 (sitting on the ground) and a brief peak, so check the steady altitude is held
         # well above ground — this correctly fails a non-redundant frame after a motor loss.
-        stable = hov_alt > TGT * 0.5 and band < 1.5
+        #
+        # Altitude is necessary but not sufficient. Repeated one-motor-out runs
+        # of the same configuration held 1.17, 6.27, 9.93 and 10.00 m with
+        # attitude RMS from 1.59 to 19.56 deg — one of them holding altitude
+        # beautifully while wobbling 13.5 deg. Requiring both closes that gap;
+        # neither signal alone, and no single run, settles the requirement.
+        att_rms = LAST_RESULT.get("hover_attitude_rms_deg")
+        attitude_ok = (att_rms is None
+                       or float(att_rms) <= _HOVER_ATTITUDE_RMS_LIMIT_DEG)
+        LAST_RESULT["hover_attitude_limit_deg"] = _HOVER_ATTITUDE_RMS_LIMIT_DEG
+        LAST_RESULT["hover_attitude_within_limit"] = (
+            None if att_rms is None else attitude_ok
+        )
+        stable = hov_alt > TGT * 0.5 and band < 1.5 and attitude_ok
         if stable:
             failure_kind = None
             rc_result = 0
@@ -1626,9 +1848,14 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                            failure_kind=failure_kind)
         print(f"[RESULT] climb_peak={peak:.2f}m  hover_alt={hov_alt:.2f}m  "
               f"alt_band=±{band/2:.2f}m  hover_throttle={hov_thr:.0f}%", flush=True)
+        att_note = (
+            "attitude not measured" if att_rms is None else
+            f"attitude RMS {float(att_rms):.2f} deg "
+            f"(limit {_HOVER_ATTITUDE_RMS_LIMIT_DEG:.1f})"
+        )
         print(f"[RESULT] dynamics: "
-              f"{'STABLE hover @ %.0f%% throttle' % hov_thr if stable else 'did NOT achieve stable hover'}",
-              flush=True)
+              f"{'STABLE hover @ %.0f%% throttle' % hov_thr if stable else 'did NOT achieve stable hover'}"
+              f"; {att_note}", flush=True)
         return rc_result
     except Exception as e:
         print("[error]", repr(e), flush=True); _cleanup(proc); return 1

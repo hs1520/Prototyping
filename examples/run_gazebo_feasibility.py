@@ -427,6 +427,11 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
             fail_rotor=0,
             max_thrust_g=max_thrust_g,
             hover_throttle=hover_throttle,
+            # "maintain controlled flight" is an attitude claim before it is an
+            # altitude one: a run held 9.93 m to +/-0.06 m while wobbling
+            # 13.5 deg. Neither signal reproduces across runs, so this scenario
+            # must at least never be flown without measuring both.
+            measure_attitude=True,
         )
         fail_result = dict(run_flight.LAST_RESULT)
         result["motor_failure_req"] = rid
@@ -434,6 +439,11 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         result["motor_failure_tolerant"] = bool(fail_result.get("hover_stable"))
         result["motor_failure_hover_alt_m"] = fail_result.get("hover_alt_m")
         result["motor_failure_hover_throttle_pct"] = fail_result.get("hover_throttle_pct")
+        result["motor_failure_attitude_rms_deg"] = fail_result.get("hover_attitude_rms_deg")
+        result["motor_failure_attitude_within_limit"] = fail_result.get(
+            "hover_attitude_within_limit")
+        result["motor_failure_attitude_limit_deg"] = fail_result.get(
+            "hover_attitude_limit_deg")
     return result
 
 
@@ -444,18 +454,37 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
     if gazebo and gazebo.get("motor_failure_req"):
         rid = str(gazebo["motor_failure_req"])
         ok = gazebo.get("motor_failure_tolerant")
-        status = "PASS" if ok is True else "FAIL" if ok is False else "INCONCLUSIVE"
+        att = gazebo.get("motor_failure_attitude_rms_deg")
+        # An unmeasured attitude cannot support "maintain controlled flight",
+        # so it is INCONCLUSIVE rather than a pass on altitude alone.
+        status = (
+            "INCONCLUSIVE" if att is None
+            else "PASS" if ok is True else "FAIL" if ok is False else "INCONCLUSIVE"
+        )
         covered.add(rid)
         results.append({
             "req_id": rid,
             "check": "single_motor_out",
             "status": status,
+            "attitude_rms_deg": att,
             "message": (
-                "Gazebo one-motor-out hover remained stable"
-                if ok is True else
-                "Gazebo one-motor-out hover did not remain stable"
-                if ok is False else
-                "Gazebo one-motor-out result was inconclusive"
+                "Gazebo one-motor-out attitude was not measured, so nothing here "
+                "speaks to controlled flight — altitude alone cannot: repeated "
+                "runs of this configuration held 1.17, 6.27, 9.93 and 10.00 m "
+                "with attitude RMS from 1.59 to 19.56 deg"
+                if att is None else
+                (f"Gazebo one-motor-out hover remained stable; attitude RMS "
+                 f"{float(att):.2f} deg within the "
+                 f"{gazebo.get('motor_failure_attitude_limit_deg')} deg bound"
+                 if ok is True else
+                 f"Gazebo one-motor-out hover did not remain controlled; attitude "
+                 f"RMS {float(att):.2f} deg against a "
+                 f"{gazebo.get('motor_failure_attitude_limit_deg')} deg bound "
+                 f"(nominal hover is ~0.009 deg), steady altitude "
+                 f"{gazebo.get('motor_failure_hover_alt_m')} m at "
+                 f"{gazebo.get('motor_failure_hover_throttle_pct')}% throttle"
+                 if ok is False else
+                 "Gazebo one-motor-out result was inconclusive")
             ),
         })
 
@@ -752,6 +781,12 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         accepted = gazebo.get("takeoff_command_accepted")
         method = gazebo.get("takeoff_method")
         autonomous = accepted is True and method == "guided_nav_takeoff"
+        cep = gazebo.get("cep_m")
+        scatter = gazebo.get("cep_raw_gnss_scatter_m")
+        # "GNSS error is represented" means the raw fix and the fused estimate
+        # actually disagree. Agreement to centimetres means the sensor model is
+        # ideal, whatever noise parameter was requested.
+        gnss_represented = scatter is not None and float(scatter) >= 0.5
         covered.add(rid)
         results.append({
             "req_id": rid,
@@ -759,9 +794,14 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             # No CEP is reported unless the vehicle actually navigated to a
             # commanded position. Saying WHY it could not is worth more than a
             # blank row, and it is checkable.
-            "status": "PASS" if autonomous and gazebo.get("cep_m") is not None
-            and float(gazebo["cep_m"]) < float(nav_req.get("max_cep_m") or 0.0)
-            else "INCONCLUSIVE",
+            # CEP is a GNSS-dominated quantity. A rig whose simulated GNSS
+            # carries no error cannot support a navigation-accuracy verdict
+            # however small the measured error is — that would be a floor
+            # reported as a result.
+            "status": ("PASS" if autonomous and gnss_represented and cep is not None
+                       and cep < float(nav_req.get("max_cep_m") or 0.0)
+                       else "INCONCLUSIVE"),
+            "cep_m": cep,
             "message": (
                 f"CEP < {nav_req.get('max_cep_m')} m is not measured: autonomous "
                 f"position-controlled flight is not available in this rig — the "
@@ -772,8 +812,20 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                 "a designated waypoint, so no CEP is reported rather than a "
                 "number from a manoeuvre the requirement does not describe"
                 if not autonomous else
-                f"CEP {gazebo.get('cep_m')} m over commanded waypoints "
-                f"(limit {nav_req.get('max_cep_m')} m)"
+                f"the vehicle flew {gazebo.get('cep_samples')} commanded waypoints "
+                f"autonomously and held them to a median ground-truth error of "
+                f"{cep} m (max {gazebo.get('cep_max_error_m')} m, limit "
+                f"{nav_req.get('max_cep_m')} m) — but this is NOT a navigation "
+                f"CEP: the simulated GNSS carries no error, raw GPS and the fused "
+                f"estimate agreeing to {scatter} m, and injecting "
+                f"SIM_GPS1_NOISE={gazebo.get('cep_gps_noise_m')} m changed "
+                "nothing. What is measured is the position loop's tracking "
+                "accuracy against ground truth; the GNSS error that dominates a "
+                "real CEP is absent, so the requirement stays open"
+                if not gnss_represented else
+                f"CEP {cep} m over {gazebo.get('cep_samples')} commanded waypoints "
+                f"(limit {nav_req.get('max_cep_m')} m) with GNSS error represented "
+                f"(raw-versus-fused scatter {scatter} m)"
             ),
         })
 

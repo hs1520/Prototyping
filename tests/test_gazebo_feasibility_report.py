@@ -130,7 +130,9 @@ def test_req_results_upgrade_only_the_implemented_gazebo_check():
         {"req_id": "REQ-SAFE-007", "check": "single_motor_out", "message": "needs dynamics"},
         {"req_id": "REQ-FUNC-002", "check": "obstacle_avoidance", "message": "needs contact physics"},
     ]
-    live = {"motor_failure_req": "REQ-SAFE-007", "motor_failure_tolerant": True}
+    live = {"motor_failure_req": "REQ-SAFE-007", "motor_failure_tolerant": True,
+            "motor_failure_attitude_rms_deg": 0.31,
+            "motor_failure_attitude_limit_deg": 5.0}
 
     results = rgf._req_results(live, planned)
 
@@ -705,7 +707,95 @@ def test_cep_is_only_reported_from_autonomous_flight():
     autonomous = rgf._req_results({
         "takeoff_command_accepted": True,
         "takeoff_method": "guided_nav_takeoff",
-        "cep_m": 0.4,
+        "cep_m": 0.4, "cep_samples": 8,
+        "cep_raw_gnss_scatter_m": 1.8,     # GNSS error actually present
     }, planned)[0]
     assert autonomous["status"] == "PASS"
-    assert "CEP 0.4 m over commanded waypoints" in autonomous["message"]
+    assert "CEP 0.4 m over 8 commanded waypoints" in autonomous["message"]
+
+    # the same flight on a noise-free GNSS is a floor, not a CEP
+    idealised = rgf._req_results({
+        "takeoff_command_accepted": True,
+        "takeoff_method": "guided_nav_takeoff",
+        "cep_m": 0.4, "cep_samples": 8, "cep_raw_gnss_scatter_m": 0.02,
+    }, planned)[0]
+    assert idealised["status"] == "INCONCLUSIVE"
+
+
+def test_one_motor_out_cannot_pass_on_altitude_alone():
+    """Repeated runs of the same configuration held 1.17 m, 9.93 m and 6.27 m,
+    while attitude RMS stayed 13-20 deg in every one. A verdict resting on the
+    signal that does not reproduce is a coin flip on a safety requirement."""
+    planned = [{"req_id": "REQ-SAFE-007", "check": "single_motor_out",
+                "message": "redundancy"}]
+
+    unmeasured = rgf._req_results(
+        {"motor_failure_req": "REQ-SAFE-007", "motor_failure_tolerant": True},
+        planned, include_single_motor_out=True)[0]
+    assert unmeasured["status"] == "INCONCLUSIVE"
+    assert "attitude was not measured" in unmeasured["message"]
+
+    wobbling = rgf._req_results({
+        "motor_failure_req": "REQ-SAFE-007",
+        "motor_failure_tolerant": False,
+        "motor_failure_attitude_rms_deg": 13.46,
+        "motor_failure_attitude_limit_deg": 5.0,
+        "motor_failure_hover_alt_m": 9.93,
+        "motor_failure_hover_throttle_pct": 35.0,
+    }, planned, include_single_motor_out=True)[0]
+    assert wobbling["status"] == "FAIL"
+    assert "did not remain controlled" in wobbling["message"]
+    # the evidence names the number, and what nominal looks like
+    assert "13.46 deg" in wobbling["message"]
+    assert "0.009 deg" in wobbling["message"]
+
+
+def test_hover_stability_requires_attitude_tracking():
+    from gazebo_poc.run_flight import _HOVER_ATTITUDE_RMS_LIMIT_DEG
+
+    # an order of magnitude above the 0.5 deg RMS asked of steady cruise, and
+    # far below tilt authority — the observed 13-20 deg is outside any choice
+    # in that band, so the verdict does not hinge on the exact value
+    assert 2.0 <= _HOVER_ATTITUDE_RMS_LIMIT_DEG <= 10.0
+
+
+def test_a_cep_from_a_noise_free_gnss_is_not_a_navigation_cep():
+    """The rig now flies waypoints autonomously and the error is tiny — which
+    is exactly when a floor is easiest to mistake for a result. Raw GPS and the
+    fused estimate agree to 0.02 m and an injected 2 m SIM_GPS1_NOISE changes
+    nothing, so no GNSS error is represented at all."""
+    planned = rgf._planned_gazebo_reqs([_NAV_REQ])
+    row = rgf._req_results({
+        "takeoff_command_accepted": True,
+        "takeoff_method": "guided_nav_takeoff",
+        "cep_m": 0.0079, "cep_samples": 8, "cep_max_error_m": 0.0131,
+        "cep_raw_gnss_scatter_m": 0.022, "cep_gps_noise_m": 2.0,
+    }, planned)[0]
+
+    assert row["status"] == "INCONCLUSIVE"
+    assert "NOT a navigation CEP" in row["message"]
+    assert "the requirement stays open" in row["message"]
+    # the measurement is still reported — it is a real number about the control loop
+    assert row["cep_m"] == 0.0079
+    assert "flew 8 commanded waypoints autonomously" in row["message"]
+
+
+def test_cep_closes_once_gnss_error_is_actually_present():
+    planned = rgf._planned_gazebo_reqs([_NAV_REQ])
+    row = rgf._req_results({
+        "takeoff_command_accepted": True,
+        "takeoff_method": "guided_nav_takeoff",
+        "cep_m": 0.42, "cep_samples": 8, "cep_max_error_m": 0.7,
+        "cep_raw_gnss_scatter_m": 1.8, "cep_gps_noise_m": 2.0,
+    }, planned)[0]
+    assert row["status"] == "PASS"
+    assert "GNSS error represented" in row["message"]
+
+    # and a real CEP over the limit is a real failure, not an excuse
+    over = rgf._req_results({
+        "takeoff_command_accepted": True,
+        "takeoff_method": "guided_nav_takeoff",
+        "cep_m": 1.6, "cep_samples": 8, "cep_max_error_m": 2.4,
+        "cep_raw_gnss_scatter_m": 1.8, "cep_gps_noise_m": 2.0,
+    }, planned)[0]
+    assert over["status"] == "INCONCLUSIVE"   # over the limit -> not a pass
