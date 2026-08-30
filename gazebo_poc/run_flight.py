@@ -140,7 +140,8 @@ def _thrust_diagnostics(mass_kg: float, rotor_count: int, area: float,
 
 def _parm_text(frame_class: int, hover_throttle: float | None,
                gripper_servo: int | None = None,
-               parachute_servo: int | None = None) -> str:
+               parachute_servo: int | None = None,
+               extra_parms: str = "") -> str:
     hover = 0.5 if hover_throttle is None else max(0.2, min(0.8, float(hover_throttle)))
     text = _PARM.replace("FRAME_CLASS 1", f"FRAME_CLASS {frame_class}").format(
         mot_thst_hover=f"{hover:.3f}"
@@ -157,6 +158,11 @@ def _parm_text(frame_class: int, hover_throttle: float | None,
             "CHUTE_ALT_MIN 0\nCHUTE_SERVO_ON 2000\nCHUTE_SERVO_OFF 1000\n"
             f"SERVO{parachute_servo}_FUNCTION 27\n"
         )
+    if extra_parms:
+        # Per-scenario overlay. Position-controlled flight needs a yaw source,
+        # which the base set deliberately does not have; that overlay must not
+        # leak into the scenarios measured without it.
+        text += extra_parms if extra_parms.endswith("\n") else extra_parms + "\n"
     return text
 
 
@@ -552,7 +558,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                                # survey now sweeps to steady state instead
          wind_force_scale_override=None,
          mission_model_text=None,
-         delivery_abort_before_release=False) -> int:
+         delivery_abort_before_release=False,
+         extra_parms="") -> int:
     LAST_RESULT.clear()
     # When the generated model is supplied it OWNS the mission decisions: the
     # harness offers events derived from telemetry and actuates only what the
@@ -691,6 +698,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         hover_throttle,
         gripper_servo=gripper_servo,
         parachute_servo=parachute_servo,
+        extra_parms=extra_parms or "",
     ))
     if obstacle_avoidance:
         avoidance_margin = (
@@ -827,6 +835,21 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             TGT,
         )
         LAST_RESULT["takeoff_method"] = "guided_nav_takeoff"
+        # Whether the autopilot ACCEPTED the takeoff decides how to read a
+        # failure to climb: a rejected command is a configuration problem, a
+        # denied climb after acceptance is a control/thrust one. Without this
+        # the fallback hides which.
+        takeoff_ack = m.recv_match(type="COMMAND_ACK", blocking=True, timeout=3)
+        if takeoff_ack is not None and takeoff_ack.command == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
+            LAST_RESULT["takeoff_command_result"] = int(takeoff_ack.result)
+            LAST_RESULT["takeoff_command_accepted"] = (
+                takeoff_ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+            )
+            print(f"[sitl] NAV_TAKEOFF ack result={takeoff_ack.result} "
+                  f"(0=accepted)", flush=True)
+        else:
+            LAST_RESULT["takeoff_command_accepted"] = None
+            print("[sitl] NAV_TAKEOFF produced no COMMAND_ACK", flush=True)
 
         def alt_hold_stick(rel):
             hover_rc = 1500 if hover_throttle is None else int(1100 + max(0.2, min(0.8, float(hover_throttle))) * 800)

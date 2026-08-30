@@ -669,3 +669,43 @@ def test_no_payload_observer_makes_the_inhibition_inconclusive_not_a_pass():
     }
     result = {r["check"]: r for r in rgf._req_results(live, planned)}
     assert result["delivery_abort_inhibition"]["status"] == "INCONCLUSIVE"
+
+
+_NAV_REQ = ("REQ-FUNC-001: The system shall autonomously navigate to designated "
+            "GPS waypoints with a circular error probable (CEP) of less than 1.0 metre.")
+
+
+def test_a_stick_flown_rig_reports_no_cep_and_says_why():
+    """A blank row says nothing; a stated, checkable limitation says a lot."""
+    planned = rgf._planned_gazebo_reqs([_NAV_REQ])
+    assert planned[0]["max_cep_m"] == 1.0
+
+    row = rgf._req_results({
+        "takeoff_command_accepted": False,
+        "takeoff_command_result": 4,          # MAV_RESULT_FAILED
+        "takeoff_method": "guided_nav_takeoff_then_alt_hold_fallback",
+    }, planned)[0]
+
+    assert row["status"] == "INCONCLUSIVE"
+    assert "REJECTED MAV_CMD_NAV_TAKEOFF" in row["message"]
+    assert "flown by RC stick in ALT_HOLD" in row["message"]
+
+
+def test_cep_is_only_reported_from_autonomous_flight():
+    planned = rgf._planned_gazebo_reqs([_NAV_REQ])
+
+    # a CEP measured while the rig was stick-flown must not be reported
+    stick = rgf._req_results({
+        "takeoff_command_accepted": False,
+        "takeoff_method": "guided_nav_takeoff_then_alt_hold_fallback",
+        "cep_m": 0.4,
+    }, planned)[0]
+    assert stick["status"] == "INCONCLUSIVE"
+
+    autonomous = rgf._req_results({
+        "takeoff_command_accepted": True,
+        "takeoff_method": "guided_nav_takeoff",
+        "cep_m": 0.4,
+    }, planned)[0]
+    assert autonomous["status"] == "PASS"
+    assert "CEP 0.4 m over commanded waypoints" in autonomous["message"]

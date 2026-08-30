@@ -77,7 +77,14 @@ def _planned_gazebo_reqs(requirements: list[str]) -> list[dict[str, Any]]:
         low = req.lower()
         check = None
         reason = None
-        if ("payload" in low and "lock" in low and "abort" in low):
+        if (("navigate" in low or "navigation" in low)
+                and ("cep" in low or "circular error" in low)):
+            # Autonomous waypoint navigation, not a stick-flown dash. Whether
+            # the rig can fly it at all is the first thing this check reports.
+            check = "navigation_accuracy"
+            reason = ("waypoint navigation accuracy requires autonomous "
+                      "position-controlled flight")
+        elif ("payload" in low and "lock" in low and "abort" in low):
             # An inhibition claim cannot be shown by a run in which the
             # inhibiting condition never held. It is only testable by driving
             # the generated logic WITH the condition active and observing that
@@ -147,6 +154,10 @@ def _planned_gazebo_reqs(requirements: list[str]) -> list[dict[str, Any]]:
             elif check == "cruise_speed":
                 item["min_speed_mps"] = _number_after(
                     r"at least\s+(\d+(?:\.\d+)?)\s*m/s", low
+                )
+            elif check == "navigation_accuracy":
+                item["max_cep_m"] = _number_after(
+                    r"less\s+than\s+(\d+(?:\.\d+)?)\s*(?:metres?|meters?)", low
                 )
             elif check == "obstacle_avoidance":
                 # Every number comes from the requirement's own text; the
@@ -732,6 +743,37 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                     if released else
                     "the payload remained attached, so the inhibition holds"
                 )
+            ),
+        })
+
+    nav_req = _planned_check(planned, "navigation_accuracy")
+    if gazebo and nav_req:
+        rid = str(nav_req["req_id"])
+        accepted = gazebo.get("takeoff_command_accepted")
+        method = gazebo.get("takeoff_method")
+        autonomous = accepted is True and method == "guided_nav_takeoff"
+        covered.add(rid)
+        results.append({
+            "req_id": rid,
+            "check": "navigation_accuracy",
+            # No CEP is reported unless the vehicle actually navigated to a
+            # commanded position. Saying WHY it could not is worth more than a
+            # blank row, and it is checkable.
+            "status": "PASS" if autonomous and gazebo.get("cep_m") is not None
+            and float(gazebo["cep_m"]) < float(nav_req.get("max_cep_m") or 0.0)
+            else "INCONCLUSIVE",
+            "message": (
+                f"CEP < {nav_req.get('max_cep_m')} m is not measured: autonomous "
+                f"position-controlled flight is not available in this rig — the "
+                f"autopilot REJECTED MAV_CMD_NAV_TAKEOFF (COMMAND_ACK result="
+                f"{gazebo.get('takeoff_command_result')}, 0=accepted) and every "
+                f"segment is flown by RC stick in ALT_HOLD (takeoff_method="
+                f"{method}). A stick-flown dash cannot demonstrate navigation to "
+                "a designated waypoint, so no CEP is reported rather than a "
+                "number from a manoeuvre the requirement does not describe"
+                if not autonomous else
+                f"CEP {gazebo.get('cep_m')} m over commanded waypoints "
+                f"(limit {nav_req.get('max_cep_m')} m)"
             ),
         })
 
