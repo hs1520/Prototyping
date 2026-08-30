@@ -993,6 +993,130 @@ class _RefinementEngine:
               "original model", flush=True)
         return current_model, sim_result, False
 
+    def _response_conformance_issues(
+        self, model_text: str, model_name: str = "Model"
+    ) -> List[str]:
+        """Deterministic response-conformance findings for the current text.
+
+        Two detectors, both decidable without an LLM: send payloads that
+        contradict their port's declared item type, and response commands
+        whose family the SITL traceability gate would reject against the
+        requirement text (the gate's own projection, same code path as
+        Phase 9). Together they cover the archived shapes of the defect the
+        matrix otherwise reports only as a blocked row.
+        """
+        from ..prototyping.port_payload_conformance import (
+            port_payload_conformance_issues,
+        )
+        from ..sitl.requirement_linker import RequirementLinker
+
+        issues = list(port_payload_conformance_issues(model_text))
+        issues.extend(RequirementLinker.static_traceability_issues(
+            model_text, model_name
+        ))
+        return issues
+
+    def _response_conformance_repair_pass(
+        self,
+        current_model: SysMLModel,
+        sim_result: Any,
+        rule_score: float,
+        requirements: List[str],
+        dse_best_config: Optional[DesignConfiguration],
+    ) -> tuple[SysMLModel, Any, bool]:
+        """One bounded surgical pass on clean exit for response conformance.
+
+        Mirrors the namespace discipline: advisory, exactly one LLM attempt,
+        accepted only when the combined finding count actually falls and
+        nothing regresses. A deterministic rewrite is deliberately not
+        attempted — whether the fix is to send the port's declared payload
+        or to retype the port is the author's intent to state.
+        """
+        full_text = get_sysml_text(current_model)
+        issues = self._response_conformance_issues(
+            full_text, current_model.name)
+        if not issues or not self.use_surgical_refinement:
+            return current_model, sim_result, False
+
+        print(f"  ~ Quality met, but {len(issues)} response-conformance "
+              "finding(s) would be withheld/blocked at verification — one "
+              "surgical response-conformance pass", flush=True)
+        from ..simulation.surgical_refiner import (
+            SurgicalAudit,
+            attempt_surgical_refinement,
+        )
+        surgical_audit = SurgicalAudit()
+        repaired = attempt_surgical_refinement(
+            llm=self._intelligence,
+            model_text=full_text,
+            issues=issues,
+            verbose=self.verbose,
+            audit=surgical_audit,
+        )
+        attempt_record = {
+            "status": "CANDIDATE" if repaired is not None else "REJECTED",
+            "issues": list(issues),
+            "surgical_audit": surgical_audit.to_dict(),
+        }
+        attempt_index = self._append_pipeline_state_list(
+            "response_conformance_repair_attempts", attempt_record
+        )
+
+        def _finalize_record() -> None:
+            # The append publishes a snapshot; a later status mutation must be
+            # re-published or the archived record understates what happened.
+            self._replace_pipeline_state_list_item(
+                "response_conformance_repair_attempts", attempt_index,
+                attempt_record,
+            )
+
+        if repaired is None:
+            _finalize_record()
+            print("  ⚠ Response-conformance pass not applicable (LLM output "
+                  "failed the surgical gates)", flush=True)
+            return current_model, sim_result, False
+
+        repaired_model = build_lite_model(
+            repaired.merged_text, model_name=current_model.name)
+        self._restore_generation_plan_metadata(repaired_model)
+        repaired_sim = self._run_simulation(
+            repaired.merged_text, current_model.name)
+        repaired_eval = self._intelligence.evaluate(
+            config=DesignConfiguration(
+                name="response_conformance_repair_pass", parameters={}
+            ),
+            model=repaired_model,
+            dse_config=dse_best_config,
+            syntax_result=check_syntax(repaired.merged_text),
+            sim_result=repaired_sim,
+            requirements=requirements,
+        )
+        before = len(issues)
+        after = len(self._response_conformance_issues(
+            repaired.merged_text, current_model.name))
+        from .verification_audit import behavioral_result_regressed
+        regressed = (
+            bool(repaired_sim.failed_scenarios())
+            or behavioral_result_regressed(sim_result, repaired_sim)
+            or repaired_eval.weighted_total < rule_score - 0.05
+        )
+        if not regressed and after < before:
+            attempt_record["status"] = "ACCEPTED"
+            _finalize_record()
+            print(f"  ✓ Response-conformance pass accepted: findings "
+                  f"{before} → {after}", flush=True)
+            return repaired_model, repaired_sim, True
+
+        attempt_record["status"] = "REJECTED"
+        attempt_record["post_merge_reason"] = (
+            "regression" if regressed else "no_finding_reduction"
+        )
+        _finalize_record()
+        print("  ⚠ Response-conformance pass rejected "
+              f"({attempt_record['post_merge_reason']}) — keeping the "
+              "original model", flush=True)
+        return current_model, sim_result, False
+
     def _verification_anchor_pass(
         self,
         current_model: SysMLModel,
@@ -1269,6 +1393,15 @@ class _RefinementEngine:
                 dse_best_config=dse_best_config,
             )
         )
+        current_model, sim_result, _response_repaired = (
+            self._response_conformance_repair_pass(
+                current_model=current_model,
+                sim_result=sim_result,
+                rule_score=score,
+                requirements=requirements,
+                dse_best_config=dse_best_config,
+            )
+        )
         if anchor_accepted:
             score = self._intelligence.evaluate(
                 config=DesignConfiguration(
@@ -1398,6 +1531,16 @@ class _RefinementEngine:
             namespace_issues = namespace_integrity_issues(current_sysml)
             if namespace_issues and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(namespace_issues)
+            # And for response-conformance defects the Phase 9 SITL gate would
+            # otherwise surface only as a blocked evidence row (8 of 24
+            # archived runs): a send whose payload type contradicts its port's
+            # declared item type, and a response whose command family
+            # contradicts the requirement text (the linker's own deterministic
+            # traceability projection — no LLM, no SITL process).
+            response_issues = self._response_conformance_issues(
+                current_sysml, current_model.name)
+            if response_issues and isinstance(eval_result.issues, list):
+                eval_result.issues.extend(response_issues)
             # How much the pass/fail verdict depends on the weighting at all —
             # sampled over the weight simplex (answers "would another weighting
             # flip the outcome?").  Defensive: test doubles may not provide it.
@@ -1503,6 +1646,15 @@ class _RefinementEngine:
                         rule_score=rule_score,
                         requirements=requirements,
                         dse_best_config=dse_best_config,
+                    )
+                    current_model, sim_result, _ = (
+                        self._response_conformance_repair_pass(
+                            current_model=current_model,
+                            sim_result=sim_result,
+                            rule_score=rule_score,
+                            requirements=requirements,
+                            dse_best_config=dse_best_config,
+                        )
                     )
                     print(f"  ✓ Quality threshold {self.quality_threshold} reached",
                           flush=True)

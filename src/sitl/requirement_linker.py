@@ -1012,6 +1012,43 @@ class RequirementLinker:
             self._lookup_catalogue(req_id)
         return [dict(v) for _, v in sorted(self._traceability_mismatches.items())]
 
+    @classmethod
+    def static_traceability_issues(cls, model_text: str,
+                                   model_name: str = "Model") -> List[str]:
+        """Refinement-actionable issues for response-traceability mismatches.
+
+        Runs the SAME deterministic gate that later withholds SITL evidence
+        (no LLM, no SITL process) against the in-session model text, so a
+        response action that emits the wrong command family — measured on
+        8 of 24 archived runs as a blocked matrix row discovered only at
+        Phase 9 — reaches the refinement loop while the author can still
+        repair it.  Silence on any parse/link failure: this is an advisory
+        projection, never a new failure mode for generation.
+        """
+        try:
+            from src.sysml.lite_model import build_lite_model
+            model = build_lite_model(str(model_text or ""), model_name=model_name)
+            mismatches = cls(model, llm=None).traceability_mismatches()
+        except Exception as exc:  # advisory projection must never break the loop
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.static_trace_issues", exc)
+            return []
+        issues: List[str] = []
+        for item in mismatches:
+            message = str(item.get("message") or "traceability mismatch")
+            issues.append(
+                f"[SITL-TRACE] {item.get('req_id')}: {message}. The flight-stack "
+                "test for this requirement is derived from the response the "
+                "model actually emits, so this mapping will be withheld at "
+                "verification. Repair the response action so its send matches "
+                "the requirement's commanded response (e.g. a parachute "
+                "requirement's response must send the parachute-command "
+                "payload through its command port, not the detected-failure "
+                "event or a generic mode command); keep the triggering "
+                "guard/accept unchanged."
+            )
+        return issues
+
     def _extract_requirement_texts(self) -> Dict[str, str]:
         try:
             text = self._model.to_sysml_text() if self._model else ""
