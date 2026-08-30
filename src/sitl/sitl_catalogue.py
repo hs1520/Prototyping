@@ -245,11 +245,15 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         notes="Sensor failure → SYS_STATUS GPS health bit cleared.",
     ),
 
-    # ── Safety: parachute deploy（bool: propulsionCriticalFailure）
+    # ── Safety: parachute deploy（bool guard 或 accept 事件：
+    #    propulsionCriticalFailure / accept CriticalPropulsionFailure——
+    #    权威 run 44642597 把降落伞写成事件机，bool-only 匹配面让它落入
+    #    silent no-mapping 而非映射执行；accept 面开放后，错发命令的模型
+    #    仍被同一道响应溯源门拦截（5af6c666 形态回归钉住）。
     ContentEntry(
         semantic_tag="PARACHUTE_DEPLOY",
         guard_matcher=GuardMatcher(
-            operators=["bool"],
+            operators=["bool", "event"],
             var_keywords=["propulsion", "engine", "motor", "thrust"],
         ),
         ardu_params={

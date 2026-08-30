@@ -270,3 +270,73 @@ def test_accept_pseudo_guard_does_not_hijack_behavioral_routing():
     # tiers must come from initialization/functional routing (or none), never
     # from the accept-claimed guard branch, whose signature can match nothing.
     assert "l2_sitl_planned" in row.tiers
+
+
+_PARACHUTE_ACCEPT_MODEL = """package D {
+    item def CriticalPropulsionFailure;
+    requirement def REQ_SAFE_005 { doc /* The system shall deploy the ballistic recovery parachute within 0.5 seconds of detecting a critical propulsion subsystem failure during flight. */ }
+    part def SafetyMonitor {
+        attribute parachuteDeployTime : Real = 0.5 [s];
+        satisfy requirement REQ_SAFE_005;
+        action def deployParachute {}
+        state def ParachuteDeploymentBehavior {
+            entry; then Monitoring;
+            state Monitoring;
+            state DeployingParachute {
+                entry action onDeploy : deployParachute;
+            }
+            transition toDeploy
+                first Monitoring
+                accept CriticalPropulsionFailure
+                then DeployingParachute;
+        }
+    }
+}"""
+
+
+def test_parachute_accept_machine_maps_to_the_executable_l2():
+    """Run 44642597 wrote the parachute as an accept-event machine with an
+    abstract (empty) response action; the bool-only matcher left it silently
+    unmapped. The accept surface must reach the same servo8 check the
+    guard-driven spelling gets."""
+    model = build_lite_model(_PARACHUTE_ACCEPT_MODEL, model_name="D")
+    ev = RequirementLinker(model, llm=None).compile_evidence()
+
+    spec = next(s for s in ev.test_specs if s.req_id == "REQ_SAFE_005")
+    assert spec.tier == "L2"
+    assert spec.inject.kind == "mavlink_command"
+    assert spec.verify.kind == "assert_servo_pwm"
+    assert spec.verify.args["channel"] == 8
+    assert spec.verify.args["target_pwm"] == 2000
+
+    ga = ev.guard_assignments["REQ_SAFE_005"]
+    assert ga.kind == "accept_event"
+    assert ga.attribute == "CriticalPropulsionFailure"
+    assert not any(
+        m.get("req_id") == "REQ_SAFE_005" for m in ev.traceability_mismatches
+    )
+
+
+def test_parachute_accept_machine_with_wrong_send_stays_blocked():
+    """The 5af6c666 defect shape transplanted onto the accept spelling: the
+    response state re-sends the detected-failure event instead of a parachute
+    command. Opening the accept surface must not open a bypass around the
+    response traceability gate."""
+    wrong = _PARACHUTE_ACCEPT_MODEL.replace(
+        "        action def deployParachute {}\n",
+        "        out port parachuteCmd : ParachuteCmdPort;\n"
+        "        action def deployParachute {\n"
+        "            send CriticalPropulsionFailure() to parachuteCmd;\n"
+        "        }\n",
+    )
+    model = build_lite_model(wrong, model_name="D")
+    ev = RequirementLinker(model, llm=None).compile_evidence()
+
+    spec = next(s for s in ev.test_specs if s.req_id == "REQ_SAFE_005")
+    assert spec.tier == "TRACE"
+    mismatches = [
+        m for m in ev.traceability_mismatches
+        if m.get("req_id") == "REQ_SAFE_005"
+    ]
+    assert mismatches
+    assert "CRITICALPROPULSIONFAILURE" in mismatches[0]["message"]
