@@ -1,0 +1,102 @@
+{
+  "defect": "send CriticalPropulsionFailure() to parachuteCmd;",
+  "repair": "send ParachuteCmdData() to parachuteCmd;",
+  "gate_before": {
+    "mismatches": [
+      {
+        "req_id": "REQ_SAFE_005",
+        "expected_family": "PARACHUTE_DEPLOY",
+        "matched_family": "CRITICALPROPULSIONFAILURE",
+        "matched_tag": "PARACHUTE_DEPLOY",
+        "requirement_text": "The system shall deploy the ballistic recovery parachute within 0.5 seconds of detecting a critical propulsion subsystem failure during flight, taking precedence over all other safety responses.",
+        "message": "traceability mismatch: PARACHUTE_DEPLOY expects one of ['CMD_PARACHUTE'], but action onParachute sends ['CRITICALPROPULSIONFAILURE']"
+      }
+    ],
+    "safe5_specs": [
+      {
+        "tier": "TRACE",
+        "inject": "skip",
+        "verify": "skip",
+        "verify_args": {},
+        "params": []
+      }
+    ],
+    "l2_ids": [
+      "REQ_CONS_001",
+      "REQ_SAFE_003",
+      "REQ_SAFE_004",
+      "REQ_SAFE_006",
+      "REQ_SAFE_008"
+    ]
+  },
+  "gate_after": {
+    "mismatches": [],
+    "safe5_specs": [
+      {
+        "tier": "L2",
+        "inject": "mavlink_command",
+        "verify": "assert_servo_pwm",
+        "verify_args": {
+          "channel": 8,
+          "target_pwm": 2000,
+          "tol": 50
+        },
+        "params": [
+          {
+            "name": "CHUTE_ENABLED",
+            "value": 1,
+            "source": "static"
+          },
+          {
+            "name": "CHUTE_TYPE",
+            "value": 10,
+            "source": "static"
+          },
+          {
+            "name": "CHUTE_DELAY_MS",
+            "value": 500,
+            "source": "attr:SafetyMonitor.parachuteDeploymentLatency(~parachute)*1000"
+          },
+          {
+            "name": "SERVO8_FUNCTION",
+            "value": 27,
+            "source": "static"
+          },
+          {
+            "name": "CHUTE_SERVO_ON",
+            "value": 2000,
+            "source": "static"
+          },
+          {
+            "name": "CHUTE_SERVO_OFF",
+            "value": 1000,
+            "source": "static"
+          },
+          {
+            "name": "CHUTE_ALT_MIN",
+            "value": 0,
+            "source": "static"
+          }
+        ]
+      }
+    ],
+    "l2_ids": [
+      "REQ_CONS_001",
+      "REQ_SAFE_003",
+      "REQ_SAFE_004",
+      "REQ_SAFE_005",
+      "REQ_SAFE_006",
+      "REQ_SAFE_008"
+    ]
+  },
+  "l2_result": {
+    "passed": true,
+    "message": "servo8_raw=2000 within 2000±50",
+    "window_s": [
+      89.03,
+      118.17
+    ]
+  },
+  "recorder_connected": true,
+  "claim": "Instrument demonstration: the traceability gate reopens after a one-payload model revision and the previously withheld check executes and passes. Hand-applied repair on a labelled copy; not pipeline self-repair; archived bundle untouched."
+}

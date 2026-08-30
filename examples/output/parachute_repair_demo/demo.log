@@ -1,0 +1,24 @@
+[   0.00s] archived model: /Users/huangsongyi/VSCode/Prototyping/examples/output/runs/5af6c666-7654-4ebe-b79e-75771895e7e5/final_model.sysml
+[   0.00s] defect line   : send CriticalPropulsionFailure() to parachuteCmd;
+[   0.00s] === PHASE A: gate on the archived model ===
+[   0.32s] [before] traceability mismatches: 1
+[   0.32s] [before]   REQ_SAFE_005: traceability mismatch: PARACHUTE_DEPLOY expects one of ['CMD_PARACHUTE'], but action onParachute sends ['CRITICALPROPULSIONFAILURE']
+[   0.32s] [before] executable L2 requirements: ['REQ_CONS_001', 'REQ_SAFE_003', 'REQ_SAFE_004', 'REQ_SAFE_006', 'REQ_SAFE_008']
+[   0.32s] [before] REQ_SAFE_005 spec: tier=TRACE inject=skip verify=skip args={}
+[   0.32s] === PHASE B: one-payload repair (new derived artefact) ===
+[   0.32s] repair applied on a COPY; archived bundle untouched
+[   0.32s]   -            send CriticalPropulsionFailure() to parachuteCmd;
+[   0.32s]   +            send ParachuteCmdData() to parachuteCmd;
+[   0.32s] === PHASE C: gate on the repaired model ===
+[   0.47s] [after] traceability mismatches: 0
+[   0.47s] [after] executable L2 requirements: ['REQ_CONS_001', 'REQ_SAFE_003', 'REQ_SAFE_004', 'REQ_SAFE_005', 'REQ_SAFE_006', 'REQ_SAFE_008']
+[   0.47s] [after] REQ_SAFE_005 spec: tier=L2 inject=mavlink_command verify=assert_servo_pwm args={'channel': 8, 'target_pwm': 2000, 'tol': 50}
+[   0.47s] === PHASE D: execute the previously withheld L2 in native SITL ===
+[   0.62s] boot parm: archived recommended.parm + repaired-model linker params
+[   0.62s] spec: inject=mavlink_command (MAV_CMD_DO_PARACHUTE, pre_takeoff=10.0 m) verify=assert_servo_pwm args={'channel': 8, 'target_pwm': 2000, 'tol': 50}
+[  87.02s] SITL up, EKF ready
+[  87.03s] [recorder] connected on tcp:5762 (side channel; test untouched)
+[  87.03s] [recorder] mode -> STABILIZE
+[  89.03s] running bridge._run_single_test (the real L2 runner) ...
+[  93.90s] [recorder] mode -> GUIDED
+[ 118.17s] RESULT: PASS — servo8_raw=2000 within 2000±50 (29.1s)

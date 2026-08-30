@@ -1,0 +1,11 @@
+--- archived/final_model.sysml
++++ demo/final_model.repaired.sysml
+@@ -759,7 +759,7 @@
+         action def initiateEmergencyLand { }
+         action def preventArming { }
+         action def triggerParachute { 
+-            send CriticalPropulsionFailure() to parachuteCmd; 
++            send ParachuteCmdData() to parachuteCmd; 
+         }
+         action def deployParachute {}
+ 
