@@ -993,6 +993,18 @@ class _RefinementEngine:
               "original model", flush=True)
         return current_model, sim_result, False
 
+    @staticmethod
+    def _model_rank_key(
+        score: float, syntax_result: Any, iteration: int
+    ) -> tuple:
+        """Best-model ordering: score, then fewer syntax errors, then the
+        later iteration. A parse-broken model must never win a tie against
+        its own repaired successor."""
+        errors = (
+            syntax_result.total_errors() if syntax_result is not None else 0
+        )
+        return (score, -errors, iteration)
+
     def _response_conformance_issues(
         self, model_text: str, model_name: str = "Model"
     ) -> List[str]:
@@ -1462,6 +1474,13 @@ class _RefinementEngine:
         best_score = 0.0
         best_model = model
         best_sim_result: Any = None          # tracks sim matching best_model
+        # (score, -syntax_errors, iteration): strict score-only `>` kept the
+        # FIRST of four equally-scored iterations on the 2026-08-30 attempt —
+        # the only one still carrying the parser error the later iterations
+        # had repaired — and the broken text then failed the variation
+        # surgery's syntax gate downstream. Ties break to fewer errors, then
+        # to the later (more-repaired) iteration.
+        best_key = (best_score, -(10 ** 9), -1)
         last_sim_result: Any = None          # most recent sim result
         seen_issues: Dict[str, int] = {}  # issue text → occurrence count
 
@@ -1608,7 +1627,9 @@ class _RefinementEngine:
 
             # ── P0: Best-model tracking ───────────────────────────────────
             last_sim_result = sim_result
-            if score > best_score:
+            candidate_key = self._model_rank_key(score, syntax_result, iteration)
+            if candidate_key > best_key:
+                best_key = candidate_key
                 best_score = score
                 best_model = current_model
                 best_sim_result = sim_result
@@ -1764,18 +1785,26 @@ class _RefinementEngine:
                 if (
                     outcome.accepted
                     and isinstance(accepted_score, (int, float))
-                    and float(accepted_score) > best_score
                 ):
                     # The last allowed iteration has no next pass in which to
-                    # promote an accepted candidate. Record it immediately,
-                    # paired with simulation from the exact returned text.
-                    candidate_sim = self._run_simulation(
-                        get_sysml_text(current_model), current_model.name
+                    # promote an accepted candidate. Rank it with the same
+                    # (score, -errors, iteration) key as the loop-top tracker
+                    # so an equal-score, cleaner candidate is not dropped.
+                    accepted_text = get_sysml_text(current_model)
+                    accepted_key = self._model_rank_key(
+                        float(accepted_score),
+                        check_syntax(accepted_text),
+                        iteration,
                     )
-                    best_model = current_model
-                    best_score = float(accepted_score)
-                    best_sim_result = candidate_sim
-                    last_sim_result = candidate_sim
+                    if accepted_key > best_key:
+                        candidate_sim = self._run_simulation(
+                            accepted_text, current_model.name
+                        )
+                        best_key = accepted_key
+                        best_model = current_model
+                        best_score = float(accepted_score)
+                        best_sim_result = candidate_sim
+                        last_sim_result = candidate_sim
 
         return best_model, best_score, best_sim_result or last_sim_result
 
@@ -2540,6 +2569,38 @@ class _RefinementEngine:
         LLM prompt.
         """
         lev_hints: List[Dict] = []   # distance-2 suggestions for the LLM prompt
+
+        # ── rewrite quoted `doc` bodies ──────────────────────────────────────
+        # SysML v2 documentation bodies are comments; `doc '...';` is a hard
+        # parser error (measured 2026-08-30: one such line survived all three
+        # LLM fix attempts because the block rewrite tripped the merge-size
+        # gate). Mechanical rewrite — no LLM needed.
+        if latest_result.parser_errors:
+            from ..sysml.text_normalization import fix_doc_syntax
+            rewritten, n_docs = fix_doc_syntax(working_sysml)
+            if n_docs and rewritten != working_sysml:
+                re_checked = check_syntax(rewritten)
+                if re_checked.total_errors() < latest_result.total_errors():
+                    n_fixed = (latest_result.total_errors()
+                               - re_checked.total_errors())
+                    working_sysml = rewritten
+                    print(
+                        f"\n  ┌─ [DOC-FIX]  {n_docs} quoted doc body(ies) "
+                        f"rewritten to comment form — {n_fixed} error(s) "
+                        "cleared, no LLM needed",
+                        flush=True,
+                    )
+                    self._sync_model_text(working_model, working_sysml)
+                    latest_result = re_checked
+                    if not latest_result.has_errors:
+                        print("  └─ [DOC-FIX]  ✓ all errors resolved",
+                              flush=True)
+                        return working_sysml, latest_result, lev_hints, True
+                    print(
+                        f"  └─ [DOC-FIX]  {latest_result.total_errors()} "
+                        "error(s) remain — continuing",
+                        flush=True,
+                    )
 
         # ── strip `readonly` before attribute ────────────────────────────────
         # syside rejects `readonly attribute X : ...`; idiomatic SysML v2 uses

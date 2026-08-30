@@ -82,6 +82,13 @@ def connected_components(model_text: str) -> List[Tuple[str, str]]:
     return [(u, t) for u, t in usages.items() if u in connected and t in part_defs]
 
 
+# Why the last introduce_variation() call returned ok=False (empty on success).
+# Module-attribute out-channel (run_flight.LAST_RESULT precedent): the caller's
+# one-line "could not form" message conflated four distinct bail points and
+# misdirected the 2026-08-30 failure diagnosis.
+LAST_FAILURE_REASON: str = ""
+
+
 def introduce_variation(
     model_text: str,
     usage_name: str,
@@ -92,11 +99,19 @@ def introduce_variation(
 ) -> Tuple[str, bool]:
     """Convert `part usage_name : type_name;` into a variation point over variants
     that specialise type_name. Connects to usage_name are preserved. Returns
-    (new_text, ok); ok=False (text unchanged) if it would not parse."""
+    (new_text, ok); ok=False (text unchanged) if it would not parse. On failure
+    ``LAST_FAILURE_REASON`` names the exact bail point."""
+    global LAST_FAILURE_REASON
+    LAST_FAILURE_REASON = ""
     if len(variants) < 2:
+        LAST_FAILURE_REASON = f"only {len(variants)} variant(s); need at least 2"
         return model_text, False
     usage_re = re.compile(rf"\bpart\s+{re.escape(usage_name)}\s*:\s*{re.escape(type_name)}\s*;")
     if not usage_re.search(model_text):
+        LAST_FAILURE_REASON = (
+            f"host usage `part {usage_name} : {type_name};` not found as a "
+            "simple usage declaration"
+        )
         return model_text, False
 
     # harvest the ports the host's connects reference for this component and declare
@@ -122,9 +137,19 @@ def introduce_variation(
     # insert the variant defs before the model package's closing brace
     idx = result.rfind("}")
     if idx == -1:
+        LAST_FAILURE_REASON = "no package closing brace to insert variant defs before"
         return model_text, False
     result = result[:idx] + "\n" + defs + "\n" + result[idx:]
 
-    if check_syntax(result).has_errors:
+    post = check_syntax(result)
+    if post.has_errors:
+        first = (post.parser_errors + post.sema_errors)[0]
+        LAST_FAILURE_REASON = (
+            f"post-surgery text fails to parse "
+            f"({post.total_errors()} error(s); first: "
+            f"L{first.get('line')}: {str(first.get('message'))[:90]}) — "
+            "note the input text must already be error-free for the "
+            "zero-error post-check to be attainable"
+        )
         return model_text, False
     return result, True

@@ -286,6 +286,11 @@ def main() -> int:
     run_dir: Path | None = None
     with AuthoritativeRunLock(output_root()):
         try:
+            # Fail-fast marker for in-process gates (e.g. the variation-DSE
+            # catalog seed): an authoritative run must stop at the first
+            # unpublishable condition instead of spending the remaining
+            # budget before the finalizer refuses publication.
+            os.environ["PROTOTYPING_AUTHORITATIVE"] = "1"
             require_authoritative_runtime()
             _require_clean_worktree()
             staging = create_staging_bundle(output_root())

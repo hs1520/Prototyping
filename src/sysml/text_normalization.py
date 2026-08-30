@@ -16,6 +16,7 @@ from ..utils.sysml_text_utils import find_block_end
 # not their scheduling.
 NORMALIZATION_RULE_ORDER = {
     "syntax_gate": (
+        "fix_doc_syntax",
         "strip_readonly_keyword",
         "fix_keyword_item_names",
         "fix_c_style_negation",
@@ -141,25 +142,39 @@ def normalise_connect_syntax(sysml_text: str) -> Tuple[str, int]:
 
 
 def fix_doc_syntax(sysml_text: str) -> Tuple[str, int]:
-    """Convert invalid ``doc = "string";`` to valid ``doc /* string */``.
+    """Convert quoted ``doc`` bodies to the legal ``doc /* text */`` form.
 
-    The correct SysML v2 doc-comment syntax is ``doc /* text */``.
-    LLMs sometimes generate ``doc = "text";`` (or ``doc = "text"``) which
-    is not valid SysML v2 — it is parsed by Syside as a feature-usage
-    named ``doc`` of type String, causing round-trip serialization issues
-    (the feature leaks into ``top_level_usages`` as a spurious
-    ``requirement req : String = "..."`` line).
+    The correct SysML v2 doc-comment syntax is ``doc /* text */`` —
+    documentation bodies are comments, never strings.  LLMs emit two
+    invalid spellings of the same idea:
+
+    * ``doc = "text";`` — parsed by Syside as a feature-usage named
+      ``doc`` of type String, leaking into ``top_level_usages`` as a
+      spurious ``requirement req : String = "..."`` line;
+    * ``doc 'text';`` / ``doc "text";`` (no ``=``) — a hard parser error.
+      Measured on the 2026-08-30 authoritative attempt: one such line
+      inside a port body produced an error the three-attempt LLM syntax
+      gate could not clear (the block-scoped rewrite tripped the
+      merge-size gate), and the run limped on with a degraded model.
+
+    Both are mechanical rewrites, so they cost no syntax-gate LLM round.
+    Single-line bodies only; ``*/`` inside a body is defused.
 
     Returns:
         (fixed_text, count_of_substitutions)
     """
-    # Match: optional leading whitespace, `doc`, optional whitespace,
-    # `=`, optional whitespace, a double-quoted string, optional `;`
-    doc_eq_re = re.compile(
-        r'\bdoc\s*=\s*"((?:[^"\\]|\\.)*)"[ \t]*;?',
+    doc_quoted_re = re.compile(
+        r"""\bdoc\s*(?:=\s*)?(?P<quote>['"])"""
+        r"""(?P<body>(?:\\.|(?!(?P=quote))[^\n\\])*)"""
+        r"""(?P=quote)[ \t]*;?""",
     )
-    count = len(doc_eq_re.findall(sysml_text))
-    fixed = doc_eq_re.sub(lambda m: f'doc /* {m.group(1)} */', sysml_text)
+
+    def _swap(match: re.Match) -> str:
+        body = match.group("body").replace("*/", "* /").strip()
+        return f"doc /* {body} */"
+
+    count = len(doc_quoted_re.findall(sysml_text))
+    fixed = doc_quoted_re.sub(_swap, sysml_text)
     return fixed, count
 
 

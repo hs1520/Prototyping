@@ -6,9 +6,12 @@ from src.sysml.text_normalization import NORMALIZATION_RULE_ORDER
 def test_normalization_rule_order_is_explicit():
     assert NORMALIZATION_RULE_ORDER == {
         # `fix_c_style_negation` is appended, not interleaved: the two rules
-        # before it are historical and their relative order is load-bearing,
-        # while this one is new and independent of both.
+        # after `fix_doc_syntax` are historical and their relative order is
+        # load-bearing. `fix_doc_syntax` leads (2026-08-30): a quoted doc body
+        # is a hard parser error that survived all three LLM fix attempts, and
+        # rewriting it first gives every later rule a parseable text.
         "syntax_gate": (
+            "fix_doc_syntax",
             "strip_readonly_keyword",
             "fix_keyword_item_names",
             "fix_c_style_negation",
@@ -68,3 +71,59 @@ def test_the_archived_run_that_lost_its_qualification_now_parses():
     assert check_syntax(
         fix_c_style_negation(source), fail_closed=True
     ).total_errors() == 0
+
+
+def test_fix_doc_syntax_rewrites_quoted_bodies_without_equals():
+    """Measured 2026-08-30: `doc '...';` inside a port body was a parser error
+    the three-attempt LLM syntax gate could not clear."""
+    from src.sysml.text_normalization import fix_doc_syntax
+
+    text = (
+        "        in port remoteIdMonitor : RemoteIdPort {\n"
+        "            doc 'Monitor remote ID broadcast; satisfies REQ_INTF_003';\n"
+        "        }\n"
+    )
+    fixed, count = fix_doc_syntax(text)
+    assert count == 1
+    assert "doc /* Monitor remote ID broadcast; satisfies REQ_INTF_003 */" in fixed
+    assert "'" not in fixed.split("doc /*")[1].split("*/")[0]
+
+    double, count2 = fix_doc_syntax('doc "plain double";\n')
+    assert count2 == 1 and 'doc /* plain double */' in double
+
+
+def test_fix_doc_syntax_keeps_legacy_equals_form_and_inner_apostrophes():
+    from src.sysml.text_normalization import fix_doc_syntax
+
+    fixed, count = fix_doc_syntax('doc = "legacy form";')
+    assert count == 1 and "doc /* legacy form */" in fixed
+
+    fixed2, count2 = fix_doc_syntax('doc "the vehicle\'s remote ID";')
+    assert count2 == 1
+    assert "doc /* the vehicle's remote ID */" in fixed2
+
+    # comment-form docs and comment closers inside bodies stay safe
+    valid = "doc /* already valid */"
+    assert fix_doc_syntax(valid) == (valid, 0)
+    defused, _ = fix_doc_syntax('doc "sneaky */ closer";')
+    assert "*/ closer" not in defused.split("doc /*", 1)[1].rsplit("*/", 1)[0]
+
+
+def test_fix_doc_syntax_repairs_the_archived_defect_to_parseable_sysml():
+    from src.simulation.syntax_checker import check_syntax
+    from src.sysml.text_normalization import fix_doc_syntax
+
+    model = (
+        "package M {\n"
+        "    port def RemoteIdPort;\n"
+        "    part def SafetyMonitor {\n"
+        "        in port remoteIdMonitor : RemoteIdPort {\n"
+        "            doc 'Monitor remote ID broadcast; satisfies REQ_INTF_003';\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    assert check_syntax(model).has_errors
+    fixed, count = fix_doc_syntax(model)
+    assert count == 1
+    assert not check_syntax(fixed).has_errors

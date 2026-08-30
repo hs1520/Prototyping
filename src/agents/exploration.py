@@ -1,6 +1,7 @@
 """Methods mechanically extracted from agents.orchestrator."""
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 from .dse_injectors import (
@@ -710,6 +711,37 @@ class ExplorationMixin:
                 print("  [variation-DSE] injected mandatory evidence-backed catalog "
                       f"architecture seed on '{usage}' ({len(variants)} architectures)")
 
+        # A quantified run whose mandatory catalog seed cannot be established
+        # has no catalog-grounded route to a Phase 8 realization: the bilevel
+        # fallback searches configuration parameters, not the physical
+        # architecture tuple, so the finalizer would refuse publication at the
+        # very end anyway (measured 2026-08-30: the refusal landed only after
+        # the whole downstream phase sequence had run). Say precisely WHY the
+        # seed failed, and in an authoritative run stop here instead of
+        # spending the remaining budget on a bundle that cannot publish.
+        from ..dse.domain_objective import objective_families
+        if not catalog_seeded and objective_families(requirements):
+            if seed is None:
+                seed_reason = ("no admissible seed (see the "
+                               "[variation-DSE] seed diagnostics above)")
+            else:
+                from ..dse import variation_introducer as _vi
+                seed_reason = (
+                    "variation surgery failed: "
+                    + (_vi.LAST_FAILURE_REASON or "unknown")
+                )
+            print("  [variation-DSE] mandatory catalog architecture seed "
+                  f"FAILED — {seed_reason}", flush=True)
+            if os.environ.get("PROTOTYPING_AUTHORITATIVE") == "1":
+                self.last_variation_proposal_source = "catalog-seed-unavailable"
+                raise RuntimeError(
+                    "authoritative fail-fast: the mandatory catalog "
+                    f"architecture seed could not be established ({seed_reason}). "
+                    "Without it Phase 8 realization has no catalog-grounded "
+                    "design and the finalizer would refuse publication after "
+                    "the full phase sequence had already run."
+                )
+
         # A model may already contain objective variation points supplied upstream.
         # Do not generate additional LLM points in that case, but do still add the
         # mandatory catalog architecture seed above.  This closes the old early-
@@ -941,6 +973,8 @@ class ExplorationMixin:
             if any(f in fams for f, _ in targets)
         )
         if not req_ids:
+            print("  [variation-DSE] seed diagnostics: objective families "
+                  f"{sorted(fams)} matched no requirement targets", flush=True)
             return None
 
         # Preference-ordered concern keywords: the propulsion-ish component is the
@@ -954,6 +988,8 @@ class ExplorationMixin:
             if rank is not None and (best is None or rank < best[0]):
                 best = (rank, usage, type_name)
         if best is None:
+            print("  [variation-DSE] seed diagnostics: no connected component "
+                  "matches a propulsion/airframe/power concern name", flush=True)
             return None
         _, usage, type_name = best
 
@@ -979,6 +1015,9 @@ class ExplorationMixin:
             vtype = f"{name.capitalize()}{usage.capitalize()}Impl"
             variants.append(VariantSpec(name=name, type_name=vtype, attrs=attrs))
         if len(variants) < 2:
+            print("  [variation-DSE] seed diagnostics: only "
+                  f"{len(variants)} catalog architecture(s) within the bounds "
+                  f"of {req_ids} — at least 2 needed", flush=True)
             return None
         rationale = ("mandatory deterministic catalog architecture seed: evidence-backed "
                      "coupled rotor-count/radius/cell architectures")
