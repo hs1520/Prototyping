@@ -81,3 +81,7 @@ gazebo_poc/generated/
 .codegraph/
 CONTEXT.md
 skills-lock.json
+
+# session scratch / local preview tooling
+tmp/
+.claude/launch.json
