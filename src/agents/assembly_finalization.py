@@ -544,9 +544,15 @@ class AssemblyFinalizer:
         result = assembled
 
         for owner, name, block in behavior_state_defs:
-            # Check if this state def already appears in the assembled model
-            if re.search(r"\bstate\s+def\s+" + re.escape(name) + r"\b", result):
-                continue  # already present — nothing to do
+            # Spelling-robust presence check: the behaviour may already exist
+            # as `state def Name` OR as a part-level bodied usage
+            # (`state Name { ... }`) — injecting a def beside the usage was
+            # the measured double-declaration (draws #1/#4: every shadowing
+            # warning sat beside an injection marker).
+            if re.search(
+                r"\bstate\s+(?:def\s+)?" + re.escape(name) + r"\b", result
+            ):
+                continue  # already present in some spelling — nothing to do
 
             # Determine target part
             target_part = owner
@@ -566,18 +572,37 @@ class AssemblyFinalizer:
             if closing == -1:
                 continue
 
-            # Indent the block by 4 spaces and inject before the closing }
+            # Re-indent from the block's own base indent (additive indenting
+            # compounded to 70-column drift across injection rounds)
+            stripped_lines = [
+                line for line in block.splitlines() if line.strip()
+            ]
+            base = min(
+                (len(line) - len(line.lstrip()) for line in stripped_lines),
+                default=0,
+            )
             indented = "\n".join(
-                "        " + line if line.strip() else line
+                "        " + line[base:] if line.strip() else line
                 for line in block.splitlines()
             )
-            result = (
+            candidate = (
                 result[:closing]
                 + "\n        // (injected by pipeline)\n"
                 + indented
                 + "\n    "
                 + result[closing:]
             )
+            # Injection must never manufacture a duplicate/shadow the model
+            # did not already have (surgical-pass discipline applied to our
+            # own writers).
+            from ..prototyping.planned_behavior import _shadow_fingerprint
+            if _shadow_fingerprint(candidate) > _shadow_fingerprint(result):
+                print(
+                    f"  ⚠ state-def injection of '{name}' reverted — it "
+                    "would add a duplicate/shadowed member", flush=True,
+                )
+                continue
+            result = candidate
             injected_names.append(name)
 
         return result, injected_names

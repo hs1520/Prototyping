@@ -164,17 +164,24 @@ def test_do_action_is_preserved_as_executable_state_behavior():
     compiled, report = materialize_planned_behaviors("", (behavior,))
 
     assert report["status"] == "PASS"
-    assert "do action maintainObstacleSeparation;" in compiled
+    # Named, typed usage spelling: the bare `do action X;` declared a nested
+    # member named X that shadowed the part-level `action def X` — the
+    # measured mass-shadowing source of the 2026-08-30 draws.
+    assert (
+        "do action runAvoidingObstacle : maintainObstacleSeparation;"
+        in compiled
+    )
+    assert "do action maintainObstacleSeparation;" not in compiled
     assert "action def maintainObstacleSeparation {}" in compiled
     assert "item def ObstacleDetectedSignal;" in compiled
     assert check_syntax(compiled).has_errors is False
     machines = extract_state_machines(compiled)
     assert len(machines) == 1
     assert machines[0].do_action_for_state("AvoidingObstacle") == (
-        "maintainObstacleSeparation"
+        "runAvoidingObstacle"
     )
     assert machines[0].response_action_for_state("AvoidingObstacle") == (
-        "maintainObstacleSeparation"
+        "runAvoidingObstacle"
     )
 
 

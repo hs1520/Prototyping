@@ -40,7 +40,7 @@
       "ordinal": 6,
       "system_prompt_digest": "f4d35d02a165c22b3747132869386dfe41d247c64ca83a3189e4bde63a3291e4",
       "temperature": 0.2,
-      "user_prompt_digest": "319de7289ad792ae1d1175d5db29de52e4dcd8bbc796c7f595d67c85863163b1"
+      "user_prompt_digest": "1cc5edc7ccbcc98193635bcb5a6e1dc3e0ed793e234ed98b748214f471c29974"
     }
   ],
   "R1-BBCTX": [
@@ -84,7 +84,7 @@
       "ordinal": 6,
       "system_prompt_digest": "f4d35d02a165c22b3747132869386dfe41d247c64ca83a3189e4bde63a3291e4",
       "temperature": 0.2,
-      "user_prompt_digest": "319de7289ad792ae1d1175d5db29de52e4dcd8bbc796c7f595d67c85863163b1"
+      "user_prompt_digest": "1cc5edc7ccbcc98193635bcb5a6e1dc3e0ed793e234ed98b748214f471c29974"
     }
   ],
   "R2-BBAG": [
@@ -149,7 +149,7 @@
       "ordinal": 9,
       "system_prompt_digest": "f4d35d02a165c22b3747132869386dfe41d247c64ca83a3189e4bde63a3291e4",
       "temperature": 0.2,
-      "user_prompt_digest": "ae867c2adc8efc7b9cde30441dc98e2064d7f7a0e2eb8bf1114867d2693a7438"
+      "user_prompt_digest": "ded905b485307178fefc36201258d82b5182eb79783a953ced9cda4ad08fc6d7"
     }
   ]
 }

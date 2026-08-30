@@ -175,6 +175,14 @@ def validate_planned_behaviors(
     seen_behaviors: set[tuple[str, str]] = set()
     globally_named: set[str] = set()
     ports_by_owner = component_port_names or {}
+    planned_actions_by_owner: dict[str, set[str]] = {}
+    for behavior in behaviors:
+        for state in behavior.states:
+            for action in (state.entry_action, state.do_action):
+                if action:
+                    planned_actions_by_owner.setdefault(
+                        behavior.owner, set()
+                    ).add(action)
 
     for index, behavior in enumerate(behaviors):
         prefix = f"behaviors[{index}]"
@@ -190,6 +198,21 @@ def validate_planned_behaviors(
                 f"planned behavior id {behavior.behavior_id} must be unique"
             )
         globally_named.add(behavior.behavior_id)
+        # A behaviour id that equals a planned action name in the SAME owner
+        # materializes as a state def and an action def sharing one name in
+        # one scope — the exact collision the terminal
+        # USER_NAMESPACE_INTEGRITY gate rejects (measured on draw 4c39e7ba:
+        # WaypointModificationBehavior declared as both). Reject it while the
+        # plan is still repairable.
+        if behavior.behavior_id in planned_actions_by_owner.get(
+            behavior.owner, set()
+        ):
+            issues.append(
+                f"{prefix}.behavior_id '{behavior.behavior_id}' is also a "
+                f"planned action name in {behavior.owner}; a state def and "
+                "an action def may not share one name in the owner scope — "
+                "rename one of them"
+            )
         if behavior.owner not in component_names:
             issues.append(f"{prefix}.owner is not a planned component")
         if not IDENTIFIER_RE.fullmatch(behavior.behavior_id):
@@ -433,12 +456,23 @@ def emit_planned_behavior(behavior: PlannedBehavior) -> str:
             lines.extend([
                 f"    state {state.state_id} {{",
             ])
+            # Named, typed usages (`entry action onX : act;`) — the bare
+            # spelling (`entry action act;`) declares a NESTED member named
+            # `act` that shadows the part-level `action def act`, and the
+            # emitter + declaration injector then mass-produce shadow pairs
+            # by construction (measured: 59 of 61 warnings across the three
+            # failed 2026-08-30 draws). The archived QUALIFIED models use
+            # the typed spelling throughout.
             if state.entry_action:
                 lines.append(
-                    f"        entry action {state.entry_action};"
+                    f"        entry action on{state.state_id} : "
+                    f"{state.entry_action};"
                 )
             if state.do_action:
-                lines.append(f"        do action {state.do_action};")
+                lines.append(
+                    f"        do action run{state.state_id} : "
+                    f"{state.do_action};"
+                )
             lines.append("    }")
         else:
             lines.append(f"    state {state.state_id};")
@@ -734,6 +768,7 @@ def materialize_owned_planned_behaviors(
     )
 
     materialized: list[str] = []
+    reverted: list[dict[str, str]] = []
     for behavior in behaviors:
         owner_span = _owner_body(text, behavior.owner)
         if owner_span is None:
@@ -742,11 +777,16 @@ def materialize_owned_planned_behaviors(
         action_declarations = []
         for state in behavior.states:
             for action in (state.entry_action, state.do_action):
+                # Any DECLARATION spelling blocks re-declaration: `action def
+                # X`, a typed usage `action X : T`, or a bare owned usage
+                # `action X;` / `action X {`. (References inside state bodies
+                # — `entry action u : X;` — do not match: `X` there follows a
+                # colon, not the `action` keyword.)
                 if (
                     action
                     and re.search(
-                    rf"\baction\s+def\s+"
-                        rf"{re.escape(action)}\b",
+                        rf"\baction\s+(?:def\s+)?"
+                        rf"{re.escape(action)}\s*[:;{{]",
                         owner_text,
                     ) is None
                 ):
@@ -756,6 +796,25 @@ def materialize_owned_planned_behaviors(
         existing = _definition_spans(
             owner_text, r"state\s+def", behavior.behavior_id
         )
+        if not existing:
+            # A part-level BODIED usage spelling (`state Name { ... }`) is the
+            # same declaration in the extractor-invisible form; leaving it and
+            # injecting a def beside it produced the measured double
+            # declaration (a same-name sibling pair is exactly what syside
+            # flags). Replace it with the plan-blessed def instead — but only
+            # a TOP-LEVEL usage: a nested occurrence belongs to another scope
+            # and replacing it there would plant the def in the wrong place
+            # (the fingerprint guard below covers that shape by reverting).
+            existing = [
+                (start, end)
+                for start, end in _definition_spans(
+                    text=owner_text, kind=r"state", name=behavior.behavior_id
+                )
+                if owner_text[start:end].rstrip().endswith("}")
+                and "exhibit" not in owner_text[max(0, start - 24):start]
+                and owner_text[:start].count("{")
+                == owner_text[:start].count("}")
+            ]
         block = "\n".join(
             "        " + line if line else ""
             for line in emit_planned_behavior(behavior).splitlines()[1:]
@@ -766,6 +825,8 @@ def materialize_owned_planned_behaviors(
             + block
             + "\n    "
         )
+        before_text = text
+        before_fp = _shadow_fingerprint(text)
         if existing:
             start, end = existing[0]
             absolute_start = owner_span[0] + start
@@ -778,6 +839,22 @@ def materialize_owned_planned_behaviors(
         else:
             closing = owner_span[1]
             text = text[:closing] + insertion + text[closing:]
+        after_fp = _shadow_fingerprint(text)
+        if after_fp > before_fp:
+            # Injection must never create a duplicate/shadow the model did
+            # not already have — the surgical-pass discipline applied to our
+            # own writers. Reverting leaves the behaviour absent, which the
+            # conformance report below surfaces for the in-loop repair.
+            text = before_text
+            reverted.append({
+                "behavior": f"{behavior.owner}::{behavior.behavior_id}",
+                "reason": (
+                    "materialization reverted: it would add "
+                    f"{after_fp[0] - before_fp[0]} duplicate member(s) and "
+                    f"{after_fp[1] - before_fp[1]} shadowing warning(s)"
+                ),
+            })
+            continue
         materialized.append(
             f"{behavior.owner}::{behavior.behavior_id}"
         )
@@ -790,4 +867,34 @@ def materialize_owned_planned_behaviors(
         report["status"] = "FAIL"
         report["issues"].extend(event_report["issues"])
     report["materialized"] = materialized
+    if reverted:
+        report["reverted"] = reverted
+        report["issues"].extend(item["reason"] for item in reverted)
     return text, report
+
+
+def _shadow_fingerprint(model_text: str) -> tuple[int, int]:
+    """(duplicate members, shadowing warnings) — the injection-safety metric.
+
+    Every pipeline writer that adds named declarations compares this before
+    and after each piece; a strictly worse fingerprint means the piece
+    manufactured a namespace defect the model did not have (measured on the
+    2026-08-30 draws: 59 of 61 shadowing warnings were injector-adjacent).
+    """
+    from ..simulation.syntax_checker import check_syntax
+    from .namespace_integrity import check_user_namespace_integrity
+
+    try:
+        duplicates = len(
+            check_user_namespace_integrity(model_text)["duplicate_members"]
+        )
+    except Exception:
+        duplicates = 0
+    try:
+        warnings = sum(
+            1 for w in check_syntax(model_text).warnings
+            if "shadows" in str(w.get("message", ""))
+        )
+    except Exception:
+        warnings = 0
+    return duplicates, warnings
