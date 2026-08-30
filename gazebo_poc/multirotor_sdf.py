@@ -34,6 +34,31 @@ OCTA_X: List[Tuple[float, int]] = [
 ]
 FRAME_CLASS = {4: 1, 6: 2, 8: 3}        # ArduCopter FRAME_CLASS: QUAD=1, HEXA=2, OCTA=3
 
+# --- airframe geometry -----------------------------------------------------
+# One source of truth. The SDF visual below is drawn from these numbers and
+# ``airframe_drag`` computes the parasitic-drag area from the same ones, so the
+# airframe that is drawn and the airframe the drag model sees cannot diverge.
+ARM_LEN_PER_ROTOR_RADIUS = 2.2
+HUB_RADIUS_PER_ARM_LEN = 0.32
+HUB_RADIUS_MIN_M = 0.06
+HUB_HEIGHT_M = 0.06
+ARM_WIDTH_PER_ROTOR_RADIUS = 0.10
+ARM_WIDTH_MIN_M = 0.022
+ARM_THICKNESS_M = 0.018
+
+
+def arm_length_m(rotor_radius_m: float) -> float:
+    """Hub centre to rotor centre."""
+    return ARM_LEN_PER_ROTOR_RADIUS * rotor_radius_m
+
+
+def hub_radius_m(arm_len_m: float) -> float:
+    return max(HUB_RADIUS_MIN_M, HUB_RADIUS_PER_ARM_LEN * arm_len_m)
+
+
+def arm_width_m(rotor_radius_m: float) -> float:
+    return max(ARM_WIDTH_MIN_M, ARM_WIDTH_PER_ROTOR_RADIUS * rotor_radius_m)
+
 _ROTOR_LINK = """    <link name='rotor_{i}'>
       <pose>{x:.4f} {y:.4f} 0.023 0 0 0</pose>
       <inertial><mass>0.025</mass>
@@ -67,7 +92,7 @@ _IRIS_PROP_RADIUS_M = 0.1
 # is visual only -- collision, inertia and the LiftDrag areas are declared
 # separately and are untouched, so the flight is unchanged.
 _BODY_VISUAL = """      <visual name='hub_visual'>
-        <geometry><cylinder><radius>{hub_r:.4f}</radius><length>0.06</length></cylinder></geometry>
+        <geometry><cylinder><radius>{hub_r:.4f}</radius><length>{hub_h:.4f}</length></cylinder></geometry>
         <material><ambient>0.08 0.08 0.09</ambient><diffuse>0.10 0.10 0.12</diffuse>
           <specular>0.4 0.4 0.4 1</specular></material>
       </visual>
@@ -75,7 +100,7 @@ _BODY_VISUAL = """      <visual name='hub_visual'>
 
 _ARM_VISUAL = """      <visual name='arm_{i}_visual'>
         <pose>{mx:.4f} {my:.4f} 0.0 0 0 {yaw:.4f}</pose>
-        <geometry><box><size>{alen:.4f} {aw:.4f} 0.018</size></box></geometry>
+        <geometry><box><size>{alen:.4f} {aw:.4f} {ath:.4f}</size></box></geometry>
         <material><ambient>0.06 0.06 0.07</ambient><diffuse>0.09 0.09 0.10</diffuse>
           <specular>0.3 0.3 0.3 1</specular></material>
       </visual>
@@ -84,8 +109,7 @@ _ARM_VISUAL = """      <visual name='arm_{i}_visual'>
 
 def _airframe_visual(table, arm_len_m: float, rotor_radius_m: float) -> str:
     """Hub-and-arms visual for the planned rotor layout."""
-    hub_r = max(0.06, 0.32 * arm_len_m)
-    body = _BODY_VISUAL.format(hub_r=hub_r)
+    body = _BODY_VISUAL.format(hub_r=hub_radius_m(arm_len_m), hub_h=HUB_HEIGHT_M)
     for i, (ang, _spin) in enumerate(table):
         th = math.radians(ang)
         x, y = arm_len_m * math.cos(th), -arm_len_m * math.sin(th)
@@ -94,7 +118,8 @@ def _airframe_visual(table, arm_len_m: float, rotor_radius_m: float) -> str:
             mx=x / 2.0, my=y / 2.0,          # arm spans hub centre to rotor
             yaw=math.atan2(y, x),
             alen=arm_len_m,
-            aw=max(0.022, 0.10 * rotor_radius_m),
+            aw=arm_width_m(rotor_radius_m),
+            ath=ARM_THICKNESS_M,
         )
     return body
 
@@ -107,6 +132,31 @@ _LIFTDRAG = """    <plugin filename="gz-sim-lift-drag-system" name="gz::sim::sys
       <link_name>iris_with_standoffs::rotor_{i}</link_name>
     </plugin>
 """
+
+# Airframe parasitic drag. The rotor LiftDrag plugins above produce *thrust*;
+# without this the body has no drag at all, so a forward dash never reaches a
+# terminal velocity and its "cruise speed" is just however long it accelerated.
+#
+# gz-sim's LiftDrag uses cd = cda*alpha below the stall angle and
+# cd = cda*alpha_stall + cda_stall*(alpha - alpha_stall) above it. Setting
+# cda_stall=0 and biasing a0 past alpha_stall therefore yields a CONSTANT
+# cd = cda*alpha_stall, i.e. a genuine quadratic drag plate rather than an
+# angle-of-attack-dependent aerofoil. With cd pinned to 1.0 the <area> below is
+# exactly the equivalent flat-plate area f, and drag = 0.5*rho*f*V^2. LiftDrag
+# reads the world Wind component, so V is airspeed, not ground speed.
+_BODY_DRAG_ALPHA_STALL = 0.01
+# NOTE: the plugin *name* selects the class inside the shared library, so it must be
+# the registered LiftDrag class — a descriptive name of our own fails to load.
+_BODY_DRAG = """    <plugin filename="gz-sim-lift-drag-system" name="gz::sim::systems::LiftDrag">
+      <a0>1.5708</a0><alpha_stall>{stall}</alpha_stall>
+      <cla>0.0</cla><cda>{cda:.4f}</cda>
+      <cma>0.0</cma><cla_stall>0.0</cla_stall><cda_stall>0.0</cda_stall><cma_stall>0.0</cma_stall>
+      <area>{area:.6f}</area><air_density>1.2041</air_density>
+      <cp>0 0 0</cp><forward>1 0 0</forward><upward>0 0 1</upward>
+      <link_name>iris_with_standoffs::base_link</link_name>
+    </plugin>
+"""
+
 
 _APPLYFORCE = ('    <plugin filename="gz-sim-apply-joint-force-system" '
                'name="gz::sim::systems::ApplyJointForce">\n'
@@ -213,14 +263,17 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
                             payload_release: bool = False,
                             parachute_deploy: bool = False,
                             forward_lidar: bool = False,
-                            forward_lidar_range_m: float = 15.0):
+                            forward_lidar_range_m: float = 15.0,
+                            body_drag_area_m2: float = 0.0):
     """Write parametric standoffs + gimbal SDFs for an N-rotor airframe. ``max_rotor_rad_s`` is the
     full-throttle rotor speed (ArduPilotPlugin multiplier) — lower it (real-motor calibration) to
     get a realistic thrust-to-weight. ``fail_rotor`` (index) sets that rotor's LiftDrag area to 0
     (dead motor — produces no thrust though ArduCopter still commands it): simulates a single
-    propulsion-unit failure to test controllability/redundancy."""
+    propulsion-unit failure to test controllability/redundancy. ``body_drag_area_m2`` is the
+    equivalent flat-plate area of the airframe (see ``airframe_drag``); it gives the body genuine
+    quadratic parasitic drag, without which a forward dash has no terminal velocity."""
     table = _motor_table(rotor_count)
-    L = 2.2 * rotor_radius_m
+    L = arm_length_m(rotor_radius_m)
     ixx, iyy, izz = inertia
     template_dir, out_dir = Path(template_dir), Path(out_dir)
 
@@ -278,6 +331,12 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
         gm += _LIFTDRAG.format(area=a, cpx="-0.084", fwd=f2, i=i)
     for i in range(rotor_count):
         gm += _APPLYFORCE.format(i=i)
+    if body_drag_area_m2 and body_drag_area_m2 > 0:
+        gm += _BODY_DRAG.format(
+            stall=_BODY_DRAG_ALPHA_STALL,
+            cda=1.0 / _BODY_DRAG_ALPHA_STALL,
+            area=float(body_drag_area_m2),
+        )
     gm += _ARDUPILOT_HEAD
     mv = f"{max_rotor_rad_s:.1f}"
     for i, (ang, spin) in enumerate(table):

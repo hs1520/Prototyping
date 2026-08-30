@@ -151,6 +151,11 @@ def test_req_results_suspend_motor_out_and_keep_subchecks_partial():
         "wind_test_complete": True,
         "wind_groundspeed_mps": 5.5,
         "wind_headwind_alignment": 0.99,
+        "wind_groundspeed_steady_state": {
+            "steady": True, "reason": "plateaued", "drift_fraction": 0.03,
+            "duration_s": 9.9, "samples": 97,
+        },
+        "wind_drag_area_m2": 0.057437,
         "payload_release_commanded": True,
         "payload_observer_available": True,
         "payload_release_detected": True,
@@ -160,7 +165,10 @@ def test_req_results_suspend_motor_out_and_keep_subchecks_partial():
     results = rgf._req_results(live, planned)
     by_id = {item["req_id"]: item for item in results}
     assert by_id["REQ-SAFE-007"]["status"] == "SUSPENDED"
-    assert by_id["REQ-PERF-004"]["status"] == "PARTIAL"
+    # the headwind now acts through geometry-derived quadratic drag on airspeed
+    # and the ground speed held is certified steady, so this closes
+    assert by_id["REQ-PERF-004"]["status"] == "PASS"
+    assert "the verdict survives unless the true f exceeds" in by_id["REQ-PERF-004"]["message"]
     assert by_id["REQ-PERF-005"]["status"] == "PARTIAL"
     assert rgf._overall_status({"return_code": 0, "hover_stable": True}, results, False) == "PARTIAL"
 
@@ -329,14 +337,25 @@ _QUALITY_REQS = [
     "percent and roll and pitch RMS within 1.0 degree.",
 ]
 
+_STEADY = {"steady": True, "reason": "plateaued", "drift_fraction": 0.021,
+           "duration_s": 10.0, "samples": 99}
+_TRENDING = {"steady": False, "reason": "still trending", "drift_fraction": 0.48,
+             "duration_s": 9.0, "samples": 89}
+
 _QUALITY_LIVE = {
     "nilwind_dash_speed_mps": 21.3,
     "nilwind_dash_peak_mps": 23.9,
+    "nilwind_dash_pitch_rc": 1100,
+    "nilwind_dash_steady_state": _STEADY,
+    "cruise_sweep_speeds_mps": [10.1, 15.6, 19.9, 21.3],
+    "cruise_sweep_payload_attached": True,
     "cruise_attitude_rms_deg": 0.31,
     "cruise_attitude_roll_rms_deg": 0.22,
     "cruise_attitude_pitch_rms_deg": 0.31,
     "cruise_attitude_samples": 88,
     "cruise_attitude_mean_speed_mps": 19.7,
+    "cruise_attitude_points": 4,
+    "cruise_attitude_speed_span_mps": [10.1, 21.3],
     "hover_attitude_rms_deg": 0.44,
     "hover_attitude_samples": 132,
     "hover_attitude_with_payload": True,
@@ -350,21 +369,48 @@ def test_flight_quality_checks_judge_pass_partial_and_scope_caveats():
     results = {r["check"]: r for r in rgf._req_results(_QUALITY_LIVE, planned)}
 
     assert results["cruise_speed"]["status"] == "PASS"
-    assert "nil-wind" in results["cruise_speed"]["message"]
+    assert "HELD" in results["cruise_speed"]["message"]
+    assert "certified steady points" in results["cruise_speed"]["message"]
 
+    # a swept envelope closes "at all authorised speeds"; the reported RMS is
+    # the worst point, so passing covers every point measured
+    assert results["cruise_attitude"]["status"] == "PASS"
+    assert "WORST of 4 certified steady speed points" in results["cruise_attitude"]["message"]
+    assert "not swept" not in results["cruise_attitude"]["message"]
+
+    # the sweep is flown with the payload aboard, so it is a transport cruise
+    assert results["payload_attitude"]["status"] == "PASS"
+    assert "margin" in results["payload_attitude"]["message"]
+    assert "cruise-transport swept with the payload aboard" in results["payload_attitude"]["message"]
+
+
+def test_a_speed_that_never_plateaued_cannot_be_reported():
+    """The 2026-08-30 defect: a still-accelerating dash reported as a cruise speed."""
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE, nilwind_dash_steady_state=_TRENDING)
+    results = {r["check"]: r for r in rgf._req_results(live, planned)}
+    # 21.3 m/s clears the 18 m/s requirement, but it was never held
+    assert results["cruise_speed"]["status"] == "INCONCLUSIVE"
+    assert "still trending" in results["cruise_speed"]["message"]
+
+
+def test_a_single_speed_point_still_cannot_claim_all_authorised_speeds():
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE, cruise_attitude_points=1,
+                cruise_attitude_speed_span_mps=[19.7, 19.7])
+    results = {r["check"]: r for r in rgf._req_results(live, planned)}
     assert results["cruise_attitude"]["status"] == "PARTIAL"
     assert "not swept" in results["cruise_attitude"]["message"]
-
+    # and without a swept transport cruise the payload claim stays PARTIAL too
     assert results["payload_attitude"]["status"] == "PARTIAL"
-    assert "margin" in results["payload_attitude"]["message"]
-    assert "carry-hover" in results["payload_attitude"]["message"]
+    assert "carry-hover window only" in results["payload_attitude"]["message"]
 
 
 def test_flight_quality_checks_fail_on_violated_limits():
     planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
     live = dict(_QUALITY_LIVE)
     live.update({
-        "nilwind_dash_speed_mps": 12.4,     # below 18
+        "nilwind_dash_speed_mps": 12.4,     # held, but below 18
         "cruise_attitude_rms_deg": 0.9,     # above 0.5
         "hover_throttle_pct": 80.0,         # margin 20 < 30
     })

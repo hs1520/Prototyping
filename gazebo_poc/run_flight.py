@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 from gazebo_poc.sdf_generator import generate_sdf
+from gazebo_poc.steady_state import steady_state
 
 _IMG = "headless_gazebo"
 _CONTAINER = "ai_prototyping_gazebo"
@@ -159,13 +160,89 @@ def _parm_text(frame_class: int, hover_throttle: float | None,
     return text
 
 
+#: A dash is measured over the trailing window once the initial acceleration
+#: transient has passed, and it runs until that window is steady or the cap is
+#: reached. Reporting a speed from a still-accelerating dash is what made the
+#: 2026-08-30 run's "cruise speed" a function of the dash duration.
+_DASH_SETTLE_S = 6.0
+_DASH_WINDOW_S = 10.0
+_DASH_MAX_S = 45.0
+
+#: RC2 commands swept by the cruise survey, gentle to full forward authority
+#: (1500 = neutral, 1100 = full). One stick position answers "how fast is the
+#: vehicle at this stick position"; the requirements ask what the vehicle can
+#: hold "at all authorised speeds", which is a sweep.
+_DASH_SWEEP_PITCH = (1420, 1330, 1220, 1100)
+
+
+def _trailing(samples, now: float, window_s: float = _DASH_WINDOW_S):
+    """The trailing ``window_s`` of ``[(time, value)]``."""
+    return [item for item in samples if item[0] >= now - window_s]
+
+
+
+
+def _collect_ned(m, sink) -> None:
+    """Append the current NED horizontal velocity, for headwind alignment."""
+    pos = m.messages.get("LOCAL_POSITION_NED") if hasattr(m, "messages") else None
+    if pos is not None:
+        sink.append((float(pos.vx), float(pos.vy)))
+
+
+def _hold_until_steady(m, rc, alt_hold_stick, alt0, pitch, *, label,
+                       attitude=None, on_sample=None, max_s=_DASH_MAX_S):
+    """Hold a fixed forward pitch until the trailing speed window plateaus.
+
+    Returns ``(window, verdict, t_window)`` where ``window`` is the trailing
+    ``[(time, groundspeed)]`` the verdict was computed over and ``t_window`` is
+    its ``(start, end)``. A hold that hits the cap without plateauing returns a
+    verdict with ``steady=False``; the caller must then report INCONCLUSIVE
+    rather than a speed.
+    """
+    samples = []
+    t_start = time.time()
+    t_cap = t_start + max_s
+    settled = False
+    while time.time() < t_cap:
+        v = m.recv_match(type="VFR_HUD", blocking=True, timeout=2)
+        if v is None:
+            continue
+        rc(alt_hold_stick(v.alt - alt0), pitch=pitch)
+        now = time.time()
+        if now - t_start <= _DASH_SETTLE_S:
+            continue                      # discard the acceleration transient
+        samples.append((now, float(v.groundspeed)))
+        if attitude is not None:
+            attitude.sample(m)
+        if on_sample is not None:
+            on_sample(m)
+        if (now - t_start > _DASH_SETTLE_S + _DASH_WINDOW_S
+                and steady_state(_trailing(samples, now)).steady):
+            settled = True
+            break
+    window = _trailing(samples, samples[-1][0]) if samples else []
+    verdict = steady_state(window)
+    span = (window[0][0], window[-1][0]) if window else (t_start, time.time())
+    print(f"[dash] {label} pitch={pitch} after {time.time() - t_start:.1f}s: "
+          f"{verdict.describe()}{'' if settled else ' [cap reached]'}", flush=True)
+    return window, verdict, span
+
+
 def _wind_force_scale(mass_kg: float, wind_mps: float,
                       drag_area_m2: float = _DEFAULT_DRAG_AREA_M2) -> float:
-    """Linearize quadratic drag at the requested wind working point.
+    """The superseded linearization of quadratic drag at the wind working point.
 
-    Gazebo 8 WindEffects applies ``m*k*(wind-v)``. Choosing k this way makes
-    its force at zero groundspeed equal ``0.5*rho*A*wind^2``. This remains a
-    lumped local calibration, not geometry-derived CFD.
+    Gazebo 8 WindEffects applies ``m*k*(wind-v)``. Choosing k this way makes its
+    force at zero groundspeed equal ``0.5*rho*A*wind^2``.
+
+    NOT used in flight any more. Because the force stays linear in ``wind - v``
+    while true drag is quadratic in it, this under-predicts drag by a factor of
+    ``(wind+v)/wind`` as the vehicle speeds up: the 2026-08-30 run reached
+    28.9 m/s against a 15 m/s headwind — faster than it flew with no wind at
+    all. The headwind now acts through the airframe's geometry-derived drag
+    plate instead (``airframe_drag``), which gz-sim's LiftDrag evaluates against
+    airspeed. This is retained so ``wind_force_scale_override`` can reproduce
+    the old behaviour for comparison.
     """
     if mass_kg <= 0 or wind_mps <= 0 or drag_area_m2 <= 0:
         return 0.0
@@ -422,8 +499,9 @@ def _attitude_rms_deg(samples) -> dict:
     n = len(samples)
     if n < 2:
         return {"n": n, "roll_rms_deg": None, "pitch_rms_deg": None, "rms_deg": None}
-    rolls = [s[0] for s in samples]
-    pitches = [s[1] for s in samples]
+    # Samples are (time, roll, pitch); bare (roll, pitch) is still accepted.
+    rolls = [s[-2] for s in samples]
+    pitches = [s[-1] for s in samples]
     out = {}
     for name, vals in (("roll", rolls), ("pitch", pitches)):
         mean = sum(vals) / n
@@ -451,7 +529,12 @@ class _AttitudeSampler:
         if boot_ms is not None and boot_ms == self._last_boot_ms:
             return
         self._last_boot_ms = boot_ms
-        self.samples.append((float(att.roll), float(att.pitch)))
+        self.samples.append((time.time(), float(att.roll), float(att.pitch)))
+
+    def between(self, t0: float, t1: float):
+        """Samples inside a time window — used to restrict attitude RMS to the
+        segment whose speed was certified steady."""
+        return [s for s in self.samples if t0 <= s[0] <= t1]
 
 
 def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
@@ -464,7 +547,10 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
          obstacle_response_threshold_m=5.0,
          obstacle_min_separation_m=None,
          obstacle_approach_speed_mps=1.5,
-         measure_attitude=False, nilwind_dash_s=0.0) -> int:
+         measure_attitude=False,
+         nilwind_dash_s=0.0,   # accepted for compatibility; the cruise
+                               # survey now sweeps to steady state instead
+         wind_force_scale_override=None) -> int:
     LAST_RESULT.clear()
     out = Path("gazebo_poc/generated")
     tdir = Path("gazebo_poc/templates")
@@ -500,15 +586,29 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         body_mass_kg = mass_kg
         if payload_release and payload_mass_kg > 0:
             body_mass_kg = max(0.1, mass_kg - payload_mass_kg)
+        # Parasitic drag of the airframe that is actually drawn. Without it the
+        # body has no drag at all: a forward dash never reaches terminal
+        # velocity, so its "cruise speed" measures the dash duration rather
+        # than the vehicle. Enable wind on the link unconditionally — with no
+        # WindEffects plugin in the world it costs nothing, and it lets the
+        # drag plate see airspeed rather than ground speed when there is wind.
+        from gazebo_poc.airframe_drag import drag_breakdown
+        drag = drag_breakdown(
+            rotor_count, rotor_radius,
+            payload_attached=bool(payload_release and payload_mass_kg > 0),
+        )
+        LAST_RESULT["body_drag"] = drag.as_dict()
         _, _, frame_class = generate_multirotor_sdf(
             body_mass_kg, rotor_count, rotor_radius, inertia, area, tdir, out,
             max_rotor_rad_s=mult, fail_rotor=fail_rotor,
-            enable_wind=wind_mps > 0, payload_release=payload_release,
+            enable_wind=True, payload_release=payload_release,
             parachute_deploy=parachute_deploy,
             forward_lidar=obstacle_avoidance,
-            forward_lidar_range_m=obstacle_detection_range_m)
+            forward_lidar_range_m=obstacle_detection_range_m,
+            body_drag_area_m2=drag.flat_plate_area_m2)
         print(f"[gen] {rotor_count}-rotor mass={mass_kg}kg inertia={tuple(round(x,4) for x in inertia)} "
-              f"area={area:.6f} max_rotor={mult:.0f}rad/s FRAME_CLASS={frame_class}"
+              f"area={area:.6f} max_rotor={mult:.0f}rad/s FRAME_CLASS={frame_class} "
+              f"f_drag={drag.flat_plate_area_m2:.6f}m2"
               f"{' [calibrated]' if calibrate else ''}"
               f"{f' [MOTOR {fail_rotor} FAILED]' if fail_rotor is not None else ''}", flush=True)
     thrust_diag = _thrust_diagnostics(mass_kg, rotor_count, area, mult, max_thrust_g)
@@ -531,7 +631,17 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
     ]
     wind_scale = None
     if wind_mps > 0:
-        wind_scale = _wind_force_scale(mass_kg, wind_mps)
+        # The airframe now carries genuine quadratic drag (the BodyDrag plate),
+        # which gz-sim's LiftDrag evaluates against airspeed. WindEffects' own
+        # m*k*(wind-v) term is a LINEAR approximation of that same drag, so
+        # leaving it on would double-count — and it under-predicts badly once
+        # groundspeed exceeds the wind it was linearized at. It is kept only as
+        # the channel that carries the wind field; the force it adds is zero
+        # unless a caller explicitly asks for the legacy behaviour.
+        wind_scale = (
+            0.0 if wind_force_scale_override is None
+            else float(wind_force_scale_override)
+        )
         try:
             wind_world = _prepare_wind_world(out, wind_scale)
         except Exception as e:
@@ -587,8 +697,15 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 None if wind_min_groundspeed_mps is None else float(wind_min_groundspeed_mps)
             ),
             "wind_force_scale": wind_scale,
-            "wind_drag_area_assumption_m2": _DEFAULT_DRAG_AREA_M2,
-            "wind_fidelity": "Gazebo closed-loop dynamics + lumped drag local linearization",
+            "wind_drag_area_m2": (LAST_RESULT.get("body_drag") or {}).get(
+                "flat_plate_area_m2"),
+            "wind_fidelity": (
+                "Gazebo closed-loop dynamics; the headwind acts through the "
+                "airframe's geometry-derived quadratic drag plate, which "
+                "gz-sim's LiftDrag evaluates against airspeed. WindEffects' "
+                "linear m*k*(wind-v) term is disabled — it approximated the "
+                "same drag and under-predicted it as groundspeed grew."
+            ),
         })
     if not Path(_ARDUCOPTER).exists():
         print("[sitl] arducopter binary missing:", _ARDUCOPTER, flush=True)
@@ -1081,37 +1198,122 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             )
             return 0 if stable else 8
 
-        # --- forward-flight dash: pitch forward, hold altitude, measure speed + rotor RPM ---
-        # (stage 6b — the regime where Gazebo beats hover thrust=weight; NB body drag is iris-shaped)
-        print("[sitl] forward dash (pitch fwd, hold alt) ...", flush=True)
+        # --- forward-flight survey: sweep pitch, hold each point to steady state ---
+        # One stick position only answers "how fast is this stick position". The
+        # requirements ask what the vehicle holds "at all authorised speeds", and
+        # whether it can make headway against a headwind using the authority it
+        # has. Both are sweeps, and every point must reach a certified plateau
+        # before its speed may be reported.
+        print("[sitl] forward-flight survey (pitch sweep, hold alt) ...", flush=True)
         m.set_mode("ALT_HOLD")
         wait(lambda h: h.custom_mode == ALT_HOLD, 6, "ALT_HOLD mode for forward dash")
         fwd_cap = Path("gazebo_poc/generated/jointstate_fwd.txt")
-        fcap, spds, wind_vectors = None, [], []
-
-        # Establish the actual body-forward direction before injecting wind.
-        # ArduPilot reports NED while Gazebo uses ENU-like world axes; the
-        # ArduPilotPlugin transform maps (world x, world y) -> (NED x, -NED y).
-        baseline_vectors = []
-        nilwind_speeds = []
+        fcap, wind_vectors = None, []
         cruise_att = _AttitudeSampler() if measure_attitude else None
+
+        sweep = []
+        last_window = []
+        for index, pitch in enumerate(_DASH_SWEEP_PITCH):
+            final_point = index == len(_DASH_SWEEP_PITCH) - 1
+            if final_point and wind_mps <= 0 and fcap is None:
+                # capture rotor speed over the segment fwd_speed will describe
+                fcap = subprocess.Popen(
+                    ["docker", "exec", _CONTAINER, "gz", "topic", "-e", "-t", topic],
+                    stdout=open(fwd_cap, "w"), stderr=subprocess.DEVNULL)
+            window, verdict, span = _hold_until_steady(
+                m, rc, alt_hold_stick, alt0, pitch,
+                label="cruise survey", attitude=cruise_att)
+            point = {
+                "pitch_rc": pitch,
+                "steady": verdict.steady,
+                "speed_mps": verdict.mean,
+                "steady_state": verdict.as_dict(),
+            }
+            if cruise_att is not None and verdict.steady:
+                point_rms = _attitude_rms_deg(cruise_att.between(*span))
+                point.update({
+                    "attitude_rms_deg": point_rms["rms_deg"],
+                    "attitude_roll_rms_deg": point_rms["roll_rms_deg"],
+                    "attitude_pitch_rms_deg": point_rms["pitch_rms_deg"],
+                    "attitude_samples": point_rms["n"],
+                })
+            sweep.append(point)
+            if window:
+                last_window = window
+        LAST_RESULT["cruise_sweep"] = sweep
+        # The delivery payload is released later in the flight, so the survey
+        # above is flown with it aboard. That makes the sweep a *transport*
+        # cruise measurement, not just a carry-hover one.
+        LAST_RESULT["cruise_sweep_payload_attached"] = bool(
+            payload_release and payload_mass_kg > 0)
+        if fcap:
+            fcap.terminate()
+            fcap = None
+
+        steady_points = [pt for pt in sweep if pt["steady"] and pt["speed_mps"] is not None]
+        LAST_RESULT["cruise_sweep_steady_points"] = len(steady_points)
+        LAST_RESULT["cruise_sweep_points"] = len(sweep)
+        if steady_points:
+            best = max(steady_points, key=lambda pt: pt["speed_mps"])
+            LAST_RESULT.update({
+                # The fastest speed the vehicle *held*, across the swept
+                # authority — not the speed it happened to have reached.
+                "nilwind_dash_speed_mps": best["speed_mps"],
+                "nilwind_dash_peak_mps": max(pt["speed_mps"] for pt in steady_points),
+                "nilwind_dash_samples": best["steady_state"]["samples"],
+                "nilwind_dash_steady_state": best["steady_state"],
+                "nilwind_dash_pitch_rc": best["pitch_rc"],
+                "cruise_sweep_speeds_mps": [pt["speed_mps"] for pt in steady_points],
+            })
+            print("[nilwind] certified cruise points: "
+                  + ", ".join(f"{pt['speed_mps']:.1f} m/s @rc{pt['pitch_rc']}"
+                              for pt in steady_points)
+                  + f"; best={best['speed_mps']:.1f} m/s", flush=True)
+        else:
+            print("[nilwind] no cruise point reached steady state — no speed reported",
+                  flush=True)
+
+        rms_points = [pt for pt in steady_points if pt.get("attitude_rms_deg") is not None]
+        if rms_points:
+            # "at all authorised speeds" is a worst case over the sweep, not one
+            # point: report the largest RMS and the span it was swept across.
+            worst = max(rms_points, key=lambda pt: pt["attitude_rms_deg"])
+            LAST_RESULT.update({
+                "cruise_attitude_rms_deg": worst["attitude_rms_deg"],
+                "cruise_attitude_roll_rms_deg": worst["attitude_roll_rms_deg"],
+                "cruise_attitude_pitch_rms_deg": worst["attitude_pitch_rms_deg"],
+                "cruise_attitude_samples": worst["attitude_samples"],
+                "cruise_attitude_mean_speed_mps": worst["speed_mps"],
+                "cruise_attitude_swept_speeds_mps": [pt["speed_mps"] for pt in rms_points],
+                "cruise_attitude_speed_span_mps": [
+                    min(pt["speed_mps"] for pt in rms_points),
+                    max(pt["speed_mps"] for pt in rms_points),
+                ],
+                "cruise_attitude_points": len(rms_points),
+            })
+            print(f"[att] cruise RMS worst-of-sweep {worst['attitude_rms_deg']:.4f} deg "
+                  f"over {len(rms_points)} speed points "
+                  f"({min(pt['speed_mps'] for pt in rms_points):.1f}-"
+                  f"{max(pt['speed_mps'] for pt in rms_points):.1f} m/s)", flush=True)
+
+        fwd_speed = (
+            sum(v for _t, v in last_window) / len(last_window) if last_window else 0.0
+        )
+        LAST_RESULT["fwd_speed_steady_state"] = steady_state(last_window).as_dict()
+
         if wind_mps > 0:
-            # The pre-injection segment IS the nil-wind dash: extend it when a
-            # nil-wind cruise measurement (speed and/or attitude RMS) was asked
-            # for, and sample the tail once the speed has built up.
-            baseline_s = max(7.0, float(nilwind_dash_s or 0.0))
-            t0_baseline = time.time()
-            t_baseline = t0_baseline + baseline_s
-            tail_start = t0_baseline + baseline_s * 0.5
-            while time.time() < t_baseline:
-                rel_msg = m.recv_match(type="VFR_HUD", blocking=True, timeout=1)
-                if rel_msg is not None:
-                    rc(alt_hold_stick(rel_msg.alt - alt0), pitch=_FWD_PITCH)
-                    if time.time() >= tail_start:
-                        nilwind_speeds.append(float(rel_msg.groundspeed))
-                        if cruise_att is not None:
-                            cruise_att.sample(m)
+            # Aim the wind against the direction the vehicle actually flies, then
+            # ask the question the requirement asks: with the forward authority it
+            # has, what ground speed can it HOLD against the headwind?
+            # ArduPilot reports NED while Gazebo uses ENU-like world axes; the
+            # ArduPilotPlugin transform maps (world x, world y) -> (NED x, -NED y).
+            baseline_vectors = []
+            t_aim = time.time() + 3.0
+            while time.time() < t_aim:
                 pos = m.recv_match(type="LOCAL_POSITION_NED", blocking=True, timeout=1)
+                v = m.recv_match(type="VFR_HUD", blocking=True, timeout=1)
+                if v is not None:
+                    rc(alt_hold_stick(v.alt - alt0), pitch=_DASH_SWEEP_PITCH[-1])
                 if pos is not None and (pos.vx * pos.vx + pos.vy * pos.vy) > 1.0:
                     baseline_vectors.append((float(pos.vx), float(pos.vy)))
             if baseline_vectors:
@@ -1138,58 +1340,28 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 LAST_RESULT["wind_injected"] = False
                 print("[wind] no forward velocity vector; wind injection skipped", flush=True)
 
-        t_end = time.time() + (22 if wind_mps > 0 else 18)
-        while time.time() < t_end:
-            v = m.recv_match(type="VFR_HUD", blocking=True, timeout=2)
-            if v is None:
-                continue
-            rel = v.alt - alt0
-            rc(alt_hold_stick(rel), pitch=_FWD_PITCH)  # nose down → fly forward (env-tunable)
-            if time.time() > t_end - 9:             # steady-state last 9 s
-                spds.append(v.groundspeed)
-                if wind_mps <= 0:
-                    # no wind was ever injected → this dash IS the nil-wind run
-                    nilwind_speeds.append(float(v.groundspeed))
-                    if cruise_att is not None:
-                        cruise_att.sample(m)
-                if wind_mps > 0:
-                    pos = m.recv_match(type="LOCAL_POSITION_NED", blocking=True, timeout=1)
-                    if pos is not None:
-                        wind_vectors.append((float(pos.vx), float(pos.vy)))
-                if fcap is None:
-                    fcap = subprocess.Popen(
-                        ["docker", "exec", _CONTAINER, "gz", "topic", "-e", "-t", topic],
-                        stdout=open(fwd_cap, "w"), stderr=subprocess.DEVNULL)
-        if fcap:
-            fcap.terminate()
+            fcap = subprocess.Popen(
+                ["docker", "exec", _CONTAINER, "gz", "topic", "-e", "-t", topic],
+                stdout=open(fwd_cap, "w"), stderr=subprocess.DEVNULL)
+            wind_window, wind_verdict, _span = _hold_until_steady(
+                m, rc, alt_hold_stick, alt0, _DASH_SWEEP_PITCH[-1],
+                label="headwind penetration",
+                on_sample=lambda conn: _collect_ned(conn, wind_vectors),
+                max_s=_DASH_MAX_S + 15.0)
+            if fcap:
+                fcap.terminate()
+            fwd_speed = (
+                sum(v for _t, v in wind_window) / len(wind_window) if wind_window else 0.0
+            )
+            LAST_RESULT.update({
+                "wind_groundspeed_steady_state": wind_verdict.as_dict(),
+                "wind_pitch_rc": _DASH_SWEEP_PITCH[-1],
+                "wind_authority": "full forward pitch (maximum sustained headway)",
+            })
+            LAST_RESULT["fwd_speed_steady_state"] = wind_verdict.as_dict()
+
         fwd_rad_s = _parse_rotor_velocity(fwd_cap)
         fwd_rpm = fwd_rad_s * 9.5493
-        ns = max(1, len(spds) // 2)
-        fwd_speed = sum(spds[-ns:]) / ns if spds else 0.0
-        if nilwind_speeds:
-            ntail = max(1, len(nilwind_speeds) // 2)
-            nil_speed = sum(nilwind_speeds[-ntail:]) / ntail
-            LAST_RESULT.update({
-                "nilwind_dash_speed_mps": nil_speed,
-                "nilwind_dash_peak_mps": max(nilwind_speeds),
-                "nilwind_dash_samples": len(nilwind_speeds),
-            })
-            print(f"[nilwind] dash speed={nil_speed:.1f} m/s "
-                  f"(peak {max(nilwind_speeds):.1f}, n={len(nilwind_speeds)})",
-                  flush=True)
-        if cruise_att is not None:
-            cruise_rms = _attitude_rms_deg(cruise_att.samples)
-            LAST_RESULT.update({
-                "cruise_attitude_samples": cruise_rms["n"],
-                "cruise_attitude_roll_rms_deg": cruise_rms["roll_rms_deg"],
-                "cruise_attitude_pitch_rms_deg": cruise_rms["pitch_rms_deg"],
-                "cruise_attitude_rms_deg": cruise_rms["rms_deg"],
-                "cruise_attitude_mean_speed_mps": (
-                    sum(nilwind_speeds) / len(nilwind_speeds)
-                    if nilwind_speeds else None
-                ),
-            })
-            print(f"[att] cruise RMS: {cruise_rms}", flush=True)
         if wind_mps > 0:
             wind_ned = LAST_RESULT.get("wind_ned_xy_mps")
             alignment = None

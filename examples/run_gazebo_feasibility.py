@@ -195,6 +195,12 @@ def _single_motor_req(planned: list[dict[str, Any]]) -> str | None:
     return None
 
 
+#: A cruise claim phrased "at all authorised speeds" needs an envelope, not a
+#: point. Three certified steady points spanning the authority range is the
+#: minimum this harness will call a sweep; the reported RMS is the worst of them.
+_MIN_SWEEP_POINTS = 3
+
+
 def _planned_check(planned: list[dict[str, Any]], check: str) -> dict[str, Any] | None:
     return next((item for item in planned if item.get("check") == check), None)
 
@@ -339,20 +345,37 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         wind = float(wind_req.get("wind_mps") or 0.0)
         alignment = gazebo.get("wind_headwind_alignment")
         aligned = alignment is not None and float(alignment) >= 0.9
-        meets = aligned and speed >= minimum
+        steady = (gazebo.get("wind_groundspeed_steady_state") or {})
+        held = bool(steady.get("steady"))
+        meets = aligned and held and speed >= minimum
+        f_drag = gazebo.get("wind_drag_area_m2")
+        # How wrong could the drag estimate be before the verdict flips? The
+        # vehicle holds a fixed AIRSPEED at fixed tilt, so ground speed is
+        # airspeed - wind, and airspeed scales as 1/sqrt(f). Stating this makes
+        # the result checkable rather than dependent on trusting the Cd values.
+        tolerated_f = None
+        if f_drag and speed + wind > 0 and minimum + wind > 0:
+            tolerated_f = float(f_drag) * ((speed + wind) / (minimum + wind)) ** 2
         covered.add(rid)
         results.append({
             "req_id": rid,
             "check": "wind_condition",
-            # WindEffects is a mass-scaled linear force, locally calibrated to
-            # the lumped drag area. Passing is useful dynamics evidence but is
-            # not geometry-derived high-fidelity aerodynamic closure.
-            "status": "PARTIAL" if meets else "INCONCLUSIVE",
+            # The headwind now acts through the airframe's geometry-derived
+            # quadratic drag plate, evaluated by gz-sim's LiftDrag against
+            # airspeed, and the ground speed held is certified steady state.
+            "status": "PASS" if meets else "INCONCLUSIVE",
             "message": (
-                f"Gazebo closed-loop flight held {speed:.2f} m/s ground speed in a "
-                f"{wind:.1f} m/s injected headwind (minimum {minimum:.1f}, "
-                f"opposition alignment={alignment}); WindEffects uses a lumped "
-                "0.05 m^2 drag-area local linearization"
+                f"Gazebo closed-loop flight HELD {speed:.2f} m/s ground speed against a "
+                f"{wind:.1f} m/s headwind at full forward authority "
+                f"(minimum {minimum:.1f}, opposition alignment={alignment}; "
+                f"{steady.get('reason', 'steady state unknown')}, drift "
+                f"{steady.get('drift_fraction')} of mean over "
+                f"{steady.get('duration_s')} s, n={steady.get('samples')}); "
+                f"drag is the geometry-derived flat-plate area f={f_drag} m^2 acting on "
+                "airspeed, not a lumped linearization of it"
+                + (f"; the verdict survives unless the true f exceeds "
+                   f"{tolerated_f:.4f} m^2 ({tolerated_f / float(f_drag):.2f}x the estimate)"
+                   if tolerated_f else "")
             ),
         })
 
@@ -439,24 +462,32 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
     if gazebo and speed_req and gazebo.get("nilwind_dash_speed_mps") is not None:
         rid = str(speed_req["req_id"])
         speed = float(gazebo["nilwind_dash_speed_mps"])
-        peak = gazebo.get("nilwind_dash_peak_mps")
         minimum = float(speed_req.get("min_speed_mps") or 0.0)
-        met = speed >= minimum
+        steady = gazebo.get("nilwind_dash_steady_state") or {}
+        held = bool(steady.get("steady"))
+        swept = gazebo.get("cruise_sweep_speeds_mps") or []
+        met = held and speed >= minimum
         covered.add(rid)
         results.append({
             "req_id": rid,
             "check": "cruise_speed",
             # Nil wind → ground speed equals airspeed; ALT_HOLD keeps level
-            # flight. The measured condition is exactly the requirement's.
-            "status": "PASS" if met else "FAIL",
+            # flight. A speed may only be reported once its window plateaus:
+            # a still-accelerating dash reports the dash duration, not the
+            # vehicle. INCONCLUSIVE (not FAIL) when nothing reached steady
+            # state, because no speed was actually measured.
+            "status": ("PASS" if met else "FAIL" if held else "INCONCLUSIVE"),
             "message": (
-                f"Gazebo nil-wind level dash held {speed:.2f} m/s mean ground speed "
-                f"(peak {float(peak):.2f} m/s; requirement >= {minimum:.1f} m/s); "
-                "no wind injected during this segment, altitude held in ALT_HOLD, "
+                f"Gazebo nil-wind pitch sweep: the fastest speed the vehicle HELD was "
+                f"{speed:.2f} m/s at RC{gazebo.get('nilwind_dash_pitch_rc')} "
+                f"(requirement >= {minimum:.1f} m/s); "
+                + (f"{len(swept)} certified steady points "
+                   f"({', '.join(f'{v:.1f}' for v in swept)} m/s); "
+                   if swept else "")
+                + f"steady state: {steady.get('reason', 'not established')}, drift "
+                f"{steady.get('drift_fraction')} of mean over {steady.get('duration_s')} s, "
+                f"n={steady.get('samples')}; altitude held in ALT_HOLD, "
                 "ground speed = airspeed in nil wind"
-                if peak is not None else
-                f"Gazebo nil-wind level dash held {speed:.2f} m/s mean ground speed "
-                f"(requirement >= {minimum:.1f} m/s)"
             ),
         })
 
@@ -465,23 +496,27 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         rid = str(catt_req["req_id"])
         rms = float(gazebo["cruise_attitude_rms_deg"])
         limit = float(catt_req.get("max_rms_deg") or 0.0)
-        mean_speed = gazebo.get("cruise_attitude_mean_speed_mps")
+        points = int(gazebo.get("cruise_attitude_points") or 0)
+        span = gazebo.get("cruise_attitude_speed_span_mps") or []
+        swept = points >= _MIN_SWEEP_POINTS and len(span) == 2
         met = rms <= limit
         covered.add(rid)
         results.append({
             "req_id": rid,
             "check": "cruise_attitude",
-            # One cruise point is measured; "at all authorised speeds" is a
-            # sweep this single dash does not cover.
-            "status": "PARTIAL" if met else "FAIL",
+            # "At all authorised speeds" is a sweep. The reported RMS is the
+            # WORST case over the swept envelope, so a pass covers every point
+            # measured — but only a sweep may claim it; one point stays PARTIAL.
+            "status": ("PASS" if met and swept else "PARTIAL" if met else "FAIL"),
             "message": (
-                f"Gazebo cruise attitude RMS {rms:.3f} deg about the window mean "
-                f"(roll {gazebo.get('cruise_attitude_roll_rms_deg'):.3f} / pitch "
+                f"Gazebo cruise attitude RMS {rms:.3f} deg about the window mean, "
+                f"WORST of {points} certified steady speed points spanning "
+                + (f"{span[0]:.1f}-{span[1]:.1f} m/s" if len(span) == 2 else "one point")
+                + f" (roll {gazebo.get('cruise_attitude_roll_rms_deg'):.3f} / pitch "
                 f"{gazebo.get('cruise_attitude_pitch_rms_deg'):.3f} deg, "
-                f"n={gazebo.get('cruise_attitude_samples')}) during the nil-wind dash "
-                f"at ~{mean_speed if mean_speed is None else round(float(mean_speed), 1)} m/s "
-                f"(limit {limit:.1f} deg RMS); single speed point — 'all authorised "
-                "speeds' not swept"
+                f"n={gazebo.get('cruise_attitude_samples')}; limit {limit:.1f} deg RMS)"
+                + ("" if swept else
+                   f"; fewer than {_MIN_SWEEP_POINTS} points — 'all authorised speeds' not swept")
             ),
         })
 
@@ -500,20 +535,40 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             or (margin is not None and margin >= float(margin_req))
         )
         met = rms_ok and margin_ok
+        # "Transport" covers cruise, not just carrying in a hover. The cruise
+        # sweep is flown before the payload is released, so when it is a
+        # certified sweep with the payload aboard it closes the cruise half;
+        # its worst-case RMS must clear the same limit.
+        cruise_rms = gazebo.get("cruise_attitude_rms_deg")
+        cruise_points = int(gazebo.get("cruise_attitude_points") or 0)
+        cruise_span = gazebo.get("cruise_attitude_speed_span_mps") or []
+        transport_swept = (
+            bool(gazebo.get("cruise_sweep_payload_attached"))
+            and cruise_points >= _MIN_SWEEP_POINTS
+            and cruise_rms is not None
+        )
+        cruise_ok = transport_swept and float(cruise_rms) <= limit
         covered.add(rid)
         results.append({
             "req_id": rid,
             "check": "payload_attitude",
-            # Carry-hover only: transport also includes cruise, which this
-            # window does not cover.
-            "status": "PARTIAL" if met else "FAIL",
+            "status": (
+                "PASS" if met and cruise_ok
+                else "FAIL" if not met or (transport_swept and not cruise_ok)
+                else "PARTIAL"
+            ),
             "message": (
                 f"Gazebo hover with {gazebo.get('payload_mass_kg')} kg payload attached: "
                 f"attitude RMS {rms:.3f} deg (limit {limit:.1f} deg, "
                 f"n={gazebo.get('hover_attitude_samples')}), hover throttle "
                 f"{throttle}% -> margin {margin if margin is None else round(margin, 1)}%"
                 + (f" (required >= {float(margin_req):.0f}%)" if margin_req is not None else "")
-                + "; carry-hover window only — cruise-transport attitude not swept"
+                + (f"; cruise-transport swept with the payload aboard — worst RMS "
+                   f"{float(cruise_rms):.3f} deg over {cruise_points} certified steady points"
+                   + (f" spanning {cruise_span[0]:.1f}-{cruise_span[1]:.1f} m/s"
+                      if len(cruise_span) == 2 else "")
+                   if transport_swept else
+                   "; carry-hover window only — cruise-transport attitude not swept")
             ),
         })
 

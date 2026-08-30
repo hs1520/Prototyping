@@ -392,7 +392,12 @@ def test_attitude_sampler_dedupes_on_time_boot_ms():
                                              time_boot_ms=1100)
     sampler.sample(m)
     assert len(sampler.samples) == 2
-    assert sampler.samples[-1] == (0.03, 0.04)
+    # samples are timestamped so attitude RMS can be restricted to the window
+    # whose speed was certified steady
+    stamp, roll, pitch = sampler.samples[-1]
+    assert (roll, pitch) == (0.03, 0.04)
+    assert stamp > 0
+    assert sampler.between(stamp, stamp) == [sampler.samples[-1]]
 
     sampler.sample(SimpleNamespace(messages={}))   # no ATTITUDE yet → no-op
     assert len(sampler.samples) == 2
