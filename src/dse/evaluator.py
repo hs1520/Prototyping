@@ -356,6 +356,13 @@ class DesignEvaluator:
                 continue
             if dim == "syntactic_validity" and not has_diagnostics:
                 continue
+            if dim == "syntactic_validity" and not self._has_syntax_errors(
+                syntax_result, model
+            ):
+                # The veto reason asserts failed compilation; warnings alone
+                # must never trigger it (measured: 46 warnings, 0 errors —
+                # the veto text then misdirected every repair prompt).
+                continue
             score = result.criteria_scores.get(dim, 1.0)
             if score < floor:
                 result.issues.insert(
@@ -484,6 +491,15 @@ class DesignEvaluator:
     # Dimension 0: Syntactic Validity (8 %) — Syside diagnostics
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _has_syntax_errors(syntax_result, model: SysMLModel) -> bool:
+        """True when actual parse/sema ERRORS exist (warnings do not count)."""
+        if syntax_result is not None:
+            return bool(getattr(syntax_result, "has_errors", False))
+        return any(
+            d.severity == DiagnosticSeverity.ERROR for d in model.diagnostics
+        )
+
     def _score_syntactic_validity(
         self,
         config: DesignConfiguration,
@@ -496,6 +512,9 @@ class DesignEvaluator:
         Priority 1: use the SyntaxCheckResult cached from the syntax gate
                     (syside try_load_model — most accurate).
         Priority 2: fall back to model.diagnostics (legacy path).
+
+        Warnings-only results are floored at 0.5 in both paths so an
+        error-free model can never score identically to a failed compile.
         """
         # Priority 1: cached syside result from syntax gate
         cached = getattr(self, "_cached_syntax_result", None)
@@ -508,6 +527,8 @@ class DesignEvaluator:
             return 1.0
         n_errors = sum(1 for d in diags if d.severity == DiagnosticSeverity.ERROR)
         n_warnings = sum(1 for d in diags if d.severity == DiagnosticSeverity.WARNING)
+        if n_errors == 0:
+            return max(0.5, 1.0 - 0.05 * n_warnings)
         return max(0.0, 1.0 - 0.20 * n_errors - 0.05 * n_warnings)
 
     # ------------------------------------------------------------------

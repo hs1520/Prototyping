@@ -104,7 +104,9 @@ class ReportingMixin:
         # ── Syntax check block ───────────────────────────────────────────
         if syntax_result is not None:
             if not syntax_result.has_errors:
-                print("  [SYNTAX]  ✓ no errors")
+                n_w = len(getattr(syntax_result, "warnings", ()) or ())
+                warn_tag = f", {n_w} warning(s)" if n_w else ""
+                print(f"  [SYNTAX]  ✓ no errors{warn_tag}")
             else:
                 n_p = len(syntax_result.parser_errors)
                 n_s = len(syntax_result.sema_errors)

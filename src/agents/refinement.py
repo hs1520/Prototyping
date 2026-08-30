@@ -2828,7 +2828,10 @@ class _RefinementEngine:
         result = check_syntax(sysml_text)
 
         if not result.has_errors:
-            print("  ✓ [SYNTAX]  no errors  (syside: 0 parser, 0 sema)", flush=True)
+            n_w = len(result.warnings or ())
+            warn_tag = f", {n_w} warning(s)" if n_w else ""
+            print(f"  ✓ [SYNTAX]  no errors  (syside: 0 parser, 0 sema"
+                  f"{warn_tag})", flush=True)
             return sysml_text, None, result
 
         working_sysml = sysml_text

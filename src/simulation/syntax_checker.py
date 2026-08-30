@@ -121,12 +121,20 @@ class SyntaxCheckResult:
 
 def _compute_score(n_parser: int, n_sema: int, n_warn: int) -> float:
     """
-    1.0  — no errors
-    0.85 — warnings only
+    1.0  — no diagnostics
+    ≥0.5 — warnings only (0.05 each, floored at 0.5: a warning-heavy but
+           error-free model must stay distinguishable from a failed compile.
+           Measured on an authoritative run: 46 warnings with zero errors
+           saturated the old linear formula to 0.0 — the same score as a
+           hard parse failure — and tripped the "fails compilation" veto,
+           pinning refinement at the cap while its prompts demanded fixes
+           for compilation errors that did not exist.)
     0.5  — sema errors only (undefined types are often fixable)
     0.1  — parser errors (hard syntax failure)
-    Deductions compound; floor is 0.0.
+    With errors present, deductions compound; floor is 0.0.
     """
+    if n_parser == 0 and n_sema == 0:
+        return round(max(0.5, 1.0 - 0.05 * n_warn), 4)
     score = 1.0 - 0.25 * n_parser - 0.12 * n_sema - 0.05 * n_warn
     return round(max(0.0, min(1.0, score)), 4)
 
