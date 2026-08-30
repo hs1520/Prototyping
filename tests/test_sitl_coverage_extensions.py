@@ -340,3 +340,33 @@ def test_parachute_accept_machine_with_wrong_send_stays_blocked():
     ]
     assert mismatches
     assert "CRITICALPROPULSIONFAILURE" in mismatches[0]["message"]
+
+
+def test_a_verify_threshold_comes_from_the_model_or_the_check_does_not_run():
+    """A check that invents its own limit reports a verdict about nothing."""
+    from src.sitl.requirement_linker import RequirementLinker
+    from src.sitl.sitl_specs import VerifySpec
+
+    spec = VerifySpec(kind="assert_waypoint_update_latency",
+                      args={"max_latency_s": "@attr_match"})
+
+    bound = RequirementLinker._bind_verify_args(spec, 1.0)
+    assert bound.args["max_latency_s"] == 1.0
+
+    # unresolved, or a nonsense zero threshold → drop the spec entirely
+    assert RequirementLinker._bind_verify_args(spec, None) is None
+    assert RequirementLinker._bind_verify_args(spec, 0.0) is None
+
+    # a spec with no token is passed through untouched
+    plain = VerifySpec(kind="wait_mode", args={"mode": "RTL"})
+    assert RequirementLinker._bind_verify_args(plain, None) is plain
+
+
+def test_mavlink_v2_check_states_what_it_does_not_cover():
+    """The evidence must say encryption is out of its reach, since the same
+    requirement asks for both and only one is testable."""
+    from src.sitl.sitl_specs import VerifySpec, render_verify
+
+    body = render_verify(VerifySpec(kind="assert_mavlink_v2_link"))
+    assert "encryption is NOT covered" in body
+    assert "0xFD" in body          # reads the real v2 start-of-frame byte

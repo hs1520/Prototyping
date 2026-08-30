@@ -462,6 +462,21 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
         tier="L1",
         **_noop_l1(),
         notes="CommunicationSystem → SERIAL0_PROTOCOL=2 (MAVLink v2).",
+        # 附加 L2：SERIAL0_PROTOCOL=2 只证明"端口被要求用 MAVLink v2"，
+        # 不证明链路真的在说 v2、会应答、且不断线。这条 L2 读实际帧头
+        # (0xFD)、发一条必须被应答的命令、并量 HEARTBEAT 最大间隔。
+        # 加密那半句仍不在范围内——由 obligation 拆分单独承担。
+        l2_inject=InjectSpec(kind="noop"),
+        l2_verify=VerifySpec(
+            kind="assert_mavlink_v2_link",
+            args={"window_s": 8.0, "max_gap_s": 2.0},
+            timeout=30.0,
+        ),
+        l2_notes=(
+            "Wire-level MAVLink v2 conformance: v2 start-of-frame on received "
+            "packets, an answered uplink command, and HEARTBEAT continuity. "
+            "Channel encryption is explicitly NOT covered."
+        ),
         req_text_kws=["mavlink", "protocol", "telemetry", "data link", "datalink",
                       "communication", "encrypted", "encryption", "gcs", "command link"],
         # A configured MAVLink port proves protocol availability only.  It does
@@ -472,6 +487,33 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
             "post-flight", "post flight", "health report", "status report",
             "after landing", "landing completion",
         ],
+    ),
+
+    # ── Functional: 航点改写并入活动航线的时限（attr: waypointModificationLatency）
+    #    L1 无对应参数可比（"并入活动航线"不是任何一个 ArduPilot 参数），
+    #    所以这条直接是 L2：上传初始任务 → 上传改写后的任务 → 从
+    #    MISSION_ACK（收到有效改写命令的时刻）计时到回读显示活动航线
+    #    已带上新坐标。传输耗时单独报告并排除，因为需求的时钟从"收到
+    #    命令"起算，不含协议传输。
+    ContentEntry(
+        semantic_tag="WAYPOINT_MODIFICATION_LATENCY",
+        attr_matcher=AttrMatcher(
+            attr_keywords=["waypointmodification", "waypointupdate", "replan",
+                           "missionupdate"],
+            part_keywords=["flight", "controller", "autopilot", "navigation"],
+        ),
+        ardu_params={},
+        tier="L2",
+        inject=InjectSpec(kind="noop"),
+        verify=VerifySpec(
+            kind="assert_waypoint_update_latency",
+            args={"max_latency_s": "@attr_match"},
+            timeout=60.0,
+        ),
+        notes=("Revised waypoint sequence → active flight plan, timed from "
+               "MISSION_ACK; transfer time excluded and reported separately."),
+        req_text_kws=["waypoint", "flight plan", "mission", "revised", "modification"],
+        req_text_exclude_kws=["cep", "circular error", "obstacle", "collision"],
     ),
 
     # ── Performance: max airspeed（attr: maxAirspeed, unit m/s → cm/s ×100）

@@ -76,6 +76,30 @@ _GAZEBO_KWS = (
     "gust",
 )
 
+#: What each L2 verification actually measures, and therefore which obligation
+#: kinds its result may close. The default is the behaviour clause alone: a
+#: check that watches a mode change or a servo position has not looked at any
+#: numeric threshold, and must not be read as having closed one. A check that
+#: times an interval against a limit taken from the model has.
+_L2_CLOSES_KINDS = {
+    "assert_waypoint_update_latency": {"behavior", "response_time"},
+}
+
+
+def _sim_claim(**kwargs) -> EvidenceClaim:
+    """A claim produced by a simulation tier.
+
+    No simulator tests an encryption scheme, an ingress rating or a regulatory
+    approval, whatever else the same requirement also asserts. Excluding those
+    clauses here means a wire-level MAVLink v2 test can close the protocol half
+    of a requirement without appearing to have closed the encrypted-channel
+    half — which is exactly what a single whole-sentence obligation used to let
+    it do, in both directions.
+    """
+    kwargs.setdefault("clause_exclude_terms", frozenset(_INSPECTION_KWS))
+    return EvidenceClaim(**kwargs)
+
+
 _BEHAVIORAL_TEXT_KWS = ("phase", "sequence", "sequential", "state", "mode", "transition")
 _INITIALIZATION_KWS = ("power-on", "power on", "default", "initial", "startup", "start-up")
 
@@ -154,14 +178,14 @@ def _record_behavioral_outcome(
         tiers[rid].add("behavioral_sim")
         detail = f"{description} (PASS)"
         evidence[rid].append(detail)
-        claims[rid].append(EvidenceClaim(
+        claims[rid].append(_sim_claim(
             description=detail, status="verified", kinds=frozenset(claim_kinds),
         ))
     else:
         tiers[rid].add("behavioral_sim_failed")
         detail = f"{description} (FAIL)"
         evidence[rid].append(detail)
-        claims[rid].append(EvidenceClaim(
+        claims[rid].append(_sim_claim(
             description=detail, status="failed", kinds=frozenset(claim_kinds),
         ))
     return True
@@ -234,14 +258,16 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             evidence[rid].append(
                 f"L2 {spec.inject.kind}→{spec.verify.kind} ({strength}; {state})"
             )
-            claims[rid].append(EvidenceClaim(
+            claims[rid].append(_sim_claim(
                 description=evidence[rid][-1],
                 status=(
                     "verified" if outcome is True
                     else "failed" if outcome is False
                     else "planned"
                 ),
-                kinds=frozenset({"behavior"}),
+                kinds=frozenset(
+                    _L2_CLOSES_KINDS.get(spec.verify.kind, {"behavior"})
+                ),
             ))
         elif spec.tier == "L1":
             names = ", ".join(p.param_name for p in spec.params) or "params"
@@ -265,7 +291,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             )
             suffix = "" if model_derived else " (config-level; obligations not closed)"
             evidence[rid].append(f"L1 param consistency ({state}): {names}{suffix}")
-            claims[rid].append(EvidenceClaim(
+            claims[rid].append(_sim_claim(
                 description=evidence[rid][-1],
                 status=(
                     "verified" if outcome is True
@@ -299,7 +325,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                 "mass": {"behavior", "mass"},
                 "payload": {"behavior", "payload", "hover_throttle_margin"},
             }.get(family, {"behavior", family})
-            claims[rid].append(EvidenceClaim(
+            claims[rid].append(_sim_claim(
                 description=evidence[rid][-1],
                 status=(
                     "verified" if v.get("met") is True
@@ -317,7 +343,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                 f"forward-flight (lumped): {v.get('family')} realized={v.get('realized_value')} "
                 f"met={v.get('met')}")
             family = str(v.get("family") or "").lower()
-            claims[rid].append(EvidenceClaim(
+            claims[rid].append(_sim_claim(
                 description=evidence[rid][-1],
                 status=(
                     "verified" if v.get("met") is True
@@ -515,15 +541,20 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         if any(k in low for k in _INSPECTION_KWS):
             tiers[rid].add("inspection_analysis")
             evidence[rid].append("inspection/analysis item (compliance/environment/materials)")
+            # Scoped to the clauses that actually carry the untestable terms.
+            # A blanket claim used to stamp out-of-sim-scope over every clause
+            # of a compound requirement, so a single "encrypted" put MAVLink
+            # protocol conformance — which SITL does test — out of scope too.
             claims[rid].append(EvidenceClaim(
                 description=evidence[rid][-1], status="out-of-sim-scope",
                 all_obligations=True,
+                clause_terms=frozenset(_INSPECTION_KWS),
             ))
         if (any(k in low for k in _GAZEBO_KWS)
                 or _positional_release(low) or _timing_actuation(low)):
             tiers[rid].add("gazebo_deferred")
             evidence[rid].append("needs Gazebo-tier physics (S8 boundary) — planned")
-            claims[rid].append(EvidenceClaim(
+            claims[rid].append(_sim_claim(
                 description=evidence[rid][-1], status="planned", all_obligations=True,
             ))
 
@@ -543,26 +574,26 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             tiers[rid].discard("gazebo_deferred")
             tiers[rid].add("gazebo")
             evidence[rid].append(f"Gazebo PASS ({check}){suffix}")
-            claims[rid].append(EvidenceClaim(
+            claims[rid].append(_sim_claim(
                 description=evidence[rid][-1], status="verified", all_obligations=True,
             ))
         elif status == "FAIL":
             tiers[rid].add("gazebo_failed")
             evidence[rid].append(f"Gazebo FAIL ({check}){suffix}")
-            claims[rid].append(EvidenceClaim(
+            claims[rid].append(_sim_claim(
                 description=evidence[rid][-1], status="failed", all_obligations=True,
             ))
         elif status == "PARTIAL":
             tiers[rid].add("gazebo_deferred")
             tiers[rid].add("gazebo_partial")
             evidence[rid].append(f"Gazebo partial ({check}){suffix}")
-            claims[rid].append(EvidenceClaim(
+            claims[rid].append(_sim_claim(
                 description=evidence[rid][-1], status="partial", all_obligations=True,
             ))
         elif status in {"INCONCLUSIVE", "PLANNED", "SKIPPED", "SUSPENDED"}:
             tiers[rid].add("gazebo_deferred")
             evidence[rid].append(f"Gazebo {status.lower()} ({check}){suffix}")
-            claims[rid].append(EvidenceClaim(
+            claims[rid].append(_sim_claim(
                 description=evidence[rid][-1], status="planned", all_obligations=True,
             ))
 

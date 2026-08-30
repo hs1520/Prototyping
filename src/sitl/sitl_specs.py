@@ -753,6 +753,281 @@ def _render_verify_skip(spec: VerifySpec) -> str:
     """)
 
 
+def _verify_assert_mavlink_v2_link(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
+    """MAVLink v2 framing + bidirectionality + link continuity, measured.
+
+    A configured SERIAL0_PROTOCOL=2 proves the port was *asked* for MAVLink v2;
+    it does not prove the link speaks it, answers, or stays up. This reads the
+    wire: the v2 start-of-frame byte (0xFD) on actually-received packets, a
+    command that must be answered to show the uplink is live, and the largest
+    HEARTBEAT gap over a sampling window.
+    """
+    window = float(spec.args.get("window_s", 8.0))
+    max_gap = float(spec.args.get("max_gap_s", 2.0))
+
+    # -- downlink framing: read the real start-of-frame byte --------------
+    v2_frames = v1_frames = 0
+    beats: List[float] = []
+    deadline = time.time() + window
+    while time.time() < deadline:
+        msg = ctx.mav.recv_match(blocking=True, timeout=1)
+        if msg is None:
+            continue
+        buf = msg.get_msgbuf()
+        if buf:
+            if buf[0] == 0xFD:
+                v2_frames += 1
+            elif buf[0] == 0xFE:
+                v1_frames += 1
+        if msg.get_type() == "HEARTBEAT":
+            beats.append(time.time())
+
+    if v2_frames == 0:
+        return False, (
+            f"no MAVLink v2 frames observed (v1 frames={v1_frames}); "
+            "the link is not speaking MAVLink 2.0"
+        )
+    if v1_frames:
+        return False, (
+            f"link is mixed-version: {v2_frames} v2 frames but {v1_frames} v1 frames"
+        )
+
+    # -- uplink: a command the vehicle must answer ------------------------
+    ctx.mav.mav.command_long_send(
+        ctx.mav.target_system, ctx.mav.target_component,
+        ctx.mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
+        ctx.mavutil.mavlink.MAVLINK_MSG_ID_AUTOPILOT_VERSION,
+        0, 0, 0, 0, 0, 0,
+    )
+    ack = ctx.mav.recv_match(type="COMMAND_ACK", blocking=True, timeout=5)
+    if ack is None:
+        return False, (
+            f"downlink is v2 ({v2_frames} frames) but the uplink was not "
+            "answered: no COMMAND_ACK, so the link is not demonstrably bidirectional"
+        )
+
+    # -- continuity: the largest gap between heartbeats --------------------
+    if len(beats) < 2:
+        return False, f"only {len(beats)} heartbeats in {window:.0f} s — continuity not measurable"
+    gaps = [b - a for a, b in zip(beats, beats[1:])]
+    worst = max(gaps)
+    if worst > max_gap:
+        return False, (
+            f"link continuity broken: largest HEARTBEAT gap {worst:.2f} s "
+            f"exceeds {max_gap:.1f} s over {window:.0f} s"
+        )
+    return True, (
+        f"MAVLink v2 confirmed on the wire ({v2_frames} v2 frames, 0 v1), "
+        f"bidirectional (COMMAND_ACK result={ack.result}), continuous "
+        f"({len(beats)} heartbeats, largest gap {worst:.2f} s <= {max_gap:.1f} s "
+        f"over {window:.0f} s). Channel encryption is NOT covered by this check."
+    )
+
+
+def _render_verify_assert_mavlink_v2_link(spec: VerifySpec) -> str:
+    window = float(spec.args.get("window_s", 8.0))
+    max_gap = float(spec.args.get("max_gap_s", 2.0))
+    return textwrap.dedent(f"""\
+        print("  reading the wire for MAVLink v2 framing + continuity ...")
+        v2_frames = v1_frames = 0
+        beats = []
+        deadline = time.time() + {window}
+        while time.time() < deadline:
+            msg = mav.recv_match(blocking=True, timeout=1)
+            if msg is None:
+                continue
+            buf = msg.get_msgbuf()
+            if buf:
+                if buf[0] == 0xFD:
+                    v2_frames += 1
+                elif buf[0] == 0xFE:
+                    v1_frames += 1
+            if msg.get_type() == "HEARTBEAT":
+                beats.append(time.time())
+        ok = v2_frames > 0 and v1_frames == 0 and len(beats) >= 2
+        if ok:
+            mav.mav.command_long_send(
+                mav.target_system, mav.target_component,
+                mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
+                mavutil.mavlink.MAVLINK_MSG_ID_AUTOPILOT_VERSION, 0, 0, 0, 0, 0, 0,
+            )
+            ack = mav.recv_match(type="COMMAND_ACK", blocking=True, timeout=5)
+            gaps = [b - a for a, b in zip(beats, beats[1:])]
+            worst = max(gaps)
+            ok = ack is not None and worst <= {max_gap}
+            print(f"  v2_frames={{v2_frames}} v1_frames={{v1_frames}} "
+                  f"ack={{ack is not None}} worst_gap={{worst:.2f}}s")
+        else:
+            print(f"  v2_frames={{v2_frames}} v1_frames={{v1_frames}} beats={{len(beats)}}")
+        print("  " + ("OK" if ok else "FAIL") + " — channel encryption is NOT covered")
+        return ok
+    """)
+
+
+def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
+    """Time from an accepted waypoint-modification command to the active plan
+    carrying it.
+
+    The transfer itself is protocol overhead, so the clock starts at MISSION_ACK
+    — the point at which the vehicle has RECEIVED a valid modification — and
+    stops when a read-back of the mission shows the revised coordinate. Both
+    intervals are reported so the split is visible.
+    """
+    limit = float(spec.args.get("max_latency_s", 1.0))
+    mav, mv = ctx.mav, ctx.mavutil
+
+    def upload(items) -> Optional[float]:
+        """Send a mission; return the time MISSION_ACK arrived."""
+        mav.mav.mission_count_send(
+            mav.target_system, mav.target_component, len(items),
+            mv.mavlink.MAV_MISSION_TYPE_MISSION,
+        )
+        sent = 0
+        deadline = time.time() + 15.0
+        while sent < len(items) and time.time() < deadline:
+            req = mav.recv_match(
+                type=["MISSION_REQUEST", "MISSION_REQUEST_INT"],
+                blocking=True, timeout=3,
+            )
+            if req is None:
+                continue
+            seq = int(req.seq)
+            lat, lon, alt = items[seq]
+            mav.mav.mission_item_int_send(
+                mav.target_system, mav.target_component, seq,
+                mv.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+                mv.mavlink.MAV_CMD_NAV_WAYPOINT,
+                0, 1, 0, 0, 0, 0,
+                int(lat * 1e7), int(lon * 1e7), float(alt),
+                mv.mavlink.MAV_MISSION_TYPE_MISSION,
+            )
+            sent = max(sent, seq + 1)
+        ack = mav.recv_match(type="MISSION_ACK", blocking=True, timeout=5)
+        if ack is None or int(ack.type) != mv.mavlink.MAV_MISSION_ACCEPTED:
+            return None
+        return time.time()
+
+    def readback(seq: int) -> Optional[tuple]:
+        mav.mav.mission_request_int_send(
+            mav.target_system, mav.target_component, seq,
+            mv.mavlink.MAV_MISSION_TYPE_MISSION,
+        )
+        item = mav.recv_match(type="MISSION_ITEM_INT", blocking=True, timeout=2)
+        if item is None:
+            return None
+        return (int(item.x), int(item.y))
+
+    home_lat, home_lon = -35.363262, 149.165237
+    original = [(home_lat, home_lon, 0.0),
+                (home_lat + 0.0004, home_lon, 20.0),
+                (home_lat + 0.0008, home_lon, 20.0)]
+    if upload(original) is None:
+        return False, "the original mission was not accepted; no baseline plan to revise"
+
+    revised = list(original)
+    revised[2] = (home_lat + 0.0008, home_lon + 0.0006, 25.0)
+    target = (int(revised[2][0] * 1e7), int(revised[2][1] * 1e7))
+
+    # The active plan is polled, so one read-back round-trip is the floor on
+    # what this method can resolve. Measure it, so the latency below is
+    # reported as the upper bound it actually is.
+    poll_started = time.time()
+    readback(2)
+    poll_cost = time.time() - poll_started
+
+    send_started = time.time()
+    accepted_at = upload(revised)
+    if accepted_at is None:
+        return False, "the revised waypoint sequence was rejected by the vehicle"
+    transfer_s = accepted_at - send_started
+
+    deadline = accepted_at + max(limit * 4.0, 5.0)
+    incorporated_at = None
+    last_seen = None
+    while time.time() < deadline:
+        last_seen = readback(2)
+        if last_seen == target:
+            incorporated_at = time.time()
+            break
+    if incorporated_at is None:
+        return False, (
+            f"the active plan never carried the revision (last read-back {last_seen}, "
+            f"expected {target}); transfer took {transfer_s:.3f} s"
+        )
+
+    latency = incorporated_at - accepted_at
+    ok = latency <= limit
+    return ok, (
+        f"revised waypoint sequence was carried by the active flight plan within "
+        f"{latency:.3f} s of MISSION_ACK (limit {limit:.1f} s). This is an UPPER "
+        f"BOUND, not an exact interval: the plan is polled, and one read-back "
+        f"round-trip costs {poll_cost:.3f} s, so incorporation happened at or "
+        f"before the first poll that saw it. The upload transfer took "
+        f"{transfer_s:.3f} s and is excluded — the requirement's clock starts at "
+        f"receipt of the modification command, not at the start of its transfer"
+    )
+
+
+def _render_verify_assert_waypoint_update_latency(spec: VerifySpec) -> str:
+    limit = float(spec.args.get("max_latency_s", 1.0))
+    return textwrap.dedent(f"""\
+        print("  timing waypoint-sequence incorporation ...")
+        HOME_LAT, HOME_LON = -35.363262, 149.165237
+
+        def _upload(items):
+            mav.mav.mission_count_send(
+                mav.target_system, mav.target_component, len(items),
+                mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+            sent, deadline = 0, time.time() + 15.0
+            while sent < len(items) and time.time() < deadline:
+                req = mav.recv_match(type=["MISSION_REQUEST", "MISSION_REQUEST_INT"],
+                                     blocking=True, timeout=3)
+                if req is None:
+                    continue
+                seq = int(req.seq)
+                lat, lon, alt = items[seq]
+                mav.mav.mission_item_int_send(
+                    mav.target_system, mav.target_component, seq,
+                    mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+                    mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 1, 0, 0, 0, 0,
+                    int(lat * 1e7), int(lon * 1e7), float(alt),
+                    mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+                sent = max(sent, seq + 1)
+            ack = mav.recv_match(type="MISSION_ACK", blocking=True, timeout=5)
+            if ack is None or int(ack.type) != mavutil.mavlink.MAV_MISSION_ACCEPTED:
+                return None
+            return time.time()
+
+        def _readback(seq):
+            mav.mav.mission_request_int_send(
+                mav.target_system, mav.target_component, seq,
+                mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+            item = mav.recv_match(type="MISSION_ITEM_INT", blocking=True, timeout=2)
+            return None if item is None else (int(item.x), int(item.y))
+
+        original = [(HOME_LAT, HOME_LON, 0.0),
+                    (HOME_LAT + 0.0004, HOME_LON, 20.0),
+                    (HOME_LAT + 0.0008, HOME_LON, 20.0)]
+        revised = list(original)
+        revised[2] = (HOME_LAT + 0.0008, HOME_LON + 0.0006, 25.0)
+        target = (int(revised[2][0] * 1e7), int(revised[2][1] * 1e7))
+
+        ok = False
+        if _upload(original) is not None:
+            accepted_at = _upload(revised)
+            if accepted_at is not None:
+                deadline = accepted_at + max({limit} * 4.0, 5.0)
+                while time.time() < deadline:
+                    if _readback(2) == target:
+                        latency = time.time() - accepted_at
+                        ok = latency <= {limit}
+                        print(f"  incorporation latency {{latency:.3f}}s (limit {limit})")
+                        break
+        print("  " + ("OK" if ok else "FAIL"))
+        return ok
+    """)
+
+
 VERIFY_HANDLERS: Dict[str, VerifyHandler] = {
     "noop":                _verify_noop,
     "wait_mode":           _verify_wait_mode,
@@ -760,6 +1035,8 @@ VERIFY_HANDLERS: Dict[str, VerifyHandler] = {
     "assert_servo_pwm":    _verify_assert_servo_pwm,
     "assert_sensor_unhealthy": _verify_assert_sensor_unhealthy,
     "wait_statustext":     _verify_wait_statustext,
+    "assert_mavlink_v2_link": _verify_assert_mavlink_v2_link,
+    "assert_waypoint_update_latency": _verify_assert_waypoint_update_latency,
     "skip":                _verify_skip,
 }
 
@@ -770,6 +1047,8 @@ RENDER_VERIFY: Dict[str, RenderVerifyHandler] = {
     "assert_servo_pwm":    _render_verify_assert_servo_pwm,
     "assert_sensor_unhealthy": _render_verify_assert_sensor_unhealthy,
     "wait_statustext":     _render_verify_wait_statustext,
+    "assert_mavlink_v2_link": _render_verify_assert_mavlink_v2_link,
+    "assert_waypoint_update_latency": _render_verify_assert_waypoint_update_latency,
     "skip":                _render_verify_skip,
 }
 

@@ -27,7 +27,7 @@ Maps SysML requirements to ArduPilot parameters and SITL test specs.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Dict, List, Optional, Any, Mapping, Tuple
 
@@ -1388,6 +1388,27 @@ class RequirementLinker:
 
         return "\n".join(lines) + "\n"
 
+    @staticmethod
+    def _bind_verify_args(verify, attr_val):
+        """Resolve ``@attr_match`` inside a verify spec's args.
+
+        A threshold a check compares against has to come from the model, the
+        same way an ``ardu_params`` value does. When it cannot be resolved the
+        spec is DROPPED rather than run against a default: a check that invents
+        its own limit reports a verdict about nothing.
+        """
+        if verify is None:
+            return verify
+        args = dict(getattr(verify, "args", {}) or {})
+        if not any(v == "@attr_match" for v in args.values()):
+            return verify
+        if attr_val is None or float(attr_val) <= 0:
+            return None
+        for key, value in list(args.items()):
+            if value == "@attr_match":
+                args[key] = float(attr_val)
+        return replace(verify, args=args)
+
     def generate_test_specs(self) -> List[SITLTestSpec]:
         specs: List[SITLTestSpec] = []
         resolved_by_req: Dict[str, List[ResolvedParam]] = {}
@@ -1399,26 +1420,32 @@ class RequirementLinker:
             if cat is None:
                 continue
             st = cat["sitl_test"]
-            specs.append(SITLTestSpec(
-                req_id=req_id,
-                tier=st["tier"],
-                inject=st.get("inject"),
-                verify=st.get("verify"),
-                notes=st.get("notes", ""),
-                params=tuple(resolved_by_req.get(req_id, [])),
-            ))
+            verify = self._bind_verify_args(
+                st.get("verify"), cat.get("_resolved_attr_val"))
+            if verify is not None:
+                specs.append(SITLTestSpec(
+                    req_id=req_id,
+                    tier=st["tier"],
+                    inject=st.get("inject"),
+                    verify=verify,
+                    notes=st.get("notes", ""),
+                    params=tuple(resolved_by_req.get(req_id, [])),
+                ))
             l2 = cat.get("l2_test")
             if l2 is not None:
                 # 同一需求的附加 L2 行为检查（如 FENCE 缩尺执法）；参数
                 # 已由主 spec 携带并写入启动 .parm，这里不重复。
-                specs.append(SITLTestSpec(
-                    req_id=req_id,
-                    tier="L2",
-                    inject=l2.get("inject"),
-                    verify=l2.get("verify"),
-                    notes=l2.get("notes", ""),
-                    params=(),
-                ))
+                l2_verify = self._bind_verify_args(
+                    l2.get("verify"), cat.get("_resolved_attr_val"))
+                if l2_verify is not None:
+                    specs.append(SITLTestSpec(
+                        req_id=req_id,
+                        tier="L2",
+                        inject=l2.get("inject"),
+                        verify=l2_verify,
+                        notes=l2.get("notes", ""),
+                        params=(),
+                    ))
         return specs
 
     # ------------------------------------------------------------------

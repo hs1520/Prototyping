@@ -40,6 +40,76 @@ _QUANTITY_RE = re.compile(
 )
 
 
+#: Terms whose presence makes a clause inspection/analysis work — no simulator
+#: can test them. Kept in step with verification_matrix._INSPECTION_KWS.
+INSPECTION_TERMS = (
+    "comply", "compliance", "regulation", "easa", "faa", "astm", "ip54", "ip5",
+    "ingress", "temperature", "certif", "material", "encrypt", "aes",
+)
+
+#: Connectives that introduce the MEANS or MEDIUM a capability runs over. A
+#: sentence that names an untestable medium for an otherwise testable
+#: capability is asserting two things with different verification means, and a
+#: single obligation over the whole sentence lets either half misrepresent the
+#: other: the untestable half drags the capability out of scope, and a test of
+#: the capability would appear to close the untestable half. Splitting there is
+#: the only way both can be reported truthfully.
+#:
+#: Deliberately NOT included: "in accordance with", "compliant with", " across "
+#: and " through ". Those qualify HOW or UNDER WHAT CONDITIONS the same
+#: capability must behave rather than naming a separate medium — "operate
+#: across an ambient temperature range" is one obligation, not two — so
+#: splitting them would invent an obligation the requirement never asserted.
+_MEDIUM_CONNECTIVES = (" over ", " via ", " using ")
+
+#: A capability clause has to survive the cut as a requirement in its own
+#: right. "The system shall operate" is what is left when a condition is
+#: mistaken for a medium, and it asserts nothing testable.
+_MIN_CAPABILITY_WORDS = 8
+
+
+def _inspection_positions(low: str) -> list:
+    return sorted(
+        position
+        for term in INSPECTION_TERMS
+        for position in [low.find(term)]
+        if position >= 0
+    )
+
+
+def split_capability_and_medium(text: str):
+    """Split "<capability> over <untestable medium>" into its two clauses.
+
+    Returns ``(capability, medium)``, or ``None`` when the sentence does not
+    have that shape — which is the common case, and stays a single obligation.
+    """
+    source = _clean(text)
+    low = source.lower()
+    positions = _inspection_positions(low)
+    if not positions:
+        return None
+    first = positions[0]
+
+    cut = -1
+    connective = ""
+    for token in _MEDIUM_CONNECTIVES:
+        index = low.rfind(token, 0, first)
+        if index > cut:
+            cut, connective = index, token
+    if cut < 0:
+        return None                      # the untestable term is in the main clause
+
+    capability = source[:cut].strip(" .,;")
+    medium = source[cut + len(connective):].strip(" .,;")
+    if "shall" not in capability.lower() or not medium:
+        return None                      # left side no longer reads as a requirement
+    if len(capability.split()) < _MIN_CAPABILITY_WORDS:
+        return None                      # degenerate stub, not a capability
+    if _inspection_positions(capability.lower()):
+        return None                      # the split failed to isolate the untestable half
+    return capability, medium
+
+
 @dataclass(frozen=True)
 class VerificationObligation:
     obligation_id: str
@@ -55,6 +125,22 @@ class EvidenceClaim:
     status: str  # verified | failed | planned | partial | out-of-sim-scope
     kinds: FrozenSet[str] = field(default_factory=frozenset)
     all_obligations: bool = False
+    #: Restrict the claim to obligations whose CLAUSE mentions one of these
+    #: terms. An inspection finding about encryption must not be stamped over a
+    #: protocol clause that a test does cover.
+    clause_terms: FrozenSet[str] = field(default_factory=frozenset)
+    #: The inverse: a claim that must never close a clause carrying one of
+    #: these terms. A wire-level protocol test says nothing about encryption
+    #: even when both live in the same requirement.
+    clause_exclude_terms: FrozenSet[str] = field(default_factory=frozenset)
+
+    def covers(self, obligation: "VerificationObligation") -> bool:
+        clause = (obligation.clause or "").lower()
+        if self.clause_exclude_terms and any(t in clause for t in self.clause_exclude_terms):
+            return False
+        if self.clause_terms and not any(t in clause for t in self.clause_terms):
+            return False
+        return self.all_obligations or obligation.kind in self.kinds
 
 
 @dataclass(frozen=True)
@@ -158,11 +244,27 @@ def compile_verification_obligations(
     if not source:
         return tuple()
 
-    obligations = [VerificationObligation(
-        obligation_id=f"OBL_{req_id}_001",
-        clause=source,
-        kind="behavior",
-    )]
+    split = split_capability_and_medium(source)
+    if split is None:
+        obligations = [VerificationObligation(
+            obligation_id=f"OBL_{req_id}_001",
+            clause=source,
+            kind="behavior",
+        )]
+    else:
+        capability, medium = split
+        obligations = [
+            VerificationObligation(
+                obligation_id=f"OBL_{req_id}_001",
+                clause=capability,
+                kind="behavior",
+            ),
+            VerificationObligation(
+                obligation_id=f"OBL_{req_id}_001M",
+                clause=medium,
+                kind="behavior",
+            ),
+        ]
     previous_end = 0
     for index, match in enumerate(_QUANTITY_RE.finditer(source), 2):
         obligations.append(VerificationObligation(
@@ -195,10 +297,7 @@ def evaluate_obligations(
     results = []
     claim_list = tuple(claims)
     for obligation in obligations:
-        matching = tuple(
-            claim for claim in claim_list
-            if claim.all_obligations or obligation.kind in claim.kinds
-        )
+        matching = tuple(claim for claim in claim_list if claim.covers(obligation))
         if blocked:
             status = "blocked"
         elif matching:
