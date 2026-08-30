@@ -550,8 +550,23 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
          measure_attitude=False,
          nilwind_dash_s=0.0,   # accepted for compatibility; the cruise
                                # survey now sweeps to steady state instead
-         wind_force_scale_override=None) -> int:
+         wind_force_scale_override=None,
+         mission_model_text=None,
+         delivery_abort_before_release=False) -> int:
     LAST_RESULT.clear()
+    # When the generated model is supplied it OWNS the mission decisions: the
+    # harness offers events derived from telemetry and actuates only what the
+    # model fires. Without it the harness decides, which is honest evidence of
+    # physics but says nothing about the generated logic — the two cases are
+    # labelled differently so the mapper can tell them apart.
+    mission = None
+    if mission_model_text:
+        from gazebo_poc.model_mission import ModelDrivenMission
+        mission = ModelDrivenMission(mission_model_text)
+        LAST_RESULT["mission_provenance"] = mission.provenance()
+        print(f"[model] mission decisions owned by the generated model: "
+              f"{len(mission.machines)} machines, "
+              f"{len(mission.accepted_events())} events", flush=True)
     out = Path("gazebo_poc/generated")
     tdir = Path("gazebo_poc/templates")
     frame_class = 1
@@ -939,15 +954,41 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                             break
                 rc(alt_hold_stick(rels[-1] if rels else TGT))
 
+            # An abort condition, when the scenario asks for one, is offered to
+            # the model BEFORE the coordinate event. REQ-SAFE-006 says the
+            # payload stays locked whenever an abort is active regardless of
+            # proximity, so a release that still happens here is a physical
+            # observation of the requirement being violated.
+            abort_active = False
+            if mission is not None and delivery_abort_before_release:
+                abort_fired = mission.offer(
+                    "AbortConditionActive", time=time.monotonic())
+                abort_active = True
+                print(f"[model] abort offered; model fired "
+                      f"{[d.action for d in abort_fired]}", flush=True)
+
+            # Ask the model whether to release. The harness does NOT decide.
+            release_decisions = ()
+            if mission is not None:
+                release_decisions = mission.offer(
+                    "DeliveryCoordinateSatisfied", time=time.monotonic())
+                print(f"[model] delivery coordinate offered; model fired "
+                      f"{[d.action for d in release_decisions]}", flush=True)
+            model_released = bool(mission is None or release_decisions)
+
             payload_z0 = _payload_z()
             release_started = time.monotonic()
-            m.mav.command_long_send(
-                m.target_system,
-                m.target_component,
-                211,  # MAV_CMD_DO_GRIPPER
-                0,
-                0, 0, 0, 0, 0, 0, 0,  # gripper 0, RELEASE
-            )
+            if model_released:
+                m.mav.command_long_send(
+                    m.target_system,
+                    m.target_component,
+                    211,  # MAV_CMD_DO_GRIPPER
+                    0,
+                    0, 0, 0, 0, 0, 0, 0,  # gripper 0, RELEASE
+                )
+            else:
+                print("[model] the generated logic declined to release; "
+                      "the harness issues no command", flush=True)
             release_delay = None
             payload_z = payload_z0
             deadline = time.monotonic() + 4.0
@@ -962,12 +1003,22 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             coordinate_chain_delay = None
             if condition_met_mono is not None and release_delay is not None:
                 # coordinate-condition satisfied → physical separation, the
-                # full PERF-005 interval (harness owns the condition check).
+                # full PERF-005 interval. With a mission model the condition is
+                # consumed by the generated logic, which owns the decision to
+                # actuate; the harness only observes the separation.
                 coordinate_chain_delay = (
                     release_started + release_delay - condition_met_mono
                 )
             LAST_RESULT.update({
-                "payload_release_commanded": True,
+                "payload_release_commanded": model_released,
+                "payload_release_decided_by": (
+                    "generated model" if mission is not None else "harness"),
+                "payload_release_decisions": (
+                    [d.as_dict() for d in release_decisions]
+                    if mission is not None else None),
+                "payload_abort_active": abort_active,
+                "payload_release_inhibited": bool(
+                    mission is not None and not release_decisions),
                 "payload_observer_available": payload_z0 is not None,
                 "payload_release_detected": release_delay is not None,
                 "payload_release_delay_s": release_delay,
@@ -985,6 +1036,10 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 ),
                 "payload_release_position_tolerance_m": positional_tolerance_m,
                 "payload_release_fidelity": (
+                    "generated PayloadReleaseBehavior consumed the delivery event "
+                    "and its entry action drove MAV_CMD_DO_GRIPPER to Gazebo "
+                    "detachable-joint physical separation"
+                    if mission is not None else
                     "MAV_CMD_DO_GRIPPER to Gazebo detachable-joint physical separation"
                 ),
             })
@@ -1385,14 +1440,29 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             observer, chute_event, chute_seen = _start_model_observer("parachute_small")
             time.sleep(0.2)
             observer_available = observer.poll() is None
+            # Offer the critical-propulsion-failure detection to the model and
+            # deploy only if its SafetyMonitor fires. Precedence over other
+            # safety responses (REQ-SAFE-005) is a separate arbitration claim
+            # and is NOT established by this subcheck.
+            chute_decisions = ()
+            if mission is not None:
+                chute_decisions = mission.offer(
+                    "CriticalPropulsionFailure", time=time.monotonic())
+                print(f"[model] critical propulsion failure offered; model fired "
+                      f"{[d.action for d in chute_decisions]}", flush=True)
+            model_deployed = bool(mission is None or chute_decisions)
             chute_started = time.monotonic()
-            m.mav.command_long_send(
-                m.target_system,
-                m.target_component,
-                208,  # MAV_CMD_DO_PARACHUTE
-                0,
-                2, 0, 0, 0, 0, 0, 0,  # PARACHUTE_ACTION_RELEASE
-            )
+            if model_deployed:
+                m.mav.command_long_send(
+                    m.target_system,
+                    m.target_component,
+                    208,  # MAV_CMD_DO_PARACHUTE
+                    0,
+                    2, 0, 0, 0, 0, 0, 0,  # PARACHUTE_ACTION_RELEASE
+                )
+            else:
+                print("[model] the generated logic declined to deploy the "
+                      "parachute; the harness issues no command", flush=True)
             chute_event.wait(timeout=max(2.0, parachute_max_delay_s + 1.0))
             chute_delay = (
                 float(chute_seen["at"] - chute_started)
@@ -1401,12 +1471,21 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             if observer.poll() is None:
                 observer.terminate()
             LAST_RESULT.update({
-                "parachute_commanded": True,
+                "parachute_commanded": model_deployed,
+                "parachute_decided_by": (
+                    "generated model" if mission is not None else "harness"),
+                "parachute_decisions": (
+                    [d.as_dict() for d in chute_decisions]
+                    if mission is not None else None),
                 "parachute_observer_available": observer_available,
                 "parachute_model_observed": chute_delay is not None,
                 "parachute_deploy_delay_s": chute_delay,
                 "parachute_max_delay_s": parachute_max_delay_s,
                 "parachute_fidelity": (
+                    "generated ParachuteDeploymentBehavior consumed the critical-"
+                    "failure event and its entry action drove MAV_CMD_DO_PARACHUTE "
+                    "to Gazebo ParachutePlugin model creation/attachment"
+                    if mission is not None else
                     "MAV_CMD_DO_PARACHUTE to Gazebo ParachutePlugin model creation/attachment"
                 ),
             })
@@ -1415,6 +1494,11 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 f"delay={chute_delay} s limit={parachute_max_delay_s}s",
                 flush=True,
             )
+        if mission is not None:
+            LAST_RESULT["mission_decisions"] = mission.decision_log()
+            LAST_RESULT["mission_events_offered"] = [
+                {"time": round(t, 6), "event": e} for t, e in mission.offered
+            ]
         m.mav.rc_channels_override_send(m.target_system, m.target_component, *([0] * 8))
         _cleanup(proc)
 

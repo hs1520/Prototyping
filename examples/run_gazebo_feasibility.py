@@ -77,7 +77,15 @@ def _planned_gazebo_reqs(requirements: list[str]) -> list[dict[str, Any]]:
         low = req.lower()
         check = None
         reason = None
-        if any(k in low for k in ("single propulsion", "one motor", "motor inoperative", "propulsion unit")):
+        if ("payload" in low and "lock" in low and "abort" in low):
+            # An inhibition claim cannot be shown by a run in which the
+            # inhibiting condition never held. It is only testable by driving
+            # the generated logic WITH the condition active and observing that
+            # the action does not occur.
+            check = "delivery_abort_inhibition"
+            reason = ("payload-lock inhibition under an active abort must be "
+                      "driven and physically observed, not inferred")
+        elif any(k in low for k in ("single propulsion", "one motor", "motor inoperative", "propulsion unit")):
             check = "single_motor_out"
             reason = "one-motor-out controllability requires high-fidelity dynamics"
         elif any(k in low for k in ("headwind", "tailwind", "crosswind", "gust")):
@@ -228,6 +236,26 @@ def _single_motor_req(planned: list[dict[str, Any]]) -> str | None:
 _MIN_SWEEP_POINTS = 3
 
 
+def _decided_by_model(gazebo: dict[str, Any] | None, what: str) -> bool:
+    """True when the generated model, not the harness, made this call."""
+    return bool(gazebo) and gazebo.get(f"{what}_decided_by") == "generated model"
+
+
+def _model_owned_clause(gazebo: dict[str, Any], what: str) -> str:
+    """Name the machine and action the generated model fired."""
+    decisions = gazebo.get(f"{what}_decisions") or []
+    fired = "; ".join(
+        f"{d.get('owner_part')}.{d.get('machine')} {d.get('from_state')}"
+        f"->{d.get('to_state')} on {d.get('event')} firing {d.get('action')}"
+        for d in decisions
+    )
+    return (
+        "the GENERATED model owned the decision: "
+        + (fired or "no transition recorded")
+        + " — the harness only supplied the event and actuated what the model fired"
+    )
+
+
 def _planned_check(planned: list[dict[str, Any]], check: str) -> dict[str, Any] | None:
     return next((item for item in planned if item.get("check") == check), None)
 
@@ -255,7 +283,8 @@ def _parachute_timing_req(planned: list[dict[str, Any]]) -> dict[str, Any] | Non
 
 
 def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]],
-                     include_single_motor_out: bool = False) -> dict[str, Any]:
+                     include_single_motor_out: bool = False,
+                     mission_model_text: str | None = None) -> dict[str, Any]:
     from gazebo_poc import run_flight
     from gazebo_poc.prop_theory import rpm_cross_check
 
@@ -295,6 +324,7 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         parachute_max_delay_s=float((parachute_req or {}).get("max_delay_s") or 0.5),
         measure_attitude=(cruise_att_req is not None
                           or payload_att_req is not None),
+        mission_model_text=mission_model_text,
         # extend the pre-wind (nil-wind) dash so top speed and cruise attitude
         # are sampled from a built-up plateau rather than the 7 s direction probe
         nilwind_dash_s=(
@@ -341,6 +371,39 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         for key, value in obstacle_result.items():
             if key.startswith("obstacle_"):
                 result[key] = value
+
+    # The inhibition scenario needs its own flight: a payload can only be
+    # released once, so the abort case cannot share the nominal delivery.
+    inhibition_req = _planned_check(planned, "delivery_abort_inhibition")
+    if (inhibition_req and mission_model_text and payload_release
+            and result.get("hover_stable")):
+        rc_inhibit = run_flight.main(
+            mass_kg=mass,
+            rotor_radius=rotor_radius,
+            capacity_mah=capacity,
+            rotor_count=rotor_count,
+            calibrate=True,
+            max_thrust_g=max_thrust_g,
+            hover_throttle=hover_throttle,
+            payload_release=True,
+            payload_mass_kg=payload_mass_kg,
+            positional_release=position_req is not None,
+            positional_tolerance_m=float((position_req or {}).get("max_error_m") or 1.0),
+            mission_model_text=mission_model_text,
+            delivery_abort_before_release=True,
+        )
+        inhibit_result = dict(run_flight.LAST_RESULT)
+        result["abort_inhibition_req"] = str(inhibition_req["req_id"])
+        result["abort_inhibition_return_code"] = rc_inhibit
+        result["abort_inhibition_abort_active"] = inhibit_result.get("payload_abort_active")
+        result["abort_inhibition_release_detected"] = inhibit_result.get(
+            "payload_release_detected")
+        result["abort_inhibition_decisions"] = inhibit_result.get(
+            "payload_release_decisions")
+        result["abort_inhibition_observer_available"] = inhibit_result.get(
+            "payload_observer_available")
+        result["abort_inhibition_z_before_m"] = inhibit_result.get("payload_z_before_m")
+        result["abort_inhibition_z_after_m"] = inhibit_result.get("payload_z_after_m")
 
     rid = _single_motor_req(planned) if include_single_motor_out else None
     if rid and result.get("hover_stable"):
@@ -437,14 +500,19 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         observer_available = bool(gazebo.get("payload_observer_available"))
         if chain is not None:
             # Full requirement interval: coordinate condition satisfied →
-            # physical separation. The condition was evaluated by the harness,
-            # not by generated mission logic — hence still PARTIAL.
+            # physical separation. Who owned the decision decides the ceiling:
+            # the generated logic consuming the event and firing its own action
+            # is what makes this evidence about the model rather than about
+            # Gazebo's ability to separate a joint.
             meets = detected and float(chain) <= limit
             message = (
                 f"delivery-coordinate condition satisfied → physical detachable-joint "
                 f"separation delay={float(chain):.3f} s (limit {limit:.1f} s; "
-                f"command→separation {delay} s, detected={detected}); the coordinate "
-                "condition was evaluated by the harness, not by generated mission logic"
+                f"command→separation {delay} s, detected={detected}); "
+                + (_model_owned_clause(gazebo, "payload_release")
+                   if _decided_by_model(gazebo, "payload_release") else
+                   "the coordinate condition was evaluated by the harness, not by "
+                   "generated mission logic")
             )
         else:
             meets = detected and delay is not None and float(delay) <= limit
@@ -458,10 +526,11 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         results.append({
             "req_id": rid,
             "check": "timed_actuation",
-            # Physical timing is measured; condition ownership stays with the
-            # harness, so the ceiling remains PARTIAL.
+            # Physical timing is measured either way; the model owning the
+            # decision is what lifts the ceiling off PARTIAL.
             "status": (
-                "PARTIAL" if meets else "FAIL" if observer_available else "INCONCLUSIVE"
+                ("PASS" if _decided_by_model(gazebo, "payload_release") else "PARTIAL")
+                if meets else "FAIL" if observer_available else "INCONCLUSIVE"
             ),
             "message": message,
         })
@@ -476,11 +545,17 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         results.append({
             "req_id": rid,
             "check": "positional_release",
-            "status": "PARTIAL" if met else "INCONCLUSIVE",
+            "status": (
+                ("PASS" if _decided_by_model(gazebo, "payload_release") else "PARTIAL")
+                if met else "INCONCLUSIVE"
+            ),
             "message": (
-                f"Harness triggered physical payload release at horizontal position error "
-                f"{error} m (limit {limit:.1f} m); this exercises trajectory/position/actuator "
-                "coupling but not generated mission-logic ownership of the trigger"
+                f"physical payload release at horizontal position error "
+                f"{error} m (limit {limit:.1f} m); "
+                + (_model_owned_clause(gazebo, "payload_release")
+                   if _decided_by_model(gazebo, "payload_release") else
+                   "harness-triggered — this exercises trajectory/position/actuator "
+                   "coupling but not generated mission-logic ownership of the trigger")
             ),
         })
 
@@ -497,12 +572,18 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             "req_id": rid,
             "check": "parachute_deploy_timing",
             "status": (
-                "PARTIAL" if met else "FAIL" if observer_available else "INCONCLUSIVE"
+                ("PASS" if _decided_by_model(gazebo, "parachute") else "PARTIAL")
+                if met else "FAIL" if observer_available else "INCONCLUSIVE"
             ),
             "message": (
                 f"MAV_CMD_DO_PARACHUTE to Gazebo parachute model creation/attachment "
-                f"delay={delay} s (limit {limit:.1f} s, observed={observed}); critical-failure "
-                "detection and precedence were not injected by this subcheck"
+                f"delay={delay} s (limit {limit:.1f} s, observed={observed}); "
+                + (_model_owned_clause(gazebo, "parachute")
+                   + "; precedence over other safety responses is a separate "
+                     "arbitration claim and is NOT established here"
+                   if _decided_by_model(gazebo, "parachute") else
+                   "critical-failure detection and precedence were not injected "
+                   "by this subcheck")
             ),
         })
 
@@ -617,6 +698,40 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                       if len(cruise_span) == 2 else "")
                    if transport_swept else
                    "; carry-hover window only — cruise-transport attitude not swept")
+            ),
+        })
+
+    if gazebo and gazebo.get("abort_inhibition_req"):
+        rid = str(gazebo["abort_inhibition_req"])
+        released = gazebo.get("abort_inhibition_release_detected")
+        observer = bool(gazebo.get("abort_inhibition_observer_available"))
+        aborted = bool(gazebo.get("abort_inhibition_abort_active"))
+        fired = "; ".join(
+            f"{d.get('machine')} {d.get('from_state')}->{d.get('to_state')} "
+            f"firing {d.get('action')}"
+            for d in (gazebo.get("abort_inhibition_decisions") or [])
+        )
+        covered.add(rid)
+        results.append({
+            "req_id": rid,
+            "check": "delivery_abort_inhibition",
+            "status": (
+                "INCONCLUSIVE" if not (aborted and observer)
+                else "FAIL" if released else "PASS"
+            ),
+            "message": (
+                "abort condition offered to the generated logic BEFORE the "
+                "delivery coordinate; "
+                + (f"the model then fired {fired}; " if fired else "")
+                + (
+                    f"the payload SEPARATED anyway "
+                    f"(z {gazebo.get('abort_inhibition_z_before_m')} -> "
+                    f"{gazebo.get('abort_inhibition_z_after_m')}) — the generated "
+                    "release transition carries no guard, so an active abort "
+                    "does not inhibit it"
+                    if released else
+                    "the payload remained attached, so the inhibition holds"
+                )
             ),
         })
 
@@ -846,7 +961,10 @@ def build_report(dry_run: bool = False, include_single_motor_out: bool = False) 
                 return report
     gazebo_design = _gazebo_design_from_run(run)
     live = None if dry_run else _run_live_gazebo(
-        gazebo_design, planned, include_single_motor_out=include_single_motor_out
+        gazebo_design, planned, include_single_motor_out=include_single_motor_out,
+        # the model under verification owns the mission decisions; without this
+        # the harness decides and the evidence can only speak for the physics
+        mission_model_text=model_sysml,
     )
     req_results = _req_results(
         live, planned, include_single_motor_out=include_single_motor_out

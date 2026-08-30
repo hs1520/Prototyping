@@ -531,3 +531,141 @@ def test_obstacle_is_not_flown_when_the_requirement_omits_the_envelope(monkeypat
     assert not [c for c in calls if c.get("obstacle_avoidance")], (
         "refused envelope must not be invented by flying a default scenario"
     )
+
+
+_RELEASE_PLANNED = [
+    {"req_id": "REQ-PERF-005", "check": "timed_actuation", "message": "release",
+     "max_delay_s": 2.0, "requirement_text": "payload release within 2 seconds"},
+    {"req_id": "REQ-FUNC-005", "check": "positional_release", "message": "release",
+     "max_error_m": 1.0, "requirement_text": "release within 1.0 metre"},
+]
+_RELEASE_LIVE = {
+    "payload_release_commanded": True,
+    "payload_observer_available": True,
+    "payload_release_detected": True,
+    "payload_release_delay_s": 0.69,
+    "payload_coordinate_to_separation_delay_s": 1.33,
+    "payload_release_position_error_m": 0.765,
+    "payload_release_position_met": True,
+}
+_MODEL_DECISION = [{
+    "owner_part": "PayloadMechanism", "machine": "PayloadReleaseBehavior",
+    "event": "DeliveryCoordinateSatisfied", "from_state": "Locked",
+    "to_state": "Releasing", "action": "onReleasing",
+    "decided_by": "generated model",
+}]
+
+
+def test_a_harness_triggered_release_stays_partial():
+    """Physics evidence about Gazebo is not evidence about the generated model."""
+    results = {r["check"]: r for r in rgf._req_results(
+        dict(_RELEASE_LIVE, payload_release_decided_by="harness"), _RELEASE_PLANNED)}
+    assert results["timed_actuation"]["status"] == "PARTIAL"
+    assert results["positional_release"]["status"] == "PARTIAL"
+    assert "not generated mission-logic ownership" in results["positional_release"]["message"]
+
+
+def test_a_model_owned_release_closes_and_names_the_machine():
+    live = dict(_RELEASE_LIVE,
+                payload_release_decided_by="generated model",
+                payload_release_decisions=_MODEL_DECISION)
+    results = {r["check"]: r for r in rgf._req_results(live, _RELEASE_PLANNED)}
+
+    assert results["timed_actuation"]["status"] == "PASS"
+    assert results["positional_release"]["status"] == "PASS"
+    for check in ("timed_actuation", "positional_release"):
+        message = results[check]["message"]
+        assert "the GENERATED model owned the decision" in message
+        # the evidence names what actually fired, not just that something did
+        assert "PayloadMechanism.PayloadReleaseBehavior Locked->Releasing" in message
+        assert "firing onReleasing" in message
+
+
+def test_parachute_ownership_does_not_silently_claim_precedence():
+    planned = [{"req_id": "REQ-SAFE-005", "check": "timed_actuation",
+                "message": "parachute", "max_delay_s": 0.5,
+                "requirement_text": "deploy the ballistic recovery parachute within 0.5 seconds"}]
+    live = {
+        "parachute_commanded": True,
+        "parachute_observer_available": True,
+        "parachute_model_observed": True,
+        "parachute_deploy_delay_s": 0.0516,
+        "parachute_max_delay_s": 0.5,
+        "parachute_decided_by": "generated model",
+        "parachute_decisions": [{
+            "owner_part": "SafetyMonitor", "machine": "ParachuteDeploymentBehavior",
+            "event": "CriticalPropulsionFailure", "from_state": "Monitoring",
+            "to_state": "DeployingParachute", "action": "onDeployingParachute",
+            "decided_by": "generated model",
+        }],
+    }
+    results = {r["check"]: r for r in rgf._req_results(live, planned)}
+    message = results["parachute_deploy_timing"]["message"]
+    assert results["parachute_deploy_timing"]["status"] == "PASS"
+    assert "the GENERATED model owned the decision" in message
+    # SAFE-005 also asks for precedence over all other safety responses, which
+    # deploying on cue does not demonstrate
+    assert "precedence over other safety responses is a separate" in message
+
+
+_INHIBITION_REQ = (
+    "REQ-SAFE-006: The system shall maintain the payload in the mechanically "
+    "locked state whenever a delivery-abort condition is active, regardless of "
+    "geographic proximity to the delivery waypoint."
+)
+
+
+def test_an_inhibition_requirement_is_planned_as_its_own_driven_scenario():
+    planned = rgf._planned_gazebo_reqs([_INHIBITION_REQ])
+    assert planned[0]["check"] == "delivery_abort_inhibition"
+    assert "physically observed, not inferred" in planned[0]["message"]
+
+
+def test_releasing_while_the_abort_is_active_fails_the_inhibition():
+    """The 2026-08-30 model does exactly this, and REQ-SAFE-006 was marked
+    verified: two unguarded machines, no arbitration between them."""
+    planned = rgf._planned_gazebo_reqs([_INHIBITION_REQ])
+    live = {
+        "abort_inhibition_req": "REQ-SAFE-006",
+        "abort_inhibition_abort_active": True,
+        "abort_inhibition_observer_available": True,
+        "abort_inhibition_release_detected": True,
+        "abort_inhibition_z_before_m": 8.799,
+        "abort_inhibition_z_after_m": 8.291,
+        "abort_inhibition_decisions": [{
+            "machine": "PayloadReleaseBehavior", "from_state": "Locked",
+            "to_state": "Releasing", "action": "onReleasing",
+        }],
+    }
+    result = {r["check"]: r for r in rgf._req_results(live, planned)}
+    row = result["delivery_abort_inhibition"]
+    assert row["status"] == "FAIL"
+    assert "SEPARATED anyway" in row["message"]
+    assert "carries no guard" in row["message"]
+
+
+def test_a_payload_that_stays_attached_passes_the_inhibition():
+    planned = rgf._planned_gazebo_reqs([_INHIBITION_REQ])
+    live = {
+        "abort_inhibition_req": "REQ-SAFE-006",
+        "abort_inhibition_abort_active": True,
+        "abort_inhibition_observer_available": True,
+        "abort_inhibition_release_detected": False,
+        "abort_inhibition_decisions": [],
+    }
+    result = {r["check"]: r for r in rgf._req_results(live, planned)}
+    assert result["delivery_abort_inhibition"]["status"] == "PASS"
+    assert "remained attached" in result["delivery_abort_inhibition"]["message"]
+
+
+def test_no_payload_observer_makes_the_inhibition_inconclusive_not_a_pass():
+    """Without an observer, 'no separation seen' is not evidence of inhibition."""
+    planned = rgf._planned_gazebo_reqs([_INHIBITION_REQ])
+    live = {
+        "abort_inhibition_req": "REQ-SAFE-006",
+        "abort_inhibition_abort_active": True,
+        "abort_inhibition_observer_available": False,
+        "abort_inhibition_release_detected": False,
+    }
+    result = {r["check"]: r for r in rgf._req_results(live, planned)}
+    assert result["delivery_abort_inhibition"]["status"] == "INCONCLUSIVE"
