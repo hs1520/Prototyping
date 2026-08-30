@@ -148,6 +148,7 @@ def run_one(
     stem = f"{arm.name}_seed{seed}"
     log_path = runs_dir / f"{stem}.log"
     started = time.time()
+    llm = None
 
     try:
         provider_kwargs = (
@@ -234,6 +235,18 @@ def run_one(
             "error": f"{type(error).__name__}: {error}",
             "log_path": str(log_path),
         })
+        # Spend up to the point of failure.  Deliberately NOT the llm_* names
+        # the analysis consumes: a failed run stopped at an arbitrary point, so
+        # its cost is not comparable to a completed run's and must never reach
+        # aggregate()/paired_deltas().  This is campaign accounting — the run
+        # report (and the usage line it prints) is never built on this path, so
+        # without this the tokens a failed run burned are unrecoverable.
+        ledger = getattr(llm, "ledger", None)
+        if ledger is not None:
+            usage = ledger.as_dict()
+            record["llm_usage_at_failure"] = usage
+            record["llm_calls_at_failure"] = usage.get("calls")
+            record["llm_total_tokens_at_failure"] = usage.get("total_tokens")
         try:
             _archive_failure(error, campaign_dir, arm.name, seed, record)
         except Exception as archive_error:   # never mask the real failure
