@@ -1,0 +1,19 @@
+{
+  "aggregate": {
+    "SINGLE-SHOT": {
+      "runs_ok": 0,
+      "runs_failed": 1,
+      "failed_seeds": [
+        0
+      ]
+    }
+  },
+  "paired_vs_baseline": {
+    "SINGLE-SHOT": {
+      "paired_seeds": [],
+      "unpaired_seeds": [
+        0
+      ]
+    }
+  }
+}
