@@ -1146,6 +1146,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 obstacle_min_separation_m,
             )
             LAST_RESULT.update({
+                # gate read by the feasibility mapper: an obstacle scenario was
+                # actually flown, so its verdict may be judged from live evidence
+                "obstacle_req": True,
                 "obstacle_lidar_available": lidar_available,
                 "obstacle_lidar_samples": int(lidar.get("sample_count") or 0),
                 "obstacle_detected_within_range": first_detection_distance is not None,

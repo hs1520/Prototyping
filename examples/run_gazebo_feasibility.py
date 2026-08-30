@@ -140,6 +140,33 @@ def _planned_gazebo_reqs(requirements: list[str]) -> list[dict[str, Any]]:
                 item["min_speed_mps"] = _number_after(
                     r"at least\s+(\d+(?:\.\d+)?)\s*m/s", low
                 )
+            elif check == "obstacle_avoidance":
+                # Every number comes from the requirement's own text; the
+                # scenario envelope is never invented here.
+                item["detection_range_m"] = _number_after(
+                    r"detection\s+no\s+later\s+than\s+(\d+(?:\.\d+)?)\s*(?:metres?|meters?)",
+                    low,
+                )
+                item["min_separation_m"] = _number_after(
+                    r"separation\s+of\s+at\s+least\s+(\d+(?:\.\d+)?)\s*(?:metres?|meters?)",
+                    low,
+                )
+                item["approach_speed_mps"] = _number_after(
+                    r"closing\s+speed\s+no\s+greater\s+than\s+(\d+(?:\.\d+)?)\s*m/s",
+                    low,
+                )
+                item["contract_ready"] = all(
+                    item.get(key) is not None
+                    for key in ("detection_range_m", "min_separation_m",
+                                "approach_speed_mps")
+                )
+                if not item["contract_ready"]:
+                    item["semantic_gaps"] = [
+                        f"{key} not stated in the requirement"
+                        for key in ("detection_range_m", "min_separation_m",
+                                    "approach_speed_mps")
+                        if item.get(key) is None
+                    ]
             planned.append(item)
     return planned
 
@@ -289,10 +316,31 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
             "implied_ct": rpm.ct_implied,
         })
 
-    # The obstacle-avoidance live sub-check was driven by the external-contract
-    # geometry layer, which was retired with the Layer-2 excision; the planner
-    # still records the requirement, and its status is judged from live evidence
-    # in _req_results.
+    # Obstacle avoidance is its own scenario: the vehicle must approach a
+    # stationary threat and be seen to break off. It cannot ride along with the
+    # cruise survey, so it is flown separately — like one-motor-out — and only
+    # when the requirement itself states the whole envelope (detection range,
+    # separation, closing speed). Nothing here invents a scenario.
+    obstacle_req = _planned_check(planned, "obstacle_avoidance")
+    if obstacle_req and obstacle_req.get("contract_ready") and result.get("hover_stable"):
+        rc_obstacle = run_flight.main(
+            mass_kg=mass,
+            rotor_radius=rotor_radius,
+            capacity_mah=capacity,
+            rotor_count=rotor_count,
+            calibrate=True,
+            max_thrust_g=max_thrust_g,
+            hover_throttle=hover_throttle,
+            obstacle_avoidance=True,
+            obstacle_detection_range_m=float(obstacle_req["detection_range_m"]),
+            obstacle_min_separation_m=float(obstacle_req["min_separation_m"]),
+            obstacle_approach_speed_mps=float(obstacle_req["approach_speed_mps"]),
+        )
+        obstacle_result = dict(run_flight.LAST_RESULT)
+        result["obstacle_return_code"] = rc_obstacle
+        for key, value in obstacle_result.items():
+            if key.startswith("obstacle_"):
+                result[key] = value
 
     rid = _single_motor_req(planned) if include_single_motor_out else None
     if rid and result.get("hover_stable"):

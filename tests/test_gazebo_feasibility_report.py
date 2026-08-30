@@ -464,3 +464,70 @@ def test_coordinate_chain_delay_supersedes_command_delay():
     result = rgf._req_results(live, planned)[0]
     assert result["status"] == "PARTIAL"
     assert "coordinate-condition detection was not exercised" in result["message"]
+
+
+def test_obstacle_scenario_is_actually_flown_when_the_requirement_states_it(monkeypatch):
+    """It stopped being flown once and nobody noticed for months: the planner
+    kept recording the requirement while no scenario ever produced evidence."""
+    calls = []
+
+    from gazebo_poc import run_flight
+
+    def fake_main(**kwargs):
+        calls.append(kwargs)
+        run_flight.LAST_RESULT.clear()
+        run_flight.LAST_RESULT.update(
+            {"hover_stable": True}
+            if not kwargs.get("obstacle_avoidance")
+            else {"obstacle_req": True, "obstacle_avoidance_met": True,
+                  "obstacle_lidar_available": True,
+                  "obstacle_min_distance_m": 5.44}
+        )
+        return 0
+
+    monkeypatch.setattr(run_flight, "main", fake_main)
+    planned = rgf._planned_gazebo_reqs([
+        "REQ-FUNC-002: When approaching a stationary collision threat directly "
+        "ahead within the forward sensor field of view at a closing speed no "
+        "greater than 1.5 m/s, the system shall execute an avoidance manoeuvre "
+        "following threat detection no later than 15 metres, maintaining an "
+        "airframe-to-obstacle separation of at least 5 metres."
+    ])
+    design = {"mass_kg": 5.54, "rotor_radius_m": 0.2032, "rotor_count": 6,
+              "battery_capacity_mah": 16000.0, "payload_mass_kg": 0.0}
+    live = rgf._run_live_gazebo(design, planned)
+
+    obstacle_calls = [c for c in calls if c.get("obstacle_avoidance")]
+    assert len(obstacle_calls) == 1, "the obstacle scenario was never flown"
+    # the envelope is the requirement's own, not an invented one
+    assert obstacle_calls[0]["obstacle_detection_range_m"] == 15.0
+    assert obstacle_calls[0]["obstacle_min_separation_m"] == 5.0
+    assert obstacle_calls[0]["obstacle_approach_speed_mps"] == 1.5
+    assert live["obstacle_req"] is True
+
+    results = {r["check"]: r for r in rgf._req_results(live, planned)}
+    assert results["obstacle_avoidance"]["status"] == "PASS"
+
+
+def test_obstacle_is_not_flown_when_the_requirement_omits_the_envelope(monkeypatch):
+    calls = []
+
+    from gazebo_poc import run_flight
+
+    def fake_main(**kwargs):
+        calls.append(kwargs)
+        run_flight.LAST_RESULT.clear()
+        run_flight.LAST_RESULT.update({"hover_stable": True})
+        return 0
+
+    monkeypatch.setattr(run_flight, "main", fake_main)
+    planned = rgf._planned_gazebo_reqs([
+        "REQ-FUNC-002: The system shall avoid obstacles."   # no numbers at all
+    ])
+    assert planned[0]["contract_ready"] is False
+    assert planned[0]["semantic_gaps"]
+    rgf._run_live_gazebo({"mass_kg": 5.54, "rotor_radius_m": 0.2032, "rotor_count": 6,
+                      "battery_capacity_mah": 16000.0, "payload_mass_kg": 0.0}, planned)
+    assert not [c for c in calls if c.get("obstacle_avoidance")], (
+        "refused envelope must not be invented by flying a default scenario"
+    )
