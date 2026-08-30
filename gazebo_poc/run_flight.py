@@ -774,6 +774,26 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             print(f"[sitl] timeout waiting for {label}", flush=True)
             return False
 
+        def mode_holds(mode_id, secs=6.0, consecutive=4):
+            """True only when the mode is reported on N heartbeats in a row.
+
+            A single matching heartbeat is not evidence the vehicle is IN a
+            mode. ArduCopter accepts GUIDED while disarmed, reports it once,
+            and reverts to STABILIZE — which read as success here for months
+            and left every flight in a stick-flown fallback, because
+            ModeStabilize has no user takeoff.
+            """
+            end = time.time() + secs
+            run = 0
+            while time.time() < end:
+                h = hb()
+                if h is None:
+                    continue
+                run = run + 1 if h.custom_mode == mode_id else 0
+                if run >= consecutive:
+                    return True
+            return False
+
         def drain_status():
             while True:
                 s = m.recv_match(type="STATUSTEXT", blocking=False)
@@ -816,11 +836,41 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 armed = True; break
         if not armed:
             print("[RESULT] failed to arm", flush=True); _cleanup(proc); return 5
-        print("[sitl] ARMED. GUIDED takeoff ...", flush=True)
+        # GUIDED must be (re-)entered AFTER arming and must HOLD. Set while
+        # disarmed it does not stick, and the vehicle arms in STABILIZE, whose
+        # has_user_takeoff() is false — so MAV_CMD_NAV_TAKEOFF is refused with
+        # a bare MAV_RESULT_FAILED and every flight falls back to stick control.
+        m.set_mode("GUIDED")
+        guided_held = mode_holds(GUIDED)
+        LAST_RESULT["guided_mode_held_after_arming"] = guided_held
+        print(f"[sitl] ARMED. GUIDED held after arming: {guided_held}; takeoff ...",
+              flush=True)
 
         def baro_alt():
             v = m.recv_match(type="VFR_HUD", blocking=True, timeout=2)
             return v.alt if v else None
+
+        # ArduCopter refuses a GUIDED takeoff unless position_ok() holds, which
+        # when armed needs EKF_POS_HORIZ_ABS set and EKF_CONST_POS_MODE clear.
+        # A bare MAV_RESULT_FAILED does not say which; these flags do.
+        ekf = m.recv_match(type="EKF_STATUS_REPORT", blocking=True, timeout=5)
+        if ekf is not None:
+            bits = {
+                "ATTITUDE": 1, "VELOCITY_HORIZ": 2, "VELOCITY_VERT": 4,
+                "POS_HORIZ_REL": 8, "POS_HORIZ_ABS": 16, "POS_VERT_ABS": 32,
+                "POS_VERT_AGL": 64, "CONST_POS_MODE": 128,
+                "PRED_POS_HORIZ_REL": 256, "PRED_POS_HORIZ_ABS": 512,
+            }
+            present = sorted(name for name, bit in bits.items() if int(ekf.flags) & bit)
+            position_ok = ("POS_HORIZ_ABS" in present
+                           and "CONST_POS_MODE" not in present)
+            LAST_RESULT["ekf_flags_at_takeoff"] = present
+            LAST_RESULT["ekf_position_ok_at_takeoff"] = position_ok
+            print(f"[sitl] EKF at takeoff: flags={present} → position_ok={position_ok}",
+                  flush=True)
+        else:
+            LAST_RESULT["ekf_flags_at_takeoff"] = None
+            print("[sitl] no EKF_STATUS_REPORT before takeoff", flush=True)
 
         a = baro_alt()
         alt0 = a if a is not None else 0.0
