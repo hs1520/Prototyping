@@ -592,6 +592,23 @@ def compile_source_anchored_structural_obligations(
                     f"{prefix}.behavior_kind must be STATE_DEF or ACTION_DEF"
                 )
                 local_valid = False
+            elif realization.behavior_kind != "STATE_DEF" and any(
+                behavior.owner == realization.owner_component
+                and behavior.behavior_id == realization.behavior_name
+                for behavior in planned_behaviors
+            ):
+                # behaviors[] is the sole writer of this name and always
+                # materialises a `state def`; an obligation compiled with the
+                # contradictory kind would fail the structurally correct
+                # model. from_payload reconciles this before compiling; this
+                # guard covers direct callers.
+                issues.append(
+                    f"{prefix}.behavior_kind {realization.behavior_kind} "
+                    f"contradicts behaviors[] which defines "
+                    f"{realization.owner_component}::"
+                    f"{realization.behavior_name} as a state machine"
+                )
+                local_valid = False
             if not re.fullmatch(
                 r"[A-Za-z_]\w*", realization.behavior_name
             ):

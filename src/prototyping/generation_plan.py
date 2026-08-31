@@ -1514,6 +1514,39 @@ class ModelGenerationPlan:
                 else item
                 for item in requirement_realizations
             )
+        # behaviors[] is the SOLE WRITER of every behaviour it names
+        # (materialize_planned_behaviors), and a planned behaviour always
+        # materialises as `state def`. A realization's behavior_kind for such
+        # a name is therefore derived data, not a free field: run 2026-08-31
+        # declared ACTION_DEF for a name behaviors[] defined as a state
+        # machine, the emitted model (correctly) carried `state def`, and the
+        # obligation compiled from the contradictory kind failed a
+        # structurally correct model. Reconcile toward the sole writer.
+        planned_behavior_keys = {
+            (behavior.owner, behavior.behavior_id)
+            for behavior in planned_behaviors
+        }
+        kind_reconciliations: list[str] = []
+        kind_reconciled: list[RequirementRealizationPlan] = []
+        for item in requirement_realizations:
+            if (
+                item.realization_kind == "LOCAL_BEHAVIOR"
+                and item.behavior_kind != "STATE_DEF"
+                and (item.owner_component, item.behavior_name)
+                in planned_behavior_keys
+            ):
+                kind_reconciliations.append(
+                    f"{item.requirement_id}::{item.owner_component}::"
+                    f"{item.behavior_name} behavior_kind "
+                    f"{item.behavior_kind} -> STATE_DEF "
+                    "(behaviors[] is the sole writer)"
+                )
+                item = replace(item, behavior_kind="STATE_DEF")
+            kind_reconciled.append(item)
+        requirement_realizations = tuple(kind_reconciled)
+        behavior_identity_reconciliations = tuple(
+            behavior_identity_reconciliations
+        ) + tuple(kind_reconciliations)
         if require_source_anchored_paths:
             # Runs here rather than beside the other behaviour checks because
             # it reads the intent each realization records, so realizations
