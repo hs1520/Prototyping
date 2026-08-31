@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from ..llm.interface import ESCALATION_TEMPERATURES
 from ..prototyping.generation_plan import ModelGenerationPlan
+from ..prototyping.plan_patch import normalise_for_mention as _normalise_for_mention
 from ..utils.req_id import normalise_req_id
 
 if TYPE_CHECKING:
@@ -60,10 +61,6 @@ class PlanRevisionOutcome:
     plan: ModelGenerationPlan | None
     #: Full audit record for run metadata.
     record: dict[str, Any] = field(default_factory=dict)
-
-
-def _normalise_for_mention(text: str) -> str:
-    return text.replace("-", "_").upper()
 
 
 def _blocked_issue_lines(blocked: Mapping[str, Any]) -> list[str]:

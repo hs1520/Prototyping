@@ -10,6 +10,11 @@ from ..prototyping.generation_plan import (
     ModelGenerationPlan,
     attach_ag_behavior_obligations,
 )
+from ..prototyping.plan_patch import (
+    is_plan_patch,
+    merge_plan_patch,
+    unauthorized_plan_changes,
+)
 from ..prototyping.requirement_semantics import (
     compile_requirement_semantic_obligations,
     render_semantic_binding_planning_guidance,
@@ -138,28 +143,88 @@ class TypedPlanGeneration:
             legacy_used = False
             failure_kind = "NONE"
             plan = None
+            patch_used = False
+            patch_audit: dict[str, Any] | None = None
+            unauthorized: list[str] = []
+            plan_status_override: str | None = None
 
             if isinstance(response.extracted_json, Mapping):
-                last_valid_payload = dict(response.extracted_json)
-                plan = ModelGenerationPlan.from_payload(
-                    response.extracted_json,
-                    requirements=requirements,
-                    source=(
-                        "LLM_TYPED_JSON"
-                        if attempt_index == 0
-                        else "LLM_TYPED_JSON_RETRY"
-                    ),
-                    require_source_anchored_paths=True,
-                    ag_behavior_plan=request.behavior_plan,
-                )
-                if request.behavior_plan is not None:
-                    plan = attach_ag_behavior_obligations(
-                        plan,
-                        request.behavior_plan,
+                raw_payload = dict(response.extracted_json)
+                candidate_payload: dict[str, Any] | None = raw_payload
+                if is_plan_patch(raw_payload):
+                    if last_valid_payload is None:
+                        candidate_payload = None
+                        failure_kind = "SEMANTIC_PLAN_INVALID"
+                        attempt_issues.append(
+                            "incremental plan_patch returned but no "
+                            "parseable repair base exists; return one "
+                            "complete plan JSON object"
+                        )
+                    else:
+                        candidate_payload, patch_audit = merge_plan_patch(
+                            last_valid_payload, raw_payload
+                        )
+                        patch_used = True
+                # The diff gate judges exactly what the LLM changed against
+                # the payload its issues were computed on — patch or full
+                # replacement alike. "Preserve every field not implicated"
+                # used to be an instruction; this is its gate. It applies
+                # only when the previous prompt actually named entries
+                # (a format retry names none).
+                if (
+                    candidate_payload is not None
+                    and last_valid_payload is not None
+                    and previous_failure_kind in (
+                        "SEMANTIC_PLAN_INVALID", "UNAUTHORIZED_CHANGES",
                     )
-                attempt_issues.extend(plan.issues)
-                if plan.status != "PASS":
-                    failure_kind = "SEMANTIC_PLAN_INVALID"
+                ):
+                    unauthorized = unauthorized_plan_changes(
+                        last_valid_payload,
+                        candidate_payload,
+                        previous_attempt_issues,
+                    )
+                if candidate_payload is not None:
+                    plan = ModelGenerationPlan.from_payload(
+                        candidate_payload,
+                        requirements=requirements,
+                        source=(
+                            "LLM_TYPED_JSON"
+                            if attempt_index == 0
+                            else "LLM_TYPED_JSON_RETRY"
+                        ),
+                        require_source_anchored_paths=True,
+                        ag_behavior_plan=request.behavior_plan,
+                    )
+                    if request.behavior_plan is not None:
+                        plan = attach_ag_behavior_obligations(
+                            plan,
+                            request.behavior_plan,
+                        )
+                    attempt_issues.extend(plan.issues)
+                    if plan.status != "PASS":
+                        failure_kind = "SEMANTIC_PLAN_INVALID"
+                    if unauthorized and patch_used:
+                        # A patch entry no issue names is rejected: the
+                        # merge is the structural non-drift guarantee, and
+                        # this gate is what keeps a patch from smuggling
+                        # edits through it. The base does not advance past
+                        # a rejected payload, so the issues it still
+                        # carries stay outstanding — they authorize the
+                        # next correction alongside the violations, or a
+                        # clean retry patch would find no issue naming the
+                        # entry it legitimately fixes.
+                        attempt_issues.extend(unauthorized)
+                        attempt_issues.extend(previous_attempt_issues)
+                        if failure_kind == "NONE":
+                            failure_kind = "UNAUTHORIZED_CHANGES"
+                        plan_status_override = plan.status
+                        plan = None
+                    else:
+                        # A full replacement stays acceptable as before;
+                        # its unimplicated diffs are recorded in the
+                        # attempt rather than rejected, so drift is at
+                        # least visible where it used to be silent.
+                        last_valid_payload = dict(candidate_payload)
             elif request.allow_legacy_plan:
                 legacy_text = response.final_answer
                 fence_position = legacy_text.find("```")
@@ -221,7 +286,14 @@ class TypedPlanGeneration:
                 "json_parse": parse_diagnostic,
                 "legacy_compatibility_used": legacy_used,
                 "failure_kind": failure_kind,
-                "plan_status": plan.status if plan is not None else "UNAVAILABLE",
+                "plan_status": (
+                    plan_status_override
+                    if plan_status_override is not None
+                    else plan.status if plan is not None else "UNAVAILABLE"
+                ),
+                "incremental_patch_used": patch_used,
+                "patch_audit": patch_audit,
+                "unauthorized_changes": list(unauthorized),
                 "issues": list(unique_issues),
                 "correction_outcome": correction_outcome,
                 "resolved_previous_issues": sorted(
@@ -269,6 +341,15 @@ class TypedPlanGeneration:
                     "TYPED MODEL PLAN SEMANTIC CORRECTION — the previous "
                     "JSON parsed successfully but violated the frozen plan."
                 )
+            elif failure_kind == "UNAUTHORIZED_CHANGES":
+                semantic_retries_used += 1
+                retry_heading = (
+                    "TYPED MODEL PLAN AUTHORIZATION CORRECTION — the "
+                    "previous correction changed entries no issue named. "
+                    "Every change must be authorized by a listed issue; "
+                    "unimplicated entries are carried over from the repair "
+                    "base and must not be resent with edits."
+                )
             else:
                 break
 
@@ -285,15 +366,40 @@ class TypedPlanGeneration:
                 + "\n```"
                 if last_valid_payload is not None else ""
             )
-            attempt_context = "\n\n".join(
-                item for item in (
-                    planning_context,
-                    retry_heading
-                    + "\nReturn exactly one complete replacement JSON object "
+            if last_valid_payload is not None:
+                # Incremental protocol: the retry returns only implicated
+                # entries; the harness merges them into the repair base by
+                # identity key, so unimplicated fields cannot drift and the
+                # response is 10-30x smaller than a full replacement.
+                correction_instruction = (
+                    "\nReturn exactly one JSON object in a ```json block "
+                    "and no prose, with \"plan_patch\": true, containing "
+                    "ONLY the entries the issues implicate, as full "
+                    "replacement objects inside their original list keys — "
+                    "components are matched by name, connections by their "
+                    "four endpoints, behaviors by owner+behavior_id, "
+                    "requirement_realizations by requirement_id, constraints "
+                    "by constraint_id. To delete an entry, name it in "
+                    "\"remove\": {\"<list>\": [\"<identity>\"]} "
+                    "(behaviors as \"Owner::BehaviorId\", connections as "
+                    "\"a.p->b.q\"). Every entry you do not return is "
+                    "carried over from the repair base unchanged; a change "
+                    "to an entry no issue names is rejected "
+                    "deterministically. Do not emit SysML.\n"
+                )
+            else:
+                correction_instruction = (
+                    "\nReturn exactly one complete replacement JSON object "
                     "in a ```json block and no prose. Do not emit SysML. "
                     "Change only fields required by the issues; preserve all "
                     "other valid identities, components, ports, connections, "
                     "bindings, and constraints.\n"
+                )
+            attempt_context = "\n\n".join(
+                item for item in (
+                    planning_context,
+                    retry_heading
+                    + correction_instruction
                     + "VALIDATION ISSUES:\n"
                     + "\n".join(
                         f"- {issue}" for issue in attempt_record["issues"]
