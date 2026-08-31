@@ -54,7 +54,6 @@ from src.agents.refinement_authoring import (
 from src.sysml.lite_model import build_lite_model
 from src.sysml.text_normalization import (
     fix_capability_semantics,
-    fix_safety_action_semantics,
 )
 
 
@@ -2002,19 +2001,19 @@ def test_range_floor_cleanup_does_not_remove_sensor_range_constraint():
     assert "currentRange >= minOperationalRange" not in fixed
 
 
-def test_parachute_action_command_is_repaired_and_declared():
-    text = """package D {
-        action def CMD_LAND { }
-        part def SafetyMonitor {
-            action def deployParachute { send CMD_LAND() to parachuteCmd; }
-        }
-    }"""
-    fixed, count = fix_safety_action_semantics(text)
+def test_a_wrong_safety_command_is_no_longer_silently_respelled():
+    """`fix_safety_action_semantics` (removed 2026-08-31) rewrote
+    `send CMD_LAND()` inside parachute actions into `send CMD_PARACHUTE()`
+    and injected the harness's command definition — semantic forgery that
+    laundered a real arbitration defect into a pass. The wrong command must
+    survive normalization untouched and surface at the linker's traceability
+    check (test_parachute_guard_with_land_command_is_traceability_blocked)."""
+    from src.sysml import text_normalization
 
-    assert count == 2
-    assert "action def CMD_PARACHUTE" in fixed
-    assert "send CMD_PARACHUTE() to parachuteCmd" in fixed
-    assert "deployParachute { send CMD_LAND" not in fixed
+    assert not hasattr(text_normalization, "fix_safety_action_semantics")
+    assert "fix_safety_action_semantics" not in (
+        text_normalization.NORMALIZATION_RULE_ORDER["design_semantics"]
+    )
 
 
 def test_self_test_satisfy_is_relocated_to_state_machine_owner():

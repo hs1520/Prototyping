@@ -16,9 +16,11 @@ def test_normalization_rule_order_is_explicit():
             "fix_keyword_item_names",
             "fix_c_style_negation",
         ),
+        # 2026-08-31: fix_safety_action_semantics removed — rewriting a
+        # wrong safety command toward the harness vocabulary was semantic
+        # forgery; the defect now surfaces at the linker traceability check.
         "design_semantics": (
             "fix_capability_semantics",
-            "fix_safety_action_semantics",
         ),
         "design_post_assembly": (
             "fix_doc_syntax",

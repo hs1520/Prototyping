@@ -21,9 +21,11 @@ NORMALIZATION_RULE_ORDER = {
         "fix_keyword_item_names",
         "fix_c_style_negation",
     ),
+    # 2026-08-31: `fix_safety_action_semantics` removed from this tier — it
+    # rewrote wrong safety commands toward the harness vocabulary (semantic
+    # forgery); the defect now surfaces at the linker's traceability check.
     "design_semantics": (
         "fix_capability_semantics",
-        "fix_safety_action_semantics",
     ),
     "design_post_assembly": (
         "fix_doc_syntax",
@@ -274,37 +276,17 @@ def fix_capability_semantics(
     return constraint_re.sub(_drop_constraint, result), fixes
 
 
-def fix_safety_action_semantics(sysml_text: str) -> Tuple[str, int]:
-    """Prevent a parachute action from sending a flight-mode LAND command."""
-    action_re = re.compile(
-        r"(?P<head>action\s+def\s+\w*(?:parachute|chute)\w*\s*\{)"
-        r"(?P<body>[^{}]*)(?P<tail>\})",
-        re.IGNORECASE,
-    )
-    fixes = 0
-
-    def _fix_action(match: re.Match) -> str:
-        nonlocal fixes
-        body, n = re.subn(
-            r"\bsend\s+CMD_(?:LAND|RTL|AUTO|GUIDED|LOITER|POSHOLD)\s*\(\)",
-            "send CMD_PARACHUTE()",
-            match.group("body"),
-            flags=re.IGNORECASE,
-        )
-        fixes += n
-        return match.group("head") + body + match.group("tail")
-
-    result = action_re.sub(_fix_action, sysml_text)
-    if fixes and not re.search(r"\baction\s+def\s+CMD_PARACHUTE\b", result):
-        first_part = re.search(r"(?m)^[ \t]*part\s+def\s+", result)
-        if first_part:
-            result = (
-                result[:first_part.start()]
-                + "    action def CMD_PARACHUTE { }\n\n"
-                + result[first_part.start():]
-            )
-            fixes += 1
-    return result, fixes
+# `fix_safety_action_semantics` was removed 2026-08-31. It rewrote
+# `send CMD_LAND()` inside parachute-named actions into `send CMD_PARACHUTE()`
+# and injected the harness's command definition — semantic forgery, not
+# normalisation: a model that commands the wrong response was silently
+# "repaired" toward the harness vocabulary, laundering a real arbitration
+# defect into a pass and hiding it from every verification tier. The defect
+# now surfaces where it belongs: the requirement linker's traceability check
+# blocks a parachute guard that sends a LAND command
+# (test_parachute_guard_with_land_command_is_traceability_blocked), and a
+# correctly-commanded model with its own spelling is accepted via the plan's
+# causal-path route instead of a CHUTE-substring.
 
 
 def _remove_named_block(text: str, keyword: str, name: str) -> str:

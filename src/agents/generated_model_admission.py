@@ -16,7 +16,6 @@ from ..sysml.model import (
 )
 from ..sysml.text_normalization import (
     fix_capability_semantics,
-    fix_safety_action_semantics,
 )
 from ..utils.sysml_text_utils import PART_DEF_RE, find_block_end, named_def_pattern
 from .refinement_authoring import RefinementAuthoring, RefinementRequest
@@ -266,25 +265,27 @@ class GeneratedModelAdmission:
             has_range_floor=has_range_floor,
             has_range_ceiling=has_range_ceiling,
         )
-        cleaned_sysml, action_fixes = fix_safety_action_semantics(cleaned_sysml)
+        # A parachute action sending a flight-mode command is NOT rewritten
+        # here any more (fix_safety_action_semantics, removed 2026-08-31):
+        # that was semantic forgery — the wrong command must reach the
+        # linker's traceability check, not be silently respelled to pass it.
         cleaned_sysml, self_test_fixes = self._fix_self_test_behavior_semantics(
             cleaned_sysml, requirements
         )
         cleaned_sysml, ownership_fixes = self._fix_functional_satisfy_ownership(
             cleaned_sysml, requirements
         )
-        if capability_fixes or action_fixes or self_test_fixes or ownership_fixes:
+        if capability_fixes or self_test_fixes or ownership_fixes:
             cot_result = dataclasses.replace(cot_result, extracted_sysml=cleaned_sysml)
             generation_metadata["semantic_fixes"] = {
                 "capability": capability_fixes,
-                "safety_action": action_fixes,
                 "self_test_behavior": self_test_fixes,
                 "functional_satisfy_ownership": ownership_fixes,
             }
             if verbose:
                 print(
                     f"\n  [DEBUG] Semantic consistency fixes: "
-                    f"capability={capability_fixes}, safety_action={action_fixes}, "
+                    f"capability={capability_fixes}, "
                     f"self_test_behavior={self_test_fixes}, "
                     f"functional_satisfy_ownership={ownership_fixes}"
                 )
