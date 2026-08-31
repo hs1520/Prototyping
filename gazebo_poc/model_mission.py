@@ -101,10 +101,15 @@ class ModelDrivenMission:
             (self.model_text or "").encode("utf-8")
         ).hexdigest()
         for sm in extract_state_machines(self.model_text or ""):
-            # Only machines that respond to an event are drivable from here; a
-            # purely guard-driven machine has no event for the harness to offer.
-            if not sm.has_accept_transitions():
-                continue
+            # Every machine is loaded, including purely guard-driven ones.
+            # offer() steps them all, and a guard transition fires on the
+            # variables it is given whether or not the event names it — so a
+            # guard-only machine IS drivable. Skipping them hid the one that
+            # matters most: SafetyArbiter expresses REQ-SAFE-005's precedence
+            # entirely in guards ("... and not propulsionCriticalFailure"), and
+            # while it was filtered out the precedence check saw no competing
+            # response to take precedence over, and returned inconclusive
+            # forever.
             self.machines[f"{sm.owner_part}.{sm.name}"] = StateMachineInstance(sm)
 
     # -- introspection ----------------------------------------------------

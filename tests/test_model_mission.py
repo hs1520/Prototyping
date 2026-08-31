@@ -155,3 +155,46 @@ def test_authoritative_model_is_drivable_end_to_end():
         assert [d.action for d in fired] == [action], (
             f"{machine} did not own its own {event} response"
         )
+
+
+def test_guard_only_machines_are_loaded_and_drivable():
+    """A machine whose transitions are all guards is still driven: offer() steps
+    every machine, and a guard fires on the variables it is given. Filtering
+    them out hid SafetyArbiter, which expresses REQ-SAFE-005's precedence
+    entirely in guards — so the precedence check saw nothing to take precedence
+    over and returned inconclusive forever."""
+    model = """
+package Drone {
+    part def SafetyMonitor {
+        attribute hazard : Boolean = false;
+        attribute winning : Boolean = false;
+        action def competingResponse {}
+
+        state def Arbiter {
+            entry; then Nominal;
+            state Nominal;
+            state Competing {
+                entry action onCompeting : competingResponse;
+            }
+            transition toCompeting
+                first Nominal
+                if hazard
+                and not winning
+                then Competing;
+        }
+    }
+}
+"""
+    mission = ModelDrivenMission(model)
+    assert "SafetyMonitor.Arbiter" in mission.provenance()["machines"]
+    assert mission.action_definitions_for_machine("Arbiter") == ("competingResponse",)
+
+    # the guard fires on variables, under an event the model never declares
+    fired = mission.offer("__control__", time=0.0,
+                          variables={"hazard": True, "winning": False})
+    assert [d.action_definition for d in fired] == ["competingResponse"]
+
+    # and the winning condition suppresses it — precedence, expressed as a guard
+    suppressed = ModelDrivenMission(model).offer(
+        "__control__", time=0.0, variables={"hazard": True, "winning": True})
+    assert suppressed == ()

@@ -2026,20 +2026,45 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             # and is NOT established by this subcheck.
             chute_decisions = ()
             precedence_evidence = None
+            # The clock starts BEFORE the hazard is offered, so the model's own
+            # decision time is inside the interval. The requirement says
+            # "within 0.5 seconds of DETECTING", and detection is where the
+            # interval begins — starting it after the model has already decided
+            # measures the actuator alone.
+            chute_started = time.monotonic()
             if mission is not None:
                 competing_actions = mission.action_definitions_for_machine(
                     "SafetyArbiter"
                 )
+                hazard_state = {
+                    "propulsionCriticalFailure": True,
+                    "sensorSelfTestFailed": True,
+                    "batterySoc": 0.0,
+                    "commLossTime": 20.0,
+                }
+                # Control: the identical hazard state with nothing withheld but
+                # the winning condition, on a FRESH machine so no state carries
+                # over. Offered under a name the model does not accept, so only
+                # the guard-driven competitors are evaluated and the winner's
+                # accept transition stays out of it. Without this, an arbiter
+                # that suppresses nothing and one that suppresses correctly both
+                # produce silence.
+                control_mission = ModelDrivenMission(mission_model_text)
+                control_decisions = control_mission.offer(
+                    "__precedence_control__", time=time.monotonic(),
+                    variables=dict(hazard_state, propulsionCriticalFailure=False),
+                )
+                control_fired = [
+                    decision.action_definition for decision in control_decisions
+                    if decision.action_definition is not None
+                ]
+                LAST_RESULT["parachute_precedence_control_fired"] = control_fired
                 chute_decisions = mission.offer(
                     "CriticalPropulsionFailure", time=time.monotonic(),
-                    variables={
-                        "propulsionCriticalFailure": True,
-                        "sensorSelfTestFailed": True,
-                        "batterySoc": 0.0,
-                        "commLossTime": 20.0,
-                    },
+                    variables=hazard_state,
                 )
                 precedence_evidence = evaluate_safety_precedence(
+                    control_fired_action_definitions=control_fired,
                     fired_action_definitions=(
                         decision.action_definition
                         for decision in chute_decisions
@@ -2054,7 +2079,6 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 mission is None
                 or mission.performed(chute_decisions, ModelAction.DEPLOY_PARACHUTE)
             )
-            chute_started = time.monotonic()
             if model_deployed:
                 m.mav.command_long_send(
                     m.target_system,
