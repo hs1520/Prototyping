@@ -1,9 +1,31 @@
 """Requirement Evidence for adopting a revised waypoint in the active route."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable
+from typing import Iterable, Optional
+
+#: How far the navigation controller's reported target may sit from the
+#: commanded coordinate and still be that coordinate.
+#:
+#: POSITION_TARGET_GLOBAL_INT does not echo the mission item. ArduPilot converts
+#: the item to a NEU offset from the EKF origin and converts back for the
+#: report, so the round trip carries rounding and origin error: the 2026-08-31
+#: run held the revised waypoint at 0.58 m from the commanded coordinate.
+#: Integer equality — what this module demanded before — is therefore satisfiable
+#: only by mission storage, which returns what was written. That made the
+#: criterion unsatisfiable by the very observable it declares authoritative, and
+#: it failed a run in which the navigator had plainly adopted the revision.
+ADOPTION_TOLERANCE_M = 2.0
+
+#: An approximate match only means "adopted" if the revision was far enough away
+#: to tell adoption from standing still. Below this multiple of the tolerance,
+#: no observation could discriminate, so the scenario — not the vehicle — is
+#: what failed, and the verdict says so.
+DISCRIMINATION_FACTOR = 4.0
+
+_M_PER_DEG = 111_320.0
 
 
 class RouteObservationKind(str, Enum):
@@ -28,6 +50,20 @@ class ActiveRouteUpdateEvidence:
     storage_revision_seen: bool
     active_target_seen: bool
     description: str
+    separation_m: float | None = None
+    baseline_separation_m: float | None = None
+    latency_is_upper_bound: bool = False
+
+
+def separation_m(lat_e7_a: int, lon_e7_a: int, lat_e7_b: int, lon_e7_b: int) -> float:
+    """Ground distance between two 1e-7-degree coordinates."""
+    lat_a, lat_b = lat_e7_a / 1e7, lat_e7_b / 1e7
+    d_lat = (lat_a - lat_b) * _M_PER_DEG
+    d_lon = (
+        (lon_e7_a - lon_e7_b) / 1e7
+        * _M_PER_DEG * math.cos(math.radians((lat_a + lat_b) / 2.0))
+    )
+    return math.hypot(d_lat, d_lon)
 
 
 def evaluate_active_route_update(
@@ -37,34 +73,87 @@ def evaluate_active_route_update(
     target_lon_e7: int,
     observations: Iterable[RouteObservation],
     max_latency_s: float,
+    pre_revision_lat_e7: Optional[int] = None,
+    pre_revision_lon_e7: Optional[int] = None,
 ) -> ActiveRouteUpdateEvidence:
     """Judge adoption from the controller target, never mission read-back."""
     observed = tuple(observations)
-    matching = tuple(
-        observation
-        for observation in observed
-        if observation.observed_at_s >= accepted_at_s
-        and observation.lat_e7 == target_lat_e7
-        and observation.lon_e7 == target_lon_e7
-    )
+
+    def gap(observation: RouteObservation) -> float:
+        return separation_m(
+            observation.lat_e7, observation.lon_e7, target_lat_e7, target_lon_e7)
+
+    exact = [
+        item for item in observed
+        if item.lat_e7 == target_lat_e7 and item.lon_e7 == target_lon_e7
+    ]
     storage_seen = any(
-        observation.kind is RouteObservationKind.MISSION_STORAGE
-        for observation in matching
+        item.kind is RouteObservationKind.MISSION_STORAGE for item in exact
     )
-    active = tuple(
-        observation
-        for observation in matching
-        if observation.kind is RouteObservationKind.ACTIVE_CONTROLLER_TARGET
+    controller_samples = tuple(
+        item for item in observed
+        if item.kind is RouteObservationKind.ACTIVE_CONTROLLER_TARGET
     )
-    if not active:
+    after = tuple(
+        item for item in controller_samples if item.observed_at_s >= accepted_at_s
+    )
+    # What the controller was steering to BEFORE the revision, measured through
+    # the same transform as the samples after it. This is the honest baseline:
+    # comparing against the commanded pre-revision item would mix a commanded
+    # coordinate with a reported one and attribute the transform error to the
+    # vehicle.
+    before = tuple(
+        item for item in controller_samples if item.observed_at_s < accepted_at_s
+    )
+    baseline_gap: Optional[float] = None
+    if before:
+        baseline_gap = min(gap(item) for item in before)
+    elif pre_revision_lat_e7 is not None and pre_revision_lon_e7 is not None:
+        baseline_gap = separation_m(
+            pre_revision_lat_e7, pre_revision_lon_e7, target_lat_e7, target_lon_e7)
+
+    # An exact hit needs no discrimination: it cannot be a near-miss of some
+    # other coordinate. An approximate one does, or "the target never moved"
+    # and "the target arrived" are the same measurement.
+    adopted = [item for item in after if gap(item) <= ADOPTION_TOLERANCE_M]
+    exact_adopted = [
+        item for item in after
+        if item.lat_e7 == target_lat_e7 and item.lon_e7 == target_lon_e7
+    ]
+    discriminating = (
+        baseline_gap is not None
+        and baseline_gap >= DISCRIMINATION_FACTOR * ADOPTION_TOLERANCE_M
+    )
+
+    if adopted and not exact_adopted and not discriminating:
+        held = adopted[0]
+        return ActiveRouteUpdateEvidence(
+            status="inconclusive",
+            latency_s=None,
+            storage_revision_seen=storage_seen,
+            active_target_seen=True,
+            separation_m=gap(held),
+            baseline_separation_m=baseline_gap,
+            description=(
+                f"the navigation target sits {gap(held):.2f} m from the revised "
+                f"coordinate, within the {ADOPTION_TOLERANCE_M:.1f} m adoption "
+                "tolerance — but "
+                + (
+                    f"the revision moved the waypoint only "
+                    f"{baseline_gap:.2f} m, so a target that never moved would "
+                    "read the same; the scenario cannot tell adoption from "
+                    "standing still"
+                    if baseline_gap is not None else
+                    "no pre-revision controller target was sampled, so there is "
+                    "nothing to tell adoption from standing still"
+                )
+            ),
+        )
+
+    if not adopted:
         # "the navigator had no target" and "the navigator held the OLD target"
         # are different failures, and only the second says the revision was
         # ignored. Naming the coordinate it held says which one happened.
-        controller_samples = tuple(
-            observation for observation in observed
-            if observation.kind is RouteObservationKind.ACTIVE_CONTROLLER_TARGET
-        )
-        controller_observer_available = bool(controller_samples)
         held = ""
         if controller_samples:
             last = controller_samples[-1]
@@ -72,19 +161,20 @@ def evaluate_active_route_update(
             held = (
                 f" The navigation target was sampled {len(controller_samples)} times "
                 f"and held {len(distinct)} distinct coordinate(s), last "
-                f"({last.lat_e7}, {last.lon_e7}) against a revision to "
-                f"({target_lat_e7}, {target_lon_e7})."
+                f"({last.lat_e7}, {last.lon_e7}) at {gap(last):.2f} m from the "
+                f"revision to ({target_lat_e7}, {target_lon_e7})."
             )
         return ActiveRouteUpdateEvidence(
-            status=("failed" if controller_observer_available else "inconclusive"),
+            status=("failed" if controller_samples else "inconclusive"),
             latency_s=None,
             storage_revision_seen=storage_seen,
             active_target_seen=False,
+            baseline_separation_m=baseline_gap,
             description=(
                 "mission storage carried the revision, but no active-controller "
                 "target samples were available; active-route adoption is not "
                 "observable with this telemetry channel"
-                if storage_seen and not controller_observer_available else
+                if storage_seen and not controller_samples else
                 "the revised coordinate was present in mission storage but never "
                 "appeared as the active navigation-controller target" + held
                 if storage_seen else
@@ -92,16 +182,30 @@ def evaluate_active_route_update(
                 "the active navigation-controller target" + held
             ),
         )
-    adopted_at = min(observation.observed_at_s for observation in active)
-    latency = round(adopted_at - accepted_at_s, 6)
+
+    first = min(adopted, key=lambda item: item.observed_at_s)
+    latency = round(first.observed_at_s - accepted_at_s, 6)
+    # Sampling that begins at acceptance cannot see an adoption that had already
+    # happened: the first sample is then an upper bound, not a measurement.
+    upper_bound = not before and first is min(
+        after, key=lambda item: item.observed_at_s)
     return ActiveRouteUpdateEvidence(
         status="verified" if latency <= max_latency_s else "failed",
         latency_s=latency,
         storage_revision_seen=storage_seen,
         active_target_seen=True,
+        separation_m=gap(first),
+        baseline_separation_m=baseline_gap,
+        latency_is_upper_bound=upper_bound,
         description=(
             f"the revised coordinate became the active navigation-controller "
             f"target {latency:.3f} s after MISSION_ACK (limit "
-            f"{max_latency_s:.3f} s)"
+            f"{max_latency_s:.3f} s), reported {gap(first):.2f} m from the "
+            f"commanded coordinate"
+            + (f"; the controller had been steering {baseline_gap:.2f} m away "
+               f"before the revision, so the move is unambiguous"
+               if baseline_gap is not None else "")
+            + ("; sampling began at acceptance, so this latency is an upper "
+               "bound rather than a measurement" if upper_bound else "")
         ),
     )

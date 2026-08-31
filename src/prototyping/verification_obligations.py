@@ -222,8 +222,6 @@ _QUANTITY_RE = re.compile(
 )
 
 
-#: Terms whose presence makes a clause inspection/analysis work — no simulator
-#: can test them. Kept in step with verification_matrix._INSPECTION_KWS.
 #: Why a clause is out of simulation scope, as rules rather than a judgement
 #: call. One criterion decides every exclusion: the simulation stack carries no
 #: observable that the clause could be read off. Each rule names the missing

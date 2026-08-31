@@ -867,9 +867,11 @@ def _render_verify_assert_mavlink_v2_link(spec: VerifySpec) -> str:
 def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
     """Time adoption of a revised *active controller target* after MISSION_ACK."""
     from .active_route_evidence import (
+        ADOPTION_TOLERANCE_M,
         RouteObservation,
         RouteObservationKind,
         evaluate_active_route_update,
+        separation_m,
     )
 
     limit = float(spec.args.get("max_latency_s", 1.0))
@@ -970,13 +972,32 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
 
     revised = (home_lat + 0.0015, home_lon + 0.0010, 10.0)
     target = (int(revised[0] * 1e7), int(revised[1] * 1e7))
+
+    # Sample the controller target BEFORE revising. Two things need this: the
+    # baseline has to come through the same NEU-round-trip as the samples after
+    # the revision (comparing a reported coordinate against a commanded one
+    # would charge the transform error to the vehicle), and a latency measured
+    # from the first post-acceptance sample is only an upper bound.
+    observations = []
+    baseline_deadline = time.monotonic() + 1.5
+    while time.monotonic() < baseline_deadline:
+        prior = mav.recv_match(
+            type="POSITION_TARGET_GLOBAL_INT", blocking=True, timeout=0.5,
+        )
+        if prior is None:
+            continue
+        observations.append(RouteObservation(
+            observed_at_s=time.monotonic(),
+            kind=RouteObservationKind.ACTIVE_CONTROLLER_TARGET,
+            lat_e7=int(prior.lat_int), lon_e7=int(prior.lon_int),
+        ))
+
     send_started = time.monotonic()
     accepted_at = revise(1, revised)
     if accepted_at is None:
         return False, "the active-waypoint revision was rejected by the vehicle"
     transfer_s = accepted_at - send_started
 
-    observations = []
     deadline = accepted_at + max(limit * 4.0, 5.0)
     while time.monotonic() < deadline:
         active = mav.recv_match(
@@ -990,7 +1011,8 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
             lat_e7=int(active.lat_int), lon_e7=int(active.lon_int),
         )
         observations.append(observation)
-        if (observation.lat_e7, observation.lon_e7) == target:
+        if separation_m(observation.lat_e7, observation.lon_e7,
+                        target[0], target[1]) <= ADOPTION_TOLERANCE_M:
             break
 
     stored = readback(1)
@@ -1005,13 +1027,20 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
         target_lat_e7=target[0], target_lon_e7=target[1],
         observations=observations,
         max_latency_s=limit,
+        # the coordinate the revision replaced, as a fallback basis when the
+        # pre-revision sampling window caught nothing
+        pre_revision_lat_e7=int(original[1][0] * 1e7),
+        pre_revision_lon_e7=int(original[1][1] * 1e7),
     )
     return evidence.status == "verified", (
         ("INCONCLUSIVE: " if evidence.status == "inconclusive" else "")
         + f"{evidence.description}. Mission storage revision seen="
         f"{evidence.storage_revision_seen}; transfer took {transfer_s:.3f} s "
         "and is excluded. POSITION_TARGET_GLOBAL_INT is the active "
-        "navigation-controller target; MISSION_ITEM_INT is mission storage only"
+        "navigation-controller target; MISSION_ITEM_INT is mission storage only. "
+        f"Adoption is judged within {ADOPTION_TOLERANCE_M:.1f} m because the "
+        "controller reports its own target through an EKF-origin round trip, "
+        "never the commanded integers"
     )
 
 
