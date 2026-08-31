@@ -30,9 +30,18 @@ def evaluate_safety_precedence(
     correctly arbitrating one look identical.
 
     ``control_fired_action_definitions`` is what fired in that control run.
+
+    The winner is not its own competitor: the competing set is discovered
+    from the generated arbiter's full action table, which naturally contains
+    the winning action too, and leaving it in judged the first run where the
+    parachute actually fired as "a competing response fired alongside the
+    winner" — a precedence failure manufactured out of the win itself.
     """
     fired = tuple(fired_action_definitions)
-    competitors = tuple(competing_action_definitions)
+    competitors = tuple(
+        action for action in competing_action_definitions
+        if action != winner_action_definition
+    )
     winner_fired = winner_action_definition in fired
     competing_fired = tuple(action for action in competitors if action in fired)
     control = tuple(control_fired_action_definitions or ())

@@ -60,6 +60,29 @@ def test_any_competing_response_firing_is_a_precedence_failure():
     assert evidence.competing_actions_fired == ("initiateEmergencyLand",)
 
 
+def test_the_winner_is_not_its_own_competitor():
+    """The competing set is discovered from the generated arbiter's full
+    action table, so it contains the winning action too. run3's first real
+    parachute firing was judged 'a competing response fired alongside the
+    winner' — the failure was manufactured out of the win itself."""
+    evidence = evaluate_safety_precedence(
+        fired_action_definitions=["deployBallisticRecoveryParachute"],
+        winner_action_definition="deployBallisticRecoveryParachute",
+        competing_action_definitions=[
+            "deployBallisticRecoveryParachute",   # the winner, as discovered
+            "initiateBatteryRtb",
+            "initiateEmergencyLand",
+        ],
+        control_fired_action_definitions=["initiateEmergencyLand"],
+    )
+
+    assert evidence.status == "verified"
+    assert evidence.competing_actions_fired == ()
+    assert evidence.declared_competing_actions == (
+        "initiateBatteryRtb", "initiateEmergencyLand",
+    )
+
+
 def test_no_declared_competitors_cannot_establish_precedence_over_all_others():
     evidence = evaluate_safety_precedence(
         fired_action_definitions=["deployParachute"],
