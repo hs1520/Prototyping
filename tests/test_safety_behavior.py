@@ -138,3 +138,58 @@ def test_response_collapse_downgrades_safety_reqs():
     assert st["REQ-SAFE-010"] == RESPONSE_COLLAPSED      # land collapsed with rtb
     assert st["REQ-SAFE-011"] == RESPONSE_COLLAPSED      # rtb collapsed with land
     assert st["REQ-SAFE-012"] == BEHAVIORALLY_VERIFIED   # lock distinct → still verified
+
+
+# Degraded-continue (REQ-SAFE-007 shape, run 2026-08-31): the mandated response
+# is to KEEP FLYING — the state is named for the fault and the response lives
+# in its do-action. Grading state names only called this "no reachable
+# fail-safe state", which was literally false.
+_CONTINUE_MODEL = """package D {
+    requirement def REQ_SAFE_007 { doc /* maintain controlled flight */ }
+    item def SinglePropulsionUnitFailure;
+    part def PropulsionSystem {
+        action def operateAllMotors {}
+        action def maintainControlledFlight {}
+        state def PropulsionFaultToleranceBehavior {
+            entry; then NominalOperation;
+            state NominalOperation {
+                do action runNominalOperation : operateAllMotors;
+            }
+            state SingleMotorFailure {
+                do action runSingleMotorFailure : maintainControlledFlight;
+            }
+            transition motorFailureDetected
+                first NominalOperation
+                accept SinglePropulsionUnitFailure
+                then SingleMotorFailure;
+        }
+        satisfy requirement REQ_SAFE_007;
+    }
+}"""
+_CONTINUE_REQS = [
+    "REQ-SAFE-007: The system shall maintain controlled flight following "
+    "the failure of a single propulsion unit (one motor inoperative).",
+]
+
+
+def test_degraded_continue_response_is_verified_by_its_action():
+    st = safety_behavior_status(_CONTINUE_MODEL, _CONTINUE_REQS)
+    assert st["REQ-SAFE-007"] == BEHAVIORALLY_VERIFIED
+
+
+def test_continue_is_a_response_category_and_descent_still_lands():
+    from src.dse.safety_behavior import _response_category
+    assert _response_category(
+        "maintain controlled flight following a failure") == "continue"
+    # 'controlled descent' is a landing, not a continuation — order preserved.
+    assert _response_category("perform a controlled descent") == "land"
+
+
+def test_action_word_prefixes_do_not_smuggle_substrings():
+    """`checkThresholds` must not smuggle in "hold" and `unlockPayload` must
+    not smuggle in "lock" — an action word counts only from its start."""
+    model = _CONTINUE_MODEL.replace(
+        "maintainControlledFlight", "checkThresholds"
+    ).replace("operateAllMotors", "unlockPayload")
+    st = safety_behavior_status(model, _CONTINUE_REQS)
+    assert st["REQ-SAFE-007"] == BEHAVIORALLY_VIOLATED

@@ -37,15 +37,20 @@ _RESPONSE_CATEGORIES = {
     "rtb":       ("return-to-base", "return to base", "return-to-home", "rtb", "return trajectory"),
     "land":      ("controlled descent", "safe landing", "land", "landing", "touchdown", "descend"),
     "lock":      ("lock", "locked", "inhibit release", "mechanically locked"),
+    # Degraded-continue: the mandated response is to KEEP FLYING under a
+    # fault (one motor inoperative), not to enter a land/rtb/lock state.
+    "continue":  ("controlled flight", "controlledflight", "maintain controlled"),
 }
 
 
 def _response_category(text: str):
-    """The distinct safety RESPONSE a requirement mandates (parachute/rtb/land/lock), or None.
-    Order matters: parachute & rtb are checked before land (a parachute/RTB req may also say
-    'land')."""
+    """The distinct safety RESPONSE a requirement mandates
+    (parachute/rtb/land/lock/continue), or None. Order matters: parachute &
+    rtb are checked before land (a parachute/RTB req may also say 'land'),
+    and 'continue' last ('controlled descent' is a landing, not a
+    continuation)."""
     t = text.lower()
-    for cat in ("parachute", "rtb", "land", "lock"):
+    for cat in ("parachute", "rtb", "land", "lock", "continue"):
         if any(k in t for k in _RESPONSE_CATEGORIES[cat]):
             return cat
     return None
@@ -104,9 +109,48 @@ def reachable_states(sm) -> Set[str]:
     return seen
 
 
+#: Word-prefix vocabulary for the RESPONSE a state EXECUTES. A fail-safe
+#: state is usually named for the safety condition it represents, but
+#: REQ-SAFE-007's mandated response is to keep flying: the state is named for
+#: the fault (SingleMotorFailure) and the whole response lives in its
+#: do-action (maintainControlledFlight). Grading state NAMES only produced
+#: the literally-false verdict "no reachable fail-safe state" on run
+#: 2026-08-31 — nothing was unreachable; the ontology had no word for a
+#: degraded-continue response. What a state does is evidence of the same
+#: rank as what it is called. Matching is on camelCase-split word PREFIXES,
+#: not substrings, so `checkThresholds` does not smuggle in "hold" and
+#: `unlockPayload` does not smuggle in "lock".
+_SAFE_ACTION_WORD_PREFIXES = (
+    "failsafe", "safe", "abort", "lock", "disarm", "rtb", "return", "land",
+    "hold", "emergency", "parachute", "contingency", "controlled",
+)
+
+
+def _executes_safe_response(state) -> bool:
+    words: Set[str] = set()
+    for name in (
+        getattr(state, "entry_action", None),
+        getattr(state, "entry_action_def", None),
+        getattr(state, "do_action", None),
+        getattr(state, "do_action_def", None),
+    ):
+        if name:
+            separated = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name)
+            words.update(w.lower() for w in re.findall(r"[A-Za-z]+", separated))
+    return any(
+        word.startswith(prefix)
+        for word in words
+        for prefix in _SAFE_ACTION_WORD_PREFIXES
+    )
+
+
 def _failsafe_reachable(sm) -> str:
     """'reachable' | 'unreachable' | 'no_safe_state' for one state machine."""
-    safe = {s.name for s in sm.states if any(k in s.name.lower() for k in _SAFE_STATE_KW)}
+    safe = {
+        s.name for s in sm.states
+        if any(k in s.name.lower() for k in _SAFE_STATE_KW)
+        or _executes_safe_response(s)
+    }
     if not safe:
         return "no_safe_state"
     return "reachable" if (reachable_states(sm) & safe) else "unreachable"
