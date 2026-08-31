@@ -94,9 +94,63 @@ ARDUCOPTER_MODES: Dict[str, int] = {
 
 @dataclass
 class TestContext:
-    """传给 handler 的运行时上下文。"""
+    """传给 handler 的运行时上下文。
+
+    speedup — SITL 的 ``--speedup`` 倍率。两条纪律(见 sim_clock.py):
+
+    * **代表仿真时长的等待/发送节拍**按 ``wall/speedup`` 缩放
+      (`scaled_sleep`)——锁步下仿真时间 = 墙钟×speedup,缩放后仿真
+      语义逐字不变。GCS 心跳预热是硬案例:ArduCopter 按仿真时间判断
+      链路存活,1Hz 墙钟节拍在 5× 下是 5 仿真秒的间隔,预热本身就把
+      链路弄丢了。
+    * **需求时限的测量与判定窗口**读仿真时钟(``clock``,来自消息的
+      time_boot_ms),墙钟只作 watchdog——否则测出的延迟被 speedup
+      除,时限类证据假性变好。
+    """
     mav: Any
     mavutil: Any
+    speedup: float = 1.0
+    clock: Any = None
+
+    def __post_init__(self) -> None:
+        if self.clock is None:
+            from .sim_clock import SimClock
+            self.clock = SimClock()
+        self.attach_clock()
+
+    def attach_clock(self) -> None:
+        """(重)挂仿真时钟到当前连接;连接被替换后必须重新调用。"""
+        self.clock.install(self.mav)
+
+    def scaled_sleep(self, sim_seconds: float) -> None:
+        """睡到仿真时间前进约 *sim_seconds*(锁步:墙钟按 speedup 缩)。"""
+        time.sleep(sim_seconds / max(self.speedup, 1e-9))
+
+    def sim_window(self, sim_timeout_s: float, wall_margin_s: float = 0.0):
+        """判定窗口:仿真预算 *sim_timeout_s*,墙钟 watchdog 兜底。
+
+        返回 ``expired() -> bool``。仿真时钟可用时按仿真预算判定(严格度
+        不随 speedup 漂移),通常在 ~sim_timeout/speedup 墙钟秒内到期;
+        时钟无戳或停走时,watchdog(原墙钟超时 + 余量,默认 0 即与旧
+        行为一致)保证循环终止。
+        """
+        wall_deadline = time.time() + sim_timeout_s + wall_margin_s
+        clock = self.clock
+        start_sim = clock.now_s()
+
+        def expired() -> bool:
+            nonlocal start_sim
+            if time.time() >= wall_deadline:
+                return True
+            if start_sim is None:
+                # No stamp had arrived when the window opened; the budget
+                # starts at the first one so early silence is not billed.
+                start_sim = clock.now_s()
+                return False
+            elapsed = clock.elapsed_s(start_sim)
+            return elapsed is not None and elapsed >= sim_timeout_s
+
+        return expired
 
     def set_param(self, name: str, value: float) -> None:
         self.mav.mav.param_set_send(
@@ -148,7 +202,7 @@ class TestContext:
                     and ack.result == self.mavutil.mavlink.MAV_RESULT_ACCEPTED):
                 arm_ok = True
                 break
-            time.sleep(2)
+            self.scaled_sleep(2)
         if not arm_ok:
             self.set_param("FENCE_ENABLE", 1)   # 恢复围栏（123 行临时关闭）
             return False
@@ -220,7 +274,7 @@ class TestContext:
                     0b0000_1111_1100_0111,
                     0, 0, 0, 0, 0, -1.5, 0, 0, 0, 0, 0,
                 )
-            time.sleep(0.3)
+            self.scaled_sleep(0.3)
         self.set_param("FENCE_ENABLE", 1)
         return False
 
@@ -309,7 +363,7 @@ def _inject_set_param(ctx: TestContext, spec: InjectSpec) -> None:
     pre_mode = spec.params.get("_pre_mode")
     if pre_mode:
         ctx.set_mode(str(pre_mode))
-        time.sleep(0.5)
+        ctx.scaled_sleep(0.5)
 
     _require_takeoff(ctx, spec)
 
@@ -320,8 +374,8 @@ def _inject_set_param(ctx: TestContext, spec: InjectSpec) -> None:
             continue   # 跳过特殊控制 key（_pre_mode、_settle_s 等）
         ctx.set_param(name, float(value))
 
-    # 注入后等待，让 ArduCopter 检测到故障
-    time.sleep(settle_s)
+    # 注入后等待，让 ArduCopter 检测到故障（仿真时长，随 speedup 缩放）
+    ctx.scaled_sleep(settle_s)
 
 
 def _render_inject_set_param(spec: InjectSpec) -> str:
@@ -345,15 +399,17 @@ def _inject_disconnect_gcs(ctx: TestContext, spec: InjectSpec) -> None:
     # 硬编码 1 会把 GCS_LOSS_LAND 的 boot 值覆盖回 RTL，verify 等 LAND 必假阴。
     ctx.set_param("FS_GCS_ENABLE", float(spec.params.get("FS_GCS_ENABLE", 1)))
     ctx.set_param("FS_GCS_TIMEOUT", float(spec.params.get("FS_GCS_TIMEOUT", 10)))
-    # 预热：持续发 HEARTBEAT 至少 15s，让 ArduCopter 建立稳定的 GCS 连接状态
-    t_warmup = time.time() + 15
-    while time.time() < t_warmup:
+    # 预热：以 1Hz 仿真节拍发 15 个 HEARTBEAT（≈15 仿真秒），让 ArduCopter
+    # 建立稳定的 GCS 连接状态。ArduCopter 按仿真时间判定链路存活，所以节拍
+    # 必须随 speedup 缩放——1Hz 墙钟节拍在 5x 下是 5 仿真秒的间隔，预热
+    # 阶段链路就已经"丢失"了。
+    for _ in range(15):
         ctx.mav.mav.heartbeat_send(
             ctx.mavutil.mavlink.MAV_TYPE_GCS,
             ctx.mavutil.mavlink.MAV_AUTOPILOT_INVALID,
             0, 0, 0,
         )
-        time.sleep(1.0)
+        ctx.scaled_sleep(1.0)
     # 关闭连接，彻底切断心跳 → ArduCopter 检测到 GCS 断连
     # 不在 inject 中 sleep — verify 立即开始轮询模式切换
     try:
@@ -420,7 +476,7 @@ def _inject_mavlink_command(ctx: TestContext, spec: InjectSpec) -> None:
             int(pre_cmd), 0,
             pre[0], pre[1], pre[2], pre[3], pre[4], pre[5], pre[6],
         )
-        time.sleep(float(spec.params.get("_pre_settle_s", 2.0)))
+        ctx.scaled_sleep(float(spec.params.get("_pre_settle_s", 2.0)))
 
     ctx.mav.mav.command_long_send(
         ctx.mav.target_system, ctx.mav.target_component,
@@ -428,7 +484,7 @@ def _inject_mavlink_command(ctx: TestContext, spec: InjectSpec) -> None:
         p[0], p[1], p[2], p[3], p[4], p[5], p[6],
     )
     settle_s = float(spec.params.get("_settle_s", 1.5))
-    time.sleep(settle_s)
+    ctx.scaled_sleep(settle_s)
 
 
 def _render_inject_mavlink_command(spec: InjectSpec) -> str:
@@ -524,11 +580,12 @@ def _verify_wait_mode(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
         try:
             ctx.mav = ctx.mavutil.mavlink_connection(conn_str)
             ctx.mav.wait_heartbeat(timeout=10)
+            ctx.attach_clock()
         except Exception as e:
             return False, f"重连失败: {e}"
 
-    deadline = time.time() + spec.timeout
-    while time.time() < deadline:
+    expired = ctx.sim_window(spec.timeout)
+    while not expired():
         try:
             msg = ctx.mav.recv_match(type="HEARTBEAT", blocking=True, timeout=2)
         except Exception:
@@ -537,6 +594,7 @@ def _verify_wait_mode(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
                 conn_str = getattr(ctx, "_gcs_conn_str", "tcp:127.0.0.1:5760")
                 ctx.mav = ctx.mavutil.mavlink_connection(conn_str)
                 ctx.mav.wait_heartbeat(timeout=5)
+                ctx.attach_clock()
                 continue
             except Exception:
                 break
@@ -544,7 +602,7 @@ def _verify_wait_mode(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
             current = ctx.mavutil.mode_string_v10(msg)
             if mode in current.upper() or (fallback and fallback in current.upper()):
                 return True, f"模式已切换到 {current}"
-        time.sleep(0.5)
+        ctx.scaled_sleep(0.5)
     return False, f"超时未切换到 {mode}"
 
 
@@ -603,8 +661,8 @@ def _verify_wait_statustext(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, s
         [k.lower() for k in raw] if isinstance(raw, list)
         else [str(raw).lower()]
     )
-    deadline = time.time() + spec.timeout
-    while time.time() < deadline:
+    expired = ctx.sim_window(spec.timeout)
+    while not expired():
         msg = ctx.mav.recv_match(type="STATUSTEXT", blocking=True, timeout=1)
         if msg:
             text_lower = msg.text.lower()
@@ -633,9 +691,9 @@ def _verify_assert_servo_pwm(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, 
     if not (1 <= channel <= 16):
         return False, f"无效舵机通道: {channel}"
     field_name = f"servo{channel}_raw"
-    deadline = time.time() + spec.timeout
+    expired = ctx.sim_window(spec.timeout)
     last_pwm = None
-    while time.time() < deadline:
+    while not expired():
         msg = ctx.mav.recv_match(type="SERVO_OUTPUT_RAW", blocking=True, timeout=1)
         if msg is None:
             continue
@@ -906,7 +964,7 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
         ack = mav.recv_match(type="MISSION_ACK", blocking=True, timeout=5)
         if ack is None or int(ack.type) != mv.mavlink.MAV_MISSION_ACCEPTED:
             return None
-        return time.time()
+        return ctx.clock.now_s() or time.monotonic()
 
     def readback(seq: int) -> Optional[tuple[int, int]]:
         mav.mav.mission_request_int_send(
@@ -941,7 +999,9 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
         ack = mav.recv_match(type="MISSION_ACK", blocking=True, timeout=5)
         if ack is None or int(ack.type) != mv.mavlink.MAV_MISSION_ACCEPTED:
             return None
-        return time.monotonic()
+        # MISSION_ACK carries no time_boot_ms; the sim clock is fresh to the
+        # 10Hz position-target stream requested before AUTO.
+        return ctx.clock.now_s() or time.monotonic()
 
     home_lat, home_lon = -35.363262, 149.165237
     original = [(home_lat, home_lon, 10.0),
@@ -960,9 +1020,9 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
     )
     mav.recv_match(type="COMMAND_ACK", blocking=True, timeout=2)
     ctx.set_mode("AUTO")
-    active_deadline = time.monotonic() + 20.0
+    active_expired = ctx.sim_window(20.0)
     active_seq = False
-    while time.monotonic() < active_deadline:
+    while not active_expired():
         current = mav.recv_match(type="MISSION_CURRENT", blocking=True, timeout=1)
         if current is not None and int(current.seq) == 1:
             active_seq = True
@@ -979,34 +1039,36 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
     # would charge the transform error to the vehicle), and a latency measured
     # from the first post-acceptance sample is only an upper bound.
     observations = []
-    baseline_deadline = time.monotonic() + 1.5
-    while time.monotonic() < baseline_deadline:
+    baseline_expired = ctx.sim_window(1.5, wall_margin_s=3.0)
+    while not baseline_expired():
         prior = mav.recv_match(
             type="POSITION_TARGET_GLOBAL_INT", blocking=True, timeout=0.5,
         )
         if prior is None:
             continue
         observations.append(RouteObservation(
-            observed_at_s=time.monotonic(),
+            # The message's own stamp — the vehicle's clock, not ours.
+            observed_at_s=float(prior.time_boot_ms) / 1000.0,
             kind=RouteObservationKind.ACTIVE_CONTROLLER_TARGET,
             lat_e7=int(prior.lat_int), lon_e7=int(prior.lon_int),
         ))
 
-    send_started = time.monotonic()
+    send_started = ctx.clock.now_s() or time.monotonic()
     accepted_at = revise(1, revised)
     if accepted_at is None:
         return False, "the active-waypoint revision was rejected by the vehicle"
     transfer_s = accepted_at - send_started
 
-    deadline = accepted_at + max(limit * 4.0, 5.0)
-    while time.monotonic() < deadline:
+    budget_s = max(limit * 4.0, 5.0)
+    adoption_expired = ctx.sim_window(budget_s, wall_margin_s=10.0)
+    while not adoption_expired():
         active = mav.recv_match(
             type="POSITION_TARGET_GLOBAL_INT", blocking=True, timeout=0.5,
         )
         if active is None:
             continue
         observation = RouteObservation(
-            observed_at_s=time.monotonic(),
+            observed_at_s=float(active.time_boot_ms) / 1000.0,
             kind=RouteObservationKind.ACTIVE_CONTROLLER_TARGET,
             lat_e7=int(active.lat_int), lon_e7=int(active.lon_int),
         )
@@ -1018,7 +1080,7 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
     stored = readback(1)
     if stored is not None:
         observations.append(RouteObservation(
-            observed_at_s=time.monotonic(),
+            observed_at_s=ctx.clock.now_s() or time.monotonic(),
             kind=RouteObservationKind.MISSION_STORAGE,
             lat_e7=stored[0], lon_e7=stored[1],
         ))

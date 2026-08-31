@@ -143,6 +143,7 @@ class SITLBridge:
         platform_profile: Optional[dict] = None,
         verbose: bool = False,
         fdm_backend: str = "native",
+        speedup: float = 1.0,
     ) -> None:
         """
         llm             : 可选 LLMInterface，启用语义标签分类。
@@ -155,6 +156,12 @@ class SITLBridge:
                           （--model JSON），并在 launch_sitl() 时自动拉起
                           headless_gazebo 容器（需要的需求验证，如夹爪/
                           降落伞/真实姿态动力学，才需要这个）。
+        speedup         : SITL 仿真时钟相对墙钟的倍率（--speedup N）。仅
+                          native FDM 支持；gazebo 后端与外部物理引擎锁步，
+                          单方面加速要么无效要么破坏时序，强制钉回 1。
+                          L2 的测量与判定窗口读仿真时钟（sitl_specs 的
+                          TestContext 纪律），因此判定严格度不随倍率漂移；
+                          渲染出的独立 test_*.py 脚本仍按 1x 编写。
         """
         self._model = model
         self._output_dir = Path(output_dir)
@@ -173,6 +180,17 @@ class SITLBridge:
             raise ValueError(f"未知 fdm_backend: {fdm_backend!r}（应为 'native' 或 'gazebo'）")
         self._fdm_backend = fdm_backend
         self._gazebo_started_by_us = False
+        speedup = float(speedup)
+        if speedup < 1.0:
+            raise ValueError(f"speedup 必须 ≥ 1.0，收到 {speedup}")
+        if fdm_backend == "gazebo" and speedup != 1.0:
+            print(
+                f"  ⚠ fdm_backend='gazebo' 与外部物理引擎锁步，"
+                f"speedup={speedup} 被钉回 1.0（加速 Gazebo 需要 world "
+                "RTF 与 --speedup 匹配调整，见 speedup 采纳计划 B 段）"
+            )
+            speedup = 1.0
+        self._speedup = speedup
 
     @property
     def requirement_evidence(self) -> RequirementEvidenceBundle:
@@ -272,6 +290,9 @@ class SITLBridge:
             "--wipe",                    # 清空 EEPROM，确保 --defaults 生效
             "--defaults", str(parm_path),
         ]
+        if self._speedup != 1.0:
+            # 构造器已保证 gazebo 后端到不了这里（speedup 被钉回 1）。
+            cmd += ["--speedup", str(self._speedup)]
         self._sitl_proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -686,7 +707,7 @@ class SITLBridge:
         )
         time.sleep(0.5)
 
-        ctx = TestContext(mav=mav, mavutil=mavutil)
+        ctx = TestContext(mav=mav, mavutil=mavutil, speedup=self._speedup)
 
         # 仅共享 SITL 时才需清理跨测试状态污染；新拉起的 SITL 已是干净态
         if not fresh_sitl:
