@@ -201,7 +201,12 @@ _HOVER_ATTITUDE_RMS_LIMIT_DEG = 5.0
 
 _DASH_SETTLE_S = 6.0
 _DASH_WINDOW_S = 10.0
-_DASH_MAX_S = 45.0
+#: Raised from 45 s because the low-pitch points need it: at ~10 m/s the drag
+#: force is small, the approach to terminal velocity is correspondingly slow,
+#: and rc1420 was still at 1.06% drift when a 45 s cap cut it off — losing an
+#: envelope point to the clock rather than to the vehicle. The criterion stays
+#: where it is; the measurement gets the time it needs to meet it.
+_DASH_MAX_S = 75.0
 
 #: RC2 commands swept by the cruise survey, gentle to full forward authority
 #: (1500 = neutral, 1100 = full). One stick position answers "how fast is the
@@ -613,17 +618,62 @@ def _attitude_rms_deg(samples) -> dict:
     n = len(samples)
     if n < 2:
         return {"n": n, "roll_rms_deg": None, "pitch_rms_deg": None, "rms_deg": None}
-    # Samples are (time, roll, pitch); bare (roll, pitch) is still accepted.
-    rolls = [s[-2] for s in samples]
-    pitches = [s[-1] for s in samples]
+    # Samples are (time, roll, pitch[, target_roll, target_pitch]); a bare
+    # (roll, pitch) is still accepted.
+    def _actual(sample):
+        return (sample[1], sample[2]) if len(sample) >= 3 else (sample[0], sample[1])
+
+    def _target(sample):
+        return (sample[3], sample[4]) if len(sample) >= 5 else (None, None)
+
+    rolls = [_actual(s)[0] for s in samples]
+    pitches = [_actual(s)[1] for s in samples]
     out = {}
     for name, vals in (("roll", rolls), ("pitch", pitches)):
         mean = sum(vals) / n
         var = sum((v - mean) ** 2 for v in vals) / n
         out[f"{name}_rms_deg"] = math.degrees(math.sqrt(var))
     out["n"] = n
-    out["rms_deg"] = max(out["roll_rms_deg"], out["pitch_rms_deg"])
+    # The historical number: deviation about the window's own mean. That is
+    # JITTER around whatever attitude the vehicle settled at, and it is not what
+    # "attitude deviations within 0.5 degree RMS" asks — a vehicle holding a
+    # steady 12 deg error scores zero on it.
+    out["jitter_rms_about_window_mean_deg"] = max(
+        out["roll_rms_deg"], out["pitch_rms_deg"])
+
+    # Deviation from the attitude the controller was COMMANDED to hold, which is
+    # what the requirement bounds. Only available when ATTITUDE_TARGET was
+    # sampled; never silently substituted by the jitter figure.
+    paired = [s for s in samples if _target(s)[0] is not None]
+    if len(paired) >= 2:
+        for axis, index in (("roll", 0), ("pitch", 1)):
+            errors = [_actual(s)[index] - _target(s)[index] for s in paired]
+            mean_error = sum(errors) / len(errors)
+            out[f"mean_{axis}_error_deg"] = math.degrees(mean_error)
+            out[f"{axis}_rms_about_command_deg"] = math.degrees(
+                math.sqrt(sum(e * e for e in errors) / len(errors)))
+        out["rms_about_command_deg"] = max(
+            out["roll_rms_about_command_deg"], out["pitch_rms_about_command_deg"])
+        out["command_samples"] = len(paired)
+    else:
+        out["rms_about_command_deg"] = None
+        out["command_samples"] = len(paired)
+
+    # rms_deg stays the requirement-facing number, and it is the about-command
+    # one when it exists. It is None rather than the jitter when it does not:
+    # an unmeasured reference is not a small error.
+    out["rms_deg"] = out["rms_about_command_deg"]
     return out
+
+
+def _quaternion_roll_pitch(q) -> tuple:
+    """Roll and pitch in radians from a MAVLink (w, x, y, z) quaternion."""
+    if q is None or len(q) < 4:
+        return None, None
+    w, x, y, z = (float(value) for value in q[:4])
+    roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+    sin_pitch = max(-1.0, min(1.0, 2.0 * (w * y - z * x)))
+    return roll, math.asin(sin_pitch)
 
 
 class _AttitudeSampler:
@@ -643,7 +693,17 @@ class _AttitudeSampler:
         if boot_ms is not None and boot_ms == self._last_boot_ms:
             return
         self._last_boot_ms = boot_ms
-        self.samples.append((time.time(), float(att.roll), float(att.pitch)))
+        # The attitude the controller was COMMANDED to hold. Without it only
+        # jitter can be computed, and jitter scores a steadily mis-trimmed
+        # vehicle as perfect.
+        target = m.messages.get("ATTITUDE_TARGET") if hasattr(m, "messages") else None
+        target_roll = target_pitch = None
+        if target is not None and getattr(target, "q", None):
+            target_roll, target_pitch = _quaternion_roll_pitch(target.q)
+        self.samples.append((
+            time.time(), float(att.roll), float(att.pitch),
+            target_roll, target_pitch,
+        ))
 
     def between(self, t0: float, t1: float):
         """Samples inside a time window — used to restrict attitude RMS to the
@@ -1047,6 +1107,17 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
 
         peak = 0.0
         thr, rels = [], []
+        if measure_attitude:
+            # Requested BEFORE the first measurement window, not before the
+            # cruise survey: hover is a measurement window too, and a stream
+            # asked for too late leaves those samples with no reference at all —
+            # which correctly yields None, but under-measures the envelope.
+            m.mav.command_long_send(
+                m.target_system, m.target_component,
+                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+                mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE_TARGET,
+                100000, 0, 0, 0, 0, 0)
+            time.sleep(0.5)
         hover_att = _AttitudeSampler() if measure_attitude else None
         cap_proc, cap_path = None, Path("gazebo_poc/generated/jointstate.txt")
         topic = ("/world/iris_runway/model/iris_with_gimbal/model/"

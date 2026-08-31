@@ -25,6 +25,14 @@ DEFAULT_MAX_DRIFT_FRACTION = 0.05
 DEFAULT_MIN_SAMPLES = 8
 DEFAULT_MIN_DURATION_S = 3.0
 DEFAULT_MAX_TREND_T_STAT = 2.0
+#: A trend must be BOTH statistically significant and practically meaningful.
+#: The t-statistic is |slope| / standard-error, so with many samples and little
+#: noise any nonzero slope becomes "significant": a measured cruise point that
+#: went 15.91 -> 15.91 m/s over 9.9 s, a drift of 0.015%, was rejected as a
+#: "statistically significant trend". Significance says the slope is real; it
+#: says nothing about whether it matters. Below this fraction of the mean the
+#: trend is real and irrelevant, and the window is a plateau.
+DEFAULT_MIN_PRACTICAL_DRIFT_FRACTION = 0.01
 
 
 @dataclass(frozen=True)
@@ -113,6 +121,7 @@ def steady_state(
     min_samples: int = DEFAULT_MIN_SAMPLES,
     min_duration_s: float = DEFAULT_MIN_DURATION_S,
     max_trend_t_stat: float = DEFAULT_MAX_TREND_T_STAT,
+    min_practical_drift_fraction: float = DEFAULT_MIN_PRACTICAL_DRIFT_FRACTION,
 ) -> SteadyState:
     """Classify ``[(time_s, value)]`` as plateaued or still trending.
 
@@ -152,7 +161,10 @@ def steady_state(
     half_gap = abs(second_half - first_half) / abs(mean)
 
     trending = drift_fraction > max_drift_fraction
-    significant_trend = trend_t_stat > max_trend_t_stat
+    significant_trend = (
+        trend_t_stat > max_trend_t_stat
+        and drift_fraction > min_practical_drift_fraction
+    )
     halves_disagree = half_gap > max_drift_fraction
     if trending or significant_trend or halves_disagree:
         reason = (

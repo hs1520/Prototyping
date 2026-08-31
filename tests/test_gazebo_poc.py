@@ -358,23 +358,58 @@ def test_motor_failure_upgrades_redundancy_req_to_flight_verified():
     assert classify_requirement_coverage(model, reqs, gazebo=gv3)["REQ-SAFE-007"] != FLIGHT_VERIFIED
 
 
-def test_attitude_rms_deg_centres_each_axis_on_its_own_mean():
+def test_jitter_about_the_window_mean_excludes_any_constant_offset():
+    """Kept as a reported quantity — but it is JITTER, not the requirement's
+    deviation: a vehicle holding a steady error scores zero on it."""
     import math
     from gazebo_poc.run_flight import _attitude_rms_deg
 
-    # constant offset (forward-dash trim pitch) must NOT count as deviation
     samples = [(0.0, math.radians(-8.0))] * 10
     rms = _attitude_rms_deg(samples)
     assert rms["n"] == 10
-    assert rms["rms_deg"] == 0.0
+    assert rms["jitter_rms_about_window_mean_deg"] == 0.0
 
-    # symmetric ±1° square wave about the mean → RMS exactly 1°
     one = math.radians(1.0)
     samples = [(one, 0.0), (-one, 0.0)] * 8
     rms = _attitude_rms_deg(samples)
     assert abs(rms["roll_rms_deg"] - 1.0) < 1e-9
     assert abs(rms["pitch_rms_deg"]) < 1e-9
-    assert abs(rms["rms_deg"] - 1.0) < 1e-9
+    assert abs(rms["jitter_rms_about_window_mean_deg"] - 1.0) < 1e-9
+
+
+def test_the_requirement_facing_rms_is_measured_against_the_commanded_attitude():
+    """"Attitude deviations within 0.5 degree RMS" bounds the error from the
+    attitude the controller was told to hold. Centring on the window's own mean
+    measures jitter around whatever it settled at instead, and a steady 12 deg
+    tracking error then scores 0.003 deg."""
+    import math
+    from gazebo_poc.run_flight import _attitude_rms_deg
+
+    bias = math.radians(12.0)
+    samples = [(t * 0.1, bias + 0.0001 * (t % 2), bias + 0.0001 * (t % 2), 0.0, 0.0)
+               for t in range(40)]
+    rms = _attitude_rms_deg(samples)
+
+    assert rms["jitter_rms_about_window_mean_deg"] < 0.01     # looks perfect
+    assert abs(rms["rms_about_command_deg"] - 12.0) < 0.01    # is not
+    assert abs(rms["mean_roll_error_deg"] - 12.0) < 0.01
+    assert rms["rms_deg"] == rms["rms_about_command_deg"]
+    assert rms["command_samples"] == 40
+
+
+def test_without_a_commanded_attitude_there_is_no_requirement_facing_number():
+    """An unmeasured reference is not a small error, so it must not fall back to
+    the jitter figure."""
+    import math
+    from gazebo_poc.run_flight import _attitude_rms_deg
+
+    samples = [(t * 0.1, math.radians(12.0), math.radians(12.0)) for t in range(20)]
+    rms = _attitude_rms_deg(samples)
+
+    assert rms["jitter_rms_about_window_mean_deg"] == 0.0
+    assert rms["rms_about_command_deg"] is None
+    assert rms["rms_deg"] is None
+    assert rms["command_samples"] == 0
 
 
 def test_attitude_rms_deg_needs_at_least_two_samples():
@@ -402,8 +437,10 @@ def test_attitude_sampler_dedupes_on_time_boot_ms():
     assert len(sampler.samples) == 2
     # samples are timestamped so attitude RMS can be restricted to the window
     # whose speed was certified steady
-    stamp, roll, pitch = sampler.samples[-1]
+    stamp, roll, pitch, target_roll, target_pitch = sampler.samples[-1]
     assert (roll, pitch) == (0.03, 0.04)
+    # no ATTITUDE_TARGET in this fixture — the reference is absent, not zero
+    assert target_roll is None and target_pitch is None
     assert stamp > 0
     assert sampler.between(stamp, stamp) == [sampler.samples[-1]]
 

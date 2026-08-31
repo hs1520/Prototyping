@@ -162,3 +162,33 @@ def test_slow_linear_change_below_five_percent_is_still_not_a_plateau():
     assert verdict.drift_fraction < 0.05
     assert not verdict.steady
     assert verdict.reason == "statistically significant trend"
+
+
+def test_a_real_but_negligible_trend_is_still_a_plateau():
+    """Significance is not magnitude. The t-statistic is |slope| / standard
+    error, so with many samples and little noise ANY nonzero slope becomes
+    "significant" — a measured cruise point that went 15.91 -> 15.91 m/s over
+    9.9 s, a drift of 0.015%, was rejected as a statistically significant
+    trend, and took two of four envelope points with it."""
+    n = 98
+    flat = [(i * 9.9 / n, 15.91) for i in range(n)]
+    verdict = steady_state(flat)
+    assert verdict.steady, verdict.reason
+
+    # the same shape with a barely-there slope is still a plateau
+    crawling = [(i * 10.0 / n, 10.34 + 0.05 * i / n) for i in range(n)]
+    verdict = steady_state(crawling)
+    assert verdict.steady
+    assert verdict.drift_fraction < 0.01
+
+
+def test_a_significant_trend_that_also_matters_is_still_rejected():
+    """The guard must keep catching what it was added for: a slow, consistent
+    climb whose total drift stays under the 5% gross test."""
+    samples = [(t * 0.5, 20.0 + 0.02 * (t * 0.5)) for t in range(40)]
+
+    verdict = steady_state(samples)
+
+    assert not verdict.steady
+    assert verdict.reason == "statistically significant trend"
+    assert 0.01 < verdict.drift_fraction < 0.05
