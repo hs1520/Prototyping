@@ -276,10 +276,12 @@ _CEP_REQUIRED_POINTS = 8
 
 
 #: How many times the one-motor-out scenario is flown before a verdict is
-#: recorded. The outcome is bistable — repeated flights of the same
-#: configuration have both held a clean hover and sunk — so a single sample
-#: cannot support a redundancy claim in either direction.
-_MOTOR_OUT_REPEATS = 5
+#: recorded. The outcome has been observed bistable — repeated flights of the
+#: same configuration have both held a clean hover and sunk — so a larger
+#: sample (historically 5) supports the claim better; 1 trades that
+#: confidence for turnaround time by the user's direction, and the per-run
+#: record keeps the sample size visible in the evidence either way.
+_MOTOR_OUT_REPEATS = 1
 
 
 def _expected_action_names(gazebo: dict[str, Any], what: str) -> set[str]:

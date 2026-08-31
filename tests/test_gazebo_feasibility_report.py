@@ -1242,7 +1242,9 @@ def test_passing_engineering_interpretation_does_not_become_requirement_pass():
 
 
 def test_the_repeat_count_is_declared_not_incidental():
-    assert rgf._MOTOR_OUT_REPEATS >= 3
+    # 1 by the user's direction (turnaround over sample size); the evidence
+    # records attempts/passes, so the sample stays visible in every verdict
+    assert rgf._MOTOR_OUT_REPEATS == 1
 
 
 def test_a_cruise_window_flown_after_release_is_not_transport_evidence():
