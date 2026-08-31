@@ -282,6 +282,30 @@ class RefinementClosure:
         )
 
 
+def _structural_block_signature(
+    model: Any,
+) -> Optional[tuple[frozenset, str]]:
+    """(unsatisfied obligation ids, model text) of a structurally blocked model.
+
+    Two consecutive refinement iterations with the SAME signature are provably
+    futile: every repair in the loop is plan-bounded, so with the text
+    unchanged and the same obligations unsatisfied nothing inside the loop can
+    move. None when the model is not blocked.
+    """
+    blocked = (
+        getattr(model, "metadata", None) or {}
+    ).get("structural_repair_blocked")
+    if not isinstance(blocked, Mapping):
+        return None
+    report = blocked.get("structural_obligation_report") or {}
+    unsatisfied = frozenset(
+        str(item.get("obligation_id"))
+        for item in report.get("results", ())
+        if isinstance(item, Mapping) and item.get("status") != "PASS"
+    )
+    return (unsatisfied, get_sysml_text(model))
+
+
 def _freeze_evidence(value: Any) -> Any:
     """Recursively freeze JSON-like stage evidence before it crosses the seam."""
     if isinstance(value, Mapping):
@@ -1483,6 +1507,9 @@ class _RefinementEngine:
         best_key = (best_score, -(10 ** 9), -1)
         last_sim_result: Any = None          # most recent sim result
         seen_issues: Dict[str, int] = {}  # issue text → occurrence count
+        # (unsatisfied obligation ids, model text) of the last iteration that
+        # ended structurally blocked — see the futility guard at loop bottom.
+        previous_blocked_signature: Optional[tuple] = None
 
         # Pre-compute MCTS constraint text once — same for every iteration
         mcts_constraints = (
@@ -1806,6 +1833,41 @@ class _RefinementEngine:
                         best_sim_result = candidate_sim
                         last_sim_result = candidate_sim
 
+            # ── Plan-frozen futility guard ────────────────────────────────
+            # `structural_repair_blocked` means no plan-authorized structural
+            # repair can satisfy the terminal plan. When two consecutive
+            # iterations end blocked on the SAME unsatisfied obligations with
+            # the model text unchanged, nothing inside this loop can move —
+            # every repair here is plan-bounded, so it can never repair the
+            # plan (run 2026-08-31: 8 identical idle iterations). The remedy,
+            # a validated plan revision, lives outside the loop; stop paying
+            # for iterations that cannot progress.
+            signature = _structural_block_signature(current_model)
+            if signature is not None:
+                unsatisfied = signature[0]
+                if signature == previous_blocked_signature:
+                    print(
+                        "  ✂ structural repair blocked with identical "
+                        "unsatisfied obligations and unchanged model text — "
+                        "further iterations cannot progress; a validated "
+                        "plan revision is required, ending refinement loop",
+                        flush=True,
+                    )
+                    current_model.metadata["refinement_short_circuit"] = {
+                        "reason": "PLAN_FROZEN_STRUCTURAL_BLOCK",
+                        "iteration": iteration + 1,
+                        "unsatisfied_obligations": sorted(unsatisfied),
+                    }
+                    self._observe({
+                        "kind": "REFINEMENT_SHORT_CIRCUIT",
+                        "iteration": iteration + 1,
+                        "unsatisfied_obligations": sorted(unsatisfied),
+                    })
+                    break
+                previous_blocked_signature = signature
+            else:
+                previous_blocked_signature = None
+
         return best_model, best_score, best_sim_result or last_sim_result
 
 
@@ -2049,6 +2111,10 @@ class _RefinementEngine:
             )
 
             plan = ModelGenerationPlan.from_dict(raw_plan)
+            # A verdict from a previous pass must not outlive the pass that
+            # measured it: this branch re-measures below and re-sets the flag
+            # if the block still holds.
+            current.metadata.pop("structural_repair_blocked", None)
             before_text = get_sysml_text(current)
             before_report = validate_structural_obligations(
                 before_text,
