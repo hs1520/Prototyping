@@ -168,6 +168,65 @@ class PlannedBehavior:
         }
 
 
+def normalise_planned_behavior_identities(
+    behaviors: Sequence[PlannedBehavior],
+) -> tuple[tuple[PlannedBehavior, ...], tuple[str, ...]]:
+    """Deterministically resolve mechanical initial_state spellings.
+
+    Measured category (run3 first draw, 12 of 12 machines): the LLM writes
+    ``initial_state`` in the qualified form ``<behavior_id>::<state>`` — the
+    spelling SysML uses to REFERENCE a nested state from outside — and the
+    validator fans that one spelling into ~40 chained issues (not an
+    identifier / not a declared state / role INITIAL mismatch), burning a
+    full 15-25k output-token rewrite on something a parser can decide alone.
+
+    The rule is the behavior_kind reconciliation's (derive, don't re-ask):
+    strip the qualifier only when the prefix is this machine's own identity
+    (``behavior_id`` or ``owner::behavior_id``) and the suffix is a declared
+    state — anything else stays untouched for the validator to refuse.
+    Role INITIAL is duplicated data w.r.t. ``initial_state``, so when NO
+    state claims INITIAL, the named initial state's role is derived from the
+    field that owns the fact; a DIFFERENT state claiming INITIAL is a real
+    contradiction and keeps failing. Every acceptance is returned as an
+    audit line for ``behavior_identity_reconciliations``.
+    """
+    from dataclasses import replace
+
+    normalised: list[PlannedBehavior] = []
+    audit: list[str] = []
+    for behavior in behaviors:
+        state_ids = {state.state_id for state in behavior.states}
+        initial = behavior.initial_state
+        if "::" in initial:
+            segments = [part.strip() for part in initial.split("::")]
+            self_prefixes = (
+                [behavior.behavior_id],
+                [behavior.owner, behavior.behavior_id],
+            )
+            if segments[-1] in state_ids and segments[:-1] in self_prefixes:
+                behavior = replace(behavior, initial_state=segments[-1])
+                audit.append(
+                    f"{behavior.owner}::{behavior.behavior_id} initial_state "
+                    f"{initial!r} -> {segments[-1]!r} (self-qualified "
+                    "reference stripped; states[] declares the bare name)"
+                )
+        if behavior.initial_state in state_ids and not any(
+            state.role == "INITIAL" for state in behavior.states
+        ):
+            behavior = replace(behavior, states=tuple(
+                replace(state, role="INITIAL")
+                if state.state_id == behavior.initial_state else state
+                for state in behavior.states
+            ))
+            audit.append(
+                f"{behavior.owner}::{behavior.behavior_id} role INITIAL "
+                f"derived for {behavior.initial_state} from initial_state "
+                "(no state claimed INITIAL)"
+            )
+        normalised.append(behavior)
+    return tuple(normalised), tuple(audit)
+
+
 def _plan_inhibition_issues(
     behaviors: Sequence[PlannedBehavior],
     sources: Mapping[str, str],

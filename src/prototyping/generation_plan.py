@@ -48,6 +48,7 @@ from .activated_constraint_plan import (
 from .planned_behavior import (
     PlannedBehavior,
     materialize_owned_planned_behaviors,
+    normalise_planned_behavior_identities,
     validate_planned_behaviors,
 )
 from .sysml_reserved import SYSML_RESERVED_WORDS  # noqa: F401  (re-export)
@@ -1448,6 +1449,13 @@ class ModelGenerationPlan:
             for item in raw_behaviors
             if isinstance(item, Mapping)
         )
+        # Mechanical spellings a parser can decide are decided here, before
+        # the validator turns them into a paid correction round (run3 first
+        # draw: 12/12 machines wrote initial_state as Behavior::State and
+        # ~40 chained issues bought a full rewrite).
+        planned_behaviors, initial_state_reconciliations = (
+            normalise_planned_behavior_identities(planned_behaviors)
+        )
         issues.extend(validate_planned_behaviors(
             planned_behaviors,
             component_names={item.name for item in components},
@@ -1546,7 +1554,7 @@ class ModelGenerationPlan:
         requirement_realizations = tuple(kind_reconciled)
         behavior_identity_reconciliations = tuple(
             behavior_identity_reconciliations
-        ) + tuple(kind_reconciliations)
+        ) + tuple(initial_state_reconciliations) + tuple(kind_reconciliations)
         if require_source_anchored_paths:
             # Runs here rather than beside the other behaviour checks because
             # it reads the intent each realization records, so realizations
