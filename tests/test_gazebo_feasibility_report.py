@@ -224,6 +224,9 @@ def test_position_and_parachute_subchecks_remain_partial_not_full_green():
         "payload_release_position_error_m": 0.42,
         "payload_release_position_met": True,
         "payload_release_position_basis": "payload_ground_truth_at_separation",
+        "trigger_truth_error_m": 0.42,
+        "separation_truth_error_m": 3.1,
+        "delivery_abort_inactive": True,
         "parachute_commanded": True,
         "parachute_observer_available": True,
         "parachute_model_observed": True,
@@ -641,6 +644,14 @@ _RELEASE_PLANNED = [
      "max_error_m": 1.0, "requirement_text": "release within 1.0 metre"},
 ]
 _RELEASE_LIVE = {
+    # measured on the authoritative design: the estimator was accurate, and the
+    # payload still separated 3.8 m out because 1.8 s elapsed while the vehicle
+    # kept flying
+    "delivery_abort_inactive": True,
+    "trigger_estimated_error_m": 0.978,
+    "trigger_truth_error_m": 0.854,
+    "separation_truth_error_m": 3.824,
+    "trigger_to_separation_s": 1.798,
     "payload_release_commanded": True,
     "payload_observer_available": True,
     "payload_release_detected": True,
@@ -668,23 +679,27 @@ def test_a_harness_triggered_release_stays_partial():
     assert "not generated mission-logic ownership" in results["positional_release"]["message"]
 
 
-def test_trigger_position_cannot_substitute_for_physical_separation_position():
+def test_the_estimators_own_figure_cannot_substitute_for_the_trigger_truth():
+    """The clause closes on where the vehicle TRULY was at the trigger. A system
+    scoring itself against its own estimate of that moment proves nothing, so
+    an unobserved truth is INCONCLUSIVE even when the estimate looks good."""
     live = dict(_RELEASE_LIVE)
-    live.pop("payload_release_position_basis")
+    live.pop("trigger_truth_error_m")
 
     result = {r["check"]: r for r in rgf._req_results(
         live, _RELEASE_PLANNED,
     )}["positional_release"]
 
     assert result["status"] == "INCONCLUSIVE"
-    assert "separation-position truth was not observed" in result["message"]
+    assert "true position at the trigger was not observed" in result["message"]
+    assert "cannot stand in for it" in result["message"]
 
 
-def test_observed_physical_separation_outside_tolerance_is_a_failure():
+def test_an_observed_trigger_position_outside_tolerance_is_a_failure():
+    """Over the bound with a valid measurement is a FAIL, never INCONCLUSIVE."""
     live = dict(
         _RELEASE_LIVE,
-        payload_release_position_error_m=1.4,
-        payload_release_position_met=False,
+        trigger_truth_error_m=1.4,
         payload_release_decided_by="generated model",
         payload_release_decisions=_MODEL_DECISION,
     )
@@ -1101,3 +1116,52 @@ def test_a_run_that_never_looked_cannot_claim_transport():
 
     assert row["status"] == "PARTIAL"
     assert "attachment was never observed" in row["message"]
+
+
+def test_a_release_during_an_abort_cannot_close_the_position_clause():
+    """REQ-FUNC-005 is a conjunction — within 1.0 m AND no abort active. Only
+    the distance was ever checked, so a release that happened while an abort
+    was active would have closed it."""
+    live = dict(_RELEASE_LIVE,
+                payload_release_decided_by="generated model",
+                payload_release_decisions=_MODEL_DECISION,
+                delivery_abort_inactive=False)
+
+    row = {r["check"]: r for r in rgf._req_results(live, _RELEASE_PLANNED)}["positional_release"]
+
+    assert row["status"] == "PARTIAL"
+    assert "second conjunct is unverified" in row["message"]
+
+
+def test_an_unstated_abort_state_is_not_proof_that_none_was_active():
+    live = dict(_RELEASE_LIVE,
+                payload_release_decided_by="generated model",
+                payload_release_decisions=_MODEL_DECISION)
+    live.pop("delivery_abort_inactive")
+
+    row = {r["check"]: r for r in rgf._req_results(live, _RELEASE_PLANNED)}["positional_release"]
+
+    assert row["status"] == "PARTIAL"
+    assert "NOT shown inactive" in row["message"]
+
+
+def test_the_clause_closes_on_trigger_truth_and_reports_the_separation_miss():
+    """They differ, and which one closed the clause has to be visible."""
+    live = dict(_RELEASE_LIVE,
+                payload_release_decided_by="generated model",
+                payload_release_decisions=_MODEL_DECISION)
+
+    row = {r["check"]: r for r in rgf._req_results(live, _RELEASE_PLANNED)}["positional_release"]
+
+    assert row["status"] == "PASS"
+    # the clause closes on where the vehicle TRULY was at the trigger
+    assert row["trigger_truth_error_m"] == 0.854
+    # the estimator's own figure is reported but never decides
+    assert row["trigger_estimated_error_m"] == 0.978
+    # and the separation miss is mandatory in the evidence even though the
+    # requirement does not bound it
+    assert row["separation_truth_error_m"] == 3.824
+    assert "truly 0.854 m from the designated waypoint" in row["message"]
+    assert "rather than the estimator's own figure" in row["message"]
+    assert "separated 3.824 m from the waypoint" in row["message"]
+    assert "approach speed times the actuation delay" in row["message"]

@@ -1294,6 +1294,29 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     separation_position_error is not None
                     and separation_position_error <= positional_tolerance_m
                 ),
+                # The three quantities the requirement's two conjuncts turn on,
+                # kept apart on purpose: what the ESTIMATOR thought at the
+                # trigger, where the payload TRULY was when it separated, and
+                # how long lay between. Only the truth error may close the
+                # position clause; the other two are what make it readable.
+                "trigger_estimated_error_m": condition_position_error,
+                # The missing cell: where the vehicle TRULY was when the model
+                # decided. Without it the estimator's error and the actuation
+                # lag cannot be told apart, and a 4 m miss looks like one
+                # cause when it may be the other.
+                "trigger_truth_error_m": (
+                    math.hypot(
+                        condition_position_world[0] - release_target_world[0],
+                        condition_position_world[1] - release_target_world[1],
+                    )
+                    if condition_position_world is not None
+                    and release_target_world is not None else None
+                ),
+                "separation_truth_error_m": separation_position_error,
+                "trigger_to_separation_s": coordinate_chain_delay,
+                # "no delivery-abort condition is active" is the requirement's
+                # second conjunct, and it was never checked.
+                "delivery_abort_inactive": not abort_active,
                 "payload_release_position_basis": (
                     "payload_ground_truth_at_separation"
                     if separation_position_error is not None else None

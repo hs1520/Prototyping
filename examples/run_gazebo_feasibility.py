@@ -726,21 +726,53 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             and error is not None
         )
         met = physical_position_observed and float(error) <= limit
+        # "no delivery-abort condition is active" must be shown, not assumed:
+        # absence of an abort flag is not evidence that none was active.
+        abort_inactive = gazebo.get("delivery_abort_inactive") is True
+        # The requirement bounds WHEN the release is commanded — "release the
+        # payload when the current geographic position is within 1.0 metre" —
+        # so the clause closes on where the vehicle TRULY was at the trigger.
+        # Not the estimator's own figure for that moment (a system scoring
+        # itself against its own estimate proves nothing), and not the payload's
+        # position at separation, which the requirement does not bound.
+        trigger_truth = gazebo.get("trigger_truth_error_m")
+        separation_truth = gazebo.get("separation_truth_error_m")
+        trigger_truth_observed = trigger_truth is not None
         covered.add(rid)
         results.append({
             "req_id": rid,
             "check": "positional_release",
+            # The requirement is a conjunction: within 1.0 m of the waypoint AND
+            # no abort active. Only the first half was ever checked, so a
+            # release that happened during an abort would have closed it.
             "status": (
-                ("PASS" if _decided_by_model(gazebo, "payload_release") else "PARTIAL")
-                if met else "FAIL" if physical_position_observed else "INCONCLUSIVE"
+                ("PASS" if _decided_by_model(gazebo, "payload_release")
+                 and abort_inactive else "PARTIAL")
+                if (trigger_truth_observed and float(trigger_truth) <= limit)
+                else "FAIL" if trigger_truth_observed else "INCONCLUSIVE"
             ),
+            "trigger_truth_error_m": trigger_truth,
+            "trigger_estimated_error_m": gazebo.get("trigger_estimated_error_m"),
+            "separation_truth_error_m": separation_truth,
             "message": (
-                (f"physical payload separation occurred at payload ground-truth "
-                 f"horizontal position error {error} m (limit {limit:.1f} m); "
-                 if physical_position_observed else
-                 "separation-position truth was not observed; a trigger-time "
-                 "vehicle position cannot substitute for the payload position "
-                 "at physical separation; ")
+                (f"the vehicle was truly {trigger_truth} m from the designated "
+                 f"waypoint when the release was decided (limit {limit:.1f} m) — "
+                 "this is the clause the requirement states, and it is judged on "
+                 "ground truth rather than the estimator's own figure for that "
+                 f"moment, which read {gazebo.get('trigger_estimated_error_m')} m. "
+                 f"The payload then separated {separation_truth} m from the "
+                 f"waypoint, {gazebo.get('trigger_to_separation_s')} s later: the "
+                 "requirement does not bound where the payload ends up, but a "
+                 "release-on-arrival rule misses by roughly the approach speed "
+                 "times the actuation delay, and that is worth seeing; "
+                 if trigger_truth_observed else
+                 "the vehicle's true position at the trigger was not observed, "
+                 "and the estimator's own figure cannot stand in for it; ")
+                + ("no delivery-abort condition was active, as the requirement's "
+                   "second conjunct demands; "
+                   if abort_inactive else
+                   "the delivery-abort state was NOT shown inactive, so the "
+                   "requirement's second conjunct is unverified; ")
                 + (_model_owned_clause(gazebo, "payload_release")
                    if _decided_by_model(gazebo, "payload_release") else
                    "harness-triggered — this exercises trajectory/position/actuator "
