@@ -16,6 +16,7 @@ from ..sysml.text_normalization import (
 from ..utils.sysml_text_utils import (
     PART_DEF_RE,
     STATE_DEF_RE,
+    close_truncated_blocks,
     find_block_end,
     named_def_pattern,
 )
@@ -71,6 +72,27 @@ class AssemblyFinalizer:
         normalise `connect a::b` to dot notation, and flag suspicious
         connects.  Returns the (possibly replaced) step5 result.
         """
+        # --- close blocks an output-budget truncation cut off ---
+        # Runs first: every later injector scans balanced blocks, and the
+        # syntax gate would otherwise buy an LLM window repair whose entire
+        # edit is appending '}' lines. Mid-token truncation is refused by
+        # the helper and stays with the LLM repair path.
+        if step5.extracted_sysml:
+            balanced_text, n_closed = close_truncated_blocks(
+                step5.extracted_sysml
+            )
+            if n_closed:
+                metadata["closed_truncated_blocks"] = n_closed
+                if verbose:
+                    print(
+                        f"\n  [DEBUG] Step 5 — Closed {n_closed} block(s) "
+                        "left open by output truncation (statement-boundary "
+                        "tail; mid-token tails are left to the syntax gate)"
+                    )
+                step5 = dataclasses.replace(
+                    step5, extracted_sysml=balanced_text
+                )
+
         # --- fix invalid `doc = "string";` → `doc /* string */` ---
         if step5.extracted_sysml:
             fixed_text, n_doc_fixed = fix_doc_syntax(step5.extracted_sysml)

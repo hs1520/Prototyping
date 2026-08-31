@@ -156,3 +156,77 @@ def remove_named_package(model_text: str, package_name: str) -> str:
         if end == -1:
             return text
         text = text[:match.start()] + text[end + 1:]
+
+
+def close_truncated_blocks(text: str) -> tuple[str, int]:
+    """Deterministically close blocks an output-budget truncation cut off.
+
+    Measured category (run3): the assembly response hits its output budget
+    and stops mid-file — every statement present is complete, only the
+    closing braces of the enclosing blocks are missing — and the syntax
+    gate then buys a full LLM window repair whose entire edit is appending
+    ``}`` lines. Balancing is only safe when the tail IS that shape: the
+    text must end at a statement/block boundary (``;``, ``{``, ``}``, or a
+    line comment). A tail cut mid-token, mid-string, or mid-block-comment
+    means real content was lost, and an LLM repair with the fragments in
+    view must decide — that case is refused untouched, as is any text whose
+    braces already balance or over-close. Returns (text, braces_appended).
+    """
+    depth = 0
+    in_line_comment = in_block_comment = in_string = False
+    last_code_char = ""
+    index = 0
+    while index < len(text):
+        char = text[index]
+        pair = text[index:index + 2]
+        if in_line_comment:
+            if char == "\n":
+                in_line_comment = False
+            index += 1
+            continue
+        if in_block_comment:
+            if pair == "*/":
+                in_block_comment = False
+                index += 2
+                continue
+            index += 1
+            continue
+        if in_string:
+            if char == "\\":
+                index += 2
+                continue
+            if char == '"':
+                in_string = False
+            index += 1
+            continue
+        if pair == "//":
+            in_line_comment = True
+            index += 2
+            continue
+        if pair == "/*":
+            in_block_comment = True
+            index += 2
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth < 0:
+                return text, 0
+        if not char.isspace():
+            last_code_char = char
+        index += 1
+
+    if depth <= 0 or in_block_comment or in_string:
+        return text, 0
+    stripped = text.rstrip()
+    boundary = last_code_char in {";", "{", "}"} or (
+        in_line_comment and stripped.rsplit("\n", 1)[-1].lstrip().startswith("//")
+    )
+    if not boundary:
+        return text, 0
+    return stripped + "\n" + "}\n" * depth, depth
