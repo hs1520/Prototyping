@@ -142,6 +142,23 @@ def test_matrix_marks_executed_l2_pass_and_fail_from_results():
     assert "l2_sitl_failed" in failed.tiers and failed.status == "failed"
 
 
+def test_matrix_keeps_an_executed_inconclusive_l2_result_partial():
+    model = build_lite_model(_MODEL, model_name="D")
+    linker = RequirementLinker(model)
+
+    row = {r.req_id: r for r in build_matrix(
+        model, _REALIZATION, linker.compile_evidence(),
+        l2_results=[{
+            "req_id": "REQ-SAFE-003",
+            "passed": False,
+            "conclusive": False,
+        }],
+    )}["REQ_SAFE_003"]
+
+    assert "l2_sitl_inconclusive" in row.tiers
+    assert row.status == "partial"
+
+
 def test_matrix_never_marks_an_unmet_datasheet_result_verified():
     model = build_lite_model(_MODEL, model_name="D")
     linker = RequirementLinker(model)
@@ -472,9 +489,9 @@ def test_matrix_consumes_gazebo_pass_and_fail_results():
     }
     rows = {r.req_id: r for r in build_matrix(model, None, linker.compile_evidence(), gazebo=gazebo)}
 
-    assert rows["REQ_SAFE_007"].status == "verified"
-    assert rows["REQ_SAFE_007"].tiers == ("gazebo",)
-    assert any("Gazebo PASS" in e for e in rows["REQ_SAFE_007"].evidence)
+    assert rows["REQ_SAFE_007"].status == "partial"
+    assert "gazebo_partial" in rows["REQ_SAFE_007"].tiers
+    assert any("legacy PASS downgraded" in e for e in rows["REQ_SAFE_007"].evidence)
 
     assert rows["REQ_FUNC_002"].status == "failed"
     assert "gazebo_failed" in rows["REQ_FUNC_002"].tiers
@@ -504,3 +521,132 @@ def test_matrix_preserves_partial_gazebo_evidence_without_false_green():
     assert "gazebo_partial" in row.tiers
     assert "gazebo_deferred" in row.tiers
     assert any("Gazebo partial" in e for e in row.evidence)
+
+
+def test_matrix_preserves_motor_out_criterion_source_and_sensitivity():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_SAFE_007 {
+                doc /* The system shall maintain controlled flight following the
+                       failure of a single propulsion unit. */
+            }
+            part Drone { satisfy requirement REQ_SAFE_007; }
+        }""",
+        model_name="D",
+    )
+    linker = RequirementLinker(model)
+    gazebo = {"req_results": [{
+        "req_id": "REQ-SAFE-007",
+        "check": "single_motor_out",
+        "status": "PARTIAL",
+        "message": "2 of 5 met the engineering interpretation",
+        "criterion": {
+            "metric": "attitude_rms_deg",
+            "operator": "<=",
+            "threshold": 5.0,
+            "unit": "deg",
+            "source": "engineering_judgement",
+            "basis": "separates large-amplitude wobble",
+            "accepted_for_requirement": False,
+        },
+        "sensitivity": [
+            {"interpretation": "attitude RMS <= 5 deg", "passed_runs": 2,
+             "total_runs": 5},
+            {"interpretation": "flight completed without scenario termination",
+             "passed_runs": 5, "total_runs": 5},
+        ],
+    }]}
+
+    row = {r.req_id: r for r in build_matrix(
+        model, None, linker.compile_evidence(), gazebo=gazebo,
+    )}["REQ_SAFE_007"]
+    obligation = row.obligations[0]
+
+    assert row.status == "partial"
+    assert obligation.status == "partial"
+    assert obligation.criteria[0].source.value == "engineering_judgement"
+    assert obligation.criteria[0].accepted_for_requirement is False
+    assert [(item.passed_runs, item.total_runs) for item in obligation.sensitivity] == [
+        (2, 5),
+        (5, 5),
+    ]
+
+
+def test_parachute_timing_and_precedence_close_separate_obligations():
+    model = build_lite_model(
+        """package D {
+            requirement def REQ_SAFE_005 {
+                doc /* Deploy the parachute within 0.5 seconds of critical
+                       propulsion failure, taking precedence over all other
+                       safety responses. */
+            }
+            part Drone { satisfy requirement REQ_SAFE_005; }
+        }""",
+        model_name="D",
+    )
+    linker = RequirementLinker(model)
+    gazebo = {"req_results": [
+        {"req_id": "REQ-SAFE-005", "check": "parachute_deploy_timing",
+         "status": "PASS", "message": "physical deployment in 0.04 s",
+         "action_definition_observed": "deployParachute"},
+        {"req_id": "REQ-SAFE-005", "check": "safety_precedence",
+         "status": "PASS", "message": "all declared competitors suppressed"},
+    ]}
+
+    row = {r.req_id: r for r in build_matrix(
+        model, None, linker.compile_evidence(), gazebo=gazebo,
+    )}["REQ_SAFE_005"]
+
+    assert row.status == "verified"
+    assert {obligation.kind.value: obligation.status for obligation in row.obligations} == {
+        "behavior": "verified",
+        "response_time": "verified",
+        "precedence": "verified",
+    }
+
+
+def test_a_pass_may_only_close_a_bar_the_requirement_or_the_result_states():
+    """The discriminator is whether an acceptance bar exists to judge against —
+    not whether the runner happened to attach a criterion object.
+
+    "within 0.5 seconds" is the requirement's own bar, so a PASS applied it.
+    "maintain controlled flight" states none, so a PASS there necessarily used
+    a definition of its own, and one it did not declare cannot be inspected.
+    """
+    from src.prototyping.verification_obligations import states_acceptance_threshold
+
+    assert states_acceptance_threshold(
+        "Deploy the parachute within 0.5 seconds of critical propulsion failure."
+    )
+    assert not states_acceptance_threshold(
+        "The system shall maintain controlled flight following the failure of a "
+        "single propulsion unit."
+    )
+
+    def _row(doc, req_id, check):
+        model = build_lite_model(
+            f"""package D {{
+                requirement def {req_id} {{ doc /* {doc} */ }}
+                part Drone {{ satisfy requirement {req_id}; }}
+            }}""",
+            model_name="D",
+        )
+        gazebo = {"req_results": [{
+            "req_id": req_id.replace("_", "-"), "check": check,
+            "status": "PASS", "message": "observed",
+        }]}
+        return {r.req_id: r for r in build_matrix(
+            model, None, RequirementLinker(model).compile_evidence(), gazebo=gazebo,
+        )}[req_id]
+
+    stated = _row("Deploy the parachute within 0.5 seconds of critical "
+                  "propulsion failure.", "REQ_SAFE_005", "parachute_deploy_timing")
+    assert stated.status == "verified"
+    assert all("legacy PASS downgraded" not in e for e in stated.evidence)
+
+    unstated = _row("The system shall maintain controlled flight following the "
+                    "failure of a single propulsion unit.",
+                    "REQ_SAFE_007", "single_motor_out")
+    assert unstated.status == "partial"
+    assert any("legacy PASS downgraded" in e for e in unstated.evidence)
+    assert any("no verification criterion declared" in e for e in unstated.evidence)

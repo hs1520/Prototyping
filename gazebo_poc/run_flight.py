@@ -384,6 +384,34 @@ def _parse_model_z(output: str) -> float | None:
     return None
 
 
+def _parse_model_xyz(output: str) -> tuple[float, float, float] | None:
+    number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+    for pattern in (
+        rf"XYZ\s*\[\s*({number})\s+({number})\s+({number})\s*\]",
+        rf"XYZ\s*\(m\)[^\n]*\n\s*\[\s*({number})\s+({number})\s+({number})\s*\]",
+    ):
+        match = re.search(pattern, output, re.I)
+        if match:
+            return tuple(float(match.group(index)) for index in (1, 2, 3))
+    return None
+
+
+def _model_xyz(model: str) -> tuple[float, float, float] | None:
+    result = _sh("docker", "exec", _CONTAINER, "gz", "model", "-m", model, "-p")
+    return _parse_model_xyz(result.stdout) if result.returncode == 0 else None
+
+
+_PAYLOAD_ATTACHED_MAX_DISTANCE_M = 2.0
+
+
+def _payload_attachment_distance() -> float | None:
+    vehicle = _model_xyz("iris_with_gimbal")
+    payload = _model_xyz("payload_box")
+    if vehicle is None or payload is None:
+        return None
+    return math.dist(vehicle, payload)
+
+
 def _payload_z() -> float | None:
     result = _sh("docker", "exec", _CONTAINER, "gz", "model", "-m", "payload_box", "-p")
     return _parse_model_z(result.stdout) if result.returncode == 0 else None
@@ -404,6 +432,12 @@ def _parse_model_xy(output: str) -> tuple | None:
 def _vehicle_xy() -> tuple | None:
     result = _sh("docker", "exec", _CONTAINER, "gz", "model",
                  "-m", "iris_with_gimbal", "-p")
+    return _parse_model_xy(result.stdout) if result.returncode == 0 else None
+
+
+def _payload_xy() -> tuple | None:
+    result = _sh("docker", "exec", _CONTAINER, "gz", "model",
+                 "-m", "payload_box", "-p")
     return _parse_model_xy(result.stdout) if result.returncode == 0 else None
 
 
@@ -626,7 +660,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
          mission_model_text=None,
          delivery_abort_before_release=False,
          navigation_accuracy=False,
-         gps_bias_m=None,
+         gps_horizontal_error_m=None,
          extra_parms="") -> int:
     LAST_RESULT.clear()
     # When the generated model is supplied it OWNS the mission decisions: the
@@ -636,7 +670,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
     # labelled differently so the mapper can tell them apart.
     mission = None
     if mission_model_text:
-        from gazebo_poc.model_mission import ModelDrivenMission
+        from gazebo_poc.model_mission import ModelAction, ModelDrivenMission
         mission = ModelDrivenMission(mission_model_text)
         LAST_RESULT["mission_provenance"] = mission.provenance()
         print(f"[model] mission decisions owned by the generated model: "
@@ -756,18 +790,6 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
     print("[docker] container up, gz sim loading our airframe ...", flush=True)
     time.sleep(8)
 
-    if gps_bias_m is not None:
-        # SITL has NO random horizontal GPS error. In SIM_GPS.cpp the latitude
-        # and longitude are passed through from truth; SIM_GPS1_NOISE appears
-        # exactly once, on ALTITUDE, as a deterministic sine:
-        #     d.altitude = altitude + params.noise * sinf(now_ms * 0.0005f) + ...
-        # The only horizontal term is GLTCH, a CONSTANT offset added to lat/lon
-        # in degrees. It is a bias, not scatter — but it is enough to prove the
-        # CEP chain registers GNSS error at all, which is what makes "this rig
-        # has none" a finding rather than an untested assumption.
-        _DEG_PER_M = 1.0 / 111320.0
-        extra_parms = ((extra_parms or "")
-                       + f"SIM_GPS1_GLTCH_X {float(gps_bias_m) * _DEG_PER_M:.9f}\n")
     parm = out / "poc.parm"
     gripper_channel = max(6, rotor_count) if payload_release else None
     gripper_servo = gripper_channel + 1 if gripper_channel is not None else None
@@ -844,6 +866,26 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
 
         def hb():
             return m.recv_match(type="HEARTBEAT", blocking=True, timeout=2)
+
+        def set_parameter(name: str, value: float) -> None:
+            m.mav.param_set_send(
+                m.target_system, m.target_component,
+                name.encode(), float(value),
+                mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+            )
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                response = m.recv_match(
+                    type="PARAM_VALUE", blocking=True, timeout=0.5,
+                )
+                if response is None:
+                    continue
+                response_name = response.param_id
+                if isinstance(response_name, bytes):
+                    response_name = response_name.decode()
+                if str(response_name).rstrip("\x00") == name:
+                    return
+            raise RuntimeError(f"parameter update was not acknowledged: {name}")
 
         def wait(cond, secs, label):
             end = time.time() + secs
@@ -1040,6 +1082,10 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             cap_proc.terminate()
         if hover_att is not None:
             hover_rms = _attitude_rms_deg(hover_att.samples)
+            hover_payload_distance = (
+                _payload_attachment_distance()
+                if payload_release and payload_mass_kg > 0 else None
+            )
             LAST_RESULT.update({
                 "hover_attitude_samples": hover_rms["n"],
                 "hover_attitude_roll_rms_deg": hover_rms["roll_rms_deg"],
@@ -1049,6 +1095,11 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 # release happens after hover sampling, so these are carry stats.
                 "hover_attitude_with_payload": bool(
                     payload_release and payload_mass_kg > 0
+                ),
+                "hover_payload_attachment_distance_m": hover_payload_distance,
+                "hover_payload_attachment_observed": (
+                    hover_payload_distance is not None
+                    and hover_payload_distance <= _PAYLOAD_ATTACHED_MAX_DISTANCE_M
                 ),
             })
             print(f"[att] hover RMS: {hover_rms}", flush=True)
@@ -1061,9 +1112,13 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         # This checks command -> Gazebo detachable joint -> falling payload. It
         # does not claim that the aircraft's mission logic generated the command.
         if payload_release and payload_mass_kg > 0:
-            release_target = None
-            release_position = None
-            release_position_error = None
+            release_target_ned = None
+            release_target_world = None
+            condition_position_ned = None
+            condition_position_world = None
+            condition_position_error = None
+            separation_position_world = None
+            separation_position_error = None
             condition_met_mono = None
             if positional_release:
                 m.set_mode("ALT_HOLD")
@@ -1085,25 +1140,35 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     vy = sum(v[1] for v in velocity_samples) / len(velocity_samples)
                     norm = (vx * vx + vy * vy) ** 0.5
                     ux, uy = vx / norm, vy / norm
-                    release_target = (last_pos[0] + ux * 5.0, last_pos[1] + uy * 5.0)
+                    release_target_ned = (
+                        last_pos[0] + ux * 5.0,
+                        last_pos[1] + uy * 5.0,
+                    )
+                    world_position = _vehicle_xy()
+                    if world_position is not None:
+                        release_target_world = (
+                            world_position[0] + ux * 5.0,
+                            world_position[1] - uy * 5.0,
+                        )
                     approach_end = time.monotonic() + 12.0
                     while time.monotonic() < approach_end:
                         hud = m.recv_match(type="VFR_HUD", blocking=True, timeout=1)
                         pos = m.recv_match(type="LOCAL_POSITION_NED", blocking=True, timeout=1)
                         if pos is None:
                             continue
-                        release_position = (float(pos.x), float(pos.y))
-                        release_position_error = (
-                            (release_position[0] - release_target[0]) ** 2
-                            + (release_position[1] - release_target[1]) ** 2
+                        condition_position_ned = (float(pos.x), float(pos.y))
+                        condition_position_error = (
+                            (condition_position_ned[0] - release_target_ned[0]) ** 2
+                            + (condition_position_ned[1] - release_target_ned[1]) ** 2
                         ) ** 0.5
                         if hud is not None:
-                            pitch = 1470 if release_position_error < 2.0 else 1420
+                            pitch = 1470 if condition_position_error < 2.0 else 1420
                             rc(alt_hold_stick(hud.alt - alt0), pitch=pitch)
-                        if release_position_error <= positional_tolerance_m:
+                        if condition_position_error <= positional_tolerance_m:
                             # the delivery coordinate condition is first satisfied
                             # HERE — the PERF-005 clock starts at this moment.
                             condition_met_mono = time.monotonic()
+                            condition_position_world = _vehicle_xy()
                             break
                 rc(alt_hold_stick(rels[-1] if rels else TGT))
 
@@ -1127,7 +1192,10 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     "DeliveryCoordinateSatisfied", time=time.monotonic())
                 print(f"[model] delivery coordinate offered; model fired "
                       f"{[d.action for d in release_decisions]}", flush=True)
-            model_released = bool(mission is None or release_decisions)
+            model_released = (
+                mission is None
+                or mission.performed(release_decisions, ModelAction.RELEASE_PAYLOAD)
+            )
 
             payload_z0 = _payload_z()
             release_started = time.monotonic()
@@ -1152,6 +1220,13 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 if (payload_z0 is not None and payload_z is not None
                         and payload_z < payload_z0 - 0.15):
                     release_delay = time.monotonic() - release_started
+                    separation_position_world = _payload_xy()
+                    if (release_target_world is not None
+                            and separation_position_world is not None):
+                        separation_position_error = math.hypot(
+                            separation_position_world[0] - release_target_world[0],
+                            separation_position_world[1] - release_target_world[1],
+                        )
                     break
             coordinate_chain_delay = None
             if condition_met_mono is not None and release_delay is not None:
@@ -1180,12 +1255,20 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 "payload_z_before_m": payload_z0,
                 "payload_z_after_m": payload_z,
                 "payload_mass_kg": payload_mass_kg,
-                "payload_release_target_ned_m": release_target,
-                "payload_release_position_ned_m": release_position,
-                "payload_release_position_error_m": release_position_error,
+                "payload_release_target_ned_m": release_target_ned,
+                "payload_release_target_world_m": release_target_world,
+                "payload_condition_position_ned_m": condition_position_ned,
+                "payload_condition_position_world_m": condition_position_world,
+                "payload_condition_position_error_m": condition_position_error,
+                "payload_release_position_world_m": separation_position_world,
+                "payload_release_position_error_m": separation_position_error,
                 "payload_release_position_met": (
-                    release_position_error is not None
-                    and release_position_error <= positional_tolerance_m
+                    separation_position_error is not None
+                    and separation_position_error <= positional_tolerance_m
+                ),
+                "payload_release_position_basis": (
+                    "payload_ground_truth_at_separation"
+                    if separation_position_error is not None else None
                 ),
                 "payload_release_position_tolerance_m": positional_tolerance_m,
                 "payload_release_fidelity": (
@@ -1246,6 +1329,22 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     alt_rel = float(rels[-1]) if rels else TGT
                     legs = []
                     for leg_index, (dn, de) in enumerate(_cep_targets()):
+                        injected_offset = None
+                        if gps_horizontal_error_m is not None:
+                            error_angle = 2.0 * math.pi * leg_index / _CEP_POINTS
+                            error_north = float(gps_horizontal_error_m) * math.cos(error_angle)
+                            error_east = float(gps_horizontal_error_m) * math.sin(error_angle)
+                            set_parameter(
+                                "SIM_GPS1_GLTCH_X",
+                                error_north * lat_scale,
+                            )
+                            set_parameter(
+                                "SIM_GPS1_GLTCH_Y",
+                                error_east * lon_scale,
+                            )
+                            injected_offset = [
+                                round(error_north, 4), round(error_east, 4),
+                            ]
                         tn, te = n0 + dn, e0 + de      # local target, for arrival only
                         des_lat = _HOME_LAT + (true_n0 + dn) * lat_scale
                         des_lon = _HOME_LON + (true_e0 + de) * lon_scale
@@ -1285,7 +1384,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                         # much of it survives the estimator. Without this a CEP
                         # that ignores injected noise looks like a robust result
                         # instead of an unverified filtering claim.
+                        truth = _vehicle_xy()
                         raw_spread = []
+                        raw_truth_errors = []
                         for _ in range(12):
                             raw = m.recv_match(type="GPS_RAW_INT", blocking=True, timeout=1)
                             fused = m.recv_match(type="GLOBAL_POSITION_INT",
@@ -1296,9 +1397,20 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                             dlon = ((raw.lon - fused.lon) * 1e-7 * 111320.0
                                     * math.cos(math.radians(fused.lat * 1e-7)))
                             raw_spread.append(math.hypot(dlat, dlon))
+                            if truth is not None:
+                                true_lat = _HOME_LAT + truth[0] * lat_scale
+                                true_lon = _HOME_LON - truth[1] * lon_scale
+                                raw_north_error = (
+                                    raw.lat * 1e-7 - true_lat
+                                ) * 111320.0
+                                raw_east_error = (
+                                    raw.lon * 1e-7 - true_lon
+                                ) * 111320.0 * math.cos(math.radians(true_lat))
+                                raw_truth_errors.append(math.hypot(
+                                    raw_north_error, raw_east_error,
+                                ))
                         pos = m.recv_match(type="LOCAL_POSITION_NED",
                                            blocking=True, timeout=3)
-                        truth = _vehicle_xy()
                         if pos is None or truth is None:
                             continue
                         # ArduPilotPlugin maps Gazebo world (x, y) to NED (x, -y)
@@ -1314,6 +1426,11 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                             "raw_gnss_minus_fused_m": (
                                 round(_median(raw_spread), 4) if raw_spread else None
                             ),
+                            "raw_gnss_truth_error_m": (
+                                round(_median(raw_truth_errors), 4)
+                                if raw_truth_errors else None
+                            ),
+                            "injected_gnss_offset_ne_m": injected_offset,
                         })
                         print(f"[nav] leg {leg_index}: ground-truth error "
                               f"{err_truth:.3f} m, EKF-reported {err_ekf:.3f} m",
@@ -1330,8 +1447,17 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                             [leg["raw_gnss_minus_fused_m"] for leg in legs
                              if leg.get("raw_gnss_minus_fused_m") is not None]
                         ),
-                        "cep_gps_bias_m": (
-                            0.0 if gps_bias_m is None else float(gps_bias_m)
+                        "cep_raw_gnss_truth_error_m": _median(
+                            [leg["raw_gnss_truth_error_m"] for leg in legs
+                             if leg.get("raw_gnss_truth_error_m") is not None]
+                        ),
+                        "cep_horizontal_error_source": (
+                            "sim_gps_glitch_xy_campaign"
+                            if gps_horizontal_error_m is not None else None
+                        ),
+                        "cep_horizontal_error_injected_m": (
+                            None if gps_horizontal_error_m is None
+                            else float(gps_horizontal_error_m)
                         ),
                         "cep_basis": (
                             "median horizontal error between the commanded waypoint "
@@ -1342,14 +1468,11 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                                "horizontal GPS error to begin with, so this "
                                "EXCLUDES the term that dominates a real CEP — it "
                                "is a floor, not a navigation CEP"
-                               if gps_bias_m is None else
-                               f"a {float(gps_bias_m):.2f} m constant GNSS bias was "
-                               "injected via SIM_GPS1_GLTCH_X and DID reach the "
-                               "raw fix, yet the fused estimate stayed within "
-                               "centimetres of ground truth and the navigation "
-                               "error did not move — the estimate in this rig does "
-                               "not follow the GPS, so no GNSS perturbation makes "
-                               "this a navigation CEP")
+                               if gps_horizontal_error_m is None else
+                               f"a {float(gps_horizontal_error_m):.2f} m horizontal "
+                               "GNSS error was swept through eight directions via "
+                               "SIM_GPS1_GLTCH_X/Y; raw fixes are compared directly "
+                               "with Gazebo truth before the navigation CEP is judged")
                         ),
                     })
                     print(f"[nav] CEP={LAST_RESULT['cep_m']} m over "
@@ -1620,6 +1743,15 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         # cruise measurement, not just a carry-hover one.
         LAST_RESULT["cruise_sweep_payload_attached"] = bool(
             payload_release and payload_mass_kg > 0)
+        cruise_payload_distance = (
+            _payload_attachment_distance()
+            if payload_release and payload_mass_kg > 0 else None
+        )
+        LAST_RESULT["cruise_payload_attachment_distance_m"] = cruise_payload_distance
+        LAST_RESULT["cruise_payload_attachment_observed"] = (
+            cruise_payload_distance is not None
+            and cruise_payload_distance <= _PAYLOAD_ATTACHED_MAX_DISTANCE_M
+        )
         if fcap:
             fcap.terminate()
             fcap = None
@@ -1753,6 +1885,10 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             })
 
         if parachute_deploy:
+            from gazebo_poc.safety_precedence_evidence import (
+                evaluate_safety_precedence,
+            )
+
             observer, chute_event, chute_seen = _start_model_observer("parachute_small")
             time.sleep(0.2)
             observer_available = observer.poll() is None
@@ -1761,12 +1897,35 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             # safety responses (REQ-SAFE-005) is a separate arbitration claim
             # and is NOT established by this subcheck.
             chute_decisions = ()
+            precedence_evidence = None
             if mission is not None:
+                competing_actions = mission.action_definitions_for_machine(
+                    "SafetyArbiter"
+                )
                 chute_decisions = mission.offer(
-                    "CriticalPropulsionFailure", time=time.monotonic())
+                    "CriticalPropulsionFailure", time=time.monotonic(),
+                    variables={
+                        "propulsionCriticalFailure": True,
+                        "sensorSelfTestFailed": True,
+                        "batterySoc": 0.0,
+                        "commLossTime": 20.0,
+                    },
+                )
+                precedence_evidence = evaluate_safety_precedence(
+                    fired_action_definitions=(
+                        decision.action_definition
+                        for decision in chute_decisions
+                        if decision.action_definition is not None
+                    ),
+                    winner_action_definition=ModelAction.DEPLOY_PARACHUTE.value,
+                    competing_action_definitions=competing_actions,
+                )
                 print(f"[model] critical propulsion failure offered; model fired "
                       f"{[d.action for d in chute_decisions]}", flush=True)
-            model_deployed = bool(mission is None or chute_decisions)
+            model_deployed = (
+                mission is None
+                or mission.performed(chute_decisions, ModelAction.DEPLOY_PARACHUTE)
+            )
             chute_started = time.monotonic()
             if model_deployed:
                 m.mav.command_long_send(
@@ -1797,6 +1956,22 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 "parachute_model_observed": chute_delay is not None,
                 "parachute_deploy_delay_s": chute_delay,
                 "parachute_max_delay_s": parachute_max_delay_s,
+                "parachute_precedence_status": (
+                    precedence_evidence.status
+                    if precedence_evidence is not None else None
+                ),
+                "parachute_precedence_description": (
+                    precedence_evidence.description
+                    if precedence_evidence is not None else None
+                ),
+                "parachute_precedence_competing_actions": (
+                    list(precedence_evidence.declared_competing_actions)
+                    if precedence_evidence is not None else []
+                ),
+                "parachute_precedence_competing_actions_fired": (
+                    list(precedence_evidence.competing_actions_fired)
+                    if precedence_evidence is not None else []
+                ),
                 "parachute_fidelity": (
                     "generated ParachuteDeploymentBehavior consumed the critical-"
                     "failure event and its entry action drove MAV_CMD_DO_PARACHUTE "

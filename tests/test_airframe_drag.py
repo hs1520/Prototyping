@@ -152,3 +152,13 @@ def test_monotone_ramp_is_caught_even_when_the_slope_fit_is_flattered():
     samples = [(t * 0.5, v) for t, v in enumerate(values)]
     verdict = steady_state(samples)
     assert not verdict.steady
+
+
+def test_slow_linear_change_below_five_percent_is_still_not_a_plateau():
+    samples = [(t * 0.5, 20.0 + 0.02 * (t * 0.5)) for t in range(40)]
+
+    verdict = steady_state(samples)
+
+    assert verdict.drift_fraction < 0.05
+    assert not verdict.steady
+    assert verdict.reason == "statistically significant trend"

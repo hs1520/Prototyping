@@ -125,19 +125,23 @@ def test_build_report_reuses_unchanged_pass_without_launching_gazebo(
 
 
 
-def test_req_results_upgrade_only_the_implemented_gazebo_check():
+def test_req_results_add_evidence_only_for_the_implemented_gazebo_check():
     planned = [
         {"req_id": "REQ-SAFE-007", "check": "single_motor_out", "message": "needs dynamics"},
         {"req_id": "REQ-FUNC-002", "check": "obstacle_avoidance", "message": "needs contact physics"},
     ]
+    runs = [{"return_code": 0, "stable": True, "attitude_rms_deg": 0.31,
+             "hover_alt_m": 10.0, "hover_throttle_pct": 50.0}]
     live = {"motor_failure_req": "REQ-SAFE-007", "motor_failure_tolerant": True,
+            "motor_failure_runs": runs, "motor_failure_attempts": 1,
             "motor_failure_attitude_rms_deg": 0.31,
             "motor_failure_attitude_limit_deg": 5.0}
 
     results = rgf._req_results(live, planned)
 
     by_id = {item["req_id"]: item for item in results}
-    assert by_id["REQ-SAFE-007"]["status"] == "PASS"
+    assert by_id["REQ-SAFE-007"]["status"] == "PARTIAL"
+    assert by_id["REQ-SAFE-007"]["criterion_evaluation"] == "PASS"
     assert by_id["REQ-FUNC-002"]["status"] == "PLANNED"
 
 
@@ -216,8 +220,10 @@ def test_position_and_parachute_subchecks_remain_partial_not_full_green():
     ]
     live = {
         "payload_release_commanded": True,
+        "payload_release_detected": True,
         "payload_release_position_error_m": 0.42,
         "payload_release_position_met": True,
+        "payload_release_position_basis": "payload_ground_truth_at_separation",
         "parachute_commanded": True,
         "parachute_observer_available": True,
         "parachute_model_observed": True,
@@ -351,6 +357,8 @@ _QUALITY_LIVE = {
     "nilwind_dash_steady_state": _STEADY,
     "cruise_sweep_speeds_mps": [10.1, 15.6, 19.9, 21.3],
     "cruise_sweep_payload_attached": True,
+    "cruise_payload_attachment_observed": True,
+    "cruise_payload_attachment_distance_m": 0.8,
     "cruise_attitude_rms_deg": 0.31,
     "cruise_attitude_roll_rms_deg": 0.22,
     "cruise_attitude_pitch_rms_deg": 0.31,
@@ -361,6 +369,8 @@ _QUALITY_LIVE = {
     "hover_attitude_rms_deg": 0.44,
     "hover_attitude_samples": 132,
     "hover_attitude_with_payload": True,
+    "hover_payload_attachment_observed": True,
+    "hover_payload_attachment_distance_m": 0.8,
     "hover_throttle_pct": 38.0,
     "payload_mass_kg": 1.5,
 }
@@ -376,9 +386,9 @@ def test_flight_quality_checks_judge_pass_partial_and_scope_caveats():
 
     # a swept envelope closes "at all authorised speeds"; the reported RMS is
     # the worst point, so passing covers every point measured
-    assert results["cruise_attitude"]["status"] == "PASS"
+    assert results["cruise_attitude"]["status"] == "PARTIAL"
     assert "WORST of 4 certified steady speed points" in results["cruise_attitude"]["message"]
-    assert "not swept" not in results["cruise_attitude"]["message"]
+    assert "authorised-speed envelope is not defined" in results["cruise_attitude"]["message"]
 
     # the sweep is flown with the payload aboard, so it is a transport cruise
     assert results["payload_attitude"]["status"] == "PASS"
@@ -408,6 +418,22 @@ def test_a_single_speed_point_still_cannot_claim_all_authorised_speeds():
     assert "carry-hover window only" in results["payload_attitude"]["message"]
 
 
+def test_cruise_attitude_closes_only_when_model_authority_range_is_covered():
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(
+        _QUALITY_LIVE,
+        cruise_authorised_speed_range_mps=[11.0, 20.0],
+        cruise_authorised_speed_source="generated_model",
+    )
+
+    result = {r["check"]: r for r in rgf._req_results(
+        live, planned,
+    )}["cruise_attitude"]
+
+    assert result["status"] == "PASS"
+    assert "generated_model" in result["message"]
+
+
 def test_flight_quality_checks_fail_on_violated_limits():
     planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
     live = dict(_QUALITY_LIVE)
@@ -415,6 +441,8 @@ def test_flight_quality_checks_fail_on_violated_limits():
         "nilwind_dash_speed_mps": 12.4,     # held, but below 18
         "cruise_attitude_rms_deg": 0.9,     # above 0.5
         "hover_throttle_pct": 80.0,         # margin 20 < 30
+        "cruise_authorised_speed_range_mps": [11.0, 20.0],
+        "cruise_authorised_speed_source": "generated_model",
     })
     results = {r["check"]: r for r in rgf._req_results(live, planned)}
     assert results["cruise_speed"]["status"] == "FAIL"
@@ -433,9 +461,22 @@ def test_flight_quality_checks_stay_planned_without_measurements():
 def test_payload_attitude_requires_payload_actually_attached():
     planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
     live = dict(_QUALITY_LIVE)
-    live["hover_attitude_with_payload"] = False
+    live["hover_payload_attachment_observed"] = False
     results = {r["check"]: r for r in rgf._req_results(live, planned)}
     # hover attitude measured without the payload must not judge FUNC-003
+    assert results["payload_attitude"]["status"] == "PLANNED"
+
+
+def test_payload_configuration_flags_cannot_substitute_for_attachment_truth():
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE)
+    live.pop("hover_payload_attachment_observed")
+    live.pop("cruise_payload_attachment_observed")
+
+    results = {r["check"]: r for r in rgf._req_results(live, planned)}
+
+    assert live["hover_attitude_with_payload"] is True
+    assert live["cruise_sweep_payload_attached"] is True
     assert results["payload_attitude"]["status"] == "PLANNED"
 
 
@@ -535,6 +576,46 @@ def test_obstacle_is_not_flown_when_the_requirement_omits_the_envelope(monkeypat
     )
 
 
+def test_navigation_campaign_is_separate_from_the_primary_cruise_flight(monkeypatch):
+    calls = []
+    from gazebo_poc import run_flight
+
+    def fake_main(**kwargs):
+        calls.append(kwargs)
+        run_flight.LAST_RESULT.clear()
+        if kwargs.get("navigation_accuracy"):
+            run_flight.LAST_RESULT.update({
+                "cep_samples": 8,
+                "cep_m": 0.4,
+                "takeoff_command_accepted": True,
+                "takeoff_method": "guided_nav_takeoff",
+            })
+        else:
+            run_flight.LAST_RESULT.update({
+                "hover_stable": True,
+                "nilwind_dash_speed_mps": 19.3,
+            })
+        return 0
+
+    monkeypatch.setattr(run_flight, "main", fake_main)
+    planned = rgf._planned_gazebo_reqs([
+        _NAV_REQ,
+        "REQ-PERF-003: achieve cruise airspeed of at least 18 m/s in nil wind.",
+    ])
+    design = {
+        "mass_kg": 5.54, "rotor_radius_m": 0.2032, "rotor_count": 6,
+        "battery_capacity_mah": 16000.0, "payload_mass_kg": 0.0,
+    }
+
+    live = rgf._run_live_gazebo(design, planned)
+
+    assert len(calls) == 2
+    assert calls[0].get("navigation_accuracy") is None
+    assert calls[1]["navigation_accuracy"] is True
+    assert live["nilwind_dash_speed_mps"] == 19.3
+    assert live["cep_samples"] == 8
+
+
 _RELEASE_PLANNED = [
     {"req_id": "REQ-PERF-005", "check": "timed_actuation", "message": "release",
      "max_delay_s": 2.0, "requirement_text": "payload release within 2 seconds"},
@@ -549,11 +630,13 @@ _RELEASE_LIVE = {
     "payload_coordinate_to_separation_delay_s": 1.33,
     "payload_release_position_error_m": 0.765,
     "payload_release_position_met": True,
+    "payload_release_position_basis": "payload_ground_truth_at_separation",
 }
 _MODEL_DECISION = [{
     "owner_part": "PayloadMechanism", "machine": "PayloadReleaseBehavior",
     "event": "DeliveryCoordinateSatisfied", "from_state": "Locked",
     "to_state": "Releasing", "action": "onReleasing",
+    "action_definition": "actuateRelease",
     "decided_by": "generated model",
 }]
 
@@ -565,6 +648,34 @@ def test_a_harness_triggered_release_stays_partial():
     assert results["timed_actuation"]["status"] == "PARTIAL"
     assert results["positional_release"]["status"] == "PARTIAL"
     assert "not generated mission-logic ownership" in results["positional_release"]["message"]
+
+
+def test_trigger_position_cannot_substitute_for_physical_separation_position():
+    live = dict(_RELEASE_LIVE)
+    live.pop("payload_release_position_basis")
+
+    result = {r["check"]: r for r in rgf._req_results(
+        live, _RELEASE_PLANNED,
+    )}["positional_release"]
+
+    assert result["status"] == "INCONCLUSIVE"
+    assert "separation-position truth was not observed" in result["message"]
+
+
+def test_observed_physical_separation_outside_tolerance_is_a_failure():
+    live = dict(
+        _RELEASE_LIVE,
+        payload_release_position_error_m=1.4,
+        payload_release_position_met=False,
+        payload_release_decided_by="generated model",
+        payload_release_decisions=_MODEL_DECISION,
+    )
+
+    result = {r["check"]: r for r in rgf._req_results(
+        live, _RELEASE_PLANNED,
+    )}["positional_release"]
+
+    assert result["status"] == "FAIL"
 
 
 def test_a_model_owned_release_closes_and_names_the_machine():
@@ -583,6 +694,23 @@ def test_a_model_owned_release_closes_and_names_the_machine():
         assert "firing onReleasing" in message
 
 
+def test_an_unrelated_model_action_cannot_close_release_requirements():
+    wrong_decision = [{
+        **_MODEL_DECISION[0],
+        "action_definition": "lockPayload",
+    }]
+    live = dict(
+        _RELEASE_LIVE,
+        payload_release_decided_by="generated model",
+        payload_release_decisions=wrong_decision,
+    )
+
+    results = {r["check"]: r for r in rgf._req_results(live, _RELEASE_PLANNED)}
+
+    assert results["timed_actuation"]["status"] == "PARTIAL"
+    assert results["positional_release"]["status"] == "PARTIAL"
+
+
 def test_parachute_ownership_does_not_silently_claim_precedence():
     planned = [{"req_id": "REQ-SAFE-005", "check": "timed_actuation",
                 "message": "parachute", "max_delay_s": 0.5,
@@ -598,8 +726,17 @@ def test_parachute_ownership_does_not_silently_claim_precedence():
             "owner_part": "SafetyMonitor", "machine": "ParachuteDeploymentBehavior",
             "event": "CriticalPropulsionFailure", "from_state": "Monitoring",
             "to_state": "DeployingParachute", "action": "onDeployingParachute",
+            "action_definition": "deployParachute",
             "decided_by": "generated model",
         }],
+        "parachute_precedence_status": "verified",
+        "parachute_precedence_description": (
+            "winner deployParachute fired=True; no competing response fired"
+        ),
+        "parachute_precedence_competing_actions": [
+            "initiateArmingInhibit", "initiateEmergencyLand", "initiateBatteryRtb",
+        ],
+        "parachute_precedence_competing_actions_fired": [],
     }
     results = {r["check"]: r for r in rgf._req_results(live, planned)}
     message = results["parachute_deploy_timing"]["message"]
@@ -608,6 +745,8 @@ def test_parachute_ownership_does_not_silently_claim_precedence():
     # SAFE-005 also asks for precedence over all other safety responses, which
     # deploying on cue does not demonstrate
     assert "precedence over other safety responses is a separate" in message
+    assert results["safety_precedence"]["status"] == "PASS"
+    assert "simultaneously active" in results["safety_precedence"]["message"]
 
 
 _INHIBITION_REQ = (
@@ -708,10 +847,12 @@ def test_cep_is_only_reported_from_autonomous_flight():
         "takeoff_command_accepted": True,
         "takeoff_method": "guided_nav_takeoff",
         "cep_m": 0.4, "cep_samples": 8,
-        "cep_raw_gnss_scatter_m": 1.8,     # GNSS error actually present
+        "cep_horizontal_error_source": "sim_gps_glitch_xy_campaign",
+        "cep_horizontal_error_injected_m": 2.0,
+        "cep_raw_gnss_truth_error_m": 1.8,
     }, planned)[0]
     assert autonomous["status"] == "PASS"
-    assert "CEP 0.4 m over 8 commanded waypoints" in autonomous["message"]
+    assert "CEP 0.4 m over 8 commanded global waypoints" in autonomous["message"]
 
     # the same flight on a noise-free GNSS is a floor, not a CEP
     idealised = rgf._req_results({
@@ -735,19 +876,23 @@ def test_one_motor_out_cannot_pass_on_altitude_alone():
     assert unmeasured["status"] == "INCONCLUSIVE"
     assert "attitude was not measured" in unmeasured["message"]
 
+    wobbling_run = {"return_code": 0, "stable": False,
+                    "attitude_rms_deg": 13.46, "hover_alt_m": 9.93,
+                    "hover_throttle_pct": 35.0}
     wobbling = rgf._req_results({
         "motor_failure_req": "REQ-SAFE-007",
         "motor_failure_tolerant": False,
+        "motor_failure_runs": [wobbling_run],
+        "motor_failure_attempts": 1,
         "motor_failure_attitude_rms_deg": 13.46,
         "motor_failure_attitude_limit_deg": 5.0,
         "motor_failure_hover_alt_m": 9.93,
         "motor_failure_hover_throttle_pct": 35.0,
     }, planned, include_single_motor_out=True)[0]
-    assert wobbling["status"] == "FAIL"
-    assert "did not remain controlled" in wobbling["message"]
-    # the evidence names the number, and what nominal looks like
+    assert wobbling["status"] == "PARTIAL"
+    assert wobbling["criterion_evaluation"] == "FAIL"
+    assert "unaccepted engineering interpretation" in wobbling["message"]
     assert "13.46 deg" in wobbling["message"]
-    assert "0.009 deg" in wobbling["message"]
 
 
 def test_hover_stability_requires_attitude_tracking():
@@ -786,7 +931,9 @@ def test_cep_closes_once_gnss_error_is_actually_present():
         "takeoff_command_accepted": True,
         "takeoff_method": "guided_nav_takeoff",
         "cep_m": 0.42, "cep_samples": 8, "cep_max_error_m": 0.7,
-        "cep_raw_gnss_scatter_m": 1.8, "cep_gps_noise_m": 2.0,
+        "cep_horizontal_error_source": "sim_gps_glitch_xy_campaign",
+        "cep_horizontal_error_injected_m": 2.0,
+        "cep_raw_gnss_truth_error_m": 1.8,
     }, planned)[0]
     assert row["status"] == "PASS"
     assert "GNSS error represented" in row["message"]
@@ -796,6 +943,106 @@ def test_cep_closes_once_gnss_error_is_actually_present():
         "takeoff_command_accepted": True,
         "takeoff_method": "guided_nav_takeoff",
         "cep_m": 1.6, "cep_samples": 8, "cep_max_error_m": 2.4,
-        "cep_raw_gnss_scatter_m": 1.8, "cep_gps_noise_m": 2.0,
+        "cep_horizontal_error_source": "sim_gps_glitch_xy_campaign",
+        "cep_horizontal_error_injected_m": 2.0,
+        "cep_raw_gnss_truth_error_m": 1.8,
     }, planned)[0]
-    assert over["status"] == "INCONCLUSIVE"   # over the limit -> not a pass
+    assert over["status"] == "FAIL"
+
+
+def test_incomplete_horizontal_error_campaign_cannot_report_cep():
+    planned = rgf._planned_gazebo_reqs([_NAV_REQ])
+    row = rgf._req_results({
+        "takeoff_command_accepted": True,
+        "takeoff_method": "guided_nav_takeoff",
+        "cep_m": 0.42, "cep_samples": 7, "cep_max_error_m": 0.7,
+        "cep_horizontal_error_source": "sim_gps_glitch_xy_campaign",
+        "cep_horizontal_error_injected_m": 2.0,
+        "cep_raw_gnss_truth_error_m": 1.8,
+    }, planned)[0]
+
+    assert row["status"] == "INCONCLUSIVE"
+    assert "7 of 8" in row["message"]
+
+
+def _motor_out_live(runs, passes=None):
+    measured = [r for r in runs if r.get("attitude_rms_deg") is not None]
+    worst = max(measured, key=lambda r: r["attitude_rms_deg"]) if measured else {}
+    stable = [r for r in runs if r.get("stable")]
+    return {
+        "motor_failure_req": "REQ-SAFE-007",
+        "motor_failure_runs": runs,
+        "motor_failure_attempts": len(runs),
+        "motor_failure_passes": len(stable) if passes is None else passes,
+        "motor_failure_tolerant": len(stable) == len(runs),
+        "motor_failure_attitude_rms_deg": worst.get("attitude_rms_deg"),
+        "motor_failure_attitude_limit_deg": 5.0,
+        "motor_failure_hover_alt_m": worst.get("hover_alt_m"),
+        "motor_failure_hover_throttle_pct": worst.get("hover_throttle_pct"),
+    }
+
+
+_MOTOR_OUT_PLANNED = [{"req_id": "REQ-SAFE-007", "check": "single_motor_out",
+                       "message": "redundancy"}]
+
+
+def test_a_redundancy_that_holds_only_sometimes_is_unguaranteed_not_incapable():
+    """These are different claims and a safety report must not conflate them."""
+    runs = [
+        {"return_code": 0, "stable": True,  "attitude_rms_deg": 1.59,  "hover_alt_m": 10.00, "hover_throttle_pct": 52},
+        {"return_code": 0, "stable": False, "attitude_rms_deg": 13.46, "hover_alt_m": 9.93,  "hover_throttle_pct": 35},
+        {"return_code": 0, "stable": False, "attitude_rms_deg": 19.56, "hover_alt_m": 6.27,  "hover_throttle_pct": 96},
+        {"return_code": 0, "stable": True,  "attitude_rms_deg": 2.10,  "hover_alt_m": 10.00, "hover_throttle_pct": 51},
+        {"return_code": 0, "stable": False, "attitude_rms_deg": 15.00, "hover_alt_m": 1.17,  "hover_throttle_pct": 78},
+    ]
+    row = rgf._req_results(_motor_out_live(runs), _MOTOR_OUT_PLANNED,
+                           include_single_motor_out=True)[0]
+    assert row["status"] == "PARTIAL"
+    assert row["criterion_evaluation"] == "FAIL"
+    assert row["criterion"]["source"] == "engineering_judgement"
+    assert row["criterion"]["accepted_for_requirement"] is False
+    assert row["sensitivity"] == [
+        {"interpretation": "attitude RMS <= 5 deg", "passed_runs": 2, "total_runs": 5},
+        {"interpretation": "flight completed without scenario termination", "passed_runs": 5, "total_runs": 5},
+    ]
+    assert "engineering interpretation" in row["message"]
+    assert "2 of 5 one-motor-out flights" in row["message"]
+    # every flight's numbers are in the evidence, not just the worst
+    for value in ("1.59", "13.46", "19.56", "2.10", "15.00"):
+        assert value in row["message"]
+
+
+def test_failing_engineering_interpretation_does_not_become_requirement_fail():
+    runs = [{"return_code": 0, "stable": False, "attitude_rms_deg": 12.0 + i, "hover_alt_m": 2.0,
+             "hover_throttle_pct": 90} for i in range(5)]
+    row = rgf._req_results(_motor_out_live(runs), _MOTOR_OUT_PLANNED,
+                           include_single_motor_out=True)[0]
+    assert row["status"] == "PARTIAL"
+    assert row["criterion_evaluation"] == "FAIL"
+    assert row["sensitivity"][1] == {
+        "interpretation": "flight completed without scenario termination",
+        "passed_runs": 5,
+        "total_runs": 5,
+    }
+
+
+def test_passing_engineering_interpretation_does_not_become_requirement_pass():
+    runs = [{"return_code": 0, "stable": True, "attitude_rms_deg": 0.4, "hover_alt_m": 10.0,
+             "hover_throttle_pct": 50} for _ in range(5)]
+    row = rgf._req_results(_motor_out_live(runs), _MOTOR_OUT_PLANNED,
+                           include_single_motor_out=True)[0]
+    assert row["status"] == "PARTIAL"
+    assert row["criterion_evaluation"] == "PASS"
+    assert row["criterion"]["accepted_for_requirement"] is False
+
+    # one bad flight out of five is enough to withhold the claim
+    runs[2] = {"return_code": 0, "stable": False, "attitude_rms_deg": 14.0, "hover_alt_m": 3.0,
+               "hover_throttle_pct": 88}
+    degraded = rgf._req_results(_motor_out_live(runs), _MOTOR_OUT_PLANNED,
+                                include_single_motor_out=True)[0]
+    assert degraded["status"] == "PARTIAL"
+    assert degraded["criterion_evaluation"] == "FAIL"
+
+
+def test_the_repeat_count_is_declared_not_incidental():
+    assert rgf._MOTOR_OUT_REPEATS >= 3

@@ -362,6 +362,20 @@ def test_a_verify_threshold_comes_from_the_model_or_the_check_does_not_run():
     assert RequirementLinker._bind_verify_args(plain, None) is plain
 
 
+def test_waypoint_update_check_observes_the_active_controller_target():
+    from src.sitl.sitl_specs import VerifySpec, render_verify
+
+    body = render_verify(VerifySpec(
+        kind="assert_waypoint_update_latency",
+        args={"max_latency_s": 1.0},
+    ))
+
+    assert "POSITION_TARGET_GLOBAL_INT" in body
+    assert "active navigation-controller target" in body
+    assert "MISSION_ITEM_INT" in body
+    assert "mission storage" in body
+
+
 def test_mavlink_v2_check_states_what_it_does_not_cover():
     """The evidence must say encryption is out of its reach, since the same
     requirement asks for both and only one is testable."""

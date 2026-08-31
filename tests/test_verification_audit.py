@@ -131,6 +131,37 @@ def test_audit_respects_the_limit():
     assert len(verification_gap_issues(_MODEL, model_name="D", limit=0)) == 0
 
 
+def test_positive_inhibition_failure_requests_a_guard_repair():
+    model = """package D {
+        item def DeliveryCoordinateSatisfied;
+        requirement def REQ_SAFE_006 {
+            doc /* The system shall maintain the payload in the mechanically
+                   locked state whenever a delivery-abort condition is active. */
+        }
+        part def PayloadMechanism {
+            satisfy requirement REQ_SAFE_006;
+            attribute deliveryAbortActive : Boolean = false;
+            action def releasePayload { }
+            state def PayloadReleaseBehavior {
+                state Locked;
+                state Releasing { entry action releasePayload; }
+                transition initial then Locked;
+                transition release first Locked
+                    accept DeliveryCoordinateSatisfied then Releasing;
+            }
+        }
+    }"""
+
+    issue = next(
+        item for item in verification_gap_issues(model, model_name="D", strict=True)
+        if "REQ_SAFE_006" in item
+    )
+
+    assert "INHIBITION requirement" in issue
+    assert "guard `if not <condition>`" in issue
+    assert "Do not add a new response action" in issue
+
+
 def test_audit_is_best_effort_on_garbage_input():
     # Must never raise — the refinement loop depends on that contract.
     assert verification_gap_issues("", model_name="X") == []

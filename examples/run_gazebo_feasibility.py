@@ -18,6 +18,7 @@ import argparse
 import json
 import re
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,8 @@ from src.prototyping.artifact_store import (
     latest_output_dir,
     output_dir,
 )
+from gazebo_poc.single_motor_out_evidence import evaluate_single_motor_out
+from gazebo_poc.model_mission import ModelAction
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = output_dir()
@@ -147,6 +150,18 @@ def _planned_gazebo_reqs(requirements: list[str]) -> list[dict[str, Any]]:
                 item["max_rms_deg"] = _number_after(
                     r"within\s+(\d+(?:\.\d+)?)\s*degree", low
                 )
+                if check == "cruise_attitude":
+                    authorised = re.search(
+                        r"(?:from|between)\s+(\d+(?:\.\d+)?)\s*(?:m/s)?\s*"
+                        r"(?:to|and)\s+(\d+(?:\.\d+)?)\s*m/s",
+                        low,
+                    )
+                    if authorised:
+                        item["authorised_speed_range_mps"] = [
+                            float(authorised.group(1)),
+                            float(authorised.group(2)),
+                        ]
+                        item["authorised_speed_source"] = "requirement"
                 if check == "payload_attitude":
                     item["min_margin_pct"] = _number_after(
                         r"margin of at least\s+(\d+(?:\.\d+)?)\s*percent", low
@@ -245,19 +260,45 @@ def _single_motor_req(planned: list[dict[str, Any]]) -> str | None:
 #: point. Three certified steady points spanning the authority range is the
 #: minimum this harness will call a sweep; the reported RMS is the worst of them.
 _MIN_SWEEP_POINTS = 3
+_CEP_REQUIRED_POINTS = 8
+
+
+#: How many times the one-motor-out scenario is flown before a verdict is
+#: recorded. The outcome is bistable — repeated flights of the same
+#: configuration have both held a clean hover and sunk — so a single sample
+#: cannot support a redundancy claim in either direction.
+_MOTOR_OUT_REPEATS = 5
 
 
 def _decided_by_model(gazebo: dict[str, Any] | None, what: str) -> bool:
-    """True when the generated model, not the harness, made this call."""
-    return bool(gazebo) and gazebo.get(f"{what}_decided_by") == "generated model"
+    """True when the generated model fired the exact physical action."""
+    if not gazebo or gazebo.get(f"{what}_decided_by") != "generated model":
+        return False
+    expected = {
+        "payload_release": ModelAction.RELEASE_PAYLOAD.value,
+        "parachute": ModelAction.DEPLOY_PARACHUTE.value,
+    }[what]
+    return any(
+        decision.get("action_definition") == expected
+        for decision in gazebo.get(f"{what}_decisions") or []
+    )
 
 
 def _model_owned_clause(gazebo: dict[str, Any], what: str) -> str:
     """Name the machine and action the generated model fired."""
-    decisions = gazebo.get(f"{what}_decisions") or []
+    expected = {
+        "payload_release": ModelAction.RELEASE_PAYLOAD.value,
+        "parachute": ModelAction.DEPLOY_PARACHUTE.value,
+    }[what]
+    decisions = [
+        decision
+        for decision in gazebo.get(f"{what}_decisions") or []
+        if decision.get("action_definition") == expected
+    ]
     fired = "; ".join(
         f"{d.get('owner_part')}.{d.get('machine')} {d.get('from_state')}"
         f"->{d.get('to_state')} on {d.get('event')} firing {d.get('action')}"
+        f" : {d.get('action_definition')}"
         for d in decisions
     )
     return (
@@ -312,6 +353,7 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
     cruise_att_req = _planned_check(planned, "cruise_attitude")
     payload_att_req = _planned_check(planned, "payload_attitude")
     speed_req = _planned_check(planned, "cruise_speed")
+    navigation_req = _planned_check(planned, "navigation_accuracy")
     wind_mps = float(wind_req.get("wind_mps") or 0.0)
     min_groundspeed = wind_req.get("min_groundspeed_mps")
     payload_release = timing_req is not None or position_req is not None
@@ -348,6 +390,13 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
     result["mass_kg"] = mass
     result["rotor_radius_m"] = rotor_radius
     result["capacity_mah"] = capacity
+    if cruise_att_req is not None:
+        result["cruise_authorised_speed_range_mps"] = cruise_att_req.get(
+            "authorised_speed_range_mps"
+        )
+        result["cruise_authorised_speed_source"] = cruise_att_req.get(
+            "authorised_speed_source"
+        )
     if result.get("hover_rpm"):
         rpm = rpm_cross_check(float(result["hover_rpm"]), mass, rotor_count, rotor_radius)
         result.update({
@@ -356,6 +405,29 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
             "rpm_within_ct_band": rpm.within_ct_band,
             "implied_ct": rpm.ct_implied,
         })
+
+    # Navigation accuracy is a separate route-following campaign. Its flight
+    # intentionally returns after the eight global waypoints, whereas the
+    # primary flight must continue into cruise and wind sweeps; combining them
+    # would silently suppress every later primary-flight measurement.
+    if navigation_req is not None and result.get("hover_stable"):
+        rc_navigation = run_flight.main(
+            mass_kg=mass,
+            rotor_radius=rotor_radius,
+            capacity_mah=capacity,
+            rotor_count=rotor_count,
+            calibrate=True,
+            max_thrust_g=max_thrust_g,
+            hover_throttle=hover_throttle,
+            navigation_accuracy=True,
+            gps_horizontal_error_m=gazebo_design.get("gps_horizontal_error_m"),
+        )
+        navigation_result = dict(run_flight.LAST_RESULT)
+        result["navigation_return_code"] = rc_navigation
+        for key, value in navigation_result.items():
+            if (key.startswith("cep_") or key.startswith("takeoff_")
+                    or key == "guided_mode_held_after_arming"):
+                result[key] = value
 
     # Obstacle avoidance is its own scenario: the vehicle must approach a
     # stationary threat and be seen to break off. It cannot ride along with the
@@ -418,32 +490,64 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
 
     rid = _single_motor_req(planned) if include_single_motor_out else None
     if rid and result.get("hover_stable"):
-        rc_fail = run_flight.main(
-            mass_kg=mass,
-            rotor_radius=rotor_radius,
-            capacity_mah=capacity,
-            rotor_count=rotor_count,
-            calibrate=True,
-            fail_rotor=0,
-            max_thrust_g=max_thrust_g,
-            hover_throttle=hover_throttle,
-            # "maintain controlled flight" is an attitude claim before it is an
-            # altitude one: a run held 9.93 m to +/-0.06 m while wobbling
-            # 13.5 deg. Neither signal reproduces across runs, so this scenario
-            # must at least never be flown without measuring both.
-            measure_attitude=True,
-        )
-        fail_result = dict(run_flight.LAST_RESULT)
+        # One flight cannot settle this. The same configuration has held 1.17,
+        # 6.27, 9.93 and 10.00 m with attitude RMS from 1.59 to 19.56 deg — one
+        # of those a genuinely clean flight. A single sample of a bistable
+        # outcome is a coin flip, and a coin flip is not evidence about a safety
+        # requirement whichever way it lands.
+        runs = []
+        for attempt in range(_MOTOR_OUT_REPEATS):
+            rc_fail = run_flight.main(
+                mass_kg=mass,
+                rotor_radius=rotor_radius,
+                capacity_mah=capacity,
+                rotor_count=rotor_count,
+                calibrate=True,
+                fail_rotor=0,
+                max_thrust_g=max_thrust_g,
+                hover_throttle=hover_throttle,
+                # "maintain controlled flight" is an attitude claim before it is
+                # an altitude one: a run held 9.93 m to +/-0.06 m while wobbling
+                # 13.5 deg. This scenario is never flown without measuring both.
+                measure_attitude=True,
+            )
+            attempt_result = dict(run_flight.LAST_RESULT)
+            runs.append({
+                "attempt": attempt,
+                "return_code": rc_fail,
+                "stable": bool(attempt_result.get("hover_stable")),
+                "hover_alt_m": attempt_result.get("hover_alt_m"),
+                "hover_throttle_pct": attempt_result.get("hover_throttle_pct"),
+                "attitude_rms_deg": attempt_result.get("hover_attitude_rms_deg"),
+            })
+            print(f"[motor-out] attempt {attempt + 1}/{_MOTOR_OUT_REPEATS}: "
+                  f"stable={runs[-1]['stable']} alt={runs[-1]['hover_alt_m']} "
+                  f"attitude_rms={runs[-1]['attitude_rms_deg']}", flush=True)
+
+        measured = [r for r in runs if r["attitude_rms_deg"] is not None]
+        # Worst case, not average: a redundancy claim that only holds sometimes
+        # does not hold. The worst run is the one with the largest attitude RMS.
+        worst = max(measured, key=lambda r: float(r["attitude_rms_deg"])) if measured else None
+        passes = [r for r in runs if r["stable"]]
         result["motor_failure_req"] = rid
-        result["motor_failure_return_code"] = rc_fail
-        result["motor_failure_tolerant"] = bool(fail_result.get("hover_stable"))
-        result["motor_failure_hover_alt_m"] = fail_result.get("hover_alt_m")
-        result["motor_failure_hover_throttle_pct"] = fail_result.get("hover_throttle_pct")
-        result["motor_failure_attitude_rms_deg"] = fail_result.get("hover_attitude_rms_deg")
-        result["motor_failure_attitude_within_limit"] = fail_result.get(
-            "hover_attitude_within_limit")
-        result["motor_failure_attitude_limit_deg"] = fail_result.get(
-            "hover_attitude_limit_deg")
+        result["motor_failure_runs"] = runs
+        result["motor_failure_attempts"] = len(runs)
+        result["motor_failure_passes"] = len(passes)
+        result["motor_failure_tolerant"] = len(passes) == len(runs) and bool(runs)
+        result["motor_failure_deterministic"] = (
+            len(passes) == 0 or len(passes) == len(runs)
+        )
+        result["motor_failure_return_code"] = worst["return_code"] if worst else None
+        result["motor_failure_hover_alt_m"] = worst["hover_alt_m"] if worst else None
+        result["motor_failure_hover_throttle_pct"] = (
+            worst["hover_throttle_pct"] if worst else None
+        )
+        result["motor_failure_attitude_rms_deg"] = (
+            worst["attitude_rms_deg"] if worst else None
+        )
+        result["motor_failure_attitude_limit_deg"] = (
+            run_flight.LAST_RESULT.get("hover_attitude_limit_deg")
+        )
     return result
 
 
@@ -453,38 +557,43 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
     covered: set[str] = set()
     if gazebo and gazebo.get("motor_failure_req"):
         rid = str(gazebo["motor_failure_req"])
-        ok = gazebo.get("motor_failure_tolerant")
         att = gazebo.get("motor_failure_attitude_rms_deg")
-        # An unmeasured attitude cannot support "maintain controlled flight",
-        # so it is INCONCLUSIVE rather than a pass on altitude alone.
-        status = (
-            "INCONCLUSIVE" if att is None
-            else "PASS" if ok is True else "FAIL" if ok is False else "INCONCLUSIVE"
-        )
+        attempts = int(gazebo.get("motor_failure_attempts") or 0)
+        runs = gazebo.get("motor_failure_runs") or []
+        claim = evaluate_single_motor_out(runs) if runs else None
+        passes = claim.sensitivity[0].passed_runs if claim is not None else 0
+
+        def _spread(key, digits=2):
+            values = [r.get(key) for r in runs if r.get(key) is not None]
+            return ", ".join(f"{float(v):.{digits}f}" for v in values) or "none"
         covered.add(rid)
         results.append({
             "req_id": rid,
             "check": "single_motor_out",
-            "status": status,
+            "status": "PARTIAL" if claim is not None else "INCONCLUSIVE",
+            "criterion_evaluation": (
+                "PASS" if claim.status == "verified" else "FAIL"
+            ) if claim is not None else None,
+            "criterion": asdict(claim.criterion) if claim is not None else None,
+            "sensitivity": (
+                [asdict(item) for item in claim.sensitivity]
+                if claim is not None else []
+            ),
             "attitude_rms_deg": att,
+            "attempts": attempts,
+            "passes": passes,
             "message": (
                 "Gazebo one-motor-out attitude was not measured, so nothing here "
                 "speaks to controlled flight — altitude alone cannot: repeated "
                 "runs of this configuration held 1.17, 6.27, 9.93 and 10.00 m "
                 "with attitude RMS from 1.59 to 19.56 deg"
                 if att is None else
-                (f"Gazebo one-motor-out hover remained stable; attitude RMS "
-                 f"{float(att):.2f} deg within the "
-                 f"{gazebo.get('motor_failure_attitude_limit_deg')} deg bound"
-                 if ok is True else
-                 f"Gazebo one-motor-out hover did not remain controlled; attitude "
-                 f"RMS {float(att):.2f} deg against a "
-                 f"{gazebo.get('motor_failure_attitude_limit_deg')} deg bound "
-                 f"(nominal hover is ~0.009 deg), steady altitude "
-                 f"{gazebo.get('motor_failure_hover_alt_m')} m at "
-                 f"{gazebo.get('motor_failure_hover_throttle_pct')}% throttle"
-                 if ok is False else
-                 "Gazebo one-motor-out result was inconclusive")
+                f"{claim.description}. The 5 deg bound is an unaccepted "
+                "engineering interpretation, not a value in REQ-SAFE-007, so "
+                "the requirement verdict remains conditional. Attitude RMS "
+                f"across flights: {_spread('attitude_rms_deg')} deg; steady "
+                f"altitude: {_spread('hover_alt_m')} m at "
+                f"{_spread('hover_throttle_pct', 0)}% throttle"
             ),
         })
 
@@ -580,18 +689,28 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         rid = str(position_req["req_id"])
         error = gazebo.get("payload_release_position_error_m")
         limit = float(position_req.get("max_error_m") or 0.0)
-        met = bool(gazebo.get("payload_release_position_met"))
+        physical_position_observed = (
+            gazebo.get("payload_release_position_basis")
+            == "payload_ground_truth_at_separation"
+            and bool(gazebo.get("payload_release_detected"))
+            and error is not None
+        )
+        met = physical_position_observed and float(error) <= limit
         covered.add(rid)
         results.append({
             "req_id": rid,
             "check": "positional_release",
             "status": (
                 ("PASS" if _decided_by_model(gazebo, "payload_release") else "PARTIAL")
-                if met else "INCONCLUSIVE"
+                if met else "FAIL" if physical_position_observed else "INCONCLUSIVE"
             ),
             "message": (
-                f"physical payload release at horizontal position error "
-                f"{error} m (limit {limit:.1f} m); "
+                (f"physical payload separation occurred at payload ground-truth "
+                 f"horizontal position error {error} m (limit {limit:.1f} m); "
+                 if physical_position_observed else
+                 "separation-position truth was not observed; a trigger-time "
+                 "vehicle position cannot substitute for the payload position "
+                 "at physical separation; ")
                 + (_model_owned_clause(gazebo, "payload_release")
                    if _decided_by_model(gazebo, "payload_release") else
                    "harness-triggered — this exercises trajectory/position/actuator "
@@ -626,6 +745,25 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                    "by this subcheck")
             ),
         })
+        precedence_status = gazebo.get("parachute_precedence_status")
+        if precedence_status is not None:
+            results.append({
+                "req_id": rid,
+                "check": "safety_precedence",
+                "status": {
+                    "verified": "PASS",
+                    "failed": "FAIL",
+                    "inconclusive": "INCONCLUSIVE",
+                }[precedence_status],
+                "message": (
+                    "critical propulsion failure, sensor failure, low battery, "
+                    "and communication loss were simultaneously active; "
+                    f"{gazebo.get('parachute_precedence_description')}; "
+                    "the competing response set was discovered from the generated "
+                    "SafetyArbiter: "
+                    f"{gazebo.get('parachute_precedence_competing_actions')}"
+                ),
+            })
 
     speed_req = _planned_check(planned, "cruise_speed")
     if gazebo and speed_req and gazebo.get("nilwind_dash_speed_mps") is not None:
@@ -668,6 +806,17 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         points = int(gazebo.get("cruise_attitude_points") or 0)
         span = gazebo.get("cruise_attitude_speed_span_mps") or []
         swept = points >= _MIN_SWEEP_POINTS and len(span) == 2
+        authorised = gazebo.get("cruise_authorised_speed_range_mps") or []
+        authority_source = gazebo.get("cruise_authorised_speed_source")
+        authority_defined = (
+            authority_source in {"requirement", "generated_model"}
+            and len(authorised) == 2
+        )
+        authority_covered = (
+            swept and authority_defined
+            and float(span[0]) <= float(authorised[0])
+            and float(span[1]) >= float(authorised[1])
+        )
         met = rms <= limit
         covered.add(rid)
         results.append({
@@ -676,7 +825,11 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             # "At all authorised speeds" is a sweep. The reported RMS is the
             # WORST case over the swept envelope, so a pass covers every point
             # measured — but only a sweep may claim it; one point stays PARTIAL.
-            "status": ("PASS" if met and swept else "PARTIAL" if met else "FAIL"),
+            "status": (
+                "PASS" if met and authority_covered
+                else "FAIL" if not met and authority_covered
+                else "PARTIAL"
+            ),
             "message": (
                 f"Gazebo cruise attitude RMS {rms:.3f} deg about the window mean, "
                 f"WORST of {points} certified steady speed points spanning "
@@ -684,14 +837,25 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                 + f" (roll {gazebo.get('cruise_attitude_roll_rms_deg'):.3f} / pitch "
                 f"{gazebo.get('cruise_attitude_pitch_rms_deg'):.3f} deg, "
                 f"n={gazebo.get('cruise_attitude_samples')}; limit {limit:.1f} deg RMS)"
-                + ("" if swept else
-                   f"; fewer than {_MIN_SWEEP_POINTS} points — 'all authorised speeds' not swept")
+                + (
+                    f"; authorised range {authorised[0]:.1f}-{authorised[1]:.1f} "
+                    f"m/s from {authority_source} is covered"
+                    if authority_covered else
+                    f"; fewer than {_MIN_SWEEP_POINTS} points — 'all authorised speeds' not swept"
+                    if not swept else
+                    "; authorised-speed envelope is not defined by the requirement "
+                    "or generated model, so harness-selected RC points cannot close "
+                    "'all authorised speeds'"
+                    if not authority_defined else
+                    f"; measured span does not cover authorised range "
+                    f"{authorised[0]:.1f}-{authorised[1]:.1f} m/s from {authority_source}"
+                )
             ),
         })
 
     patt_req = _planned_check(planned, "payload_attitude")
     if (gazebo and patt_req and gazebo.get("hover_attitude_rms_deg") is not None
-            and gazebo.get("hover_attitude_with_payload")):
+            and gazebo.get("hover_payload_attachment_observed") is True):
         rid = str(patt_req["req_id"])
         rms = float(gazebo["hover_attitude_rms_deg"])
         limit = float(patt_req.get("max_rms_deg") or 0.0)
@@ -712,7 +876,7 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         cruise_points = int(gazebo.get("cruise_attitude_points") or 0)
         cruise_span = gazebo.get("cruise_attitude_speed_span_mps") or []
         transport_swept = (
-            bool(gazebo.get("cruise_sweep_payload_attached"))
+            gazebo.get("cruise_payload_attachment_observed") is True
             and cruise_points >= _MIN_SWEEP_POINTS
             and cruise_rms is not None
         )
@@ -728,6 +892,8 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             ),
             "message": (
                 f"Gazebo hover with {gazebo.get('payload_mass_kg')} kg payload attached: "
+                f"pose-observed attachment distance "
+                f"{gazebo.get('hover_payload_attachment_distance_m')} m; "
                 f"attitude RMS {rms:.3f} deg (limit {limit:.1f} deg, "
                 f"n={gazebo.get('hover_attitude_samples')}), hover throttle "
                 f"{throttle}% -> margin {margin if margin is None else round(margin, 1)}%"
@@ -782,11 +948,20 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         method = gazebo.get("takeoff_method")
         autonomous = accepted is True and method == "guided_nav_takeoff"
         cep = gazebo.get("cep_m")
-        scatter = gazebo.get("cep_raw_gnss_scatter_m")
-        # "GNSS error is represented" means the raw fix and the fused estimate
-        # actually disagree. Agreement to centimetres means the sensor model is
-        # ideal, whatever noise parameter was requested.
-        gnss_represented = scatter is not None and float(scatter) >= 0.5
+        samples = int(gazebo.get("cep_samples") or 0)
+        error_source = gazebo.get("cep_horizontal_error_source")
+        injected_error = gazebo.get("cep_horizontal_error_injected_m")
+        raw_truth_error = gazebo.get("cep_raw_gnss_truth_error_m")
+        gnss_represented = (
+            error_source == "sim_gps_glitch_xy_campaign"
+            and injected_error is not None and float(injected_error) > 0.0
+            and raw_truth_error is not None and float(raw_truth_error) > 0.0
+        )
+        campaign_complete = samples == _CEP_REQUIRED_POINTS
+        measurable = (
+            autonomous and gnss_represented and campaign_complete and cep is not None
+        )
+        limit = float(nav_req.get("max_cep_m") or 0.0)
         covered.add(rid)
         results.append({
             "req_id": rid,
@@ -798,9 +973,11 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             # carries no error cannot support a navigation-accuracy verdict
             # however small the measured error is — that would be a floor
             # reported as a result.
-            "status": ("PASS" if autonomous and gnss_represented and cep is not None
-                       and cep < float(nav_req.get("max_cep_m") or 0.0)
-                       else "INCONCLUSIVE"),
+            "status": (
+                "PASS" if measurable and float(cep) < limit
+                else "FAIL" if measurable
+                else "INCONCLUSIVE"
+            ),
             "cep_m": cep,
             "message": (
                 f"CEP < {nav_req.get('max_cep_m')} m is not measured: autonomous "
@@ -812,20 +989,23 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                 "a designated waypoint, so no CEP is reported rather than a "
                 "number from a manoeuvre the requirement does not describe"
                 if not autonomous else
-                f"the vehicle flew {gazebo.get('cep_samples')} commanded waypoints "
+                f"the horizontal-error campaign completed {samples} of "
+                f"{_CEP_REQUIRED_POINTS} commanded global waypoints; all points "
+                "are required before computing its median CEP"
+                if autonomous and not campaign_complete else
+                f"the vehicle flew {samples} commanded waypoints "
                 f"autonomously and held them to a median ground-truth error of "
                 f"{cep} m (max {gazebo.get('cep_max_error_m')} m, limit "
                 f"{nav_req.get('max_cep_m')} m) — but this is NOT a navigation "
-                f"CEP: the simulated GNSS carries no error, raw GPS and the fused "
-                f"estimate agreeing to {scatter} m, and injecting "
-                f"SIM_GPS1_NOISE={gazebo.get('cep_gps_noise_m')} m changed "
-                "nothing. What is measured is the position loop's tracking "
+                "CEP: no explicit horizontal GNSS error campaign reached the raw "
+                "sensor fix relative to Gazebo truth. What is measured is the position loop's tracking "
                 "accuracy against ground truth; the GNSS error that dominates a "
                 "real CEP is absent, so the requirement stays open"
                 if not gnss_represented else
-                f"CEP {cep} m over {gazebo.get('cep_samples')} commanded waypoints "
+                f"CEP {cep} m over {samples} commanded global waypoints "
                 f"(limit {nav_req.get('max_cep_m')} m) with GNSS error represented "
-                f"(raw-versus-fused scatter {scatter} m)"
+                f"by {error_source}: injected radius {injected_error} m and "
+                f"raw-GNSS-to-Gazebo-truth median error {raw_truth_error} m"
             ),
         })
 

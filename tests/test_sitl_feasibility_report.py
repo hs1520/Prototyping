@@ -53,6 +53,16 @@ def test_safety_verification_status_marks_pass_and_fail_without_trace_blocks():
     assert safety_verification_status([], [])["status"] == "NOT_RUN"
 
 
+def test_safety_verification_status_preserves_inconclusive_execution():
+    status = safety_verification_status([
+        {"passed": True, "conclusive": True},
+        {"passed": False, "conclusive": False},
+    ], [])
+
+    assert status["status"] == "INCONCLUSIVE"
+    assert status["l2_inconclusive"] == 1
+
+
 def test_single_l2_retries_one_transient_sitl_startup_failure():
     class Bridge:
         _connection_string = "tcp:127.0.0.1:5760"

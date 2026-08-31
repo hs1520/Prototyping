@@ -263,7 +263,11 @@ def test_wind_effects_working_point_is_lumped_and_explicit():
 
 
 def test_payload_model_uses_requested_mass_and_physical_inertia(tmp_path):
-    from gazebo_poc.run_flight import _parse_model_z, _prepare_payload_model
+    from gazebo_poc.run_flight import (
+        _parse_model_xyz,
+        _parse_model_z,
+        _prepare_payload_model,
+    )
 
     path = _prepare_payload_model(tmp_path, 1.5)
     text = path.read_text()
@@ -274,6 +278,10 @@ def test_payload_model_uses_requested_mass_and_physical_inertia(tmp_path):
         "Model: [49]\n  - Pose [ XYZ (m) ] [ RPY (rad) ]:\n"
         "    [-0.000000 0.000000 10.949999]\n    [0 0 0]\n"
     ) == 10.949999
+    assert _parse_model_xyz(
+        "Model: [49]\n  - Pose [ XYZ (m) ] [ RPY (rad) ]:\n"
+        "    [-0.250000 1.500000 10.949999]\n    [0 0 0]\n"
+    ) == (-0.25, 1.5, 10.949999)
 
 
 @pytest.mark.skipif(not _HAS_TEMPLATES, reason="iris templates absent")

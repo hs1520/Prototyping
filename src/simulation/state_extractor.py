@@ -322,6 +322,16 @@ class StateMachineDef:
             or self.do_action_for_state(state_name)
         )
 
+    def response_action_definition_for_state(
+        self, state_name: str,
+    ) -> Optional[str]:
+        """Return the action definition invoked by a state's response usage."""
+        for state in self.states:
+            if state.name != state_name:
+                continue
+            return state.entry_action_def or state.do_action_def
+        return None
+
     def all_sends(self) -> List[tuple]:
         """Return [(state_name, cmd_type, port_name)] for every fault-state send."""
         out = []

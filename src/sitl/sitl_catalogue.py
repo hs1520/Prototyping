@@ -492,8 +492,9 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
     # ── Functional: 航点改写并入活动航线的时限（attr: waypointModificationLatency）
     #    L1 无对应参数可比（"并入活动航线"不是任何一个 ArduPilot 参数），
     #    所以这条直接是 L2：上传初始任务 → 上传改写后的任务 → 从
-    #    MISSION_ACK（收到有效改写命令的时刻）计时到回读显示活动航线
-    #    已带上新坐标。传输耗时单独报告并排除，因为需求的时钟从"收到
+    #    MISSION_ACK（收到有效改写命令的时刻）计时到导航控制器发布的
+    #    POSITION_TARGET_GLOBAL_INT 已带上新坐标。MISSION_ITEM_INT 回读只
+    #    证明任务存储已更新，不能关闭“活动航线”。传输耗时单独报告并排除，因为需求的时钟从"收到
     #    命令"起算，不含协议传输。
     ContentEntry(
         semantic_tag="WAYPOINT_MODIFICATION_LATENCY",
@@ -510,8 +511,9 @@ _CONTENT_CATALOGUE: List[ContentEntry] = [
             args={"max_latency_s": "@attr_match"},
             timeout=60.0,
         ),
-        notes=("Revised waypoint sequence → active flight plan, timed from "
-               "MISSION_ACK; transfer time excluded and reported separately."),
+        notes=("Revised active waypoint → POSITION_TARGET_GLOBAL_INT controller "
+               "target, timed from MISSION_ACK; mission-storage read-back and "
+               "transfer time are reported but do not establish active adoption."),
         req_text_kws=["waypoint", "flight plan", "mission", "revised", "modification"],
         req_text_exclude_kws=["cep", "circular error", "obstacle", "collision"],
     ),

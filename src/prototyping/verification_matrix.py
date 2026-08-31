@@ -20,12 +20,22 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .verification_obligations import (
+    CriterionEvaluation,
+    CriterionSource,
+    EvidenceCapability,
     EvidenceClaim,
+    INSPECTION_TERMS,
     ObligationResult,
+    ObligationKind,
+    VerificationCriterion,
     all_obligations_verified,
     compile_verification_obligations,
-    evaluate_obligations,
+    contains_any_term,
+    evaluate_evidence,
     is_inhibition_requirement,
+    parse_requirement_intent,
+    states_acceptance_threshold,
+    semantic_terms,
 )
 
 # Canonical tiers, ordered from executable test downwards. A requirement may hold
@@ -34,6 +44,7 @@ TIER_METHOD: Dict[str, str] = {
     "l2_sitl": "Test (native SITL)",
     "l2_sitl_planned": "Test (native SITL — planned, not executed)",
     "l2_sitl_failed": "Test (native SITL — failed)",
+    "l2_sitl_inconclusive": "Test (native SITL — inconclusive)",
     "gazebo": "Test (Gazebo high-fidelity FDM)",
     "gazebo_partial": "Test (Gazebo FDM — partial requirement evidence)",
     "gazebo_failed": "Test (Gazebo high-fidelity FDM — failed)",
@@ -63,10 +74,7 @@ _PLANNED_TIERS = {"l2_sitl_planned", "l1_param_planned", "gazebo_deferred"}
 
 # Requirements that are inspection/analysis work in any real programme — the
 # simulation toolchain honestly cannot test them.
-_INSPECTION_KWS = (
-    "comply", "compliance", "regulation", "easa", "faa", "astm", "ip54", "ip5",
-    "ingress", "temperature", "certif", "material", "encrypt", "aes",
-)
+_INSPECTION_KWS = INSPECTION_TERMS
 
 # Physics/conditions that need the Gazebo tier (S8 boundary): obstacle physics,
 # one-motor-out dynamics, wind conditions, positional release conditions.
@@ -76,13 +84,92 @@ _GAZEBO_KWS = (
     "gust",
 )
 
-#: What each L2 verification actually measures, and therefore which obligation
-#: kinds its result may close. The default is the behaviour clause alone: a
-#: check that watches a mode change or a servo position has not looked at any
-#: numeric threshold, and must not be read as having closed one. A check that
-#: times an interval against a limit taken from the model has.
-_L2_CLOSES_KINDS = {
-    "assert_waypoint_update_latency": {"behavior", "response_time"},
+#: What each L2 verification observes. Obligation closure is decided separately
+#: by the evidence-capability entailment relation.
+_L2_EVIDENCE_CAPABILITIES = {
+    "noop": frozenset(),
+    "wait_mode": frozenset({EvidenceCapability.MODE_TRANSITION_OBSERVED}),
+    "assert_arm_rejected": frozenset({EvidenceCapability.PHYSICAL_INHIBITION_OBSERVED}),
+    "assert_sensor_unhealthy": frozenset({EvidenceCapability.SENSOR_STATE_OBSERVED}),
+    "assert_servo_pwm": frozenset({EvidenceCapability.ACTUATOR_COMMAND_OBSERVED}),
+    "assert_mavlink_v2_link": frozenset({EvidenceCapability.WIRE_PROTOCOL_OBSERVED}),
+    "assert_waypoint_update_latency": frozenset({
+        EvidenceCapability.ACTIVE_ROUTE_CHANGE_OBSERVED,
+        EvidenceCapability.RESPONSE_TIME_MEASURED,
+    }),
+}
+
+_QUANTITATIVE_EVIDENCE_CAPABILITIES = {
+    ObligationKind.RESPONSE_TIME: EvidenceCapability.RESPONSE_TIME_MEASURED,
+    ObligationKind.POSITION_ACCURACY: EvidenceCapability.POSITION_ERROR_MEASURED,
+    ObligationKind.ATTITUDE_RMS: EvidenceCapability.ATTITUDE_RMS_MEASURED,
+    ObligationKind.MASS: EvidenceCapability.MASS_MEASURED,
+    ObligationKind.ENDURANCE: EvidenceCapability.ENDURANCE_ANALYSED,
+    ObligationKind.SPEED: EvidenceCapability.SPEED_MEASURED,
+    ObligationKind.TEMPERATURE: EvidenceCapability.TEMPERATURE_VERIFIED,
+    ObligationKind.HOVER_THROTTLE_MARGIN: EvidenceCapability.HOVER_THROTTLE_MARGIN_MEASURED,
+    ObligationKind.PAYLOAD: EvidenceCapability.PAYLOAD_STATE_OBSERVED,
+    ObligationKind.LOOP_RATE: EvidenceCapability.LOOP_RATE_MEASURED,
+    ObligationKind.ALTITUDE: EvidenceCapability.ALTITUDE_MEASURED,
+    ObligationKind.BATTERY_THRESHOLD: EvidenceCapability.BATTERY_THRESHOLD_VERIFIED,
+    ObligationKind.SEPARATION: EvidenceCapability.SEPARATION_MEASURED,
+    ObligationKind.DETECTION_RANGE: EvidenceCapability.DETECTION_RANGE_MEASURED,
+    ObligationKind.RANGE: EvidenceCapability.RANGE_MEASURED,
+    ObligationKind.WIND_SPEED: EvidenceCapability.WIND_SPEED_MEASURED,
+    ObligationKind.QUANTITATIVE_CONSTRAINT: EvidenceCapability.QUANTITATIVE_CONSTRAINT_VERIFIED,
+}
+
+_GAZEBO_EVIDENCE_CAPABILITIES = {
+    "cruise_speed": frozenset({
+        EvidenceCapability.BEHAVIOR_OBSERVED,
+        EvidenceCapability.SPEED_MEASURED,
+    }),
+    "cruise_attitude": frozenset({
+        EvidenceCapability.BEHAVIOR_OBSERVED,
+        EvidenceCapability.ATTITUDE_RMS_MEASURED,
+    }),
+    "wind_condition": frozenset({
+        EvidenceCapability.BEHAVIOR_OBSERVED,
+        EvidenceCapability.SPEED_MEASURED,
+        EvidenceCapability.WIND_SPEED_MEASURED,
+    }),
+    "payload_attitude": frozenset({
+        EvidenceCapability.BEHAVIOR_OBSERVED,
+        EvidenceCapability.PAYLOAD_STATE_OBSERVED,
+        EvidenceCapability.HOVER_THROTTLE_MARGIN_MEASURED,
+        EvidenceCapability.ATTITUDE_RMS_MEASURED,
+    }),
+    "timed_actuation": frozenset({
+        EvidenceCapability.BEHAVIOR_OBSERVED,
+        EvidenceCapability.RESPONSE_TIME_MEASURED,
+    }),
+    "parachute_deploy_timing": frozenset({
+        EvidenceCapability.BEHAVIOR_OBSERVED,
+        EvidenceCapability.RESPONSE_TIME_MEASURED,
+    }),
+    "positional_release": frozenset({
+        EvidenceCapability.BEHAVIOR_OBSERVED,
+        EvidenceCapability.POSITION_ERROR_MEASURED,
+    }),
+    "delivery_abort_inhibition": frozenset({
+        EvidenceCapability.PHYSICAL_INHIBITION_OBSERVED,
+    }),
+    "navigation_accuracy": frozenset({
+        EvidenceCapability.BEHAVIOR_OBSERVED,
+        EvidenceCapability.POSITION_ERROR_MEASURED,
+    }),
+    "obstacle_avoidance": frozenset({
+        EvidenceCapability.BEHAVIOR_OBSERVED,
+        EvidenceCapability.SPEED_MEASURED,
+        EvidenceCapability.DETECTION_RANGE_MEASURED,
+        EvidenceCapability.SEPARATION_MEASURED,
+    }),
+    "single_motor_out": frozenset({
+        EvidenceCapability.CONTROLLED_FLIGHT_OBSERVED,
+    }),
+    "safety_precedence": frozenset({
+        EvidenceCapability.SAFETY_PRECEDENCE_OBSERVED,
+    }),
 }
 
 
@@ -98,6 +185,32 @@ def _sim_claim(**kwargs) -> EvidenceClaim:
     """
     kwargs.setdefault("clause_exclude_terms", frozenset(_INSPECTION_KWS))
     return EvidenceClaim(**kwargs)
+
+
+def _gazebo_criterion(item: dict) -> tuple[
+    Optional[VerificationCriterion], Tuple[CriterionEvaluation, ...]
+]:
+    criterion_data = item.get("criterion")
+    if criterion_data is None:
+        return None, ()
+    criterion = VerificationCriterion(
+        metric=criterion_data["metric"],
+        operator=criterion_data["operator"],
+        threshold=float(criterion_data["threshold"]),
+        unit=criterion_data["unit"],
+        source=CriterionSource(criterion_data["source"]),
+        basis=criterion_data["basis"],
+        accepted_for_requirement=criterion_data["accepted_for_requirement"],
+    )
+    sensitivity = tuple(
+        CriterionEvaluation(
+            interpretation=evaluation["interpretation"],
+            passed_runs=int(evaluation["passed_runs"]),
+            total_runs=int(evaluation["total_runs"]),
+        )
+        for evaluation in item["sensitivity"]
+    )
+    return criterion, sensitivity
 
 
 _BEHAVIORAL_TEXT_KWS = ("phase", "sequence", "sequential", "state", "mode", "transition")
@@ -136,18 +249,22 @@ def _norm_req_id(req_id: object) -> str:
     return str(req_id or "").replace("-", "_")
 
 
-def _result_map(results) -> Dict[str, bool]:
+def _result_map(results) -> Dict[str, object]:
     """Normalise TestResult objects or report dictionaries by requirement id."""
     mapped: Dict[str, bool] = {}
     for result in results or []:
         if isinstance(result, dict):
             rid = result.get("req_id")
             passed = result.get("passed")
+            conclusive = result.get("conclusive", True)
         else:
             rid = getattr(result, "req_id", None)
             passed = getattr(result, "passed", None)
+            conclusive = getattr(result, "conclusive", True)
         if rid is not None and passed is not None:
-            mapped[_norm_req_id(rid)] = bool(passed)
+            mapped[_norm_req_id(rid)] = (
+                "inconclusive" if conclusive is False else bool(passed)
+            )
     return mapped
 
 
@@ -169,7 +286,7 @@ def _record_behavioral_outcome(
     evidence: Dict[str, List[str]],
     claims: Dict[str, List[EvidenceClaim]],
     description: str,
-    claim_kinds=frozenset({"behavior"}),
+    capabilities=frozenset({EvidenceCapability.BEHAVIOR_OBSERVED}),
 ) -> bool:
     """Persist real simulator evidence; return True when an outcome existed."""
     if not outcomes:
@@ -179,16 +296,38 @@ def _record_behavioral_outcome(
         detail = f"{description} (PASS)"
         evidence[rid].append(detail)
         claims[rid].append(_sim_claim(
-            description=detail, status="verified", kinds=frozenset(claim_kinds),
+            description=detail, status="verified", capabilities=frozenset(capabilities),
         ))
     else:
         tiers[rid].add("behavioral_sim_failed")
         detail = f"{description} (FAIL)"
         evidence[rid].append(detail)
         claims[rid].append(_sim_claim(
-            description=detail, status="failed", kinds=frozenset(claim_kinds),
+            description=detail, status="failed", capabilities=frozenset(capabilities),
         ))
     return True
+
+
+def _inhibition_anchor_present(intent, machines) -> bool:
+    for machine in machines:
+        for transition in machine.transitions:
+            signal_terms = semantic_terms(" ".join(filter(None, (
+                transition.name,
+                transition.accept_trigger,
+                *(guard.attribute for guard in transition.guards),
+            ))))
+            if not (signal_terms & intent.condition_terms):
+                continue
+            target_terms = semantic_terms(transition.target or "")
+            if intent.required_state_terms & target_terms:
+                return True
+            if intent.forbidden_state_terms and not (
+                intent.forbidden_state_terms & target_terms
+            ):
+                return True
+            if any(guard.kind == "bool_false" for guard in transition.guards):
+                return True
+    return False
 
 
 def build_matrix(model, realization: Optional[dict], requirement_evidence,
@@ -251,10 +390,16 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             strength = _l2_strength(spec.inject.kind, spec.verify.kind)
             outcome = l2_by_req.get(_norm_req_id(rid))
             tier = "l2_sitl" if outcome is True else (
-                "l2_sitl_failed" if outcome is False else "l2_sitl_planned"
+                "l2_sitl_failed" if outcome is False else
+                "l2_sitl_inconclusive" if outcome == "inconclusive" else
+                "l2_sitl_planned"
             )
             tiers[rid].add(tier)
-            state = "PASS" if outcome is True else "FAIL" if outcome is False else "planned, not executed"
+            state = (
+                "PASS" if outcome is True else "FAIL" if outcome is False
+                else "INCONCLUSIVE" if outcome == "inconclusive"
+                else "planned, not executed"
+            )
             evidence[rid].append(
                 f"L2 {spec.inject.kind}→{spec.verify.kind} ({strength}; {state})"
             )
@@ -263,11 +408,10 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                 status=(
                     "verified" if outcome is True
                     else "failed" if outcome is False
+                    else "partial" if outcome == "inconclusive"
                     else "planned"
                 ),
-                kinds=frozenset(
-                    _L2_CLOSES_KINDS.get(spec.verify.kind, {"behavior"})
-                ),
+                capabilities=_L2_EVIDENCE_CAPABILITIES[spec.verify.kind],
             ))
         elif spec.tier == "L1":
             names = ", ".join(p.param_name for p in spec.params) or "params"
@@ -291,6 +435,14 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             )
             suffix = "" if model_derived else " (config-level; obligations not closed)"
             evidence[rid].append(f"L1 param consistency ({state}): {names}{suffix}")
+            compiled = compile_verification_obligations(
+                rid, req_texts.get(rid, "")
+            )
+            capabilities = frozenset(
+                _QUANTITATIVE_EVIDENCE_CAPABILITIES[obligation.kind]
+                for obligation in compiled
+                if model_derived and obligation.kind in _QUANTITATIVE_EVIDENCE_CAPABILITIES
+            )
             claims[rid].append(_sim_claim(
                 description=evidence[rid][-1],
                 status=(
@@ -298,7 +450,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                     else "failed" if outcome is False
                     else "planned"
                 ),
-                all_obligations=model_derived,
+                capabilities=capabilities,
             ))
         elif spec.tier == "TRACE":
             blocked.add(rid)
@@ -320,11 +472,21 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                 f"datasheet closure: {v.get('family')} realized={v.get('realized_value')} "
                 f"target={v.get('target')} met={v.get('met')}{extra}")
             family = str(v.get("family") or "").lower()
-            family_kinds = {
-                "time": {"behavior", "endurance"},
-                "mass": {"behavior", "mass"},
-                "payload": {"behavior", "payload", "hover_throttle_margin"},
-            }.get(family, {"behavior", family})
+            family_capabilities = {
+                "time": frozenset({
+                    EvidenceCapability.BEHAVIOR_OBSERVED,
+                    EvidenceCapability.ENDURANCE_ANALYSED,
+                }),
+                "mass": frozenset({
+                    EvidenceCapability.BEHAVIOR_OBSERVED,
+                    EvidenceCapability.MASS_MEASURED,
+                }),
+                "payload": frozenset({
+                    EvidenceCapability.BEHAVIOR_OBSERVED,
+                    EvidenceCapability.PAYLOAD_STATE_OBSERVED,
+                    EvidenceCapability.HOVER_THROTTLE_MARGIN_MEASURED,
+                }),
+            }[family]
             claims[rid].append(_sim_claim(
                 description=evidence[rid][-1],
                 status=(
@@ -332,7 +494,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                     else "failed" if v.get("met") is False
                     else "partial"
                 ),
-                kinds=frozenset(family_kinds),
+                capabilities=family_capabilities,
             ))
         elif scope == "forward_flight":
             if v.get("met") is True:
@@ -343,6 +505,16 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                 f"forward-flight (lumped): {v.get('family')} realized={v.get('realized_value')} "
                 f"met={v.get('met')}")
             family = str(v.get("family") or "").lower()
+            family_capabilities = {
+                "range": frozenset({
+                    EvidenceCapability.BEHAVIOR_OBSERVED,
+                    EvidenceCapability.RANGE_MEASURED,
+                }),
+                "speed": frozenset({
+                    EvidenceCapability.BEHAVIOR_OBSERVED,
+                    EvidenceCapability.SPEED_MEASURED,
+                }),
+            }[family]
             claims[rid].append(_sim_claim(
                 description=evidence[rid][-1],
                 status=(
@@ -350,7 +522,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                     else "failed" if v.get("met") is False
                     else "partial"
                 ),
-                kinds=frozenset({"behavior", family}),
+                capabilities=family_capabilities,
             ))
         elif scope == "deferred":
             evidence[rid].append(f"Phase 8 deferred: {v.get('note') or v.get('family')}")
@@ -452,17 +624,26 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             compiled = compile_verification_obligations(
                 rid, req_texts.get(rid, "")
             )
-            quantitative_kinds = {
-                obligation.kind for obligation in compiled
-                if obligation.kind != "behavior"
+            response_capabilities = {
+                ObligationKind.BEHAVIOR: EvidenceCapability.BEHAVIOR_OBSERVED,
+                ObligationKind.INHIBITION: EvidenceCapability.INHIBITION_BEHAVIOR_OBSERVED,
             }
+            capabilities = {
+                response_capabilities[obligation.kind]
+                for obligation in compiled
+                if obligation.kind in response_capabilities
+            }
+            quantitative_capabilities = {
+                _QUANTITATIVE_EVIDENCE_CAPABILITIES[obligation.kind]
+                for obligation in compiled
+                if obligation.kind in _QUANTITATIVE_EVIDENCE_CAPABILITIES
+            }
+            if len(quantitative_capabilities) == 1:
+                capabilities.update(quantitative_capabilities)
             _record_behavioral_outcome(
                 rid, outcomes, tiers, evidence, claims,
                 f"model guard '{attr}' exercised at behavioral-sim tier",
-                claim_kinds={
-                    "behavior",
-                    *(quantitative_kinds if len(quantitative_kinds) == 1 else ()),
-                },
+                capabilities=frozenset(capabilities),
             )
             continue
 
@@ -470,6 +651,22 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         owner_machines = [
             sm for owner in owners for sm in machines_by_owner.get(owner, [])
         ]
+
+        if is_inhibition_requirement(low):
+            intent = parse_requirement_intent(req_texts.get(rid, ""))
+            scenario_outcomes = [
+                outcome
+                for machine in owner_machines
+                for outcome in results_by_machine.get(machine.name, [])
+            ]
+            anchored = _inhibition_anchor_present(intent, owner_machines)
+            _record_behavioral_outcome(
+                rid, [anchored and bool(scenario_outcomes) and all(scenario_outcomes)],
+                tiers, evidence, claims,
+                "inhibition condition was exercised against the withheld response",
+                capabilities={EvidenceCapability.INHIBITION_BEHAVIOR_OBSERVED},
+            )
+            continue
 
         # Default/initial-state requirements need initialization semantics, not
         # a fabricated fault transition. Select machines whose initial-state
@@ -538,7 +735,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         if not text.strip():
             continue
         low = f"{rid} {text}".lower()
-        if any(k in low for k in _INSPECTION_KWS):
+        if contains_any_term(low, _INSPECTION_KWS):
             tiers[rid].add("inspection_analysis")
             evidence[rid].append("inspection/analysis item (compliance/environment/materials)")
             # Scoped to the clauses that actually carry the untestable terms.
@@ -547,7 +744,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             # protocol conformance — which SITL does test — out of scope too.
             claims[rid].append(EvidenceClaim(
                 description=evidence[rid][-1], status="out-of-sim-scope",
-                all_obligations=True,
+                applies_to_matching_clauses=True,
                 clause_terms=frozenset(_INSPECTION_KWS),
             ))
         if (any(k in low for k in _GAZEBO_KWS)
@@ -555,7 +752,8 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             tiers[rid].add("gazebo_deferred")
             evidence[rid].append("needs Gazebo-tier physics (S8 boundary) — planned")
             claims[rid].append(_sim_claim(
-                description=evidence[rid][-1], status="planned", all_obligations=True,
+                description=evidence[rid][-1], status="planned",
+                applies_to_matching_clauses=True,
             ))
 
     # 6. Optional Gazebo high-fidelity results. A PASS upgrades only the exact
@@ -570,31 +768,66 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         check = item.get("check") or item.get("name") or "Gazebo"
         message = item.get("message") or item.get("evidence") or ""
         suffix = f": {message}" if message else ""
+        capabilities = _GAZEBO_EVIDENCE_CAPABILITIES[check]
+        criterion, sensitivity = _gazebo_criterion(item)
         if status == "PASS":
-            tiers[rid].discard("gazebo_deferred")
-            tiers[rid].add("gazebo")
-            evidence[rid].append(f"Gazebo PASS ({check}){suffix}")
-            claims[rid].append(_sim_claim(
-                description=evidence[rid][-1], status="verified", all_obligations=True,
-            ))
+            if criterion is None and not states_acceptance_threshold(
+                    req_texts.get(rid, "")):
+                # The requirement names no measurable bar, and the result does
+                # not declare the one it used — so the verdict rests on a
+                # definition nobody can inspect. REQ-SAFE-007 is the case in
+                # point: "maintain controlled flight" states no threshold, and
+                # repeated flights of one configuration have ranged from a
+                # clean 1.01 deg hover to a 21.08 deg wobble. A bare PASS there
+                # is an interpretation presented as a result.
+                #
+                # A requirement that DOES state its bar ("within 0.5 seconds")
+                # is different: the check applied the requirement's own
+                # criterion, and needs no separate declaration.
+                tiers[rid].add("gazebo_deferred")
+                tiers[rid].add("gazebo_partial")
+                evidence[rid].append(
+                    f"Gazebo PASS ({check}){suffix} — legacy PASS downgraded: no "
+                    "verification criterion declared, so the definition it was "
+                    "judged against is unknown"
+                )
+                claims[rid].append(_sim_claim(
+                    description=evidence[rid][-1], status="partial",
+                    capabilities=capabilities,
+                ))
+            else:
+                tiers[rid].discard("gazebo_deferred")
+                tiers[rid].add("gazebo")
+                evidence[rid].append(f"Gazebo PASS ({check}){suffix}")
+                claims[rid].append(_sim_claim(
+                    description=evidence[rid][-1], status="verified",
+                    capabilities=capabilities,
+                    criterion=criterion, sensitivity=sensitivity,
+                ))
         elif status == "FAIL":
             tiers[rid].add("gazebo_failed")
             evidence[rid].append(f"Gazebo FAIL ({check}){suffix}")
             claims[rid].append(_sim_claim(
-                description=evidence[rid][-1], status="failed", all_obligations=True,
+                description=evidence[rid][-1], status="failed",
+                capabilities=capabilities,
+                criterion=criterion, sensitivity=sensitivity,
             ))
         elif status == "PARTIAL":
             tiers[rid].add("gazebo_deferred")
             tiers[rid].add("gazebo_partial")
             evidence[rid].append(f"Gazebo partial ({check}){suffix}")
             claims[rid].append(_sim_claim(
-                description=evidence[rid][-1], status="partial", all_obligations=True,
+                description=evidence[rid][-1], status="partial",
+                capabilities=capabilities,
+                criterion=criterion, sensitivity=sensitivity,
             ))
         elif status in {"INCONCLUSIVE", "PLANNED", "SKIPPED", "SUSPENDED"}:
             tiers[rid].add("gazebo_deferred")
             evidence[rid].append(f"Gazebo {status.lower()} ({check}){suffix}")
             claims[rid].append(_sim_claim(
-                description=evidence[rid][-1], status="planned", all_obligations=True,
+                description=evidence[rid][-1], status="planned",
+                capabilities=capabilities,
+                criterion=criterion, sensitivity=sensitivity,
             ))
 
     rows: List[MatrixRow] = []
@@ -607,6 +840,8 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             status = "failed"
         elif "gazebo_partial" in t:
             status = "partial"
+        elif "l2_sitl_inconclusive" in t:
+            status = "partial"
         elif set(t) & _PLANNED_TIERS:
             status = "partial" if has_verified else "planned"
         elif has_verified:
@@ -617,7 +852,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             status = "out-of-sim-scope"
         else:
             status = "unassigned"
-        obligations = evaluate_obligations(
+        obligations = evaluate_evidence(
             compile_verification_obligations(rid, req_texts.get(rid, "")),
             claims[rid],
             blocked=rid in blocked,

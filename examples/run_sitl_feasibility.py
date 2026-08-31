@@ -400,6 +400,7 @@ def _run_single_l2_with_timeout(bridge: SITLBridge, spec, timeout_s: int = 240) 
             "req_id": spec.req_id,
             "tier": "L2",
             "passed": bool(passed),
+            "conclusive": not message.startswith("INCONCLUSIVE:"),
             "message": message,
             "duration_s": round(time.time() - t0, 2),
             "note": _l2_note(spec.req_id, bool(passed), message, spec.inject.kind),
@@ -617,6 +618,7 @@ def safety_verification_status(l2: list[dict], trace: list[dict]) -> dict:
     blocked = sum(1 for r in trace if not r.get("passed"))
     l2_total = len(l2)
     l2_passed = sum(1 for r in l2 if r.get("passed"))
+    l2_inconclusive = sum(1 for r in l2 if r.get("conclusive") is False)
     if blocked and l2_total:
         status = "PARTIAL"
         message = (
@@ -629,6 +631,12 @@ def safety_verification_status(l2: list[dict], trace: list[dict]) -> dict:
     elif l2_total == 0:
         status = "NOT_RUN"
         message = "No traceability blocks and no executable L2 checks were run."
+    elif l2_inconclusive:
+        status = "INCONCLUSIVE"
+        message = (
+            f"{l2_inconclusive} executable L2 check(s) lacked an observable "
+            f"verdict; {l2_passed}/{l2_total} passed."
+        )
     elif l2_passed == l2_total:
         status = "PASS"
         message = f"All executable L2 checks passed ({l2_passed}/{l2_total})."
@@ -639,6 +647,7 @@ def safety_verification_status(l2: list[dict], trace: list[dict]) -> dict:
         "status": status,
         "l2_passed": l2_passed,
         "l2_total": l2_total,
+        "l2_inconclusive": l2_inconclusive,
         "traceability_blocked": blocked,
         "message": message,
     }
@@ -781,7 +790,12 @@ def _write_reports(report: dict) -> None:
     for r in l2:
         suffix = f" ({r['note']})" if r.get("note") else ""
         guard = f" [guard: {r['model_guard']}]" if r.get("model_guard") else ""
-        lines.append(f"- {r['req_id']}: {'PASS' if r['passed'] else 'FAIL'} — {r['message']}{suffix}{guard}")
+        label = (
+            "PASS" if r["passed"] else
+            "INCONCLUSIVE" if r.get("conclusive") is False else
+            "FAIL"
+        )
+        lines.append(f"- {r['req_id']}: {label} — {r['message']}{suffix}{guard}")
     atomic_write_text(REPORT_MD, "\n".join(lines) + "\n")
 
 
@@ -931,7 +945,12 @@ def main(argv: list[str] | None = None) -> int:
         report["safety_l2"], report["traceability"]
     )
     for item in report["safety_l2"]:
-        print(f"{item['req_id']}: {'PASS' if item['passed'] else 'FAIL'} — {item['message']}")
+        label = (
+            "PASS" if item["passed"] else
+            "INCONCLUSIVE" if item.get("conclusive") is False else
+            "FAIL"
+        )
+        print(f"{item['req_id']}: {label} — {item['message']}")
     print(
         f"Safety verification: {report['safety_verification']['status']} — "
         f"{report['safety_verification']['message']}",

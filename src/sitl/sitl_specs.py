@@ -865,14 +865,13 @@ def _render_verify_assert_mavlink_v2_link(spec: VerifySpec) -> str:
 
 
 def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
-    """Time from an accepted waypoint-modification command to the active plan
-    carrying it.
+    """Time adoption of a revised *active controller target* after MISSION_ACK."""
+    from .active_route_evidence import (
+        RouteObservation,
+        RouteObservationKind,
+        evaluate_active_route_update,
+    )
 
-    The transfer itself is protocol overhead, so the clock starts at MISSION_ACK
-    — the point at which the vehicle has RECEIVED a valid modification — and
-    stops when a read-back of the mission shows the revised coordinate. Both
-    intervals are reported so the split is visible.
-    """
     limit = float(spec.args.get("max_latency_s", 1.0))
     mav, mv = ctx.mav, ctx.mavutil
 
@@ -907,7 +906,7 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
             return None
         return time.time()
 
-    def readback(seq: int) -> Optional[tuple]:
+    def readback(seq: int) -> Optional[tuple[int, int]]:
         mav.mav.mission_request_int_send(
             mav.target_system, mav.target_component, seq,
             mv.mavlink.MAV_MISSION_TYPE_MISSION,
@@ -917,114 +916,120 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
             return None
         return (int(item.x), int(item.y))
 
+    def revise(seq: int, item: tuple[float, float, float]) -> Optional[float]:
+        mav.mav.mission_write_partial_list_send(
+            mav.target_system, mav.target_component, seq, seq,
+            mv.mavlink.MAV_MISSION_TYPE_MISSION,
+        )
+        request = mav.recv_match(
+            type=["MISSION_REQUEST", "MISSION_REQUEST_INT"],
+            blocking=True, timeout=5,
+        )
+        if request is None or int(request.seq) != seq:
+            return None
+        lat, lon, alt = item
+        mav.mav.mission_item_int_send(
+            mav.target_system, mav.target_component, seq,
+            mv.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            mv.mavlink.MAV_CMD_NAV_WAYPOINT,
+            0, 1, 0, 0, 0, 0,
+            int(lat * 1e7), int(lon * 1e7), float(alt),
+            mv.mavlink.MAV_MISSION_TYPE_MISSION,
+        )
+        ack = mav.recv_match(type="MISSION_ACK", blocking=True, timeout=5)
+        if ack is None or int(ack.type) != mv.mavlink.MAV_MISSION_ACCEPTED:
+            return None
+        return time.monotonic()
+
     home_lat, home_lon = -35.363262, 149.165237
-    original = [(home_lat, home_lon, 0.0),
-                (home_lat + 0.0004, home_lon, 20.0),
-                (home_lat + 0.0008, home_lon, 20.0)]
+    original = [(home_lat, home_lon, 10.0),
+                (home_lat + 0.0015, home_lon, 10.0),
+                (home_lat + 0.0020, home_lon, 10.0)]
     if upload(original) is None:
         return False, "the original mission was not accepted; no baseline plan to revise"
+    if not ctx.force_arm_and_takeoff(10.0):
+        return False, "the vehicle did not reach flight, so no active route existed"
 
-    revised = list(original)
-    revised[2] = (home_lat + 0.0008, home_lon + 0.0006, 25.0)
-    target = (int(revised[2][0] * 1e7), int(revised[2][1] * 1e7))
+    mav.mav.command_long_send(
+        mav.target_system, mav.target_component,
+        mv.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+        mv.mavlink.MAVLINK_MSG_ID_POSITION_TARGET_GLOBAL_INT,
+        100_000, 0, 0, 0, 0, 0,
+    )
+    mav.recv_match(type="COMMAND_ACK", blocking=True, timeout=2)
+    ctx.set_mode("AUTO")
+    active_deadline = time.monotonic() + 20.0
+    active_seq = False
+    while time.monotonic() < active_deadline:
+        current = mav.recv_match(type="MISSION_CURRENT", blocking=True, timeout=1)
+        if current is not None and int(current.seq) == 1:
+            active_seq = True
+            break
+    if not active_seq:
+        return False, "AUTO never made waypoint 1 active; no route revision was exercised"
 
-    # The active plan is polled, so one read-back round-trip is the floor on
-    # what this method can resolve. Measure it, so the latency below is
-    # reported as the upper bound it actually is.
-    poll_started = time.time()
-    readback(2)
-    poll_cost = time.time() - poll_started
-
-    send_started = time.time()
-    accepted_at = upload(revised)
+    revised = (home_lat + 0.0015, home_lon + 0.0010, 10.0)
+    target = (int(revised[0] * 1e7), int(revised[1] * 1e7))
+    send_started = time.monotonic()
+    accepted_at = revise(1, revised)
     if accepted_at is None:
-        return False, "the revised waypoint sequence was rejected by the vehicle"
+        return False, "the active-waypoint revision was rejected by the vehicle"
     transfer_s = accepted_at - send_started
 
+    observations = []
     deadline = accepted_at + max(limit * 4.0, 5.0)
-    incorporated_at = None
-    last_seen = None
-    while time.time() < deadline:
-        last_seen = readback(2)
-        if last_seen == target:
-            incorporated_at = time.time()
-            break
-    if incorporated_at is None:
-        return False, (
-            f"the active plan never carried the revision (last read-back {last_seen}, "
-            f"expected {target}); transfer took {transfer_s:.3f} s"
+    while time.monotonic() < deadline:
+        active = mav.recv_match(
+            type="POSITION_TARGET_GLOBAL_INT", blocking=True, timeout=0.5,
         )
+        if active is None:
+            continue
+        observation = RouteObservation(
+            observed_at_s=time.monotonic(),
+            kind=RouteObservationKind.ACTIVE_CONTROLLER_TARGET,
+            lat_e7=int(active.lat_int), lon_e7=int(active.lon_int),
+        )
+        observations.append(observation)
+        if (observation.lat_e7, observation.lon_e7) == target:
+            break
 
-    latency = incorporated_at - accepted_at
-    ok = latency <= limit
-    return ok, (
-        f"revised waypoint sequence was carried by the active flight plan within "
-        f"{latency:.3f} s of MISSION_ACK (limit {limit:.1f} s). This is an UPPER "
-        f"BOUND, not an exact interval: the plan is polled, and one read-back "
-        f"round-trip costs {poll_cost:.3f} s, so incorporation happened at or "
-        f"before the first poll that saw it. The upload transfer took "
-        f"{transfer_s:.3f} s and is excluded — the requirement's clock starts at "
-        f"receipt of the modification command, not at the start of its transfer"
+    stored = readback(1)
+    if stored is not None:
+        observations.append(RouteObservation(
+            observed_at_s=time.monotonic(),
+            kind=RouteObservationKind.MISSION_STORAGE,
+            lat_e7=stored[0], lon_e7=stored[1],
+        ))
+    evidence = evaluate_active_route_update(
+        accepted_at_s=accepted_at,
+        target_lat_e7=target[0], target_lon_e7=target[1],
+        observations=observations,
+        max_latency_s=limit,
+    )
+    return evidence.status == "verified", (
+        ("INCONCLUSIVE: " if evidence.status == "inconclusive" else "")
+        + f"{evidence.description}. Mission storage revision seen="
+        f"{evidence.storage_revision_seen}; transfer took {transfer_s:.3f} s "
+        "and is excluded. POSITION_TARGET_GLOBAL_INT is the active "
+        "navigation-controller target; MISSION_ITEM_INT is mission storage only"
     )
 
 
 def _render_verify_assert_waypoint_update_latency(spec: VerifySpec) -> str:
     limit = float(spec.args.get("max_latency_s", 1.0))
     return textwrap.dedent(f"""\
-        print("  timing waypoint-sequence incorporation ...")
-        HOME_LAT, HOME_LON = -35.363262, 149.165237
-
-        def _upload(items):
-            mav.mav.mission_count_send(
-                mav.target_system, mav.target_component, len(items),
-                mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
-            sent, deadline = 0, time.time() + 15.0
-            while sent < len(items) and time.time() < deadline:
-                req = mav.recv_match(type=["MISSION_REQUEST", "MISSION_REQUEST_INT"],
-                                     blocking=True, timeout=3)
-                if req is None:
-                    continue
-                seq = int(req.seq)
-                lat, lon, alt = items[seq]
-                mav.mav.mission_item_int_send(
-                    mav.target_system, mav.target_component, seq,
-                    mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
-                    mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 1, 0, 0, 0, 0,
-                    int(lat * 1e7), int(lon * 1e7), float(alt),
-                    mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
-                sent = max(sent, seq + 1)
-            ack = mav.recv_match(type="MISSION_ACK", blocking=True, timeout=5)
-            if ack is None or int(ack.type) != mavutil.mavlink.MAV_MISSION_ACCEPTED:
-                return None
-            return time.time()
-
-        def _readback(seq):
-            mav.mav.mission_request_int_send(
-                mav.target_system, mav.target_component, seq,
-                mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
-            item = mav.recv_match(type="MISSION_ITEM_INT", blocking=True, timeout=2)
-            return None if item is None else (int(item.x), int(item.y))
-
-        original = [(HOME_LAT, HOME_LON, 0.0),
-                    (HOME_LAT + 0.0004, HOME_LON, 20.0),
-                    (HOME_LAT + 0.0008, HOME_LON, 20.0)]
-        revised = list(original)
-        revised[2] = (HOME_LAT + 0.0008, HOME_LON + 0.0006, 25.0)
-        target = (int(revised[2][0] * 1e7), int(revised[2][1] * 1e7))
-
-        ok = False
-        if _upload(original) is not None:
-            accepted_at = _upload(revised)
-            if accepted_at is not None:
-                deadline = accepted_at + max({limit} * 4.0, 5.0)
-                while time.time() < deadline:
-                    if _readback(2) == target:
-                        latency = time.time() - accepted_at
-                        ok = latency <= {limit}
-                        print(f"  incorporation latency {{latency:.3f}}s (limit {limit})")
-                        break
-        print("  " + ("OK" if ok else "FAIL"))
-        return ok
+        # POSITION_TARGET_GLOBAL_INT is the active navigation-controller target.
+        # MISSION_ITEM_INT is mission storage and cannot close this obligation.
+        from src.sitl.sitl_specs import (
+            TestContext, VerifySpec, _verify_assert_waypoint_update_latency,
+        )
+        _ok, _message = _verify_assert_waypoint_update_latency(
+            TestContext(mav=mav, mavutil=mavutil),
+            VerifySpec(kind="assert_waypoint_update_latency",
+                       args={{"max_latency_s": {limit}}}),
+        )
+        print("  " + ("OK" if _ok else "FAIL") + " — " + _message)
+        return _ok
     """)
 
 

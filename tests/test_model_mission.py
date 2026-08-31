@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from gazebo_poc.model_mission import ModelDrivenMission
+from gazebo_poc.model_mission import ModelAction, ModelDrivenMission
 
 _MODEL = """
 package Drone {
@@ -58,9 +58,25 @@ def test_the_model_fires_its_own_transition_and_action():
     fired = mission.offer("DeliveryCoordinateSatisfied", time=1.0)
 
     assert [d.action for d in fired] == ["onReleasing"]
+    assert [d.action_definition for d in fired] == ["actuateRelease"]
+    assert mission.performed(fired, ModelAction.RELEASE_PAYLOAD)
     assert fired[0].from_state == "Locked" and fired[0].to_state == "Releasing"
     assert fired[0].as_dict()["decided_by"] == "generated model"
     assert mission.state_of("PayloadMechanism.PayloadReleaseBehavior") == "Releasing"
+
+
+def test_an_unrelated_action_on_the_same_event_does_not_authorize_release():
+    model = _MODEL.replace(
+        "entry action onReleasing : actuateRelease;",
+        "entry action onReleasing : lockPayload;",
+    )
+    mission = ModelDrivenMission(model)
+
+    fired = mission.offer("DeliveryCoordinateSatisfied", time=1.0)
+
+    assert [decision.action for decision in fired] == ["onReleasing"]
+    assert [decision.action_definition for decision in fired] == ["lockPayload"]
+    assert not mission.performed(fired, ModelAction.RELEASE_PAYLOAD)
 
 
 def test_an_event_the_model_ignores_fires_nothing():
@@ -81,6 +97,14 @@ def test_accepted_events_come_from_the_model_not_a_hardcoded_list():
     )
     assert mission.handles("AbortConditionActive")
     assert not mission.handles("CriticalPropulsionFailure")
+
+
+def test_competing_actions_are_discovered_from_the_named_model_machine():
+    mission = ModelDrivenMission(_MODEL)
+
+    assert mission.action_definitions_for_machine("DeliveryAbortBehavior") == (
+        "lockPayload",
+    )
 
 
 def test_provenance_names_what_was_executed():

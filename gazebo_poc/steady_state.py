@@ -14,6 +14,7 @@ not.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
 
@@ -23,6 +24,7 @@ DEFAULT_MAX_DRIFT_FRACTION = 0.05
 #: A window shorter than this cannot distinguish plateau from noise.
 DEFAULT_MIN_SAMPLES = 8
 DEFAULT_MIN_DURATION_S = 3.0
+DEFAULT_MAX_TREND_T_STAT = 2.0
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class SteadyState:
     second_half_mean: Optional[float] = None
     samples: int = 0
     duration_s: Optional[float] = None
+    trend_t_stat: Optional[float] = None
 
     def as_dict(self) -> dict:
         def r(value, digits=6):
@@ -51,6 +54,7 @@ class SteadyState:
             "second_half_mean": r(self.second_half_mean, 4),
             "samples": self.samples,
             "duration_s": r(self.duration_s, 3),
+            "trend_t_stat": r(self.trend_t_stat, 3),
         }
 
     def describe(self) -> str:
@@ -81,12 +85,34 @@ def _linear_slope(times: Sequence[float], values: Sequence[float]) -> float:
     return numerator / denominator
 
 
+def _trend_t_stat(
+    times: Sequence[float], values: Sequence[float], slope: float,
+) -> float:
+    """Signal-to-noise ratio of the fitted slope under ordinary least squares."""
+    n = len(values)
+    mean_t = sum(times) / n
+    mean_v = sum(values) / n
+    sxx = sum((time_value - mean_t) ** 2 for time_value in times)
+    intercept = mean_v - slope * mean_t
+    residual_sum_squares = sum(
+        (value - (intercept + slope * time_value)) ** 2
+        for time_value, value in zip(times, values)
+    )
+    if residual_sum_squares <= 1e-18:
+        return math.inf if abs(slope) > 1e-12 else 0.0
+    slope_standard_error = math.sqrt(
+        (residual_sum_squares / (n - 2)) / sxx
+    )
+    return abs(slope) / slope_standard_error
+
+
 def steady_state(
     samples: Sequence[Tuple[float, float]],
     *,
     max_drift_fraction: float = DEFAULT_MAX_DRIFT_FRACTION,
     min_samples: int = DEFAULT_MIN_SAMPLES,
     min_duration_s: float = DEFAULT_MIN_DURATION_S,
+    max_trend_t_stat: float = DEFAULT_MAX_TREND_T_STAT,
 ) -> SteadyState:
     """Classify ``[(time_s, value)]`` as plateaued or still trending.
 
@@ -117,6 +143,7 @@ def steady_state(
                            duration_s=duration)
 
     slope = _linear_slope(times, values)
+    trend_t_stat = _trend_t_stat(times, values, slope)
     drift_fraction = abs(slope * duration) / abs(mean)
 
     half = n // 2
@@ -125,18 +152,20 @@ def steady_state(
     half_gap = abs(second_half - first_half) / abs(mean)
 
     trending = drift_fraction > max_drift_fraction
+    significant_trend = trend_t_stat > max_trend_t_stat
     halves_disagree = half_gap > max_drift_fraction
-    if trending or halves_disagree:
+    if trending or significant_trend or halves_disagree:
         reason = (
             "still trending" if trending
+            else "statistically significant trend" if significant_trend
             else "half-window means disagree"
         )
         return SteadyState(
             False, reason, mean, slope, drift_fraction, first_half, second_half,
-            n, duration,
+            n, duration, trend_t_stat,
         )
 
     return SteadyState(
         True, "plateaued", mean, slope, drift_fraction, first_half, second_half,
-        n, duration,
+        n, duration, trend_t_stat,
     )

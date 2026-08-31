@@ -39,6 +39,18 @@ _EXTERNAL_EVIDENCE_PATTERNS = (
     re.compile(r"\broll\b.{0,100}\bpitch\b.{0,100}\brms\b", re.IGNORECASE),
 )
 
+_INHIBITION_REPAIR_GUIDANCE = (
+    " This is an INHIBITION requirement: it is satisfied when a response is "
+    "withheld while a condition holds. Model it as a Boolean attribute for the "
+    "inhibiting condition on the owning part (e.g. deliveryAbortActive : Boolean "
+    "= false) and EITHER a guard `if not <condition>` on the transition that "
+    "would otherwise perform the response, OR a transition from the response "
+    "state back to the safe/secured state that fires on the condition. Do not "
+    "add a new response action; the anchor is the guarded or reverting "
+    "transition, which the behavioural simulator exercises by sweeping the "
+    "condition across true and false."
+)
+
 
 def _requires_external_evidence(text: str) -> bool:
     """Return True for criteria a SysML edit cannot truthfully verify.
@@ -159,6 +171,10 @@ def verification_gap_issues(
             # hardware/HIL quantity.
             continue
         if behavioral_failed:
+            repair_guidance = (
+                _INHIBITION_REPAIR_GUIDANCE
+                if is_inhibition_requirement(text) else ""
+            )
             issues.append(
                 f"{_ISSUE_PREFIX} {row.req_id} has a behavioral verification anchor, "
                 f"but its executable model-level scenario FAILS. Requirement: \"{text}\". "
@@ -166,6 +182,7 @@ def verification_gap_issues(
                 "state machine. Every declared state must be reachable, the initial/default "
                 "state must agree with its Boolean attribute, and the required transition or "
                 "entry action must actually execute under simulation."
+                f"{repair_guidance}"
             )
             continue
         default_guidance = ""
@@ -190,17 +207,7 @@ def verification_gap_issues(
             # NOT taken. Repeated probe runs showed the surgical LLM adding a
             # response action for it instead, which the simulator cannot credit:
             # nothing fires. Name the shape that does anchor.
-            default_guidance = (
-                " This is an INHIBITION requirement: it is satisfied when a response is "
-                "withheld while a condition holds. Model it as a Boolean attribute for the "
-                "inhibiting condition on the owning part (e.g. deliveryAbortActive : Boolean "
-                "= false) and EITHER a guard `if not <condition>` on the transition that "
-                "would otherwise perform the response, OR a transition from the response "
-                "state back to the safe/secured state that fires on the condition. Do not "
-                "add a new response action; the anchor is the guarded or reverting "
-                "transition, which the behavioural simulator exercises by sweeping the "
-                "condition across true and false."
-            )
+            default_guidance = _INHIBITION_REPAIR_GUIDANCE
         issues.append(
             f"{_ISSUE_PREFIX} {row.req_id} has no verification anchor at any tier — it "
             f"will land UNASSIGNED in the verification matrix. Requirement: \"{text}\". "

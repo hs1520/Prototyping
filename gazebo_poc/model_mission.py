@@ -45,7 +45,15 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+
+
+class ModelAction(str, Enum):
+    """Action definitions that the physical Gazebo adapter can execute."""
+
+    RELEASE_PAYLOAD = "actuateRelease"
+    DEPLOY_PARACHUTE = "deployParachute"
 
 
 @dataclass(frozen=True)
@@ -59,6 +67,7 @@ class ModelDecision:
     from_state: Optional[str]
     to_state: Optional[str]
     action: Optional[str]
+    action_definition: Optional[str]
 
     def as_dict(self) -> dict:
         return {
@@ -69,6 +78,7 @@ class ModelDecision:
             "from_state": self.from_state,
             "to_state": self.to_state,
             "action": self.action,
+            "action_definition": self.action_definition,
             "decided_by": "generated model",
         }
 
@@ -116,6 +126,21 @@ class ModelDrivenMission:
         instance = self.machines.get(machine)
         return None if instance is None else instance.current_state
 
+    def action_definitions_for_machine(self, machine: str) -> Tuple[str, ...]:
+        """Executable response definitions declared by a named state machine."""
+        actions = {
+            action_definition
+            for instance in self.machines.values()
+            if instance.sm.name == machine
+            for state in instance.sm.states
+            for action_definition in (
+                state.entry_action_def,
+                state.do_action_def,
+            )
+            if action_definition is not None
+        }
+        return tuple(sorted(actions))
+
     # -- driving ----------------------------------------------------------
 
     def offer(self, event: str, *, time: float,
@@ -143,6 +168,10 @@ class ModelDrivenMission:
                 to_state=target,
                 action=(instance.sm.response_action_for_state(target)
                         if target else None),
+                action_definition=(
+                    instance.sm.response_action_definition_for_state(target)
+                    if target else None
+                ),
             )
             fired.append(decision)
             self.decisions.append(decision)
@@ -150,6 +179,15 @@ class ModelDrivenMission:
 
     def actions_for(self, decisions: Sequence[ModelDecision]) -> Tuple[str, ...]:
         return tuple(d.action for d in decisions if d.action)
+
+    def performed(
+        self, decisions: Sequence[ModelDecision], action: ModelAction,
+    ) -> bool:
+        """Whether this transition set invoked the exact executable action."""
+        return any(
+            decision.action_definition == action.value
+            for decision in decisions
+        )
 
     # -- evidence ---------------------------------------------------------
 
