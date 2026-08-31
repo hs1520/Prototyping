@@ -146,7 +146,6 @@ class TypedPlanGeneration:
             patch_used = False
             patch_audit: dict[str, Any] | None = None
             unauthorized: list[str] = []
-            plan_status_override: str | None = None
 
             if isinstance(response.extracted_json, Mapping):
                 raw_payload = dict(response.extracted_json)
@@ -165,18 +164,22 @@ class TypedPlanGeneration:
                             last_valid_payload, raw_payload
                         )
                         patch_used = True
-                # The diff gate judges exactly what the LLM changed against
+                # The diff audit records exactly what the LLM changed against
                 # the payload its issues were computed on — patch or full
-                # replacement alike. "Preserve every field not implicated"
-                # used to be an instruction; this is its gate. It applies
-                # only when the previous prompt actually named entries
-                # (a format retry names none).
+                # replacement alike. It is OBSERVATIONAL: semantic repair is
+                # measurably non-local (adding the behavior a "needs a
+                # navigate response" issue demands, renaming the port a
+                # representation issue implicates — component, connections
+                # and bindings move together), and an enforcing gate killed
+                # a real seed-0 anchor run in 6 rejected attempts / 215k
+                # tokens, its rejection strings then steering the next
+                # attempt to revert legitimate repairs. The structural
+                # non-drift guarantee lives in the merge (unpatched entries
+                # are carried over byte-identically), not here.
                 if (
                     candidate_payload is not None
                     and last_valid_payload is not None
-                    and previous_failure_kind in (
-                        "SEMANTIC_PLAN_INVALID", "UNAUTHORIZED_CHANGES",
-                    )
+                    and previous_failure_kind == "SEMANTIC_PLAN_INVALID"
                 ):
                     unauthorized = unauthorized_plan_changes(
                         last_valid_payload,
@@ -203,28 +206,7 @@ class TypedPlanGeneration:
                     attempt_issues.extend(plan.issues)
                     if plan.status != "PASS":
                         failure_kind = "SEMANTIC_PLAN_INVALID"
-                    if unauthorized and patch_used:
-                        # A patch entry no issue names is rejected: the
-                        # merge is the structural non-drift guarantee, and
-                        # this gate is what keeps a patch from smuggling
-                        # edits through it. The base does not advance past
-                        # a rejected payload, so the issues it still
-                        # carries stay outstanding — they authorize the
-                        # next correction alongside the violations, or a
-                        # clean retry patch would find no issue naming the
-                        # entry it legitimately fixes.
-                        attempt_issues.extend(unauthorized)
-                        attempt_issues.extend(previous_attempt_issues)
-                        if failure_kind == "NONE":
-                            failure_kind = "UNAUTHORIZED_CHANGES"
-                        plan_status_override = plan.status
-                        plan = None
-                    else:
-                        # A full replacement stays acceptable as before;
-                        # its unimplicated diffs are recorded in the
-                        # attempt rather than rejected, so drift is at
-                        # least visible where it used to be silent.
-                        last_valid_payload = dict(candidate_payload)
+                    last_valid_payload = dict(candidate_payload)
             elif request.allow_legacy_plan:
                 legacy_text = response.final_answer
                 fence_position = legacy_text.find("```")
@@ -286,11 +268,7 @@ class TypedPlanGeneration:
                 "json_parse": parse_diagnostic,
                 "legacy_compatibility_used": legacy_used,
                 "failure_kind": failure_kind,
-                "plan_status": (
-                    plan_status_override
-                    if plan_status_override is not None
-                    else plan.status if plan is not None else "UNAVAILABLE"
-                ),
+                "plan_status": plan.status if plan is not None else "UNAVAILABLE",
                 "incremental_patch_used": patch_used,
                 "patch_audit": patch_audit,
                 "unauthorized_changes": list(unauthorized),
@@ -341,15 +319,6 @@ class TypedPlanGeneration:
                     "TYPED MODEL PLAN SEMANTIC CORRECTION — the previous "
                     "JSON parsed successfully but violated the frozen plan."
                 )
-            elif failure_kind == "UNAUTHORIZED_CHANGES":
-                semantic_retries_used += 1
-                retry_heading = (
-                    "TYPED MODEL PLAN AUTHORIZATION CORRECTION — the "
-                    "previous correction changed entries no issue named. "
-                    "Every change must be authorized by a listed issue; "
-                    "unimplicated entries are carried over from the repair "
-                    "base and must not be resent with edits."
-                )
             else:
                 break
 
@@ -383,9 +352,10 @@ class TypedPlanGeneration:
                     "\"remove\": {\"<list>\": [\"<identity>\"]} "
                     "(behaviors as \"Owner::BehaviorId\", connections as "
                     "\"a.p->b.q\"). Every entry you do not return is "
-                    "carried over from the repair base unchanged; a change "
-                    "to an entry no issue names is rejected "
-                    "deterministically. Do not emit SysML.\n"
+                    "carried over from the repair base unchanged. Keep the "
+                    "patch to entries the issues implicate (and whatever "
+                    "must move with them); unimplicated edits are recorded "
+                    "in the audit. Do not emit SysML.\n"
                 )
             else:
                 correction_instruction = (

@@ -248,7 +248,13 @@ def ModelPlanDump(payload):
     ).to_dict()
 
 
-def test_a_patch_touching_an_unimplicated_entry_is_rejected_then_retried():
+def test_an_unimplicated_patch_edit_is_recorded_not_rejected():
+    """The audit is OBSERVATIONAL. Semantic repair is measurably non-local
+    (a live seed-0 anchor run died in 6 rejected attempts / 215k tokens when
+    this was an enforcing gate), so an unimplicated edit lands and is
+    recorded — visible drift, never a dead end. The structural non-drift
+    guarantee is the merge: entries the patch does not mention cannot move
+    at all."""
     healthy = _healthy_payload()
     broken = json.loads(json.dumps(healthy))
     fixed_component = None
@@ -259,7 +265,7 @@ def test_a_patch_touching_an_unimplicated_entry_is_rejected_then_retried():
             component["responsibility"] = ""
         elif tampered_other is None and component["requirements"]:
             # Semantically inert on its own — the original anchor text is
-            # preserved — so the rejection below is purely the gate's.
+            # preserved — so the run stays PASS and only the audit speaks.
             tampered_other = json.loads(json.dumps(component))
             tampered_other["responsibility"] += (
                 " Also archives telemetry snapshots."
@@ -270,22 +276,20 @@ def test_a_patch_touching_an_unimplicated_entry_is_rejected_then_retried():
         broken,
         {"plan_patch": True,
          "components": [fixed_component, tampered_other]},
-        {"plan_patch": True, "components": [fixed_component]},
     ])
 
     attempts = outcome.metadata["step1_plan_attempts"]
-    assert len(attempts) == 3
-    assert attempts[1]["failure_kind"] == "UNAUTHORIZED_CHANGES"
-    # the merged plan was valid — rejection is purely the authorization gate
+    assert len(attempts) == 2
+    assert outcome.plan.status == "PASS"
     assert attempts[1]["plan_status"] == "PASS"
     assert any(
         tampered_other["name"] in violation
         for violation in attempts[1]["unauthorized_changes"]
     )
-    assert outcome.plan.status == "PASS"
+    # the audited edit landed — drift is visible, not silently discarded
     final = outcome.metadata["whole_model_generation_plan"]
     by_name = {c["name"]: c for c in final["components"]}
-    assert "archives telemetry" not in (
+    assert "archives telemetry" in (
         by_name[tampered_other["name"]]["responsibility"]
     )
 

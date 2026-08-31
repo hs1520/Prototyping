@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import re
 import subprocess
 import sys
 import time
@@ -59,14 +60,21 @@ SYSTEM_NAME = "AutonomousDrone"
 #: separation mechanical, mirroring the authoritative path's infrastructure
 #: routing (examples/finalize_authoritative_run.py).
 _INFRA_MARKERS = (
-    "429", "rate limit", "resource_exhausted", "resource exhausted",
+    "rate limit", "resource_exhausted", "resource exhausted",
     "quota", "unavailable", "overloaded", "timed out", "timeout",
-    "deadline", "connection", "eof occurred", "pipe",
+    "deadline exceeded", "connection refused", "connection reset",
+    "connection aborted", "connectionerror", "eof occurred", "broken pipe",
 )
 
 
 def _infrastructure_failure(message: str) -> bool:
+    # Bare substrings are dangerous here: the first live failure was
+    # misclassified as infrastructure because the marker "connection"
+    # matched the word "connections" inside plan-validation issue text.
+    # Markers are specific phrases; 429 is matched as a standalone token.
     low = str(message or "").lower()
+    if re.search(r"(?<![0-9a-z])429(?![0-9a-z])", low):
+        return True
     return any(token in low for token in _INFRA_MARKERS)
 
 
