@@ -298,12 +298,22 @@ def _build_refinement_feedback(request: _RefinementRequest) -> str:
     lines.extend(f"- {item}" for item in request.evaluation.recommendations)
 
     if request.simulation_issues:
+        # The remediation must match the issue category: these failures are
+        # missing signal paths OR missing behaviour definitions, and the old
+        # header prescribed connect statements for both — with `::` endpoint
+        # syntax the same prompt elsewhere (correctly) says breaks the
+        # parser. The LLM was being taught to fix a behaviour gap with a
+        # broken connect.
         lines.extend((
             "",
-            "Behavioral simulation failures (port-connection reachability check):\n"
-            "  The following operational scenarios have no directed signal path in the model.\n"
-            "  Add `connect <source_part>::<port> to <target_part>::<port>;` statements\n"
-            "  to establish the missing paths.",
+            "Behavioral simulation failures:\n"
+            "  Read each issue below and repair what it actually names.\n"
+            "  - missing connection: add "
+            "`connect <source_part>.<port> to <target_part>.<port>;` "
+            "(dot notation; `::` breaks the parser).\n"
+            "  - missing local behavior (state def / action def): declare "
+            "the named definition inside the responsible part def; do not "
+            "add ports or connects for it.",
         ))
         lines.extend(f"- [SIM] {item}" for item in request.simulation_issues)
 
