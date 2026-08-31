@@ -141,3 +141,38 @@ def test_block_phrasing_is_not_routed_to_the_initialization_branch():
     rows = build_matrix(lite, None, RequirementLinker(lite).compile_evidence())
     row = {r.req_id: r for r in rows}["REQ_SAFE_004"]
     assert "behavioral_sim_failed" not in row.tiers, row.evidence
+
+
+def test_default_state_held_by_a_do_action_passes():
+    """run3's shape (A3, SAFE_008): the initial state IS the required default
+    and a do-action sustains it — `Locked { do lockMechanism; }`. The tier
+    contradiction read 'behavioral FAIL vs L2 servo PASS' only because this
+    checker credited entry actions and not sustained holding."""
+    model = _MODEL.replace(
+        """state PowerOn {
+                do action initialize;
+            }""",
+        """state Locked {
+                do action lockMechanism;
+            }""",
+    ).replace("entry; then PowerOn;", "entry; then Locked;").replace(
+        """state Locked {
+                entry action lockMechanism;
+            }
+            transition powerOnComplete
+                first PowerOn
+                accept PowerOnEvent
+                then Locked;""",
+        """state Released;
+            transition release
+                first Locked
+                accept PowerOnEvent
+                then Released;""",
+    )
+    lite = build_lite_model(model, model_name="DeliveryUAV")
+    rows = {r.req_id: r for r in build_matrix(
+        lite, None, RequirementLinker(lite).compile_evidence()
+    )}
+    row = rows["REQ_SAFE_008"]
+    assert "behavioral_sim" in row.tiers, row.evidence
+    assert "behavioral_sim_failed" not in row.tiers

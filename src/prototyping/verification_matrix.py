@@ -719,8 +719,16 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                     ch for ch in sm.initial_state.lower() if ch.isalnum()
                 ) in compact_low
             ]
+            from src.utils.sysml_text_utils import semantic_terms
+            from src.prototyping.verification_obligations import (
+                _SAFE_STATE_TERMS,
+            )
+            default_terms = semantic_terms(low) & _SAFE_STATE_TERMS
             init_outcomes = [
-                run_initialization_scenario(sm).passed for sm in init_candidates
+                run_initialization_scenario(
+                    sm, required_state_terms=default_terms
+                ).passed
+                for sm in init_candidates
             ]
             if _record_behavioral_outcome(
                 rid, init_outcomes, tiers, evidence, claims,

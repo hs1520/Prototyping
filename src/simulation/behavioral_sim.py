@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .state_extractor import GuardCondition, StateMachineDef, VarRef, extract_state_machines
 from .state_executor import StateMachineInstance
@@ -441,7 +441,10 @@ def _build_test_sequence(sm: StateMachineDef) -> List[Dict[str, Any]]:
 # Scenario runner
 # ---------------------------------------------------------------------------
 
-def run_initialization_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
+def run_initialization_scenario(
+    sm: StateMachineDef,
+    required_state_terms: Iterable[str] = (),
+) -> BehavioralScenarioResult:
     """Verify an initialization/default-state machine without inventing a fault.
 
     Some requirements are invariants ("default to Locked on power-on"), not
@@ -449,6 +452,15 @@ def run_initialization_scenario(sm: StateMachineDef) -> BehavioralScenarioResult
     the machine has a single default state.  A multi-state declaration is not
     allowed to hide behind that exception: every declared state must still be
     structurally reachable from the initial state.
+
+    ``required_state_terms`` — the requirement's default-state vocabulary
+    (e.g. {"locked"}), supplied by the caller from the FROZEN requirement
+    text. A sustaining do-action counts as observable semantics only when
+    the initial state IS that default state: ``Locked { do securePayload }``
+    holds the default continuously (run3's shape, failed here while the L2
+    servo evidence showed the default physically holding), whereas
+    ``PowerOn { do initialize }`` is a phase doing generic activity and
+    crediting it would launder an unreached default into a pass.
     """
     result = BehavioralScenarioResult(
         name=sm.name,
@@ -490,6 +502,21 @@ def run_initialization_scenario(sm: StateMachineDef) -> BehavioralScenarioResult
     if entry:
         result.fired_actions.append(entry)
         result.timeline.append(f"Initial entry action: {entry}")
+    # A sustained do-action is observable initialization semantics of the
+    # same rank as an entry action: "default to the mechanically locked
+    # state" modelled as `state Locked { do securePayload; }` HOLDS the
+    # default continuously — arguably the more faithful shape — and run3's
+    # two payload machines were failed here for choosing it while the L2
+    # servo evidence (lock PWM) showed the default physically holding.
+    from src.utils.sysml_text_utils import semantic_terms
+    do_action = sm.do_action_for_state(initial)
+    initial_is_default = bool(
+        set(required_state_terms) & semantic_terms(initial)
+    )
+    holding_do = do_action if initial_is_default else None
+    if holding_do:
+        result.fired_actions.append(holding_do)
+        result.timeline.append(f"Initial do action: {holding_do}")
 
     # Check conventional Boolean state mirrors such as Locked ↔ isLocked=true
     # and Disarmed ↔ isArmed=false.  This is intentionally conservative: an
@@ -519,14 +546,24 @@ def run_initialization_scenario(sm: StateMachineDef) -> BehavioralScenarioResult
             )
 
     # A state name alone is only a declaration, not executable or observable
-    # initialization semantics.  Require either a conventional Boolean state
-    # mirror (e.g. isLocked=true) or an entry action that performs the default
-    # response.  This keeps legitimate single-state invariants compact while
-    # rejecting empty shells such as `state Locked; transition initial ...`.
-    if not has_state_mirror and not entry:
+    # initialization semantics.  Require a conventional Boolean state mirror
+    # (e.g. isLocked=true), an entry action that performs the default
+    # response, or a do action that sustains it.  This keeps legitimate
+    # single-state invariants compact while rejecting empty shells such as
+    # `state Locked; transition initial ...`.
+    #
+    # Known narrowness, deliberately unfixed here: a power-on-shaped machine
+    # (initial PowerOff --accept PowerOn--> Locked{entry default...}) fails
+    # this check because its INITIAL state legitimately has no semantics; and
+    # the matrix selects candidate machines by the initial-state name
+    # appearing in the requirement text — vocabulary coupling that excludes
+    # exactly that machine. Both belong to the binding-layer migration
+    # (select by the plan's bound behavior, then drive the power event).
+    if not has_state_mirror and not entry and not holding_do:
         result.violations.append(
             f"Initial state '{initial}' has no observable initialization semantics; "
-            "add a consistent Boolean state attribute or an initial entry action"
+            "add a consistent Boolean state attribute, an initial entry action, "
+            "or a sustaining do action"
         )
 
     result.passed = not result.violations
