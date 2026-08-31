@@ -53,6 +53,22 @@ from analyze import aggregate, paired_deltas, render_markdown  # noqa: E402
 
 SYSTEM_NAME = "AutonomousDrone"
 
+#: Provider/transport exhaustion is the harness's environment failing, not the
+#: ablated configuration failing. A 429-aborted run polluted runs_failed on
+#: 2026-08-30 (renamed *_ABORTED_429 by hand); this classifier makes the
+#: separation mechanical, mirroring the authoritative path's infrastructure
+#: routing (examples/finalize_authoritative_run.py).
+_INFRA_MARKERS = (
+    "429", "rate limit", "resource_exhausted", "resource exhausted",
+    "quota", "unavailable", "overloaded", "timed out", "timeout",
+    "deadline", "connection", "eof occurred", "pipe",
+)
+
+
+def _infrastructure_failure(message: str) -> bool:
+    low = str(message or "").lower()
+    return any(token in low for token in _INFRA_MARKERS)
+
 
 def _git(*args: str) -> str:
     return subprocess.run(
@@ -230,10 +246,12 @@ def run_one(
             "log_path": str(log_path),
         })
     except Exception as error:
+        error_text = f"{type(error).__name__}: {error}"
         record.update({
             "ok": False,
-            "error": f"{type(error).__name__}: {error}",
+            "error": error_text,
             "log_path": str(log_path),
+            "infrastructure_failure": _infrastructure_failure(error_text),
         })
         # Spend up to the point of failure.  Deliberately NOT the llm_* names
         # the analysis consumes: a failed run stopped at an arbitrary point, so

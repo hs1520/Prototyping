@@ -43,10 +43,18 @@ def aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     for arm in sorted({record["arm"] for record in records}):
         ok_runs = [r for r in records if r["arm"] == arm and r.get("ok")]
         failed = [r for r in records if r["arm"] == arm and not r.get("ok")]
+        # An infrastructure failure (rate limit, transport) is the
+        # environment's, not the arm's: it must not masquerade as a quality
+        # failure, especially in a single-seed wave where one 429 would be
+        # an arm's entire failure rate.
+        infra = [r for r in failed if r.get("infrastructure_failure")]
+        genuine = [r for r in failed if not r.get("infrastructure_failure")]
         entry: Dict[str, Any] = {
             "runs_ok": len(ok_runs),
-            "runs_failed": len(failed),
-            "failed_seeds": sorted(r["seed"] for r in failed),
+            "runs_failed": len(genuine),
+            "runs_infra_failed": len(infra),
+            "failed_seeds": sorted(r["seed"] for r in genuine),
+            "infra_failed_seeds": sorted(r["seed"] for r in infra),
         }
         for metric in HEADLINE_METRICS:
             values = [
@@ -169,8 +177,12 @@ def render_markdown(
     if failures:
         lines.append("## Failed runs\n")
         for record in failures:
-            lines.append(f"- **{record['arm']}** seed {record['seed']}: "
-                         f"{record.get('error')} "
+            kind = (
+                "infrastructure — excluded from the arm's failure rate"
+                if record.get("infrastructure_failure") else "arm failure"
+            )
+            lines.append(f"- **{record['arm']}** seed {record['seed']} "
+                         f"({kind}): {record.get('error')} "
                          f"(evidence: {record.get('failed_evidence_path', '—')})")
         lines.append("")
 
@@ -180,7 +192,9 @@ def render_markdown(
         "**descriptive**; no significance is claimed. Categorical outcomes "
         "(failure counts, gate rejections, LLM-call and token costs) carry "
         "the load-bearing comparisons; score deltas are indicative only. "
-        "A failed run stays in the denominator — failure is data, not noise."
+        "A genuine failed run stays in the denominator — failure is data, "
+        "not noise; an infrastructure failure (rate limit, transport) is "
+        "reported separately and re-run rather than charged to the arm."
     )
     lines.append("")
     return "\n".join(lines)
