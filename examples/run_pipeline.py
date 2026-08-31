@@ -55,7 +55,11 @@ if __name__ == "__main__":
         initial_sysml = fn(initial_sysml, DRONE_REQUIREMENTS)
         final_sysml = fn(final_sysml, DRONE_REQUIREMENTS)
 
-    outdir = os.path.join(os.path.dirname(__file__), "output")
+    # artifact_store.output_dir() documents examples/output ROOT as never
+    # being a writable artifact bundle; honour PROTOTYPING_OUTPUT_DIR when
+    # the caller sets it (default unchanged for manual runs).
+    outdir = os.environ.get("PROTOTYPING_OUTPUT_DIR") or os.path.join(
+        os.path.dirname(__file__), "output")
     os.makedirs(outdir, exist_ok=True)
     initial_path = os.path.join(outdir, "initial_model.sysml")
     final_path = os.path.join(outdir, "final_model.sysml")

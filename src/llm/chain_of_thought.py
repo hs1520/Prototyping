@@ -809,6 +809,14 @@ PLATFORM PROFILE — {platform} (MANDATORY — overrides default naming):
 """
 
 
+# The canonical spellings inside this template (deployParachute,
+# CMD_PARACHUTE, initiateEmergencyLand, ...) are EXAMPLES, demoted from
+# contract to suggestion on 2026-08-31: every verifier resolves identity via
+# the frozen plan's bindings (verification_binding) or semantic resolution,
+# and the identity ratchet (tests/test_identity_ratchet.py) pins that a model
+# naming things its own way scores identically. Keeping familiar names here
+# merely lowers the semantic-fallback burden for plan-less arms — do not add
+# code that depends on these spellings, and do not "fix" a model toward them.
 BEHAVIOR_TEMPLATE = """Generate the SysML v2 behavioral fragment for the system below.
 Write ONLY executable response action definitions and state definitions — no part def, no port, no attribute, no connect, no satisfy yet. Planned accepted-event item definitions are compiler-owned: reference their exact names in `accept`, but do not redeclare them as actions.
 
