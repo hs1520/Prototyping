@@ -266,13 +266,20 @@ def test_build_run_report_includes_phase8_realization_outcome():
             "forward_flight_ok": True,
             "rank_preservation": {"n": 2.0},
             "resize_note": "",
-            "per_requirement": [{"req_id": "REQ-PERF-002"}],  # not copied wholesale
+            "per_requirement": [{"req_id": "REQ-PERF-002"}],
         },
     })
 
     assert report["realization"]["verdict"] == "CLOSED"
     assert report["realization"]["chosen"]["combo"] == "c"
-    assert "per_requirement" not in report["realization"]  # summary-level only
+    # per_requirement is the datasheet/forward-flight tier INPUT and must
+    # survive into the archived report: the old summary-only projection
+    # dropped it, and the matrix then reported the missing input as
+    # "unassigned" requirements (run3, A2) — a runner artefact blamed on
+    # the model.
+    assert report["realization"]["per_requirement"] == [
+        {"req_id": "REQ-PERF-002"}
+    ]
     assert report["recommended_by"] == "datasheet"
     assert report["recommended_estimator_feasible"] is True
     assert report["variation_proposal_source"] == "llm"
