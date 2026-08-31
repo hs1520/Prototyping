@@ -224,11 +224,56 @@ _QUANTITY_RE = re.compile(
 
 #: Terms whose presence makes a clause inspection/analysis work — no simulator
 #: can test them. Kept in step with verification_matrix._INSPECTION_KWS.
-INSPECTION_TERMS = (
-    "comply", "compliance", "regulation", "easa", "faa", "astm", "ip54", "ip5",
-    "ingress", "temperature", "certification", "certified", "certificate",
-    "material", "materials", "encrypt", "encrypted", "encryption", "aes",
+#: Why a clause is out of simulation scope, as rules rather than a judgement
+#: call. One criterion decides every exclusion: the simulation stack carries no
+#: observable that the clause could be read off. Each rule names the missing
+#: observable, so a reader can check the exclusion instead of taking it on
+#: trust — and can see that the set was not widened wherever it helped a ratio.
+#:
+#: A requirement may also declare its own method ("[V: inspection / ingress
+#: test]"). That corroborates a rule; it is not a separate way in. An exclusion
+#: with a [V:] tag and no matching rule would be an exclusion nobody can check.
+NON_SIMULABLE_RULES: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "regulatory_conformance",
+        ("comply", "compliance", "regulation", "easa", "faa", "astm",
+         "certification", "certified", "certificate"),
+        "conformance to an external standard is decided by an audit against "
+        "that standard's text, and no flight observable stands in for it",
+    ),
+    (
+        "enclosure_ingress",
+        ("ip54", "ip5", "ingress"),
+        "ingress protection is a property of physical seals; the rigid-body "
+        "and aerodynamic models carry no fluid or particle ingress state",
+    ),
+    (
+        "materials_environment",
+        ("material", "materials", "temperature"),
+        "material and thermal properties are not modelled: the airframe is a "
+        "mass-inertia-drag abstraction with no thermal or structural state",
+    ),
+    (
+        "cryptography",
+        ("encrypt", "encrypted", "encryption", "aes"),
+        "the MAVLink path is simulated in the clear; no ciphertext exists to "
+        "observe, so a cipher claim has nothing in the stack to read it from",
+    ),
 )
+
+INSPECTION_TERMS = tuple(
+    term for _, terms, _ in NON_SIMULABLE_RULES for term in terms
+)
+
+
+def classify_non_simulable(text: str) -> tuple[str, str] | None:
+    """Return (rule_name, reason) for the first rule a clause trips, else None."""
+    low = (text or "").lower()
+    for name, terms, reason in NON_SIMULABLE_RULES:
+        for term in terms:
+            if re.search(rf"(?<![A-Za-z0-9]){re.escape(term)}(?![A-Za-z0-9])", low):
+                return name, reason
+    return None
 
 #: Connectives that introduce the MEANS or MEDIUM a capability runs over. A
 #: sentence that names an untestable medium for an otherwise testable

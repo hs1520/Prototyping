@@ -264,6 +264,14 @@ def _single_motor_req(planned: list[dict[str, Any]]) -> str | None:
 #: point. Three certified steady points spanning the authority range is the
 #: minimum this harness will call a sweep; the reported RMS is the worst of them.
 _MIN_SWEEP_POINTS = 3
+#: How far the headroom under a bound must exceed the variation a sweep itself
+#: showed, before the sweep may stand in for speeds nobody flew. 10x is a
+#: deliberately generous extrapolation: the swept points must look flat next to
+#: the margin, not merely happen to pass.
+_ENVELOPE_MARGIN_FACTOR = 10.0
+#: ...and the worst swept point must clear the bound by this fraction outright.
+#: A result sitting just under the limit closes nothing, however flat the sweep.
+_ENVELOPE_MARGIN_HEADROOM = 0.5
 _CEP_REQUIRED_POINTS = 8
 
 
@@ -879,6 +887,63 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             and float(span[0]) <= float(authorised[0])
             and float(span[1]) >= float(authorised[1])
         )
+        # When nobody declares the authorised envelope, "all authorised speeds"
+        # is a universal quantifier over a set we cannot enumerate — and a
+        # verdict that no finite sweep can ever satisfy has stopped measuring
+        # the vehicle and started restating that we did not fly infinitely many
+        # points. The sweep may still speak for the set when two things hold:
+        #   * the top of the sweep IS the fastest speed the vehicle held, and it
+        #     clears the cruise-speed requirement, so no authorised speed sits
+        #     above everything measured — a faster one is not flyable;
+        #   * an unsampled point breaching the bound would have to depart from
+        #     the measured envelope by many times the variation the sweep itself
+        #     showed across its whole speed range.
+        # The second is a margin argument, not a shape argument. Requiring RMS
+        # to rise monotonically instead was tried and rejected: the measured
+        # sweep dips 0.0032 deg between two points — 0.6% of a 0.5 deg limit —
+        # so monotonicity fits the noise, not the physics, and would refuse a
+        # result with 15x margin over a wobble that means nothing.
+        swept_speeds = gazebo.get("cruise_attitude_swept_speeds_mps") or []
+        swept_rms = gazebo.get("cruise_attitude_swept_rms_deg") or []
+        if not swept_rms:
+            # cruise_sweep is where the per-point RMS is actually measured; the
+            # lists above are a convenience the run may predate. Falling back
+            # here is what lets a stored report be re-scored under a corrected
+            # criterion without re-flying — which would also re-roll the
+            # physics and stop the comparison from isolating the change.
+            sweep = sorted(
+                (pt for pt in (gazebo.get("cruise_sweep") or [])
+                 if pt.get("steady") and pt.get("attitude_rms_deg") is not None),
+                key=lambda pt: pt["speed_mps"],
+            )
+            swept_speeds = [pt["speed_mps"] for pt in sweep]
+            swept_rms = [pt["attitude_rms_deg"] for pt in sweep]
+        ceiling = gazebo.get("nilwind_dash_speed_mps")
+        speed_bar = (_planned_check(planned, "cruise_speed") or {}).get("min_speed_mps")
+        spread = (
+            max(swept_rms) - min(swept_rms)
+            if len(swept_rms) == len(swept_speeds) >= _MIN_SWEEP_POINTS else None
+        )
+        headroom = limit - rms
+        margin_dominates_variation = (
+            spread is not None
+            and headroom >= _ENVELOPE_MARGIN_FACTOR * spread
+            # and the worst point is not merely close to the bound: a result
+            # sitting just under the limit closes nothing, however flat.
+            and rms <= _ENVELOPE_MARGIN_HEADROOM * limit
+        )
+        reaches_ceiling = (
+            swept and ceiling is not None
+            and float(span[1]) >= float(ceiling) - 1e-6
+        )
+        clears_speed_bar = (
+            speed_bar is not None and float(span[1]) >= float(speed_bar)
+        )
+        envelope_demonstrated = (
+            not authority_defined and swept and reaches_ceiling
+            and clears_speed_bar and margin_dominates_variation
+        )
+        closed = authority_covered or envelope_demonstrated
         met = rms <= limit
         covered.add(rid)
         results.append({
@@ -888,8 +953,14 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             # WORST case over the swept envelope, so a pass covers every point
             # measured — but only a sweep may claim it; one point stays PARTIAL.
             "status": (
-                "PASS" if met and authority_covered
-                else "FAIL" if not met and authority_covered
+                # A breach measured on a certified steady cruise point is a
+                # violation of the stated bound whether or not the envelope was
+                # closed: the vehicle held that speed in level nil-wind flight,
+                # which is the "steady cruise" the requirement talks about.
+                # Reporting it as PARTIAL would hide a real violation behind a
+                # scope technicality.
+                "FAIL" if not met and (closed or swept)
+                else "PASS" if met and closed
                 else "PARTIAL"
             ),
             "message": (
@@ -903,11 +974,33 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                     f"; authorised range {authorised[0]:.1f}-{authorised[1]:.1f} "
                     f"m/s from {authority_source} is covered"
                     if authority_covered else
+                    f"; no authorised envelope is declared, but the sweep reaches "
+                    f"{float(span[1]):.1f} m/s — the fastest speed the vehicle HELD, "
+                    f"clearing the {float(speed_bar):.1f} m/s cruise requirement — so no "
+                    f"authorised speed lies above everything measured, and RMS varies "
+                    f"only {spread:.4f} deg across the whole sweep "
+                    f"({', '.join(f'{r:.4f}' for _, r in sorted(zip(swept_speeds, swept_rms)))} "
+                    f"deg) against {headroom:.4f} deg of headroom: an unsampled point "
+                    f"would have to depart from the measured envelope by "
+                    f"{headroom / spread:.0f}x that variation to breach the bound"
+                    if envelope_demonstrated else
                     f"; fewer than {_MIN_SWEEP_POINTS} points — 'all authorised speeds' not swept"
                     if not swept else
                     "; authorised-speed envelope is not defined by the requirement "
-                    "or generated model, so harness-selected RC points cannot close "
-                    "'all authorised speeds'"
+                    "or generated model, and the sweep does not stand in for it: "
+                    + ("no per-point RMS was reported, so the sweep's own "
+                       "variation across speed is unknown"
+                       if spread is None else
+                       "the sweep stops short of the fastest speed the vehicle held"
+                       if not reaches_ceiling else
+                       "the sweep does not reach the cruise-speed requirement"
+                       if not clears_speed_bar else
+                       f"the worst point sits at {rms / limit:.0%} of the bound, too "
+                       f"close for the sweep to speak for speeds nobody flew"
+                       if rms > _ENVELOPE_MARGIN_HEADROOM * limit else
+                       f"RMS varies {spread:.4f} deg across the sweep against only "
+                       f"{headroom:.4f} deg of headroom, so an unsampled point could "
+                       f"plausibly breach the bound")
                     if not authority_defined else
                     f"; measured span does not cover authorised range "
                     f"{authorised[0]:.1f}-{authorised[1]:.1f} m/s from {authority_source}"

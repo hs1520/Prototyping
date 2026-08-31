@@ -1990,6 +1990,14 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 "cruise_attitude_samples": worst["attitude_samples"],
                 "cruise_attitude_mean_speed_mps": worst["speed_mps"],
                 "cruise_attitude_swept_speeds_mps": [pt["speed_mps"] for pt in rms_points],
+                # Paired with the speeds above, ascending. "All authorised
+                # speeds" is a claim about points nobody flew; the per-point
+                # RMS is what says whether the worst case sits at the envelope
+                # boundary or somewhere in the interior, and only the first of
+                # those lets a bounded sweep speak for the unbounded set.
+                "cruise_attitude_swept_rms_deg": [
+                    pt["attitude_rms_deg"] for pt in rms_points
+                ],
                 "cruise_attitude_speed_span_mps": [
                     min(pt["speed_mps"] for pt in rms_points),
                     max(pt["speed_mps"] for pt in rms_points),

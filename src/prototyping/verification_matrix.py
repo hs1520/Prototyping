@@ -16,6 +16,7 @@ Method vocabulary follows the systems-engineering IADT convention
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -25,6 +26,8 @@ from .verification_obligations import (
     EvidenceCapability,
     EvidenceClaim,
     INSPECTION_TERMS,
+    NON_SIMULABLE_RULES,
+    classify_non_simulable,
     ObligationResult,
     ObligationKind,
     VerificationCriterion,
@@ -75,6 +78,7 @@ _PLANNED_TIERS = {"l2_sitl_planned", "l1_param_planned", "gazebo_deferred"}
 # Requirements that are inspection/analysis work in any real programme — the
 # simulation toolchain honestly cannot test them.
 _INSPECTION_KWS = INSPECTION_TERMS
+NON_SIMULABLE_REASONS = {n: r for n, _, r in NON_SIMULABLE_RULES}
 
 # Physics/conditions that need the Gazebo tier (S8 boundary): obstacle physics,
 # one-motor-out dynamics, wind conditions, positional release conditions.
@@ -871,6 +875,23 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
     return rows
 
 
+#: A requirement may name its own verification method — "[V: inspection /
+#: ingress test]". That CORROBORATES the rule that excluded it; it is not a
+#: second way to be excluded. Keeping it as a separate class would mean two
+#: standards deciding the same denominator, one of them unfalsifiable: a tag
+#: cannot be checked against the simulation stack, a rule can.
+_DECLARED_METHOD_RE = re.compile(r"\[V:([^\]]*)\]", re.IGNORECASE)
+_NON_SIM_METHOD_KWS = ("inspection", "audit", "conformance test", "ingress test")
+
+
+def declares_non_simulation_method(text: str) -> bool:
+    """True when the requirement itself names inspection/audit as its method."""
+    return any(
+        any(kw in match.lower() for kw in _NON_SIM_METHOD_KWS)
+        for match in _DECLARED_METHOD_RE.findall(text or "")
+    )
+
+
 def summarize(rows: List[MatrixRow]) -> Dict[str, object]:
     by_status: Dict[str, int] = {}
     by_tier: Dict[str, int] = {}
@@ -879,6 +900,24 @@ def summarize(rows: List[MatrixRow]) -> Dict[str, object]:
         for t in r.tiers:
             by_tier[t] = by_tier.get(t, 0) + 1
     obligations = [item for row in rows for item in row.obligations]
+    out_of_scope = [
+        (row, item) for row in rows for item in row.obligations
+        if item.status == "out-of-sim-scope"
+    ]
+    by_rule: Dict[str, set] = {}
+    unruled = set()
+    for row, item in out_of_scope:
+        rule = classify_non_simulable(item.clause) or classify_non_simulable(row.text)
+        if rule is None:
+            # An exclusion no rule accounts for is the dangerous kind: nobody
+            # can check it. Naming it is the point.
+            unruled.add(row.req_id)
+        else:
+            by_rule.setdefault(rule[0], set()).add(row.req_id)
+    corroborated = {
+        row.req_id for row, _ in out_of_scope
+        if declares_non_simulation_method(row.text)
+    }
     return {
         "total": len(rows),
         "by_status": dict(sorted(by_status.items())),
@@ -886,6 +925,22 @@ def summarize(rows: List[MatrixRow]) -> Dict[str, object]:
         "unassigned_req_ids": [r.req_id for r in rows if r.status == "unassigned"],
         "obligations_total": len(obligations),
         "obligations_verified": sum(item.status == "verified" for item in obligations),
+        # Two denominators, both reported. The all-obligations one answers "how
+        # much of what the customer asked for is verified"; the in-scope one
+        # answers "how much of what simulation can reach did this pipeline
+        # close" — which is the claim the method actually makes. Scoring the
+        # simulation stack on an IP54 ingress rating measures nothing about the
+        # stack. Neither number may be published without the exclusion list.
+        "obligations_out_of_sim_scope": len(out_of_scope),
+        "obligations_in_sim_scope": len(obligations) - len(out_of_scope),
+        # One criterion for every exclusion: a named rule saying which
+        # observable the simulation stack does not carry. The requirement's own
+        # [V:] tag is reported as corroboration, never as grounds.
+        "out_of_sim_scope_by_rule": {
+            rule: sorted(ids) for rule, ids in sorted(by_rule.items())
+        },
+        "out_of_sim_scope_corroborated_by_requirement": sorted(corroborated),
+        "out_of_sim_scope_without_a_rule": sorted(unruled),
     }
 
 
@@ -900,7 +955,18 @@ def to_markdown(rows: List[MatrixRow]) -> str:
         f"- Total requirements: {s['total']}",
         "- By status: " + ", ".join(f"{k}={v}" for k, v in s["by_status"].items()),
         "- By tier: " + ", ".join(f"{k}={v}" for k, v in s["by_tier"].items()),
-        f"- Verified obligations: {s['obligations_verified']}/{s['obligations_total']}",
+        f"- Verified obligations, all clauses: "
+        f"{s['obligations_verified']}/{s['obligations_total']}",
+        f"- Verified obligations, simulation-reachable clauses only: "
+        f"{s['obligations_verified']}/{s['obligations_in_sim_scope']}",
+        *[f"  - excluded by rule `{rule}` ({NON_SIMULABLE_REASONS[rule]}): "
+          + ", ".join(ids)
+          for rule, ids in s["out_of_sim_scope_by_rule"].items()],
+        "  - of those, corroborated by the requirement's own [V:] method: "
+        + (", ".join(s["out_of_sim_scope_corroborated_by_requirement"]) or "none"),
+        *([f"  - EXCLUDED WITH NO RULE (unauditable): "
+           + ", ".join(s["out_of_sim_scope_without_a_rule"])]
+          if s["out_of_sim_scope_without_a_rule"] else []),
         "",
         "| Requirement | Status | Obligation coverage | Tiers | Evidence |",
         "|---|---|---|---|---|",

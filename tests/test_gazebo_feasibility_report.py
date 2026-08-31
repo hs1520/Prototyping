@@ -397,11 +397,13 @@ def test_flight_quality_checks_judge_pass_partial_and_scope_caveats():
     assert "HELD" in results["cruise_speed"]["message"]
     assert "certified steady points" in results["cruise_speed"]["message"]
 
-    # a swept envelope closes "at all authorised speeds"; the reported RMS is
-    # the worst point, so passing covers every point measured
+    # a swept envelope may close "at all authorised speeds", but this run
+    # reported no per-point RMS, so nothing shows the worst case sits at the
+    # boundary rather than between two samples
     assert results["cruise_attitude"]["status"] == "PARTIAL"
     assert "WORST of 4 certified steady speed points" in results["cruise_attitude"]["message"]
     assert "authorised-speed envelope is not defined" in results["cruise_attitude"]["message"]
+    assert "no per-point RMS was reported" in results["cruise_attitude"]["message"]
 
     # the sweep is flown with the payload aboard, so it is a transport cruise
     assert results["payload_attitude"]["status"] == "PASS"
@@ -437,6 +439,108 @@ def test_a_single_speed_point_still_cannot_claim_all_authorised_speeds():
     assert results["payload_attitude"]["status"] == "PARTIAL"
     assert ("fewer than 3 windows observed carrying"
             in results["payload_attitude"]["message"])
+
+
+#: A sweep whose variation across speed is tiny next to the headroom under the
+#: bound — the shape of the real 2026-08-31 measurement.
+_FLAT_SWEEP = {
+    "cruise_attitude_swept_speeds_mps": [10.1, 15.6, 19.9, 21.3],
+    "cruise_attitude_swept_rms_deg": [0.022, 0.026, 0.029, 0.031],
+    "cruise_attitude_rms_deg": 0.031,
+}
+
+
+def test_a_flat_sweep_to_the_demonstrated_ceiling_closes_all_authorised_speeds():
+    """No declared envelope, and no finite sweep can enumerate one. What can be
+    shown is that nothing outside the sweep plausibly breaches the bound: the
+    top of the sweep is the fastest speed the vehicle HELD, and the sweep's own
+    variation across speed is tiny next to the headroom. Demanding more makes
+    the verdict unreachable by construction."""
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE, **_FLAT_SWEEP)
+    result = {r["check"]: r for r in rgf._req_results(live, planned)}["cruise_attitude"]
+
+    assert result["status"] == "PASS"
+    assert "no authorised envelope is declared" in result["message"]
+    assert "the fastest speed the vehicle HELD" in result["message"]
+    assert "to breach the bound" in result["message"]
+
+
+def test_a_demonstrated_envelope_still_fails_when_the_bound_is_exceeded():
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE, **_FLAT_SWEEP)
+    live["cruise_attitude_swept_rms_deg"] = [0.022, 0.026, 0.029, 0.91]
+    live["cruise_attitude_rms_deg"] = 0.91
+    result = {r["check"]: r for r in rgf._req_results(live, planned)}["cruise_attitude"]
+
+    # a breach the vehicle actually flew is a FAIL, not a scope caveat
+    assert result["status"] == "FAIL"
+
+
+def test_a_small_dip_in_the_sweep_does_not_block_closure():
+    """The real 2026-08-31 sweep dipped 0.0032 deg between two points against a
+    0.5 deg limit. A monotonicity gate refused a 15x-margin result over that;
+    the margin argument does not care about the shape, only the size."""
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE, **_FLAT_SWEEP)
+    live["cruise_attitude_swept_rms_deg"] = [0.0252, 0.0220, 0.0304, 0.0321]
+    live["cruise_attitude_rms_deg"] = 0.0321
+    result = {r["check"]: r for r in rgf._req_results(live, planned)}["cruise_attitude"]
+
+    assert result["status"] == "PASS"
+
+
+def test_a_sweep_that_varies_as_much_as_its_headroom_cannot_close():
+    """Wide variation next to a thin margin is exactly the case where an
+    unsampled point could be the one that breaches."""
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE, **_FLAT_SWEEP)
+    live["cruise_attitude_swept_rms_deg"] = [0.05, 0.14, 0.09, 0.19]
+    live["cruise_attitude_rms_deg"] = 0.19
+    result = {r["check"]: r for r in rgf._req_results(live, planned)}["cruise_attitude"]
+
+    assert result["status"] == "PARTIAL"
+    assert "could\n" not in result["message"]
+    assert "plausibly breach the bound" in result["message"]
+
+
+def test_a_worst_point_near_the_bound_closes_nothing_however_flat():
+    """A perfectly flat sweep at 0.49 deg under a 0.5 deg limit has no room to
+    extrapolate into, and flatness is not evidence that it does."""
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE, **_FLAT_SWEEP)
+    live["cruise_attitude_swept_rms_deg"] = [0.49, 0.49, 0.49, 0.49]
+    live["cruise_attitude_rms_deg"] = 0.49
+    result = {r["check"]: r for r in rgf._req_results(live, planned)}["cruise_attitude"]
+
+    assert result["status"] == "PARTIAL"
+    assert "98% of the bound" in result["message"]
+
+
+def test_a_sweep_short_of_the_held_ceiling_cannot_speak_for_the_envelope():
+    """Stopping at 19.9 m/s when the vehicle held 21.3 leaves real authorised
+    speeds above everything measured."""
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE, **_FLAT_SWEEP)
+    live["cruise_attitude_swept_speeds_mps"] = [10.1, 15.6, 18.4, 19.9]
+    live["cruise_attitude_speed_span_mps"] = [10.1, 19.9]
+    result = {r["check"]: r for r in rgf._req_results(live, planned)}["cruise_attitude"]
+
+    assert result["status"] == "PARTIAL"
+    assert "stops short of the fastest speed the vehicle held" in result["message"]
+
+
+def test_a_declared_envelope_still_outranks_the_demonstrated_one():
+    """A model that names its authorised range is judged against that range,
+    not against what the airframe happened to reach."""
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE, **_FLAT_SWEEP)
+    live["cruise_authorised_speed_range_mps"] = [10.0, 24.0]   # beyond the sweep
+    live["cruise_authorised_speed_source"] = "generated_model"
+    result = {r["check"]: r for r in rgf._req_results(live, planned)}["cruise_attitude"]
+
+    assert result["status"] == "PARTIAL"
+    assert "does not cover authorised range" in result["message"]
 
 
 def test_cruise_attitude_closes_only_when_model_authority_range_is_covered():

@@ -650,3 +650,104 @@ def test_a_pass_may_only_close_a_bar_the_requirement_or_the_result_states():
     assert unstated.status == "partial"
     assert any("legacy PASS downgraded" in e for e in unstated.evidence)
     assert any("no verification criterion declared" in e for e in unstated.evidence)
+
+
+def _row(req_id, text, statuses):
+    from src.prototyping.verification_matrix import MatrixRow
+    from src.prototyping.verification_obligations import ObligationKind, ObligationResult
+    return MatrixRow(
+        req_id=req_id, text=text, tiers=(), methods=(), status="partial",
+        obligations=tuple(
+            ObligationResult(obligation_id=f"{req_id}_{i}", clause=text,
+                             kind=ObligationKind.BEHAVIOR, status=st)
+            for i, st in enumerate(statuses)
+        ),
+    )
+
+
+def test_out_of_sim_scope_is_excluded_from_the_in_scope_denominator():
+    """Scoring a simulation stack on an IP54 ingress rating measures nothing
+    about the stack. Both denominators are published so a reader can see which
+    one any given claim rests on."""
+    s = summarize([
+        _row("REQ-CONS-002",
+             "All enclosures shall meet a minimum IP54 ingress-protection "
+             "rating. [V: inspection / ingress test]",
+             ["out-of-sim-scope"]),
+        _row("REQ-PERF-003",
+             "The system shall achieve a cruise airspeed of at least 18 m/s.",
+             ["verified", "verified"]),
+    ])
+
+    assert s["obligations_total"] == 3
+    assert s["obligations_out_of_sim_scope"] == 1
+    assert s["obligations_in_sim_scope"] == 2
+    assert s["obligations_verified"] == 2
+    # one criterion decides it: a named rule saying which observable is absent
+    assert s["out_of_sim_scope_by_rule"] == {"enclosure_ingress": ["REQ-CONS-002"]}
+    assert s["out_of_sim_scope_without_a_rule"] == []
+    # the [V:] tag corroborates that rule; it is not a second way in
+    assert s["out_of_sim_scope_corroborated_by_requirement"] == ["REQ-CONS-002"]
+
+
+def test_an_untagged_requirement_is_excluded_by_the_same_rule_criterion():
+    """A requirement with no [V:] tag is not excluded on anybody's say-so: the
+    same rule table decides it, and names the observable the stack lacks. One
+    criterion, so the denominator cannot be widened by hand."""
+    s = summarize([
+        _row("REQ-INTF-001",
+             "The system shall exchange telemetry with the GCS using the "
+             "MAVLink v2.0 protocol over an AES-256 encrypted RF channel.",
+             ["verified", "out-of-sim-scope"]),
+    ])
+
+    assert s["out_of_sim_scope_by_rule"] == {"cryptography": ["REQ-INTF-001"]}
+    assert s["out_of_sim_scope_without_a_rule"] == []
+    # no [V:] tag — the rule stands alone, and says why
+    assert s["out_of_sim_scope_corroborated_by_requirement"] == []
+
+
+def test_both_denominators_appear_in_the_published_matrix():
+    """A ratio without its exclusion list is not auditable."""
+    md = to_markdown([
+        _row("REQ-CONS-004",
+             "The system shall comply with EASA UAS Category C operational "
+             "regulations. [V: inspection / regulatory audit]",
+             ["out-of-sim-scope"]),
+        _row("REQ-PERF-003", "cruise airspeed of at least 18 m/s", ["verified"]),
+    ])
+
+    assert "all clauses: 1/2" in md
+    assert "simulation-reachable clauses only: 1/1" in md
+    assert "excluded by rule `regulatory_conformance`" in md
+    assert "no flight observable stands in for it" in md
+    assert "REQ-CONS-004" in md
+    assert "corroborated by the requirement's own [V:] method: REQ-CONS-004" in md
+
+
+def test_an_exclusion_no_rule_accounts_for_is_flagged_as_unauditable():
+    """The dangerous exclusion is the one nobody can check. It is named in the
+    published matrix rather than folded quietly into the total."""
+    s = summarize([
+        _row("REQ-MYST-001", "The system shall be good.", ["out-of-sim-scope"]),
+    ])
+    assert s["out_of_sim_scope_without_a_rule"] == ["REQ-MYST-001"]
+    assert s["out_of_sim_scope_by_rule"] == {}
+
+    md = to_markdown([
+        _row("REQ-MYST-001", "The system shall be good.", ["out-of-sim-scope"]),
+    ])
+    assert "EXCLUDED WITH NO RULE (unauditable): REQ-MYST-001" in md
+
+
+def test_every_rule_names_a_distinct_missing_observable():
+    """A rule table whose reasons repeat is a single rule wearing four hats."""
+    from src.prototyping.verification_obligations import NON_SIMULABLE_RULES
+
+    names = [n for n, _, _ in NON_SIMULABLE_RULES]
+    reasons = [r for _, _, r in NON_SIMULABLE_RULES]
+    terms = [t for _, ts, _ in NON_SIMULABLE_RULES for t in ts]
+    assert len(set(names)) == len(names)
+    assert len(set(reasons)) == len(reasons)
+    # no term may be claimed by two rules, or the exclusion reason is ambiguous
+    assert len(set(terms)) == len(terms)
