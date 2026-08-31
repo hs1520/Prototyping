@@ -110,6 +110,9 @@ class ModelDrivenMission:
     #: a gap.
     condition_only: List[Tuple[float, str, Tuple[str, ...]]] = field(
         default_factory=list)
+    #: (adapter_constant, model_action) — actuation identities accepted by
+    #: causal role rather than by spelling; the rename is on the record.
+    action_resolutions: List[Tuple[str, str]] = field(default_factory=list)
     _digest: str = ""
 
     def __post_init__(self) -> None:
@@ -390,11 +393,46 @@ class ModelDrivenMission:
     def performed(
         self, decisions: Sequence[ModelDecision], action: ModelAction,
     ) -> bool:
-        """Whether this transition set invoked the exact executable action."""
-        return any(
+        """Whether this transition set invoked the executable action.
+
+        Verbatim match first. Otherwise identity by CAUSAL ROLE: the
+        decisions handed in are the model's response to one offered event,
+        and when they invoke exactly one distinct action, that action IS
+        the response — whatever the model named it. run3 fires
+        ``releasePayload`` where this adapter's constant says
+        ``actuateRelease``; the literal comparison made the harness refuse
+        to actuate, the payload never separated, and both the positional
+        and the timed checks starved of evidence — a harness spelling
+        reported as "the model declined". Causal role alone would launder:
+        a model answering the delivery event with ``lockPayload`` also fired
+        exactly one action, and actuating the gripper on it would fabricate
+        a release the model refused. So the fallback carries the same
+        semantic gate as resolve_event — the fired action must share at
+        least one term with the adapter's action name (release↔release,
+        deploy/parachute↔parachute); an unrelated or opposing action stays
+        not-performed. Two distinct fired actions are refused rather than
+        guessed, and the physical observation downstream remains the judge
+        either way. Every causal-role acceptance is recorded in
+        ``action_resolutions`` so the evidence can name the rename.
+        """
+        from src.utils.sysml_text_utils import semantic_terms
+
+        if any(
             decision.action_definition == action.value
             for decision in decisions
-        )
+        ):
+            return True
+        fired = {
+            decision.action_definition
+            for decision in decisions
+            if decision.action_definition
+        }
+        if len(fired) == 1:
+            (resolved,) = fired
+            if semantic_terms(resolved) & semantic_terms(action.value):
+                self.action_resolutions.append((action.value, resolved))
+                return True
+        return False
 
     # -- evidence ---------------------------------------------------------
 

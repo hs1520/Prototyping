@@ -1343,6 +1343,13 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 "payload_release_decisions": (
                     [d.as_dict() for d in release_decisions]
                     if mission is not None else None),
+                # (adapter_constant, model_action) pairs performed() accepted
+                # by causal role — the report must be able to recognise the
+                # model's own spelling of the actuation, not just the
+                # adapter's.
+                "action_resolutions": (
+                    [list(pair) for pair in mission.action_resolutions]
+                    if mission is not None else None),
                 "payload_abort_active": abort_active,
                 # "no guard in the model" and "a guard the harness never fed"
                 # look identical in the flight: both release. Recording which
@@ -2165,14 +2172,25 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     "CriticalPropulsionFailure", time=time.monotonic(),
                     variables=hazard_state,
                 )
+                chute_fired_defs = [
+                    decision.action_definition
+                    for decision in chute_decisions
+                    if decision.action_definition is not None
+                ]
+                # The expected winner is the model's OWN parachute action:
+                # when the failure event fired exactly one distinct action,
+                # that action is the response by causal role (run3 names it
+                # deployBallisticRecoveryParachute); the adapter constant is
+                # only the no-decision fallback.
+                winner_action = (
+                    chute_fired_defs[0]
+                    if len(set(chute_fired_defs)) == 1 and chute_fired_defs
+                    else ModelAction.DEPLOY_PARACHUTE.value
+                )
                 precedence_evidence = evaluate_safety_precedence(
                     control_fired_action_definitions=control_fired,
-                    fired_action_definitions=(
-                        decision.action_definition
-                        for decision in chute_decisions
-                        if decision.action_definition is not None
-                    ),
-                    winner_action_definition=ModelAction.DEPLOY_PARACHUTE.value,
+                    fired_action_definitions=chute_fired_defs,
+                    winner_action_definition=winner_action,
                     competing_action_definitions=competing_actions,
                 )
                 print(f"[model] critical propulsion failure offered; model fired "
@@ -2205,6 +2223,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     "generated model" if mission is not None else "harness"),
                 "parachute_decisions": (
                     [d.as_dict() for d in chute_decisions]
+                    if mission is not None else None),
+                "action_resolutions": (
+                    [list(pair) for pair in mission.action_resolutions]
                     if mission is not None else None),
                 "parachute_observer_available": observer_available,
                 "parachute_model_observed": chute_delay is not None,

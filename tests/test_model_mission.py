@@ -65,6 +65,52 @@ def test_the_model_fires_its_own_transition_and_action():
     assert mission.state_of("PayloadMechanism.PayloadReleaseBehavior") == "Releasing"
 
 
+def test_a_model_spelled_release_action_is_performed_by_causal_role():
+    """run3 names its action ``releasePayload`` where the adapter constant
+    says ``actuateRelease``. The literal comparison refused to actuate, the
+    payload never separated, and the positional/timed checks starved of
+    evidence — a harness spelling reported as "the model declined". One
+    distinct fired action sharing an actuation term IS the model's response,
+    and the rename goes on the record."""
+    model = _MODEL.replace(
+        "entry action onReleasing : actuateRelease;",
+        "entry action onReleasing : releasePayload;",
+    ).replace("action def actuateRelease {}", "action def releasePayload {}")
+    mission = ModelDrivenMission(model)
+
+    fired = mission.offer("DeliveryCoordinateSatisfied", time=1.0)
+
+    assert [d.action_definition for d in fired] == ["releasePayload"]
+    assert mission.performed(fired, ModelAction.RELEASE_PAYLOAD)
+    assert mission.action_resolutions == [("actuateRelease", "releasePayload")]
+
+
+def test_two_distinct_fired_actions_are_refused_not_guessed():
+    """The tie discipline of resolve_event, applied to actions: when the
+    event fires two different action definitions, picking one would silently
+    decide which behaviour the run exercised."""
+    model = _MODEL.replace(
+        "entry action onReleasing : actuateRelease;",
+        "entry action onReleasing : releasePayload;",
+    ).replace(
+        "action def actuateRelease {}",
+        "action def releasePayload {}\n        action def signalRelease {}",
+    ).replace(
+        "entry action onAborted : lockPayload;",
+        "entry action onAborted : signalRelease;",
+    ).replace(
+        "accept AbortConditionActive",
+        "accept DeliveryCoordinateSatisfied",
+    )
+    mission = ModelDrivenMission(model)
+
+    fired = mission.offer("DeliveryCoordinateSatisfied", time=1.0)
+
+    assert len({d.action_definition for d in fired}) == 2
+    assert not mission.performed(fired, ModelAction.RELEASE_PAYLOAD)
+    assert mission.action_resolutions == []
+
+
 def test_an_unrelated_action_on_the_same_event_does_not_authorize_release():
     model = _MODEL.replace(
         "entry action onReleasing : actuateRelease;",
