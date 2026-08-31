@@ -491,8 +491,11 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         result["abort_inhibition_req"] = str(inhibition_req["req_id"])
         result["abort_inhibition_return_code"] = rc_inhibit
         result["abort_inhibition_abort_active"] = inhibit_result.get("payload_abort_active")
+        # None = the release identity never resolved on this model (harness
+        # question unput); [] = resolved and genuinely unguarded. Coercing the
+        # first into the second is how a guarded model gets blamed.
         result["abort_inhibition_release_guards"] = inhibit_result.get(
-            "payload_release_guards") or []
+            "payload_release_guards")
         result["abort_inhibition_flags_unbound"] = inhibit_result.get(
             "payload_abort_flags_unbound") or []
         result["abort_inhibition_flags_raised"] = inhibit_result.get(
@@ -1083,7 +1086,9 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         released = gazebo.get("abort_inhibition_release_detected")
         observer = bool(gazebo.get("abort_inhibition_observer_available"))
         aborted = bool(gazebo.get("abort_inhibition_abort_active"))
-        guards = list(gazebo.get("abort_inhibition_release_guards") or [])
+        guards_value = gazebo.get("abort_inhibition_release_guards")
+        guards_measured = guards_value is not None
+        guards = list(guards_value or [])
         unbound = list(gazebo.get("abort_inhibition_flags_unbound") or [])
         raised = dict(gazebo.get("abort_inhibition_flags_raised") or {})
         # A release that fires past a guard the harness never fed says nothing
@@ -1103,7 +1108,8 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             "req_id": rid,
             "check": "delivery_abort_inhibition",
             "status": (
-                "INCONCLUSIVE" if not (aborted and observer) or blind
+                "INCONCLUSIVE"
+                if not (aborted and observer) or blind or not guards_measured
                 else "FAIL" if released else "PASS"
             ),
             "message": (
@@ -1111,6 +1117,10 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                 "delivery coordinate; "
                 + (f"the model then fired {fired}; " if fired else "")
                 + (
+                    "the release identity did not resolve on this model, so "
+                    "whether the release path is guarded was NOT MEASURED — "
+                    "a harness resolution gap, not a model finding"
+                    if not guards_measured else
                     f"the release path is guarded by {guards} but this run "
                     f"raised no flag it reads ({unbound} stayed unbound), so an "
                     "unset boolean read FALSE and the guarded model behaved "

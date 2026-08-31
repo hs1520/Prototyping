@@ -262,6 +262,13 @@ class ModelDrivenMission:
         and "the harness never raised the flag the guard reads" produce the
         same behaviour and are different findings, so a verdict on inhibition
         has to be able to tell them apart.
+
+        The action name is a MODEL identity. A harness that queries this with
+        its own canonical spelling gets () for a model that names the action
+        differently — indistinguishable from "unconditional" — which is how a
+        guarded run3 was reported as carrying no inhibition logic. Verdicts
+        should prefer :meth:`guards_for_event`, whose identity comes from the
+        model via event resolution.
         """
         return tuple(
             guard.description()
@@ -270,6 +277,34 @@ class ModelDrivenMission:
             if not transition.is_initial
             and instance.sm.response_action_definition_for_state(
                 transition.target) == action_definition
+            for guard in transition.guards
+        )
+
+    def guards_for_event(self, event: str) -> Optional[Tuple[str, ...]]:
+        """Guards on every transition that fires in response to *event* —
+        identity by causal role, no action names involved.
+
+        The scenario's canonical event is resolved onto the model's own
+        declaration first (layer 1); the transitions accepting the resolved
+        event ARE the response the requirement is about, whatever the model
+        called the actions they run. Returns:
+
+        - ``None``  — the event did not resolve: the question could not be
+          put to this model, so the caller must report "not measured",
+          never "unguarded";
+        - ``()``    — resolved, and the responding transitions carry no
+          guard: a real finding about the model;
+        - guards    — resolved and guarded.
+        """
+        resolved, _how = self.resolve_event(event)
+        if resolved is None:
+            return None
+        return tuple(
+            guard.description()
+            for instance in self.machines.values()
+            for transition in instance.sm.transitions
+            if not transition.is_initial
+            and transition.accept_trigger == resolved
             for guard in transition.guards
         )
 

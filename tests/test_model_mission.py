@@ -395,3 +395,33 @@ def test_an_event_that_says_something_else_does_not_match():
     assert other.resolve_event("CriticalPropulsionFailure")[0] == (
         "CriticalPropulsionSubsystemFailure")
     assert other.resolve_event("SinglePropulsionFailure")[0] is None
+
+
+def test_guards_for_event_identifies_release_by_causal_role():
+    """The inhibition verdict needs no action names: the guards on whatever
+    transitions answer the (resolved) delivery event ARE the release guards.
+    run3's model, previously reported as 'carries no guard' because the
+    harness asked for its own spelling 'actuateRelease'."""
+    from pathlib import Path
+    text = (
+        Path(__file__).parent.parent / "examples" / "output"
+        / "run3_authoritative_20260831" / "final_model.sysml"
+    ).read_text()
+    mission = ModelDrivenMission(model_text=text)
+
+    guards = mission.guards_for_event("DeliveryCoordinateSatisfied")
+    assert guards is not None
+    assert any("deliveryAbortConditionActive" in g for g in guards)
+    # The old spelling-bound lookup still sees nothing — the contrast that
+    # produced the false 'no inhibition logic' verdict.
+    assert mission.guards_reaching_action("actuateRelease") == ()
+
+
+def test_guards_for_event_unresolved_is_none_not_unguarded():
+    from pathlib import Path
+    text = (
+        Path(__file__).parent.parent / "examples" / "output"
+        / "run3_authoritative_20260831" / "final_model.sysml"
+    ).read_text()
+    mission = ModelDrivenMission(model_text=text)
+    assert mission.guards_for_event("WarpDriveEngaged") is None

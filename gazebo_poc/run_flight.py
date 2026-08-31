@@ -1348,8 +1348,16 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 # look identical in the flight: both release. Recording which
                 # one happened is what keeps the verdict from blaming the model
                 # for a condition it was never told about.
+                # Identity by causal role: the guards on whatever transitions
+                # answer the delivery event THIS model declares. None means
+                # the event did not resolve — the question was never put, and
+                # no verdict may read that as "unguarded". (The old lookup
+                # asked for the harness spelling 'actuateRelease' and reported
+                # a guarded run3 as carrying no inhibition logic.)
                 "payload_release_guards": (
-                    list(mission.guards_reaching_action("actuateRelease"))
+                    (lambda g: None if g is None else list(g))(
+                        mission.guards_for_event("DeliveryCoordinateSatisfied")
+                    )
                     if mission is not None else []
                 ),
                 "payload_abort_flags_unbound": (
