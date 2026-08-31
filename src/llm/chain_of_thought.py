@@ -419,7 +419,8 @@ Return exactly one JSON object in a ```json block using this schema:
           "source": "<declared source state_id>",
           "target": "<declared target state_id>",
           "trigger_kind": "ACCEPT|GUARD",
-          "trigger": "<event definition identifier or guard expression>"
+          "trigger": "<event definition identifier or guard expression>",
+          "guard": "<boolean guard expression composed WITH an ACCEPT trigger; empty when the transition is unconditional>"
         }}
       ],
       "provenance": {{
@@ -487,6 +488,16 @@ Rules:
   attribute named with the response family plus `Latency`, `Delay`, or `Time`,
   copy the exact N with unit `s`, and add a FROZEN_REQUIREMENT constraint that
   references the attribute. Do not leave these members for a later text repair.
+- An inhibition requirement — "maintain/keep <state> whenever <condition>",
+  "shall not transition to <state> if <condition>" — must reach the plan as a
+  `guard` COMPOSED with the accept trigger on the transition that performs the
+  inhibited departure or entry: keep `trigger_kind` `ACCEPT` with the domain
+  event and set `guard` to a boolean expression naming the condition (for
+  example `"not deliveryAbortConditionActive"`). The event still arrives; the
+  transition must not fire while the condition holds. Do not convert the
+  event into a `GUARD` transition to express the condition — that erases the
+  trigger — and do not plan the inhibition as a separate state machine that
+  never guards the departure itself.
 - Keep this behavior IR minimal and requirement-driven. Do not add a behavior
   merely because a component exists. Every declared transition must preserve
   the frozen trigger/effect semantics or be marked honestly as a design
