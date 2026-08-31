@@ -303,7 +303,9 @@ class RequirementLinker:
             gm = entry.guard_matcher
             for pname in part_names:
                 for guard in self._guard_map.get(pname, []):
-                    if not self._guard_satisfies(guard, gm, pname, req_id):
+                    if not self._guard_satisfies(
+                        guard, gm, pname, entry.semantic_tag
+                    ):
                         continue
                     gkey = (pname,
                             getattr(guard, "attribute", ""),
@@ -343,13 +345,41 @@ class RequirementLinker:
                 )
                 if tag is None:
                     # Families without a preference table (PAYLOAD,
-                    # PARACHUTE) map by family — unique within the AST tag
-                    # set, still derived from the requirement side only.
+                    # PARACHUTE) map by family — but the ambiguity domain is
+                    # the WHOLE catalogue gated by each entry's own req_text
+                    # gates, and only a lone survivor assigns the tag. Two
+                    # narrower domains were measured to poison SAFE_008
+                    # ("unique within the AST tag set" missed the power-on
+                    # entry entirely): its PowerOn identity got tagged
+                    # PAYLOAD_ABORT_LOCK and the power-on default test was
+                    # displaced by the release-then-grab flight test.
+                    # SAFE_008's text passes both the abort-lock and
+                    # power-on gates → ambiguous → no identity tag, keyword
+                    # fallback (original routing). SAFE_006 passes only the
+                    # abort gate → unique → identity survives renames.
                     family = self._requirement_family(req_id)
-                    family_tags = [
-                        t for t in AST_GUARD_TAGS
-                        if family and self._tag_family(t) == family
-                    ]
+                    req_text = self._requirement_match_text(req_id)
+                    req_blob = f"{req_id} {req_text}".lower()
+
+                    def _gates_pass(entry) -> bool:
+                        if entry.req_text_kws and req_text and not any(
+                            kw in req_blob for kw in entry.req_text_kws
+                        ):
+                            return False
+                        if entry.req_text_exclude_kws and any(
+                            kw in req_blob
+                            for kw in entry.req_text_exclude_kws
+                        ):
+                            return False
+                        return True
+
+                    family_tags = sorted({
+                        entry.semantic_tag
+                        for entry in self._tag_to_entry.values()
+                        if family
+                        and self._tag_family(entry.semantic_tag) == family
+                        and _gates_pass(entry)
+                    })
                     if len(family_tags) == 1:
                         tag = family_tags[0]
             except Exception as exc:
@@ -376,10 +406,11 @@ class RequirementLinker:
         """
         try:
             from src.sitl.ast_synthesizer import synthesize_specs
+            self._identity_tag_map = self._binding_identity_tags()
             return synthesize_specs(
                 self._model,
                 verbose=self._verbose,
-                identity_tags=self._binding_identity_tags(),
+                identity_tags=self._identity_tag_map,
             )
         except Exception as e:
             if self._verbose:
@@ -561,47 +592,24 @@ class RequirementLinker:
             }
         return result
 
-    _GUARD_EXPR_STOP = frozenset({"not", "and", "or", "true", "false", "if"})
-
-    def _identity_pool(self, req_id: Optional[str], part_name: str) -> set[str]:
-        """Plan-declared identifier spellings (lowercased) that ARE the model
-        elements realizing *req_id* — accept-event names and guard-flag
-        tokens, straight from the frozen plan's bindings.
-
-        STRICT ONLY: identities come from the requirement's OWN binding, or
-        not at all. A part-scoped pool was tried and measured: it handed
-        SAFE_008's PowerOn event to FUNC_005's PARACHUTE_DEPLOY entry —
-        cross-family nonsense in the laundering direction. A requirement
-        whose binding has no behavior identity (run3's FUNC_005: the plan
-        attributes the release behavior to PERF_005) stays on the keyword
-        fallback — that residue is a plan-expressiveness boundary, pinned by
-        the identity ratchet, not harness vocabulary to widen around."""
-        if not self._requirement_bindings:
-            return set()
-        from src.simulation.verification_binding import (
-            binding_for,
-            identity_tokens,
-        )
-        binding = binding_for(self._requirement_bindings, req_id or "")
-        if binding is None:
-            return set()
-        return set(identity_tokens(binding))
-
     def _guard_satisfies(self, guard, gm: GuardMatcher,
                           part_name: str,
-                          req_id: Optional[str] = None) -> bool:
+                          entry_tag: str = "") -> bool:
         """判断一条 guard（或 accept 伪 guard）是否匹配 GuardMatcher。
 
-        变量身份两级判定：计划绑定的精确身份优先(模型自选拼写也认),
-        英文关键词族仅作无计划时的兜底——词表面第五处的迁移。"""
+        变量身份判定必须 TAG 一致:变量的计划身份 tag == 本词条的
+        semantic_tag 才算身份命中。"变量属于本需求"式的池放宽被实测击穿
+        两次:SAFE_008 的 PowerOn 身份让它认领 abort 释放-抓取词条,顶掉
+        了自己的上电默认检查——身份池回答"这是谁的元素",不回答"它满足
+        哪个词条"。无 tag 的变量(歧义)不放宽任何词条,关键词兜底。"""
         kind = getattr(guard, "kind", "")
         var  = getattr(guard, "attribute", "").lower()
-        identity_pool = self._identity_pool(req_id, part_name)
+        tag_map = getattr(self, "_identity_tag_map", {})
 
         def _var_matches() -> bool:
-            return var in identity_pool or any(
-                kw in var for kw in gm.var_keywords
-            )
+            if entry_tag and tag_map.get(var) == entry_tag:
+                return True
+            return any(kw in var for kw in gm.var_keywords)
 
         if kind == "accept_event":
             # accept 事件转移：仅显式声明 "event" 的条目可匹配；
@@ -889,9 +897,10 @@ class RequirementLinker:
                 ):
                     continue
                 attrs = self._attr_map.get(pname, {})
-                identity_pool = self._identity_pool(req_id, pname)
+                tag_map = getattr(self, "_identity_tag_map", {})
                 for aname, aval in attrs.items():
-                    if aname.lower() not in identity_pool and not any(
+                    if tag_map.get(aname.lower()) != entry.semantic_tag \
+                            and not any(
                         kw in aname.lower() for kw in am.attr_keywords
                     ):
                         continue
@@ -914,7 +923,8 @@ class RequirementLinker:
                 # allow_port_match 也不放行，落入诚实的 no-mapping。
                 if am.allow_port_match and not self._has_dynamic_params(entry):
                     for port_name in self._port_map.get(pname, []):
-                        if port_name.lower() not in identity_pool and not any(
+                        if tag_map.get(port_name.lower()) != entry.semantic_tag \
+                                and not any(
                             kw in port_name.lower() for kw in am.attr_keywords
                         ):
                             continue
