@@ -357,7 +357,17 @@ _QUALITY_LIVE = {
     "nilwind_dash_steady_state": _STEADY,
     "cruise_sweep_speeds_mps": [10.1, 15.6, 19.9, 21.3],
     "cruise_sweep_payload_attached": True,
-    "cruise_payload_attachment_observed": True,
+    "transport_windows": [
+        {"label": "hover", "attitude_rms_deg": 0.44,
+         "attachment": {"observed": True, "distance_m": 0.15}},
+        {"label": "cruise@rc1420", "attitude_rms_deg": 0.21, "speed_mps": 10.1,
+         "attachment": {"observed": True, "distance_m": 0.15}},
+        {"label": "cruise@rc1330", "attitude_rms_deg": 0.31, "speed_mps": 15.6,
+         "attachment": {"observed": True, "distance_m": 0.15}},
+        {"label": "cruise@rc1220", "attitude_rms_deg": 0.28, "speed_mps": 19.9,
+         "attachment": {"observed": True, "distance_m": 0.15}},
+    ],
+    "cruise_payload_attached": True,
     "cruise_payload_attachment_distance_m": 0.8,
     "cruise_attitude_rms_deg": 0.31,
     "cruise_attitude_roll_rms_deg": 0.22,
@@ -369,7 +379,7 @@ _QUALITY_LIVE = {
     "hover_attitude_rms_deg": 0.44,
     "hover_attitude_samples": 132,
     "hover_attitude_with_payload": True,
-    "hover_payload_attachment_observed": True,
+    "hover_payload_attached": True,
     "hover_payload_attachment_distance_m": 0.8,
     "hover_throttle_pct": 38.0,
     "payload_mass_kg": 1.5,
@@ -393,7 +403,8 @@ def test_flight_quality_checks_judge_pass_partial_and_scope_caveats():
     # the sweep is flown with the payload aboard, so it is a transport cruise
     assert results["payload_attitude"]["status"] == "PASS"
     assert "margin" in results["payload_attitude"]["message"]
-    assert "cruise-transport swept with the payload aboard" in results["payload_attitude"]["message"]
+    assert ("window(s) observed carrying the payload"
+            in results["payload_attitude"]["message"])
 
 
 def test_a_speed_that_never_plateaued_cannot_be_reported():
@@ -409,13 +420,20 @@ def test_a_speed_that_never_plateaued_cannot_be_reported():
 def test_a_single_speed_point_still_cannot_claim_all_authorised_speeds():
     planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
     live = dict(_QUALITY_LIVE, cruise_attitude_points=1,
-                cruise_attitude_speed_span_mps=[19.7, 19.7])
+                cruise_attitude_speed_span_mps=[19.7, 19.7],
+                # one carrying window is not an envelope, however many the
+                # sweep flew — transport is judged on what was observed loaded
+                transport_windows=[
+                    {"label": "hover", "attitude_rms_deg": 0.44,
+                     "attachment": {"observed": True, "distance_m": 0.15}},
+                ])
     results = {r["check"]: r for r in rgf._req_results(live, planned)}
     assert results["cruise_attitude"]["status"] == "PARTIAL"
     assert "not swept" in results["cruise_attitude"]["message"]
     # and without a swept transport cruise the payload claim stays PARTIAL too
     assert results["payload_attitude"]["status"] == "PARTIAL"
-    assert "carry-hover window only" in results["payload_attitude"]["message"]
+    assert ("fewer than 3 windows observed carrying"
+            in results["payload_attitude"]["message"])
 
 
 def test_cruise_attitude_closes_only_when_model_authority_range_is_covered():
@@ -461,7 +479,7 @@ def test_flight_quality_checks_stay_planned_without_measurements():
 def test_payload_attitude_requires_payload_actually_attached():
     planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
     live = dict(_QUALITY_LIVE)
-    live["hover_payload_attachment_observed"] = False
+    live["hover_payload_attached"] = False
     results = {r["check"]: r for r in rgf._req_results(live, planned)}
     # hover attitude measured without the payload must not judge FUNC-003
     assert results["payload_attitude"]["status"] == "PLANNED"
@@ -470,8 +488,8 @@ def test_payload_attitude_requires_payload_actually_attached():
 def test_payload_configuration_flags_cannot_substitute_for_attachment_truth():
     planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
     live = dict(_QUALITY_LIVE)
-    live.pop("hover_payload_attachment_observed")
-    live.pop("cruise_payload_attachment_observed")
+    live.pop("hover_payload_attached")
+    live.pop("cruise_payload_attached")
 
     results = {r["check"]: r for r in rgf._req_results(live, planned)}
 
@@ -1046,3 +1064,40 @@ def test_passing_engineering_interpretation_does_not_become_requirement_pass():
 
 def test_the_repeat_count_is_declared_not_incidental():
     assert rgf._MOTOR_OUT_REPEATS >= 3
+
+
+def test_a_cruise_window_flown_after_release_is_not_transport_evidence():
+    """The defect this replaced: attachment was a flag set before takeoff, so a
+    window measured after separation counted as transport evidence."""
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE, transport_windows=[
+        {"label": "hover", "attitude_rms_deg": 0.44,
+         "attachment": {"observed": True, "distance_m": 0.15}},
+        {"label": "cruise@rc1420", "attitude_rms_deg": 0.21, "speed_mps": 10.1,
+         "attachment": {"observed": True, "distance_m": 0.15}},
+        # released: the box is on the ground, the vehicle is at altitude
+        {"label": "cruise@rc1330", "attitude_rms_deg": 0.31, "speed_mps": 15.6,
+         "attachment": {"observed": True, "distance_m": 9.8}},
+        {"label": "cruise@rc1220", "attitude_rms_deg": 0.28, "speed_mps": 19.9,
+         "attachment": {"observed": True, "distance_m": 12.4}},
+    ])
+
+    row = {r["check"]: r for r in rgf._req_results(live, planned)}["payload_attitude"]
+
+    assert row["status"] == "PARTIAL"
+    assert "2 window(s) excluded as observed unloaded" in row["message"]
+    assert "cruise@rc1330" in row["message"] and "cruise@rc1220" in row["message"]
+    assert "fewer than 3 windows observed carrying" in row["message"]
+
+
+def test_a_run_that_never_looked_cannot_claim_transport():
+    planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
+    live = dict(_QUALITY_LIVE, transport_windows=[
+        {"label": "hover", "attitude_rms_deg": 0.44,
+         "attachment": {"observed": False, "distance_m": None}},
+    ])
+
+    row = {r["check"]: r for r in rgf._req_results(live, planned)}["payload_attitude"]
+
+    assert row["status"] == "PARTIAL"
+    assert "attachment was never observed" in row["message"]

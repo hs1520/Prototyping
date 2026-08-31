@@ -23,6 +23,11 @@ import time
 from pathlib import Path
 
 from gazebo_poc.sdf_generator import generate_sdf
+from gazebo_poc.payload_transport_evidence import (
+    PayloadAttachment,
+    TransportWindow,
+    observe_attachment,
+)
 from gazebo_poc.steady_state import steady_state
 
 _IMG = "headless_gazebo"
@@ -401,7 +406,10 @@ def _model_xyz(model: str) -> tuple[float, float, float] | None:
     return _parse_model_xyz(result.stdout) if result.returncode == 0 else None
 
 
-_PAYLOAD_ATTACHED_MAX_DISTANCE_M = 2.0
+#: Single source for the attachment bound — the evidence module owns it,
+#: so the distance the harness reports and the distance the verdict uses
+#: cannot drift apart.
+from gazebo_poc.payload_transport_evidence import ATTACHED_MAX_DISTANCE_M as _PAYLOAD_ATTACHED_MAX_DISTANCE_M
 
 
 def _payload_attachment_distance() -> float | None:
@@ -1091,13 +1099,19 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 "hover_attitude_roll_rms_deg": hover_rms["roll_rms_deg"],
                 "hover_attitude_pitch_rms_deg": hover_rms["pitch_rms_deg"],
                 "hover_attitude_rms_deg": hover_rms["rms_deg"],
-                # payload (if any) is still attached during this window — the
-                # release happens after hover sampling, so these are carry stats.
-                "hover_attitude_with_payload": bool(
-                    payload_release and payload_mass_kg > 0
+                # Observed, not assumed: the release happens later in the same
+                # flight, so a configuration flag cannot say what was aboard
+                # when this window was sampled.
+                "hover_attitude_with_payload": (
+                    hover_payload_distance is not None
+                    and hover_payload_distance <= _PAYLOAD_ATTACHED_MAX_DISTANCE_M
                 ),
                 "hover_payload_attachment_distance_m": hover_payload_distance,
-                "hover_payload_attachment_observed": (
+                # Named for what it means: the payload was ATTACHED, not merely
+                # that a pose was readable. The two were conflated, and a field
+                # that says "observed" while meaning "attached" is how an
+                # unloaded window gets counted as transport evidence.
+                "hover_payload_attached": (
                     hover_payload_distance is not None
                     and hover_payload_distance <= _PAYLOAD_ATTACHED_MAX_DISTANCE_M
                 ),
@@ -1717,6 +1731,12 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 fcap = subprocess.Popen(
                     ["docker", "exec", _CONTAINER, "gz", "topic", "-e", "-t", topic],
                     stdout=open(fwd_cap, "w"), stderr=subprocess.DEVNULL)
+            # What the vehicle is CARRYING is observed per window, not inferred
+            # once from configuration: the same flight releases the payload, so
+            # a window flown after separation is not transport evidence however
+            # the run was configured.
+            attachment = observe_attachment(
+                _model_xyz("iris_with_gimbal"), _model_xyz("payload_box"))
             window, verdict, span = _hold_until_steady(
                 m, rc, alt_hold_stick, alt0, pitch,
                 label="cruise survey", attitude=cruise_att)
@@ -1725,6 +1745,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 "steady": verdict.steady,
                 "speed_mps": verdict.mean,
                 "steady_state": verdict.as_dict(),
+                "payload_attachment": attachment.as_dict(),
             }
             if cruise_att is not None and verdict.steady:
                 point_rms = _attitude_rms_deg(cruise_att.between(*span))
@@ -1738,19 +1759,35 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             if window:
                 last_window = window
         LAST_RESULT["cruise_sweep"] = sweep
-        # The delivery payload is released later in the flight, so the survey
-        # above is flown with it aboard. That makes the sweep a *transport*
-        # cruise measurement, not just a carry-hover one.
-        LAST_RESULT["cruise_sweep_payload_attached"] = bool(
-            payload_release and payload_mass_kg > 0)
-        cruise_payload_distance = (
-            _payload_attachment_distance()
-            if payload_release and payload_mass_kg > 0 else None
-        )
-        LAST_RESULT["cruise_payload_attachment_distance_m"] = cruise_payload_distance
-        LAST_RESULT["cruise_payload_attachment_observed"] = (
-            cruise_payload_distance is not None
-            and cruise_payload_distance <= _PAYLOAD_ATTACHED_MAX_DISTANCE_M
+        # Transport windows: the hover sample plus every cruise point, each
+        # carrying the attachment that was OBSERVED while it was measured.
+        transport_windows = []
+        if LAST_RESULT.get("hover_attitude_rms_deg") is not None:
+            transport_windows.append(TransportWindow(
+                label="hover",
+                attachment=PayloadAttachment(
+                    # "observed" is whether the poses could be read; whether
+                    # that means attached is the module's call, on one bound.
+                    observed=LAST_RESULT.get(
+                        "hover_payload_attachment_distance_m") is not None,
+                    distance_m=LAST_RESULT.get("hover_payload_attachment_distance_m"),
+                ),
+                attitude_rms_deg=LAST_RESULT.get("hover_attitude_rms_deg"),
+            ))
+        for point in sweep:
+            state = point.get("payload_attachment") or {}
+            transport_windows.append(TransportWindow(
+                label=f"cruise@rc{point['pitch_rc']}",
+                attachment=PayloadAttachment(
+                    observed=bool(state.get("observed")),
+                    distance_m=state.get("distance_m"),
+                ),
+                attitude_rms_deg=point.get("attitude_rms_deg"),
+                speed_mps=point.get("speed_mps"),
+            ))
+        LAST_RESULT["transport_windows"] = [w.as_dict() for w in transport_windows]
+        LAST_RESULT["cruise_sweep_payload_attached"] = any(
+            w.attachment.attached for w in transport_windows
         )
         if fcap:
             fcap.terminate()

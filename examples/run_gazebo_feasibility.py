@@ -36,6 +36,10 @@ from src.prototyping.artifact_store import (
     latest_output_dir,
     output_dir,
 )
+from gazebo_poc.payload_transport_evidence import (
+    TransportWindow,
+    evaluate_payload_transport,
+)
 from gazebo_poc.single_motor_out_evidence import evaluate_single_motor_out
 from gazebo_poc.model_mission import ModelAction
 
@@ -855,7 +859,7 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
 
     patt_req = _planned_check(planned, "payload_attitude")
     if (gazebo and patt_req and gazebo.get("hover_attitude_rms_deg") is not None
-            and gazebo.get("hover_payload_attachment_observed") is True):
+            and gazebo.get("hover_payload_attached") is True):
         rid = str(patt_req["req_id"])
         rms = float(gazebo["hover_attitude_rms_deg"])
         limit = float(patt_req.get("max_rms_deg") or 0.0)
@@ -872,15 +876,23 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         # sweep is flown before the payload is released, so when it is a
         # certified sweep with the payload aboard it closes the cruise half;
         # its worst-case RMS must clear the same limit.
-        cruise_rms = gazebo.get("cruise_attitude_rms_deg")
         cruise_points = int(gazebo.get("cruise_attitude_points") or 0)
         cruise_span = gazebo.get("cruise_attitude_speed_span_mps") or []
-        transport_swept = (
-            gazebo.get("cruise_payload_attachment_observed") is True
-            and cruise_points >= _MIN_SWEEP_POINTS
-            and cruise_rms is not None
+        # Judged on the windows OBSERVED to be carrying, by the same module the
+        # flight used — a window measured after separation is excluded however
+        # the run was configured, and a run that never looked cannot claim to
+        # have been transporting anything.
+        transport = evaluate_payload_transport(
+            [TransportWindow.from_dict(w) for w in
+             (gazebo.get("transport_windows") or [])],
+            attitude_limit_deg=limit,
         )
-        cruise_ok = transport_swept and float(cruise_rms) <= limit
+        loaded_windows = transport.sensitivity[0].passed_runs if transport.sensitivity else 0
+        transport_swept = (
+            transport.status in {"verified", "failed"}
+            and loaded_windows >= _MIN_SWEEP_POINTS
+        )
+        cruise_ok = transport_swept and transport.status == "verified"
         covered.add(rid)
         results.append({
             "req_id": rid,
@@ -898,12 +910,14 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                 f"n={gazebo.get('hover_attitude_samples')}), hover throttle "
                 f"{throttle}% -> margin {margin if margin is None else round(margin, 1)}%"
                 + (f" (required >= {float(margin_req):.0f}%)" if margin_req is not None else "")
-                + (f"; cruise-transport swept with the payload aboard — worst RMS "
-                   f"{float(cruise_rms):.3f} deg over {cruise_points} certified steady points"
+                + f"; {transport.description}"
+                + (f" ({cruise_points} certified steady cruise points"
                    + (f" spanning {cruise_span[0]:.1f}-{cruise_span[1]:.1f} m/s"
-                      if len(cruise_span) == 2 else "")
-                   if transport_swept else
-                   "; carry-hover window only — cruise-transport attitude not swept")
+                      if len(cruise_span) == 2 else "") + ")"
+                   if cruise_points else "")
+                + ("" if transport_swept else
+                   f"; fewer than {_MIN_SWEEP_POINTS} windows observed carrying — "
+                   "transport across the envelope is not demonstrated")
             ),
         })
 
