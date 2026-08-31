@@ -151,6 +151,146 @@ class GenerationPipelineMixin:
         c.final_model, c.final_score, c.final_sim = (
             c.refined_revision.materialize()
         )
+        self._attempt_frozen_plan_revision(c)
+
+    def _attempt_frozen_plan_revision(self, c: GenerationContext) -> None:
+        """The one path back from a plan-frozen structural deadlock.
+
+        Refinement's `structural_repair_blocked` verdict names its own remedy
+        — "requires a validated plan revision" — and until this method that
+        remedy had no code path: the plan was authored once, frozen, and
+        every downstream repair was bounded by it, so a wrong plan doomed
+        the run to idle iterations and NOT_QUALIFIED (run 2026-08-31,
+        265k tokens). Bounded sequence, once per run:
+
+        1. `PlanRevision` re-enters the typed-plan LLM protocol with the
+           frozen plan as repair base and the blockage as the authorizing
+           issues; the revision is validated by the full current plan
+           validator set and diff-gated to issue-named changes only.
+        2. The revised plan is applied to the committed text and accepted
+           only if the unsatisfied obligation set STRICTLY shrinks and
+           syntax holds — otherwise everything is rolled back.
+        3. On acceptance, one further bounded refinement pass runs under
+           the revised plan.
+        """
+        metadata = getattr(c.final_model, "metadata", None) or {}
+        blocked = metadata.get("structural_repair_blocked")
+        if not isinstance(blocked, Mapping):
+            return
+        if not getattr(self, "enable_plan_revision", True):
+            return
+        raw_plan = metadata.get("whole_model_generation_plan")
+        if not isinstance(raw_plan, Mapping):
+            raw_plan = self._active_model_generation_plan
+        if not isinstance(raw_plan, Mapping):
+            return
+
+        print("  ⟳ structural repair blocked — attempting bounded plan "
+              "revision", flush=True)
+        from ..prototyping.generation_plan import apply_generation_plan
+        from ..prototyping.structural_obligations import (
+            validate_structural_obligations,
+        )
+        from ..utils.sysml_text_utils import set_sysml_text
+        from .plan_revision import PlanRevision, PlanRevisionRequest
+
+        outcome = PlanRevision(self.cot).revise(PlanRevisionRequest(
+            system_name=c.system_name,
+            requirements=tuple(c.requirements),
+            frozen_plan=dict(raw_plan),
+            blocked=dict(blocked),
+            verbose=self.verbose,
+        ))
+        record = dict(outcome.record)
+        if outcome.plan is None:
+            record.setdefault("applied", False)
+            c.final_model.metadata["plan_revision"] = record
+            self._publish_pipeline_state("plan_revision", record)
+            print(
+                f"  ✗ plan revision {record.get('status')} — the frozen "
+                "plan stands; downstream gates will report the blockage",
+                flush=True,
+            )
+            return
+
+        before_report = blocked.get("structural_obligation_report") or {}
+        before_unsatisfied = {
+            str(item.get("obligation_id"))
+            for item in before_report.get("results", ())
+            if isinstance(item, Mapping) and item.get("status") != "PASS"
+        }
+        text = get_sysml_text(c.final_model)
+        revised_text, conformance = apply_generation_plan(
+            text, outcome.plan
+        )
+        after_report = validate_structural_obligations(
+            revised_text,
+            outcome.plan.structural_obligations,
+            model_name=c.final_model.name,
+        )
+        after_unsatisfied = {
+            str(item.get("obligation_id"))
+            for item in after_report.get("results", ())
+            if isinstance(item, Mapping) and item.get("status") != "PASS"
+        }
+        syntax_ok = not check_syntax(
+            revised_text,
+            fail_closed=True,
+            filter_stdlib_diagnostics=False,
+        ).has_errors
+        monotonic = (
+            after_unsatisfied < before_unsatisfied
+            if before_unsatisfied
+            else not after_unsatisfied
+        )
+        record.update({
+            "unsatisfied_before": sorted(before_unsatisfied),
+            "unsatisfied_after": sorted(after_unsatisfied),
+            "syntax_ok": syntax_ok,
+            "monotonic": monotonic,
+        })
+        if not (monotonic and syntax_ok):
+            record["status"] = "REJECTED_NOT_MONOTONIC"
+            record["applied"] = False
+            c.final_model.metadata["plan_revision"] = record
+            self._publish_pipeline_state("plan_revision", record)
+            print(
+                "  ✗ plan revision rejected: applying it does not strictly "
+                "shrink the unsatisfied obligation set "
+                f"({len(before_unsatisfied)} -> {len(after_unsatisfied)}, "
+                f"syntax_ok={syntax_ok}); the frozen plan stands",
+                flush=True,
+            )
+            return
+
+        record["applied"] = True
+        revised_payload = outcome.plan.to_dict()
+        set_sysml_text(c.final_model, revised_text)
+        c.final_model.metadata["whole_model_generation_plan"] = (
+            revised_payload
+        )
+        c.final_model.metadata["plan_revision"] = record
+        c.final_model.metadata["generation_plan_conformance"] = conformance
+        c.final_model.metadata["structural_obligation_report"] = after_report
+        c.final_model.metadata.pop("structural_repair_blocked", None)
+        c.final_model.metadata.pop("refinement_short_circuit", None)
+        self._active_model_generation_plan = dict(revised_payload)
+        self._publish_pipeline_state("plan_revision", record)
+        print(
+            "  ✓ plan revision accepted: unsatisfied obligations "
+            f"{len(before_unsatisfied)} -> {len(after_unsatisfied)}; "
+            "re-running bounded refinement under the revised plan",
+            flush=True,
+        )
+        c.refined_revision = self.refinement_closure.refine(
+            RefinementClosureRequest(
+                base=ModelRevision.capture(c.final_model),
+                requirements=tuple(c.requirements),
+            )
+        )
+        c.final_model, c.final_score, c.final_sim = (
+            c.refined_revision.materialize()
+        )
 
     def _phase_sitl_refinement(self, c: GenerationContext) -> None:
         # ── Phase 3.5: SITL-L1 refinement (only when targeting a platform) ────
@@ -362,6 +502,7 @@ class GenerationPipelineMixin:
             "generation_plan_conformance": c.final_model.metadata.get("generation_plan_conformance"),
             "step1_plan_attempts": c.final_model.metadata.get("step1_plan_attempts"),
             "step1_plan_retries": c.final_model.metadata.get("step1_plan_retries", 0),
+            "plan_revision": c.final_model.metadata.get("plan_revision"),
             "structural_obligation_report": c.structural_obligation_report,
             "semantic_fidelity_report": c.semantic_fidelity_report,
             "ag_binding_report": self.last_ag_binding_report,

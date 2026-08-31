@@ -1,0 +1,2964 @@
+{
+  "schema_version": "9.0",
+  "artifact_role": "WHOLE_MODEL_GENERATION_PLAN",
+  "semantic_authority": "GENERATION_INPUT_ONLY_COMMITTED_SYSML_WINS",
+  "source": "LLM_TYPED_JSON_RETRY",
+  "status": "PASS",
+  "components": [
+    {
+      "name": "FlightController",
+      "responsibility": "Executes core flight navigation, avoidance manoeuvres, and contingency responses.",
+      "requirements": [
+        "REQ_FUNC_001",
+        "REQ_FUNC_002",
+        "REQ_FUNC_003",
+        "REQ_FUNC_006",
+        "REQ_FUNC_007",
+        "REQ_PERF_001",
+        "REQ_PERF_002",
+        "REQ_PERF_003",
+        "REQ_PERF_004",
+        "REQ_PERF_006",
+        "REQ_CONS_001"
+      ],
+      "ports": [
+        {
+          "name": "obstacleData",
+          "direction": "in",
+          "type": "ObstacleSeparationPort",
+          "external": false
+        },
+        {
+          "name": "payloadHoverThrottle",
+          "direction": "in",
+          "type": "HoverThrottlePort",
+          "external": false
+        },
+        {
+          "name": "spatialPositionData",
+          "direction": "in",
+          "type": "SpatialPositionDataPort",
+          "external": false
+        },
+        {
+          "name": "batteryStateOfCharge",
+          "direction": "in",
+          "type": "BatteryStatusPort",
+          "external": false
+        },
+        {
+          "name": "overrideCmd",
+          "direction": "in",
+          "type": "CommandPort",
+          "external": false
+        },
+        {
+          "name": "safeLandingCmd",
+          "direction": "in",
+          "type": "CommandPort",
+          "external": false
+        },
+        {
+          "name": "armingLockCmd",
+          "direction": "in",
+          "type": "CommandPort",
+          "external": false
+        },
+        {
+          "name": "waypointCommand",
+          "direction": "in",
+          "type": "WaypointCommandPort",
+          "external": false
+        },
+        {
+          "name": "navigationState",
+          "direction": "out",
+          "type": "NavigationStatePort",
+          "external": false
+        },
+        {
+          "name": "flightManoeuvreCmd",
+          "direction": "out",
+          "type": "FlightManoeuvreCommandPort",
+          "external": false
+        },
+        {
+          "name": "payloadReleaseCmd",
+          "direction": "out",
+          "type": "PayloadCommandPort",
+          "external": false
+        },
+        {
+          "name": "landingHealthReport",
+          "direction": "out",
+          "type": "LandingHealthReportPort",
+          "external": false
+        },
+        {
+          "name": "returnToBaseCmd",
+          "direction": "out",
+          "type": "CommandPort",
+          "external": false
+        },
+        {
+          "name": "safeDescentCmd",
+          "direction": "out",
+          "type": "CommandPort",
+          "external": false
+        }
+      ],
+      "attributes": [
+        {
+          "name": "currentAirframeObstacleSeparation",
+          "value_type": "LengthValue",
+          "unit": "m",
+          "role": "RUNTIME_MEASUREMENT",
+          "initial_value": null,
+          "input_binding": "obstacleData.payload.airframeObstacleSeparation",
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_FUNC_002",
+          "source_digest": "42fe857846e8101c8456af02ae80de1dc4e0438ccf1d24e91e17629e6cdb19df"
+        },
+        {
+          "name": "airframeObstacleSeparationThreshold",
+          "value_type": "LengthValue",
+          "unit": "m",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "5 [m]",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_FUNC_002",
+          "source_digest": "42fe857846e8101c8456af02ae80de1dc4e0438ccf1d24e91e17629e6cdb19df"
+        },
+        {
+          "name": "currentHoverThrottleMargin",
+          "value_type": "DimensionOneValue",
+          "unit": "%",
+          "role": "RUNTIME_MEASUREMENT",
+          "initial_value": null,
+          "input_binding": "payloadHoverThrottle.payload.hoverThrottleMargin",
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_FUNC_003",
+          "source_digest": "fbfb74ce689888595cd0d0a2cf511c7c71ef0a149aa98ccc244aea24f83d0e20"
+        },
+        {
+          "name": "hoverThrottleMarginThreshold",
+          "value_type": "DimensionOneValue",
+          "unit": "%",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "30 [percent]",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_FUNC_003",
+          "source_digest": "fbfb74ce689888595cd0d0a2cf511c7c71ef0a149aa98ccc244aea24f83d0e20"
+        },
+        {
+          "name": "currentRollPitchAttitudeDeviations",
+          "value_type": "AngularMeasureValue",
+          "unit": "deg",
+          "role": "RUNTIME_MEASUREMENT",
+          "initial_value": null,
+          "input_binding": "spatialPositionData.payload.rollPitchAttitudeDeviations",
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_PERF_001",
+          "source_digest": "b56deeb9012aed1324edcf44f507223cec08f35243eaa4b26b6a076e2dc2d4d3"
+        },
+        {
+          "name": "rollPitchAttitudeDeviationsThreshold",
+          "value_type": "AngularMeasureValue",
+          "unit": "deg",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "0.5 [deg]",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_PERF_001",
+          "source_digest": "b56deeb9012aed1324edcf44f507223cec08f35243eaa4b26b6a076e2dc2d4d3"
+        },
+        {
+          "name": "currentFlightDuration",
+          "value_type": "DurationValue",
+          "unit": "min",
+          "role": "RUNTIME_MEASUREMENT",
+          "initial_value": null,
+          "input_binding": "batteryStateOfCharge.payload.flight",
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_PERF_002",
+          "source_digest": "851e4259d5129246ec4486145be158991b2aa75820e423b31a8d435fbabb483f"
+        },
+        {
+          "name": "flightDurationThreshold",
+          "value_type": "DurationValue",
+          "unit": "min",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "25 [min]",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_PERF_002",
+          "source_digest": "851e4259d5129246ec4486145be158991b2aa75820e423b31a8d435fbabb483f"
+        },
+        {
+          "name": "currentCruiseAirspeed",
+          "value_type": "SpeedValue",
+          "unit": "m/s",
+          "role": "RUNTIME_MEASUREMENT",
+          "initial_value": null,
+          "input_binding": "spatialPositionData.payload.cruiseAirspeed",
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_PERF_003",
+          "source_digest": "dd585282f197522dce7f6dce0b8a110de02edb0f2d38a5549a139930e3f43686"
+        },
+        {
+          "name": "cruiseAirspeedThreshold",
+          "value_type": "SpeedValue",
+          "unit": "m/s",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "18 [m_s]",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_PERF_003",
+          "source_digest": "dd585282f197522dce7f6dce0b8a110de02edb0f2d38a5549a139930e3f43686"
+        },
+        {
+          "name": "currentForwardGroundSpeed",
+          "value_type": "SpeedValue",
+          "unit": "m/s",
+          "role": "RUNTIME_MEASUREMENT",
+          "initial_value": null,
+          "input_binding": "spatialPositionData.payload.forwardGroundSpeed",
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_PERF_004",
+          "source_digest": "984df70fcbd29a1609af712e4cb466600fafd603b7e262ebbc5b87a2eea656f1"
+        },
+        {
+          "name": "forwardGroundSpeedThreshold",
+          "value_type": "SpeedValue",
+          "unit": "m/s",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "2 [m_s]",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_PERF_004",
+          "source_digest": "984df70fcbd29a1609af712e4cb466600fafd603b7e262ebbc5b87a2eea656f1"
+        },
+        {
+          "name": "currentOperationalRange",
+          "value_type": "LengthValue",
+          "unit": "km",
+          "role": "RUNTIME_MEASUREMENT",
+          "initial_value": null,
+          "input_binding": "batteryStateOfCharge.payload.operationalRange",
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_PERF_006",
+          "source_digest": "6377e9bbce09624ecd8b701815c89c6913fbd5d2a341001a1c43bf6f7e3b45bd"
+        },
+        {
+          "name": "operationalRangeThreshold",
+          "value_type": "LengthValue",
+          "unit": "km",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "5 [km]",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_PERF_006",
+          "source_digest": "6377e9bbce09624ecd8b701815c89c6913fbd5d2a341001a1c43bf6f7e3b45bd"
+        },
+        {
+          "name": "currentFlightAltitude",
+          "value_type": "LengthValue",
+          "unit": "m",
+          "role": "RUNTIME_MEASUREMENT",
+          "initial_value": null,
+          "input_binding": "spatialPositionData.payload.flightAltitude",
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_CONS_001",
+          "source_digest": "2f05e40dc080981370cb3bad36f6dd54b9e0fc70de7fedf7f01b6b8f14e567d7"
+        },
+        {
+          "name": "flightAltitudeThreshold",
+          "value_type": "LengthValue",
+          "unit": "m",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "120 [m]",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_CONS_001",
+          "source_digest": "2f05e40dc080981370cb3bad36f6dd54b9e0fc70de7fedf7f01b6b8f14e567d7"
+        },
+        {
+          "name": "waypointLatency",
+          "value_type": "DurationValue",
+          "unit": "s",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "1.0",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_FUNC_006",
+          "source_digest": "e68e907e989e0819776c9839ed037f9c73781de348f401112d7f3792d49c8d97"
+        }
+      ],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "PerceptionSystem",
+      "responsibility": "Processes environmental sensors to detect obstacles and determine spatial positioning.",
+      "requirements": [
+        "REQ_INTF_002"
+      ],
+      "ports": [
+        {
+          "name": "obstacleData",
+          "direction": "out",
+          "type": "ObstacleSeparationPort",
+          "external": false
+        },
+        {
+          "name": "spatialPositionData",
+          "direction": "out",
+          "type": "SpatialPositionDataPort",
+          "external": false
+        },
+        {
+          "name": "sensorFailure",
+          "direction": "out",
+          "type": "StatusPort",
+          "external": false
+        },
+        {
+          "name": "sensorStatus",
+          "direction": "out",
+          "type": "StatusPort",
+          "external": false
+        },
+        {
+          "name": "rtcmGnssCorrections",
+          "direction": "in",
+          "type": "GnssCorrectionPort",
+          "external": false
+        },
+        {
+          "name": "externalEnvironment",
+          "direction": "inout",
+          "type": "EnvironmentPort",
+          "external": true
+        }
+      ],
+      "attributes": [],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "PayloadMechanism",
+      "responsibility": "Manages the physical retention and release of the transport payload.",
+      "requirements": [
+        "REQ_FUNC_005",
+        "REQ_PERF_005",
+        "REQ_SAFE_006",
+        "REQ_SAFE_008"
+      ],
+      "ports": [
+        {
+          "name": "payloadReleaseCmd",
+          "direction": "in",
+          "type": "PayloadCommandPort",
+          "external": false
+        },
+        {
+          "name": "massData",
+          "direction": "out",
+          "type": "MassDataPort",
+          "external": false
+        }
+      ],
+      "attributes": [
+        {
+          "name": "payloadReleaseActuationTime",
+          "value_type": "DurationValue",
+          "unit": "s",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "2.0",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_PERF_005",
+          "source_digest": "ae6f7e290ca703dfc6b83d0476d494e5d1e3b6ccbd18bce2e7696c5889f9bb43"
+        }
+      ],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "CommunicationSystem",
+      "responsibility": "Maintains the encrypted bidirectional RF link with the GCS for telemetry and commands.",
+      "requirements": [
+        "REQ_FUNC_004",
+        "REQ_FUNC_008",
+        "REQ_INTF_001",
+        "REQ_INTF_003"
+      ],
+      "ports": [
+        {
+          "name": "navigationState",
+          "direction": "in",
+          "type": "NavigationStatePort",
+          "external": false
+        },
+        {
+          "name": "landingHealthReport",
+          "direction": "in",
+          "type": "LandingHealthReportPort",
+          "external": false
+        },
+        {
+          "name": "waypointCommand",
+          "direction": "out",
+          "type": "WaypointCommandPort",
+          "external": false
+        },
+        {
+          "name": "uplinkStatus",
+          "direction": "out",
+          "type": "StatusPort",
+          "external": false
+        },
+        {
+          "name": "rtcmGnssCorrections",
+          "direction": "out",
+          "type": "GnssCorrectionPort",
+          "external": false
+        },
+        {
+          "name": "commStatus",
+          "direction": "out",
+          "type": "StatusPort",
+          "external": false
+        },
+        {
+          "name": "rfLink",
+          "direction": "inout",
+          "type": "RfLinkPort",
+          "external": true
+        }
+      ],
+      "attributes": [
+        {
+          "name": "reportLatency",
+          "value_type": "DurationValue",
+          "unit": "s",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "5.0",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_FUNC_008",
+          "source_digest": "2869f9376fcd342ad3ddcc539e5a0ee5e15f5e72ee64db81fb38af7d60907d82"
+        }
+      ],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "PowerSystem",
+      "responsibility": "Provides electrical power and monitors battery state-of-charge.",
+      "requirements": [
+        "REQ_SAFE_001",
+        "REQ_SAFE_002"
+      ],
+      "ports": [
+        {
+          "name": "batteryStateOfCharge",
+          "direction": "out",
+          "type": "BatteryStatusPort",
+          "external": false
+        }
+      ],
+      "attributes": [],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "PropulsionSystem",
+      "responsibility": "Generates thrust and maintains controlled flight under commanded manoeuvres.",
+      "requirements": [
+        "REQ_SAFE_007"
+      ],
+      "ports": [
+        {
+          "name": "flightManoeuvreCmd",
+          "direction": "in",
+          "type": "FlightManoeuvreCommandPort",
+          "external": false
+        },
+        {
+          "name": "returnToBaseCmd",
+          "direction": "in",
+          "type": "CommandPort",
+          "external": false
+        },
+        {
+          "name": "safeDescentCmd",
+          "direction": "in",
+          "type": "CommandPort",
+          "external": false
+        },
+        {
+          "name": "payloadHoverThrottle",
+          "direction": "out",
+          "type": "HoverThrottlePort",
+          "external": false
+        },
+        {
+          "name": "propulsionFailure",
+          "direction": "out",
+          "type": "StatusPort",
+          "external": false
+        }
+      ],
+      "attributes": [],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "SafetyMonitor",
+      "responsibility": "Independently monitors critical subsystem health and enforces fail-safe overrides.",
+      "requirements": [
+        "REQ_SAFE_003",
+        "REQ_SAFE_004"
+      ],
+      "ports": [
+        {
+          "name": "uplinkStatus",
+          "direction": "in",
+          "type": "StatusPort",
+          "external": false
+        },
+        {
+          "name": "sensorFailure",
+          "direction": "in",
+          "type": "StatusPort",
+          "external": false
+        },
+        {
+          "name": "propulsionFailure",
+          "direction": "in",
+          "type": "StatusPort",
+          "external": false
+        },
+        {
+          "name": "commStatus",
+          "direction": "in",
+          "type": "StatusPort",
+          "external": false
+        },
+        {
+          "name": "sensorStatus",
+          "direction": "in",
+          "type": "StatusPort",
+          "external": false
+        },
+        {
+          "name": "safeLandingCmd",
+          "direction": "out",
+          "type": "CommandPort",
+          "external": false
+        },
+        {
+          "name": "armingLockCmd",
+          "direction": "out",
+          "type": "CommandPort",
+          "external": false
+        },
+        {
+          "name": "parachuteCmd",
+          "direction": "out",
+          "type": "RecoveryCommandPort",
+          "external": false
+        },
+        {
+          "name": "overrideCmd",
+          "direction": "out",
+          "type": "CommandPort",
+          "external": false
+        }
+      ],
+      "attributes": [],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "RecoverySystem",
+      "responsibility": "Deploys the ballistic recovery parachute upon critical failure.",
+      "requirements": [
+        "REQ_SAFE_005"
+      ],
+      "ports": [
+        {
+          "name": "parachuteCmd",
+          "direction": "in",
+          "type": "RecoveryCommandPort",
+          "external": false
+        }
+      ],
+      "attributes": [],
+      "passive": false,
+      "passive_rationale": ""
+    },
+    {
+      "name": "Airframe",
+      "responsibility": "Provides the structural enclosure and mounting points for all subsystems.",
+      "requirements": [
+        "REQ_CONS_002",
+        "REQ_CONS_003",
+        "REQ_CONS_004"
+      ],
+      "ports": [
+        {
+          "name": "massData",
+          "direction": "in",
+          "type": "MassDataPort",
+          "external": false
+        }
+      ],
+      "attributes": [
+        {
+          "name": "currentTakeOffMassPayloadBattery",
+          "value_type": "MassValue",
+          "unit": "kg",
+          "role": "RUNTIME_MEASUREMENT",
+          "initial_value": null,
+          "input_binding": "massData.payload.takeOffMassPayloadBattery",
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_CONS_003",
+          "source_digest": "7d89fb30f63f954aebce8e5c8b42a46e7967e406fc88c79574085b1a3e07e59f"
+        },
+        {
+          "name": "takeOffMassPayloadBatteryThreshold",
+          "value_type": "MassValue",
+          "unit": "kg",
+          "role": "FROZEN_THRESHOLD",
+          "initial_value": "8 [kg]",
+          "input_binding": null,
+          "provenance": "FROZEN_REQUIREMENT",
+          "source_requirement_id": "REQ_CONS_003",
+          "source_digest": "7d89fb30f63f954aebce8e5c8b42a46e7967e406fc88c79574085b1a3e07e59f"
+        }
+      ],
+      "passive": false,
+      "passive_rationale": ""
+    }
+  ],
+  "connections": [
+    {
+      "source": {
+        "component": "PerceptionSystem",
+        "port": "obstacleData"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "obstacleData"
+      },
+      "item_type": "ObstacleSeparationPort",
+      "requirements": [
+        "REQ_FUNC_002"
+      ]
+    },
+    {
+      "source": {
+        "component": "PropulsionSystem",
+        "port": "payloadHoverThrottle"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "payloadHoverThrottle"
+      },
+      "item_type": "HoverThrottlePort",
+      "requirements": [
+        "REQ_FUNC_003"
+      ]
+    },
+    {
+      "source": {
+        "component": "PerceptionSystem",
+        "port": "spatialPositionData"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "spatialPositionData"
+      },
+      "item_type": "SpatialPositionDataPort",
+      "requirements": [
+        "REQ_FUNC_005",
+        "REQ_PERF_001",
+        "REQ_PERF_003",
+        "REQ_PERF_004",
+        "REQ_CONS_001"
+      ]
+    },
+    {
+      "source": {
+        "component": "PowerSystem",
+        "port": "batteryStateOfCharge"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "batteryStateOfCharge"
+      },
+      "item_type": "BatteryStatusPort",
+      "requirements": [
+        "REQ_PERF_002",
+        "REQ_PERF_006",
+        "REQ_SAFE_001",
+        "REQ_SAFE_002"
+      ]
+    },
+    {
+      "source": {
+        "component": "CommunicationSystem",
+        "port": "waypointCommand"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "waypointCommand"
+      },
+      "item_type": "WaypointCommandPort",
+      "requirements": [
+        "REQ_FUNC_001"
+      ]
+    },
+    {
+      "source": {
+        "component": "FlightController",
+        "port": "navigationState"
+      },
+      "target": {
+        "component": "CommunicationSystem",
+        "port": "navigationState"
+      },
+      "item_type": "NavigationStatePort",
+      "requirements": [
+        "REQ_FUNC_001"
+      ]
+    },
+    {
+      "source": {
+        "component": "FlightController",
+        "port": "flightManoeuvreCmd"
+      },
+      "target": {
+        "component": "PropulsionSystem",
+        "port": "flightManoeuvreCmd"
+      },
+      "item_type": "FlightManoeuvreCommandPort",
+      "requirements": [
+        "REQ_FUNC_002"
+      ]
+    },
+    {
+      "source": {
+        "component": "FlightController",
+        "port": "payloadReleaseCmd"
+      },
+      "target": {
+        "component": "PayloadMechanism",
+        "port": "payloadReleaseCmd"
+      },
+      "item_type": "PayloadCommandPort",
+      "requirements": [
+        "REQ_FUNC_005"
+      ]
+    },
+    {
+      "source": {
+        "component": "FlightController",
+        "port": "landingHealthReport"
+      },
+      "target": {
+        "component": "CommunicationSystem",
+        "port": "landingHealthReport"
+      },
+      "item_type": "LandingHealthReportPort",
+      "requirements": [
+        "REQ_FUNC_008"
+      ]
+    },
+    {
+      "source": {
+        "component": "FlightController",
+        "port": "returnToBaseCmd"
+      },
+      "target": {
+        "component": "PropulsionSystem",
+        "port": "returnToBaseCmd"
+      },
+      "item_type": "CommandPort",
+      "requirements": [
+        "REQ_SAFE_001"
+      ]
+    },
+    {
+      "source": {
+        "component": "FlightController",
+        "port": "safeDescentCmd"
+      },
+      "target": {
+        "component": "PropulsionSystem",
+        "port": "safeDescentCmd"
+      },
+      "item_type": "CommandPort",
+      "requirements": [
+        "REQ_SAFE_002"
+      ]
+    },
+    {
+      "source": {
+        "component": "CommunicationSystem",
+        "port": "uplinkStatus"
+      },
+      "target": {
+        "component": "SafetyMonitor",
+        "port": "uplinkStatus"
+      },
+      "item_type": "StatusPort",
+      "requirements": [
+        "REQ_SAFE_003"
+      ]
+    },
+    {
+      "source": {
+        "component": "SafetyMonitor",
+        "port": "safeLandingCmd"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "safeLandingCmd"
+      },
+      "item_type": "CommandPort",
+      "requirements": [
+        "REQ_SAFE_003"
+      ]
+    },
+    {
+      "source": {
+        "component": "PerceptionSystem",
+        "port": "sensorFailure"
+      },
+      "target": {
+        "component": "SafetyMonitor",
+        "port": "sensorFailure"
+      },
+      "item_type": "StatusPort",
+      "requirements": [
+        "REQ_SAFE_004"
+      ]
+    },
+    {
+      "source": {
+        "component": "SafetyMonitor",
+        "port": "armingLockCmd"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "armingLockCmd"
+      },
+      "item_type": "CommandPort",
+      "requirements": [
+        "REQ_SAFE_004"
+      ]
+    },
+    {
+      "source": {
+        "component": "PropulsionSystem",
+        "port": "propulsionFailure"
+      },
+      "target": {
+        "component": "SafetyMonitor",
+        "port": "propulsionFailure"
+      },
+      "item_type": "StatusPort",
+      "requirements": [
+        "REQ_SAFE_005"
+      ]
+    },
+    {
+      "source": {
+        "component": "SafetyMonitor",
+        "port": "parachuteCmd"
+      },
+      "target": {
+        "component": "RecoverySystem",
+        "port": "parachuteCmd"
+      },
+      "item_type": "RecoveryCommandPort",
+      "requirements": [
+        "REQ_SAFE_005"
+      ]
+    },
+    {
+      "source": {
+        "component": "CommunicationSystem",
+        "port": "rtcmGnssCorrections"
+      },
+      "target": {
+        "component": "PerceptionSystem",
+        "port": "rtcmGnssCorrections"
+      },
+      "item_type": "GnssCorrectionPort",
+      "requirements": [
+        "REQ_INTF_002"
+      ]
+    },
+    {
+      "source": {
+        "component": "PayloadMechanism",
+        "port": "massData"
+      },
+      "target": {
+        "component": "Airframe",
+        "port": "massData"
+      },
+      "item_type": "MassDataPort",
+      "requirements": [
+        "REQ_CONS_003"
+      ]
+    },
+    {
+      "source": {
+        "component": "CommunicationSystem",
+        "port": "commStatus"
+      },
+      "target": {
+        "component": "SafetyMonitor",
+        "port": "commStatus"
+      },
+      "item_type": "StatusPort",
+      "requirements": [
+        "REQ_SAFE_003"
+      ]
+    },
+    {
+      "source": {
+        "component": "PerceptionSystem",
+        "port": "sensorStatus"
+      },
+      "target": {
+        "component": "SafetyMonitor",
+        "port": "sensorStatus"
+      },
+      "item_type": "StatusPort",
+      "requirements": [
+        "REQ_SAFE_004"
+      ]
+    },
+    {
+      "source": {
+        "component": "SafetyMonitor",
+        "port": "overrideCmd"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "overrideCmd"
+      },
+      "item_type": "CommandPort",
+      "requirements": [
+        "REQ_SAFE_003",
+        "REQ_SAFE_004"
+      ]
+    }
+  ],
+  "requirement_realizations": [
+    {
+      "requirement_id": "REQ_FUNC_001",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "designated GPS waypoints",
+      "effect_concept": "autonomously navigate",
+      "connection_path": [
+        {
+          "source_component": "CommunicationSystem",
+          "source_port": "waypointCommand",
+          "target_component": "FlightController",
+          "target_port": "waypointCommand",
+          "item_type": "WaypointCommandPort"
+        },
+        {
+          "source_component": "FlightController",
+          "source_port": "navigationState",
+          "target_component": "CommunicationSystem",
+          "target_port": "navigationState",
+          "item_type": "NavigationStatePort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "919b664a60c798c68c4ef8701a3b7ba77d12cf4ce395ecbe60a259015dedf279",
+      "response_intent": "navigate",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_FUNC_002",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "approaching a stationary collision threat directly ahead",
+      "effect_concept": "execute an avoidance manoeuvre",
+      "connection_path": [
+        {
+          "source_component": "PerceptionSystem",
+          "source_port": "obstacleData",
+          "target_component": "FlightController",
+          "target_port": "obstacleData",
+          "item_type": "ObstacleSeparationPort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "42fe857846e8101c8456af02ae80de1dc4e0438ccf1d24e91e17629e6cdb19df",
+      "response_intent": "navigate",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_FUNC_003",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "transport payloads",
+      "effect_concept": "maintaining a hover throttle margin",
+      "connection_path": [
+        {
+          "source_component": "PropulsionSystem",
+          "source_port": "payloadHoverThrottle",
+          "target_component": "FlightController",
+          "target_port": "payloadHoverThrottle",
+          "item_type": "HoverThrottlePort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "fbfb74ce689888595cd0d0a2cf511c7c71ef0a149aa98ccc244aea24f83d0e20",
+      "response_intent": "none",
+      "response_intent_rationale": "Continuous performance condition without a discrete event trigger.",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_FUNC_004",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "trigger_concept": "throughout the operational flight envelope",
+      "effect_concept": "maintain a continuously encrypted bidirectional data link",
+      "connection_path": [],
+      "owner_component": "CommunicationSystem",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "FlightEnvelopeLinkManagement",
+      "source_digest": "7efdd1908dbcb972c6550aad7b9f962c49148818761ef04bcd5d801d4d435c11",
+      "response_intent": "none",
+      "response_intent_rationale": "Continuous link maintenance without a discrete response.",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_FUNC_005",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "current geographic position is within 1.0 metre of the designated delivery waypoint",
+      "effect_concept": "release the payload",
+      "connection_path": [
+        {
+          "source_component": "PerceptionSystem",
+          "source_port": "spatialPositionData",
+          "target_component": "FlightController",
+          "target_port": "spatialPositionData",
+          "item_type": "SpatialPositionDataPort"
+        },
+        {
+          "source_component": "FlightController",
+          "source_port": "payloadReleaseCmd",
+          "target_component": "PayloadMechanism",
+          "target_port": "payloadReleaseCmd",
+          "item_type": "PayloadCommandPort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "b99cc954d2657b04382be47c6264ed63099d3d084234caaf2f14b16fb0ebce98",
+      "response_intent": "release",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_FUNC_006",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "trigger_concept": "receiving a valid waypoint-modification command",
+      "effect_concept": "incorporate a revised waypoint sequence",
+      "connection_path": [],
+      "owner_component": "FlightController",
+      "behavior_kind": "ACTION_DEF",
+      "behavior_name": "WaypointModificationBehavior",
+      "source_digest": "e68e907e989e0819776c9839ed037f9c73781de348f401112d7f3792d49c8d97",
+      "response_intent": "navigate",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_FUNC_007",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "trigger_concept": "detection of a non-critical contingency",
+      "effect_concept": "autonomously execute a return-to-base trajectory",
+      "connection_path": [],
+      "owner_component": "FlightController",
+      "behavior_kind": "ACTION_DEF",
+      "behavior_name": "ContingencyReturnBehavior",
+      "source_digest": "cccc3b7c34d6015c16ba5bcaec01bdeb7ba4dc761d2435d50be8820bb2eb6bd9",
+      "response_intent": "return",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_FUNC_008",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "completing an automated landing",
+      "effect_concept": "transmit a post-flight system health report",
+      "connection_path": [
+        {
+          "source_component": "FlightController",
+          "source_port": "landingHealthReport",
+          "target_component": "CommunicationSystem",
+          "target_port": "landingHealthReport",
+          "item_type": "LandingHealthReportPort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "2869f9376fcd342ad3ddcc539e5a0ee5e15f5e72ee64db81fb38af7d60907d82",
+      "response_intent": "report",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_SAFE_001",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "battery state-of-charge reaches 25%",
+      "effect_concept": "initiate an autonomous return-to-base sequence",
+      "connection_path": [
+        {
+          "source_component": "PowerSystem",
+          "source_port": "batteryStateOfCharge",
+          "target_component": "FlightController",
+          "target_port": "batteryStateOfCharge",
+          "item_type": "BatteryStatusPort"
+        },
+        {
+          "source_component": "FlightController",
+          "source_port": "returnToBaseCmd",
+          "target_component": "PropulsionSystem",
+          "target_port": "returnToBaseCmd",
+          "item_type": "CommandPort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "3d0acf5b896aec440bee944b26c325a3f5f6d5b993ca1e0d43e10432df5549e4",
+      "response_intent": "",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_SAFE_002",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "battery state-of-charge falls below 15%",
+      "effect_concept": "perform a controlled descent to the nearest safe landing area",
+      "connection_path": [
+        {
+          "source_component": "PowerSystem",
+          "source_port": "batteryStateOfCharge",
+          "target_component": "FlightController",
+          "target_port": "batteryStateOfCharge",
+          "item_type": "BatteryStatusPort"
+        },
+        {
+          "source_component": "FlightController",
+          "source_port": "safeDescentCmd",
+          "target_component": "PropulsionSystem",
+          "target_port": "safeDescentCmd",
+          "item_type": "CommandPort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "0e393ee6e127d99c64a1c1ec48099df4d7dd75f1e00a897cbe1cf5a7b5331047",
+      "response_intent": "",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_SAFE_003",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "GCS uplink has been absent for more than 10 consecutive seconds",
+      "effect_concept": "perform an autonomous safe landing",
+      "connection_path": [
+        {
+          "source_component": "CommunicationSystem",
+          "source_port": "uplinkStatus",
+          "target_component": "SafetyMonitor",
+          "target_port": "uplinkStatus",
+          "item_type": "StatusPort"
+        },
+        {
+          "source_component": "SafetyMonitor",
+          "source_port": "safeLandingCmd",
+          "target_component": "FlightController",
+          "target_port": "safeLandingCmd",
+          "item_type": "CommandPort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "070fd0fa7d09fb09097addd4bafb14d595623282bd347d6aa7431f4a00c88cc4",
+      "response_intent": "",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_SAFE_004",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "onboard sensor reports a failure during the power-on self-test sequence",
+      "effect_concept": "not transition to the armed or airborne state",
+      "connection_path": [
+        {
+          "source_component": "PerceptionSystem",
+          "source_port": "sensorFailure",
+          "target_component": "SafetyMonitor",
+          "target_port": "sensorFailure",
+          "item_type": "StatusPort"
+        },
+        {
+          "source_component": "SafetyMonitor",
+          "source_port": "armingLockCmd",
+          "target_component": "FlightController",
+          "target_port": "armingLockCmd",
+          "item_type": "CommandPort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "db9549a4c12825fa0b0be267a1d15929269be41b3f13a5fe024c5ec016109ccc",
+      "response_intent": "",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_SAFE_005",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "detecting a critical propulsion subsystem failure",
+      "effect_concept": "deploy the ballistic recovery parachute",
+      "connection_path": [
+        {
+          "source_component": "PropulsionSystem",
+          "source_port": "propulsionFailure",
+          "target_component": "SafetyMonitor",
+          "target_port": "propulsionFailure",
+          "item_type": "StatusPort"
+        },
+        {
+          "source_component": "SafetyMonitor",
+          "source_port": "parachuteCmd",
+          "target_component": "RecoverySystem",
+          "target_port": "parachuteCmd",
+          "item_type": "RecoveryCommandPort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "d98469c950cc8d656ebd7d3b18595c62d4ede57c0717842e747dd39ff0ecf2d8",
+      "response_intent": "",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_SAFE_006",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "trigger_concept": "delivery-abort condition is active",
+      "effect_concept": "maintain the payload in the mechanically locked state",
+      "connection_path": [],
+      "owner_component": "PayloadMechanism",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "DeliveryAbortLockManagement",
+      "source_digest": "2d8115572d2f7f3dd061becda76be20395e4afa917b02bda9b9ee695fe04affa",
+      "response_intent": "",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_SAFE_007",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "trigger_concept": "failure of a single propulsion unit",
+      "effect_concept": "maintain controlled flight",
+      "connection_path": [],
+      "owner_component": "PropulsionSystem",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "PropulsionFaultToleranceBehavior",
+      "source_digest": "8576503c9d8fe99acc732994f4e96b76845726630f30057b3ccd8cbe342a44b2",
+      "response_intent": "",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_SAFE_008",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "trigger_concept": "upon power-on",
+      "effect_concept": "default to the mechanically locked state",
+      "connection_path": [],
+      "owner_component": "PayloadMechanism",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "DefaultToMechanicallyLockedStateBehavior",
+      "source_digest": "6941a2a0b5156b75b1d17f8d2407084534d4bcdf3fec00ecfe709c6d6867ffde",
+      "response_intent": "",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_INTF_001",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "trigger_concept": "exchange telemetry and mission commands",
+      "effect_concept": "using the MAVLink v2.0 protocol over an AES-256 encrypted RF channel",
+      "connection_path": [],
+      "owner_component": "CommunicationSystem",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "RfLinkEncryption",
+      "source_digest": "fd323602f5e371883f4760e0abf6096152b1f3289d67a1390cd3e26b72f8ce0b",
+      "response_intent": "",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_INTF_002",
+      "realization_kind": "CAUSAL_PATH",
+      "trigger_concept": "receive and apply differential GNSS corrections",
+      "effect_concept": "formatted according to the RTCM 10403.3 standard",
+      "connection_path": [
+        {
+          "source_component": "CommunicationSystem",
+          "source_port": "rtcmGnssCorrections",
+          "target_component": "PerceptionSystem",
+          "target_port": "rtcmGnssCorrections",
+          "item_type": "GnssCorrectionPort"
+        }
+      ],
+      "owner_component": "",
+      "behavior_kind": "",
+      "behavior_name": "",
+      "source_digest": "bc6d8335bf96de343714fe0c6eb7438eb79f4747e1d12b474bc52211eb696d9d",
+      "response_intent": "",
+      "response_intent_rationale": "",
+      "response_markers": []
+    },
+    {
+      "requirement_id": "REQ_INTF_003",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "trigger_concept": "broadcast remote identification and real-time spatial positioning data",
+      "effect_concept": "in accordance with the ASTM F3411-22 standard",
+      "connection_path": [],
+      "owner_component": "CommunicationSystem",
+      "behavior_kind": "ACTION_DEF",
+      "behavior_name": "BroadcastRemoteId",
+      "source_digest": "564a8a76bc840c654ff26e2efc216f4fae111045b737405c15e3e4ef8e93e87c",
+      "response_intent": "",
+      "response_intent_rationale": "",
+      "response_markers": []
+    }
+  ],
+  "structural_obligations": [
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_001_001",
+      "requirement_id": "REQ_FUNC_001",
+      "source_component": "CommunicationSystem",
+      "target_component": "CommunicationSystem",
+      "required_components": [
+        "CommunicationSystem",
+        "FlightController",
+        "CommunicationSystem"
+      ],
+      "required_connections": [
+        {
+          "source_component": "CommunicationSystem",
+          "source_port": "waypointCommand",
+          "target_component": "FlightController",
+          "target_port": "waypointCommand",
+          "item_type": "WaypointCommandPort"
+        },
+        {
+          "source_component": "FlightController",
+          "source_port": "navigationState",
+          "target_component": "CommunicationSystem",
+          "target_port": "navigationState",
+          "item_type": "NavigationStatePort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "designated GPS waypoints",
+      "effect_concept": "autonomously navigate",
+      "source_digest": "919b664a60c798c68c4ef8701a3b7ba77d12cf4ce395ecbe60a259015dedf279",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_002_001",
+      "requirement_id": "REQ_FUNC_002",
+      "source_component": "PerceptionSystem",
+      "target_component": "FlightController",
+      "required_components": [
+        "PerceptionSystem",
+        "FlightController"
+      ],
+      "required_connections": [
+        {
+          "source_component": "PerceptionSystem",
+          "source_port": "obstacleData",
+          "target_component": "FlightController",
+          "target_port": "obstacleData",
+          "item_type": "ObstacleSeparationPort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "approaching a stationary collision threat directly ahead",
+      "effect_concept": "execute an avoidance manoeuvre",
+      "source_digest": "42fe857846e8101c8456af02ae80de1dc4e0438ccf1d24e91e17629e6cdb19df",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_003_001",
+      "requirement_id": "REQ_FUNC_003",
+      "source_component": "PropulsionSystem",
+      "target_component": "FlightController",
+      "required_components": [
+        "PropulsionSystem",
+        "FlightController"
+      ],
+      "required_connections": [
+        {
+          "source_component": "PropulsionSystem",
+          "source_port": "payloadHoverThrottle",
+          "target_component": "FlightController",
+          "target_port": "payloadHoverThrottle",
+          "item_type": "HoverThrottlePort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "transport payloads",
+      "effect_concept": "maintaining a hover throttle margin",
+      "source_digest": "fbfb74ce689888595cd0d0a2cf511c7c71ef0a149aa98ccc244aea24f83d0e20",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_004_001",
+      "requirement_id": "REQ_FUNC_004",
+      "source_component": "CommunicationSystem",
+      "target_component": "CommunicationSystem",
+      "required_components": [
+        "CommunicationSystem"
+      ],
+      "required_connections": [],
+      "entry_kind": "SOURCE_ANCHORED_LOCAL_BEHAVIOR",
+      "trigger_concept": "throughout the operational flight envelope",
+      "effect_concept": "maintain a continuously encrypted bidirectional data link",
+      "source_digest": "7efdd1908dbcb972c6550aad7b9f962c49148818761ef04bcd5d801d4d435c11",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "FlightEnvelopeLinkManagement"
+    },
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_005_001",
+      "requirement_id": "REQ_FUNC_005",
+      "source_component": "PerceptionSystem",
+      "target_component": "PayloadMechanism",
+      "required_components": [
+        "PerceptionSystem",
+        "FlightController",
+        "PayloadMechanism"
+      ],
+      "required_connections": [
+        {
+          "source_component": "PerceptionSystem",
+          "source_port": "spatialPositionData",
+          "target_component": "FlightController",
+          "target_port": "spatialPositionData",
+          "item_type": "SpatialPositionDataPort"
+        },
+        {
+          "source_component": "FlightController",
+          "source_port": "payloadReleaseCmd",
+          "target_component": "PayloadMechanism",
+          "target_port": "payloadReleaseCmd",
+          "item_type": "PayloadCommandPort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "current geographic position is within 1.0 metre of the designated delivery waypoint",
+      "effect_concept": "release the payload",
+      "source_digest": "b99cc954d2657b04382be47c6264ed63099d3d084234caaf2f14b16fb0ebce98",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_006_001",
+      "requirement_id": "REQ_FUNC_006",
+      "source_component": "FlightController",
+      "target_component": "FlightController",
+      "required_components": [
+        "FlightController"
+      ],
+      "required_connections": [],
+      "entry_kind": "SOURCE_ANCHORED_LOCAL_BEHAVIOR",
+      "trigger_concept": "receiving a valid waypoint-modification command",
+      "effect_concept": "incorporate a revised waypoint sequence",
+      "source_digest": "e68e907e989e0819776c9839ed037f9c73781de348f401112d7f3792d49c8d97",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "behavior_kind": "ACTION_DEF",
+      "behavior_name": "WaypointModificationBehavior"
+    },
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_007_001",
+      "requirement_id": "REQ_FUNC_007",
+      "source_component": "FlightController",
+      "target_component": "FlightController",
+      "required_components": [
+        "FlightController"
+      ],
+      "required_connections": [],
+      "entry_kind": "SOURCE_ANCHORED_LOCAL_BEHAVIOR",
+      "trigger_concept": "detection of a non-critical contingency",
+      "effect_concept": "autonomously execute a return-to-base trajectory",
+      "source_digest": "cccc3b7c34d6015c16ba5bcaec01bdeb7ba4dc761d2435d50be8820bb2eb6bd9",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "behavior_kind": "ACTION_DEF",
+      "behavior_name": "ContingencyReturnBehavior"
+    },
+    {
+      "obligation_id": "STRUCT_REQ_FUNC_008_001",
+      "requirement_id": "REQ_FUNC_008",
+      "source_component": "FlightController",
+      "target_component": "CommunicationSystem",
+      "required_components": [
+        "FlightController",
+        "CommunicationSystem"
+      ],
+      "required_connections": [
+        {
+          "source_component": "FlightController",
+          "source_port": "landingHealthReport",
+          "target_component": "CommunicationSystem",
+          "target_port": "landingHealthReport",
+          "item_type": "LandingHealthReportPort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "completing an automated landing",
+      "effect_concept": "transmit a post-flight system health report",
+      "source_digest": "2869f9376fcd342ad3ddcc539e5a0ee5e15f5e72ee64db81fb38af7d60907d82",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_SAFE_001_001",
+      "requirement_id": "REQ_SAFE_001",
+      "source_component": "PowerSystem",
+      "target_component": "PropulsionSystem",
+      "required_components": [
+        "PowerSystem",
+        "FlightController",
+        "PropulsionSystem"
+      ],
+      "required_connections": [
+        {
+          "source_component": "PowerSystem",
+          "source_port": "batteryStateOfCharge",
+          "target_component": "FlightController",
+          "target_port": "batteryStateOfCharge",
+          "item_type": "BatteryStatusPort"
+        },
+        {
+          "source_component": "FlightController",
+          "source_port": "returnToBaseCmd",
+          "target_component": "PropulsionSystem",
+          "target_port": "returnToBaseCmd",
+          "item_type": "CommandPort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "battery state-of-charge reaches 25%",
+      "effect_concept": "initiate an autonomous return-to-base sequence",
+      "source_digest": "3d0acf5b896aec440bee944b26c325a3f5f6d5b993ca1e0d43e10432df5549e4",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_SAFE_002_001",
+      "requirement_id": "REQ_SAFE_002",
+      "source_component": "PowerSystem",
+      "target_component": "PropulsionSystem",
+      "required_components": [
+        "PowerSystem",
+        "FlightController",
+        "PropulsionSystem"
+      ],
+      "required_connections": [
+        {
+          "source_component": "PowerSystem",
+          "source_port": "batteryStateOfCharge",
+          "target_component": "FlightController",
+          "target_port": "batteryStateOfCharge",
+          "item_type": "BatteryStatusPort"
+        },
+        {
+          "source_component": "FlightController",
+          "source_port": "safeDescentCmd",
+          "target_component": "PropulsionSystem",
+          "target_port": "safeDescentCmd",
+          "item_type": "CommandPort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "battery state-of-charge falls below 15%",
+      "effect_concept": "perform a controlled descent to the nearest safe landing area",
+      "source_digest": "0e393ee6e127d99c64a1c1ec48099df4d7dd75f1e00a897cbe1cf5a7b5331047",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_SAFE_003_001",
+      "requirement_id": "REQ_SAFE_003",
+      "source_component": "CommunicationSystem",
+      "target_component": "FlightController",
+      "required_components": [
+        "CommunicationSystem",
+        "SafetyMonitor",
+        "FlightController"
+      ],
+      "required_connections": [
+        {
+          "source_component": "CommunicationSystem",
+          "source_port": "uplinkStatus",
+          "target_component": "SafetyMonitor",
+          "target_port": "uplinkStatus",
+          "item_type": "StatusPort"
+        },
+        {
+          "source_component": "SafetyMonitor",
+          "source_port": "safeLandingCmd",
+          "target_component": "FlightController",
+          "target_port": "safeLandingCmd",
+          "item_type": "CommandPort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "GCS uplink has been absent for more than 10 consecutive seconds",
+      "effect_concept": "perform an autonomous safe landing",
+      "source_digest": "070fd0fa7d09fb09097addd4bafb14d595623282bd347d6aa7431f4a00c88cc4",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_SAFE_004_001",
+      "requirement_id": "REQ_SAFE_004",
+      "source_component": "PerceptionSystem",
+      "target_component": "FlightController",
+      "required_components": [
+        "PerceptionSystem",
+        "SafetyMonitor",
+        "FlightController"
+      ],
+      "required_connections": [
+        {
+          "source_component": "PerceptionSystem",
+          "source_port": "sensorFailure",
+          "target_component": "SafetyMonitor",
+          "target_port": "sensorFailure",
+          "item_type": "StatusPort"
+        },
+        {
+          "source_component": "SafetyMonitor",
+          "source_port": "armingLockCmd",
+          "target_component": "FlightController",
+          "target_port": "armingLockCmd",
+          "item_type": "CommandPort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "onboard sensor reports a failure during the power-on self-test sequence",
+      "effect_concept": "not transition to the armed or airborne state",
+      "source_digest": "db9549a4c12825fa0b0be267a1d15929269be41b3f13a5fe024c5ec016109ccc",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_SAFE_005_001",
+      "requirement_id": "REQ_SAFE_005",
+      "source_component": "PropulsionSystem",
+      "target_component": "RecoverySystem",
+      "required_components": [
+        "PropulsionSystem",
+        "SafetyMonitor",
+        "RecoverySystem"
+      ],
+      "required_connections": [
+        {
+          "source_component": "PropulsionSystem",
+          "source_port": "propulsionFailure",
+          "target_component": "SafetyMonitor",
+          "target_port": "propulsionFailure",
+          "item_type": "StatusPort"
+        },
+        {
+          "source_component": "SafetyMonitor",
+          "source_port": "parachuteCmd",
+          "target_component": "RecoverySystem",
+          "target_port": "parachuteCmd",
+          "item_type": "RecoveryCommandPort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "detecting a critical propulsion subsystem failure",
+      "effect_concept": "deploy the ballistic recovery parachute",
+      "source_digest": "d98469c950cc8d656ebd7d3b18595c62d4ede57c0717842e747dd39ff0ecf2d8",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_SAFE_006_001",
+      "requirement_id": "REQ_SAFE_006",
+      "source_component": "PayloadMechanism",
+      "target_component": "PayloadMechanism",
+      "required_components": [
+        "PayloadMechanism"
+      ],
+      "required_connections": [],
+      "entry_kind": "SOURCE_ANCHORED_LOCAL_BEHAVIOR",
+      "trigger_concept": "delivery-abort condition is active",
+      "effect_concept": "maintain the payload in the mechanically locked state",
+      "source_digest": "2d8115572d2f7f3dd061becda76be20395e4afa917b02bda9b9ee695fe04affa",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "DeliveryAbortLockManagement"
+    },
+    {
+      "obligation_id": "STRUCT_REQ_SAFE_007_001",
+      "requirement_id": "REQ_SAFE_007",
+      "source_component": "PropulsionSystem",
+      "target_component": "PropulsionSystem",
+      "required_components": [
+        "PropulsionSystem"
+      ],
+      "required_connections": [],
+      "entry_kind": "SOURCE_ANCHORED_LOCAL_BEHAVIOR",
+      "trigger_concept": "failure of a single propulsion unit",
+      "effect_concept": "maintain controlled flight",
+      "source_digest": "8576503c9d8fe99acc732994f4e96b76845726630f30057b3ccd8cbe342a44b2",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "PropulsionFaultToleranceBehavior"
+    },
+    {
+      "obligation_id": "STRUCT_REQ_SAFE_008_001",
+      "requirement_id": "REQ_SAFE_008",
+      "source_component": "PayloadMechanism",
+      "target_component": "PayloadMechanism",
+      "required_components": [
+        "PayloadMechanism"
+      ],
+      "required_connections": [],
+      "entry_kind": "SOURCE_ANCHORED_LOCAL_BEHAVIOR",
+      "trigger_concept": "upon power-on",
+      "effect_concept": "default to the mechanically locked state",
+      "source_digest": "6941a2a0b5156b75b1d17f8d2407084534d4bcdf3fec00ecfe709c6d6867ffde",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "DefaultToMechanicallyLockedStateBehavior"
+    },
+    {
+      "obligation_id": "STRUCT_REQ_INTF_001_001",
+      "requirement_id": "REQ_INTF_001",
+      "source_component": "CommunicationSystem",
+      "target_component": "CommunicationSystem",
+      "required_components": [
+        "CommunicationSystem"
+      ],
+      "required_connections": [],
+      "entry_kind": "SOURCE_ANCHORED_LOCAL_BEHAVIOR",
+      "trigger_concept": "exchange telemetry and mission commands",
+      "effect_concept": "using the MAVLink v2.0 protocol over an AES-256 encrypted RF channel",
+      "source_digest": "fd323602f5e371883f4760e0abf6096152b1f3289d67a1390cd3e26b72f8ce0b",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "behavior_kind": "STATE_DEF",
+      "behavior_name": "RfLinkEncryption"
+    },
+    {
+      "obligation_id": "STRUCT_REQ_INTF_002_001",
+      "requirement_id": "REQ_INTF_002",
+      "source_component": "CommunicationSystem",
+      "target_component": "PerceptionSystem",
+      "required_components": [
+        "CommunicationSystem",
+        "PerceptionSystem"
+      ],
+      "required_connections": [
+        {
+          "source_component": "CommunicationSystem",
+          "source_port": "rtcmGnssCorrections",
+          "target_component": "PerceptionSystem",
+          "target_port": "rtcmGnssCorrections",
+          "item_type": "GnssCorrectionPort"
+        }
+      ],
+      "entry_kind": "SOURCE_ANCHORED_CAUSAL_TRIGGER",
+      "trigger_concept": "receive and apply differential GNSS corrections",
+      "effect_concept": "formatted according to the RTCM 10403.3 standard",
+      "source_digest": "bc6d8335bf96de343714fe0c6eb7438eb79f4747e1d12b474bc52211eb696d9d",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "CAUSAL_PATH",
+      "behavior_kind": "",
+      "behavior_name": ""
+    },
+    {
+      "obligation_id": "STRUCT_REQ_INTF_003_001",
+      "requirement_id": "REQ_INTF_003",
+      "source_component": "CommunicationSystem",
+      "target_component": "CommunicationSystem",
+      "required_components": [
+        "CommunicationSystem"
+      ],
+      "required_connections": [],
+      "entry_kind": "SOURCE_ANCHORED_LOCAL_BEHAVIOR",
+      "trigger_concept": "broadcast remote identification and real-time spatial positioning data",
+      "effect_concept": "in accordance with the ASTM F3411-22 standard",
+      "source_digest": "564a8a76bc840c654ff26e2efc216f4fae111045b737405c15e3e4ef8e93e87c",
+      "provenance": "FROZEN_REQUIREMENT_REALIZATION",
+      "realization_kind": "LOCAL_BEHAVIOR",
+      "behavior_kind": "ACTION_DEF",
+      "behavior_name": "BroadcastRemoteId"
+    }
+  ],
+  "semantic_obligations": [
+    {
+      "obligation_id": "SEM_REQ_FUNC_002_001",
+      "requirement_id": "REQ_FUNC_002",
+      "kind": "NUMERIC_INVARIANT",
+      "subject_terms": [
+        "airframe",
+        "obstacle",
+        "separation"
+      ],
+      "operator": ">=",
+      "threshold": 5.0,
+      "unit": "m",
+      "source_clause": "maintaining an airframe-to-obstacle separation of at least 5 metres",
+      "source_digest": "42fe857846e8101c8456af02ae80de1dc4e0438ccf1d24e91e17629e6cdb19df",
+      "activation": {
+        "kind": "UNCONDITIONAL",
+        "source_clause": null
+      },
+      "claim_boundary": "MODEL_SEMANTIC_FIDELITY_NOT_PHYSICAL_PROOF"
+    },
+    {
+      "obligation_id": "SEM_REQ_FUNC_003_001",
+      "requirement_id": "REQ_FUNC_003",
+      "kind": "NUMERIC_INVARIANT",
+      "subject_terms": [
+        "hover",
+        "throttle",
+        "margin"
+      ],
+      "operator": ">=",
+      "threshold": 30.0,
+      "unit": "%",
+      "source_clause": "maintaining a hover throttle margin of at least 30 percent",
+      "source_digest": "fbfb74ce689888595cd0d0a2cf511c7c71ef0a149aa98ccc244aea24f83d0e20",
+      "activation": {
+        "kind": "UNCONDITIONAL",
+        "source_clause": null
+      },
+      "claim_boundary": "MODEL_SEMANTIC_FIDELITY_NOT_PHYSICAL_PROOF"
+    },
+    {
+      "obligation_id": "SEM_REQ_PERF_001_001",
+      "requirement_id": "REQ_PERF_001",
+      "kind": "NUMERIC_INVARIANT",
+      "subject_terms": [
+        "roll",
+        "pitch",
+        "attitude",
+        "deviations"
+      ],
+      "operator": "<=",
+      "threshold": 0.5,
+      "unit": "deg",
+      "source_clause": "maintain roll and pitch attitude deviations within 0.5 degree RMS during steady cruise flight at all authorised speeds",
+      "source_digest": "b56deeb9012aed1324edcf44f507223cec08f35243eaa4b26b6a076e2dc2d4d3",
+      "activation": {
+        "kind": "CONTEXTUAL",
+        "source_clause": "during steady cruise flight at all authorised speeds"
+      },
+      "claim_boundary": "MODEL_SEMANTIC_FIDELITY_NOT_PHYSICAL_PROOF"
+    },
+    {
+      "obligation_id": "SEM_REQ_PERF_002_001",
+      "requirement_id": "REQ_PERF_002",
+      "kind": "NUMERIC_INVARIANT",
+      "subject_terms": [
+        "flight"
+      ],
+      "operator": ">=",
+      "threshold": 25.0,
+      "unit": "min",
+      "source_clause": "sustain flight for a minimum of 25 minutes when carrying the maximum rated payload at nominal cruise speed",
+      "source_digest": "851e4259d5129246ec4486145be158991b2aa75820e423b31a8d435fbabb483f",
+      "activation": {
+        "kind": "CONTEXTUAL",
+        "source_clause": "when carrying the maximum rated payload at nominal cruise speed"
+      },
+      "claim_boundary": "MODEL_SEMANTIC_FIDELITY_NOT_PHYSICAL_PROOF"
+    },
+    {
+      "obligation_id": "SEM_REQ_PERF_003_001",
+      "requirement_id": "REQ_PERF_003",
+      "kind": "NUMERIC_INVARIANT",
+      "subject_terms": [
+        "cruise",
+        "airspeed"
+      ],
+      "operator": ">=",
+      "threshold": 18.0,
+      "unit": "m/s",
+      "source_clause": "achieve a cruise airspeed of at least 18 m/s",
+      "source_digest": "dd585282f197522dce7f6dce0b8a110de02edb0f2d38a5549a139930e3f43686",
+      "activation": {
+        "kind": "UNCONDITIONAL",
+        "source_clause": null
+      },
+      "claim_boundary": "MODEL_SEMANTIC_FIDELITY_NOT_PHYSICAL_PROOF"
+    },
+    {
+      "obligation_id": "SEM_REQ_PERF_004_001",
+      "requirement_id": "REQ_PERF_004",
+      "kind": "NUMERIC_INVARIANT",
+      "subject_terms": [
+        "forward",
+        "ground",
+        "speed"
+      ],
+      "operator": ">=",
+      "threshold": 2.0,
+      "unit": "m/s",
+      "source_clause": "maintain a minimum forward ground speed of 2 m/s when operating in sustained headwinds of up to 15 m/s",
+      "source_digest": "984df70fcbd29a1609af712e4cb466600fafd603b7e262ebbc5b87a2eea656f1",
+      "activation": {
+        "kind": "CONTEXTUAL",
+        "source_clause": "when operating in sustained headwinds of up to 15 m/s"
+      },
+      "claim_boundary": "MODEL_SEMANTIC_FIDELITY_NOT_PHYSICAL_PROOF"
+    },
+    {
+      "obligation_id": "SEM_REQ_PERF_006_001",
+      "requirement_id": "REQ_PERF_006",
+      "kind": "NUMERIC_INVARIANT",
+      "subject_terms": [
+        "operational",
+        "range"
+      ],
+      "operator": ">=",
+      "threshold": 5.0,
+      "unit": "km",
+      "source_clause": "achieve an operational range of at least 5 km",
+      "source_digest": "6377e9bbce09624ecd8b701815c89c6913fbd5d2a341001a1c43bf6f7e3b45bd",
+      "activation": {
+        "kind": "UNCONDITIONAL",
+        "source_clause": null
+      },
+      "claim_boundary": "MODEL_SEMANTIC_FIDELITY_NOT_PHYSICAL_PROOF"
+    },
+    {
+      "obligation_id": "SEM_REQ_CONS_001_001",
+      "requirement_id": "REQ_CONS_001",
+      "kind": "NUMERIC_INVARIANT",
+      "subject_terms": [
+        "flight",
+        "altitude"
+      ],
+      "operator": "<=",
+      "threshold": 120.0,
+      "unit": "m",
+      "source_clause": "The system shall not exceed a flight altitude of 120 metres",
+      "source_digest": "2f05e40dc080981370cb3bad36f6dd54b9e0fc70de7fedf7f01b6b8f14e567d7",
+      "activation": {
+        "kind": "UNCONDITIONAL",
+        "source_clause": null
+      },
+      "claim_boundary": "MODEL_SEMANTIC_FIDELITY_NOT_PHYSICAL_PROOF"
+    },
+    {
+      "obligation_id": "SEM_REQ_CONS_003_001",
+      "requirement_id": "REQ_CONS_003",
+      "kind": "NUMERIC_INVARIANT",
+      "subject_terms": [
+        "take",
+        "off",
+        "mass",
+        "payload",
+        "battery"
+      ],
+      "operator": "<=",
+      "threshold": 8.0,
+      "unit": "kg",
+      "source_clause": "The system maximum take-off mass, including payload and battery, shall not exceed 8.0 kg",
+      "source_digest": "7d89fb30f63f954aebce8e5c8b42a46e7967e406fc88c79574085b1a3e07e59f",
+      "activation": {
+        "kind": "UNCONDITIONAL",
+        "source_clause": null
+      },
+      "claim_boundary": "MODEL_SEMANTIC_FIDELITY_NOT_PHYSICAL_PROOF"
+    }
+  ],
+  "semantic_bindings": [
+    {
+      "obligation_id": "SEM_REQ_FUNC_002_001",
+      "requirement_id": "REQ_FUNC_002",
+      "source": {
+        "component": "PerceptionSystem",
+        "port": "obstacleData"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "obstacleData",
+        "runtime_attribute": "currentAirframeObstacleSeparation"
+      },
+      "payload": {
+        "port_type": "ObstacleSeparationPort",
+        "port_feature": "payload",
+        "item_type": "ObstacleSeparationData",
+        "item_feature": "airframeObstacleSeparation",
+        "value_type": "LengthValue",
+        "unit": "m"
+      },
+      "constraint": {
+        "name": "obstacleSeparationConstraint",
+        "threshold_attribute": "airframeObstacleSeparationThreshold"
+      }
+    },
+    {
+      "obligation_id": "SEM_REQ_FUNC_003_001",
+      "requirement_id": "REQ_FUNC_003",
+      "source": {
+        "component": "PropulsionSystem",
+        "port": "payloadHoverThrottle"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "payloadHoverThrottle",
+        "runtime_attribute": "currentHoverThrottleMargin"
+      },
+      "payload": {
+        "port_type": "HoverThrottlePort",
+        "port_feature": "payload",
+        "item_type": "HoverThrottleData",
+        "item_feature": "hoverThrottleMargin",
+        "value_type": "DimensionOneValue",
+        "unit": "%"
+      },
+      "constraint": {
+        "name": "hoverThrottleMarginConstraint",
+        "threshold_attribute": "hoverThrottleMarginThreshold"
+      }
+    },
+    {
+      "obligation_id": "SEM_REQ_PERF_001_001",
+      "requirement_id": "REQ_PERF_001",
+      "source": {
+        "component": "PerceptionSystem",
+        "port": "spatialPositionData"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "spatialPositionData",
+        "runtime_attribute": "currentRollPitchAttitudeDeviations"
+      },
+      "payload": {
+        "port_type": "SpatialPositionDataPort",
+        "port_feature": "payload",
+        "item_type": "SpatialPositionData",
+        "item_feature": "rollPitchAttitudeDeviations",
+        "value_type": "AngularMeasureValue",
+        "unit": "deg"
+      },
+      "constraint": {
+        "name": "attitudeDeviationsConstraint",
+        "threshold_attribute": "rollPitchAttitudeDeviationsThreshold"
+      }
+    },
+    {
+      "obligation_id": "SEM_REQ_PERF_002_001",
+      "requirement_id": "REQ_PERF_002",
+      "source": {
+        "component": "PowerSystem",
+        "port": "batteryStateOfCharge"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "batteryStateOfCharge",
+        "runtime_attribute": "currentFlightDuration"
+      },
+      "payload": {
+        "port_type": "BatteryStatusPort",
+        "port_feature": "payload",
+        "item_type": "BatteryStatusData",
+        "item_feature": "flight",
+        "value_type": "DurationValue",
+        "unit": "min"
+      },
+      "constraint": {
+        "name": "flightDurationConstraint",
+        "threshold_attribute": "flightDurationThreshold"
+      }
+    },
+    {
+      "obligation_id": "SEM_REQ_PERF_003_001",
+      "requirement_id": "REQ_PERF_003",
+      "source": {
+        "component": "PerceptionSystem",
+        "port": "spatialPositionData"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "spatialPositionData",
+        "runtime_attribute": "currentCruiseAirspeed"
+      },
+      "payload": {
+        "port_type": "SpatialPositionDataPort",
+        "port_feature": "payload",
+        "item_type": "SpatialPositionData",
+        "item_feature": "cruiseAirspeed",
+        "value_type": "SpeedValue",
+        "unit": "m/s"
+      },
+      "constraint": {
+        "name": "cruiseAirspeedConstraint",
+        "threshold_attribute": "cruiseAirspeedThreshold"
+      }
+    },
+    {
+      "obligation_id": "SEM_REQ_PERF_004_001",
+      "requirement_id": "REQ_PERF_004",
+      "source": {
+        "component": "PerceptionSystem",
+        "port": "spatialPositionData"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "spatialPositionData",
+        "runtime_attribute": "currentForwardGroundSpeed"
+      },
+      "payload": {
+        "port_type": "SpatialPositionDataPort",
+        "port_feature": "payload",
+        "item_type": "SpatialPositionData",
+        "item_feature": "forwardGroundSpeed",
+        "value_type": "SpeedValue",
+        "unit": "m/s"
+      },
+      "constraint": {
+        "name": "forwardGroundSpeedConstraint",
+        "threshold_attribute": "forwardGroundSpeedThreshold"
+      }
+    },
+    {
+      "obligation_id": "SEM_REQ_PERF_006_001",
+      "requirement_id": "REQ_PERF_006",
+      "source": {
+        "component": "PowerSystem",
+        "port": "batteryStateOfCharge"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "batteryStateOfCharge",
+        "runtime_attribute": "currentOperationalRange"
+      },
+      "payload": {
+        "port_type": "BatteryStatusPort",
+        "port_feature": "payload",
+        "item_type": "BatteryStatusData",
+        "item_feature": "operationalRange",
+        "value_type": "LengthValue",
+        "unit": "km"
+      },
+      "constraint": {
+        "name": "operationalRangeConstraint",
+        "threshold_attribute": "operationalRangeThreshold"
+      }
+    },
+    {
+      "obligation_id": "SEM_REQ_CONS_001_001",
+      "requirement_id": "REQ_CONS_001",
+      "source": {
+        "component": "PerceptionSystem",
+        "port": "spatialPositionData"
+      },
+      "target": {
+        "component": "FlightController",
+        "port": "spatialPositionData",
+        "runtime_attribute": "currentFlightAltitude"
+      },
+      "payload": {
+        "port_type": "SpatialPositionDataPort",
+        "port_feature": "payload",
+        "item_type": "SpatialPositionData",
+        "item_feature": "flightAltitude",
+        "value_type": "LengthValue",
+        "unit": "m"
+      },
+      "constraint": {
+        "name": "flightAltitudeConstraint",
+        "threshold_attribute": "flightAltitudeThreshold"
+      }
+    },
+    {
+      "obligation_id": "SEM_REQ_CONS_003_001",
+      "requirement_id": "REQ_CONS_003",
+      "source": {
+        "component": "PayloadMechanism",
+        "port": "massData"
+      },
+      "target": {
+        "component": "Airframe",
+        "port": "massData",
+        "runtime_attribute": "currentTakeOffMassPayloadBattery"
+      },
+      "payload": {
+        "port_type": "MassDataPort",
+        "port_feature": "payload",
+        "item_type": "MassData",
+        "item_feature": "takeOffMassPayloadBattery",
+        "value_type": "MassValue",
+        "unit": "kg"
+      },
+      "constraint": {
+        "name": "takeOffMassConstraint",
+        "threshold_attribute": "takeOffMassPayloadBatteryThreshold"
+      }
+    }
+  ],
+  "constraints": [
+    {
+      "constraint_id": "obstacleSeparationConstraint",
+      "owner": "FlightController",
+      "expression": {
+        "lhs": "currentAirframeObstacleSeparation",
+        "operator": ">=",
+        "rhs": "airframeObstacleSeparationThreshold"
+      },
+      "activation": {
+        "kind": "ALWAYS",
+        "reference": null
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_002",
+        "source_digest": "42fe857846e8101c8456af02ae80de1dc4e0438ccf1d24e91e17629e6cdb19df"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    },
+    {
+      "constraint_id": "hoverThrottleMarginConstraint",
+      "owner": "FlightController",
+      "expression": {
+        "lhs": "currentHoverThrottleMargin",
+        "operator": ">=",
+        "rhs": "hoverThrottleMarginThreshold"
+      },
+      "activation": {
+        "kind": "ALWAYS",
+        "reference": null
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_003",
+        "source_digest": "fbfb74ce689888595cd0d0a2cf511c7c71ef0a149aa98ccc244aea24f83d0e20"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    },
+    {
+      "constraint_id": "attitudeDeviationsConstraint",
+      "owner": "FlightController",
+      "expression": {
+        "lhs": "currentRollPitchAttitudeDeviations",
+        "operator": "<=",
+        "rhs": "rollPitchAttitudeDeviationsThreshold"
+      },
+      "activation": {
+        "kind": "STATE_ACTIVE",
+        "reference": "AttitudePerformanceBehavior::SteadyCruiseFlight"
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_PERF_001",
+        "source_digest": "b56deeb9012aed1324edcf44f507223cec08f35243eaa4b26b6a076e2dc2d4d3"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    },
+    {
+      "constraint_id": "flightDurationConstraint",
+      "owner": "FlightController",
+      "expression": {
+        "lhs": "currentFlightDuration",
+        "operator": ">=",
+        "rhs": "flightDurationThreshold"
+      },
+      "activation": {
+        "kind": "STATE_ACTIVE",
+        "reference": "EndurancePerformanceBehavior::NominalCruiseWithMaxPayload"
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_PERF_002",
+        "source_digest": "851e4259d5129246ec4486145be158991b2aa75820e423b31a8d435fbabb483f"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    },
+    {
+      "constraint_id": "cruiseAirspeedConstraint",
+      "owner": "FlightController",
+      "expression": {
+        "lhs": "currentCruiseAirspeed",
+        "operator": ">=",
+        "rhs": "cruiseAirspeedThreshold"
+      },
+      "activation": {
+        "kind": "ALWAYS",
+        "reference": null
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_PERF_003",
+        "source_digest": "dd585282f197522dce7f6dce0b8a110de02edb0f2d38a5549a139930e3f43686"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    },
+    {
+      "constraint_id": "forwardGroundSpeedConstraint",
+      "owner": "FlightController",
+      "expression": {
+        "lhs": "currentForwardGroundSpeed",
+        "operator": ">=",
+        "rhs": "forwardGroundSpeedThreshold"
+      },
+      "activation": {
+        "kind": "STATE_ACTIVE",
+        "reference": "HeadwindPerformanceBehavior::HeadwindOperation"
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_PERF_004",
+        "source_digest": "984df70fcbd29a1609af712e4cb466600fafd603b7e262ebbc5b87a2eea656f1"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    },
+    {
+      "constraint_id": "operationalRangeConstraint",
+      "owner": "FlightController",
+      "expression": {
+        "lhs": "currentOperationalRange",
+        "operator": ">=",
+        "rhs": "operationalRangeThreshold"
+      },
+      "activation": {
+        "kind": "ALWAYS",
+        "reference": null
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_PERF_006",
+        "source_digest": "6377e9bbce09624ecd8b701815c89c6913fbd5d2a341001a1c43bf6f7e3b45bd"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    },
+    {
+      "constraint_id": "flightAltitudeConstraint",
+      "owner": "FlightController",
+      "expression": {
+        "lhs": "currentFlightAltitude",
+        "operator": "<=",
+        "rhs": "flightAltitudeThreshold"
+      },
+      "activation": {
+        "kind": "ALWAYS",
+        "reference": null
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_CONS_001",
+        "source_digest": "2f05e40dc080981370cb3bad36f6dd54b9e0fc70de7fedf7f01b6b8f14e567d7"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    },
+    {
+      "constraint_id": "takeOffMassConstraint",
+      "owner": "Airframe",
+      "expression": {
+        "lhs": "currentTakeOffMassPayloadBattery",
+        "operator": "<=",
+        "rhs": "takeOffMassPayloadBatteryThreshold"
+      },
+      "activation": {
+        "kind": "ALWAYS",
+        "reference": null
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_CONS_003",
+        "source_digest": "7d89fb30f63f954aebce8e5c8b42a46e7967e406fc88c79574085b1a3e07e59f"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    },
+    {
+      "constraint_id": "waypointLatencyConstraint",
+      "owner": "FlightController",
+      "expression": {
+        "lhs": "waypointLatency",
+        "operator": "<=",
+        "rhs": "1.0"
+      },
+      "activation": {
+        "kind": "ALWAYS",
+        "reference": null
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_006",
+        "source_digest": "e68e907e989e0819776c9839ed037f9c73781de348f401112d7f3792d49c8d97"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    },
+    {
+      "constraint_id": "reportLatencyConstraint",
+      "owner": "CommunicationSystem",
+      "expression": {
+        "lhs": "reportLatency",
+        "operator": "<=",
+        "rhs": "5.0"
+      },
+      "activation": {
+        "kind": "ALWAYS",
+        "reference": null
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_008",
+        "source_digest": "2869f9376fcd342ad3ddcc539e5a0ee5e15f5e72ee64db81fb38af7d60907d82"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    },
+    {
+      "constraint_id": "payloadReleaseActuationTimeConstraint",
+      "owner": "PayloadMechanism",
+      "expression": {
+        "lhs": "payloadReleaseActuationTime",
+        "operator": "<=",
+        "rhs": "2.0"
+      },
+      "activation": {
+        "kind": "ALWAYS",
+        "reference": null
+      },
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_PERF_005",
+        "source_digest": "ae6f7e290ca703dfc6b83d0476d494e5d1e3b6ccbd18bce2e7696c5889f9bb43"
+      },
+      "verification_tier": "STATE_EXECUTION",
+      "qualification_effect": "REQUIREMENT_BEHAVIOR_EXECUTION"
+    }
+  ],
+  "behaviors": [
+    {
+      "owner": "FlightController",
+      "behavior_id": "WaypointNavigationBehavior",
+      "initial_state": "Initial",
+      "states": [
+        {
+          "state_id": "Initial",
+          "role": "INITIAL",
+          "entry_action": "initializeNavigation",
+          "do_action": null
+        },
+        {
+          "state_id": "NavigatingWaypoints",
+          "role": "RESPONSE",
+          "entry_action": "navigateWaypoints",
+          "do_action": null
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "startNavigation",
+          "source": "Initial",
+          "target": "NavigatingWaypoints",
+          "trigger_kind": "ACCEPT",
+          "trigger": "DesignatedGpsWaypoints",
+          "guard": ""
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_001",
+        "source_digest": "919b664a60c798c68c4ef8701a3b7ba77d12cf4ce395ecbe60a259015dedf279"
+      }
+    },
+    {
+      "owner": "FlightController",
+      "behavior_id": "AvoidanceNavigationBehavior",
+      "initial_state": "Initial",
+      "states": [
+        {
+          "state_id": "Initial",
+          "role": "INITIAL",
+          "entry_action": "initializeAvoidance",
+          "do_action": null
+        },
+        {
+          "state_id": "AvoidingThreat",
+          "role": "RESPONSE",
+          "entry_action": "navigateAvoidanceManoeuvre",
+          "do_action": null
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "avoidThreat",
+          "source": "Initial",
+          "target": "AvoidingThreat",
+          "trigger_kind": "ACCEPT",
+          "trigger": "StationaryCollisionThreat",
+          "guard": ""
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_002",
+        "source_digest": "42fe857846e8101c8456af02ae80de1dc4e0438ccf1d24e91e17629e6cdb19df"
+      }
+    },
+    {
+      "owner": "FlightController",
+      "behavior_id": "WaypointModificationBehavior",
+      "initial_state": "Initial",
+      "states": [
+        {
+          "state_id": "Initial",
+          "role": "INITIAL",
+          "entry_action": "initializeModification",
+          "do_action": null
+        },
+        {
+          "state_id": "ModifyingWaypoint",
+          "role": "RESPONSE",
+          "entry_action": "navigateRevisedWaypoints",
+          "do_action": null
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "modifyWaypoint",
+          "source": "Initial",
+          "target": "ModifyingWaypoint",
+          "trigger_kind": "ACCEPT",
+          "trigger": "ValidWaypointModificationCommand",
+          "guard": ""
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_006",
+        "source_digest": "e68e907e989e0819776c9839ed037f9c73781de348f401112d7f3792d49c8d97"
+      }
+    },
+    {
+      "owner": "FlightController",
+      "behavior_id": "ContingencyReturnBehavior",
+      "initial_state": "Initial",
+      "states": [
+        {
+          "state_id": "Initial",
+          "role": "INITIAL",
+          "entry_action": "initializeContingency",
+          "do_action": null
+        },
+        {
+          "state_id": "ReturningToBase",
+          "role": "RESPONSE",
+          "entry_action": "returnToBase",
+          "do_action": null
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "executeReturn",
+          "source": "Initial",
+          "target": "ReturningToBase",
+          "trigger_kind": "ACCEPT",
+          "trigger": "NonCriticalContingency",
+          "guard": ""
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_007",
+        "source_digest": "cccc3b7c34d6015c16ba5bcaec01bdeb7ba4dc761d2435d50be8820bb2eb6bd9"
+      }
+    },
+    {
+      "owner": "CommunicationSystem",
+      "behavior_id": "HealthReportBehavior",
+      "initial_state": "Initial",
+      "states": [
+        {
+          "state_id": "Initial",
+          "role": "INITIAL",
+          "entry_action": "initializeReporting",
+          "do_action": null
+        },
+        {
+          "state_id": "ReportingHealth",
+          "role": "RESPONSE",
+          "entry_action": "reportHealthStatus",
+          "do_action": null
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "reportHealth",
+          "source": "Initial",
+          "target": "ReportingHealth",
+          "trigger_kind": "ACCEPT",
+          "trigger": "AutomatedLandingCompleted",
+          "guard": ""
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_008",
+        "source_digest": "2869f9376fcd342ad3ddcc539e5a0ee5e15f5e72ee64db81fb38af7d60907d82"
+      }
+    },
+    {
+      "owner": "FlightController",
+      "behavior_id": "AttitudePerformanceBehavior",
+      "initial_state": "Initial",
+      "states": [
+        {
+          "state_id": "Initial",
+          "role": "INITIAL",
+          "entry_action": "initializeAttitude",
+          "do_action": null
+        },
+        {
+          "state_id": "SteadyCruiseFlight",
+          "role": "NORMAL",
+          "entry_action": null,
+          "do_action": "maintainAttitude"
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "enterCruise",
+          "source": "Initial",
+          "target": "SteadyCruiseFlight",
+          "trigger_kind": "ACCEPT",
+          "trigger": "SteadyCruiseFlightEntered",
+          "guard": ""
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_PERF_001",
+        "source_digest": "b56deeb9012aed1324edcf44f507223cec08f35243eaa4b26b6a076e2dc2d4d3"
+      }
+    },
+    {
+      "owner": "FlightController",
+      "behavior_id": "EndurancePerformanceBehavior",
+      "initial_state": "Initial",
+      "states": [
+        {
+          "state_id": "Initial",
+          "role": "INITIAL",
+          "entry_action": "initializeEndurance",
+          "do_action": null
+        },
+        {
+          "state_id": "NominalCruiseWithMaxPayload",
+          "role": "NORMAL",
+          "entry_action": null,
+          "do_action": "sustainFlight"
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "enterMaxPayloadCruise",
+          "source": "Initial",
+          "target": "NominalCruiseWithMaxPayload",
+          "trigger_kind": "ACCEPT",
+          "trigger": "MaxPayloadCruiseEntered",
+          "guard": ""
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_PERF_002",
+        "source_digest": "851e4259d5129246ec4486145be158991b2aa75820e423b31a8d435fbabb483f"
+      }
+    },
+    {
+      "owner": "FlightController",
+      "behavior_id": "HeadwindPerformanceBehavior",
+      "initial_state": "Initial",
+      "states": [
+        {
+          "state_id": "Initial",
+          "role": "INITIAL",
+          "entry_action": "initializeHeadwind",
+          "do_action": null
+        },
+        {
+          "state_id": "HeadwindOperation",
+          "role": "NORMAL",
+          "entry_action": null,
+          "do_action": "maintainForwardSpeed"
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "detectHeadwind",
+          "source": "Initial",
+          "target": "HeadwindOperation",
+          "trigger_kind": "ACCEPT",
+          "trigger": "HeadwindDetected",
+          "guard": ""
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_PERF_004",
+        "source_digest": "984df70fcbd29a1609af712e4cb466600fafd603b7e262ebbc5b87a2eea656f1"
+      }
+    },
+    {
+      "owner": "PayloadMechanism",
+      "behavior_id": "DefaultToMechanicallyLockedStateBehavior",
+      "initial_state": "Initial",
+      "states": [
+        {
+          "state_id": "Initial",
+          "role": "INITIAL",
+          "entry_action": "defaultToMechanicallyLockedState",
+          "do_action": null
+        }
+      ],
+      "transitions": [],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_SAFE_008",
+        "source_digest": "6941a2a0b5156b75b1d17f8d2407084534d4bcdf3fec00ecfe709c6d6867ffde"
+      }
+    },
+    {
+      "owner": "PayloadMechanism",
+      "behavior_id": "PayloadReleaseBehavior",
+      "initial_state": "Initial",
+      "states": [
+        {
+          "state_id": "Initial",
+          "role": "INITIAL",
+          "entry_action": "initializeRelease",
+          "do_action": null
+        },
+        {
+          "state_id": "ReleasingPayload",
+          "role": "RESPONSE",
+          "entry_action": "releasePayload",
+          "do_action": null
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "executeRelease",
+          "source": "Initial",
+          "target": "ReleasingPayload",
+          "trigger_kind": "ACCEPT",
+          "trigger": "DeliveryWaypointReached",
+          "guard": ""
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_FUNC_005",
+        "source_digest": "b99cc954d2657b04382be47c6264ed63099d3d084234caaf2f14b16fb0ebce98"
+      }
+    },
+    {
+      "owner": "PropulsionSystem",
+      "behavior_id": "PropulsionFaultToleranceBehavior",
+      "initial_state": "Initial",
+      "states": [
+        {
+          "state_id": "Initial",
+          "role": "INITIAL",
+          "entry_action": "initializePropulsion",
+          "do_action": null
+        },
+        {
+          "state_id": "FaultTolerance",
+          "role": "FAULT",
+          "entry_action": null,
+          "do_action": "maintainControlledFlight"
+        }
+      ],
+      "transitions": [
+        {
+          "transition_id": "handlePropulsionFault",
+          "source": "Initial",
+          "target": "FaultTolerance",
+          "trigger_kind": "ACCEPT",
+          "trigger": "PropulsionUnitFailure",
+          "guard": ""
+        }
+      ],
+      "provenance": {
+        "kind": "FROZEN_REQUIREMENT",
+        "requirement_id": "REQ_SAFE_007",
+        "source_digest": "8576503c9d8fe99acc732994f4e96b76845726630f30057b3ccd8cbe342a44b2"
+      }
+    }
+  ],
+  "behavior_obligations": [],
+  "planned_event_symbols": [
+    {
+      "name": "AutomatedLandingCompleted",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::CommunicationSystem::HealthReportBehavior"
+      ]
+    },
+    {
+      "name": "DeliveryWaypointReached",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::PayloadMechanism::PayloadReleaseBehavior"
+      ]
+    },
+    {
+      "name": "DesignatedGpsWaypoints",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::FlightController::WaypointNavigationBehavior"
+      ]
+    },
+    {
+      "name": "HeadwindDetected",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::FlightController::HeadwindPerformanceBehavior"
+      ]
+    },
+    {
+      "name": "MaxPayloadCruiseEntered",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::FlightController::EndurancePerformanceBehavior"
+      ]
+    },
+    {
+      "name": "NonCriticalContingency",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::FlightController::ContingencyReturnBehavior"
+      ]
+    },
+    {
+      "name": "PropulsionUnitFailure",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::PropulsionSystem::PropulsionFaultToleranceBehavior"
+      ]
+    },
+    {
+      "name": "StationaryCollisionThreat",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::FlightController::AvoidanceNavigationBehavior"
+      ]
+    },
+    {
+      "name": "SteadyCruiseFlightEntered",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::FlightController::AttitudePerformanceBehavior"
+      ]
+    },
+    {
+      "name": "ValidWaypointModificationCommand",
+      "definition_kind": "item def",
+      "sources": [
+        "BEHAVIOR::FlightController::WaypointModificationBehavior"
+      ]
+    }
+  ],
+  "behavior_identity_reconciliations": [],
+  "constraint_identity_reconciliations": [],
+  "issues": [],
+  "advisories": [
+    "constraints[waypointLatencyConstraint] claims STATE_EXECUTION but its subject FlightController.waypointLatency carries only the value '1.0' and no input binding; the behavioural executor requires a bound runtime measurement, so this constraint cannot anchor REQ_FUNC_006",
+    "constraints[reportLatencyConstraint] claims STATE_EXECUTION but its subject CommunicationSystem.reportLatency carries only the value '5.0' and no input binding; the behavioural executor requires a bound runtime measurement, so this constraint cannot anchor REQ_FUNC_008",
+    "constraints[payloadReleaseActuationTimeConstraint] claims STATE_EXECUTION but its subject PayloadMechanism.payloadReleaseActuationTime carries only the value '2.0' and no input binding; the behavioural executor requires a bound runtime measurement, so this constraint cannot anchor REQ_PERF_005",
+    "mandated wiring conflict (overrideCmd): a planned port of the same name has a different direction or type \u2014 model declaration left untouched",
+    "mandated wiring conflict (commStatus): a planned port of the same name has a different direction or type \u2014 model declaration left untouched",
+    "mandated wiring conflict (sensorStatus): a planned port of the same name has a different direction or type \u2014 model declaration left untouched"
+  ]
+}

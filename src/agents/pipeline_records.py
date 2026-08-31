@@ -73,6 +73,9 @@ class PipelineRuntimeState:
     estimator_calibration: Any = None
     ag_generation_plan: Optional[AGGenerationPlanRecord] = None
     model_generation_plan: Optional[ModelGenerationPlanRecord] = None
+    #: Audit record of the bounded frozen-plan revision (plan_revision.py),
+    #: published whether the revision was accepted, rejected, or rolled back.
+    plan_revision: Any = None
 
 
 @dataclass

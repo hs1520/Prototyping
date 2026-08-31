@@ -38,9 +38,14 @@ class InitializationMixin:
         r2_authored_syntax_max_attempts: int = 3,
         maximum_ag_repair_attempts: int = 3,
         maximum_plan_attempts: int = DEFAULT_MAXIMUM_PLAN_ATTEMPTS,
+        enable_plan_revision: bool = True,
     ):
         self._init_pipeline_state()
         self.llm = llm
+        # Bounded plan revision when refinement reports
+        # `structural_repair_blocked` (see agents/plan_revision.py). An
+        # ablation arm may disable it to reproduce the frozen-plan deadlock.
+        self.enable_plan_revision = enable_plan_revision
         self.rag = rag_retriever
         self.quality_threshold = quality_threshold
         self.max_iterations = max_iterations
