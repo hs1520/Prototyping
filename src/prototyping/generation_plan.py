@@ -1891,11 +1891,20 @@ class ModelGenerationPlan:
                         )
                     )
                 for transition in behavior.transitions:
+                    # The guard is part of the frozen identity: omitting it
+                    # here told the writer "emit exactly" an unguarded
+                    # transition while the sole-writer materialization emits
+                    # `accept E if guard` — the writer then authors
+                    # surrounding text against the wrong shape.
                     lines.append(
                         f"  transition {transition.transition_id}: "
                         f"{transition.source} -> {transition.target}; "
                         f"{transition.trigger_kind} "
                         f"{transition.trigger}"
+                        + (
+                            f"; if {transition.guard}"
+                            if transition.guard else ""
+                        )
                     )
         if self.behavior_obligations:
             lines.append("")
