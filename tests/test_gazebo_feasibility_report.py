@@ -1269,3 +1269,75 @@ def test_the_clause_closes_on_trigger_truth_and_reports_the_separation_miss():
     assert "rather than the estimator's own figure" in row["message"]
     assert "separated 3.824 m from the waypoint" in row["message"]
     assert "approach speed times the actuation delay" in row["message"]
+
+
+_ABORT_REQS = [
+    "REQ-SAFE-006: The system shall maintain the payload in the mechanically "
+    "locked state whenever a delivery-abort condition is active, regardless of "
+    "geographic proximity to the delivery waypoint.",
+]
+
+_ABORT_LIVE = {
+    "abort_inhibition_req": "REQ-SAFE-006",
+    "abort_inhibition_observer_available": True,
+    "abort_inhibition_abort_active": True,
+    "abort_inhibition_release_detected": True,
+    "abort_inhibition_z_before_m": 10.0953,
+    "abort_inhibition_z_after_m": 9.57917,
+}
+
+
+def _abort(**overrides):
+    planned = rgf._planned_gazebo_reqs(_ABORT_REQS)
+    live = dict(_ABORT_LIVE, **overrides)
+    return {r["check"]: r for r in rgf._req_results(live, planned)}[
+        "delivery_abort_inhibition"]
+
+
+def test_an_unguarded_release_that_separates_during_an_abort_is_a_failure():
+    """The measured defect, reproduced at three tiers."""
+    result = _abort()
+    assert result["status"] == "FAIL"
+    assert "carries no guard" in result["message"]
+
+
+def test_a_guard_the_run_never_fed_cannot_convict_the_model():
+    """An unset boolean reads FALSE, so a correctly guarded model releases
+    exactly like an unguarded one. Calling that a model defect would blame the
+    model for a condition the harness never told it about — and would make the
+    guard fix look applied while the verdict stayed red."""
+    result = _abort(
+        abort_inhibition_release_guards=["deliveryAbortActive == false"],
+        abort_inhibition_flags_unbound=["deliveryAbortActive"],
+        abort_inhibition_flags_raised={},
+    )
+    assert result["status"] == "INCONCLUSIVE"
+    assert "says nothing about the model" in result["message"]
+
+
+def test_a_guard_that_was_fed_and_fired_anyway_is_a_model_defect():
+    result = _abort(
+        abort_inhibition_release_guards=["deliveryAbortActive == false"],
+        abort_inhibition_flags_unbound=[],
+        abort_inhibition_flags_raised={"deliveryAbortActive": True},
+    )
+    assert result["status"] == "FAIL"
+    assert "fired regardless" in result["message"]
+
+
+def test_a_fed_guard_that_held_the_payload_closes_the_requirement():
+    result = _abort(
+        abort_inhibition_release_detected=False,
+        abort_inhibition_release_guards=["deliveryAbortActive == false"],
+        abort_inhibition_flags_unbound=[],
+        abort_inhibition_flags_raised={"deliveryAbortActive": True},
+    )
+    assert result["status"] == "PASS"
+    assert "the inhibition holds" in result["message"]
+
+
+def test_a_payload_that_stayed_put_with_no_guard_is_not_credited_to_inhibition():
+    """Nothing held it back; it merely did not go. A PASS here would credit the
+    model with logic it does not contain."""
+    result = _abort(abort_inhibition_release_detected=False)
+    assert "not attributable to inhibition logic" in result["message"]

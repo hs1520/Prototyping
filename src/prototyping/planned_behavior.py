@@ -63,6 +63,13 @@ class PlannedTransition:
     target: str
     trigger_kind: str
     trigger: str
+    #: A guard that composes WITH an accept trigger, rather than replacing it.
+    #: An inhibition is exactly this shape: the event still arrives, and the
+    #: transition must not fire while the inhibiting condition holds. With only
+    #: the either/or trigger_kind, "release on arrival" and "release on arrival
+    #: unless aborted" are the same plan — which is how REQ_SAFE_006 came out
+    #: as an unguarded transition that separated the payload during an abort.
+    guard: str = ""
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "PlannedTransition":
@@ -76,6 +83,7 @@ class PlannedTransition:
                 value.get("trigger_kind") or "ACCEPT"
             ).strip().upper(),
             trigger=str(value.get("trigger") or "").strip(),
+            guard=str(value.get("guard") or "").strip(),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -158,6 +166,71 @@ class PlannedBehavior:
                 "source_digest": self.source_digest,
             },
         }
+
+
+def _inhibition_issues(
+    behavior: PlannedBehavior,
+    requirement_text: str,
+    prefix: str,
+) -> list[str]:
+    """An inhibition requirement must reach the plan as a guard.
+
+    REQ_SAFE_006 — "maintain the payload in the mechanically locked state
+    whenever a delivery-abort condition is active, regardless of geographic
+    proximity" — was planned as an unguarded ``Locked --accept
+    DeliveryCoordinateSatisfied--> Releasing``. Every structural check passed:
+    the states exist, the identifiers are legal, the response state is
+    reachable. Nothing asked whether the state the requirement says to HOLD can
+    be left unconditionally, so the generated vehicle separated its payload
+    while an abort was active, reproduced independently at three tiers.
+
+    The check is on the requirement's own parsed intent rather than on
+    REQ_SAFE_006's spellings, so any requirement of this shape is covered and a
+    model that renames its states still conforms.
+    """
+    from .verification_obligations import (
+        RequirementIntentKind,
+        parse_requirement_intent,
+        semantic_terms,
+    )
+
+    intent = parse_requirement_intent(requirement_text)
+    if (
+        intent.kind is not RequirementIntentKind.INHIBITION
+        or not intent.required_state_terms
+        or not intent.condition_terms
+    ):
+        return []
+
+    held = [
+        state for state in behavior.states
+        if semantic_terms(state.state_id) & intent.required_state_terms
+    ]
+    if not held:
+        # The requirement names a state to hold and this behaviour has none by
+        # that name. That is a naming or decomposition question the AG tier
+        # answers against the model's own invariants; guessing here would
+        # reject conforming models for their vocabulary.
+        return []
+
+    issues: list[str] = []
+    for state in held:
+        for transition in behavior.transitions:
+            if transition.source != state.state_id:
+                continue
+            guard = transition.guard or (
+                transition.trigger if transition.trigger_kind == "GUARD" else ""
+            )
+            if semantic_terms(guard) & intent.condition_terms:
+                continue
+            issues.append(
+                f"{prefix} transition {transition.transition_id} leaves "
+                f"{state.state_id} unconditionally, but "
+                f"{behavior.source_requirement_id} requires that state to be "
+                f"held whenever {'/'.join(sorted(intent.condition_terms))} is "
+                f"active; the transition needs a guard naming that condition"
+            )
+    return issues
 
 
 def validate_planned_behaviors(
@@ -328,6 +401,18 @@ def validate_planned_behaviors(
                     f"{transition_prefix}.trigger is not a safe guard "
                     "expression"
                 )
+            if transition.guard and any(
+                token in transition.guard for token in "{};"
+            ):
+                issues.append(
+                    f"{transition_prefix}.guard is not a safe guard expression"
+                )
+            if transition.guard and transition.trigger_kind != "ACCEPT":
+                issues.append(
+                    f"{transition_prefix}.guard composes with an accept "
+                    "trigger; a GUARD transition carries its condition in "
+                    "trigger"
+                )
             edges.append((transition.source, transition.target))
 
         reachable = {behavior.initial_state}
@@ -362,6 +447,9 @@ def validate_planned_behaviors(
             issues.append(
                 f"{prefix} has no matching frozen source requirement"
             )
+        source_text = sources.get(behavior.source_requirement_id or "")
+        if source_text:
+            issues.extend(_inhibition_issues(behavior, source_text, prefix))
 
     planned_refs = {
         (behavior.owner, f"{behavior.behavior_id}::{state.state_id}"): (
@@ -488,8 +576,10 @@ def emit_planned_behavior(behavior: PlannedBehavior) -> str:
             f"    transition {transition.transition_id}",
             f"        first {transition.source}",
             f"        {trigger}",
-            f"        then {transition.target};",
         ])
+        if transition.guard and transition.trigger_kind == "ACCEPT":
+            lines.append(f"        if {transition.guard}")
+        lines.append(f"        then {transition.target};")
     lines.append("}")
     return "\n".join(lines)
 
@@ -715,6 +805,19 @@ def check_planned_behavior_conformance(
                     issues.append(
                         f"{qualified} transition "
                         f"{transition.transition_id} changed trigger"
+                    )
+                # A guard that the writer dropped leaves a transition that
+                # fires unconditionally — a change that reads as harmless
+                # because everything still parses and every state is still
+                # reachable. It is the whole of REQ_SAFE_006's defect.
+                if transition.guard and re.search(
+                    rf"\bif\s+{re.escape(transition.guard)}",
+                    transition_text,
+                ) is None:
+                    issues.append(
+                        f"{qualified} transition "
+                        f"{transition.transition_id} dropped its guard "
+                        f"'{transition.guard}'"
                     )
                 edges.append((transition.source, transition.target))
             reachable = {behavior.initial_state}

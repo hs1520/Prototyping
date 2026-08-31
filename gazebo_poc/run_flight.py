@@ -1344,6 +1344,21 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     [d.as_dict() for d in release_decisions]
                     if mission is not None else None),
                 "payload_abort_active": abort_active,
+                # "no guard in the model" and "a guard the harness never fed"
+                # look identical in the flight: both release. Recording which
+                # one happened is what keeps the verdict from blaming the model
+                # for a condition it was never told about.
+                "payload_release_guards": (
+                    list(mission.guards_reaching_action("actuateRelease"))
+                    if mission is not None else []
+                ),
+                "payload_abort_flags_unbound": (
+                    list(mission.unlatched_boolean_attributes())
+                    if mission is not None else []
+                ),
+                "payload_abort_flags_raised": (
+                    dict(mission.conditions) if mission is not None else {}
+                ),
                 "payload_release_inhibited": bool(
                     mission is not None and not release_decisions),
                 "payload_observer_available": payload_z0 is not None,

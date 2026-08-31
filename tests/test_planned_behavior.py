@@ -9,6 +9,7 @@ from src.prototyping.planned_behavior import (
     PlannedState,
     PlannedTransition,
     check_planned_behavior_conformance,
+    emit_planned_behavior,
     materialize_owned_planned_behaviors,
     materialize_planned_behaviors,
     validate_planned_behaviors,
@@ -266,3 +267,104 @@ package DeliveryUAV {
     )
     assert state_report["status"] == "PASS"
     assert check_syntax(final_text).has_errors is False
+
+
+_INHIBITION_REQ = (
+    "REQ-SAFE-006: The system shall maintain the payload in the mechanically "
+    "locked state whenever a delivery-abort condition is active, regardless of "
+    "geographic proximity to the delivery waypoint."
+)
+
+
+def _release_plan(guard: str = "") -> PlannedBehavior:
+    """The behaviour the authoritative run actually generated, guard optional."""
+    return PlannedBehavior(
+        owner="PayloadMechanism",
+        behavior_id="PayloadReleaseBehavior",
+        initial_state="Locked",
+        states=(
+            PlannedState("Locked", role="INITIAL"),
+            PlannedState("Releasing", role="RESPONSE",
+                         entry_action="actuateRelease"),
+        ),
+        transitions=(PlannedTransition(
+            transition_id="toReleasing", source="Locked", target="Releasing",
+            trigger_kind="ACCEPT", trigger="DeliveryCoordinateSatisfied",
+            guard=guard,
+        ),),
+        source_requirement_id="REQ_SAFE_006",
+    )
+
+
+def _validate(behavior: PlannedBehavior) -> list[str]:
+    return validate_planned_behaviors(
+        [behavior],
+        component_names={"PayloadMechanism"},
+        requirements=[_INHIBITION_REQ],
+        state_active_constraints=[],
+    )
+
+
+def test_an_inhibition_requirement_may_not_leave_its_held_state_unguarded():
+    """The generated plan, verbatim. Every structural check passed on it — the
+    states exist, the identifiers are legal, the response state is reachable —
+    and the vehicle separated its payload during an active abort, reproduced at
+    three tiers. Nothing had asked whether the state the requirement says to
+    HOLD could be left unconditionally."""
+    issues = _validate(_release_plan())
+
+    assert issues
+    assert "leaves Locked unconditionally" in issues[0]
+    assert "REQ_SAFE_006" in issues[0]
+    assert "abort" in issues[0]
+
+
+def test_a_guard_naming_the_inhibiting_condition_satisfies_the_obligation():
+    assert _validate(_release_plan("not deliveryAbortActive")) == []
+
+
+def test_a_guard_that_names_some_other_condition_does_not_satisfy_it():
+    """A guard is not a token: it has to name the condition the requirement
+    conditions the inhibition on."""
+    issues = _validate(_release_plan("not batteryLow"))
+    assert issues and "leaves Locked unconditionally" in issues[0]
+
+
+def test_the_guard_reaches_the_emitted_sysml_composed_with_the_accept():
+    """An inhibition is accept AND guard: the event still arrives, and the
+    transition must not fire while the condition holds. Emitting one or the
+    other makes "release on arrival" and "release on arrival unless aborted"
+    the same model."""
+    text = emit_planned_behavior(_release_plan("not deliveryAbortActive"))
+
+    assert "accept DeliveryCoordinateSatisfied" in text
+    assert "if not deliveryAbortActive" in text
+    assert text.index("accept") < text.index("if not") < text.index("then Releasing")
+
+
+def test_a_writer_that_drops_the_guard_is_caught_by_conformance():
+    """Dropping a guard leaves a model that parses, keeps every state reachable
+    and fires unconditionally — a change that reads as harmless. It is the
+    whole of the defect, so the conformance check has to name it."""
+    behavior = _release_plan("not deliveryAbortActive")
+    unguarded = emit_planned_behavior(_release_plan())
+    report = check_planned_behavior_conformance(
+        unguarded, [behavior], owned=False)
+
+    assert report["status"] == "FAIL"
+    assert any("dropped its guard" in issue for issue in report["issues"])
+
+
+def test_a_non_inhibition_requirement_is_not_forced_to_carry_guards():
+    """The rule follows the requirement's parsed intent, so an ordinary
+    behavioural requirement is untouched."""
+    issues = validate_planned_behaviors(
+        [_release_plan()],
+        component_names={"PayloadMechanism"},
+        requirements=[
+            "REQ-FUNC-005: The system shall release the payload within 1.0 m "
+            "of the designated delivery waypoint."
+        ],
+        state_active_constraints=[],
+    )
+    assert not any("unconditionally" in issue for issue in issues)

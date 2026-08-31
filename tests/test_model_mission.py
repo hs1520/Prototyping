@@ -198,3 +198,90 @@ package Drone {
     suppressed = ModelDrivenMission(model).offer(
         "__control__", time=0.0, variables={"hazard": True, "winning": True})
     assert suppressed == ()
+
+
+_GUARDED_RELEASE = """
+package GuardedRelease {
+    item def DeliveryCoordinateSatisfied;
+
+    part def PayloadMechanism {
+        attribute deliveryAbortActive : Boolean;
+
+        state def PayloadReleaseBehavior {
+            entry; then Locked;
+
+            state Locked;
+            state Releasing {
+                entry action onReleasing : actuateRelease;
+            }
+
+            transition toReleasing
+                first Locked
+                accept DeliveryCoordinateSatisfied
+                if not deliveryAbortActive
+                then Releasing;
+        }
+        action def actuateRelease {}
+    }
+}
+"""
+
+
+def test_an_unbound_guard_flag_makes_a_guarded_model_behave_as_unguarded():
+    """Measured: with no variables bound, `not deliveryAbortActive` still fired
+    the release. An unset flag reads FALSE, so adding the guard to the model
+    changes nothing the harness can see — the fix would have looked applied and
+    the requirement would still have failed, blaming the model."""
+    mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
+    assert mission.boolean_guard_attributes() == ("deliveryAbortActive",)
+    assert mission.unlatched_boolean_attributes() == ("deliveryAbortActive",)
+
+
+def test_offering_the_abort_raises_the_flag_the_model_itself_declared():
+    """The flag is found by matching the offered event's words against names the
+    MODEL declared, so a model that calls it something else is still checkable
+    and this harness holds no requirement's spellings."""
+    mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
+    mission.offer("AbortConditionActive", time=0.0)
+
+    assert mission.conditions == {"deliveryAbortActive": True}
+    assert mission.latched == [(0.0, "AbortConditionActive", "deliveryAbortActive")]
+    assert mission.unlatched_boolean_attributes() == ()
+
+
+def test_an_active_abort_inhibits_the_release_the_model_would_otherwise_fire():
+    mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
+    mission.offer("AbortConditionActive", time=0.0)
+    fired = mission.offer("DeliveryCoordinateSatisfied", time=1.0)
+
+    assert fired == ()
+
+
+def test_an_ordinary_delivery_still_releases():
+    """The guard must not inhibit the ordinary case. It did, briefly: matching
+    the event against the flag on any shared word raised the abort flag from
+    the DELIVERY event itself, because both names carry "delivery"."""
+    mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
+    fired = mission.offer("DeliveryCoordinateSatisfied", time=0.0)
+
+    assert [d.action for d in fired] == ["onReleasing"]
+    assert mission.conditions == {}
+
+
+def test_a_condition_stays_raised_for_later_events():
+    """"Whenever an abort is active" is a standing state, not an instant."""
+    mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
+    mission.offer("AbortConditionActive", time=0.0)
+    mission.offer("SomethingElse", time=1.0)
+
+    assert mission.conditions == {"deliveryAbortActive": True}
+    assert mission.offer("DeliveryCoordinateSatisfied", time=2.0) == ()
+
+
+def test_an_explicit_caller_value_overrides_a_latched_one():
+    mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
+    mission.offer("AbortConditionActive", time=0.0)
+    fired = mission.offer("DeliveryCoordinateSatisfied", time=1.0,
+                          variables={"deliveryAbortActive": False})
+
+    assert [d.action for d in fired] == ["onReleasing"]

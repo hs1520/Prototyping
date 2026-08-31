@@ -91,6 +91,11 @@ class ModelDrivenMission:
     machines: Dict[str, Any] = field(default_factory=dict)
     decisions: List[ModelDecision] = field(default_factory=list)
     offered: List[Tuple[float, str]] = field(default_factory=list)
+    #: Boolean guard flags raised by the events offered so far, and the record
+    #: of which event raised each — evidence has to be able to say the model
+    #: was actually told the condition held.
+    conditions: Dict[str, Any] = field(default_factory=dict)
+    latched: List[Tuple[float, str, str]] = field(default_factory=list)
     _digest: str = ""
 
     def __post_init__(self) -> None:
@@ -146,6 +151,87 @@ class ModelDrivenMission:
         }
         return tuple(sorted(actions))
 
+    def boolean_guard_attributes(self) -> Tuple[str, ...]:
+        """Boolean flags the loaded guards read, whatever the model calls them."""
+        def walk(guard) -> List[str]:
+            if guard.kind in {"bool_true", "bool_false"}:
+                return [guard.attribute]
+            return [name for operand in guard.operands for name in walk(operand)]
+
+        return tuple(sorted({
+            name
+            for instance in self.machines.values()
+            for transition in instance.sm.transitions
+            for guard in transition.guards
+            for name in walk(guard)
+            if name
+        }))
+
+    def _latched_by(self, event: str) -> Tuple[str, ...]:
+        """Boolean guard flags this event's own name says it raises.
+
+        A guard is only a guard if something sets the flag it reads. An unset
+        flag evaluates FALSE, so a correctly guarded model behaves exactly like
+        an unguarded one — measured: with no variables bound, a
+        ``not deliveryAbortActive`` guard still fired the release. That failure
+        looks like a model defect and is a harness defect, so the flag has to be
+        bound from something.
+
+        It is bound by matching the offered event's words against the words in
+        the flags the MODEL declared, never against a name this harness holds:
+        REQ-SAFE-006 must be checkable on a model that calls the flag whatever
+        it likes. Only boolean flags are latched — writing True into a numeric
+        attribute would corrupt an unrelated comparison guard.
+        """
+        from src.prototyping.verification_obligations import semantic_terms
+
+        offered = semantic_terms(event)
+        if not offered:
+            return ()
+        # Every word the EVENT uses must appear in the flag's name. A shared
+        # word is not enough: "DeliveryCoordinateSatisfied" and
+        # "deliveryAbortActive" share "delivery", and latching on that raised
+        # the abort flag from the delivery event itself — the guard then
+        # inhibited the ordinary release too, turning a fix into a new false
+        # negative. Subset says the event names the condition rather than
+        # merely touching the same subject.
+        return tuple(
+            name for name in self.boolean_guard_attributes()
+            if offered <= semantic_terms(name)
+        )
+
+    def guards_reaching_action(self, action_definition: str) -> Tuple[str, ...]:
+        """Guard descriptions on every transition that reaches an action.
+
+        Empty means the action fires unconditionally. "The model has no guard"
+        and "the harness never raised the flag the guard reads" produce the
+        same behaviour and are different findings, so a verdict on inhibition
+        has to be able to tell them apart.
+        """
+        return tuple(
+            guard.description()
+            for instance in self.machines.values()
+            for transition in instance.sm.transitions
+            if not transition.is_initial
+            and instance.sm.response_action_definition_for_state(
+                transition.target) == action_definition
+            for guard in transition.guards
+        )
+
+    def unlatched_boolean_attributes(self) -> Tuple[str, ...]:
+        """Boolean guard flags no offered event ever raised.
+
+        These read FALSE, so the model behaves as if unguarded on them. That is
+        indistinguishable from a model with no guard at all, which is why a
+        verdict that rests on inhibition has to check this and report
+        INCONCLUSIVE rather than blame the model for a condition it was never
+        told about.
+        """
+        return tuple(
+            name for name in self.boolean_guard_attributes()
+            if name not in self.conditions
+        )
+
     # -- driving ----------------------------------------------------------
 
     def offer(self, event: str, *, time: float,
@@ -157,7 +243,14 @@ class ModelDrivenMission:
         must then do nothing — that is the whole point of asking it.
         """
         self.offered.append((float(time), str(event)))
-        env = dict(variables or {})
+        # Conditions latch: "whenever an abort is active" is a standing state,
+        # not an instant, so a flag raised by an earlier event is still true
+        # when the next one is offered. An explicit caller value always wins.
+        for name in self._latched_by(event):
+            self.conditions[name] = True
+            self.latched.append((float(time), str(event), name))
+        env = dict(self.conditions)
+        env.update(variables or {})
         fired: List[ModelDecision] = []
         for name, instance in self.machines.items():
             before = instance.current_state

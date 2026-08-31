@@ -491,6 +491,12 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         result["abort_inhibition_req"] = str(inhibition_req["req_id"])
         result["abort_inhibition_return_code"] = rc_inhibit
         result["abort_inhibition_abort_active"] = inhibit_result.get("payload_abort_active")
+        result["abort_inhibition_release_guards"] = inhibit_result.get(
+            "payload_release_guards") or []
+        result["abort_inhibition_flags_unbound"] = inhibit_result.get(
+            "payload_abort_flags_unbound") or []
+        result["abort_inhibition_flags_raised"] = inhibit_result.get(
+            "payload_abort_flags_raised") or {}
         result["abort_inhibition_release_detected"] = inhibit_result.get(
             "payload_release_detected")
         result["abort_inhibition_decisions"] = inhibit_result.get(
@@ -1077,6 +1083,16 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         released = gazebo.get("abort_inhibition_release_detected")
         observer = bool(gazebo.get("abort_inhibition_observer_available"))
         aborted = bool(gazebo.get("abort_inhibition_abort_active"))
+        guards = list(gazebo.get("abort_inhibition_release_guards") or [])
+        unbound = list(gazebo.get("abort_inhibition_flags_unbound") or [])
+        raised = dict(gazebo.get("abort_inhibition_flags_raised") or {})
+        # A release that fires past a guard the harness never fed says nothing
+        # about the model: an unset boolean reads FALSE, so a correctly guarded
+        # model behaves exactly like an unguarded one. Only an unguarded
+        # transition, or a guard that WAS fed and fired anyway, is a finding
+        # against the model.
+        told = bool(raised) or not unbound
+        blind = bool(guards) and not told
         fired = "; ".join(
             f"{d.get('machine')} {d.get('from_state')}->{d.get('to_state')} "
             f"firing {d.get('action')}"
@@ -1087,7 +1103,7 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             "req_id": rid,
             "check": "delivery_abort_inhibition",
             "status": (
-                "INCONCLUSIVE" if not (aborted and observer)
+                "INCONCLUSIVE" if not (aborted and observer) or blind
                 else "FAIL" if released else "PASS"
             ),
             "message": (
@@ -1095,13 +1111,28 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
                 "delivery coordinate; "
                 + (f"the model then fired {fired}; " if fired else "")
                 + (
+                    f"the release path is guarded by {guards} but this run "
+                    f"raised no flag it reads ({unbound} stayed unbound), so an "
+                    "unset boolean read FALSE and the guarded model behaved "
+                    "exactly like an unguarded one — this says nothing about "
+                    "the model"
+                    if blind else
                     f"the payload SEPARATED anyway "
                     f"(z {gazebo.get('abort_inhibition_z_before_m')} -> "
-                    f"{gazebo.get('abort_inhibition_z_after_m')}) — the generated "
-                    "release transition carries no guard, so an active abort "
-                    "does not inhibit it"
+                    f"{gazebo.get('abort_inhibition_z_after_m')}) — "
+                    + (
+                        f"the release transition's guard {guards} was fed "
+                        f"{raised} and the transition fired regardless"
+                        if guards else
+                        "the generated release transition carries no guard, so "
+                        "an active abort does not inhibit it"
+                    )
                     if released else
                     "the payload remained attached, so the inhibition holds"
+                    + (f", with {guards} evaluated against {raised}"
+                       if guards else
+                       " — though the release transition carries no guard, so "
+                       "the hold is not attributable to inhibition logic")
                 )
             ),
         })
