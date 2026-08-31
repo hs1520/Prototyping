@@ -197,3 +197,28 @@ def binding_for(
     requirement_id: str,
 ) -> Optional[RequirementBinding]:
     return bindings.get(normalise_req_id(str(requirement_id)))
+
+
+#: Tokens that appear in guard expressions without being identities.
+_GUARD_EXPR_STOP = frozenset({"not", "and", "or", "true", "false", "if"})
+
+_IDENTIFIER_RE = __import__("re").compile(r"[A-Za-z_]\w*")
+
+
+def identity_tokens(binding: RequirementBinding) -> frozenset:
+    """Lowercased identifier spellings that ARE this requirement's model
+    elements per its plan: accept-event names, and the flag tokens read by
+    its transition guards / guard-kind triggers. Route ports are deliberately
+    EXCLUDED — ports are plentiful and pooling them was measured to hand
+    unrelated requirements a match (FUNC_004 drifted into the L2 suite)."""
+    tokens = {event.lower() for event in binding.trigger_events}
+    for expression in (
+        *binding.trigger_conditions,
+        *(guard for _tid, guard in binding.transition_guards),
+    ):
+        tokens.update(
+            token.lower()
+            for token in _IDENTIFIER_RE.findall(expression)
+            if token.lower() not in _GUARD_EXPR_STOP
+        )
+    return frozenset(tokens)

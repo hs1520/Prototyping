@@ -66,30 +66,17 @@ def _linker_shape(model_text: str, plan_payload: dict):
     )
 
 
-#: The one vocabulary surface the binding layer has NOT yet absorbed: the
-#: L2 spec synthesizers (ast_synthesizer._AST_RULES, sitl_catalogue keyword
-#: entries) match model identifiers against English keyword families, so an
-#: alien rename of releasePayload / deliveryAbortConditionActive stops the
-#: payload-release and abort-lock tests from being generated. Their
-#: identities are in the plan (response_actions / guard flags) — migrating
-#: the synthesizers to consume bindings is the next batch. This frontier pin
-#: fails in BOTH directions: fix the synthesizers and it reminds you to
-#: tighten the ratchet to {}; regrow coupling elsewhere and the gap widens.
-_KNOWN_KEYWORD_BOUND = {"REQ_FUNC_005", "REQ_SAFE_006"}
-
-
-def test_plan_tier_is_spelling_independent_up_to_the_known_frontier():
+def test_plan_tier_is_spelling_independent():
     """Anti-coupling, PLAN tier: rename model AND plan consistently with
-    alien identities. Everything the binding layer absorbed must be
-    byte-identical to run3's shape; the residual coupling is pinned
-    exactly — no silent growth, no silent fix."""
-    base_l2, base_mm = _linker_shape(_model_text(), _plan_payload())
+    alien identities — the L2 suite and mismatch set must be byte-identical
+    to run3's shape. The frontier this pin once held open ({FUNC_005,
+    SAFE_006}: the AST synthesizer's keyword-family guard matching) was
+    closed by the identity tier (plan identifiers → semantic tags); any
+    reappearing gap means a harness spelling became load-bearing again."""
+    base = _linker_shape(_model_text(), _plan_payload())
     renamed_plan = json.loads(_rename(json.dumps(_plan_payload()), _ALIEN))
-    ren_l2, ren_mm = _linker_shape(_rename(_model_text(), _ALIEN), renamed_plan)
-
-    assert ren_mm == base_mm                      # traceability: independent
-    assert base_l2 - ren_l2 == _KNOWN_KEYWORD_BOUND
-    assert ren_l2 <= base_l2                      # a rename must never ADD tests
+    renamed = _linker_shape(_rename(_model_text(), _ALIEN), renamed_plan)
+    assert renamed == base
 
 
 def test_semantic_tier_resolves_term_covering_renames_identically():

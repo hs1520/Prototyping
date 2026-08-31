@@ -19,7 +19,7 @@ ast_synthesizer.py
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, List, Mapping, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.sysml.lite_model import SysMLLiteModel
@@ -132,9 +132,14 @@ class SynthesizedSpec:
 def synthesize_specs(
     model: "SysMLLiteModel",
     verbose: bool = False,
+    identity_tags: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, List[SynthesizedSpec]]:
     """
     从模型 AST 合成 (InjectSpec, VerifySpec) 对。
+
+    identity_tags: {模型标识符(小写) → semantic_tag}，来自冻结计划的绑定
+    （linker 构建）。身份命中优先于英文关键词族——模型自选拼写的 guard
+    变量/事件仍能合成到正确的 tag；关键词仅作无计划时的兜底。
 
     返回 {part_name: [SynthesizedSpec, ...]}。
     一个 part 可能有多个状态机，每个产生一个 SynthesizedSpec。
@@ -155,7 +160,7 @@ def synthesize_specs(
         for transition in sm.fault_transitions():
             for guard in transition.guards:
                 guard_var = getattr(guard, "attribute", None) or ""
-                inject_spec, tag = _match_guard(guard_var)
+                inject_spec, tag = _match_guard(guard_var, identity_tags)
                 if inject_spec is None and tag == "":
                     continue  # 未匹配，跳过
 
@@ -191,12 +196,29 @@ def synthesize_specs(
 # 内部匹配函数
 # ---------------------------------------------------------------------------
 
-def _match_guard(guard_var: str) -> Tuple[Optional[InjectSpec], str]:
+_TAG_TO_INJECT: Dict[str, Optional[InjectSpec]] = {
+    tag: inject for _kws, tag, inject in _GUARD_TO_TAG_INJECT
+}
+
+#: The semantic tags this synthesizer can produce — the linker's identity
+#: tier maps plan-declared identifiers onto exactly these.
+AST_GUARD_TAGS: Tuple[str, ...] = tuple(_TAG_TO_INJECT)
+
+
+def _match_guard(
+    guard_var: str,
+    identity_tags: Optional[Mapping[str, str]] = None,
+) -> Tuple[Optional[InjectSpec], str]:
     """
-    根据 guard 变量名（小写）匹配注入 spec 和语义 tag。
-    返回 (InjectSpec | None, tag)。tag="" 表示未匹配。
+    根据 guard 变量名匹配注入 spec 和语义 tag。
+    计划身份优先(变量是计划为某需求声明的元素 → 直接取该需求的 tag),
+    关键词族兜底。返回 (InjectSpec | None, tag)。tag="" 表示未匹配。
     """
     var_lower = guard_var.lower()
+    if identity_tags:
+        tag = identity_tags.get(var_lower)
+        if tag and tag in _TAG_TO_INJECT:
+            return (_TAG_TO_INJECT[tag], tag)
     for keywords, tag, inject_spec in _GUARD_TO_TAG_INJECT:
         if any(kw in var_lower for kw in keywords):
             return (inject_spec, tag)
