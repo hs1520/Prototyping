@@ -908,6 +908,7 @@ def test_releasing_while_the_abort_is_active_fails_the_inhibition():
         "abort_inhibition_abort_active": True,
         "abort_inhibition_observer_available": True,
         "abort_inhibition_release_detected": True,
+        "abort_inhibition_release_guards": [],
         "abort_inhibition_z_before_m": 8.799,
         "abort_inhibition_z_after_m": 8.291,
         "abort_inhibition_decisions": [{
@@ -929,6 +930,7 @@ def test_a_payload_that_stays_attached_passes_the_inhibition():
         "abort_inhibition_abort_active": True,
         "abort_inhibition_observer_available": True,
         "abort_inhibition_release_detected": False,
+        "abort_inhibition_release_guards": [],
         "abort_inhibition_decisions": [],
     }
     result = {r["check"]: r for r in rgf._req_results(live, planned)}
@@ -1289,7 +1291,9 @@ _ABORT_LIVE = {
 
 def _abort(**overrides):
     planned = rgf._planned_gazebo_reqs(_ABORT_REQS)
-    live = dict(_ABORT_LIVE, **overrides)
+    # Guards MEASURED as absent by default; tri-state contract reserves a
+    # missing/None value for "the release identity never resolved".
+    live = {**_ABORT_LIVE, "abort_inhibition_release_guards": [], **overrides}
     return {r["check"]: r for r in rgf._req_results(live, planned)}[
         "delivery_abort_inhibition"]
 
@@ -1341,3 +1345,13 @@ def test_a_payload_that_stayed_put_with_no_guard_is_not_credited_to_inhibition()
     model with logic it does not contain."""
     result = _abort(abort_inhibition_release_detected=False)
     assert "not attributable to inhibition logic" in result["message"]
+
+
+def test_an_unresolved_release_identity_is_not_measured_not_unguarded():
+    """The run3 false verdict, pinned: when the harness could not resolve the
+    release identity on this model, whether the path is guarded was never
+    measured — INCONCLUSIVE and said so, never 'carries no guard'."""
+    result = _abort(abort_inhibition_release_guards=None)
+    assert result["status"] == "INCONCLUSIVE"
+    assert "NOT MEASURED" in result["message"]
+    assert "carries no guard" not in result["message"]
