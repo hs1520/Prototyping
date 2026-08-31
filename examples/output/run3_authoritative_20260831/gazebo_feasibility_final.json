@@ -1,0 +1,1042 @@
+{
+  "generated_at": "2026-08-31T20:04:55Z",
+  "status": "PARTIAL",
+  "dry_run": false,
+  "include_single_motor_out": true,
+  "honesty_redline": "Gazebo verifies high-fidelity dynamics such as hover stability, forward dash, and one-motor-out behavior. Datasheet endurance/mass closure remains Phase 8; do not treat Gazebo as endurance validation.",
+  "requirements_source": "examples/output/run3_authoritative_20260831/final_model.sysml",
+  "recommended_design_inputs": {
+    "payload_mass_kg": 1.5,
+    "battery_capacity_mah": 16000.0,
+    "battery_cells": 6,
+    "rotor_count": 6,
+    "rotor_radius_m": 0.2032
+  },
+  "source_provenance": {
+    "schema_version": 2,
+    "run_id": "68c38629-cac4-4432-aa15-1b102279eb0a",
+    "model_sha256": "b9c9e678c0cba8ba8ee2f80a9ab0b01a90475b727f6657390c69055020f0f702",
+    "verification_model_sha256": "f1d6b150fdea8a62a917a1bc9f6d8fc962f213b082d66ea0a2c98b5f860c57f0",
+    "requirements_sha256": "041b7a93b719ab3138062e6045540cab0acd8691759429de6f4bd09f571b4ffa",
+    "requirement_graph_sha256": "15e28e63f1bbee1e2430db6bafb34ea2bb8bc7693def2567d0efb55a2d434b9f",
+    "catalog_sha256": "8dbe547d1f08318ac4709d7365dfe8c726e0b40bbdf49dc17196b0cc27662021",
+    "recommended_design_sha256": "e2ea13680170f2b4d494662aa778a45431637e71233dfce64d1035000b1a1806",
+    "realized_components_sha256": "cc5543dbf3d306c8792333d82f0720c66120ab070744539be8c9900489180e7b",
+    "parm_sha256": null
+  },
+  "gazebo_design": {
+    "rotor_count": 6,
+    "rotor_radius_m": 0.2032,
+    "battery_capacity_mah": 16000.0,
+    "battery_cells": 6.0,
+    "mass_kg": 5.54,
+    "payload_mass_kg": 1.5,
+    "max_thrust_g": 2309.0,
+    "hover_throttle": 0.5405405405405405,
+    "source": "Phase 8 realized components when available; DSE recommendation otherwise"
+  },
+  "gazebo_result": {
+    "mission_provenance": {
+      "model_sha256": "b9c9e678c0cba8ba8ee2f80a9ab0b01a90475b727f6657390c69055020f0f702",
+      "machines": [
+        "FlightController.ContingencyResponseBehavior",
+        "FlightController.HeadwindFlightBehavior",
+        "FlightController.HealthReportingBehavior",
+        "FlightController.MaxPayloadCruiseBehavior",
+        "FlightController.NavigationBehavior",
+        "FlightController.ObstacleAvoidanceBehavior",
+        "FlightController.SteadyCruiseBehavior",
+        "FlightController.WaypointManagementBehavior",
+        "PayloadMechanism.MechanicallyLockedInitializationBehavior",
+        "PayloadMechanism.PayloadLockBehavior",
+        "PayloadMechanism.PayloadReleaseBehavior",
+        "PropulsionSystem.PropulsionFaultToleranceBehavior",
+        "SafetyMonitor.ArmedStateInhibitionBehavior",
+        "SafetyMonitor.BatteryLandMonitor",
+        "SafetyMonitor.BatteryRtbMonitor",
+        "SafetyMonitor.CommLossMonitor",
+        "SafetyMonitor.ParachuteDeploymentBehavior",
+        "SafetyMonitor.SafetyArbiter"
+      ],
+      "accepted_events": [
+        "ArmingCommand",
+        "AutomatedLandingCompleted",
+        "CollisionThreatDetected",
+        "CriticalPropulsionSubsystemFailure",
+        "DeliveryCoordinateConditionSatisfied",
+        "HeadwindConditionMet",
+        "MaxPayloadCruiseConditionMet",
+        "MissionCommandReceived",
+        "NonCriticalContingencyDetected",
+        "PayloadReleaseCommand",
+        "PowerOn",
+        "SinglePropulsionUnitFailure",
+        "SteadyCruiseConditionMet",
+        "ValidWaypointModificationCommand"
+      ],
+      "decision_owner": "generated model state machines",
+      "harness_role": "derives events from telemetry and actuates the action the model fires; it does not decide whether to act"
+    },
+    "body_drag": {
+      "hub_area_m2": 0.017166,
+      "arms_area_m2": 0.033559,
+      "payload_area_m2": 0.0048,
+      "frontal_area_m2": 0.055525,
+      "flat_plate_area_m2": 0.062477,
+      "cd_hub": 1.0,
+      "cd_arm": 1.2,
+      "cd_payload": 1.05,
+      "method": "bluff-body sum over the drawn SDF primitives (hub cylinder + arm boxes + payload box), body-x projection"
+    },
+    "thrust_diagnostics": {
+      "required_per_rotor_n": 9.0579,
+      "model_max_per_rotor_n": 22.651290000000003,
+      "datasheet_max_per_rotor_n": 22.651290000000003,
+      "model_twr": 2.5007220216606503,
+      "datasheet_twr": 2.5007220216606503,
+      "hover_rad_s_required": 305.04876153383725,
+      "hover_rpm_required": 2913.002138515072,
+      "hover_rad_s_fraction_of_max": 0.6323642224927346,
+      "sdf_can_hover": true
+    },
+    "wind_requested_mps": 15.0,
+    "wind_min_groundspeed_mps": 2.0,
+    "wind_force_scale": 0.0,
+    "wind_drag_area_m2": 0.062477,
+    "wind_fidelity": "Gazebo closed-loop dynamics; the headwind acts through the airframe's geometry-derived quadratic drag plate, which gz-sim's LiftDrag evaluates against airspeed. WindEffects' linear m*k*(wind-v) term is disabled — it approximated the same drag and under-predicted it as groundspeed grew.",
+    "guided_mode_held_after_arming": true,
+    "ekf_flags_at_takeoff": [
+      "ATTITUDE",
+      "POS_HORIZ_ABS",
+      "POS_HORIZ_REL",
+      "POS_VERT_ABS",
+      "POS_VERT_AGL",
+      "PRED_POS_HORIZ_ABS",
+      "PRED_POS_HORIZ_REL",
+      "VELOCITY_HORIZ",
+      "VELOCITY_VERT"
+    ],
+    "ekf_position_ok_at_takeoff": true,
+    "takeoff_method": "guided_nav_takeoff",
+    "takeoff_command_result": 0,
+    "takeoff_command_accepted": true,
+    "hover_attitude_samples": 180,
+    "hover_attitude_roll_rms_deg": 0.00921653360542981,
+    "hover_attitude_pitch_rms_deg": 0.009856744966337505,
+    "hover_attitude_rms_deg": 0.014775250092624821,
+    "hover_attitude_with_payload": true,
+    "hover_payload_attachment_distance_m": 0.09450065702417103,
+    "hover_payload_vertical_separation_m": 0.09450000000000003,
+    "hover_payload_attached": true,
+    "payload_release_commanded": false,
+    "payload_release_decided_by": "generated model",
+    "payload_release_decisions": [
+      {
+        "time": 171270.015745,
+        "owner_part": "PayloadMechanism",
+        "machine": "PayloadReleaseBehavior",
+        "event": "DeliveryCoordinateConditionSatisfied",
+        "from_state": "Locked",
+        "to_state": "Releasing",
+        "action": "onReleasing",
+        "action_definition": "releasePayload",
+        "decided_by": "generated model"
+      }
+    ],
+    "payload_abort_active": false,
+    "payload_release_guards": [
+      "deliveryAbortConditionActive == false"
+    ],
+    "payload_abort_flags_unbound": [
+      "deliveryAbortConditionActive",
+      "propulsionCriticalFailure",
+      "sensorFailureReported"
+    ],
+    "payload_abort_flags_raised": {},
+    "payload_release_inhibited": false,
+    "payload_observer_available": true,
+    "payload_release_detected": false,
+    "payload_release_delay_s": null,
+    "payload_condition_met": true,
+    "payload_coordinate_to_separation_delay_s": null,
+    "payload_z_before_m": 10.0968,
+    "payload_z_after_m": 10.095,
+    "payload_mass_kg": 1.5,
+    "payload_release_target_ned_m": [
+      -0.011955561011361249,
+      -7.841412794219473
+    ],
+    "payload_release_target_world_m": [
+      -0.02312956101136125,
+      8.40826570643566
+    ],
+    "payload_condition_position_ned_m": [
+      -0.011131884530186653,
+      -6.862999439239502
+    ],
+    "payload_condition_position_world_m": [
+      -0.024165,
+      7.65426
+    ],
+    "payload_condition_position_error_m": 0.9784137016855954,
+    "payload_release_position_world_m": null,
+    "payload_release_position_error_m": null,
+    "payload_release_position_met": false,
+    "trigger_estimated_error_m": 0.9784137016855954,
+    "trigger_truth_error_m": 0.7540064173940687,
+    "separation_truth_error_m": null,
+    "trigger_to_separation_s": null,
+    "delivery_abort_inactive": true,
+    "payload_release_position_basis": null,
+    "payload_release_position_tolerance_m": 1.0,
+    "payload_release_fidelity": "generated PayloadReleaseBehavior consumed the delivery event and its entry action drove MAV_CMD_DO_GRIPPER to Gazebo detachable-joint physical separation",
+    "cruise_sweep": [
+      {
+        "pitch_rc": 1420,
+        "steady": true,
+        "speed_mps": 10.085563142248924,
+        "steady_state": {
+          "steady": true,
+          "reason": "plateaued",
+          "mean": 10.0856,
+          "slope_per_s": 0.01011,
+          "drift_fraction": 0.009967,
+          "first_half_mean": 10.0605,
+          "second_half_mean": 10.1106,
+          "samples": 94,
+          "duration_s": 9.943,
+          "trend_t_stat": 51.001
+        },
+        "payload_attachment": {
+          "observed": true,
+          "distance_m": 1.2777,
+          "vertical_separation_m": 0.0945,
+          "attached": true,
+          "attached_max_vertical_separation_m": 2.0
+        },
+        "gripper_pwm": 1500,
+        "payload_trace": [
+          {
+            "distance_m": 2.8850913877035143,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 3.0705954202564745,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 3.186666052136787,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 3.2621132012805747,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 3.4039726956321266,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 3.7060964197904966,
+            "gripper_pwm": 1500
+          }
+        ],
+        "attitude_rms_deg": 0.028763520037074164,
+        "attitude_roll_rms_deg": 0.0026757407640217914,
+        "attitude_pitch_rms_deg": 0.01914962632549086,
+        "attitude_samples": 93
+      },
+      {
+        "pitch_rc": 1330,
+        "steady": true,
+        "speed_mps": 15.460298517917066,
+        "steady_state": {
+          "steady": true,
+          "reason": "plateaued",
+          "mean": 15.4603,
+          "slope_per_s": 0.01516,
+          "drift_fraction": 0.009769,
+          "first_half_mean": 15.4229,
+          "second_half_mean": 15.4977,
+          "samples": 94,
+          "duration_s": 9.962,
+          "trend_t_stat": 28.965
+        },
+        "payload_attachment": {
+          "observed": true,
+          "distance_m": 4.6713,
+          "vertical_separation_m": 0.0952,
+          "attached": true,
+          "attached_max_vertical_separation_m": 2.0
+        },
+        "gripper_pwm": 1500,
+        "payload_trace": [
+          {
+            "distance_m": 6.286906117073804,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 6.408905082937293,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 6.683858855960373,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 6.3858963576071766,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 6.6428638439230365,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 6.741845230951227,
+            "gripper_pwm": 1500
+          }
+        ],
+        "attitude_rms_deg": 0.02415205897457278,
+        "attitude_roll_rms_deg": 0.010229861969722065,
+        "attitude_pitch_rms_deg": 0.015440667153578318,
+        "attitude_samples": 93
+      },
+      {
+        "pitch_rc": 1220,
+        "steady": true,
+        "speed_mps": 19.67939742068027,
+        "steady_state": {
+          "steady": true,
+          "reason": "plateaued",
+          "mean": 19.6794,
+          "slope_per_s": 0.011166,
+          "drift_fraction": 0.005639,
+          "first_half_mean": 19.6519,
+          "second_half_mean": 19.7068,
+          "samples": 94,
+          "duration_s": 9.939,
+          "trend_t_stat": 25.303
+        },
+        "payload_attachment": {
+          "observed": true,
+          "distance_m": 6.9478,
+          "vertical_separation_m": 0.094,
+          "attached": true,
+          "attached_max_vertical_separation_m": 2.0
+        },
+        "gripper_pwm": 1500,
+        "payload_trace": [
+          {
+            "distance_m": 8.570560898360089,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 8.430558317003635,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 8.502566931956443,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 8.795542629855152,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 8.476544741962964,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 8.88953357044115,
+            "gripper_pwm": 1500
+          }
+        ],
+        "attitude_rms_deg": 0.02621623931652225,
+        "attitude_roll_rms_deg": 0.009206073764265896,
+        "attitude_pitch_rms_deg": 0.01709500286931355,
+        "attitude_samples": 93
+      },
+      {
+        "pitch_rc": 1100,
+        "steady": true,
+        "speed_mps": 20.388969556023092,
+        "steady_state": {
+          "steady": true,
+          "reason": "plateaued",
+          "mean": 20.389,
+          "slope_per_s": 0.007667,
+          "drift_fraction": 0.003753,
+          "first_half_mean": 20.3765,
+          "second_half_mean": 20.4011,
+          "samples": 85,
+          "duration_s": 9.98,
+          "trend_t_stat": 10.178
+        },
+        "payload_attachment": {
+          "observed": true,
+          "distance_m": 8.6605,
+          "vertical_separation_m": 0.0895,
+          "attached": true,
+          "attached_max_vertical_separation_m": 2.0
+        },
+        "gripper_pwm": 1500,
+        "payload_trace": [
+          {
+            "distance_m": 9.390456658890322,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 8.910492540084268,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 9.160475525326264,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 9.320489044792597,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 9.020474653392673,
+            "gripper_pwm": 1500
+          },
+          {
+            "distance_m": 9.020491610195299,
+            "gripper_pwm": 1500
+          }
+        ],
+        "attitude_rms_deg": 0.0367903611011431,
+        "attitude_roll_rms_deg": 0.0052631320128982695,
+        "attitude_pitch_rms_deg": 0.03374667862357163,
+        "attitude_samples": 84
+      }
+    ],
+    "transport_windows": [
+      {
+        "label": "hover",
+        "attitude_rms_deg": 0.0151,
+        "speed_mps": null,
+        "attachment": {
+          "observed": true,
+          "distance_m": 0.095,
+          "vertical_separation_m": 0.095,
+          "attached": true,
+          "attached_max_vertical_separation_m": 2.0
+        }
+      },
+      {
+        "label": "cruise@rc1420",
+        "attitude_rms_deg": 0.0206,
+        "speed_mps": 10.041,
+        "attachment": {
+          "observed": true,
+          "distance_m": 0.3192,
+          "vertical_separation_m": 0.3192,
+          "attached": true,
+          "attached_max_vertical_separation_m": 2.0
+        }
+      },
+      {
+        "label": "cruise@rc1330",
+        "attitude_rms_deg": 0.0296,
+        "speed_mps": 15.402,
+        "attachment": {
+          "observed": true,
+          "distance_m": 4.4603,
+          "vertical_separation_m": 0.096,
+          "attached": true,
+          "attached_max_vertical_separation_m": 2.0
+        }
+      },
+      {
+        "label": "cruise@rc1220",
+        "attitude_rms_deg": 0.027,
+        "speed_mps": 19.588,
+        "attachment": {
+          "observed": true,
+          "distance_m": 7.5227,
+          "vertical_separation_m": 0.0922,
+          "attached": true,
+          "attached_max_vertical_separation_m": 2.0
+        }
+      },
+      {
+        "label": "cruise@rc1100",
+        "attitude_rms_deg": 0.0326,
+        "speed_mps": 20.365,
+        "attachment": {
+          "observed": true,
+          "distance_m": 8.9405,
+          "vertical_separation_m": 0.0885,
+          "attached": true,
+          "attached_max_vertical_separation_m": 2.0
+        }
+      }
+    ],
+    "cruise_sweep_payload_attached": true,
+    "cruise_sweep_steady_points": 4,
+    "cruise_sweep_points": 4,
+    "nilwind_dash_speed_mps": 20.388969556023092,
+    "nilwind_dash_peak_mps": 20.388969556023092,
+    "nilwind_dash_samples": 85,
+    "nilwind_dash_steady_state": {
+      "steady": true,
+      "reason": "plateaued",
+      "mean": 20.389,
+      "slope_per_s": 0.007667,
+      "drift_fraction": 0.003753,
+      "first_half_mean": 20.3765,
+      "second_half_mean": 20.4011,
+      "samples": 85,
+      "duration_s": 9.98,
+      "trend_t_stat": 10.178
+    },
+    "nilwind_dash_pitch_rc": 1100,
+    "cruise_sweep_speeds_mps": [
+      10.085563142248924,
+      15.460298517917066,
+      19.67939742068027,
+      20.388969556023092
+    ],
+    "cruise_attitude_rms_deg": 0.0367903611011431,
+    "cruise_attitude_roll_rms_deg": 0.0052631320128982695,
+    "cruise_attitude_pitch_rms_deg": 0.03374667862357163,
+    "cruise_attitude_samples": 84,
+    "cruise_attitude_mean_speed_mps": 20.388969556023092,
+    "cruise_attitude_swept_speeds_mps": [
+      10.085563142248924,
+      15.460298517917066,
+      19.67939742068027,
+      20.388969556023092
+    ],
+    "cruise_attitude_swept_rms_deg": [
+      0.028763520037074164,
+      0.02415205897457278,
+      0.02621623931652225,
+      0.0367903611011431
+    ],
+    "cruise_attitude_speed_span_mps": [
+      10.085563142248924,
+      20.388969556023092
+    ],
+    "cruise_attitude_points": 4,
+    "fwd_speed_steady_state": {
+      "steady": true,
+      "reason": "plateaued",
+      "mean": 5.4223,
+      "slope_per_s": -0.005275,
+      "drift_fraction": 0.009705,
+      "first_half_mean": 5.4348,
+      "second_half_mean": 5.4098,
+      "samples": 98,
+      "duration_s": 9.977,
+      "trend_t_stat": 17.721
+    },
+    "wind_injected": true,
+    "wind_world_xy_mps": [
+      0.050457171986142024,
+      -14.999915135553104
+    ],
+    "wind_ned_xy_mps": [
+      0.050457171986142024,
+      14.999915135553104
+    ],
+    "wind_baseline_groundspeed_mps": 20.40358159246192,
+    "wind_groundspeed_steady_state": {
+      "steady": true,
+      "reason": "plateaued",
+      "mean": 5.4223,
+      "slope_per_s": -0.005275,
+      "drift_fraction": 0.009705,
+      "first_half_mean": 5.4348,
+      "second_half_mean": 5.4098,
+      "samples": 98,
+      "duration_s": 9.977,
+      "trend_t_stat": 17.721
+    },
+    "wind_pitch_rc": 1100,
+    "wind_authority": "full forward pitch (maximum sustained headway)",
+    "wind_groundspeed_mps": 5.422290952838197,
+    "wind_headwind_alignment": 0.9996242552650609,
+    "wind_test_complete": true,
+    "parachute_precedence_control_fired": [
+      "initiateEmergencyLand"
+    ],
+    "parachute_commanded": false,
+    "parachute_decided_by": "generated model",
+    "parachute_decisions": [
+      {
+        "time": 171421.433146,
+        "owner_part": "SafetyMonitor",
+        "machine": "BatteryRtbMonitor",
+        "event": "CriticalPropulsionSubsystemFailure",
+        "from_state": "RtbNominal",
+        "to_state": "RtbDetected",
+        "action": null,
+        "action_definition": null,
+        "decided_by": "generated model"
+      },
+      {
+        "time": 171421.433146,
+        "owner_part": "SafetyMonitor",
+        "machine": "BatteryLandMonitor",
+        "event": "CriticalPropulsionSubsystemFailure",
+        "from_state": "LandNominal",
+        "to_state": "LandDetected",
+        "action": null,
+        "action_definition": null,
+        "decided_by": "generated model"
+      },
+      {
+        "time": 171421.433146,
+        "owner_part": "SafetyMonitor",
+        "machine": "CommLossMonitor",
+        "event": "CriticalPropulsionSubsystemFailure",
+        "from_state": "CommNominal",
+        "to_state": "CommLossDetected",
+        "action": null,
+        "action_definition": null,
+        "decided_by": "generated model"
+      },
+      {
+        "time": 171421.433146,
+        "owner_part": "SafetyMonitor",
+        "machine": "SafetyArbiter",
+        "event": "CriticalPropulsionSubsystemFailure",
+        "from_state": "ArbNominal",
+        "to_state": "ArbParachuteMode",
+        "action": "onParachute",
+        "action_definition": "deployBallisticRecoveryParachute",
+        "decided_by": "generated model"
+      },
+      {
+        "time": 171421.433146,
+        "owner_part": "SafetyMonitor",
+        "machine": "ParachuteDeploymentBehavior",
+        "event": "CriticalPropulsionSubsystemFailure",
+        "from_state": "Monitoring",
+        "to_state": "DeployingParachute",
+        "action": "onDeployingParachute",
+        "action_definition": "deployBallisticRecoveryParachute",
+        "decided_by": "generated model"
+      }
+    ],
+    "parachute_observer_available": true,
+    "parachute_model_observed": false,
+    "parachute_deploy_delay_s": null,
+    "parachute_max_delay_s": 0.5,
+    "parachute_precedence_status": "failed",
+    "parachute_precedence_description": "winner deployParachute fired=False; declared competing responses=['deployBallisticRecoveryParachute', 'initiateBatteryRtb', 'initiateEmergencyLand']; competing responses fired=['deployBallisticRecoveryParachute']; control run fired=['initiateEmergencyLand'] — competing responses ['deployBallisticRecoveryParachute'] fired alongside the winner",
+    "parachute_precedence_competing_actions": [
+      "deployBallisticRecoveryParachute",
+      "initiateBatteryRtb",
+      "initiateEmergencyLand"
+    ],
+    "parachute_precedence_competing_actions_fired": [
+      "deployBallisticRecoveryParachute"
+    ],
+    "parachute_fidelity": "generated ParachuteDeploymentBehavior consumed the critical-failure event and its entry action drove MAV_CMD_DO_PARACHUTE to Gazebo ParachutePlugin model creation/attachment",
+    "mission_decisions": [
+      {
+        "time": 171270.015745,
+        "owner_part": "PayloadMechanism",
+        "machine": "PayloadReleaseBehavior",
+        "event": "DeliveryCoordinateConditionSatisfied",
+        "from_state": "Locked",
+        "to_state": "Releasing",
+        "action": "onReleasing",
+        "action_definition": "releasePayload",
+        "decided_by": "generated model"
+      },
+      {
+        "time": 171421.433146,
+        "owner_part": "SafetyMonitor",
+        "machine": "BatteryRtbMonitor",
+        "event": "CriticalPropulsionSubsystemFailure",
+        "from_state": "RtbNominal",
+        "to_state": "RtbDetected",
+        "action": null,
+        "action_definition": null,
+        "decided_by": "generated model"
+      },
+      {
+        "time": 171421.433146,
+        "owner_part": "SafetyMonitor",
+        "machine": "BatteryLandMonitor",
+        "event": "CriticalPropulsionSubsystemFailure",
+        "from_state": "LandNominal",
+        "to_state": "LandDetected",
+        "action": null,
+        "action_definition": null,
+        "decided_by": "generated model"
+      },
+      {
+        "time": 171421.433146,
+        "owner_part": "SafetyMonitor",
+        "machine": "CommLossMonitor",
+        "event": "CriticalPropulsionSubsystemFailure",
+        "from_state": "CommNominal",
+        "to_state": "CommLossDetected",
+        "action": null,
+        "action_definition": null,
+        "decided_by": "generated model"
+      },
+      {
+        "time": 171421.433146,
+        "owner_part": "SafetyMonitor",
+        "machine": "SafetyArbiter",
+        "event": "CriticalPropulsionSubsystemFailure",
+        "from_state": "ArbNominal",
+        "to_state": "ArbParachuteMode",
+        "action": "onParachute",
+        "action_definition": "deployBallisticRecoveryParachute",
+        "decided_by": "generated model"
+      },
+      {
+        "time": 171421.433146,
+        "owner_part": "SafetyMonitor",
+        "machine": "ParachuteDeploymentBehavior",
+        "event": "CriticalPropulsionSubsystemFailure",
+        "from_state": "Monitoring",
+        "to_state": "DeployingParachute",
+        "action": "onDeployingParachute",
+        "action_definition": "deployBallisticRecoveryParachute",
+        "decided_by": "generated model"
+      }
+    ],
+    "mission_events_offered": [
+      {
+        "time": 171270.015745,
+        "event": "DeliveryCoordinateConditionSatisfied"
+      },
+      {
+        "time": 171421.433146,
+        "event": "CriticalPropulsionSubsystemFailure"
+      }
+    ],
+    "fwd_speed_mps": 5.422290952838197,
+    "fwd_power_w": 1384.342480115222,
+    "hover_power_w": 377.64618990845844,
+    "analytical_fwd_power_w": null,
+    "drag_area_m2": null,
+    "hover_attitude_limit_deg": 5.0,
+    "hover_attitude_within_limit": true,
+    "hover_stable": true,
+    "hover_throttle_pct": 38.0,
+    "hover_rpm": 2824.2000806494166,
+    "hover_alt_m": 9.99749755859375,
+    "mass_kg": 5.54,
+    "rotor_radius_m": 0.2032,
+    "rotor_count": 6,
+    "capacity_mah": 16000.0,
+    "ok": true,
+    "failure_kind": null,
+    "return_code": 0,
+    "cruise_authorised_speed_range_mps": null,
+    "cruise_authorised_speed_source": null,
+    "rpm_theory": 2913.0010969302616,
+    "rpm_pct_diff": -3.0484374473605302,
+    "rpm_within_ct_band": true,
+    "implied_ct": 0.12234556038291473,
+    "navigation_return_code": 0,
+    "cep_legs": [
+      {
+        "leg": 0,
+        "target_ned_m": [
+          15.0,
+          0.0
+        ],
+        "truth_error_m": 0.1068,
+        "ekf_error_m": 0.0192,
+        "raw_gnss_minus_fused_m": 0.024,
+        "raw_gnss_truth_error_m": 0.0285,
+        "injected_gnss_offset_ne_m": null
+      },
+      {
+        "leg": 1,
+        "target_ned_m": [
+          10.607,
+          10.607
+        ],
+        "truth_error_m": 0.1092,
+        "ekf_error_m": 0.0097,
+        "raw_gnss_minus_fused_m": 0.0272,
+        "raw_gnss_truth_error_m": 0.0098,
+        "injected_gnss_offset_ne_m": null
+      },
+      {
+        "leg": 2,
+        "target_ned_m": [
+          0.0,
+          15.0
+        ],
+        "truth_error_m": 0.1144,
+        "ekf_error_m": 0.0225,
+        "raw_gnss_minus_fused_m": 0.0127,
+        "raw_gnss_truth_error_m": 0.0211,
+        "injected_gnss_offset_ne_m": null
+      },
+      {
+        "leg": 3,
+        "target_ned_m": [
+          -10.607,
+          10.607
+        ],
+        "truth_error_m": 0.1098,
+        "ekf_error_m": 0.0253,
+        "raw_gnss_minus_fused_m": 0.0223,
+        "raw_gnss_truth_error_m": 0.0116,
+        "injected_gnss_offset_ne_m": null
+      },
+      {
+        "leg": 4,
+        "target_ned_m": [
+          -15.0,
+          0.0
+        ],
+        "truth_error_m": 0.1039,
+        "ekf_error_m": 0.0189,
+        "raw_gnss_minus_fused_m": 0.0211,
+        "raw_gnss_truth_error_m": 0.0101,
+        "injected_gnss_offset_ne_m": null
+      },
+      {
+        "leg": 5,
+        "target_ned_m": [
+          -10.607,
+          -10.607
+        ],
+        "truth_error_m": 0.1036,
+        "ekf_error_m": 0.025,
+        "raw_gnss_minus_fused_m": 0.0272,
+        "raw_gnss_truth_error_m": 0.026,
+        "injected_gnss_offset_ne_m": null
+      },
+      {
+        "leg": 6,
+        "target_ned_m": [
+          -0.0,
+          -15.0
+        ],
+        "truth_error_m": 0.1016,
+        "ekf_error_m": 0.0187,
+        "raw_gnss_minus_fused_m": 0.0232,
+        "raw_gnss_truth_error_m": 0.0175,
+        "injected_gnss_offset_ne_m": null
+      },
+      {
+        "leg": 7,
+        "target_ned_m": [
+          10.607,
+          -10.607
+        ],
+        "truth_error_m": 0.1067,
+        "ekf_error_m": 0.0137,
+        "raw_gnss_minus_fused_m": 0.024,
+        "raw_gnss_truth_error_m": 0.0237,
+        "injected_gnss_offset_ne_m": null
+      }
+    ],
+    "cep_samples": 8,
+    "cep_m": 0.10675000000000001,
+    "cep_max_error_m": 0.1144,
+    "cep_ekf_m": 0.019049999999999997,
+    "cep_raw_gnss_scatter_m": 0.0236,
+    "cep_raw_gnss_truth_error_m": 0.0193,
+    "cep_horizontal_error_source": null,
+    "cep_horizontal_error_injected_m": null,
+    "cep_basis": "median horizontal error between the commanded waypoint and Gazebo ground truth; the EKF-reported error is recorded alongside and their difference is the estimator/GPS contribution. no GNSS error was injected, and SITL has no random horizontal GPS error to begin with, so this EXCLUDES the term that dominates a real CEP — it is a floor, not a navigation CEP",
+    "obstacle_return_code": 0,
+    "obstacle_req": true,
+    "obstacle_lidar_available": true,
+    "obstacle_lidar_samples": 553,
+    "obstacle_detected_within_range": true,
+    "obstacle_detected_within_15m": true,
+    "obstacle_detection_range_requirement_m": 15.0,
+    "obstacle_first_detection_distance_m": 14.849884033203125,
+    "obstacle_detection_timely": true,
+    "obstacle_min_distance_m": 5.430266380310059,
+    "obstacle_final_groundspeed_mps": 1.4421091079711914,
+    "obstacle_response_observed": true,
+    "obstacle_response_onset_distance_m": 15.0,
+    "obstacle_response_threshold_m": 5.0,
+    "obstacle_min_separation_requirement_m": 5.0,
+    "obstacle_approach_speed_mps": 1.5,
+    "obstacle_scenario_alignment": "wall normal derived from airframe spawn yaw; body-forward lidar and BODY_NED +X velocity",
+    "obstacle_avoidance_met": true,
+    "obstacle_fidelity": "Gazebo gpu_lidar -> MAVLink DISTANCE_SENSOR -> ArduPilot proximity avoidance",
+    "abort_inhibition_req": "REQ-SAFE-006",
+    "abort_inhibition_return_code": 0,
+    "abort_inhibition_abort_active": true,
+    "abort_inhibition_release_guards": [
+      "deliveryAbortConditionActive == false"
+    ],
+    "abort_inhibition_flags_unbound": [
+      "propulsionCriticalFailure",
+      "sensorFailureReported"
+    ],
+    "abort_inhibition_flags_raised": {
+      "deliveryAbortConditionActive": true
+    },
+    "abort_inhibition_release_detected": false,
+    "abort_inhibition_decisions": [],
+    "abort_inhibition_observer_available": true,
+    "abort_inhibition_z_before_m": 10.1005,
+    "abort_inhibition_z_after_m": 10.0952,
+    "transport_return_code": 0,
+    "transport_cruise_points": 4,
+    "motor_failure_req": "REQ-SAFE-007",
+    "motor_failure_runs": [
+      {
+        "attempt": 0,
+        "return_code": 8,
+        "stable": false,
+        "hover_alt_m": 9.946931483381885,
+        "hover_throttle_pct": 49.728813559322035,
+        "attitude_rms_deg": 14.610473186040615
+      },
+      {
+        "attempt": 1,
+        "return_code": 8,
+        "stable": false,
+        "hover_alt_m": 3.6011745646848516,
+        "hover_throttle_pct": 88.61016949152543,
+        "attitude_rms_deg": 46.63211658732072
+      },
+      {
+        "attempt": 2,
+        "return_code": 8,
+        "stable": false,
+        "hover_alt_m": 1.208465058924788,
+        "hover_throttle_pct": 77.8135593220339,
+        "attitude_rms_deg": 48.21704694696875
+      },
+      {
+        "attempt": 3,
+        "return_code": 8,
+        "stable": false,
+        "hover_alt_m": 9.998619342672415,
+        "hover_throttle_pct": 52.0,
+        "attitude_rms_deg": 14.182493549424942
+      },
+      {
+        "attempt": 4,
+        "return_code": 8,
+        "stable": false,
+        "hover_alt_m": 0.0,
+        "hover_throttle_pct": 0.0,
+        "attitude_rms_deg": 41.44992050168073
+      }
+    ],
+    "motor_failure_attempts": 5,
+    "motor_failure_passes": 0,
+    "motor_failure_tolerant": false,
+    "motor_failure_deterministic": true,
+    "motor_failure_return_code": 8,
+    "motor_failure_hover_alt_m": 1.208465058924788,
+    "motor_failure_hover_throttle_pct": 77.8135593220339,
+    "motor_failure_attitude_rms_deg": 48.21704694696875,
+    "motor_failure_attitude_limit_deg": 5.0
+  },
+  "req_results": [
+    {
+      "req_id": "REQ-SAFE-007",
+      "check": "single_motor_out",
+      "status": "PARTIAL",
+      "criterion_evaluation": "FAIL",
+      "criterion": {
+        "metric": "attitude_rms_deg",
+        "operator": "<=",
+        "threshold": 5.0,
+        "unit": "deg",
+        "source": "engineering_judgement",
+        "basis": "separates attitude tracking with reduced margin from the recorded large-amplitude wobble",
+        "accepted_for_requirement": false
+      },
+      "sensitivity": [
+        {
+          "interpretation": "attitude RMS <= 5 deg",
+          "passed_runs": 0,
+          "total_runs": 5
+        },
+        {
+          "interpretation": "flight completed without scenario termination",
+          "passed_runs": 0,
+          "total_runs": 5
+        }
+      ],
+      "attitude_rms_deg": 48.21704694696875,
+      "attempts": 5,
+      "passes": 0,
+      "message": "0 of 5 one-motor-out flights met the 5 deg RMS engineering interpretation; 0 of 5 completed without scenario termination. The 5 deg bound is an unaccepted engineering interpretation, not a value in REQ-SAFE-007, so the requirement verdict remains conditional. Attitude RMS across flights: 14.61, 46.63, 48.22, 14.18, 41.45 deg; steady altitude: 9.95, 3.60, 1.21, 10.00, 0.00 m at 50, 89, 78, 52, 0% throttle"
+    },
+    {
+      "req_id": "REQ-PERF-004",
+      "check": "wind_condition",
+      "status": "PASS",
+      "message": "Gazebo closed-loop flight HELD 5.42 m/s ground speed against a 15.0 m/s headwind at full forward authority (minimum 2.0, opposition alignment=0.9996242552650609; plateaued, drift 0.009705 of mean over 9.977 s, n=98); drag is the geometry-derived flat-plate area f=0.062477 m^2 acting on airspeed, not a lumped linearization of it; the verdict survives unless the true f exceeds 0.0902 m^2 (1.44x the estimate)"
+    },
+    {
+      "req_id": "REQ-PERF-003",
+      "check": "cruise_speed",
+      "status": "PASS",
+      "message": "Gazebo nil-wind pitch sweep: the fastest speed the vehicle HELD was 20.39 m/s at RC1100 (requirement >= 18.0 m/s); 4 certified steady points (10.1, 15.5, 19.7, 20.4 m/s); steady state: plateaued, drift 0.003753 of mean over 9.98 s, n=85; altitude held in ALT_HOLD, ground speed = airspeed in nil wind"
+    },
+    {
+      "req_id": "REQ-PERF-001",
+      "check": "cruise_attitude",
+      "status": "PASS",
+      "message": "Gazebo cruise attitude RMS 0.037 deg about the window mean, WORST of 4 certified steady speed points spanning 10.1-20.4 m/s (roll 0.005 / pitch 0.034 deg, n=84; limit 0.5 deg RMS); no authorised envelope is declared, but the sweep reaches 20.4 m/s — the fastest speed the vehicle HELD, clearing the 18.0 m/s cruise requirement — so no authorised speed lies above everything measured, and RMS varies only 0.0126 deg across the whole sweep (0.0288, 0.0242, 0.0262, 0.0368 deg) against 0.4632 deg of headroom: an unsampled point would have to depart from the measured envelope by 37x that variation to breach the bound"
+    },
+    {
+      "req_id": "REQ-FUNC-003",
+      "check": "payload_attitude",
+      "status": "PASS",
+      "message": "Gazebo hover with 1.5 kg payload attached: pose-observed attachment distance 0.09450065702417103 m; attitude RMS 0.015 deg (limit 1.0 deg, n=180), hover throttle 38.0% -> margin 62.0% (required >= 30%); payload transport over 5 window(s) observed carrying the payload: worst attitude RMS 0.033 deg at cruise@rc1100 against a 1.0 deg bound. Windows: hover attached (0.10 m vertical, 0.10 m total), RMS 0.015 deg; cruise@rc1420 attached (0.32 m vertical, 0.32 m total), RMS 0.021 deg; cruise@rc1330 attached (0.10 m vertical, 4.46 m total), RMS 0.030 deg; cruise@rc1220 attached (0.09 m vertical, 7.52 m total), RMS 0.027 deg; cruise@rc1100 attached (0.09 m vertical, 8.94 m total), RMS 0.033 deg (4 certified steady cruise points spanning 10.1-20.4 m/s)"
+    },
+    {
+      "req_id": "REQ-SAFE-006",
+      "check": "delivery_abort_inhibition",
+      "status": "PASS",
+      "message": "abort condition offered to the generated logic BEFORE the delivery coordinate; the payload remained attached, so the inhibition holds, with ['deliveryAbortConditionActive == false'] evaluated against {'deliveryAbortConditionActive': True}"
+    },
+    {
+      "req_id": "REQ-FUNC-001",
+      "check": "navigation_accuracy",
+      "status": "INCONCLUSIVE",
+      "cep_m": 0.10675000000000001,
+      "message": "the vehicle flew 8 commanded waypoints autonomously and held them to a median ground-truth error of 0.10675000000000001 m (max 0.1144 m, limit 1.0 m) — but this is NOT a navigation CEP: no explicit horizontal GNSS error campaign reached the raw sensor fix relative to Gazebo truth. What is measured is the position loop's tracking accuracy against ground truth; the GNSS error that dominates a real CEP is absent, so the requirement stays open"
+    },
+    {
+      "req_id": "REQ-FUNC-002",
+      "check": "obstacle_avoidance",
+      "status": "PASS",
+      "message": "Gazebo gpu_lidar -> MAVLink DISTANCE_SENSOR -> ArduPilot proximity avoidance: lidar=True, detected=True, first_detection=14.849884033203125 m, detection_timely=True, response_onset=15.0 m, minimum_separation=5.430266380310059 m, final_groundspeed=1.4421091079711914 m/s, response_observed=True, scenario_alignment=wall normal derived from airframe spawn yaw; body-forward lidar and BODY_NED +X velocity"
+    },
+    {
+      "req_id": "REQ-FUNC-005",
+      "check": "positional_release",
+      "message": "positional payload-release error needs high-fidelity motion/trajectory; no implemented Gazebo check has produced evidence yet",
+      "requirement_text": "REQ-FUNC-005: The system shall release the payload when the current geographic position is within 1.0 metre of the designated delivery waypoint and no delivery-abort condition is active.",
+      "max_error_m": 1.0,
+      "status": "PLANNED"
+    },
+    {
+      "req_id": "REQ-PERF-005",
+      "check": "timed_actuation",
+      "message": "timed actuator behavior needs synchronized high-fidelity execution; no implemented Gazebo check has produced evidence yet",
+      "requirement_text": "REQ-PERF-005: The mechanical payload release actuation shall complete within 2.0 seconds from the moment the delivery coordinate condition is satisfied.",
+      "max_delay_s": 2.0,
+      "status": "PLANNED"
+    },
+    {
+      "req_id": "REQ-SAFE-005",
+      "check": "timed_actuation",
+      "message": "timed actuator behavior needs synchronized high-fidelity execution; no implemented Gazebo check has produced evidence yet",
+      "requirement_text": "REQ-SAFE-005: The system shall deploy the ballistic recovery parachute within 0.5 seconds of detecting a critical propulsion subsystem failure during flight, taking precedence over all other safety responses.",
+      "max_delay_s": 0.5,
+      "status": "PLANNED"
+    }
+  ]
+}
