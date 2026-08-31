@@ -449,6 +449,45 @@ def _render_inject_skip(spec: InjectSpec) -> str:
     return f'print("  ⚠ inject skipped: {note}")\n'
 
 
+def _send_command_acked(
+    ctx: TestContext,
+    cmd_id: int,
+    params: "list[float]",
+    *,
+    attempts: int = 3,
+    ack_timeout_s: float = 3.0,
+) -> int:
+    """Send COMMAND_LONG and BLOCK for its COMMAND_ACK, retrying bounded.
+
+    The MAVLink command protocol is ACK-confirmed for a reason: a send
+    followed by a plain sleep was measured to vanish without a trace —
+    REQ_SAFE_005's DO_PARACHUTE drew no ACK, no STATUSTEXT and no console
+    line across four instrumented runs, while the identical bytes followed
+    by a blocking recv drew ACK=0 and a released parachute on the first
+    attempt. Pumping the connection right after the send is part of
+    delivering the command; sleeping is not. Raises on total silence so the
+    test fails with the true reason instead of a downstream symptom.
+    """
+    for attempt in range(attempts):
+        ctx.mav.mav.command_long_send(
+            ctx.mav.target_system, ctx.mav.target_component,
+            cmd_id, 0,
+            params[0], params[1], params[2], params[3],
+            params[4], params[5], params[6],
+        )
+        deadline = time.time() + ack_timeout_s
+        while time.time() < deadline:
+            message = ctx.mav.recv_match(
+                type="COMMAND_ACK", blocking=True, timeout=1
+            )
+            if message is not None and message.command == cmd_id:
+                return int(message.result)
+    raise RuntimeError(
+        f"MAVLink command {cmd_id} drew no COMMAND_ACK in "
+        f"{attempts} attempts"
+    )
+
+
 def _inject_mavlink_command(ctx: TestContext, spec: InjectSpec) -> None:
     """发送任意 MAVLink command_long（用于 gripper、喷射器等执行器命令）。
 
@@ -478,18 +517,10 @@ def _inject_mavlink_command(ctx: TestContext, spec: InjectSpec) -> None:
     pre_cmd = spec.params.get("pre_command")
     if pre_cmd is not None:
         pre = [float(spec.params.get(f"pre_param{i}", 0)) for i in range(1, 8)]
-        ctx.mav.mav.command_long_send(
-            ctx.mav.target_system, ctx.mav.target_component,
-            int(pre_cmd), 0,
-            pre[0], pre[1], pre[2], pre[3], pre[4], pre[5], pre[6],
-        )
+        _send_command_acked(ctx, int(pre_cmd), pre)
         ctx.scaled_sleep(float(spec.params.get("_pre_settle_s", 2.0)))
 
-    ctx.mav.mav.command_long_send(
-        ctx.mav.target_system, ctx.mav.target_component,
-        cmd_id, 0,
-        p[0], p[1], p[2], p[3], p[4], p[5], p[6],
-    )
+    _send_command_acked(ctx, cmd_id, p)
     settle_s = float(spec.params.get("_settle_s", 1.5))
     ctx.scaled_sleep(settle_s)
 

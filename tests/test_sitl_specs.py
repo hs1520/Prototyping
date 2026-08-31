@@ -681,13 +681,28 @@ def test_mavlink_command_inject_sends_pre_command_before_main_command():
     sent = []
 
     class _CmdMav:
+        # Commands are ACK-confirmed since the SAFE_005 vanishing-command
+        # fix: the fake acknowledges each send so the inject proceeds.
         target_system = 1
         target_component = 1
 
-        class mav:  # noqa: N801 - pymavlink attribute shape
-            @staticmethod
-            def command_long_send(sys, comp, cmd, conf, *params):  # noqa: ARG004
-                sent.append((cmd, params[:2]))
+        def __init__(self):
+            outer = self
+
+            class _Sender:
+                @staticmethod
+                def command_long_send(sys, comp, cmd, conf, *params):  # noqa: ARG004
+                    sent.append((cmd, params[:2]))
+                    outer._pending = SimpleNamespace(
+                        get_type=lambda: "COMMAND_ACK", command=cmd, result=0,
+                    )
+
+            self.mav = _Sender()
+            self._pending = None
+
+        def recv_match(self, type=None, blocking=True, timeout=1):  # noqa: A002
+            message, self._pending = self._pending, None
+            return message
 
     ctx = SitlTestContext(mav=_CmdMav(), mavutil=SimpleNamespace(mavlink=SimpleNamespace()))
     spec = InjectSpec(

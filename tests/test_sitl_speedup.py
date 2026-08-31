@@ -142,3 +142,54 @@ def test_bridge_native_carries_speedup_and_gazebo_pins_it(tmp_path, capsys):
 
     with pytest.raises(ValueError):
         _bridge(tmp=tmp_path / "x", speedup=0.5)
+
+
+class _AckMav:
+    """ACKs a command only from the Nth send — the measured SAFE_005 shape:
+    a send followed by a plain sleep vanished; a send followed by a blocking
+    recv pump was processed."""
+
+    def __init__(self, ack_on_attempt=1, result=0):
+        self.message_hooks = []
+        self.target_system = 1
+        self.target_component = 0
+        self.sends = 0
+        self._ack_on = ack_on_attempt
+        self._result = result
+        self._pending = None
+        self.mav = SimpleNamespace(command_long_send=self._send)
+
+    def _send(self, _sys, _comp, cmd, _conf, *params):
+        self.sends += 1
+        if self.sends >= self._ack_on:
+            self._pending = SimpleNamespace(
+                get_type=lambda: "COMMAND_ACK", command=cmd,
+                result=self._result,
+            )
+
+    def recv_match(self, type=None, blocking=True, timeout=1):  # noqa: A002
+        message, self._pending = self._pending, None
+        return message
+
+
+def test_mavlink_commands_are_ack_confirmed_with_bounded_retry():
+    from src.sitl.sitl_specs import _send_command_acked
+
+    mav = _AckMav(ack_on_attempt=2)
+    ctx = TestContext(mav=mav, mavutil=SimpleNamespace())
+    result = _send_command_acked(ctx, 208, [2.0] + [0.0] * 6,
+                                 ack_timeout_s=0.05)
+    assert result == 0
+    assert mav.sends == 2                       # retried exactly once
+
+
+def test_total_command_silence_raises_the_true_reason():
+    import pytest
+    from src.sitl.sitl_specs import _send_command_acked
+
+    mav = _AckMav(ack_on_attempt=99)
+    ctx = TestContext(mav=mav, mavutil=SimpleNamespace())
+    with pytest.raises(RuntimeError, match="no COMMAND_ACK"):
+        _send_command_acked(ctx, 208, [2.0] + [0.0] * 6,
+                            attempts=2, ack_timeout_s=0.05)
+    assert mav.sends == 2
