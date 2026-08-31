@@ -106,6 +106,34 @@ def test_an_untestable_term_inside_the_main_clause_does_not_split():
     ) is None
 
 
+def test_a_means_is_not_a_medium_and_must_not_be_split_off():
+    """"authenticate ... using an AES challenge" — the AES challenge IS the
+    authentication, not a channel the authentication runs over. Splitting it
+    left a testable "authenticate every operator command" that a protocol-level
+    test could close while the mechanism went untested. A medium is separable
+    from the capability; a means is not."""
+    assert split_capability_and_medium(
+        "The system shall authenticate every operator command and reject "
+        "unsigned packets using an AES challenge over the uplink."
+    ) is None
+
+    # the contrast that must keep splitting: the channel is a medium, and
+    # MAVLink v2 conformance over it is a real, separate capability
+    split = split_capability_and_medium(_INTF_001)
+    assert split is not None
+    capability, medium = split
+    assert "MAVLink v2.0 protocol" in capability
+    assert "AES-256 encrypted RF channel" in medium
+
+
+def test_a_word_that_merely_contains_an_untestable_term_does_not_split():
+    """"materialized" is not "material"."""
+    assert split_capability_and_medium(
+        "The system shall serve cached query results to the operator console "
+        "using a materialized database view over a replicated store."
+    ) is None
+
+
 def test_a_conformance_qualifier_is_not_a_medium():
     """'in accordance with the ASTM F3411-22 standard' says HOW the same
     capability must behave, not what it runs over."""

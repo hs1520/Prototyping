@@ -238,12 +238,21 @@ INSPECTION_TERMS = (
 #: the capability would appear to close the untestable half. Splitting there is
 #: the only way both can be reported truthfully.
 #:
-#: Deliberately NOT included: "in accordance with", "compliant with", " across "
-#: and " through ". Those qualify HOW or UNDER WHAT CONDITIONS the same
-#: capability must behave rather than naming a separate medium — "operate
-#: across an ambient temperature range" is one obligation, not two — so
-#: splitting them would invent an obligation the requirement never asserted.
-_MEDIUM_CONNECTIVES = (" over ", " via ", " using ")
+#: Deliberately NOT included:
+#:
+#: " using " — it introduces the MEANS by which the capability is achieved, not
+#: a medium the capability runs over, and a means is not separable from it.
+#: "authenticate every operator command … using an AES challenge" split into a
+#: testable "authenticate every operator command" and an untestable "AES
+#: challenge", so a protocol-level test could close the authentication clause
+#: while the mechanism that IS the authentication went untested. Contrast
+#: " over an AES-256 encrypted RF channel": the channel is a medium, and
+#: MAVLink v2 conformance over it is a real, separate capability.
+#:
+#: "in accordance with", "compliant with", " across ", " through " — those
+#: qualify HOW or UNDER WHAT CONDITIONS the same capability must behave.
+#: "operate across an ambient temperature range" is one obligation, not two.
+_MEDIUM_CONNECTIVES = (" over ", " via ")
 
 #: A capability clause has to survive the cut as a requirement in its own
 #: right. "The system shall operate" is what is left when a condition is
