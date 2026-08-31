@@ -136,16 +136,23 @@ class TestContext:
         """
         wall_deadline = time.time() + sim_timeout_s + wall_margin_s
         clock = self.clock
-        start_sim = clock.now_s()
+        observations_at_open = getattr(clock, "observations", 0)
+        start_sim = None
 
         def expired() -> bool:
             nonlocal start_sim
             if time.time() >= wall_deadline:
                 return True
             if start_sim is None:
-                # No stamp had arrived when the window opened; the budget
-                # starts at the first one so early silence is not billed.
-                start_sim = clock.now_s()
+                # The budget starts at the first stamp observed AFTER the
+                # window opened. The latest stamp at opening time can be
+                # arbitrarily old — the GCS-loss warmup sends heartbeats for
+                # 15s and reads nothing, and settle sleeps read nothing — so
+                # seeding from it bills the model for time the harness spent
+                # not listening (measured: a 25s budget expired 1.5s after
+                # opening, 30 sim-seconds pre-charged).
+                if getattr(clock, "observations", 0) > observations_at_open:
+                    start_sim = clock.now_s()
                 return False
             elapsed = clock.elapsed_s(start_sim)
             return elapsed is not None and elapsed >= sim_timeout_s

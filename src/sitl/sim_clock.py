@@ -22,12 +22,20 @@ class SimClock:
 
     def __init__(self) -> None:
         self._boot_ms: Optional[int] = None
+        #: Count of accepted stamps. A budget window uses this to bind its
+        #: start to the first stamp observed AFTER the window opened: the
+        #: latest stamp can be arbitrarily old whenever the harness spent
+        #: time sending without receiving (the GCS-loss warmup sends
+        #: heartbeats for 15s and reads nothing), and billing that gap to
+        #: the window expired a 25s budget 1.5s after it opened.
+        self.observations: int = 0
 
     def observe(self, msg: Any) -> None:
         stamp = getattr(msg, "time_boot_ms", None)
         if not isinstance(stamp, (int, float)) or stamp <= 0:
             return
         stamp = int(stamp)
+        self.observations += 1
         # Monotonic max: a fresh SITL (per-test --wipe launch) starts near 0,
         # and each test installs a fresh clock, so a reboot mid-test is the
         # only regression source — ignore it rather than jump backwards.

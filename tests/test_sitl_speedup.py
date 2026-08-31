@@ -76,9 +76,11 @@ def test_sim_window_expires_on_sim_budget_not_wall():
     mav.feed(SimpleNamespace(time_boot_ms=10_000))
     expired = ctx.sim_window(5.0, wall_margin_s=30.0)
     assert not expired()
-    mav.feed(SimpleNamespace(time_boot_ms=14_900))  # 4.9 sim s — inside
+    mav.feed(SimpleNamespace(time_boot_ms=10_100))  # budget starts here
     assert not expired()
-    mav.feed(SimpleNamespace(time_boot_ms=15_100))  # 5.1 sim s — budget spent
+    mav.feed(SimpleNamespace(time_boot_ms=15_000))  # 4.9 sim s — inside
+    assert not expired()
+    mav.feed(SimpleNamespace(time_boot_ms=15_200))  # 5.1 sim s — budget spent
     assert expired()
 
 
@@ -90,6 +92,25 @@ def test_sim_window_budget_starts_at_first_stamp():
     mav.feed(SimpleNamespace(time_boot_ms=60_000))   # clock starts late
     assert not expired()
     mav.feed(SimpleNamespace(time_boot_ms=62_500))   # 2.5 sim s after start
+    assert expired()
+
+
+def test_sim_window_does_not_bill_the_gap_before_it_opened():
+    """The SAFE_003 regression, distilled: the GCS-loss warmup sends
+    heartbeats for 15 sim-seconds and reads nothing, so the clock's latest
+    stamp predates the verify window by ~30 sim-seconds. Seeding the budget
+    from that stale stamp expired a 25s window 1.5s after it opened and
+    turned a passing failsafe test into '超时未切换到 LAND'."""
+    mav = _HookedMav()
+    ctx = TestContext(mav=mav, mavutil=SimpleNamespace())
+    mav.feed(SimpleNamespace(time_boot_ms=52_344))   # last pre-disconnect stamp
+    expired = ctx.sim_window(25.0, wall_margin_s=30.0)
+    assert not expired()
+    mav.feed(SimpleNamespace(time_boot_ms=82_369))   # first post-reconnect stamp
+    assert not expired()                             # gap is NOT billed
+    mav.feed(SimpleNamespace(time_boot_ms=107_000))  # +24.6 sim s — inside
+    assert not expired()
+    mav.feed(SimpleNamespace(time_boot_ms=107_500))  # +25.1 sim s — spent
     assert expired()
 
 
