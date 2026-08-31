@@ -47,6 +47,50 @@ _BLOCK_TRANSITION_RE = re.compile(
 )
 
 _SAFE_STATE_TERMS = frozenset({"locked", "secured", "disabled", "disarmed", "closed"})
+
+#: What it means, lexically, to LEAVE each held safe state: the verbs a plan
+#: uses to name the departure, with their common inflections (semantic_terms
+#: does not stem). The inhibition gate anchors on these because a plan may
+#: model the held state nowhere — run 2026-08-31 planned "locked" as a
+#: transitionless corner machine while the departure itself (ReleasingPayload)
+#: lived one behaviour over, unguarded — and a held state with no exits passes
+#: every exit check vacuously.
+_HELD_STATE_EXIT_TERMS = {
+    "locked": frozenset({
+        "release", "releasing", "released",
+        "unlock", "unlocking", "unlocked",
+        "open", "opening", "opened",
+        "deploy", "deploying", "deployed",
+        "drop", "dropping", "dropped",
+        "separate", "separating", "separated", "separation",
+        "eject", "ejecting", "ejected",
+    }),
+    "secured": frozenset({
+        "release", "releasing", "released",
+        "unlock", "unlocking", "unlocked",
+        "open", "opening", "opened",
+        "deploy", "deploying", "deployed",
+        "drop", "dropping", "dropped",
+        "separate", "separating", "separated", "separation",
+        "eject", "ejecting", "ejected",
+    }),
+    "closed": frozenset({"open", "opening", "opened"}),
+    "disabled": frozenset({
+        "enable", "enabling", "enabled",
+        "activate", "activating", "activated",
+        "arm", "arming", "armed",
+        "start", "starting", "started",
+    }),
+    "disarmed": frozenset({"arm", "arming", "armed"}),
+}
+
+
+def held_state_exit_terms(required_state_terms: Iterable[str]) -> FrozenSet[str]:
+    """Union of the departure vocabulary for every held state term."""
+    terms: set[str] = set()
+    for state_term in required_state_terms:
+        terms.update(_HELD_STATE_EXIT_TERMS.get(state_term, ()))
+    return frozenset(terms)
 _CONDITION_SIGNAL_TERMS = frozenset({
     "abort", "failure", "fault", "unsafe", "emergency", "sensor", "open", "loss",
 })
@@ -159,6 +203,11 @@ class RequirementIntent:
     condition_terms: FrozenSet[str] = field(default_factory=frozenset)
     required_state_terms: FrozenSet[str] = field(default_factory=frozenset)
     forbidden_state_terms: FrozenSet[str] = field(default_factory=frozenset)
+    #: The subject held in the required state — the state phrase's vocabulary
+    #: minus the safe-state terms themselves ("the payload in the mechanically
+    #: locked state" → {payload, mechanically}). Lets a reader locate the
+    #: inhibition's subject in a plan that never names the held state.
+    held_object_terms: FrozenSet[str] = field(default_factory=frozenset)
 
 
 def semantic_terms(text: str) -> FrozenSet[str]:
@@ -179,13 +228,15 @@ def parse_requirement_intent(text: str) -> RequirementIntent:
     source = " ".join(text.split())
     positive = _POSITIVE_INHIBITION_RE.search(source)
     if positive:
-        required = semantic_terms(positive.group("state")) & _SAFE_STATE_TERMS
+        state_terms = semantic_terms(positive.group("state"))
+        required = state_terms & _SAFE_STATE_TERMS
         condition = _condition_terms(positive.group("condition"))
         if required and condition:
             return RequirementIntent(
                 kind=RequirementIntentKind.INHIBITION,
                 condition_terms=condition,
                 required_state_terms=required,
+                held_object_terms=state_terms - _SAFE_STATE_TERMS,
             )
 
     for pattern in (_NEGATIVE_TRANSITION_RE, _BLOCK_TRANSITION_RE):

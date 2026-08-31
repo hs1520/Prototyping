@@ -168,67 +168,181 @@ class PlannedBehavior:
         }
 
 
-def _inhibition_issues(
-    behavior: PlannedBehavior,
-    requirement_text: str,
-    prefix: str,
+def _plan_inhibition_issues(
+    behaviors: Sequence[PlannedBehavior],
+    sources: Mapping[str, str],
 ) -> list[str]:
-    """An inhibition requirement must reach the plan as a guard.
+    """An inhibition requirement must reach the plan as a guard — wherever
+    the departure actually lives.
 
     REQ_SAFE_006 — "maintain the payload in the mechanically locked state
     whenever a delivery-abort condition is active, regardless of geographic
     proximity" — was planned as an unguarded ``Locked --accept
-    DeliveryCoordinateSatisfied--> Releasing``. Every structural check passed:
-    the states exist, the identifiers are legal, the response state is
-    reachable. Nothing asked whether the state the requirement says to HOLD can
-    be left unconditionally, so the generated vehicle separated its payload
-    while an abort was active, reproduced independently at three tiers.
+    DeliveryCoordinateSatisfied--> Releasing``. Every structural check passed
+    and the generated vehicle separated its payload while an abort was
+    active, reproduced independently at three tiers.
 
-    The check is on the requirement's own parsed intent rather than on
-    REQ_SAFE_006's spellings, so any requirement of this shape is covered and a
-    model that renames its states still conforms.
+    An earlier version of this gate was scoped per-behaviour against that
+    behaviour's OWN source requirement. Measured against a real plan it fired
+    zero times: the inhibition requirement's behaviour was a transitionless
+    corner machine ("DefaultToMechanicallyLockedStateBehavior"), while the
+    departure itself (``Initial --accept DeliveryWaypointReached-->
+    ReleasingPayload``) lived one behaviour over, traced to a different
+    requirement. Surgical scoping was the defect, so the gate is now anchored
+    on the whole plan:
+
+    - the held state, wherever it is planned, may not be left without a guard
+      naming the condition;
+    - the departure itself (the safe state's exit vocabulary applied to the
+      held object), wherever it is planned, needs the same guard at its
+      boundary;
+    - a plan that expresses neither cannot express the inhibition at all,
+      which is a plan defect — not a silent skip;
+    - "shall not transition to X while C" guards every boundary entry into X.
+
+    Checks read the requirement's parsed intent rather than any spelling, so
+    a model that renames its states still conforms.
     """
     from .verification_obligations import (
         RequirementIntentKind,
+        held_state_exit_terms,
         parse_requirement_intent,
         semantic_terms,
     )
 
-    intent = parse_requirement_intent(requirement_text)
-    if (
-        intent.kind is not RequirementIntentKind.INHIBITION
-        or not intent.required_state_terms
-        or not intent.condition_terms
-    ):
-        return []
-
-    held = [
-        state for state in behavior.states
-        if semantic_terms(state.state_id) & intent.required_state_terms
-    ]
-    if not held:
-        # The requirement names a state to hold and this behaviour has none by
-        # that name. That is a naming or decomposition question the AG tier
-        # answers against the model's own invariants; guessing here would
-        # reject conforming models for their vocabulary.
-        return []
-
     issues: list[str] = []
-    for state in held:
-        for transition in behavior.transitions:
-            if transition.source != state.state_id:
-                continue
+    for req_id, requirement_text in sources.items():
+        intent = parse_requirement_intent(requirement_text)
+        if (
+            intent.kind is not RequirementIntentKind.INHIBITION
+            or not intent.condition_terms
+        ):
+            continue
+        condition_label = "/".join(sorted(intent.condition_terms))
+
+        def _guard_names_condition(transition: PlannedTransition) -> bool:
             guard = transition.guard or (
-                transition.trigger if transition.trigger_kind == "GUARD" else ""
+                transition.trigger
+                if transition.trigger_kind == "GUARD" else ""
             )
-            if semantic_terms(guard) & intent.condition_terms:
-                continue
+            return bool(semantic_terms(guard) & intent.condition_terms)
+
+        if intent.forbidden_state_terms:
+            # Negative shape: every boundary entry into the forbidden state
+            # needs the guard; an interior move is decided at its boundary.
+            for index, behavior in enumerate(behaviors):
+                for transition in behavior.transitions:
+                    if not (
+                        semantic_terms(transition.target)
+                        & intent.forbidden_state_terms
+                    ):
+                        continue
+                    if (
+                        semantic_terms(transition.source)
+                        & intent.forbidden_state_terms
+                    ):
+                        continue
+                    if _guard_names_condition(transition):
+                        continue
+                    issues.append(
+                        f"behaviors[{index}] transition "
+                        f"{transition.transition_id} enters "
+                        f"{transition.target} unconditionally, but {req_id} "
+                        f"forbids that state whenever {condition_label} is "
+                        "active; the transition needs a guard naming that "
+                        "condition"
+                    )
+            continue
+
+        if not intent.required_state_terms:
+            continue
+
+        flagged: set[tuple[int, str]] = set()
+        held_anchor = False
+        for index, behavior in enumerate(behaviors):
+            held_states = {
+                state.state_id for state in behavior.states
+                if semantic_terms(state.state_id)
+                & intent.required_state_terms
+            }
+            if held_states:
+                held_anchor = True
+            for transition in behavior.transitions:
+                if transition.source not in held_states:
+                    continue
+                if _guard_names_condition(transition):
+                    continue
+                flagged.add((index, transition.transition_id))
+                issues.append(
+                    f"behaviors[{index}] transition "
+                    f"{transition.transition_id} leaves "
+                    f"{transition.source} unconditionally, but {req_id} "
+                    f"requires that state to be held whenever "
+                    f"{condition_label} is active; the transition needs a "
+                    "guard naming that condition"
+                )
+
+        exit_terms = held_state_exit_terms(intent.required_state_terms)
+        exit_anchor = False
+        if exit_terms and intent.held_object_terms:
+            for index, behavior in enumerate(behaviors):
+                scope_terms = (
+                    semantic_terms(behavior.owner)
+                    | semantic_terms(behavior.behavior_id)
+                )
+                action_vocabulary = {
+                    state.state_id: " ".join(
+                        item
+                        for item in (state.entry_action, state.do_action)
+                        if item
+                    )
+                    for state in behavior.states
+                }
+                for transition in behavior.transitions:
+                    target_terms = semantic_terms(
+                        transition.target
+                    ) | semantic_terms(
+                        action_vocabulary.get(transition.target, "")
+                    )
+                    if not (target_terms & exit_terms):
+                        continue
+                    if not (
+                        (target_terms | scope_terms)
+                        & intent.held_object_terms
+                    ):
+                        continue
+                    # Only the source STATE NAME evidences a prior departure
+                    # (ReleasingPayload -> Released is interior). Its actions
+                    # do not: run 2026-08-31 planned `Initial` with
+                    # entry_action initializeRelease — preparation, not
+                    # departure — and counting it hid the one boundary the
+                    # guard belongs on.
+                    if semantic_terms(transition.source) & exit_terms:
+                        continue
+                    exit_anchor = True
+                    if (index, transition.transition_id) in flagged:
+                        continue
+                    if _guard_names_condition(transition):
+                        continue
+                    issues.append(
+                        f"behaviors[{index}] transition "
+                        f"{transition.transition_id} "
+                        f"({behavior.owner}::{behavior.behavior_id}) departs "
+                        f"the "
+                        f"{'/'.join(sorted(intent.required_state_terms))} "
+                        f"state via {transition.target} unconditionally, but "
+                        f"{req_id} requires it held whenever "
+                        f"{condition_label} is active; the transition needs "
+                        "a guard naming that condition"
+                    )
+
+        if not held_anchor and not exit_anchor:
             issues.append(
-                f"{prefix} transition {transition.transition_id} leaves "
-                f"{state.state_id} unconditionally, but "
-                f"{behavior.source_requirement_id} requires that state to be "
-                f"held whenever {'/'.join(sorted(intent.condition_terms))} is "
-                f"active; the transition needs a guard naming that condition"
+                f"{req_id} requires "
+                f"{'/'.join(sorted(intent.required_state_terms))} to be held "
+                f"whenever {condition_label} is active, but no planned state "
+                "matches the held state and no planned transition names its "
+                "departure; the plan cannot express this inhibition"
             )
     return issues
 
@@ -447,9 +561,7 @@ def validate_planned_behaviors(
             issues.append(
                 f"{prefix} has no matching frozen source requirement"
             )
-        source_text = sources.get(behavior.source_requirement_id or "")
-        if source_text:
-            issues.extend(_inhibition_issues(behavior, source_text, prefix))
+    issues.extend(_plan_inhibition_issues(behaviors, sources))
 
     planned_refs = {
         (behavior.owner, f"{behavior.behavior_id}::{state.state_id}"): (
