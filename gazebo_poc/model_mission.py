@@ -96,6 +96,20 @@ class ModelDrivenMission:
     #: was actually told the condition held.
     conditions: Dict[str, Any] = field(default_factory=dict)
     latched: List[Tuple[float, str, str]] = field(default_factory=list)
+    #: (time, requested, resolved, how) — a harness that quietly renames the
+    #: events it offers is its own hazard, so every rename is recorded and the
+    #: evidence can name it.
+    resolutions: List[Tuple[float, str, str, str]] = field(default_factory=list)
+    #: (time, requested, why) — the offer established NOTHING: no declared
+    #: event covered it and no boolean guard flag matched it. The model was
+    #: never asked, so a scenario resting on it proves nothing.
+    unresolved: List[Tuple[float, str, str]] = field(default_factory=list)
+    #: (time, requested, flags) — no event matched, but the offer raised guard
+    #: flags, so the condition WAS established. The model expresses this one as
+    #: a standing boolean rather than an event; that is a modelling choice, not
+    #: a gap.
+    condition_only: List[Tuple[float, str, Tuple[str, ...]]] = field(
+        default_factory=list)
     _digest: str = ""
 
     def __post_init__(self) -> None:
@@ -131,6 +145,47 @@ class ModelDrivenMission:
 
     def handles(self, event: str) -> bool:
         return event in self.accepted_events()
+
+    def resolve_event(self, event: str) -> Tuple[Optional[str], str]:
+        """Map a scenario's canonical event onto the name THIS model declares.
+
+        The harness held three hard-coded event spellings. A generated model is
+        free to name its own events, and run3's did: it accepts
+        ``DeliveryCoordinateConditionSatisfied`` where the harness offered
+        ``DeliveryCoordinateSatisfied``. Nothing fired, and the resulting
+        evidence would have read as "the generated logic declined to release" —
+        a model defect that was really a harness spelling.
+
+        Matching is on meaning, not on string equality: the scenario's words
+        must all appear in the declared event's words. That admits a model that
+        says more than the scenario (``...ConditionSatisfied``,
+        ``...SubsystemFailure``) and rejects one that says something else. The
+        most specific match wins, and a tie is refused rather than guessed —
+        picking arbitrarily between two candidate events would silently decide
+        which requirement the run exercised.
+        """
+        from src.prototyping.verification_obligations import semantic_terms
+
+        declared = self.accepted_events()
+        if event in declared:
+            return event, "declared verbatim"
+        wanted = semantic_terms(event)
+        if not wanted:
+            return None, "the scenario event carries no semantic terms"
+        candidates = [
+            name for name in declared if wanted <= semantic_terms(name)
+        ]
+        if not candidates:
+            return None, (
+                f"no declared event covers {sorted(wanted)}; the model declares "
+                f"{list(declared)}"
+            )
+        ranked = sorted(candidates, key=lambda n: (len(semantic_terms(n)), n))
+        best = semantic_terms(ranked[0])
+        tied = [n for n in ranked if len(semantic_terms(n)) == len(best)]
+        if len(tied) > 1:
+            return None, f"ambiguous: {tied} all cover {sorted(wanted)}"
+        return ranked[0], f"resolved from {event} by semantic match"
 
     def state_of(self, machine: str) -> Optional[str]:
         instance = self.machines.get(machine)
@@ -242,13 +297,32 @@ class ModelDrivenMission:
         An empty result means the generated logic declined to act. The caller
         must then do nothing — that is the whole point of asking it.
         """
+        requested = str(event)
+        resolved, how = self.resolve_event(requested)
+        if resolved is not None and resolved != requested:
+            self.resolutions.append((float(time), requested, resolved, how))
+        event = resolved or requested
         self.offered.append((float(time), str(event)))
         # Conditions latch: "whenever an abort is active" is a standing state,
         # not an instant, so a flag raised by an earlier event is still true
         # when the next one is offered. An explicit caller value always wins.
-        for name in self._latched_by(event):
+        raised = self._latched_by(requested) or self._latched_by(event)
+        for name in raised:
             self.conditions[name] = True
             self.latched.append((float(time), str(event), name))
+        # A model may express a condition as a standing boolean read by guards
+        # rather than as an event — run3's delivery abort has no event at all.
+        # So "no event matched" does NOT mean the model was never told: the
+        # latched flag told it. Only an offer that resolved to nothing AND
+        # raised nothing established nothing, and that is the one a verdict
+        # must never rest on. Recording those together would make an exercised
+        # scenario read like an unasked one.
+        if resolved is None:
+            if raised:
+                self.condition_only.append(
+                    (float(time), requested, tuple(raised)))
+            else:
+                self.unresolved.append((float(time), requested, how))
         env = dict(self.conditions)
         env.update(variables or {})
         fired: List[ModelDecision] = []

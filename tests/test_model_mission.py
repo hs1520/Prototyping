@@ -285,3 +285,113 @@ def test_an_explicit_caller_value_overrides_a_latched_one():
                           variables={"deliveryAbortActive": False})
 
     assert [d.action for d in fired] == ["onReleasing"]
+
+
+_RENAMED_EVENTS = """
+package RenamedEvents {
+    item def DeliveryCoordinateConditionSatisfied;
+    item def CriticalPropulsionSubsystemFailure;
+    item def SinglePropulsionUnitFailure;
+    item def PayloadReleaseCommand;
+
+    part def PayloadMechanism {
+        attribute deliveryAbortConditionActive : Boolean;
+
+        state def PayloadReleaseBehavior {
+            entry; then Locked;
+
+            state Locked;
+            state Releasing {
+                entry action onReleasing : releasePayload;
+            }
+
+            transition releaseConditionMet
+                first Locked
+                accept DeliveryCoordinateConditionSatisfied
+                if not deliveryAbortConditionActive
+                then Releasing;
+        }
+        action def releasePayload {}
+    }
+}
+"""
+
+
+def test_a_model_may_name_its_own_events_and_still_be_driven():
+    """run3's model accepts `DeliveryCoordinateConditionSatisfied` where the
+    harness offered `DeliveryCoordinateSatisfied`. Nothing fired, and the
+    evidence would have read "the generated logic declined to release" — a
+    harness spelling reported as a model defect."""
+    mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
+
+    resolved, how = mission.resolve_event("DeliveryCoordinateSatisfied")
+    assert resolved == "DeliveryCoordinateConditionSatisfied"
+    assert "semantic match" in how
+
+    fired = mission.offer("DeliveryCoordinateSatisfied", time=0.0)
+    assert [d.action for d in fired] == ["onReleasing"]
+    assert mission.resolutions[0][1:3] == (
+        "DeliveryCoordinateSatisfied", "DeliveryCoordinateConditionSatisfied")
+
+
+def test_a_declared_name_is_used_verbatim_and_not_renamed():
+    mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
+    resolved, how = mission.resolve_event("DeliveryCoordinateConditionSatisfied")
+    assert resolved == "DeliveryCoordinateConditionSatisfied"
+    assert how == "declared verbatim"
+    mission.offer("DeliveryCoordinateConditionSatisfied", time=0.0)
+    assert mission.resolutions == []
+
+
+def test_an_event_the_model_never_declares_is_recorded_not_guessed():
+    """"The model was never asked" and "the model was asked and declined" are
+    different findings. A scenario resting on an unresolved event proves
+    nothing, so it must not look like a refusal."""
+    mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
+    resolved, why = mission.resolve_event("AbortConditionActive")
+
+    assert resolved is None
+    assert "no declared event covers" in why
+
+
+def test_a_condition_expressed_as_a_flag_is_not_an_unasked_model():
+    """run3 has no abort EVENT at all — the delivery abort is a standing
+    boolean its guards read. "No event matched" would read as "the model was
+    never told", when the latched flag told it. Only an offer that resolves to
+    nothing AND raises nothing established nothing."""
+    mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
+    mission.offer("AbortConditionActive", time=0.0)
+
+    assert mission.unresolved == []
+    assert mission.condition_only == [
+        (0.0, "AbortConditionActive", ("deliveryAbortConditionActive",))]
+    assert mission.conditions == {"deliveryAbortConditionActive": True}
+    # and the condition it established really does inhibit the release
+    assert mission.offer("DeliveryCoordinateSatisfied", time=1.0) == ()
+
+
+def test_an_offer_that_establishes_nothing_is_the_one_that_is_flagged():
+    mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
+    mission.offer("SomethingNobodyModelled", time=0.0)
+
+    assert mission.condition_only == []
+    assert mission.unresolved and mission.unresolved[0][1] == "SomethingNobodyModelled"
+    assert mission.conditions == {}
+
+
+def test_an_event_that_says_something_else_does_not_match():
+    """Matching is on the scenario's words being covered, not on overlap: a
+    single motor failure is not a critical subsystem failure."""
+    mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
+    assert mission.resolve_event("CriticalPropulsionFailure")[0] is None
+    # ...and with the critical event declared, it resolves to that one only
+    text = _RENAMED_EVENTS.replace(
+        "transition releaseConditionMet",
+        "transition criticalFailure\n                first Locked\n"
+        "                accept CriticalPropulsionSubsystemFailure\n"
+        "                then Releasing;\n\n            transition releaseConditionMet",
+    )
+    other = ModelDrivenMission(model_text=text)
+    assert other.resolve_event("CriticalPropulsionFailure")[0] == (
+        "CriticalPropulsionSubsystemFailure")
+    assert other.resolve_event("SinglePropulsionFailure")[0] is None
