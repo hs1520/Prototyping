@@ -57,10 +57,24 @@ def evaluate_active_route_update(
         if observation.kind is RouteObservationKind.ACTIVE_CONTROLLER_TARGET
     )
     if not active:
-        controller_observer_available = any(
-            observation.kind is RouteObservationKind.ACTIVE_CONTROLLER_TARGET
-            for observation in observed
+        # "the navigator had no target" and "the navigator held the OLD target"
+        # are different failures, and only the second says the revision was
+        # ignored. Naming the coordinate it held says which one happened.
+        controller_samples = tuple(
+            observation for observation in observed
+            if observation.kind is RouteObservationKind.ACTIVE_CONTROLLER_TARGET
         )
+        controller_observer_available = bool(controller_samples)
+        held = ""
+        if controller_samples:
+            last = controller_samples[-1]
+            distinct = {(o.lat_e7, o.lon_e7) for o in controller_samples}
+            held = (
+                f" The navigation target was sampled {len(controller_samples)} times "
+                f"and held {len(distinct)} distinct coordinate(s), last "
+                f"({last.lat_e7}, {last.lon_e7}) against a revision to "
+                f"({target_lat_e7}, {target_lon_e7})."
+            )
         return ActiveRouteUpdateEvidence(
             status=("failed" if controller_observer_available else "inconclusive"),
             latency_s=None,
@@ -72,10 +86,10 @@ def evaluate_active_route_update(
                 "observable with this telemetry channel"
                 if storage_seen and not controller_observer_available else
                 "the revised coordinate was present in mission storage but never "
-                "appeared as the active navigation-controller target"
+                "appeared as the active navigation-controller target" + held
                 if storage_seen else
                 "the revised coordinate appeared in neither mission storage nor "
-                "the active navigation-controller target"
+                "the active navigation-controller target" + held
             ),
         )
     adopted_at = min(observation.observed_at_s for observation in active)
