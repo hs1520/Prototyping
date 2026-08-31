@@ -140,7 +140,9 @@ def test_req_results_add_evidence_only_for_the_implemented_gazebo_check():
     results = rgf._req_results(live, planned)
 
     by_id = {item["req_id"]: item for item in results}
-    assert by_id["REQ-SAFE-007"]["status"] == "PARTIAL"
+    # surface criterion: every run held stable hover → the requirement's own
+    # stated observable is met, so this is a PASS, not a demoted PARTIAL
+    assert by_id["REQ-SAFE-007"]["status"] == "PASS"
     assert by_id["REQ-SAFE-007"]["criterion_evaluation"] == "PASS"
     assert by_id["REQ-FUNC-002"]["status"] == "PLANNED"
 
@@ -831,6 +833,45 @@ def test_a_model_owned_release_closes_and_names_the_machine():
         assert "firing onReleasing" in message
 
 
+def test_a_model_spelled_action_accepted_by_the_adapter_also_closes():
+    """run3 names its action ``releasePayload``; the adapter accepted it by
+    causal role and actuated it, recording the resolution. The report must
+    recognise that spelling too, or it re-demotes a decision the model DID
+    own and calls it harness-triggered."""
+    renamed = [{**_MODEL_DECISION[0], "action_definition": "releasePayload"}]
+    live = dict(
+        _RELEASE_LIVE,
+        payload_release_decided_by="generated model",
+        payload_release_decisions=renamed,
+        action_resolutions=[["actuateRelease", "releasePayload"]],
+    )
+
+    results = {r["check"]: r for r in rgf._req_results(live, _RELEASE_PLANNED)}
+
+    assert results["timed_actuation"]["status"] == "PASS"
+    assert results["positional_release"]["status"] == "PASS"
+    message = results["timed_actuation"]["message"]
+    assert "the GENERATED model owned the decision" in message
+    assert ": releasePayload" in message
+
+
+def test_a_recorded_resolution_for_a_different_action_lifts_nothing():
+    """A parachute resolution must not make a lockPayload release decision
+    count — resolutions widen only the action they were accepted for."""
+    wrong = [{**_MODEL_DECISION[0], "action_definition": "lockPayload"}]
+    live = dict(
+        _RELEASE_LIVE,
+        payload_release_decided_by="generated model",
+        payload_release_decisions=wrong,
+        action_resolutions=[["deployParachute", "lockPayload"]],
+    )
+
+    results = {r["check"]: r for r in rgf._req_results(live, _RELEASE_PLANNED)}
+
+    assert results["timed_actuation"]["status"] == "PARTIAL"
+    assert results["positional_release"]["status"] == "PARTIAL"
+
+
 def test_an_unrelated_model_action_cannot_close_release_requirements():
     wrong_decision = [{
         **_MODEL_DECISION[0],
@@ -1013,7 +1054,7 @@ def test_one_motor_out_cannot_pass_on_altitude_alone():
         {"motor_failure_req": "REQ-SAFE-007", "motor_failure_tolerant": True},
         planned, include_single_motor_out=True)[0]
     assert unmeasured["status"] == "INCONCLUSIVE"
-    assert "attitude was not measured" in unmeasured["message"]
+    assert "were not recorded" in unmeasured["message"]
 
     wobbling_run = {"return_code": 0, "stable": False,
                     "attitude_rms_deg": 13.46, "hover_alt_m": 9.93,
@@ -1028,7 +1069,9 @@ def test_one_motor_out_cannot_pass_on_altitude_alone():
         "motor_failure_hover_alt_m": 9.93,
         "motor_failure_hover_throttle_pct": 35.0,
     }, planned, include_single_motor_out=True)[0]
-    assert wobbling["status"] == "PARTIAL"
+    # the surface observable (stable hover) was not met, so this is a real
+    # FAIL — the held altitude alone cannot rescue it
+    assert wobbling["status"] == "FAIL"
     assert wobbling["criterion_evaluation"] == "FAIL"
     assert "unaccepted engineering interpretation" in wobbling["message"]
     assert "13.46 deg" in wobbling["message"]
@@ -1136,13 +1179,20 @@ def test_a_redundancy_that_holds_only_sometimes_is_unguaranteed_not_incapable():
     ]
     row = rgf._req_results(_motor_out_live(runs), _MOTOR_OUT_PLANNED,
                            include_single_motor_out=True)[0]
-    assert row["status"] == "PARTIAL"
+    # 2 of 5 held: the surface criterion makes an unguaranteed redundancy a
+    # real FAIL, and the record still separates it from "incapable" — the
+    # sensitivity carries every run and every interpretation
+    assert row["status"] == "FAIL"
     assert row["criterion_evaluation"] == "FAIL"
-    assert row["criterion"]["source"] == "engineering_judgement"
-    assert row["criterion"]["accepted_for_requirement"] is False
+    assert row["criterion"]["source"] == "requirement"
+    assert row["criterion"]["accepted_for_requirement"] is True
     assert row["sensitivity"] == [
-        {"interpretation": "attitude RMS <= 5 deg", "passed_runs": 2, "total_runs": 5},
-        {"interpretation": "flight completed without scenario termination", "passed_runs": 5, "total_runs": 5},
+        {"interpretation": "controlled flight maintained (stable hover held)",
+         "passed_runs": 2, "total_runs": 5},
+        {"interpretation": "attitude RMS <= 5 deg (informational, not in REQ-SAFE-007)",
+         "passed_runs": 2, "total_runs": 5},
+        {"interpretation": "flight completed without scenario termination",
+         "passed_runs": 5, "total_runs": 5},
     ]
     assert "engineering interpretation" in row["message"]
     assert "2 of 5 one-motor-out flights" in row["message"]
@@ -1152,34 +1202,42 @@ def test_a_redundancy_that_holds_only_sometimes_is_unguaranteed_not_incapable():
 
 
 def test_failing_engineering_interpretation_does_not_become_requirement_fail():
-    runs = [{"return_code": 0, "stable": False, "attitude_rms_deg": 12.0 + i, "hover_alt_m": 2.0,
-             "hover_throttle_pct": 90} for i in range(5)]
+    """Every flight wobbles past the 5 deg interpretation, yet every one held
+    the commanded hover — REQ-SAFE-007 never stated 5 deg, so the surface it
+    DID state passes the requirement."""
+    runs = [{"return_code": 0, "stable": True, "attitude_rms_deg": 12.0 + i, "hover_alt_m": 10.0,
+             "hover_throttle_pct": 55} for i in range(5)]
     row = rgf._req_results(_motor_out_live(runs), _MOTOR_OUT_PLANNED,
                            include_single_motor_out=True)[0]
-    assert row["status"] == "PARTIAL"
-    assert row["criterion_evaluation"] == "FAIL"
+    assert row["status"] == "PASS"
+    assert row["criterion_evaluation"] == "PASS"
     assert row["sensitivity"][1] == {
-        "interpretation": "flight completed without scenario termination",
-        "passed_runs": 5,
+        "interpretation": "attitude RMS <= 5 deg (informational, not in REQ-SAFE-007)",
+        "passed_runs": 0,
         "total_runs": 5,
     }
+    assert "for information only" in row["message"]
 
 
 def test_passing_engineering_interpretation_does_not_become_requirement_pass():
-    runs = [{"return_code": 0, "stable": True, "attitude_rms_deg": 0.4, "hover_alt_m": 10.0,
-             "hover_throttle_pct": 50} for _ in range(5)]
+    """A pristine attitude RMS cannot rescue a flight that lost its hover —
+    the interpretation stays informational in BOTH directions."""
+    runs = [{"return_code": 0, "stable": False, "attitude_rms_deg": 0.4, "hover_alt_m": 2.0,
+             "hover_throttle_pct": 90} for _ in range(5)]
     row = rgf._req_results(_motor_out_live(runs), _MOTOR_OUT_PLANNED,
                            include_single_motor_out=True)[0]
-    assert row["status"] == "PARTIAL"
-    assert row["criterion_evaluation"] == "PASS"
-    assert row["criterion"]["accepted_for_requirement"] is False
+    assert row["status"] == "FAIL"
+    assert row["criterion_evaluation"] == "FAIL"
+    assert row["sensitivity"][1]["passed_runs"] == 5
 
     # one bad flight out of five is enough to withhold the claim
+    runs = [{"return_code": 0, "stable": True, "attitude_rms_deg": 0.4, "hover_alt_m": 10.0,
+             "hover_throttle_pct": 50} for _ in range(5)]
     runs[2] = {"return_code": 0, "stable": False, "attitude_rms_deg": 14.0, "hover_alt_m": 3.0,
                "hover_throttle_pct": 88}
     degraded = rgf._req_results(_motor_out_live(runs), _MOTOR_OUT_PLANNED,
                                 include_single_motor_out=True)[0]
-    assert degraded["status"] == "PARTIAL"
+    assert degraded["status"] == "FAIL"
     assert degraded["criterion_evaluation"] == "FAIL"
 
 
