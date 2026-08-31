@@ -280,7 +280,7 @@ System: {system_name}
 
 Requirements:
 {requirements}
-{context_block}
+
 For each requirement category, identify which subsystems are responsible:
   FUNC  → which component performs the function?
   PERF  → which component owns the measurable bound?
@@ -605,7 +605,7 @@ Rules:
     • If a PerceptionSystem (or sensor/IMU/camera component) is listed:
         – It MUST include `out sensorStatus` in its port list.
         – SafetyMonitor MUST include `in sensorStatus` in its port list.
-"""
+{context_block}"""
 
 PART_DEFINITIONS_TEMPLATE = """Generate the SysML v2 structural fragment for the system below.
 Write ONLY part definitions, port definitions, and attributes — no action def, no state def, no connect, no satisfy yet.
@@ -1567,6 +1567,11 @@ class ChainOfThoughtPrompter:
     ) -> CoTResult:
         """Step 1: Produce a typed whole-model JSON generation plan."""
         req_text = "\n".join(f"  {r}" for r in requirements)
+        # The varying block (correction context, repair base) renders at the
+        # template TAIL: everything before it — instructions, schema,
+        # requirements — is byte-stable across a run's retry attempts, so
+        # the ~20KB static prefix stays eligible for provider-side implicit
+        # prefix caching instead of being invalidated by each correction.
         context_block = (
             f"\nRelevant domain context:\n{context}\n"
             if context and context.strip()
