@@ -141,10 +141,23 @@ class RequirementLinker:
         model: SysMLLiteModel,
         llm: Optional[Any] = None,
         verbose: bool = False,
+        plan_payload: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._model = model
         self._llm = llm
         self._verbose = verbose
+        # Requirement → model-identity bindings from the frozen plan. The
+        # sent-command traceability check consumes the ROUTE: a response that
+        # sends through the requirement's own causal-path command leg matches
+        # structurally, whatever the payload item is spelled like (run3 sends
+        # RecoveryCmdData through recoveryCmd — the plan's SAFE_005 route —
+        # and the CHUTE-substring check rejected it).
+        from src.simulation.verification_binding import plan_bindings
+        if plan_payload is None:
+            metadata = getattr(model, "metadata", None) or {}
+            candidate = metadata.get("whole_model_generation_plan")
+            plan_payload = candidate if isinstance(candidate, dict) else None
+        self._requirement_bindings = plan_bindings(plan_payload)
         self._contract_bundle = None
         self._contracts: Dict[str, Any] = {}
         self._contract_trace_findings: Dict[str, List[Any]] = {}
@@ -625,6 +638,60 @@ class RequirementLinker:
             record_suppressed("sitl.requirement_linker.guard_response", exc)
             return "", set()
 
+    def _guard_response_send_ports(self, part_name: str, guard) -> set[str]:
+        """Ports the guard's response state sends through (route identity)."""
+        try:
+            from src.simulation.state_extractor import extract_state_machines
+            text = self._model.to_sysml_text() or ""
+            wanted_event = (
+                getattr(guard, "attribute", "")
+                if getattr(guard, "kind", "") == "accept_event" else None
+            )
+            ports: set[str] = set()
+            for sm in extract_state_machines(text):
+                if sm.owner_part != part_name:
+                    continue
+                if wanted_event is not None:
+                    matched = [
+                        tr for tr in sm.transitions
+                        if not tr.is_initial and tr.accept_trigger == wanted_event
+                    ]
+                else:
+                    matched = [
+                        tr for tr in sm.fault_transitions()
+                        if any(
+                            getattr(g, "attribute", "") == getattr(guard, "attribute", "")
+                            and getattr(g, "operator", "") == getattr(guard, "operator", "")
+                            for g in tr.guards
+                        )
+                    ]
+                for tr in matched:
+                    state = next((s for s in sm.states if s.name == (tr.target or "")), None)
+                    if state is None:
+                        continue
+                    ports.update(
+                        str(port) for _cmd, port in state.sends if port
+                    )
+            return ports
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.guard_send_ports", exc)
+            return set()
+
+    def _terminal_route_ports(self, req_id: str) -> set[str]:
+        """Ports of the requirement's causal path's FINAL hop, per its plan.
+
+        The last hop is the terminal effect leg — for the parachute
+        requirement, SafetyMonitor.recoveryCmd → RecoverySystem.recoveryCmd.
+        A response that sends through it is on the requirement's own route.
+        """
+        from src.simulation.verification_binding import binding_for
+        binding = binding_for(self._requirement_bindings, req_id)
+        if binding is None or not binding.route:
+            return set()
+        last = binding.route[-1]
+        return {port for port in (last[1], last[3]) if port}
+
     def _action_traceability_issue(
         self, req_id: str, tag: str
     ) -> Optional[Dict[str, str]]:
@@ -648,10 +715,25 @@ class RequirementLinker:
         # command is explicit, checking the wrong command is mandatory.
         semantic_match = bool(commands & expected)
         if tag == "PARACHUTE_DEPLOY":
+            # Accept-side widening only — a CHUTE-spelled command is never a
+            # ground for rejection, merely for acceptance.
             semantic_match = semantic_match or any(
                 "PARACHUTE" in command or "CHUTE" in command
                 for command in commands
             )
+        if not semantic_match:
+            # Route identity from the plan: a response sending through the
+            # requirement's own terminal causal-path leg is the commanded
+            # response, whatever the payload item is named. run3 sends
+            # RecoveryCmdData through recoveryCmd (the SAFE_005 route) and
+            # the substring check rejected it, collapsing L2 generation
+            # from ~9 tests to 3.
+            route_ports = self._terminal_route_ports(req_id)
+            if route_ports:
+                send_ports = self._guard_response_send_ports(
+                    assigned["part"], assigned["guard"]
+                )
+                semantic_match = bool(send_ports & route_ports)
         if not commands or semantic_match:
             return None
         return {
