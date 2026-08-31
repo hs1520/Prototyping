@@ -411,6 +411,31 @@ class TestPromptShape:
         assert "FlightController loop rate wrong" in prompt
         assert "Likely affected elements: FlightController" in prompt
 
+    def test_guidance_that_verbatim_repeats_the_issues_is_dropped(self):
+        """run3's surgical prompts carried every long issue twice — once
+        numbered under ISSUES TO FIX and once verbatim under ADDITIONAL
+        GUIDANCE. Only lines that add something survive; when nothing does,
+        the section disappears."""
+        issue = "FlightController loop rate wrong"
+        prompt = build_surgical_prompt(
+            _BASE, [issue],
+            feedback=f"1. {issue}\nKeep the existing port names unchanged.",
+        )
+        assert prompt.count(issue) == 1
+        assert "ADDITIONAL GUIDANCE:\nKeep the existing port names" in prompt
+
+        all_duplicate = build_surgical_prompt(
+            _BASE, [issue], feedback=f"- {issue}",
+        )
+        assert "ADDITIONAL GUIDANCE" not in all_duplicate
+
+    def test_blank_line_runs_in_the_context_are_compressed(self):
+        """Materialization leaves multi-blank-line gaps; the prompt copy is
+        read-only context, so the gaps compress to one blank line."""
+        gappy = _BASE + "\n\n\n\n\npackage Extra {\n}\n"
+        prompt = build_surgical_prompt(gappy, ["FlightController loop rate wrong"])
+        assert "\n\n\n" not in prompt.split("ISSUES TO FIX")[0]
+
     def test_prompt_serializes_scoped_repair_packet_as_authoritative_data(self):
         prompt = build_surgical_prompt(
             _BASE,

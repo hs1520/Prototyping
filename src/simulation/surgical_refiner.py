@@ -206,6 +206,10 @@ def build_surgical_prompt(
     numbered = "\n".join(f"{i}. {iss}" for i, iss in enumerate(issues, 1))
     hint = ", ".join(_affected_names(model_text, issues)) or "(infer from the issues)"
     display_text = context_text if context_text is not None else model_text
+    # Materialization leaves runs of blank lines behind; the model text is
+    # read-only context here, so compressing them shrinks the prompt without
+    # touching the model itself.
+    display_text = re.sub(r"\n[ \t]*\n([ \t]*\n)+", "\n\n", display_text)
     context_label = (
         "CURRENT MODEL DEPENDENCY SLICE (read-only; this is intentionally not "
         "the complete model — return only authorised changed blocks):"
@@ -226,7 +230,22 @@ def build_surgical_prompt(
             f"must not be changed):\n```json\n{packet_json}\n```"
         )
     if feedback.strip():
-        sections.append(f"ADDITIONAL GUIDANCE:\n{feedback.strip()}")
+        # Callers assemble guidance from the same issue records, so on run3
+        # every ADDITIONAL GUIDANCE line verbatim repeated an ISSUES TO FIX
+        # line (long ones). Keep only lines that add something.
+        normalised_issues = {
+            " ".join(issue.split()) for issue in issues
+        }
+        novel_lines = [
+            line for line in feedback.strip().splitlines()
+            if " ".join(
+                line.lstrip(" \t-*•").lstrip("0123456789.").split()
+            ) not in normalised_issues
+        ]
+        if any(line.strip() for line in novel_lines):
+            sections.append(
+                "ADDITIONAL GUIDANCE:\n" + "\n".join(novel_lines).strip()
+            )
     sections.append(f"Likely affected elements: {hint}")
     sections.append(
         "Return ONLY the changed/new blocks in ```sysml fences, per the output rules."

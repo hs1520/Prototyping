@@ -3189,10 +3189,14 @@ class _RefinementEngine:
             for sr in br.scenario_results:
                 if not sr.passed:
                     for v in sr.violations:
+                        # The violation text IS the issue. A hardcoded
+                        # "Fix: verify guard thresholds..." used to ride
+                        # along on every violation, guard-related or not —
+                        # run3's SafetyArbiter violations carried a hint
+                        # about thresholds they never mentioned, steering
+                        # the corrector at the wrong member.
                         issues.append(
-                            f"STATE MACHINE '{sr.state_machine}': {v} "
-                            f"Fix: verify guard thresholds in the state def match "
-                            f"the corresponding SAFE requirement value."
+                            f"STATE MACHINE '{sr.state_machine}': {v}"
                         )
 
         # ── Missing state machines (Solution B) ──────────────────────────────
