@@ -66,6 +66,27 @@ def find_block_end(text: str, start: int) -> int:
     return -1
 
 
+_SEMANTIC_STOP_WORDS = frozenset({
+    "a", "all", "an", "and", "any", "condition", "during", "if", "in", "is",
+    "of", "or", "state", "system", "the", "to", "when", "whenever", "while",
+})
+
+
+def semantic_terms(text: str) -> frozenset[str]:
+    """Content words of an identifier or phrase (camelCase split, stopworded).
+
+    Lives in utils so that packages below `prototyping` in the dependency
+    order (simulation's verification binding, dse) can match identities by
+    meaning without importing that package. Re-exported from
+    prototyping.verification_obligations for its existing callers.
+    """
+    separated = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text).replace("-", " ")
+    return frozenset(
+        token for token in re.findall(r"[A-Za-z]+", separated.lower())
+        if token not in _SEMANTIC_STOP_WORDS
+    )
+
+
 _PART_DEF_BASES_RE = re.compile(
     r"\bpart\s+def\s+(\w+)\s*:>\s*([\w:,\s]+?)\s*[{;]"
 )

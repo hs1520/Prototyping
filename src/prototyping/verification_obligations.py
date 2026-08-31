@@ -94,10 +94,13 @@ def held_state_exit_terms(required_state_terms: Iterable[str]) -> FrozenSet[str]
 _CONDITION_SIGNAL_TERMS = frozenset({
     "abort", "failure", "fault", "unsafe", "emergency", "sensor", "open", "loss",
 })
-_SEMANTIC_STOP_WORDS = frozenset({
-    "a", "all", "an", "and", "any", "condition", "during", "if", "in", "is",
-    "of", "or", "state", "system", "the", "to", "when", "whenever", "while",
-})
+# The semantic-terms tokenizer lives in utils so that packages below
+# `prototyping` in the dependency order (simulation, dse) can resolve
+# identities by meaning. Re-exported here for its existing callers.
+from ..utils.sysml_text_utils import (  # noqa: F401,E402
+    _SEMANTIC_STOP_WORDS,
+    semantic_terms,
+)
 
 
 class RequirementIntentKind(str, Enum):
@@ -208,14 +211,6 @@ class RequirementIntent:
     #: locked state" → {payload, mechanically}). Lets a reader locate the
     #: inhibition's subject in a plan that never names the held state.
     held_object_terms: FrozenSet[str] = field(default_factory=frozenset)
-
-
-def semantic_terms(text: str) -> FrozenSet[str]:
-    separated = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text).replace("-", " ")
-    return frozenset(
-        token for token in re.findall(r"[A-Za-z]+", separated.lower())
-        if token not in _SEMANTIC_STOP_WORDS
-    )
 
 
 def _condition_terms(text: str) -> FrozenSet[str]:
