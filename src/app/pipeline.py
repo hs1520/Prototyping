@@ -495,6 +495,12 @@ class PrototypingPipeline:
                 "forward_flight_ok": realization.get("forward_flight_ok"),
                 "rank_preservation": realization.get("rank_preservation"),
                 "resize_note": realization.get("resize_note"),
+                # The datasheet/forward-flight tier INPUT. This projection
+                # used to drop it, and the matrix then reported the missing
+                # input as three "unassigned" requirements — a runner
+                # artefact blamed on the model (run3, A2).
+                "per_requirement": realization.get("per_requirement"),
+                "failed_checks": realization.get("failed_checks"),
             }
         for key in ("recommended_by", "recommended_estimator_feasible",
                     "recommendation_status", "recommendable_front_count",

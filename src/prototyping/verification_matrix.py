@@ -227,7 +227,13 @@ class MatrixRow:
     text: str
     tiers: Tuple[str, ...]
     methods: Tuple[str, ...]
-    status: str  # verified | partial | planned | failed | out-of-sim-scope | blocked | unassigned
+    status: str  # verified | partial | planned | failed | out-of-sim-scope
+    #              | blocked | unassigned | evidence-input-missing
+    #  "unassigned" is the true honest gap — no tier could verify this.
+    #  "evidence-input-missing" is NOT that gap: a tier exists whose input
+    #  artifact (realization.per_requirement) was never supplied to this
+    #  compile, so ontology gap and missing input cannot be told apart. The
+    #  attribution is to the runner/report projection, never to the model.
     evidence: Tuple[str, ...] = field(default_factory=tuple)
     obligations: Tuple[ObligationResult, ...] = field(default_factory=tuple)
 
@@ -374,6 +380,16 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
     }
     guard_assignment = requirement_evidence.guard_assignments
     universe = sorted(set(req_texts) | set(satisfy_map))
+    # Tier input contract: a realization dict WITHOUT the per_requirement key
+    # means the datasheet/forward_flight tier input was dropped somewhere
+    # upstream (measured on run3: build_run_report projected it away and the
+    # matrix then called three requirements "unassigned" — a runner artefact
+    # reported as a property of the model). An explicit empty list is a
+    # legitimately empty tier and keeps "unassigned" semantics.
+    realization_input_missing = (
+        realization is not None
+        and realization.get("per_requirement") is None
+    )
 
     tiers: Dict[str, set] = {r: set() for r in universe}
     evidence: Dict[str, List[str]] = {r: [] for r in universe}
@@ -855,7 +871,10 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         elif "inspection_analysis" in t:
             status = "out-of-sim-scope"
         else:
-            status = "unassigned"
+            status = (
+                "evidence-input-missing"
+                if realization_input_missing else "unassigned"
+            )
         obligations = evaluate_evidence(
             compile_verification_obligations(rid, req_texts.get(rid, "")),
             claims[rid],
@@ -923,6 +942,9 @@ def summarize(rows: List[MatrixRow]) -> Dict[str, object]:
         "by_status": dict(sorted(by_status.items())),
         "by_tier": dict(sorted(by_tier.items())),
         "unassigned_req_ids": [r.req_id for r in rows if r.status == "unassigned"],
+        "evidence_input_missing_req_ids": [
+            r.req_id for r in rows if r.status == "evidence-input-missing"
+        ],
         "obligations_total": len(obligations),
         "obligations_verified": sum(item.status == "verified" for item in obligations),
         # Two denominators, both reported. The all-obligations one answers "how
@@ -983,6 +1005,18 @@ def to_markdown(rows: List[MatrixRow]) -> str:
         lines += ["", "## Unassigned (honest gap)"]
         for r in rows:
             if r.status == "unassigned":
+                lines.append(f"- **{r.req_id}**: {r.text[:120]}")
+    if s["evidence_input_missing_req_ids"]:
+        lines += [
+            "",
+            "## Evidence input missing (runner gap — NOT a model finding)",
+            "The realization artifact carries no `per_requirement`, so the "
+            "datasheet/forward-flight tier had no input; whether these are "
+            "ontology gaps cannot be determined until it is supplied "
+            "(Phase 8 emits it; the run-report projection must keep it).",
+        ]
+        for r in rows:
+            if r.status == "evidence-input-missing":
                 lines.append(f"- **{r.req_id}**: {r.text[:120]}")
     return "\n".join(lines) + "\n"
 

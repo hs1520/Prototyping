@@ -751,3 +751,63 @@ def test_every_rule_names_a_distinct_missing_observable():
     assert len(set(reasons)) == len(reasons)
     # no term may be claimed by two rules, or the exclusion reason is ambiguous
     assert len(set(terms)) == len(terms)
+
+
+# ── A2: tier input contract ──────────────────────────────────────────────
+# run3's archived report carried a realization dict whose per_requirement had
+# been projected away; the matrix then reported three requirements as
+# "unassigned" — a runner artefact blamed on the model.
+
+
+def _rows_with(realization):
+    model = build_lite_model(_MODEL, model_name="D")
+    linker = RequirementLinker(model)
+    return {r.req_id: r for r in build_matrix(
+        model, realization, linker.compile_evidence(),
+    )}
+
+
+def test_missing_per_requirement_is_a_runner_gap_not_an_unassigned_row():
+    """A realization dict WITHOUT per_requirement (run3's archived shape):
+    tier-less rows read evidence-input-missing — attributable, loud, and
+    distinct from the honest ontology gap."""
+    run3_shaped = {
+        "verdict": "CLOSED", "summary": "…", "chosen": None,
+        "forward_flight_ok": True, "rank_preservation": {}, "resize_note": "",
+    }
+    rows = _rows_with(run3_shaped)
+    assert rows["REQ_MISC_001"].status == "evidence-input-missing"
+    # The endurance requirement loses its datasheet tier with the input —
+    # exactly the run3 symptom — and must not read as an honest gap either.
+    assert rows["REQ_PERF_002"].status == "evidence-input-missing"
+
+    from src.prototyping.verification_matrix import summarize, to_markdown
+    all_rows = list(_rows_with(run3_shaped).values())
+    s = summarize(all_rows)
+    assert "REQ_MISC_001" in s["evidence_input_missing_req_ids"]
+    assert s["unassigned_req_ids"] == []
+    md = to_markdown(all_rows)
+    assert "runner gap — NOT a model finding" in md
+
+
+def test_an_explicit_empty_per_requirement_keeps_the_honest_gap():
+    """[] means the tier ran and produced nothing — unassigned keeps its
+    'true honest gap' meaning."""
+    rows = _rows_with({"per_requirement": []})
+    assert rows["REQ_MISC_001"].status == "unassigned"
+
+
+def test_no_realization_at_all_is_unchanged_legacy_behavior():
+    """Pre-DSE compiles pass realization=None everywhere (qualification);
+    their semantics must not move."""
+    rows = _rows_with(None)
+    assert rows["REQ_MISC_001"].status == "unassigned"
+
+
+def test_run_report_projection_keeps_the_tier_input():
+    """The projection that dropped per_requirement (pipeline.build_run_report)
+    now carries it, so archived reports feed the matrix."""
+    import inspect
+    from src.app.pipeline import PrototypingPipeline
+    source = inspect.getsource(PrototypingPipeline.build_run_report)
+    assert '"per_requirement": realization.get("per_requirement")' in source
