@@ -294,6 +294,40 @@ def test_an_unimplicated_patch_edit_is_recorded_not_rejected():
     )
 
 
+def test_a_missing_semantic_binding_is_repairable_through_the_patch_channel():
+    """The s0v4 anchor run died here: semantic_bindings had no identity
+    channel, so an instruction-obedient patch could not add the binding a
+    'has no typed semantic binding' issue demanded, and a full list resent
+    under the wholesale top-level rule would have nuked every other binding.
+    Six attempts converged to exactly these stuck issues and burned 170k
+    tokens. Bindings now merge by obligation_id like every other entry."""
+    healthy = _healthy_payload()
+    broken = json.loads(json.dumps(healthy))
+    restored = broken["semantic_bindings"].pop()
+
+    outcome, prompter = _generate([
+        broken,
+        {"plan_patch": True, "semantic_bindings": [restored]},
+    ])
+
+    assert outcome.plan.status == "PASS"
+    attempts = outcome.metadata["step1_plan_attempts"]
+    assert len(attempts) == 2
+    assert any(
+        "has no typed semantic binding" in issue
+        for issue in attempts[0]["issues"]
+    )
+    assert attempts[1]["patch_audit"]["added"] == [
+        f"semantic_bindings:{restored['obligation_id']}"
+    ]
+    # the other eight bindings survived untouched — no wholesale nuke
+    final = outcome.metadata["whole_model_generation_plan"]
+    assert len(final["semantic_bindings"]) == len(
+        healthy["semantic_bindings"]
+    )
+    assert "semantic_bindings by obligation_id" in prompter.contexts[1]
+
+
 def test_a_patch_with_no_repair_base_asks_for_a_full_plan():
     healthy = _healthy_payload()
     outcome, prompter = _generate([

@@ -12,7 +12,7 @@
       "ordinal": 2,
       "system_prompt_digest": "4766d0baea09e7951f75a6889fff1dfc6ba4c648f9d44967c60ae84c23151836",
       "temperature": 0.6,
-      "user_prompt_digest": "9cdbfc36f58c026cbc41369a4ff6e51cb5faae8a9dc388042d9006f333fd7b9c"
+      "user_prompt_digest": "592f58f8da84797d75a7bce349b38d924e2eceb93f4c1435979e048b8cb99ba9"
     },
     {
       "max_tokens": 20480,
@@ -56,7 +56,7 @@
       "ordinal": 2,
       "system_prompt_digest": "4766d0baea09e7951f75a6889fff1dfc6ba4c648f9d44967c60ae84c23151836",
       "temperature": 0.6,
-      "user_prompt_digest": "4f572e90be1a04ca247d501cec5e330393e271f5fa5f8e3a86e99285d1783767"
+      "user_prompt_digest": "f62efb01d113ae0e190def05e67b938c0e1682e88e622f88deb93707da8c6b2e"
     },
     {
       "max_tokens": 20480,
@@ -121,7 +121,7 @@
       "ordinal": 5,
       "system_prompt_digest": "4766d0baea09e7951f75a6889fff1dfc6ba4c648f9d44967c60ae84c23151836",
       "temperature": 0.6,
-      "user_prompt_digest": "ef7b9a847ab8b04b206553be28b9af1848ebb23c657f2eb68011d5cfaaba4f4a"
+      "user_prompt_digest": "d0f2129f0e4761b839ecd24b6c02ded3c4d21372c85431e30d65398bdb9d7c8c"
     },
     {
       "max_tokens": 20480,

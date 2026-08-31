@@ -60,10 +60,16 @@ SYSTEM_NAME = "AutonomousDrone"
 #: separation mechanical, mirroring the authoritative path's infrastructure
 #: routing (examples/finalize_authoritative_run.py).
 _INFRA_MARKERS = (
-    "rate limit", "resource_exhausted", "resource exhausted",
-    "quota", "unavailable", "overloaded", "timed out", "timeout",
-    "deadline exceeded", "connection refused", "connection reset",
-    "connection aborted", "connectionerror", "eof occurred", "broken pipe",
+    # "provider error" is the wrapper every transport/quota failure funnels
+    # through (LLMInterface raises "<Provider> provider error (...): ...");
+    # gate/validation errors never contain it. Bare words are dangerous:
+    # "connection" matched "connections entry" and "unavailable" matched
+    # TYPED_MODEL_PLAN_UNAVAILABLE — both measured misclassifications.
+    "provider error", "rate limit", "resource_exhausted",
+    "resource exhausted", "quota", "service unavailable", "overloaded",
+    "timed out", "deadline exceeded", "connection refused",
+    "connection reset", "connection aborted", "connectionerror",
+    "eof occurred", "broken pipe",
 )
 
 

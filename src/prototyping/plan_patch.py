@@ -45,6 +45,11 @@ PATCHABLE_LISTS = (
     "requirement_realizations",
     "behaviors",
     "constraints",
+    # Measured omission (s0v4 anchor, 6 attempts / 170k tokens): with no
+    # identity channel for bindings, "SEM_* has no typed semantic binding"
+    # was unfixable by an instruction-obedient patch, and a full list resent
+    # under the wholesale top-level rule would nuke every other binding.
+    "semantic_bindings",
 )
 
 
@@ -87,6 +92,9 @@ def _identity(list_name: str, entry: Mapping[str, Any]):
     if list_name == "constraints":
         constraint_id = str(entry.get("constraint_id") or "").strip()
         return constraint_id or None
+    if list_name == "semantic_bindings":
+        obligation_id = str(entry.get("obligation_id") or "").strip()
+        return obligation_id or None
     return None
 
 
@@ -149,6 +157,10 @@ def _entry_mention_names(
         provenance = entry.get("provenance")
         if isinstance(provenance, Mapping) and provenance.get("requirement_id"):
             names.append(str(provenance["requirement_id"]))
+    elif list_name == "semantic_bindings" and identity:
+        names.append(identity)
+        if entry.get("requirement_id"):
+            names.append(str(entry["requirement_id"]))
     if base_index is not None:
         names.append(f"{list_name}[{base_index}]")
     return tuple(names)
