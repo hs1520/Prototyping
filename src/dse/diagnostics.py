@@ -72,7 +72,42 @@ def diagnose(
         )
 
     # ── Parts without ports ──────────────────────────────────────────────
-    no_ports = [p.name for p in model.part_definitions if not p.ports]
+    # Resolve `:>` specialization before reporting: a retyped catalogue
+    # implementation (`Catalog_X :> PropulsionSystem`) declares no ports of
+    # its own and inherits all of its base's. Reporting those asked the
+    # surgical editor to damage parts the DSE machinery itself generated
+    # (measured: 10 catalogue variants plus the DseDesignAnalysis closure,
+    # all false positives). The analysis closure and plan-declared passive
+    # parts have no ports by design and are likewise excluded.
+    from ..utils.sysml_text_utils import (
+        part_def_bases,
+        passive_components_in_text,
+    )
+    from .analysis_emitter import ANALYSIS_CLOSURE_DEF_NAME
+
+    own_ports = {p.name: bool(p.ports) for p in model.part_definitions}
+    type_bases = part_def_bases(text)
+    passive = passive_components_in_text(text)
+
+    def _has_ports_transitively(name: str) -> bool:
+        seen: Set[str] = set()
+        frontier = [name]
+        while frontier:
+            current = frontier.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            if own_ports.get(current):
+                return True
+            frontier.extend(type_bases.get(current, ()))
+        return False
+
+    no_ports = [
+        p.name for p in model.part_definitions
+        if p.name != ANALYSIS_CLOSURE_DEF_NAME
+        and p.name not in passive
+        and not _has_ports_transitively(p.name)
+    ]
     if no_ports:
         issues.append(f"Parts with no ports: {', '.join(no_ports)}")
         recs.append("Add at least one directed port (in/out/inout) to each part def.")

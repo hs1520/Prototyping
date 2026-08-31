@@ -66,6 +66,44 @@ def find_block_end(text: str, start: int) -> int:
     return -1
 
 
+_PART_DEF_BASES_RE = re.compile(
+    r"\bpart\s+def\s+(\w+)\s*:>\s*([\w:,\s]+?)\s*[{;]"
+)
+
+
+def part_def_bases(model_text: str) -> dict[str, tuple[str, ...]]:
+    """Map each part definition to the definitions it specialises (`:>`)."""
+    bases: dict[str, tuple[str, ...]] = {}
+    for match in _PART_DEF_BASES_RE.finditer(model_text or ""):
+        names = tuple(
+            item.strip().rsplit("::", 1)[-1]
+            for item in match.group(2).split(",")
+            if item.strip()
+        )
+        if names:
+            bases[match.group(1)] = names
+    return bases
+
+
+PASSIVE_MARKER_RE = re.compile(
+    r"(?m)^[ \t]*//\s*PLAN-PASSIVE\s+(?P<name>[A-Za-z_]\w*)\s*:"
+)
+
+
+def passive_components_in_text(sysml_text: str) -> set[str]:
+    """Part-definition names the committed model itself declares passive.
+
+    The declaration is a `// PLAN-PASSIVE <PartDef>: <reason>` comment inside
+    the part def, written by ``materialize_passive_components`` from the
+    generation plan. It lives in the model text so that every downstream
+    reader -- the reachability simulator in particular -- sees the same
+    decision the planner recorded, without needing the plan object.
+    """
+    return {
+        m.group("name") for m in PASSIVE_MARKER_RE.finditer(sysml_text or "")
+    }
+
+
 def get_sysml_text(model) -> str:
     """Return SysML text for *model*, preferring the cached metadata string.
 

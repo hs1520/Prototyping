@@ -19,23 +19,10 @@ from ..utils.sysml_text_utils import find_block_end
 
 _STRUCTURAL_CATEGORIES = ("REQ_FUNC_", "REQ_SAFE_", "REQ_INTF_", "REQ_OPER_")
 
-_PART_DEF_BASES_RE = re.compile(
-    r"\bpart\s+def\s+(\w+)\s*:>\s*([\w:,\s]+?)\s*[{;]"
-)
-
-
-def part_def_bases(model_text: str) -> dict[str, tuple[str, ...]]:
-    """Map each part definition to the definitions it specialises (`:>`)."""
-    bases: dict[str, tuple[str, ...]] = {}
-    for match in _PART_DEF_BASES_RE.finditer(model_text or ""):
-        names = tuple(
-            item.strip().rsplit("::", 1)[-1]
-            for item in match.group(2).split(",")
-            if item.strip()
-        )
-        if names:
-            bases[match.group(1)] = names
-    return bases
+# The pure-text specialization parser lives in utils so that packages below
+# `prototyping` in the dependency order (dse.diagnostics) can resolve `:>`
+# without importing this package. Re-exported here for its existing callers.
+from ..utils.sysml_text_utils import part_def_bases  # noqa: F401,E402
 
 
 def specializes(def_name: str, target: str,
