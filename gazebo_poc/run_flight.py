@@ -655,6 +655,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
          rotor_count=4, calibrate=False, fail_rotor=None, max_thrust_g=None,
          hover_throttle=None, wind_mps=0.0, wind_min_groundspeed_mps=None,
          payload_release=False, payload_mass_kg=0.0,
+         payload_transport=False,
          positional_release=False, positional_tolerance_m=1.0,
          parachute_deploy=False, parachute_max_delay_s=0.5,
          obstacle_avoidance=False, obstacle_detection_range_m=15.0,
@@ -671,6 +672,12 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
          gps_horizontal_error_m=None,
          extra_parms="") -> int:
     LAST_RESULT.clear()
+    # Carrying a payload and releasing it are different scenarios, and the flight
+    # order made that matter: the release block runs BEFORE the cruise survey, so
+    # a run configured for release flies every cruise point already empty. The
+    # SDF, the payload spawn and the gripper wiring key off "aboard"; only the
+    # release action keys off "release".
+    payload_aboard = (payload_release or payload_transport) and payload_mass_kg > 0
     # When the generated model is supplied it OWNS the mission decisions: the
     # harness offers events derived from telemetry and actuates only what the
     # model fires. Without it the harness decides, which is honest evidence of
@@ -716,7 +723,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         # is represented as a detachable Gazebo model, remove it from the body
         # link so it is not counted twice.
         body_mass_kg = mass_kg
-        if payload_release and payload_mass_kg > 0:
+        if payload_aboard:
             body_mass_kg = max(0.1, mass_kg - payload_mass_kg)
         # Parasitic drag of the airframe that is actually drawn. Without it the
         # body has no drag at all: a forward dash never reaches terminal
@@ -727,13 +734,13 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         from gazebo_poc.airframe_drag import drag_breakdown
         drag = drag_breakdown(
             rotor_count, rotor_radius,
-            payload_attached=bool(payload_release and payload_mass_kg > 0),
+            payload_attached=payload_aboard,
         )
         LAST_RESULT["body_drag"] = drag.as_dict()
         _, _, frame_class = generate_multirotor_sdf(
             body_mass_kg, rotor_count, rotor_radius, inertia, area, tdir, out,
             max_rotor_rad_s=mult, fail_rotor=fail_rotor,
-            enable_wind=True, payload_release=payload_release,
+            enable_wind=True, payload_release=payload_aboard,
             parachute_deploy=parachute_deploy,
             forward_lidar=obstacle_avoidance,
             forward_lidar_range_m=obstacle_detection_range_m,
@@ -787,7 +794,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             print(f"[obstacle] world preparation failed: {e}", flush=True)
             return 2
         docker_args += ["-v", f"{obstacle_world.resolve()}:{_WORLD_PATH}"]
-    if payload_release and payload_mass_kg > 0:
+    if payload_aboard:
         payload_model = _prepare_payload_model(out, payload_mass_kg)
         docker_args += ["-v", f"{payload_model.resolve()}:{_MODEL_BASE}/payload_box/model.sdf"]
     docker_args.append(_IMG)
@@ -799,7 +806,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
     time.sleep(8)
 
     parm = out / "poc.parm"
-    gripper_channel = max(6, rotor_count) if payload_release else None
+    gripper_channel = max(6, rotor_count) if payload_aboard else None
     gripper_servo = gripper_channel + 1 if gripper_channel is not None else None
     parachute_channel = max(6, rotor_count) + 1 if parachute_deploy else None
     parachute_servo = parachute_channel + 1 if parachute_channel is not None else None
@@ -1090,10 +1097,12 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             cap_proc.terminate()
         if hover_att is not None:
             hover_rms = _attitude_rms_deg(hover_att.samples)
-            hover_payload_distance = (
-                _payload_attachment_distance()
-                if payload_release and payload_mass_kg > 0 else None
+            hover_attachment = (
+                observe_attachment(_model_xyz("iris_with_gimbal"),
+                                   _model_xyz("payload_box"))
+                if payload_aboard else PayloadAttachment(observed=False)
             )
+            hover_payload_distance = hover_attachment.distance_m
             LAST_RESULT.update({
                 "hover_attitude_samples": hover_rms["n"],
                 "hover_attitude_roll_rms_deg": hover_rms["roll_rms_deg"],
@@ -1107,13 +1116,15 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     and hover_payload_distance <= _PAYLOAD_ATTACHED_MAX_DISTANCE_M
                 ),
                 "hover_payload_attachment_distance_m": hover_payload_distance,
+                "hover_payload_vertical_separation_m": (
+                    hover_attachment.vertical_separation_m),
                 # Named for what it means: the payload was ATTACHED, not merely
                 # that a pose was readable. The two were conflated, and a field
                 # that says "observed" while meaning "attached" is how an
                 # unloaded window gets counted as transport evidence.
                 "hover_payload_attached": (
-                    hover_payload_distance is not None
-                    and hover_payload_distance <= _PAYLOAD_ATTACHED_MAX_DISTANCE_M
+                    hover_attachment.attached
+                    or False
                 ),
             })
             print(f"[att] hover RMS: {hover_rms}", flush=True)
@@ -1126,6 +1137,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         # This checks command -> Gazebo detachable joint -> falling payload. It
         # does not claim that the aircraft's mission logic generated the command.
         if payload_release and payload_mass_kg > 0:
+            # NOT payload_aboard: a transport scenario carries the payload
+            # through the whole flight and never releases it, which is what
+            # makes its cruise windows transport evidence.
             release_target_ned = None
             release_target_world = None
             condition_position_ned = None
@@ -1715,6 +1729,16 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         # whether it can make headway against a headwind using the authority it
         # has. Both are sweeps, and every point must reach a certified plateau
         # before its speed may be reported.
+        if payload_aboard:
+            # SERVO_OUTPUT_RAW is not streamed by default, and a non-blocking
+            # read of a message nobody sends returns None — which reads as "no
+            # signal" rather than "not asked for".
+            m.mav.command_long_send(
+                m.target_system, m.target_component,
+                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+                mavutil.mavlink.MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,
+                200000, 0, 0, 0, 0, 0)
+            time.sleep(0.5)
         print("[sitl] forward-flight survey (pitch sweep, hold alt) ...", flush=True)
         m.set_mode("ALT_HOLD")
         wait(lambda h: h.custom_mode == ALT_HOLD, 6, "ALT_HOLD mode for forward dash")
@@ -1737,15 +1761,54 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             # the run was configured.
             attachment = observe_attachment(
                 _model_xyz("iris_with_gimbal"), _model_xyz("payload_box"))
+            # The gripper servo drives the detach topic through a
+            # TriggeredPublisher, so its PWM separates "the joint let go" from
+            # "something commanded the release" when a payload goes missing.
+            _srv = m.recv_match(type="SERVO_OUTPUT_RAW", blocking=True, timeout=2)
+            gripper_pwm = (
+                getattr(_srv, f"servo{(gripper_channel or 6) + 1}_raw", None)
+                if _srv is not None else None
+            )
+            if payload_aboard:
+                # Absolute poses, not just their separation: a RELEASED payload
+                # is left hundreds of metres behind, while one that merely lags
+                # under acceleration stays within a few. Only the vehicle's own
+                # displacement tells those apart, and the separation alone was
+                # about to be read as a release.
+                _veh = _model_xyz("iris_with_gimbal")
+                _pay = _model_xyz("payload_box")
+                print(f"[payload] {pitch}: vehicle={_veh} payload={_pay} "
+                      f"dist={attachment.distance_m} "
+                      f"attached={attachment.attached} "
+                      f"gripper_pwm={gripper_pwm}", flush=True)
+            trace = []
+
+            def _watch(conn, _sink=trace):
+                if not payload_aboard or len(_sink) >= 6:
+                    return
+                srv = conn.messages.get("SERVO_OUTPUT_RAW")
+                _sink.append({
+                    "distance_m": (observe_attachment(
+                        _model_xyz("iris_with_gimbal"),
+                        _model_xyz("payload_box")).distance_m),
+                    "gripper_pwm": (
+                        getattr(srv, f"servo{(gripper_channel or 6) + 1}_raw", None)
+                        if srv is not None else None
+                    ),
+                })
+
             window, verdict, span = _hold_until_steady(
                 m, rc, alt_hold_stick, alt0, pitch,
-                label="cruise survey", attitude=cruise_att)
+                label="cruise survey", attitude=cruise_att,
+                on_sample=_watch if payload_aboard else None)
             point = {
                 "pitch_rc": pitch,
                 "steady": verdict.steady,
                 "speed_mps": verdict.mean,
                 "steady_state": verdict.as_dict(),
                 "payload_attachment": attachment.as_dict(),
+                "gripper_pwm": gripper_pwm,
+                "payload_trace": trace,
             }
             if cruise_att is not None and verdict.steady:
                 point_rms = _attitude_rms_deg(cruise_att.between(*span))
@@ -1767,10 +1830,14 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 label="hover",
                 attachment=PayloadAttachment(
                     # "observed" is whether the poses could be read; whether
-                    # that means attached is the module's call, on one bound.
+                    # that means attached is the module's call, on vertical
+                    # separation — which must be carried through EVERY
+                    # reconstruction or it silently decides "not attached".
                     observed=LAST_RESULT.get(
                         "hover_payload_attachment_distance_m") is not None,
                     distance_m=LAST_RESULT.get("hover_payload_attachment_distance_m"),
+                    vertical_separation_m=LAST_RESULT.get(
+                        "hover_payload_vertical_separation_m"),
                 ),
                 attitude_rms_deg=LAST_RESULT.get("hover_attitude_rms_deg"),
             ))
@@ -1781,6 +1848,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 attachment=PayloadAttachment(
                     observed=bool(state.get("observed")),
                     distance_m=state.get("distance_m"),
+                    vertical_separation_m=state.get("vertical_separation_m"),
                 ),
                 attitude_rms_deg=point.get("attitude_rms_deg"),
                 speed_mps=point.get("speed_mps"),

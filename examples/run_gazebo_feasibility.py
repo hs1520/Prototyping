@@ -492,6 +492,32 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         result["abort_inhibition_z_before_m"] = inhibit_result.get("payload_z_before_m")
         result["abort_inhibition_z_after_m"] = inhibit_result.get("payload_z_after_m")
 
+    # Transport is its own flight. In the delivery flight the release block runs
+    # before the cruise survey, so every cruise point there is flown empty —
+    # measured: the payload sat at the takeoff point while the vehicle reached
+    # 1253 m away. A scenario that carries the payload throughout is the only
+    # way a cruise window is transport evidence.
+    if payload_att_req is not None and payload_mass_kg > 0 and result.get("hover_stable"):
+        rc_transport = run_flight.main(
+            mass_kg=mass,
+            rotor_radius=rotor_radius,
+            capacity_mah=capacity,
+            rotor_count=rotor_count,
+            calibrate=True,
+            max_thrust_g=max_thrust_g,
+            hover_throttle=hover_throttle,
+            payload_transport=True,
+            payload_mass_kg=payload_mass_kg,
+            measure_attitude=True,
+        )
+        transport_result = dict(run_flight.LAST_RESULT)
+        result["transport_return_code"] = rc_transport
+        # the transport flight's windows REPLACE the delivery flight's, which
+        # are empty by construction
+        result["transport_windows"] = transport_result.get("transport_windows")
+        result["transport_cruise_points"] = transport_result.get(
+            "cruise_sweep_steady_points")
+
     rid = _single_motor_req(planned) if include_single_motor_out else None
     if rid and result.get("hover_stable"):
         # One flight cannot settle this. The same configuration has held 1.17,

@@ -359,13 +359,13 @@ _QUALITY_LIVE = {
     "cruise_sweep_payload_attached": True,
     "transport_windows": [
         {"label": "hover", "attitude_rms_deg": 0.44,
-         "attachment": {"observed": True, "distance_m": 0.15}},
+         "attachment": {"observed": True, "distance_m": 0.15, "vertical_separation_m": 0.15}},
         {"label": "cruise@rc1420", "attitude_rms_deg": 0.21, "speed_mps": 10.1,
-         "attachment": {"observed": True, "distance_m": 0.15}},
+         "attachment": {"observed": True, "distance_m": 0.15, "vertical_separation_m": 0.15}},
         {"label": "cruise@rc1330", "attitude_rms_deg": 0.31, "speed_mps": 15.6,
-         "attachment": {"observed": True, "distance_m": 0.15}},
+         "attachment": {"observed": True, "distance_m": 0.15, "vertical_separation_m": 0.15}},
         {"label": "cruise@rc1220", "attitude_rms_deg": 0.28, "speed_mps": 19.9,
-         "attachment": {"observed": True, "distance_m": 0.15}},
+         "attachment": {"observed": True, "distance_m": 0.15, "vertical_separation_m": 0.15}},
     ],
     "cruise_payload_attached": True,
     "cruise_payload_attachment_distance_m": 0.8,
@@ -425,7 +425,7 @@ def test_a_single_speed_point_still_cannot_claim_all_authorised_speeds():
                 # sweep flew — transport is judged on what was observed loaded
                 transport_windows=[
                     {"label": "hover", "attitude_rms_deg": 0.44,
-                     "attachment": {"observed": True, "distance_m": 0.15}},
+                     "attachment": {"observed": True, "distance_m": 0.15, "vertical_separation_m": 0.15}},
                 ])
     results = {r["check"]: r for r in rgf._req_results(live, planned)}
     assert results["cruise_attitude"]["status"] == "PARTIAL"
@@ -1072,14 +1072,14 @@ def test_a_cruise_window_flown_after_release_is_not_transport_evidence():
     planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
     live = dict(_QUALITY_LIVE, transport_windows=[
         {"label": "hover", "attitude_rms_deg": 0.44,
-         "attachment": {"observed": True, "distance_m": 0.15}},
+         "attachment": {"observed": True, "distance_m": 0.15, "vertical_separation_m": 0.15}},
         {"label": "cruise@rc1420", "attitude_rms_deg": 0.21, "speed_mps": 10.1,
-         "attachment": {"observed": True, "distance_m": 0.15}},
+         "attachment": {"observed": True, "distance_m": 0.15, "vertical_separation_m": 0.15}},
         # released: the box is on the ground, the vehicle is at altitude
         {"label": "cruise@rc1330", "attitude_rms_deg": 0.31, "speed_mps": 15.6,
-         "attachment": {"observed": True, "distance_m": 9.8}},
+         "attachment": {"observed": True, "distance_m": 880.0, "vertical_separation_m": 9.2}},
         {"label": "cruise@rc1220", "attitude_rms_deg": 0.28, "speed_mps": 19.9,
-         "attachment": {"observed": True, "distance_m": 12.4}},
+         "attachment": {"observed": True, "distance_m": 1250.0, "vertical_separation_m": 9.2}},
     ])
 
     row = {r["check"]: r for r in rgf._req_results(live, planned)}["payload_attitude"]
@@ -1094,7 +1094,7 @@ def test_a_run_that_never_looked_cannot_claim_transport():
     planned = rgf._planned_gazebo_reqs(_QUALITY_REQS)
     live = dict(_QUALITY_LIVE, transport_windows=[
         {"label": "hover", "attitude_rms_deg": 0.44,
-         "attachment": {"observed": False, "distance_m": None}},
+         "attachment": {"observed": False, "distance_m": None, "vertical_separation_m": None}},
     ])
 
     row = {r["check"]: r for r in rgf._req_results(live, planned)}["payload_attitude"]

@@ -32,11 +32,24 @@ from src.prototyping.verification_obligations import (
     VerificationCriterion,
 )
 
-#: A payload on the detachable joint sits ~0.15 m under the airframe origin and
-#: moves with it. This bound is loose enough for that offset plus simulation
-#: jitter, and far tighter than the separation a released box reaches within
-#: the settle window that follows any cruise point.
-ATTACHED_MAX_DISTANCE_M = 2.0
+#: Attachment is judged on VERTICAL separation, not 3-D distance.
+#:
+#: 3-D distance does not measure what it was asked to. Under a fast dash the
+#: detachable joint is compliant enough that an attached payload trails along
+#: the direction of travel: measured at 1656 m downrange, the vehicle sat at
+#: (…, 1656.59, 9.32) and its still-attached payload at (…, 1665.01, 9.23) —
+#: 8.9 m apart horizontally, 0.09 m apart vertically, both at cruise altitude.
+#: A 2 m 3-D bound called that released, which is a false negative of exactly
+#: the shape this module exists to prevent, only pointing the other way.
+#:
+#: A released payload falls. Vertical separation therefore separates the two
+#: cleanly: 0.09 m while carrying, ~9 m once the box is on the ground and the
+#: vehicle is still at altitude.
+ATTACHED_MAX_VERTICAL_SEPARATION_M = 2.0
+
+#: Kept for reporting only — the horizontal lag is informative about the joint's
+#: compliance, and says nothing about whether the payload is still aboard.
+ATTACHED_MAX_DISTANCE_M = ATTACHED_MAX_VERTICAL_SEPARATION_M
 
 
 @dataclass(frozen=True)
@@ -45,29 +58,38 @@ class PayloadAttachment:
 
     observed: bool
     distance_m: Optional[float] = None
+    vertical_separation_m: Optional[float] = None
 
     @property
     def attached(self) -> bool:
         return (
             self.observed
-            and self.distance_m is not None
-            and self.distance_m <= ATTACHED_MAX_DISTANCE_M
+            and self.vertical_separation_m is not None
+            and self.vertical_separation_m <= ATTACHED_MAX_VERTICAL_SEPARATION_M
         )
 
     def as_dict(self) -> dict:
         return {
             "observed": self.observed,
             "distance_m": None if self.distance_m is None else round(self.distance_m, 4),
+            "vertical_separation_m": (
+                None if self.vertical_separation_m is None
+                else round(self.vertical_separation_m, 4)
+            ),
             "attached": self.attached,
-            "attached_max_distance_m": ATTACHED_MAX_DISTANCE_M,
+            "attached_max_vertical_separation_m": ATTACHED_MAX_VERTICAL_SEPARATION_M,
         }
 
 
 def observe_attachment(vehicle_xyz, payload_xyz) -> PayloadAttachment:
-    """Attachment as a distance between two ground-truth poses."""
+    """Attachment from two ground-truth poses, decided on vertical separation."""
     if vehicle_xyz is None or payload_xyz is None:
         return PayloadAttachment(observed=False)
-    return PayloadAttachment(observed=True, distance_m=math.dist(vehicle_xyz, payload_xyz))
+    return PayloadAttachment(
+        observed=True,
+        distance_m=math.dist(vehicle_xyz, payload_xyz),
+        vertical_separation_m=abs(vehicle_xyz[2] - payload_xyz[2]),
+    )
 
 
 @dataclass(frozen=True)
@@ -89,6 +111,7 @@ class TransportWindow:
             attachment=PayloadAttachment(
                 observed=bool(state.get("observed")),
                 distance_m=state.get("distance_m"),
+                vertical_separation_m=state.get("vertical_separation_m"),
             ),
             attitude_rms_deg=data.get("attitude_rms_deg"),
             speed_mps=data.get("speed_mps"),
@@ -203,7 +226,9 @@ def _describe(windows: Sequence[TransportWindow]) -> str:
         f"{w.label} "
         + ("attached" if w.attachment.attached
            else "UNLOADED" if w.attachment.observed else "attachment not observed")
-        + (f" at {w.attachment.distance_m:.2f} m" if w.attachment.distance_m is not None else "")
+        + (f" ({w.attachment.vertical_separation_m:.2f} m vertical, "
+           f"{w.attachment.distance_m:.2f} m total)"
+           if w.attachment.vertical_separation_m is not None else "")
         + (f", RMS {w.attitude_rms_deg:.3f} deg" if w.attitude_rms_deg is not None else "")
         for w in windows
     )
