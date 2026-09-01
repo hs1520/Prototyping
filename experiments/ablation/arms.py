@@ -96,6 +96,21 @@ ARMS: Dict[str, AblationArm] = {
             pipeline_kwargs={"use_deterministic_fixers": False},
         ),
         AblationArm(
+            name="NO-REPAIR",
+            ablated_component="combined repair stack: iterative refinement "
+                              "(max_iterations 4 -> 1) AND surgical "
+                              "block-level refinement (whole-model rewrite "
+                              "only; surgical-hosted exit passes inactive, "
+                              "closure retains its full-rewrite fallback)",
+            question="Is the repair stack redundant, or does stripping both "
+                     "the iteration budget and the surgical mechanism break "
+                     "the run where single ablations were absorbed?",
+            pipeline_kwargs={
+                "max_iterations": 1,
+                "use_surgical_refinement": False,
+            },
+        ),
+        AblationArm(
             name="SINGLE-SHOT",
             ablated_component="multistep typed-plan generation → legacy "
                               "single-prompt whole-model generation "
