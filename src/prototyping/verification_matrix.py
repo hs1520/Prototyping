@@ -359,6 +359,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         BEHAVIOR_ABSENT,
         BEHAVIORALLY_VERIFIED,
         functional_behavior_status,
+        planned_behavior_bindings_from_model,
         planned_intents_from_model,
         planned_markers_from_model,
     )
@@ -572,6 +573,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
     # a caller that holds the plan passes the intents in.
     if planned_intents is None:
         planned_intents = planned_intents_from_model(model)
+    behavior_bindings = planned_behavior_bindings_from_model(model)
     if planned_markers is None:
         planned_markers = planned_markers_from_model(model)
     functional_status = {
@@ -711,14 +713,29 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             and not is_inhibition_requirement(low)
             and any(k in low for k in _INITIALIZATION_KWS)
         ):
-            compact_low = "".join(ch for ch in low if ch.isalnum())
+            # The plan already binds this requirement to its anchoring
+            # behavior (requirement_realizations: owner_component +
+            # behavior_name).  Select by that binding first — the
+            # initial-state-name vocabulary match below excludes exactly the
+            # power-on-shaped machine whose initial state (e.g. PowerOff) the
+            # requirement text never names.  Vocabulary stays as the fallback
+            # for plan-less models (single-shot arm, legacy runs).
+            bound = behavior_bindings.get(_norm_req_id(rid))
             init_candidates = [
                 sm for sm in owner_machines
-                if sm.initial_state
-                and "".join(
-                    ch for ch in sm.initial_state.lower() if ch.isalnum()
-                ) in compact_low
+                if bound
+                and sm.name == bound[1]
+                and (not bound[0] or sm.owner_part == bound[0])
             ]
+            if not init_candidates:
+                compact_low = "".join(ch for ch in low if ch.isalnum())
+                init_candidates = [
+                    sm for sm in owner_machines
+                    if sm.initial_state
+                    and "".join(
+                        ch for ch in sm.initial_state.lower() if ch.isalnum()
+                    ) in compact_low
+                ]
             from src.utils.sysml_text_utils import semantic_terms
             from src.prototyping.verification_obligations import (
                 _SAFE_STATE_TERMS,

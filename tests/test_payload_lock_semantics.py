@@ -177,3 +177,183 @@ def test_unnamed_attribute_redefinition_does_not_break_the_linker():
     # the audit must reach a verdict rather than raise
     verification_gap_issues(text, "D", strict=True)
     build_matrix(model, None, linker.compile_evidence())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Power-on shape: initial phase state, every exit driven onto the default
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_machine(text, name="PayloadLockMachine"):
+    from src.simulation.state_extractor import extract_state_machines
+    return next(sm for sm in extract_state_machines(text) if sm.name == name)
+
+
+_POWER_ON_BODY = """
+    action def lockPayload {}
+    state def PayloadLockMachine {
+        entry; then PowerOn;
+        state PowerOn;
+        state MechanicallyLocked {
+            entry action onLocked : lockPayload;
+        }
+        transition initializeLock
+            first PowerOn
+            accept PowerOnEvent
+            then MechanicallyLocked;
+    }
+"""
+
+
+def test_power_on_shaped_machine_drives_the_event_and_passes():
+    """s0v15's shape: initial PowerOn --accept PowerOnEvent--> Locked{entry}.
+    The check drives the power event instead of failing the phase state."""
+    from src.simulation.behavioral_sim import run_initialization_scenario
+
+    text, _ = _model(_POWER_ON_BODY)
+    scenario = run_initialization_scenario(
+        _extract_machine(text), required_state_terms={"locked"}
+    )
+
+    assert scenario.passed, scenario.violations
+    assert any("Drove power event" in line for line in scenario.timeline)
+    assert "onLocked" in scenario.fired_actions
+    # And the in-loop audit that spent s0v15's whole iteration budget:
+    assert not [
+        i for i in verification_gap_issues(text, model_name="D")
+        if "REQ_SAFE_008" in i
+    ]
+
+
+def test_power_on_shape_with_escape_edge_still_fails():
+    """An exit from the initial state to a non-default state means the machine
+    can leave power-on without passing the default — "before any arming"."""
+    from src.simulation.behavioral_sim import run_initialization_scenario
+
+    text, _ = _model("""
+        action def lockPayload {}
+        action def releasePayload {}
+        state def PayloadLockMachine {
+            entry; then PowerOn;
+            state PowerOn;
+            state MechanicallyLocked {
+                entry action onLocked : lockPayload;
+            }
+            state Released {
+                entry action onReleased : releasePayload;
+            }
+            transition initializeLock
+                first PowerOn
+                accept PowerOnEvent
+                then MechanicallyLocked;
+            transition earlyRelease
+                first PowerOn
+                accept ReleaseCommand
+                then Released;
+            transition release
+                first MechanicallyLocked
+                accept ReleaseCommand
+                then Released;
+        }
+    """)
+    scenario = run_initialization_scenario(
+        _extract_machine(text), required_state_terms={"locked"}
+    )
+
+    assert not scenario.passed
+    assert any("no observable initialization semantics" in v
+               for v in scenario.violations)
+
+
+def test_power_on_shape_with_only_guarded_exits_still_fails():
+    """A default reached only through a guard is conditional, not a default."""
+    from src.simulation.behavioral_sim import run_initialization_scenario
+
+    text, _ = _model("""
+        attribute selfTestPassed : Boolean = false;
+        action def lockPayload {}
+        state def PayloadLockMachine {
+            entry; then PowerOn;
+            state PowerOn;
+            state MechanicallyLocked {
+                entry action onLocked : lockPayload;
+            }
+            transition initializeLock
+                first PowerOn
+                if selfTestPassed
+                then MechanicallyLocked;
+        }
+    """)
+    scenario = run_initialization_scenario(
+        _extract_machine(text), required_state_terms={"locked"}
+    )
+
+    assert not scenario.passed
+    assert any("guarded" in v for v in scenario.violations)
+
+
+def test_power_on_shape_needs_semantics_on_the_landed_state():
+    """Driving the event onto a bare state name is still an empty shell."""
+    from src.simulation.behavioral_sim import run_initialization_scenario
+
+    text, _ = _model("""
+        state def PayloadLockMachine {
+            entry; then PowerOn;
+            state PowerOn;
+            state MechanicallyLocked;
+            transition initializeLock
+                first PowerOn
+                accept PowerOnEvent
+                then MechanicallyLocked;
+        }
+    """)
+    scenario = run_initialization_scenario(
+        _extract_machine(text), required_state_terms={"locked"}
+    )
+
+    assert not scenario.passed
+    assert any("no observable semantics" in v for v in scenario.violations)
+
+
+def test_plan_binding_selects_the_machine_vocabulary_excludes():
+    """Initial state 'BootPhase' appears nowhere in the requirement text, so
+    the vocabulary fallback cannot select the machine; the plan's recorded
+    requirement->behavior binding must."""
+    text, model = _model("""
+        action def lockPayload {}
+        state def PayloadLockMachine {
+            entry; then BootPhase;
+            state BootPhase;
+            state MechanicallyLocked {
+                entry action onLocked : lockPayload;
+            }
+            transition initializeLock
+                first BootPhase
+                accept PowerOnEvent
+                then MechanicallyLocked;
+        }
+    """)
+
+    _INIT_DETAIL = "initial/default-state invariant exercised at behavioral-sim tier"
+
+    unbound = build_matrix(model, None, RequirementLinker(model).compile_evidence())[0]
+    # Without the binding the row may still earn behavioral_sim from the
+    # generic requirement-linked scenario route; what it cannot earn is the
+    # initialization-invariant evidence — no machine was selected for it.
+    assert not any(_INIT_DETAIL in e for e in unbound.evidence)
+
+    # NB: assign the plan as a key on the existing metadata dict — the lite
+    # model's metadata already carries last_sysml_text, which to_sysml_text()
+    # serialises from; replacing the dict silently empties the model.
+    model.metadata["whole_model_generation_plan"] = {
+        "requirement_realizations": [{
+            "requirement_id": "REQ_SAFE_008",
+            "owner_component": "PayloadMechanism",
+            "behavior_name": "PayloadLockMachine",
+        }],
+    }
+    bound = build_matrix(model, None, RequirementLinker(model).compile_evidence())[0]
+
+    assert any(_INIT_DETAIL in e and "(PASS)" in e for e in bound.evidence), (
+        bound.evidence
+    )
+    assert "behavioral_sim_failed" not in bound.tiers

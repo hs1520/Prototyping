@@ -155,6 +155,30 @@ def planned_intents_from_model(model) -> "Dict[str, str]":
     return out
 
 
+def planned_behavior_bindings_from_model(model) -> "Dict[str, tuple]":
+    """{requirement id: (owner_component, behavior_name)} read from the plan's
+    requirement_realizations, or {} when the model carries no plan.
+
+    This is the requirement->behavior binding the plan already records
+    (e.g. REQ_SAFE_008 -> PayloadMechanism.DeliveryAbortBehavior); the
+    verification matrix uses it to select the anchoring machine directly
+    instead of by initial-state-name vocabulary."""
+    meta = getattr(model, "metadata", None) or {}
+    plan = meta.get("whole_model_generation_plan") if isinstance(meta, dict) else None
+    if not isinstance(plan, dict):
+        return {}
+    out: Dict[str, tuple] = {}
+    for item in plan.get("requirement_realizations") or ():
+        if not isinstance(item, dict):
+            continue
+        rid = str(item.get("requirement_id") or "").strip().upper().replace("-", "_")
+        behavior = str(item.get("behavior_name") or "").strip()
+        owner = str(item.get("owner_component") or "").strip()
+        if rid and behavior:
+            out[rid] = (owner, behavior)
+    return out
+
+
 def planned_markers_from_model(model) -> "Dict[str, frozenset[str]]":
     """{requirement id: declared response_markers} read from the generation
     plan a committed model carries in its metadata, or {} when the model

@@ -6,8 +6,8 @@ initial-state semantics. One measured run routed such a requirement into the
 initialization branch because its text contains "power-on", then failed a
 model whose inhibition anchor existed and whose scenarios all passed. A
 default-state requirement ("shall default to the locked state upon
-power-on") stays on the initialization branch, and a machine that only
-reaches the locked state after an event keeps failing it."""
+power-on") stays on the initialization branch, where the power-on shape is
+driven onto its default state rather than failed for it."""
 from __future__ import annotations
 
 from src.prototyping.verification_matrix import build_matrix
@@ -90,9 +90,19 @@ def test_inhibition_requirement_is_not_routed_to_the_initialization_branch():
     assert "behavioral_sim" in row.tiers
 
 
-def test_default_state_requirement_still_fails_without_initial_semantics():
+def test_default_state_requirement_is_driven_through_the_power_event():
+    """Still routed to the initialization branch (the evidence detail proves
+    it), and the power-on shape is now driven instead of failed: PowerOn
+    --accept PowerOnEvent--> Locked{entry lockMechanism} is faithful
+    modelling of "default to locked upon power-on".  The shapes that must
+    KEEP failing (escape edge from the initial state, guard-only exits, a
+    bare landed state) are pinned in test_payload_lock_semantics.py."""
     row = _rows()["REQ_SAFE_008"]
-    assert "behavioral_sim_failed" in row.tiers, row.evidence
+    assert any(
+        "initial/default-state invariant exercised" in e and "(PASS)" in e
+        for e in row.evidence
+    ), row.evidence
+    assert "behavioral_sim_failed" not in row.tiers
 
 
 def test_default_state_requirement_passes_with_entry_lock_on_initial_state():

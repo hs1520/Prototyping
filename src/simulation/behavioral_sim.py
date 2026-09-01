@@ -441,6 +441,81 @@ def _build_test_sequence(sm: StateMachineDef) -> List[Dict[str, Any]]:
 # Scenario runner
 # ---------------------------------------------------------------------------
 
+def _drive_power_event_to_default(
+    sm: StateMachineDef,
+    initial: str,
+    required_state_terms: set,
+    result: BehavioralScenarioResult,
+) -> bool:
+    """Recognise and drive the power-on shape: initial phase state whose every
+    exit lands on the requirement's default-term state.
+
+    Returns True when the shape is recognised (the caller then skips the
+    no-initial-semantics violation); any defect found while driving is
+    recorded as a violation on *result*, so a recognised-but-broken shape
+    still fails.  Returns False when this is not the shape — the caller's
+    original violation applies.
+    """
+    from src.utils.sysml_text_utils import semantic_terms
+
+    if not required_state_terms:
+        # No default-state vocabulary: nothing to recognise the landed state
+        # by.  The internal (termless) caller keeps its original strictness.
+        return False
+    exits = [
+        t for t in sm.transitions
+        if not t.is_initial and t.source == initial and t.target
+    ]
+    if not exits:
+        return False
+    if any(
+        not (required_state_terms & semantic_terms(t.target)) for t in exits
+    ):
+        # An escape edge from the initial state to a non-default state:
+        # the machine can leave power-on without passing the default —
+        # exactly what "before any arming" forbids.  Not this shape.
+        return False
+    unguarded = [t for t in exits if not t.guards]
+    if not unguarded:
+        result.violations.append(
+            f"Every transition out of initial state '{initial}' toward the "
+            "default state is guarded — the default is conditional, not a "
+            "power-on default"
+        )
+        return True
+    drive = unguarded[0]
+    landed = drive.target
+    trigger = drive.accept_trigger or "automatic"
+    result.timeline.append(f"Drove power event: {trigger} -> {landed}")
+    landed_entry = sm.entry_action_for_state(landed)
+    landed_do = sm.do_action_for_state(landed)
+    if landed_entry:
+        result.fired_actions.append(landed_entry)
+        result.timeline.append(f"Default-state entry action: {landed_entry}")
+    if landed_do:
+        result.fired_actions.append(landed_do)
+        result.timeline.append(f"Default-state do action: {landed_do}")
+    landed_key = re.sub(r"[^a-z0-9]", "", landed.lower())
+    mirror_found = False
+    for attr, value in (sm.initial_values or {}).items():
+        if not isinstance(value, bool):
+            continue
+        attr_key = re.sub(r"[^a-z0-9]", "", str(attr).lower())
+        if not attr_key.startswith("is") or len(attr_key) <= 2:
+            continue
+        feature = attr_key[2:]
+        if feature and feature in landed_key:
+            mirror_found = True
+            result.timeline.append(f"Default-state attribute: {attr}={value}")
+    if not landed_entry and not landed_do and not mirror_found:
+        result.violations.append(
+            f"Default state '{landed}' has no observable semantics; add an "
+            "entry action, a sustaining do action, or a consistent Boolean "
+            "state attribute"
+        )
+    return True
+
+
 def run_initialization_scenario(
     sm: StateMachineDef,
     required_state_terms: Iterable[str] = (),
@@ -552,19 +627,27 @@ def run_initialization_scenario(
     # single-state invariants compact while rejecting empty shells such as
     # `state Locked; transition initial ...`.
     #
-    # Known narrowness, deliberately unfixed here: a power-on-shaped machine
-    # (initial PowerOff --accept PowerOn--> Locked{entry default...}) fails
-    # this check because its INITIAL state legitimately has no semantics; and
-    # the matrix selects candidate machines by the initial-state name
-    # appearing in the requirement text — vocabulary coupling that excludes
-    # exactly that machine. Both belong to the binding-layer migration
-    # (select by the plan's bound behavior, then drive the power event).
+    # A power-on-shaped machine (initial PowerOn --accept PowerOnEvent-->
+    # Locked{entry lock...}) is equally faithful modelling of "default to X
+    # upon power-on": its INITIAL state legitimately has no semantics — the
+    # semantics live one driven hop away.  This was a documented narrowness
+    # (run3 failed two payload machines here while the L2 servo evidence
+    # showed the default physically holding; s0v15 spent its whole iteration
+    # budget against it): drive the power event instead of failing the shape.
+    # The discipline that keeps discriminating power: EVERY exit from the
+    # initial state must land on a default-term state ("before any arming" —
+    # an escape edge to any other state fails), at least one exit must be
+    # unguarded (an all-guarded default is conditional, not a default), and
+    # the landed state must itself carry observable semantics.
     if not has_state_mirror and not entry and not holding_do:
-        result.violations.append(
-            f"Initial state '{initial}' has no observable initialization semantics; "
-            "add a consistent Boolean state attribute, an initial entry action, "
-            "or a sustaining do action"
-        )
+        if not _drive_power_event_to_default(
+            sm, initial, set(required_state_terms), result
+        ):
+            result.violations.append(
+                f"Initial state '{initial}' has no observable initialization semantics; "
+                "add a consistent Boolean state attribute, an initial entry action, "
+                "or a sustaining do action"
+            )
 
     result.passed = not result.violations
     return result
