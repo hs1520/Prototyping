@@ -1613,6 +1613,18 @@ class _RefinementEngine:
             warning_issues = _syntax_warning_issues(syntax_result)
             if warning_issues and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(warning_issues)
+            # And for typed-plan conformance residue: the terminal
+            # enforcement deterministically ADDS missing planned elements,
+            # but an UNPLANNED connection/port/usage it cannot remove fails
+            # qualification with nothing upstream ever having shown it
+            # (measured on s0v9: an invented airframe.environment ->
+            # perceptionSystem.environment connect, invisible in-loop,
+            # NOT_QUALIFIED at terminal). The projection below reports
+            # exactly the post-remediation residue.
+            conformance_issues = self._plan_conformance_issues(
+                current_sysml, current_model, requirements)
+            if conformance_issues and isinstance(eval_result.issues, list):
+                eval_result.issues.extend(conformance_issues)
             # How much the pass/fail verdict depends on the weighting at all —
             # sampled over the weight simplex (answers "would another weighting
             # flip the outcome?").  Defensive: test doubles may not provide it.
@@ -3165,6 +3177,47 @@ class _RefinementEngine:
             r.issues.append(f"Simulation error: {e}")
             return r
 
+
+    def _plan_conformance_issues(
+        self, model_text: str, model, requirements,
+    ) -> List[str]:
+        """Terminal-unfixable plan-conformance residue as refinement issues.
+
+        Runs the SAME projection the terminal gate applies — materialise
+        the plan onto a text copy, report what still deviates — and rides
+        the result along like the namespace/response/warning advisories, so
+        the author can remove or justify a deviation while still in the
+        loop. Read-only: the materialised copy is discarded."""
+        from collections.abc import Mapping as _Mapping
+
+        raw_plan = (getattr(model, "metadata", None) or {}).get(
+            "whole_model_generation_plan"
+        )
+        if not isinstance(raw_plan, _Mapping):
+            return []
+        try:
+            from ..prototyping.generation_plan import (
+                ModelGenerationPlan, apply_generation_plan,
+            )
+            plan = ModelGenerationPlan.from_payload(
+                dict(raw_plan),
+                requirements=list(requirements or ()),
+                source="IN_LOOP_CONFORMANCE_PROJECTION",
+                require_source_anchored_paths=True,
+            )
+            _discarded, conformance = apply_generation_plan(model_text, plan)
+        except Exception as error:
+            # A rider must not kill the loop, and it must not fail silently.
+            return [
+                "[PLAN-CONFORMANCE] projection failed: "
+                f"{type(error).__name__}: {error}"
+            ]
+        return [
+            f"[PLAN-CONFORMANCE] {issue} — the terminal conformance gate "
+            "fails closed on this; remove the deviation or justify it with "
+            "an in-body doc /* rationale; satisfies REQ_... */"
+            for issue in (conformance.get("issues") or ())
+        ]
 
     def _format_sim_issues(self, sim_result: SimulationResult,
                             requirements: Optional[List[str]] = None) -> List[str]:

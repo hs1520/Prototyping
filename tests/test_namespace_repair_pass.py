@@ -228,3 +228,47 @@ def test_a_repair_that_adds_a_scenario_failure_is_still_rejected():
 
     assert accepted is False
     assert repaired_model is model
+
+
+def test_plan_conformance_residue_rides_along_in_the_loop():
+    """s0v9 anchor: an invented airframe->perception connect was invisible
+    to every in-loop mechanism and failed qualification at terminal. The
+    rider runs the terminal gate's own projection read-only and surfaces
+    exactly the post-remediation residue."""
+    import json as _json
+    from pathlib import Path
+
+    fixtures = Path(__file__).parent / "fixtures" / "plan_deadlock_20260831"
+    text = (fixtures / "final_model.sysml").read_text()
+    payload = _json.loads(
+        (fixtures / "whole_model_generation_plan.json").read_text()
+    )
+    requirements = _json.loads((fixtures / "requirements.json").read_text())
+
+    class _Model:
+        metadata = {"whole_model_generation_plan": payload}
+
+    orchestrator, engine = _engine(ScriptedRefinementIntelligence())
+    baseline = engine._plan_conformance_issues(text, _Model(), requirements)
+    tampered = text.replace(
+        "part airframe : Airframe;",
+        "part airframe : Airframe;\n"
+        "    connect airframe.structuralMount to "
+        "perceptionSystem.obstacleData;",
+        1,
+    )
+    assert tampered != text
+    tampered_issues = engine._plan_conformance_issues(
+        tampered, _Model(), requirements
+    )
+    new_issues = [i for i in tampered_issues if i not in baseline]
+    assert any(
+        "unplanned connection" in issue and "airframe.structuralMount" in issue
+        for issue in new_issues
+    )
+    assert all(issue.startswith("[PLAN-CONFORMANCE]") for issue in new_issues)
+
+    class _PlanlessModel:
+        metadata = {}
+
+    assert engine._plan_conformance_issues(text, _PlanlessModel(), []) == []
