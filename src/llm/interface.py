@@ -1055,6 +1055,12 @@ class VertexLLM(LLMInterface):
         # is excluded above, so a deadline we set is still not retried.
         if "499" in text or "cancelled" in text:
             return True
+        # The request worker is a fresh per-call process; its pipe dying
+        # (bare EOFError from connection.recv) is a transient the memoried
+        # 2026-08-29 launch already hit once and a NO-REFINE roll lost
+        # 149k tokens to. A retry gets a brand-new worker.
+        if isinstance(exc, EOFError) or "eoferror" in text:
+            return True
         return super()._is_retryable(exc)
 
 

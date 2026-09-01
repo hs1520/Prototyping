@@ -70,7 +70,7 @@ _INFRA_MARKERS = (
     "timed out", "wall-clock timeout", "deadline exceeded",
     "connection refused",
     "connection reset", "connection aborted", "connectionerror",
-    "eof occurred", "broken pipe",
+    "eof occurred", "eoferror", "broken pipe",
 )
 
 

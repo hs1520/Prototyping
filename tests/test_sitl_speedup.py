@@ -193,3 +193,13 @@ def test_total_command_silence_raises_the_true_reason():
         _send_command_acked(ctx, 208, [2.0] + [0.0] * 6,
                             attempts=2, ack_timeout_s=0.05)
     assert mav.sends == 2
+
+
+def test_vertex_worker_pipe_eof_is_retryable():
+    """The Vertex request worker is a fresh per-call process; its pipe
+    dying raises a bare EOFError, which used to give up instantly (a
+    NO-REFINE roll lost 149k tokens to one). A retry spawns a new worker."""
+    from src.llm.interface import VertexLLM
+
+    assert VertexLLM._is_retryable(EOFError())
+    assert VertexLLM._is_retryable(RuntimeError("EOFError: "))
