@@ -1548,6 +1548,18 @@ class _RefinementEngine:
             print(f"  {'─'*60}")
             print(mcts_constraints)
 
+        # Fatal-advisory continuation guard.  The continuation below spends an
+        # iteration whenever a terminal-fatal advisory survives the bounded
+        # passes.  Without a progress check that is unbounded resampling: run
+        # s0v15 forced six refinements, had all six rejected by the
+        # plan-conformance gate, and finished eight iterations with the score
+        # unmoved (0.9552 / 0.9126 to four places) at 4x the wall clock.  Allow
+        # one resample, then stop: if a forced refinement left both the model
+        # text and the advisory set untouched, the next iteration starts from a
+        # byte-identical state.
+        fatal_state_before = None
+        fatal_stalls = 0
+
         for iteration in range(self.max_iterations):
             self.state.iteration = iteration + 1
 
@@ -1785,9 +1797,21 @@ class _RefinementEngine:
                     fatal_advisories = self._terminal_fatal_advisories(
                         current_model, requirements
                     )
+                    fatal_state = (
+                        hashlib.sha256(
+                            get_sysml_text(current_model).encode("utf-8")
+                        ).hexdigest(),
+                        tuple(sorted(str(a) for a in fatal_advisories)),
+                    )
+                    if fatal_state == fatal_state_before:
+                        fatal_stalls += 1
+                    else:
+                        fatal_stalls = 0
+                    fatal_state_before = fatal_state
                     if (
                         fatal_advisories
                         and iteration + 1 < self.max_iterations
+                        and fatal_stalls < _FATAL_ADVISORY_MAX_STALLS
                     ):
                         print(
                             f"  ~ Quality met, but "
@@ -1806,9 +1830,21 @@ class _RefinementEngine:
                             ] + fatal_advisories
                         _force_llm_refinement = True
                     else:
-                        print(f"  ✓ Quality threshold "
-                              f"{self.quality_threshold} reached",
-                              flush=True)
+                        if fatal_advisories and fatal_stalls:
+                            print(
+                                f"  ✓ Quality threshold "
+                                f"{self.quality_threshold} reached — "
+                                f"{len(fatal_advisories)} terminal-fatal "
+                                "advisory issue(s) remain, but the last forced "
+                                "refinement changed neither the model nor the "
+                                "advisory set; further iterations would "
+                                "resample against an identical state",
+                                flush=True,
+                            )
+                        else:
+                            print(f"  ✓ Quality threshold "
+                                  f"{self.quality_threshold} reached",
+                                  flush=True)
                         return current_model, score, sim_result
 
             # The fatal-advisory continue path goes straight to the P1
@@ -3569,6 +3605,12 @@ class _RefinementEngine:
 
 
 #: Advisory prefixes whose issues the terminal qualification fails closed on.
+#: How many consecutive no-progress iterations the fatal-advisory continuation
+#: may spend before it stops.  1 = the forced refinement gets exactly one
+#: resample from an unchanged state, then the loop exits instead of burning the
+#: rest of the budget on a wall it has already hit.
+_FATAL_ADVISORY_MAX_STALLS = 1
+
 _FATAL_ADVISORY_PREFIXES = (
     "[SYNTAX-WARNING]", "[NAMESPACE]", "[PLAN-CONFORMANCE]",
     "[SEMANTIC-FIDELITY]", "[REQ-COVERAGE]",

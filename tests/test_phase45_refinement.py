@@ -1317,3 +1317,59 @@ class TestTerminalFatalAdvisoriesSpendBudget:
         _refine(orch, model_a, [])
 
         assert orch.design_agent.call_count == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Fatal-advisory continuation: stop resampling an unchanged state
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestFatalAdvisoryStallGuard:
+    """The continuation added for the nine iterations=1 rolls must not become
+    unbounded resampling.  Run s0v15 forced six refinements, had all six
+    rejected, and finished eight iterations with the score unmoved."""
+
+    def _stalling_orch(self, monkeypatch, *, advisories):
+        from src.agents import refinement as refinement_mod
+
+        orch = _make_orch(max_iterations=4, quality_threshold=0.50)
+        # Quality is met on the first evaluation and never moves, which is the
+        # condition the continuation fires under.
+        orch.evaluator = FakeEvaluator(
+            [FakeEvalResult(weighted_total=0.95, issues=[]) for _ in range(12)]
+        )
+        orch.cot = FakeCot([
+            FakeCotResult(_scores={"overall": 0.95}, final_answer="")
+            for _ in range(12)
+        ])
+        # Every refinement returns a model that is rejected, so the committed
+        # text — and therefore the advisory set — is identical each iteration.
+        orch.design_agent = FakeDesignAgent([])
+        monkeypatch.setattr(
+            refinement_mod._RefinementEngine,
+            "_terminal_fatal_advisories",
+            lambda self, model, requirements: list(advisories),
+        )
+        monkeypatch.setattr(
+            refinement_mod._RefinementEngine,
+            "_early_exit_gates",
+            lambda self, *a, **k: (True, True, True),
+        )
+        return orch
+
+    def test_stops_after_one_resample_when_nothing_changed(self, monkeypatch):
+        orch = self._stalling_orch(
+            monkeypatch, advisories=["[VERIFY-GAP] REQ_FUNC_009 unassigned"]
+        )
+        _refine(orch, _make_model("stalled"), [])
+
+        # max_iterations=4, but an unchanged state buys exactly one resample.
+        assert len(orch.state.evaluation_history) <= 2, (
+            "the continuation spent more than one resample on an unchanged "
+            f"state: {len(orch.state.evaluation_history)} iterations"
+        )
+
+    def test_no_advisory_still_exits_immediately(self, monkeypatch):
+        orch = self._stalling_orch(monkeypatch, advisories=[])
+        _refine(orch, _make_model("clean"), [])
+
+        assert len(orch.state.evaluation_history) == 1
