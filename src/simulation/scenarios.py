@@ -197,13 +197,15 @@ def _classify_node(node: PartNode, bg: BehavioralGraph) -> str:
     """
     Priority-stacked classification:
 
-    P1. Satisfy relationships  — requirement IDs with unambiguous domain
-        fragments (safe/comms/power) map directly to a class.  FUNC/PERF
-        requirements are skipped — any part can satisfy them.
-    P2. Keyword matching       — semantic intent expressed in usage + def names,
-        checked unconditionally BEFORE topology.  Ensures a well-named part
-        (e.g. "FlightController") is never mis-classified as "sensor" just
-        because syside missed some of its input ports.
+    P1. Keyword matching       — semantic intent expressed in usage + def names,
+        checked before everything else.  Ensures a well-named part (e.g.
+        "FlightController") is never mis-classified — not as "sensor" by a
+        port-direction quirk, and not as "safety" by the SAFE requirements a
+        controller legitimately satisfies (measured, s0v8).
+    P2. Satisfy relationships  — requirement IDs with unambiguous domain
+        fragments (safe/comms/power) classify parts whose NAMES carry no
+        signal.  FUNC/PERF requirements are skipped — any part can satisfy
+        them.
     P3. Port direction topology — structural role for anonymous/abbreviated
         names that carry no keyword signal:
           pure OUT  → "sensor"
@@ -217,15 +219,14 @@ def _classify_node(node: PartNode, bg: BehavioralGraph) -> str:
       part names almost never misrepresent intent.  Topology is a strong signal
       only when the name gives no information (abbreviated or random).
     """
-    # ── P1: satisfy relationships ────────────────────────────────────────────
-    for req_name in node.satisfied_reqs:
-        low = req_name.lower()
-        if any(k in low for k in _REQ_SAFETY_KW): return "safety"
-        if any(k in low for k in _REQ_COMMS_KW):  return "comms"
-        if any(k in low for k in _REQ_POWER_KW):  return "power"
-        # FUNC/PERF: fall through — any part type can satisfy these
-
-    # ── P2: keyword matching (all parts, all categories) ─────────────────────
+    # ── P1: keyword matching (all parts, all categories) ─────────────────────
+    # Name identity comes FIRST. Satisfy-based classification used to run
+    # before it, and a controller legitimately satisfies SAFE requirements —
+    # s0v8's flightController carried a satisfy REQ_SAFE_* link, classified
+    # "safety", and every controller-role scenario died with
+    # MISSING_TARGET_ROLE (controlled suite 1/7 on a healthy topology).
+    # The old P2 rationale already said it: part names almost never
+    # misrepresent intent; requirement allocation routinely crosses roles.
     for name in (node.id, node.def_name):
         low = name.lower()
         if any(k in low for k in _SAFETY_KEYWORDS):    return "safety"
@@ -238,6 +239,14 @@ def _classify_node(node: PartNode, bg: BehavioralGraph) -> str:
         # active role and carry a structural name (airframe, chassis, …) are
         # passive mechanical bodies.
         if any(k in low for k in _STRUCTURE_KEYWORDS): return "structure"
+
+    # ── P2: satisfy relationships (name carries no keyword signal) ───────────
+    for req_name in node.satisfied_reqs:
+        low = req_name.lower()
+        if any(k in low for k in _REQ_SAFETY_KW): return "safety"
+        if any(k in low for k in _REQ_COMMS_KW):  return "comms"
+        if any(k in low for k in _REQ_POWER_KW):  return "power"
+        # FUNC/PERF: fall through — any part type can satisfy these
 
     # ── P3: production-oriented classification (name carries no keyword) ──────
     # A part's role is defined by what it PRODUCES.  Match the production

@@ -311,3 +311,33 @@ def test_dse_analysis_closure_excluded_from_reachability():
     assert not any("recommendedDesign" in str(p) for p in parts)   # closure part excluded
     assert any("motor" in str(p) for p in parts)                   # real assembly kept
     assert any("airframe" in str(p) for p in parts)
+
+
+def test_a_controller_satisfying_safe_requirements_stays_a_controller():
+    """Measured on the s0v8 anchor: flightController carried a satisfy
+    REQ_SAFE_* link and the satisfy-first classifier filed it under
+    "safety" — every controller-role controlled scenario then died with
+    MISSING_TARGET_ROLE (1/7 on a healthy topology). Name identity
+    classifies first; satisfy fragments only classify keyword-less names."""
+    from src.simulation.extractor import BehavioralGraph, PartNode
+    from src.simulation.scenarios import classify_parts_by_role
+
+    bg = BehavioralGraph()
+    bg.parts["flightController"] = PartNode(
+        id="flightController", def_name="FlightController",
+        satisfied_reqs=["REQ_SAFE_007", "REQ_FUNC_001"],
+    )
+    bg.parts["watchdogUnit"] = PartNode(
+        id="watchdogUnit", def_name="WatchdogUnit",
+        satisfied_reqs=["REQ_FUNC_002"],
+    )
+    bg.parts["unit7"] = PartNode(   # keyword-less: satisfy fragments decide
+        id="unit7", def_name="Unit7",
+        satisfied_reqs=["REQ_SAFE_001"],
+    )
+    roles = classify_parts_by_role(bg)
+
+    assert roles.get("controller") == ["flightController"]
+    assert "flightController" not in roles.get("safety", [])
+    assert "watchdogUnit" in roles.get("safety", [])   # name keyword wins
+    assert "unit7" in roles.get("safety", [])          # P2 fallback preserved

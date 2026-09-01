@@ -1604,6 +1604,15 @@ class _RefinementEngine:
                 current_sysml, current_model.name)
             if response_issues and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(response_issues)
+            # And for user-model syntax WARNINGS: the terminal gate fails
+            # closed on every one (zero-warning policy), but the in-loop
+            # syntax gate returns on has_errors alone — so a warning class
+            # without a bespoke normalizer was invisible to every repair
+            # mechanism until qualification (measured on s0v8: one
+            # usage-typed-by-non-classifier warning, NOT_QUALIFIED).
+            warning_issues = _syntax_warning_issues(syntax_result)
+            if warning_issues and isinstance(eval_result.issues, list):
+                eval_result.issues.extend(warning_issues)
             # How much the pass/fail verdict depends on the weighting at all —
             # sampled over the weight simplex (answers "would another weighting
             # flip the outcome?").  Defensive: test doubles may not provide it.
@@ -3231,3 +3240,25 @@ class _RefinementEngine:
             )
 
         return issues
+
+
+def _syntax_warning_issues(syntax_result) -> list:
+    """User-model syntax warnings as refinement issues.
+
+    The terminal qualification's zero-warning policy makes every warning a
+    hard failure, so each one must be visible in the loop where the author
+    can still fix it."""
+    issues = []
+    for warning in (getattr(syntax_result, "warnings", None) or ()):
+        if isinstance(warning, dict):
+            line = warning.get("line")
+            message = warning.get("message")
+        else:
+            line = getattr(warning, "line", None)
+            message = getattr(warning, "message", warning)
+        issues.append(
+            f"[SYNTAX-WARNING] line {line}: {message} — the terminal "
+            "qualification gate fails closed on every warning; resolve it "
+            "in the model"
+        )
+    return issues

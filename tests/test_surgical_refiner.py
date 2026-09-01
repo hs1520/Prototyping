@@ -508,3 +508,24 @@ class TestOrchestratorIntegration:
         out = capsys.readouterr().out
         assert "Surgical refinement: replaced 1 block(s) (FlightController)" in out
         assert _NeverAgent.call_count == 0
+
+
+def test_syntax_warnings_become_visible_refinement_issues():
+    """The terminal gate fails closed on every warning, but the in-loop
+    syntax gate returns on has_errors alone — a warning class without a
+    bespoke normalizer was invisible to every repair mechanism until
+    qualification (measured on s0v8: one usage-typed-by-non-classifier
+    warning, NOT_QUALIFIED)."""
+    from types import SimpleNamespace
+    from src.agents.refinement import _syntax_warning_issues
+
+    issues = _syntax_warning_issues(SimpleNamespace(warnings=[
+        {"line": 372, "col": 40,
+         "message": "Usages should only be typed by Classifiers",
+         "code": "usage-featured-typing"},
+    ]))
+    assert len(issues) == 1
+    assert issues[0].startswith("[SYNTAX-WARNING] line 372:")
+    assert "fails closed on every warning" in issues[0]
+    assert _syntax_warning_issues(SimpleNamespace(warnings=[])) == []
+    assert _syntax_warning_issues(SimpleNamespace()) == []
