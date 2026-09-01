@@ -728,27 +728,79 @@ class _RefinementEngine:
             flush=True,
         )
 
-        if not self.use_surgical_refinement:
-            print("  └─ ⚠ surgical refinement disabled; functional gaps remain", flush=True)
-        else:
+        closure_feedback = (
+            "This is the terminal functional-closure pass. Repair the "
+            "complete trigger -> reachable response entry action -> timing "
+            "constraint chain for every listed FUNC requirement."
+        )
+        from .verification_audit import behavioral_result_regressed
+        if self.use_surgical_refinement:
             from ..simulation.surgical_refiner import (
                 SurgicalAudit,
                 attempt_surgical_refinement,
                 build_dependency_closed_context,
             )
-            from .verification_audit import behavioral_result_regressed
-
-            for idx in range(max_iters):
-                if not gaps:
-                    break
-                attempts += 1
-                before_ids = set(self._gap_req_ids(gaps))
-                print(
-                    f"  │  Pass {idx + 1}/{max_iters}: targeted repair for "
-                    f"{', '.join(sorted(before_ids))}",
-                    flush=True,
+        for idx in range(max_iters):
+            if not gaps:
+                break
+            attempts += 1
+            before_ids = set(self._gap_req_ids(gaps))
+            print(
+                f"  │  Pass {idx + 1}/{max_iters}: targeted repair for "
+                f"{', '.join(sorted(before_ids))}",
+                flush=True,
+            )
+            full_text = get_sysml_text(current)
+            if not self.use_surgical_refinement:
+                # Full-rewrite fallback: ablating the surgical MECHANISM must
+                # not amputate closure repair itself. NO-SURGICAL@seed0
+                # measured "closure repair exists vs not" (this branch used
+                # to print one line and give up) instead of the intended
+                # "surgical vs full-rewrite repair". Same pass budget, same
+                # acceptance gates below; only the candidate generator
+                # differs.
+                result = self._intelligence.generate({
+                    "system_name": model_name,
+                    "requirements": list(requirements),
+                    "existing_model": current,
+                    "refinement_feedback": closure_feedback,
+                    "refinement_issues": list(gaps),
+                    "verbose": self.verbose,
+                })
+                from .orchestrator_support import _SysMLModelTypes
+                if not (
+                    getattr(result, "success", False)
+                    and isinstance(
+                        getattr(result, "output", None), _SysMLModelTypes
+                    )
+                ):
+                    repair_contexts.append({
+                        "pass": idx + 1,
+                        "generator": "FULL_REWRITE",
+                        "status": "REJECTED",
+                        "reason": "full_rewrite_unusable",
+                        "target_req_ids": sorted(before_ids),
+                    })
+                    print("  │    ⚠ full-rewrite candidate unusable",
+                          flush=True)
+                    continue
+                candidate_source_text = get_sysml_text(result.output)
+                context_record = {
+                    "pass": idx + 1,
+                    "generator": "FULL_REWRITE",
+                    "status": "CANDIDATE",
+                }
+                repair_contexts.append(context_record)
+                raw_candidate = build_lite_model(
+                    candidate_source_text, model_name=model_name
                 )
-                full_text = get_sysml_text(current)
+                self._restore_generation_plan_metadata(raw_candidate)
+                candidate_text, plan_conformance = (
+                    self._enforce_terminal_generation_plan(
+                        raw_candidate, candidate_source_text
+                    )
+                )
+            else:
                 context = build_dependency_closed_context(
                     full_text,
                     gaps,
@@ -773,11 +825,7 @@ class _RefinementEngine:
                     llm=self._intelligence,
                     model_text=full_text,
                     issues=gaps,
-                    feedback=(
-                        "This is the terminal functional-closure pass. Repair the "
-                        "complete trigger -> reachable response entry action -> timing "
-                        "constraint chain for every listed FUNC requirement."
-                    ),
+                    feedback=closure_feedback,
                     verbose=self.verbose,
                     audit=surgical_audit,
                     context_slice=context,
@@ -786,11 +834,14 @@ class _RefinementEngine:
                     "pass": idx + 1,
                     "context": context.to_dict(),
                     "surgical_audit": surgical_audit.to_dict(),
-                    "status": "CANDIDATE" if repaired is not None else "REJECTED",
+                    "status": (
+                        "CANDIDATE" if repaired is not None else "REJECTED"
+                    ),
                 }
                 repair_contexts.append(context_record)
                 if repaired is None:
-                    print("  │    ⚠ no syntax-safe surgical result", flush=True)
+                    print("  │    ⚠ no syntax-safe surgical result",
+                          flush=True)
                     continue
 
                 raw_candidate = build_lite_model(
@@ -802,93 +853,93 @@ class _RefinementEngine:
                         raw_candidate, repaired.merged_text
                     )
                 )
-                if (
-                    plan_conformance is not None
-                    and plan_conformance.get("status") != "PASS"
-                ):
-                    context_record["status"] = "REJECTED"
-                    context_record["post_merge_reason"] = (
-                        "terminal generation-plan conformance failed"
-                    )
-                    context_record["generation_plan_issues"] = list(
-                        plan_conformance.get("issues") or ()
-                    )
-                    self._append_pipeline_state_list(
-                        "plan_conformance_rejections", {
-                            "stage": "FUNCTIONAL_CLOSURE",
-                            "pass": idx + 1,
-                            "target_req_ids": self._gap_req_ids(gaps),
-                            "issues": list(
-                                plan_conformance.get("issues") or ()
-                            ),
-                        }
-                    )
-                    print(
-                        "  │    ⚠ rejected: terminal generation-plan "
-                        "conformance failed",
-                        flush=True,
-                    )
-                    continue
-                candidate_metadata = dict(
-                    getattr(raw_candidate, "metadata", None) or {}
+            if (
+                plan_conformance is not None
+                and plan_conformance.get("status") != "PASS"
+            ):
+                context_record["status"] = "REJECTED"
+                context_record["post_merge_reason"] = (
+                    "terminal generation-plan conformance failed"
                 )
-                candidate = build_lite_model(
-                    candidate_text, model_name=model_name
+                context_record["generation_plan_issues"] = list(
+                    plan_conformance.get("issues") or ()
                 )
-                candidate.metadata.update(candidate_metadata)
-                candidate_text = get_sysml_text(candidate)
-                cand_syntax = check_syntax(candidate_text)
-                cand_sim = self._run_simulation(candidate_text, model_name)
-                cand_eval = self._intelligence.evaluate(
-                    config=DesignConfiguration(
-                        name=f"functional_closure_{idx + 1}", parameters={}
-                    ),
-                    model=candidate,
-                    dse_config=dse_best_config,
-                    syntax_result=cand_syntax,
-                    sim_result=cand_sim,
-                    requirements=requirements,
+                self._append_pipeline_state_list(
+                    "plan_conformance_rejections", {
+                        "stage": "FUNCTIONAL_CLOSURE",
+                        "pass": idx + 1,
+                        "target_req_ids": self._gap_req_ids(gaps),
+                        "issues": list(
+                            plan_conformance.get("issues") or ()
+                        ),
+                    }
                 )
-                remaining = self._functional_verification_gap_issues(
-                    candidate_text, model_name
+                print(
+                    "  │    ⚠ rejected: terminal generation-plan "
+                    "conformance failed",
+                    flush=True,
                 )
-                after_ids = set(self._gap_req_ids(remaining))
-                progress = after_ids < before_ids
-                regression_reasons: List[str] = []
-                if cand_syntax.has_errors:
-                    regression_reasons.append("SYNTAX_ERRORS")
-                if (
-                    len(cand_sim.failed_scenarios())
-                    > len(current_sim.failed_scenarios())
-                ):
-                    regression_reasons.append("SIMULATION_FAILURE_COUNT")
-                if behavioral_result_regressed(current_sim, cand_sim):
-                    regression_reasons.append("BEHAVIORAL_SIMULATION")
-                if cand_eval.weighted_total < current_score - 0.05:
-                    regression_reasons.append("RULE_SCORE")
-                regressed = bool(regression_reasons)
-                if progress and not regressed:
-                    current = candidate
-                    current_sim = cand_sim
-                    current_score = cand_eval.weighted_total
-                    gaps = remaining
-                    accepted += 1
-                    context_record["status"] = "ACCEPTED"
-                    print(
-                        f"  │    ✓ accepted: {len(before_ids)} -> "
-                        f"{len(after_ids)} functional gap(s)",
-                        flush=True,
-                    )
-                else:
-                    why = (
-                        "regression" if regressed
-                        else "no functional-gap reduction"
-                    )
-                    context_record["status"] = "REJECTED"
-                    context_record["post_merge_reason"] = why
-                    if regression_reasons:
-                        context_record["regression_reasons"] = regression_reasons
-                    print(f"  │    ⚠ rejected: {why}", flush=True)
+                continue
+            candidate_metadata = dict(
+                getattr(raw_candidate, "metadata", None) or {}
+            )
+            candidate = build_lite_model(
+                candidate_text, model_name=model_name
+            )
+            candidate.metadata.update(candidate_metadata)
+            candidate_text = get_sysml_text(candidate)
+            cand_syntax = check_syntax(candidate_text)
+            cand_sim = self._run_simulation(candidate_text, model_name)
+            cand_eval = self._intelligence.evaluate(
+                config=DesignConfiguration(
+                    name=f"functional_closure_{idx + 1}", parameters={}
+                ),
+                model=candidate,
+                dse_config=dse_best_config,
+                syntax_result=cand_syntax,
+                sim_result=cand_sim,
+                requirements=requirements,
+            )
+            remaining = self._functional_verification_gap_issues(
+                candidate_text, model_name
+            )
+            after_ids = set(self._gap_req_ids(remaining))
+            progress = after_ids < before_ids
+            regression_reasons: List[str] = []
+            if cand_syntax.has_errors:
+                regression_reasons.append("SYNTAX_ERRORS")
+            if (
+                len(cand_sim.failed_scenarios())
+                > len(current_sim.failed_scenarios())
+            ):
+                regression_reasons.append("SIMULATION_FAILURE_COUNT")
+            if behavioral_result_regressed(current_sim, cand_sim):
+                regression_reasons.append("BEHAVIORAL_SIMULATION")
+            if cand_eval.weighted_total < current_score - 0.05:
+                regression_reasons.append("RULE_SCORE")
+            regressed = bool(regression_reasons)
+            if progress and not regressed:
+                current = candidate
+                current_sim = cand_sim
+                current_score = cand_eval.weighted_total
+                gaps = remaining
+                accepted += 1
+                context_record["status"] = "ACCEPTED"
+                print(
+                    f"  │    ✓ accepted: {len(before_ids)} -> "
+                    f"{len(after_ids)} functional gap(s)",
+                    flush=True,
+                )
+            else:
+                why = (
+                    "regression" if regressed
+                    else "no functional-gap reduction"
+                )
+                context_record["status"] = "REJECTED"
+                context_record["post_merge_reason"] = why
+                if regression_reasons:
+                    context_record["regression_reasons"] = regression_reasons
+                print(f"  │    ⚠ rejected: {why}", flush=True)
 
         remaining_ids = self._gap_req_ids(gaps)
         status = "CLOSED" if not remaining_ids else "OPEN"
