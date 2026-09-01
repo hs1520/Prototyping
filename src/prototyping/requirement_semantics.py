@@ -292,15 +292,31 @@ def _source_bound_subject(
     inputs: set[str],
     attributes: dict[str, str],
     subject_terms: Sequence[str],
+    bound_subject: str | None = None,
 ) -> tuple[bool, str]:
     candidate = expression.strip()
+
+    def _subject_ok(identifier: str) -> bool:
+        # The plan's semantic binding DECLARES the runtime attribute that
+        # carries this obligation's subject (e.g. currentAltitude for
+        # "flight altitude").  That identity outranks term matching: the
+        # binding-declared name legitimately drops the requirement text's
+        # qualifier words, and demanding every term rejected the very
+        # attributes the plan materialised (s0v16: all four "failing"
+        # obligations had their planned assert in place under the planned
+        # name, invisible to this checker).  Term matching remains the
+        # test for obligations no binding covers.
+        if bound_subject is not None and identifier == bound_subject:
+            return True
+        return _matches_subject(identifier, subject_terms)
+
     if candidate in attributes:
         binding = attributes[candidate].strip()
         if (
             _PATH_RE.fullmatch(binding)
             and binding.split(".", 1)[0] in inputs
             and (
-                _matches_subject(candidate, subject_terms)
+                _subject_ok(candidate)
                 or _matches_subject(binding, subject_terms)
             )
         ):
@@ -308,7 +324,7 @@ def _source_bound_subject(
     if (
         _PATH_RE.fullmatch(candidate)
         and candidate.split(".", 1)[0] in inputs
-        and _matches_subject(candidate, subject_terms)
+        and _subject_ok(candidate)
     ):
         return True, candidate
     return False, ""
@@ -320,6 +336,7 @@ def _comparison_fidelity(
     *,
     inputs: set[str],
     attributes: dict[str, str],
+    bound_subject: str | None = None,
 ) -> dict[str, Any] | None:
     match = _COMPARISON_RE.fullmatch(" ".join(expression.split()))
     if match is None:
@@ -327,10 +344,16 @@ def _comparison_fidelity(
     left = match.group("left")
     right = match.group("right")
     operator = match.group("operator")
+
+    def _is_subject(identifier: str) -> bool:
+        if bound_subject is not None and identifier.strip() == bound_subject:
+            return True
+        return _matches_subject(identifier, obligation.subject_terms)
+
     subject = left
     bound = right
-    if not _matches_subject(left, obligation.subject_terms):
-        if not _matches_subject(right, obligation.subject_terms):
+    if not _is_subject(left):
+        if not _is_subject(right):
             return None
         subject = right
         bound = left
@@ -345,6 +368,7 @@ def _comparison_fidelity(
         inputs=inputs,
         attributes=attributes,
         subject_terms=obligation.subject_terms,
+        bound_subject=bound_subject,
     )
     numeric = _numeric_value(bound, attributes)
     return {
@@ -1558,6 +1582,10 @@ def validate_requirement_semantic_obligations(
                     obligation,
                     inputs=inputs,
                     attributes=attributes,
+                    bound_subject=(
+                        expected_binding.runtime_attribute
+                        if expected_binding is not None else None
+                    ),
                 )
                 if comparison is None:
                     continue

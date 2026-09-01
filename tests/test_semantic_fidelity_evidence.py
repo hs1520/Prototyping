@@ -154,3 +154,62 @@ def test_capability_normaliser_emits_the_structured_delegation_marker():
     )
     assert "mission-end" in fixed
     assert "assert constraint operationalRangeConstraint" not in fixed
+
+
+def test_binding_declared_runtime_attribute_is_the_subject_identity():
+    """s0v16: all four "failing" obligations had their planned assert in
+    place, under the binding's own constraint name, on the binding's own
+    runtime attribute — and the checker could not see them, because term
+    matching demanded every requirement-text word (currentAltitude carries
+    'altitude' but not 'flight').  The binding's declared identity outranks
+    term matching; without a binding the term test keeps its full strictness.
+    """
+    binding = SemanticBindingPlan.from_dict({
+        "obligation_id": "SEM_REQ_CONS_001_001",
+        "requirement_id": "REQ_CONS_001",
+        "source": {"component": "PerceptionSystem", "port": "altitudeData"},
+        "target": {
+            "component": "FlightController",
+            "port": "altitudeData",
+            "runtime_attribute": "currentAltitude",
+        },
+        "payload": {
+            "port_type": "FlightAltitudePort",
+            "port_feature": "payload",
+            "item_type": "FlightAltitudeData",
+            "item_feature": "altitude",
+            "value_type": "LengthValue",
+            "unit": "m",
+        },
+        "constraint": {
+            "name": "altitudeConstraint",
+            "threshold_attribute": "altitudeThreshold",
+        },
+    })
+    text = """package D {
+        part def FlightController {
+            in port altitudeData : FlightAltitudePort;
+            attribute currentAltitude : LengthValue = altitudeData.payload.altitude;
+            attribute altitudeThreshold : LengthValue = 120 [m];
+            assert constraint altitudeConstraint {
+                currentAltitude <= altitudeThreshold
+            }
+        }
+    }"""
+
+    with_binding = _validate(text, [binding])
+    row = {r["requirement_id"]: r for r in with_binding["results"]}[
+        "REQ_CONS_001"
+    ]
+    assert row["status"] == "PASS", row
+
+    without_binding = _validate(text, [])
+    row = {r["requirement_id"]: r for r in without_binding["results"]}[
+        "REQ_CONS_001"
+    ]
+    assert row["status"] == "FAIL"
+    assert any(
+        "no assert constraint expresses" in issue
+        for candidate in row["candidate_evidence"]
+        for issue in candidate["issues"]
+    ) or row["candidate_evidence"] == [], row
