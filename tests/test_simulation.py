@@ -341,3 +341,62 @@ def test_a_controller_satisfying_safe_requirements_stays_a_controller():
     assert "flightController" not in roles.get("safety", [])
     assert "watchdogUnit" in roles.get("safety", [])   # name keyword wins
     assert "unit7" in roles.get("safety", [])          # P2 fallback preserved
+
+
+def test_dse_machinery_is_not_charged_by_the_quality_ruler():
+    """The variant emitter's contract says variants specialise the host
+    'so they share its ports', and the reachability extractor already
+    exempts the DseDesignAnalysis closure by codified name — but the
+    quality scorer followed neither, charging FULL's terminal artifact
+    0.043 against NO-DSE on the same ruler for its own DSE machinery
+    (measured, seed-0 wave). Specialisation inherits ports; the closure
+    wrapper leaves the denominator; a standalone attribute-only def is
+    still penalised."""
+    from src.dse.design_space import DesignConfiguration
+    from src.dse.evaluator import DesignEvaluator
+    from src.simulation.syntax_checker import check_syntax
+    from src.simulation.validator import SimulationValidator
+    from src.sysml.lite_model import build_lite_model
+
+    base = """package P {{
+    port def DataPort;
+    part def PerceptionSystem {{
+        out port data : DataPort;
+    }}
+    part def FlightController {{
+        in port data : DataPort;
+    }}{extra}
+    part perceptionSystem : PerceptionSystem;
+    part flightController : FlightController;
+    connect perceptionSystem.data to flightController.data;
+}}"""
+
+    def score(extra):
+        text = base.format(extra=extra)
+        model = build_lite_model(text, model_name="P")
+        ev = DesignEvaluator(quality_threshold=0.75).evaluate(
+            DesignConfiguration(name="t", parameters={}), model,
+            syntax_result=check_syntax(text),
+            sim_result=SimulationValidator().validate(text, model_name="P"),
+            requirements=[],
+        )
+        return ev.criteria_scores
+
+    clean = score("")
+    with_machinery = score(
+        "\n    part def Catalog_r4FlightcontrollerImpl :> FlightController"
+        " { attribute rotorCount : Real = 4.0; }"
+        "\n    part def DseDesignAnalysis { attribute recommendedDesign :"
+        " Real = 1.0; }"
+    )
+    assert with_machinery["structural_completeness"] == (
+        clean["structural_completeness"]
+    )
+    assert with_machinery["interface_quality"] == clean["interface_quality"]
+
+    with_standalone = score(
+        "\n    part def OrphanBox { attribute massKg : Real = 1.0; }"
+    )
+    assert with_standalone["structural_completeness"] < (
+        clean["structural_completeness"]
+    )

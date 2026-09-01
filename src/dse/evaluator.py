@@ -238,6 +238,67 @@ _GUARDED_TRANSITION = re.compile(
 )
 
 
+
+
+def _scoreable_parts(parts: List[Any]) -> List[Any]:
+    """Model parts minus the injected DSE analysis closure wrapper.
+
+    The reachability extractor already exempts ``DseDesignAnalysis`` by its
+    codified name (simulation/extractor.py; dse/analysis_emitter.py declares
+    the constant): the closure holds the recommendedDesign binding, not a
+    system component. The quality denominators follow the same decision."""
+    from .analysis_emitter import ANALYSIS_CLOSURE_DEF_NAME
+
+    return [
+        part for part in parts
+        if getattr(part, "name", None) != ANALYSIS_CLOSURE_DEF_NAME
+    ]
+
+
+def _specialization_bases(text: str, part_name: str) -> List[str]:
+    """Model-local base def names a part def specialises (``:>`` chain heads).
+
+    A catalogue implementation (``Impl :> Planned``) declares no ports of
+    its own BY DESIGN — the variant emitter's contract is that variants
+    "specialise the host type (so they share its ports)"
+    (dse/variation_introducer.py). Scorers that ask "does this part have
+    directed ports" must follow the specialisation, or every emitted
+    variant is charged as an unported component (measured on the seed-0
+    ablation wave: 10 catalogue variants cost FULL's terminal artifact
+    0.043 against NO-DSE on the same ruler)."""
+    match = re.search(
+        rf"\bpart\s+def\s+{re.escape(part_name)}\b([^{{;\n]*)", text
+    )
+    if not match:
+        return []
+    return re.findall(r":>\s*([A-Za-z_][\w:]*)", match.group(1))
+
+
+def _directed_via_specialization(
+    text: str,
+    part_name: str,
+    has_directed_port_of_own,
+    parts_by_name: Dict[str, Any],
+    _seen: Optional[Set[str]] = None,
+) -> bool:
+    """Whether a part def inherits directed ports through its ``:>`` chain."""
+    seen = _seen or set()
+    if part_name in seen:
+        return False
+    seen.add(part_name)
+    for base_name in _specialization_bases(text, part_name):
+        base = parts_by_name.get(base_name.split("::")[-1])
+        if base is None:
+            continue
+        if has_directed_port_of_own(base):
+            return True
+        if _directed_via_specialization(
+            text, base.name, has_directed_port_of_own, parts_by_name, seen,
+        ):
+            return True
+    return False
+
+
 class DesignEvaluator:
     """
     Evaluates SysML v2 design configurations against five quality dimensions.
@@ -746,7 +807,7 @@ class DesignEvaluator:
           no_dangling     (20 %) — fraction of part usages appearing in ≥1 connect
         Connectivity quality (reachability) is measured in behavioral_verification.
         """
-        parts = model.part_definitions
+        parts = _scoreable_parts(model.part_definitions)
         if not parts:
             return 0.0
         n = len(parts)
@@ -768,7 +829,18 @@ class DesignEvaluator:
             return bool(re.search(
                 r"\b(?:in|out|inout)\s+port\s+\w+", body, re.IGNORECASE
             ))
-        port_cov = sum(1 for p in parts if _has_directed_port(p)) / n
+
+        parts_by_name = {p.name: p for p in parts}
+
+        def _has_directed_port_or_inherits(part) -> bool:  # noqa: ANN001
+            if _has_directed_port(part):
+                return True
+            return _directed_via_specialization(
+                text, part.name, _has_directed_port, parts_by_name,
+            )
+        port_cov = sum(
+            1 for p in parts if _has_directed_port_or_inherits(p)
+        ) / n
 
         # ── Attribute coverage (PERF/CONS parts only) ───────────────────
         # Only parts that satisfy PERF or CONS requirements are expected to
@@ -1021,7 +1093,7 @@ class DesignEvaluator:
           direction_cov    (20 %) — fraction of parts with all ports directed
         """
         text = _sysml_text(model)
-        parts = model.part_definitions
+        parts = _scoreable_parts(model.part_definitions)
 
         # ── External port typing ─────────────────────────────────────────
         # Only penalise DataPort on ports belonging to components that satisfy
@@ -1096,6 +1168,14 @@ class DesignEvaluator:
                 # when direction is declared in a port def body rather than inline.
                 span = named_block_span(text, "part", part.name)
                 if span is None or not part.ports:
+                    # A part with no ports of its own may still inherit a
+                    # fully-directed interface through specialisation
+                    # (Impl :> Planned — the variant emitter's contract).
+                    if not part.ports:
+                        return _directed_via_specialization(
+                            text, part.name, _all_directed,
+                            {p.name: p for p in parts},
+                        )
                     return False
                 body = text[span[0] + 1:span[1]]
                 directed_count = len(re.findall(
