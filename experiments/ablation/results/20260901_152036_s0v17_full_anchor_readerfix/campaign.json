@@ -1,0 +1,129 @@
+{
+  "campaign": "20260901_152036_s0v17_full_anchor_readerfix",
+  "system": "AutonomousDrone",
+  "requirement_source": "examples/drone_system_v2.py (DRONE_FROZEN_REQUIREMENTS)",
+  "requirements_digest": "a2f04214fa1e129bd231b54c83fb728badc7b9eada1224822263a9828fbb893a",
+  "frozen_set_digest": null,
+  "provider": "vertex",
+  "seeds": [
+    0
+  ],
+  "arms_requested": [
+    "FULL"
+  ],
+  "base_pipeline_kwargs": {
+    "max_iterations": 4,
+    "dse_mode": "variation",
+    "verbose": false
+  },
+  "mcts_iterations": 20,
+  "git_commit": "008c3825359e94dc4a6d464a34fc477361ca381c",
+  "git_dirty": false,
+  "git_untracked": [
+    "experiments/ablation/results/20260830_164357_s0_nodetfix_ABORTED_429/",
+    "experiments/ablation/results/20260830_172231_s0_nodetfix_rerun/",
+    "experiments/ablation/results/20260830_175116_s0_nosurgical/",
+    "experiments/ablation/results/20260831_232433_s0v2_full_anchor_ABORTED_HARNESS_GATE/",
+    "experiments/ablation/results/20260831_235007_s0v3_full_anchor_ABORTED_QUOTA/",
+    "experiments/ablation/results/20260901_001730_s0v4_full_anchor_ABORTED_HARNESS_PATCH_CHANNEL/",
+    "experiments/ablation/results/20260901_003310_s0v5_full_anchor/",
+    "experiments/ablation/results/20260901_010939_s0v6_full_anchor/",
+    "experiments/ablation/results/20260901_082720_s0v7_full_anchor/",
+    "experiments/ablation/results/20260901_090647_s0v8_full_anchor/",
+    "experiments/ablation/results/20260901_093634_s0v9_full_anchor/",
+    "experiments/ablation/results/20260901_101509_s0v10_full_anchor/",
+    "experiments/ablation/results/20260901_103817_s0v11_full_anchor/",
+    "experiments/ablation/results/20260901_114520_s0v12_full_anchor_ABORTED_PROVIDER_TIMEOUT/",
+    "experiments/ablation/results/20260901_122014_s0v13_ABORTED_DOUBLE_LAUNCH/",
+    "experiments/ablation/results/20260901_122045_s0v14_ABORTED_PROVIDER_HANG_NO_CAPTURE/",
+    "experiments/ablation/results/20260901_122941_s0v15_full_anchor/",
+    "experiments/ablation/results/20260901_141656_s0v16_full_anchor_postcure/",
+    "experiments/speedup_gate_results/"
+  ],
+  "arm_registry": {
+    "FULL": {
+      "name": "FULL",
+      "ablated_component": "none (baseline \u2014 production default pipeline)",
+      "question": "Baseline for every paired comparison; its own failure rate quantifies current full-chain robustness.",
+      "pipeline_kwargs": {},
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "aa8bc962967029f89e0dfcba0996acd40bac7626a6fe2675de23a30caca4db62"
+    },
+    "NO-DSE": {
+      "name": "NO-DSE",
+      "ablated_component": "bilevel design-space exploration (explore() skipped)",
+      "question": "Does DSE materially improve the final design over the generate-only model?",
+      "pipeline_kwargs": {},
+      "run_dse": false,
+      "posthoc": false,
+      "digest": "d735d73b123264afdbd73c5899466bbeaa82fa4ac05987ecda834a2f7fd0434f"
+    },
+    "DSE-BILEVEL": {
+      "name": "DSE-BILEVEL",
+      "ablated_component": "LLM-declared variation points \u2192 catalog-operator bilevel DSE",
+      "question": "How do the two DSE modes compare on the same spec?",
+      "pipeline_kwargs": {
+        "dse_mode": "bilevel"
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "eb259bc3f4f2189c024317d14c6f4d6fd3f36f2c464e8aeecdaacf2adf04a337"
+    },
+    "NO-REFINE": {
+      "name": "NO-REFINE",
+      "ablated_component": "iterative refinement loop (max_iterations 4 \u2192 1)",
+      "question": "What does iterative refinement contribute beyond the first evaluated candidate?",
+      "pipeline_kwargs": {
+        "max_iterations": 1
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "23592470e6c6f81edfea1fca1e0172cd63dcfafb71e2f20aab7817a57fc5d159"
+    },
+    "NO-SURGICAL": {
+      "name": "NO-SURGICAL",
+      "ablated_component": "surgical block-level refinement (whole-model rewrite only)",
+      "question": "What do scoped block edits save vs full rewrites in quality, preservation, and tokens?",
+      "pipeline_kwargs": {
+        "use_surgical_refinement": false
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "28fdf8fdf953add31760065468f0b55ba8dbbeddca932ef2abe487704ecbdaf5"
+    },
+    "NO-DETFIX": {
+      "name": "NO-DETFIX",
+      "ablated_component": "deterministic fixer chain (Tier-0 syntax fixes; connectivity direction/missing-connect fixes)",
+      "question": "How many LLM calls and failures does the deterministic repair layer absorb?",
+      "pipeline_kwargs": {
+        "use_deterministic_fixers": false
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "5acac5d81b9be0ae990417a5b0100631550ccea16b3832c0c34e8fbd4f5406ae"
+    },
+    "SINGLE-SHOT": {
+      "name": "SINGLE-SHOT",
+      "ablated_component": "multistep typed-plan generation \u2192 legacy single-prompt whole-model generation (plan-conformance gates inapplicable by construction)",
+      "question": "Is structured multistep decomposition necessary, or can one prompt produce an admissible model?",
+      "pipeline_kwargs": {
+        "design_generation_mode": "single_shot"
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "460b211c5e8ca5ac0a830f9c80ea36681375d91237b98046c0e6db0558648d8b"
+    },
+    "W-UNIFORM": {
+      "name": "W-UNIFORM",
+      "ablated_component": "requirement-derived recommendation weights \u2192 uniform weights (offline replay on FULL's saved Pareto fronts)",
+      "question": "Does requirement-traceable weighting actually change which design is recommended?",
+      "pipeline_kwargs": {},
+      "run_dse": true,
+      "posthoc": true,
+      "digest": "592b106b92c24e2f67da2f639464a2638ba8df9ebc6794bc06dbfbf88f01ae58"
+    }
+  },
+  "python": "3.12.13 | packaged by conda-forge | (main, Mar  5 2026, 17:06:14) [Clang 19.1.7 ]",
+  "started": "20260901_152036"
+}
