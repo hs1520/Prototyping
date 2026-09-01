@@ -331,9 +331,26 @@ def run_one(
         closure = result.get("functional_closure") or {}
         qualification = result.get("model_qualification") or {}
         usage = report.get("llm_usage") or {}
+        # final_score is measured at different pipeline stages per arm: DSE
+        # arms re-score the terminal snapshot (A/G layer + DSE closure
+        # injections on the text), non-DSE arms keep the generate-phase
+        # score. Measured on the seed-0 wave: every arm's generate-phase
+        # score was byte-identical (0.9608) while final_score ranged
+        # 0.9181-0.9608 purely by measurement point. generate_phase_score
+        # is the cross-arm comparable number.
+        history_scores = [
+            h.get("score") for h in (report.get("evaluation_history") or ())
+            if isinstance(h, dict) and h.get("score") is not None
+        ]
         record.update({
             "ok": True,
             "final_score": report.get("final_score"),
+            "generate_phase_score": (
+                history_scores[0] if history_scores else None
+            ),
+            "terminal_rescore": (
+                history_scores[-1] if len(history_scores) > 1 else None
+            ),
             "reachability": (report.get("simulation") or {}).get(
                 "reachability_score"
             ),

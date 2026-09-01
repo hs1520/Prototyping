@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 HEADLINE_METRICS = (
     "final_score",
+    "generate_phase_score",
     "reachability",
     "controlled_pass_rate",
     "iterations",
@@ -30,6 +31,7 @@ HEADLINE_METRICS = (
 #: Metrics worth a per-seed paired comparison against FULL.
 PAIRED_METRICS = (
     "final_score",
+    "generate_phase_score",
     "controlled_pass_rate",
     "llm_calls",
     "llm_total_tokens",
@@ -194,7 +196,13 @@ def render_markdown(
         "the load-bearing comparisons; score deltas are indicative only. "
         "A genuine failed run stays in the denominator — failure is data, "
         "not noise; an infrastructure failure (rate limit, transport) is "
-        "reported separately and re-run rather than charged to the arm."
+        "reported separately and re-run rather than charged to the arm. "
+        "final_score is measured at different pipeline stages per arm (DSE "
+        "arms re-score the enriched terminal snapshot; non-DSE arms keep "
+        "the generate-phase score), so cross-arm score comparisons must "
+        "use generate_phase_score; final_score differences between "
+        "DSE-bearing and DSE-less arms reflect the measurement point and "
+        "the terminal enrichment layer, not generation quality."
     )
     lines.append("")
     return "\n".join(lines)
