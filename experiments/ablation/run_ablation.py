@@ -85,6 +85,94 @@ def _infrastructure_failure(message: str) -> bool:
     return any(token in low for token in _INFRA_MARKERS)
 
 
+def _request_digest(
+    message_dicts: List[Dict[str, str]], temperature: float, max_tokens: int,
+) -> str:
+    """Byte-stable identity of one provider request (provider-agnostic)."""
+    return sha256_text(json.dumps(
+        {
+            "messages": message_dicts,
+            "temperature": temperature,
+            "max_tokens": int(max_tokens),
+        },
+        sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+    ))
+
+
+def _capture_observer(calls_path: Path):
+    """Append every completed provider call to a crash-safe JSONL.
+
+    This is what makes a dead run resumable: s0v12 hung on one provider
+    request 34 minutes in and 187k tokens of identical prefix work had to
+    be re-bought. The record is pure observation — prompts, pipeline, and
+    arm digests are untouched."""
+    def _observer(event: Dict[str, Any]) -> None:
+        line = json.dumps({
+            "request_digest": _request_digest(
+                event["messages"], event["temperature"], event["max_tokens"],
+            ),
+            "label": event.get("label"),
+            "response": event["response"],
+        }, ensure_ascii=False, default=str)
+        with open(calls_path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    return _observer
+
+
+class PrefixReplayLLM:
+    """Serve archived responses while requests match the recorded prefix.
+
+    Replay is free and instant; the FIRST divergence (or exhaustion) flips
+    permanently to the live provider — which is exactly resume-from-where-
+    it-broke semantics, with the caveat that any divergence point starts
+    paying from there. The inner ledger counts live calls only, so the
+    run's cost accounting stays honest."""
+
+    def __init__(self, inner, recorded: List[Dict[str, Any]]) -> None:
+        self._inner = inner
+        self._recorded = list(recorded)
+        self._cursor = 0
+        self._live = False
+        self.replayed_calls = 0
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def complete(self, messages, temperature=None, max_tokens=None, **kwargs):
+        from src.llm.interface import (
+            DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE, LLMResponse,
+        )
+        resolved_temp = (
+            DEFAULT_TEMPERATURE if temperature is None else temperature
+        )
+        resolved_max = DEFAULT_MAX_TOKENS if max_tokens is None else max_tokens
+        if not self._live and self._cursor < len(self._recorded):
+            record = self._recorded[self._cursor]
+            digest = _request_digest(
+                [m.to_dict() for m in messages], resolved_temp, resolved_max,
+            )
+            if record.get("request_digest") == digest:
+                self._cursor += 1
+                self.replayed_calls += 1
+                payload = record.get("response") or {}
+                return LLMResponse(
+                    content=str(payload.get("content") or ""),
+                    model=str(payload.get("model") or ""),
+                    prompt_tokens=int(payload.get("prompt_tokens") or 0),
+                    completion_tokens=int(payload.get("completion_tokens") or 0),
+                )
+        if not self._live:
+            self._live = True
+            print(f"  [resume] replayed {self.replayed_calls} archived "
+                  f"call(s) free; live provider from call "
+                  f"{self.replayed_calls + 1}", flush=True)
+        return self._inner.complete(
+            messages, temperature=temperature,
+            **({} if max_tokens is None else {"max_tokens": max_tokens}),
+            **kwargs,
+        )
+
+
 def _git(*args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=REPO, capture_output=True, text=True, check=False
@@ -150,6 +238,7 @@ def run_one(
     base_kwargs: Dict[str, Any],
     mcts_iterations: int,
     campaign_dir: Path,
+    resume_calls: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """One ablation run → flat record (never raises; failures are recorded)."""
     from src.app.pipeline import PrototypingPipeline
@@ -188,6 +277,13 @@ def run_one(
             else None
         )
         llm = create_llm(provider=provider, provider_kwargs=provider_kwargs)
+        calls_path = runs_dir / f"{stem}.calls.jsonl"
+        if hasattr(llm, "add_call_observer"):
+            llm.add_call_observer(_capture_observer(calls_path))
+            record["calls_capture_path"] = str(calls_path)
+        if resume_calls:
+            llm = PrefixReplayLLM(llm, resume_calls)
+            record["resumed_from_calls"] = True
         record.update({
             "llm_model": getattr(llm, "model", None),
             "provider_seed": getattr(llm, "seed", None),
@@ -314,6 +410,10 @@ def main() -> int:
                         default=str(REPO / "experiments/ablation/results"))
     parser.add_argument("--label", default="",
                         help="optional campaign label suffix")
+    parser.add_argument("--resume-calls", default="",
+                        help="path to a previous run's .calls.jsonl: matching "
+                             "request prefix replays free, live from the "
+                             "first divergence (single arm+seed only)")
     parser.add_argument("--allow-dirty", action="store_true",
                         help="permit a real-provider campaign on a dirty "
                              "worktree (recorded either way)")
@@ -370,6 +470,19 @@ def main() -> int:
     print(f"campaign: {campaign_dir}")
     print(f"commit  : {commit[:12]}{' (DIRTY)' if dirty else ''}")
 
+    resume_calls: Optional[List[Dict[str, Any]]] = None
+    if args.resume_calls:
+        if len(args.arms) != 1 or args.seeds != 1:
+            print("✗ --resume-calls applies to exactly one arm × one seed")
+            return 2
+        resume_calls = [
+            json.loads(line)
+            for line in Path(args.resume_calls).read_text().splitlines()
+            if line.strip()
+        ]
+        print(f"resume  : {len(resume_calls)} archived call(s) from "
+              f"{args.resume_calls}")
+
     records: List[Dict[str, Any]] = []
     records_path = campaign_dir / "records.jsonl"
     total = len(args.arms) * args.seeds
@@ -382,6 +495,7 @@ def main() -> int:
             record = run_one(
                 args.provider, arm_name, seed, base_kwargs,
                 args.mcts_iterations, campaign_dir,
+                resume_calls=resume_calls,
             )
             records.append(record)
             with open(records_path, "a", encoding="utf-8") as records_file:
