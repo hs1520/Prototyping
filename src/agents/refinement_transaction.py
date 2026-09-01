@@ -61,6 +61,11 @@ class _RefinementOutcome:
     #: candidate, so without carrying it out a rejected refinement leaves only
     #: a count and the reason it was rejected is unrecoverable afterwards.
     plan_conformance_issues: tuple[str, ...] = ()
+    #: Additive violations deterministically stripped so the candidate's
+    #: in-plan edits could proceed to the normal gates (empty when no salvage
+    #: happened).  Audit trail: without it an accepted-after-salvage candidate
+    #: is indistinguishable from a clean one.
+    plan_conformance_salvage: tuple[str, ...] = ()
 
     @property
     def accepted(self) -> bool:
@@ -182,6 +187,7 @@ class _RefinementTransaction:
             getattr(candidate, "metadata", None) or {}
         ).get("whole_model_generation_plan")
         conformance = None
+        salvage_note: tuple[str, ...] = ()
         if isinstance(raw_plan, Mapping):
             from ..prototyping.generation_plan import (
                 ModelGenerationPlan,
@@ -196,17 +202,58 @@ class _RefinementTransaction:
                 plan_issues = tuple(
                     str(issue) for issue in (conformance.get("issues") or ())
                 )
-                print(
-                    "  ⚠ Refinement violates the frozen typed structure "
-                    f"({len(plan_issues) or 1} issue(s)) "
-                    "— rejected before simulation repair",
-                    flush=True,
+                # ── Conformance-scoped salvage ────────────────────────────
+                # All-or-nothing rejection killed in-plan edits together with
+                # their collateral (s0v16: two forced refinements carrying
+                # the fidelity asserts the terminal gate then failed on were
+                # both rejected whole).  Strip the ADDITIVE violations
+                # deterministically and re-judge; a candidate that removed or
+                # contradicted planned structure still re-checks FAIL and is
+                # rejected exactly as before.  Acceptance discipline is
+                # unchanged — the salvaged text passes through the same
+                # syntax/simulation/score gates below.
+                from ..prototyping.generation_plan import (
+                    strip_unplanned_additions,
                 )
-                return _RefinementOutcome(
-                    model=request.current_model,
-                    decision=_RefinementDecision.PLAN_CONFORMANCE_FAILED,
-                    plan_conformance_issues=plan_issues,
+                stripped_text, salvage_log = strip_unplanned_additions(
+                    candidate_text,
+                    conformance.get("salvage_targets") or {},
                 )
+                salvaged = False
+                if salvage_log:
+                    recheck_text, recheck = apply_generation_plan(
+                        stripped_text,
+                        ModelGenerationPlan.from_dict(raw_plan),
+                    )
+                    if (
+                        recheck.get("status") == "PASS"
+                        and not check_syntax(recheck_text).has_errors
+                    ):
+                        print(
+                            "  ⚠ Refinement violated the frozen typed "
+                            f"structure ({len(plan_issues) or 1} issue(s)) "
+                            f"— salvaged: {len(salvage_log)} unplanned "
+                            "addition(s) stripped, in-plan edits retained",
+                            flush=True,
+                        )
+                        for line in salvage_log:
+                            print(f"      − {line}", flush=True)
+                        candidate_text = recheck_text
+                        conformance = recheck
+                        salvage_note = tuple(salvage_log)
+                        salvaged = True
+                if not salvaged:
+                    print(
+                        "  ⚠ Refinement violates the frozen typed structure "
+                        f"({len(plan_issues) or 1} issue(s)) "
+                        "— rejected before simulation repair",
+                        flush=True,
+                    )
+                    return _RefinementOutcome(
+                        model=request.current_model,
+                        decision=_RefinementDecision.PLAN_CONFORMANCE_FAILED,
+                        plan_conformance_issues=plan_issues,
+                    )
             _sync_model_text(candidate, candidate_text)
 
         candidate_syntax = check_syntax(candidate_text)
@@ -285,6 +332,7 @@ class _RefinementTransaction:
             model=repaired,
             decision=_RefinementDecision.ACCEPTED,
             candidate_rule_score=candidate_score,
+            plan_conformance_salvage=salvage_note,
         )
 
 

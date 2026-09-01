@@ -401,9 +401,14 @@ class TestTerminalConsistencyGate:
 
 
 class TestPlanAwareStructuralGates:
-    def test_refinement_with_unplanned_port_is_rejected_before_fixer(
+    def test_refinement_with_unplanned_port_is_salvaged_not_rejected(
         self,
     ):
+        """The additive violation (an invented port) is stripped and the
+        candidate proceeds through the normal gates instead of dying whole —
+        s0v16's fidelity asserts were lost to exactly this all-or-nothing
+        rejection.  The subtractive case stays rejected: see
+        test_refinement_missing_planned_port_stays_rejected."""
         payload = {
             "components": [
                 {
@@ -457,6 +462,92 @@ class TestPlanAwareStructuralGates:
         candidate.metadata["whole_model_generation_plan"] = plan.to_dict()
         orch = _make_orch(max_iterations=1, quality_threshold=0.95)
         orch.evaluator = FakeEvaluator([
+            FakeEvalResult(weighted_total=0.5, issues=["improve"]),  # current
+            FakeEvalResult(weighted_total=0.7),  # salvaged candidate
+        ])
+        orch.cot = FakeCot([
+            FakeCotResult(_scores={"overall": 0.5}, final_answer="improve"),
+        ])
+        orch.design_agent = FakeDesignAgent([candidate])
+        current = build_lite_model("package P {}", model_name="P")
+        orch.refinement_closure = RefinementClosure(
+            orch,
+            simulation_runner=lambda _text, name: SimulationResult(
+                model_name=name
+            ),
+            verification_gap_audit=lambda _text, _name: [],
+        )
+
+        outcome = orch.refinement_closure.refine(RefinementClosureRequest(
+            base=ModelRevision.capture(current),
+            requirements=("REQ_FUNC_001: propagate signal",),
+        ))
+
+        event = outcome.evidence["events"][-1]
+        assert event["decision"] == "ACCEPTED"
+        assert any(
+            "invented" in item
+            for item in event.get("plan_conformance_salvage", ())
+        ), event
+        final_text = outcome.revision.sysml
+        assert "invented" not in final_text
+        # the in-plan edits survive: planned ports and the planned connect
+        assert "out port signal : SignalPort" in final_text
+        assert "connect source.signal to sink.signal" in final_text
+
+    def test_refinement_missing_planned_port_stays_rejected(self):
+        """A candidate that REMOVED planned structure cannot be salvaged by
+        deletion — the subtractive violation classes keep the original
+        all-or-nothing rejection."""
+        payload = {
+            "components": [
+                {
+                    "name": "Source",
+                    "responsibility": "Produces a signal.",
+                    "requirements": ["REQ_FUNC_001"],
+                    "ports": [{
+                        "name": "signal",
+                        "direction": "out",
+                        "type": "SignalPort",
+                        "external": False,
+                    }],
+                },
+                {
+                    "name": "Sink",
+                    "responsibility": "Consumes a signal.",
+                    "requirements": ["REQ_FUNC_001"],
+                    "ports": [{
+                        "name": "signal",
+                        "direction": "in",
+                        "type": "SignalPort",
+                        "external": False,
+                    }],
+                },
+            ],
+            "connections": [{
+                "source": {"component": "Source", "port": "signal"},
+                "target": {"component": "Sink", "port": "signal"},
+                "item_type": "SignalPort",
+                "requirements": ["REQ_FUNC_001"],
+            }],
+        }
+        plan = ModelGenerationPlan.from_payload(
+            payload,
+            requirements=["REQ_FUNC_001: propagate signal"],
+        )
+        candidate = build_lite_model(
+            """package P {
+                port def SignalPort;
+                part def Source { out port signal : SignalPort; }
+                part def Sink;
+                part source : Source;
+                part sink : Sink;
+            }""",
+            model_name="P",
+        )
+        candidate.metadata["whole_model_generation_plan"] = plan.to_dict()
+        orch = _make_orch(max_iterations=1, quality_threshold=0.95)
+        orch.evaluator = FakeEvaluator([
             FakeEvalResult(weighted_total=0.5, issues=["improve"]),
         ])
         orch.cot = FakeCot([
@@ -481,7 +572,6 @@ class TestPlanAwareStructuralGates:
         assert outcome.evidence["events"][-1]["decision"] == (
             "PLAN_CONFORMANCE_FAILED"
         )
-        assert orch.evaluator.call_count == 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────

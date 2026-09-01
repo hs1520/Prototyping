@@ -1940,7 +1940,19 @@ class _RefinementEngine:
                     "plan_conformance_issues": list(
                         outcome.plan_conformance_issues
                     ),
+                    "plan_conformance_salvage": list(
+                        getattr(outcome, "plan_conformance_salvage", ())
+                    ),
                 })
+                if getattr(outcome, "plan_conformance_salvage", ()):
+                    self._append_pipeline_state_list(
+                        "plan_conformance_salvages", {
+                            "stage": "ITERATIVE_REFINEMENT",
+                            "iteration": iteration + 1,
+                            "decision": outcome.decision.value,
+                            "removed": list(outcome.plan_conformance_salvage),
+                        }
+                    )
                 if outcome.plan_conformance_issues:
                     self._append_pipeline_state_list(
                         "plan_conformance_rejections", {

@@ -65,6 +65,7 @@ class PipelineRuntimeState:
         default_factory=list)
     response_conformance_repair_attempts: list[Dict[str, Any]] = field(default_factory=list)
     plan_conformance_rejections: list[Dict[str, Any]] = field(default_factory=list)
+    plan_conformance_salvages: list[Dict[str, Any]] = field(default_factory=list)
     requirement_semantic_analysis: Any = None
     requirement_input: Dict[str, Any] = field(default_factory=dict)
     ag_authoring_attempts: list[Dict[str, Any]] = field(default_factory=list)

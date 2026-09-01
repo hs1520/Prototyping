@@ -1075,3 +1075,125 @@ def test_response_markers_survive_the_plan_serialisation_round_trip():
     )
     realization = plan.requirement_realizations[0].to_dict()
     assert realization["response_markers"] == ["alert"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  strip_unplanned_additions — the conformance-scoped salvage knife
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_strip_unplanned_additions_removes_each_additive_class():
+    from src.prototyping.generation_plan import strip_unplanned_additions
+
+    text = """package P {
+    port def SignalPort;
+    part def Source {
+        out port signal : SignalPort;
+        out port invented : SignalPort;
+        assert constraint altitudeBound { maxAltitude <= 120.0 }
+    }
+    part def Sink { in port signal : SignalPort; }
+    part def Gadget {
+        in port stuff : SignalPort;
+    }
+    part source : Source;
+    part sink : Sink;
+    part gadget : Gadget;
+    connect source.signal to sink.signal;
+    connect source.invented to gadget.stuff;
+}"""
+    stripped, removed = strip_unplanned_additions(text, {
+        "connections": [["source", "invented", "gadget", "stuff"]],
+        "ports": [["Source", "invented", "out", "SignalPort"]],
+        "component_usages": [["gadget", "Gadget"]],
+        "part_definitions": ["Gadget"],
+    })
+
+    assert len(removed) == 4, removed
+    assert "invented" not in stripped
+    assert "Gadget" not in stripped
+    assert "gadget" not in stripped
+    # the in-plan edits survive intact
+    assert "out port signal : SignalPort" in stripped
+    assert "assert constraint altitudeBound" in stripped
+    assert "connect source.signal to sink.signal" in stripped
+    # no dangling header remains from the part-def deletion
+    assert "part def\n" not in stripped and "part def ;" not in stripped
+
+
+def test_strip_sweeps_connects_referencing_a_dropped_usage():
+    from src.prototyping.generation_plan import strip_unplanned_additions
+
+    text = """package P {
+    part def A { out port p : X; }
+    part def B { in port q : X; }
+    part a : A;
+    part b : B;
+    connect a.p to b.q;
+}"""
+    stripped, removed = strip_unplanned_additions(text, {
+        "component_usages": [["b", "B"]],
+    })
+
+    assert "part b : B" not in stripped
+    assert "connect a.p to b.q" not in stripped
+    assert any("dropped usage b" in item for item in removed)
+
+
+def test_conformance_report_carries_salvage_targets():
+    payload = {
+        "components": [
+            {
+                "name": "Source",
+                "responsibility": "Produces a signal.",
+                "requirements": ["REQ_FUNC_001"],
+                "ports": [{
+                    "name": "signal",
+                    "direction": "out",
+                    "type": "SignalPort",
+                    "external": False,
+                }],
+            },
+            {
+                "name": "Sink",
+                "responsibility": "Consumes a signal.",
+                "requirements": ["REQ_FUNC_001"],
+                "ports": [{
+                    "name": "signal",
+                    "direction": "in",
+                    "type": "SignalPort",
+                    "external": False,
+                }],
+            },
+        ],
+        "connections": [{
+            "source": {"component": "Source", "port": "signal"},
+            "target": {"component": "Sink", "port": "signal"},
+            "item_type": "SignalPort",
+            "requirements": ["REQ_FUNC_001"],
+        }],
+    }
+    plan = ModelGenerationPlan.from_payload(
+        payload, requirements=["REQ_FUNC_001: propagate signal"],
+    )
+    model = """package P {
+        port def SignalPort;
+        part def Source {
+            out port signal : SignalPort;
+            out port invented : SignalPort;
+        }
+        part def Sink { in port signal : SignalPort; }
+        part source : Source;
+        part sink : Sink;
+        connect source.signal to sink.signal;
+    }"""
+    _, report = apply_generation_plan(model, plan)
+
+    assert report["status"] == "FAIL"
+    targets = report["salvage_targets"]
+    assert ["Source", "invented", "out", "SignalPort"] in targets["ports"]
+    # and the salvage round-trips to PASS
+    from src.prototyping.generation_plan import strip_unplanned_additions
+    stripped, removed = strip_unplanned_additions(model, targets)
+    assert removed
+    _, recheck = apply_generation_plan(stripped, plan)
+    assert recheck["status"] == "PASS", recheck["issues"]

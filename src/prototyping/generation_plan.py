@@ -2571,11 +2571,15 @@ def apply_generation_plan(
         for component, usages in actual_by_type.items()
         if component in planned_component_types and len(usages) != 1
     )
-    unplanned_components = sorted(
-        f"{instance} : {component_type}"
+    unplanned_component_tuples = sorted(
+        (instance, component_type)
         for instance, component_type in actual_instance_types.items()
         if _planned_type_of(component_type) is None
     )
+    unplanned_components = [
+        f"{instance} : {component_type}"
+        for instance, component_type in unplanned_component_tuples
+    ]
 
     planned_ports = {
         (
@@ -2842,6 +2846,163 @@ def apply_generation_plan(
         "unplanned_ports": unplanned_ports,
         "internalized_external_ports": internalized_external_ports,
         "definition_contract": definition_contract,
+        # Deterministic deletion targets for the additive violation classes --
+        # exactly what strip_unplanned_additions() consumes.  Deletion is the
+        # anti-fabrication-safe direction: an ADDED element can be removed
+        # without inventing anything, whereas a missing/contradicted planned
+        # element cannot be restored deterministically and stays FAIL.
+        "salvage_targets": {
+            "part_definitions": list(
+                definition_contract["unplanned_part_definitions"]
+            ),
+            "component_usages": [
+                [instance, component_type]
+                for instance, component_type in unplanned_component_tuples
+            ],
+            "ports": [
+                [owner_def, name, direction, port_type]
+                for component, name, direction, port_type
+                in unjustified_port_tuples
+                for owner_def in owner_actual_types.get(component, ())
+            ],
+            "connections": [
+                [src, source_port, target, target_port]
+                for src, source_port, target, target_port
+                in unjustified_connection_tuples
+            ],
+        },
         "issues": list(dict.fromkeys(issues)),
     }
     return final_text, report
+
+
+def strip_unplanned_additions(
+    model_text: str,
+    salvage_targets: Mapping[str, Any],
+) -> tuple[str, list[str]]:
+    '''Deterministically delete the additive plan violations from a candidate.
+
+    A refinement candidate that bundles in-plan edits (an assert constraint,
+    a doc, an attribute value) with out-of-plan additions used to be rejected
+    whole by the conformance gate -- the good fix died with the collateral
+    (s0v16: two forced refinements carrying fidelity asserts were both
+    rejected for exactly this).  Deletion never fabricates: only elements the
+    conformance report identified as unplanned ADDITIONS are removed, in
+    dependency order (connections -> ports -> usages -> part definitions).
+    The caller MUST re-run apply_generation_plan and the syntax check on the
+    result and keep the candidate only if both are clean -- this function is
+    the knife, not the judge.
+
+    Returns (stripped_text, removal_log); an empty log means nothing this
+    function knows how to remove was found (caller keeps the rejection).
+    '''
+    text = str(model_text or "")
+    removed: list[str] = []
+
+    def _drop_span(start: int, end: int) -> None:
+        nonlocal text
+        # swallow the trailing newline so no blank line is left behind
+        while end < len(text) and text[end] in " \t":
+            end += 1
+        if end < len(text) and text[end] == "\n":
+            end += 1
+        # and the line's leading indentation
+        line_start = text.rfind("\n", 0, start) + 1
+        if text[line_start:start].strip() == "":
+            start = line_start
+        text = text[:start] + text[end:]
+
+    def _drop_statement(pattern: "re.Pattern[str]", label: str) -> None:
+        match = pattern.search(text)
+        if match is None:
+            return
+        start, end = match.start(), match.end()
+        # a declaration may carry a brace body instead of ';'
+        if end > 0 and text[end - 1] == "{":
+            close = find_block_end(text, end - 1)
+            if close == -1:
+                return
+            end = close + 1
+        _drop_span(start, end)
+        removed.append(label)
+
+    for item in salvage_targets.get("connections") or ():
+        src, source_port, target, target_port = item
+        _drop_statement(
+            re.compile(
+                rf"\bconnect\s+{re.escape(src)}\s*\.\s*{re.escape(source_port)}"
+                rf"\s+to\s+{re.escape(target)}\s*\.\s*{re.escape(target_port)}"
+                rf"\s*;"
+            ),
+            f"unplanned connection {src}.{source_port} -> "
+            f"{target}.{target_port}",
+        )
+
+    for item in salvage_targets.get("ports") or ():
+        owner_def, name, direction, port_type = item
+        span = named_block_span(text, "part", owner_def)
+        if span is None:
+            continue
+        body = text[span[0]:span[1] + 1]
+        pattern = re.compile(
+            rf"\b{re.escape(direction)}\s+port\s+{re.escape(name)}\s*:"
+            rf"\s*{re.escape(str(port_type))}\s*(?:;|\{{)"
+        )
+        match = pattern.search(body)
+        if match is None:
+            continue
+        start = span[0] + match.start()
+        end = span[0] + match.end()
+        if text[end - 1] == "{":
+            close = find_block_end(text, end - 1)
+            if close == -1:
+                continue
+            end = close + 1
+        _drop_span(start, end)
+        removed.append(
+            f"unplanned port {owner_def}.{name} ({direction}:{port_type})"
+        )
+
+    for item in salvage_targets.get("component_usages") or ():
+        instance, component_type = item
+        _drop_statement(
+            re.compile(
+                rf"\bpart\s+{re.escape(instance)}\s*:"
+                rf"\s*{re.escape(component_type)}\s*(?:;|\{{)"
+            ),
+            f"unplanned component usage {instance} : {component_type}",
+        )
+        # connects referencing the dropped instance are dangling now; the
+        # conformance re-check the caller runs treats any we miss as FAIL,
+        # so sweep the obvious ones here.
+        while True:
+            match = re.search(
+                rf"\bconnect\s+[^;]*\b{re.escape(instance)}\s*\.[^;]*;",
+                text,
+            )
+            if match is None:
+                break
+            _drop_span(match.start(), match.end())
+            removed.append(
+                f"connection referencing dropped usage {instance}"
+            )
+
+    for name in salvage_targets.get("part_definitions") or ():
+        # named_block_span returns brace-to-brace; the declaration HEADER must
+        # go too, so locate it with the same supertype-tolerant pattern.
+        header = named_def_pattern("part", str(name)).search(text)
+        if header is not None:
+            close = find_block_end(text, header.end() - 1)
+            if close == -1:
+                continue
+            _drop_span(header.start(), close + 1)
+        else:
+            bodiless = re.search(
+                rf"\bpart\s+def\s+{re.escape(str(name))}\b[^;{{}}]*;", text
+            )
+            if bodiless is None:
+                continue
+            _drop_span(bodiless.start(), bodiless.end())
+        removed.append(f"unplanned part definition {name}")
+
+    return text, removed

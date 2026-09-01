@@ -142,6 +142,7 @@ _STATE_FIELDS = {
     ),
     "last_response_conformance_repair_attempts": "response_conformance_repair_attempts",
     "last_plan_conformance_rejections": "plan_conformance_rejections",
+    "last_plan_conformance_salvages": "plan_conformance_salvages",
     "last_requirement_semantic_analysis": "requirement_semantic_analysis",
     "last_requirement_input": "requirement_input",
     "last_ag_authoring_attempts": "ag_authoring_attempts",
