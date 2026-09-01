@@ -344,3 +344,29 @@ def test_a_patch_with_no_repair_base_asks_for_a_full_plan():
     # without a base, the retry instruction demands one complete object
     assert "complete replacement JSON object" in prompter.contexts[1]
     assert outcome.plan.status == "PASS"
+
+
+def test_a_format_failure_keeps_the_outstanding_semantic_issues_in_view():
+    """A format failure replaces nothing: the repair base still carries the
+    last round's semantic issues, but the old retry prompt showed only the
+    parse error — the next attempt had nothing to fix but the fence."""
+    healthy = _healthy_payload()
+    broken = json.loads(json.dumps(healthy))
+    fixed_component = None
+    for component in broken["components"]:
+        if component["name"] == "PayloadMechanism":
+            fixed_component = json.loads(json.dumps(component))
+            component["responsibility"] = ""
+    assert fixed_component is not None
+
+    outcome, prompter = _generate([
+        broken,                                       # semantic issues
+        None,                                         # unparseable response
+        {"plan_patch": True, "components": [fixed_component]},
+    ])
+
+    assert outcome.plan.status == "PASS"
+    format_retry_prompt = prompter.contexts[2]
+    assert "FORMAT CORRECTION" in format_retry_prompt
+    assert "STILL OUTSTANDING from the repair base" in format_retry_prompt
+    assert "has no stated responsibility" in format_retry_prompt

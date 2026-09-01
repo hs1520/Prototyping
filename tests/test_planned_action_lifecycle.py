@@ -259,3 +259,41 @@ def test_artifact_projection_is_a_fresh_copy():
     first = observed.to_artifact_dict()
     first["status"] = "MUTATED"
     assert observed.to_artifact_dict()["status"] == "ADVISORY"
+
+
+def test_namespace_regression_rolls_back_the_complete_candidate(monkeypatch):
+    """Duplicate members are warning-level for the syntax checker but a hard
+    USER_NAMESPACE_INTEGRITY failure at terminal qualification — and this
+    writer runs AFTER the one bounded namespace repair pass, so a collision
+    injected here would reach qualification with no repair downstream."""
+    import src.agents.planned_action_lifecycle as lifecycle
+
+    original = _model()
+
+    def _fake_materialize(source, _effects):
+        # Whatever the materializer would write, the gate must catch a
+        # duplicate-member increase. This shape (action def + attribute
+        # sharing one unreferenced name) is warning-level for the syntax
+        # checker — exactly the s0v7 escape route.
+        import re
+        match = re.search(r"(part def \w+ \{)", source)
+        assert match
+        injected = source[:match.end()] + (
+            "\n        action def zzShadowProbe {}"
+            "\n        attribute zzShadowProbe : Boolean;"
+        ) + source[match.end():]
+        return injected, ()
+
+    monkeypatch.setattr(
+        lifecycle, "_materialize_runtime_effects", _fake_materialize
+    )
+    prepared = lifecycle.prepare_planned_actions(
+        original, model_plan=_model_plan(), ag_plan=_ag_plan(),
+    )
+
+    assert prepared.model_text == original
+    assert prepared.changed is False
+    assert prepared.syntax_disposition == "REJECTED_NAMESPACE_REGRESSION"
+    assert "NAMESPACE_REGRESSION_ROLLBACK" in {
+        item.code for item in prepared.diagnostics
+    }

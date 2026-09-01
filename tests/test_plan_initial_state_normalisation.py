@@ -242,3 +242,41 @@ def test_an_action_def_realization_is_not_cross_checked_against_behaviors():
         requirements=["REQ_SAFE_006: maintain the locked state"],
     )
     assert not any("is not a planned behavior" in i for i in plan.issues)
+
+
+def test_self_qualified_transition_endpoints_are_stripped_and_audited():
+    """Same mechanical category as initial_state, on the transition surface:
+    a source/target spelled Behavior::State (or Owner::Behavior::State) with
+    the machine's own identity as prefix and a declared state as suffix is a
+    spelling, not a different state. Foreign prefixes stay for the validator."""
+    behaviors, audit = normalise_planned_behavior_identities([
+        PlannedBehavior.from_dict({
+            "owner": "Mechanism",
+            "behavior_id": "ReleaseBehavior",
+            "initial_state": "Locked",
+            "states": [
+                {"state_id": "Locked", "role": "INITIAL"},
+                {"state_id": "Releasing", "role": "RESPONSE",
+                 "entry_action": "actuateRelease"},
+            ],
+            "transitions": [{
+                "transition_id": "toReleasing",
+                "source": "ReleaseBehavior::Locked",
+                "target": "Mechanism::ReleaseBehavior::Releasing",
+                "trigger_kind": "ACCEPT",
+                "trigger": "DeliveryCoordinateSatisfied",
+            }, {
+                "transition_id": "foreign",
+                "source": "OtherBehavior::Locked",
+                "target": "Releasing",
+                "trigger_kind": "ACCEPT",
+                "trigger": "SomeEvent",
+            }],
+        })
+    ])
+    transitions = {t.transition_id: t for t in behaviors[0].transitions}
+    assert transitions["toReleasing"].source == "Locked"
+    assert transitions["toReleasing"].target == "Releasing"
+    # foreign prefix untouched — the validator refuses it
+    assert transitions["foreign"].source == "OtherBehavior::Locked"
+    assert sum("transition toReleasing" in line for line in audit) == 2

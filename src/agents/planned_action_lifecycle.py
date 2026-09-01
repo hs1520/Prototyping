@@ -100,9 +100,28 @@ def prepare_planned_actions(
             _audit_effects=audit_effects,
         )
 
+    from ..prototyping.namespace_integrity import (
+        check_user_namespace_integrity,
+    )
+
     before = check_syntax(source).total_errors()
     after = check_syntax(candidate).total_errors()
-    if after > before:
+    # Duplicate members are warning-level for the syntax checker but a hard
+    # USER_NAMESPACE_INTEGRITY failure at terminal qualification — and this
+    # writer runs AFTER the namespace repair pass, so a collision injected
+    # here has no repair downstream. Gate on that regression too.
+    duplicates_before = len(
+        check_user_namespace_integrity(source)["duplicate_members"]
+    )
+    duplicates_after = len(
+        check_user_namespace_integrity(candidate)["duplicate_members"]
+    )
+    if after > before or duplicates_after > duplicates_before:
+        rollback_code = (
+            "SYNTAX_REGRESSION_ROLLBACK"
+            if after > before
+            else "NAMESPACE_REGRESSION_ROLLBACK"
+        )
         rolled_back = tuple(
             replace(
                 item,
@@ -112,11 +131,15 @@ def prepare_planned_actions(
                 }.get(item.code, item.code),
             )
             for item in diagnostics
-        ) + (ActionDiagnostic(code="SYNTAX_REGRESSION_ROLLBACK"),)
+        ) + (ActionDiagnostic(code=rollback_code),)
         return PlannedActionPreparation(
             model_text=source,
             changed=False,
-            syntax_disposition="REJECTED_SYNTAX_REGRESSION",
+            syntax_disposition=(
+                "REJECTED_SYNTAX_REGRESSION"
+                if after > before
+                else "REJECTED_NAMESPACE_REGRESSION"
+            ),
             diagnostics=rolled_back,
             _audit_effects=audit_effects,
         )

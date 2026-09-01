@@ -114,6 +114,7 @@ class TypedPlanGeneration:
         last_valid_payload: dict[str, Any] | None = None
         previous_attempt_issues: tuple[str, ...] = ()
         previous_failure_kind: str | None = None
+        outstanding_semantic_issues: tuple[str, ...] = ()
         previous_request_signature: tuple[str, float] | None = None
 
         while len(attempts) < self._maximum_attempts:
@@ -244,6 +245,8 @@ class TypedPlanGeneration:
                     )
 
             unique_issues = tuple(dict.fromkeys(attempt_issues))
+            if failure_kind != "FORMAT_UNAVAILABLE" and plan is not None:
+                outstanding_semantic_issues = unique_issues
             if attempt_index == 0:
                 correction_outcome = "INITIAL_ATTEMPT"
             elif failure_kind == "NONE":
@@ -374,6 +377,20 @@ class TypedPlanGeneration:
                     + "VALIDATION ISSUES:\n"
                     + "\n".join(
                         f"- {issue}" for issue in attempt_record["issues"]
+                    )
+                    # A format failure replaces nothing: the repair base
+                    # still carries the last round's semantic issues, and
+                    # dropping them from the prompt (measured protocol gap)
+                    # left the next attempt nothing to fix but the fence.
+                    + (
+                        "\nSTILL OUTSTANDING from the repair base:\n"
+                        + "\n".join(
+                            f"- {issue}"
+                            for issue in outstanding_semantic_issues
+                        )
+                        if failure_kind == "FORMAT_UNAVAILABLE"
+                        and outstanding_semantic_issues
+                        else ""
                     ),
                     repair_base,
                 )

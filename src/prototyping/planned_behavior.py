@@ -210,6 +210,35 @@ def normalise_planned_behavior_identities(
                     f"{initial!r} -> {segments[-1]!r} (self-qualified "
                     "reference stripped; states[] declares the bare name)"
                 )
+        stripped_transitions = []
+        transitions_changed = False
+        for transition in behavior.transitions:
+            updated = transition
+            for field_name in ("source", "target"):
+                value = getattr(transition, field_name)
+                if "::" not in value:
+                    continue
+                segments = [part.strip() for part in value.split("::")]
+                if segments[-1] in state_ids and segments[:-1] in (
+                    [behavior.behavior_id],
+                    [behavior.owner, behavior.behavior_id],
+                ):
+                    updated = replace(
+                        updated, **{field_name: segments[-1]}
+                    )
+                    audit.append(
+                        f"{behavior.owner}::{behavior.behavior_id} "
+                        f"transition {transition.transition_id} "
+                        f"{field_name} {value!r} -> {segments[-1]!r} "
+                        "(self-qualified reference stripped)"
+                    )
+            if updated is not transition:
+                transitions_changed = True
+            stripped_transitions.append(updated)
+        if transitions_changed:
+            behavior = replace(
+                behavior, transitions=tuple(stripped_transitions)
+            )
         if behavior.initial_state in state_ids and not any(
             state.role == "INITIAL" for state in behavior.states
         ):
