@@ -1534,9 +1534,55 @@ class ModelGenerationPlan:
             (behavior.owner, behavior.behavior_id)
             for behavior in planned_behaviors
         }
+        # A realization naming a STATE of a planned machine as its
+        # behavior_name collides with the sole writer's namespace: the
+        # machine materialises with that state INSIDE it, so no standalone
+        # `state def <state>` will ever exist and the obligation compiled
+        # from the name is unsatisfiable. Measured (s0v6 anchor):
+        # REQ_SAFE_006 recorded 'Locked' — a state of PayloadMechanism's
+        # one planned machine — and lost terminal qualification to the
+        # frozen obligation STATE_DEF PayloadMechanism.Locked. Derive,
+        # don't re-ask: a name that is exactly one planned machine's state
+        # reconciles to that machine (audited). A name that matches NO
+        # planned machine or state stays untouched — realizations
+        # legitimately name behaviours that Step 4 authors beyond the
+        # planned machines (run2's archived plan carries three).
+        states_to_behavior: dict[tuple[str, str], list[str]] = {}
+        for behavior in planned_behaviors:
+            for state in behavior.states:
+                states_to_behavior.setdefault(
+                    (behavior.owner, state.state_id), []
+                ).append(behavior.behavior_id)
+        behaviors_by_owner: dict[str, list[str]] = {}
+        for behavior in planned_behaviors:
+            behaviors_by_owner.setdefault(
+                behavior.owner, []
+            ).append(behavior.behavior_id)
         kind_reconciliations: list[str] = []
         kind_reconciled: list[RequirementRealizationPlan] = []
         for item in requirement_realizations:
+            if (
+                item.realization_kind == "LOCAL_BEHAVIOR"
+                # STATE_DEF only: behaviors[] writes state machines and
+                # nothing else, so an ACTION_DEF realization legitimately
+                # names an action def that behaviors[] never declares.
+                and item.behavior_kind == "STATE_DEF"
+                and item.behavior_name
+                and item.owner_component in behaviors_by_owner
+                and (item.owner_component, item.behavior_name)
+                not in planned_behavior_keys
+            ):
+                owning = states_to_behavior.get(
+                    (item.owner_component, item.behavior_name), []
+                )
+                if len(owning) == 1:
+                    kind_reconciliations.append(
+                        f"{item.requirement_id}::{item.owner_component} "
+                        f"behavior_name {item.behavior_name!r} -> "
+                        f"{owning[0]!r} (a state of that machine, not a "
+                        "machine; behaviors[] is the sole writer)"
+                    )
+                    item = replace(item, behavior_name=owning[0])
             if (
                 item.realization_kind == "LOCAL_BEHAVIOR"
                 and item.behavior_kind != "STATE_DEF"
