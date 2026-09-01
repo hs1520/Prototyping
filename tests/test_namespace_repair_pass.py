@@ -292,3 +292,94 @@ def test_requirement_coverage_issues_use_the_terminal_gates_own_regexes():
     issues2 = _requirement_coverage_issues(text_no_satisfy, ["REQ_FUNC_001: x"])
     assert len(issues2) == 1 and "no satisfy link" in issues2[0]
     assert _requirement_coverage_issues(text, ["REQ_FUNC_001: x"]) == []
+
+
+def _s0_style_setup(tampered_connect: str):
+    import json as _json
+    from pathlib import Path
+    from src.simulation.validator import SimulationResult
+
+    fixtures = Path(__file__).parent / "fixtures" / "plan_deadlock_20260831"
+    text = (fixtures / "final_model.sysml").read_text()
+    payload = _json.loads(
+        (fixtures / "whole_model_generation_plan.json").read_text()
+    )
+    requirements = _json.loads((fixtures / "requirements.json").read_text())
+    tampered = text.replace(
+        "part airframe : Airframe;",
+        f"part airframe : Airframe;\n    {tampered_connect}",
+        1,
+    )
+    assert tampered != text
+    model = build_lite_model(tampered, model_name="AutonomousDrone")
+    model.metadata["whole_model_generation_plan"] = payload
+    return model, requirements, SimulationResult(model_name="AutonomousDrone")
+
+
+def test_unplanned_connect_removal_pass_removes_and_audits():
+    """s0v9/s0v10 died twice on the same invented connect: visible in-loop
+    via the rider, fatal at terminal, and nothing empowered to remove it.
+    The plan is the sole writer of connectivity — an unjustified unplanned
+    connect is removed deterministically, evidence-gated."""
+    connect = "connect airframe.structuralMount to perceptionSystem.obstacleData;"
+    model, requirements, baseline = _s0_style_setup(connect)
+    orchestrator = Orchestrator(
+        _NoCallLLM(), max_iterations=1, quality_threshold=0.5,
+    )
+    closure = RefinementClosure(
+        orchestrator, intelligence=ScriptedRefinementIntelligence(),
+        simulation_runner=lambda _t, n: SimulationResult(model_name=n),
+    )
+    engine = closure._RefinementClosure__implementation
+
+    repaired, _sim, accepted = engine._unplanned_connect_removal_pass(
+        model, baseline, rule_score=0.9,
+        requirements=requirements, dse_best_config=None,
+    )
+
+    assert accepted is True
+    from src.utils.sysml_text_utils import get_sysml_text
+    assert connect not in get_sysml_text(repaired)
+    attempts = orchestrator.last_unplanned_connect_removal_attempts
+    assert [a["status"] for a in attempts] == ["ACCEPTED"]
+    assert attempts[0]["removed_statements"] == [
+        "airframe.structuralMount -> perceptionSystem.obstacleData"
+    ]
+
+
+def test_unplanned_connect_removal_rolls_back_on_sim_regression():
+    """A load-bearing connect regresses the candidate simulation and rolls
+    back — fail-loud is restored, nothing is silently severed."""
+    from src.simulation.simulator import ScenarioResult
+
+    connect = "connect airframe.structuralMount to perceptionSystem.obstacleData;"
+    model, requirements, baseline = _s0_style_setup(connect)
+
+    def _failing_sim(_text, name):
+        return SimulationResult(model_name=name, scenario_results=[
+            ScenarioResult(
+                scenario_name="x", description="", tags=[], reachable=False,
+                path=[], missing_nodes=["y"], unreachable_targets=["y"],
+                issues=[],
+            ),
+        ])
+
+    orchestrator = Orchestrator(
+        _NoCallLLM(), max_iterations=1, quality_threshold=0.5,
+    )
+    closure = RefinementClosure(
+        orchestrator, intelligence=ScriptedRefinementIntelligence(),
+        simulation_runner=_failing_sim,
+    )
+    engine = closure._RefinementClosure__implementation
+
+    repaired, _sim, accepted = engine._unplanned_connect_removal_pass(
+        model, baseline, rule_score=0.9,
+        requirements=requirements, dse_best_config=None,
+    )
+
+    assert accepted is False
+    assert repaired is model
+    attempts = orchestrator.last_unplanned_connect_removal_attempts
+    assert attempts[0]["status"] == "REJECTED"
+    assert attempts[0]["reason"] == "regression"

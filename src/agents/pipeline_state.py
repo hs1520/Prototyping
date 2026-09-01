@@ -137,6 +137,9 @@ _STATE_FIELDS = {
     "last_functional_closure": "functional_closure",
     "last_verification_anchor_attempts": "verification_anchor_attempts",
     "last_namespace_repair_attempts": "namespace_repair_attempts",
+    "last_unplanned_connect_removal_attempts": (
+        "unplanned_connect_removal_attempts"
+    ),
     "last_response_conformance_repair_attempts": "response_conformance_repair_attempts",
     "last_plan_conformance_rejections": "plan_conformance_rejections",
     "last_requirement_semantic_analysis": "requirement_semantic_analysis",

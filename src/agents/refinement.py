@@ -1755,6 +1755,15 @@ class _RefinementEngine:
                             dse_best_config=dse_best_config,
                         )
                     )
+                    current_model, sim_result, _ = (
+                        self._unplanned_connect_removal_pass(
+                            current_model=current_model,
+                            sim_result=sim_result,
+                            rule_score=rule_score,
+                            requirements=requirements,
+                            dse_best_config=dse_best_config,
+                        )
+                    )
                     print(f"  ✓ Quality threshold {self.quality_threshold} reached",
                           flush=True)
                     return current_model, score, sim_result
@@ -3201,36 +3210,173 @@ class _RefinementEngine:
         the result along like the namespace/response/warning advisories, so
         the author can remove or justify a deviation while still in the
         loop. Read-only: the materialised copy is discarded."""
-        from collections.abc import Mapping as _Mapping
-
-        raw_plan = (getattr(model, "metadata", None) or {}).get(
-            "whole_model_generation_plan"
-        )
-        if not isinstance(raw_plan, _Mapping):
-            return []
         try:
-            from ..prototyping.generation_plan import (
-                ModelGenerationPlan, apply_generation_plan,
+            conformance = self._plan_conformance_report(
+                model_text, model, requirements
             )
-            plan = ModelGenerationPlan.from_payload(
-                dict(raw_plan),
-                requirements=list(requirements or ()),
-                source="IN_LOOP_CONFORMANCE_PROJECTION",
-                require_source_anchored_paths=True,
-            )
-            _discarded, conformance = apply_generation_plan(model_text, plan)
         except Exception as error:
             # A rider must not kill the loop, and it must not fail silently.
             return [
                 "[PLAN-CONFORMANCE] projection failed: "
                 f"{type(error).__name__}: {error}"
             ]
+        if conformance is None:
+            return []
         return [
             f"[PLAN-CONFORMANCE] {issue} — the terminal conformance gate "
             "fails closed on this; remove the deviation or justify it with "
             "an in-body doc /* rationale; satisfies REQ_... */"
             for issue in (conformance.get("issues") or ())
         ]
+
+    def _unplanned_connect_removal_pass(
+        self,
+        current_model,
+        sim_result,
+        rule_score: float,
+        requirements,
+        dse_best_config,
+    ):
+        """Deterministically remove connects the plan never sanctioned.
+
+        The plan is the sole writer of connectivity: an unplanned,
+        unjustified connect has no authority behind it, the terminal
+        conformance gate fails closed on it, and the riders can only SHOW
+        it — with quality met and no iterations left nothing removes it
+        (measured twice, s0v9/s0v10: the same invented
+        airframe->perception connect, visible in-loop, fatal at terminal).
+        Zero LLM. Evidence-gated like every repair pass, with RELATIVE
+        gates: accepted only when the conformance residue strictly shrinks,
+        syntax stays clean, and neither simulation nor behavioral execution
+        gets worse — a load-bearing connect regresses the sim and rolls
+        back, restoring fail-loud."""
+        import re as _re
+        from ..utils.sysml_text_utils import get_sysml_text, set_sysml_text
+        from .verification_audit import behavioral_result_regressed
+
+        full_text = get_sysml_text(current_model)
+        try:
+            conformance = self._plan_conformance_report(
+                full_text, current_model, requirements
+            )
+        except Exception:
+            return current_model, sim_result, False
+        if not isinstance(conformance, dict):
+            return current_model, sim_result, False
+        justified = set(
+            conformance.get("justified_extension_connections") or ()
+        )
+        unplanned = [
+            item for item in (conformance.get("unplanned_connections") or ())
+            if item not in justified
+        ]
+        if not unplanned:
+            return current_model, sim_result, False
+
+        candidate = full_text
+        removed: list = []
+        for identity in unplanned:
+            try:
+                left, right = identity.split(" -> ")
+            except ValueError:
+                continue
+            for a, b in ((left, right), (right, left)):
+                pattern = _re.compile(
+                    rf"^[ \t]*connect\s+{_re.escape(a)}\s+to\s+"
+                    rf"{_re.escape(b)}\s*;[ \t]*\n?",
+                    _re.MULTILINE,
+                )
+                candidate, count = pattern.subn("", candidate, count=1)
+                if count:
+                    removed.append(identity)
+                    break
+        attempt_record = {
+            "status": "REJECTED",
+            "unplanned": list(unplanned),
+            "removed_statements": list(removed),
+        }
+        attempt_index = self._append_pipeline_state_list(
+            "unplanned_connect_removal_attempts", attempt_record
+        )
+
+        def _finalize() -> None:
+            self._replace_pipeline_state_list_item(
+                "unplanned_connect_removal_attempts",
+                attempt_index,
+                attempt_record,
+            )
+
+        if not removed or candidate == full_text:
+            attempt_record["status"] = "NOT_APPLICABLE"
+            attempt_record["reason"] = "no removable statement matched"
+            _finalize()
+            return current_model, sim_result, False
+        if check_syntax(candidate).has_errors:
+            attempt_record["status"] = "REJECTED"
+            attempt_record["reason"] = "syntax_regression"
+            _finalize()
+            return current_model, sim_result, False
+        try:
+            residue_after = self._plan_conformance_report(
+                candidate, current_model, requirements
+            )
+        except Exception:
+            attempt_record["reason"] = "post_removal_projection_failed"
+            _finalize()
+            return current_model, sim_result, False
+        before_count = len(conformance.get("issues") or ())
+        after_count = len((residue_after or {}).get("issues") or ())
+        candidate_sim = self._run_simulation(candidate, current_model.name)
+        regressed = (
+            len(candidate_sim.failed_scenarios())
+            > len(sim_result.failed_scenarios())
+            or behavioral_result_regressed(sim_result, candidate_sim)
+        )
+        if regressed or after_count >= before_count:
+            attempt_record["reason"] = (
+                "regression" if regressed else "no_residue_reduction"
+            )
+            _finalize()
+            print("  ⚠ Unplanned-connect removal rejected "
+                  f"({attempt_record['reason']}) — keeping the original "
+                  "model", flush=True)
+            return current_model, sim_result, False
+
+        attempt_record["status"] = "ACCEPTED"
+        attempt_record["conformance_issues"] = [before_count, after_count]
+        _finalize()
+        repaired_model = build_lite_model(
+            candidate, model_name=current_model.name
+        )
+        self._restore_generation_plan_metadata(repaired_model)
+        set_sysml_text(repaired_model, candidate)
+        print(f"  ✓ Removed {len(removed)} unplanned connect(s) the plan "
+              f"never sanctioned: {', '.join(removed)} (conformance issues "
+              f"{before_count} → {after_count})", flush=True)
+        return repaired_model, candidate_sim, True
+
+    def _plan_conformance_report(
+        self, model_text: str, model, requirements,
+    ):
+        """The terminal gate's own conformance projection, read-only."""
+        from collections.abc import Mapping as _Mapping
+
+        raw_plan = (getattr(model, "metadata", None) or {}).get(
+            "whole_model_generation_plan"
+        )
+        if not isinstance(raw_plan, _Mapping):
+            return None
+        from ..prototyping.generation_plan import (
+            ModelGenerationPlan, apply_generation_plan,
+        )
+        plan = ModelGenerationPlan.from_payload(
+            dict(raw_plan),
+            requirements=list(requirements or ()),
+            source="IN_LOOP_CONFORMANCE_PROJECTION",
+            require_source_anchored_paths=True,
+        )
+        _discarded, conformance = apply_generation_plan(model_text, plan)
+        return conformance
 
     def _semantic_fidelity_issues(self, model_text: str, model) -> List[str]:
         """Non-PASS semantic-fidelity rows as in-loop advisories.

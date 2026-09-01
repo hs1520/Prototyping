@@ -82,6 +82,7 @@ class InitializationMixin:
         self.last_functional_closure = None
         self.last_verification_anchor_attempts: List[Dict[str, Any]] = []
         self.last_namespace_repair_attempts: List[Dict[str, Any]] = []
+        self.last_unplanned_connect_removal_attempts: List[Dict[str, Any]] = []
         self.last_response_conformance_repair_attempts: List[Dict[str, Any]] = []
         # Stimulus/envelope/response/oracle contracts from requirement intake.
         # High-fidelity runners consume these instead of reinterpreting prose

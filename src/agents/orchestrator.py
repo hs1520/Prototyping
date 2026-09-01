@@ -109,6 +109,7 @@ class Orchestrator(
         self._init_pipeline_state()
         self.last_verification_anchor_attempts = []
         self.last_namespace_repair_attempts = []
+        self.last_unplanned_connect_removal_attempts = []
         self.last_response_conformance_repair_attempts = []
         self.last_requirement_input = {}
         self._active_model_generation_plan = None
