@@ -1625,6 +1625,19 @@ class _RefinementEngine:
                 current_sysml, current_model, requirements)
             if conformance_issues and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(conformance_issues)
+            # Fidelity and coverage complete the rider set: with these,
+            # every model-property terminal qualification check has an
+            # in-loop advisory twin, instead of failure classes surfacing
+            # one paid run at a time (s0v6 lost qualification partly to
+            # fidelity rows nothing in the loop had shown).
+            fidelity_issues = self._semantic_fidelity_issues(
+                current_sysml, current_model)
+            if fidelity_issues and isinstance(eval_result.issues, list):
+                eval_result.issues.extend(fidelity_issues)
+            coverage_issues = _requirement_coverage_issues(
+                current_sysml, requirements)
+            if coverage_issues and isinstance(eval_result.issues, list):
+                eval_result.issues.extend(coverage_issues)
             # How much the pass/fail verdict depends on the weighting at all —
             # sampled over the weight simplex (answers "would another weighting
             # flip the outcome?").  Defensive: test doubles may not provide it.
@@ -3219,6 +3232,53 @@ class _RefinementEngine:
             for issue in (conformance.get("issues") or ())
         ]
 
+    def _semantic_fidelity_issues(self, model_text: str, model) -> List[str]:
+        """Non-PASS semantic-fidelity rows as in-loop advisories.
+
+        The terminal REQUIREMENT_MODEL_SEMANTIC_FIDELITY check requires the
+        report's overall PASS; DELEGATED rows are tolerated there and are
+        not repeated here."""
+        from collections.abc import Mapping as _Mapping
+
+        raw_plan = (getattr(model, "metadata", None) or {}).get(
+            "whole_model_generation_plan"
+        )
+        if not isinstance(raw_plan, _Mapping):
+            return []
+        try:
+            from ..prototyping.generation_plan import ModelGenerationPlan
+            from ..prototyping.requirement_semantics import (
+                validate_requirement_semantic_obligations,
+            )
+            plan = ModelGenerationPlan.from_dict(raw_plan)
+            report = validate_requirement_semantic_obligations(
+                model_text,
+                plan.semantic_obligations,
+                model_name=getattr(model, "name", ""),
+                bindings=plan.semantic_bindings,
+            )
+        except Exception as error:
+            return [
+                "[SEMANTIC-FIDELITY] projection failed: "
+                f"{type(error).__name__}: {error}"
+            ]
+        if not isinstance(report, dict) or report.get("status") == "PASS":
+            return []
+        issues: List[str] = []
+        for row in report.get("results") or ():
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("status") or "").upper()
+            if status in ("PASS", "DELEGATED"):
+                continue
+            issues.append(
+                f"[SEMANTIC-FIDELITY] {row.get('obligation_id')} "
+                f"[{row.get('requirement_id')}] {status}: "
+                f"{str(row.get('detail') or row.get('reason') or '')[:200]}"
+                " — the terminal fidelity gate fails closed on this"
+            )
+        return issues
+
     def _format_sim_issues(self, sim_result: SimulationResult,
                             requirements: Optional[List[str]] = None) -> List[str]:
         """Convert failed simulation scenarios into LLM-readable issue strings."""
@@ -3314,4 +3374,29 @@ def _syntax_warning_issues(syntax_result) -> list:
             "qualification gate fails closed on every warning; resolve it "
             "in the model"
         )
+    return issues
+
+
+def _requirement_coverage_issues(model_text: str, requirements) -> list:
+    """Missing requirement defs / satisfy links, as the terminal
+    REQUIREMENT_REALIZATION_COVERAGE check will count them (same regexes)."""
+    from ..prototyping.model_qualification import _declared_requirement_ids
+
+    issues = []
+    for req_id in _declared_requirement_ids(list(requirements or ())):
+        if not re.search(
+            rf"\brequirement\s+def\s+{re.escape(req_id)}\b", model_text
+        ):
+            issues.append(
+                f"[REQ-COVERAGE] requirement def {req_id} is missing from "
+                "the model — the terminal coverage gate fails closed on this"
+            )
+        elif not re.search(
+            rf"\bsatisfy\s+requirement\b[^;\n]*\b{re.escape(req_id)}\b",
+            model_text,
+        ):
+            issues.append(
+                f"[REQ-COVERAGE] no satisfy link for {req_id} — the "
+                "terminal coverage gate fails closed on this"
+            )
     return issues

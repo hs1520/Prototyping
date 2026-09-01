@@ -272,3 +272,23 @@ def test_plan_conformance_residue_rides_along_in_the_loop():
         metadata = {}
 
     assert engine._plan_conformance_issues(text, _PlanlessModel(), []) == []
+
+
+def test_requirement_coverage_issues_use_the_terminal_gates_own_regexes():
+    from src.agents.refinement import _requirement_coverage_issues
+
+    text = """package M {
+    requirement def REQ_FUNC_001 { doc /* x */ }
+    part def A { satisfy requirement REQ_FUNC_001; }
+}"""
+    reqs = ["REQ_FUNC_001: do x", "REQ_SAFE_002: stay safe"]
+    issues = _requirement_coverage_issues(text, reqs)
+    assert len(issues) == 1
+    assert "requirement def REQ_SAFE_002 is missing" in issues[0]
+    # def present but no satisfy link
+    text_no_satisfy = text.replace(
+        "satisfy requirement REQ_FUNC_001;", ""
+    )
+    issues2 = _requirement_coverage_issues(text_no_satisfy, ["REQ_FUNC_001: x"])
+    assert len(issues2) == 1 and "no satisfy link" in issues2[0]
+    assert _requirement_coverage_issues(text, ["REQ_FUNC_001: x"]) == []
