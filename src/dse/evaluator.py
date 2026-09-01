@@ -1056,7 +1056,24 @@ class DesignEvaluator:
             part_usage_re = re.compile(r"\bpart\s+(\w+)\s*:\s*(\w+)\s*;")
             instances_of: Dict[str, set] = {}
             for m in part_usage_re.finditer(text):
-                instances_of.setdefault(m.group(2), set()).add(m.group(1))
+                usage_name, type_name = m.group(1), m.group(2)
+                instances_of.setdefault(type_name, set()).add(usage_name)
+                # A usage retyped to a catalogue implementation
+                # (``Impl :> Planned``) is still a usage of the planned type
+                # (structural_obligations.py codifies this). Credit the
+                # specialisation chain, or the DSE-selected design counts
+                # its own SAFE part as unwired (measured: propulsionSystem
+                # retyped to Catalog_*Impl read safety_connectivity 3/4 on
+                # a fully wired model).
+                seen: set = set()
+                base_names = list(_specialization_bases(text, type_name))
+                while base_names:
+                    base = base_names.pop().split("::")[-1]
+                    if base in seen:
+                        continue
+                    seen.add(base)
+                    instances_of.setdefault(base, set()).add(usage_name)
+                    base_names.extend(_specialization_bases(text, base))
             connected_instances: set = set()
             for stmt in parse_connects(text):
                 connected_instances.add(stmt.src_inst)

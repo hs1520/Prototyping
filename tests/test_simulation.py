@@ -400,3 +400,51 @@ def test_dse_machinery_is_not_charged_by_the_quality_ruler():
     assert with_standalone["structural_completeness"] < (
         clean["structural_completeness"]
     )
+
+
+def test_a_retyped_usage_still_counts_as_the_planned_safe_part():
+    """A usage retyped to the DSE-selected implementation
+    (propulsionSystem : Catalog_*Impl :> PropulsionSystem) is still a usage
+    of the planned type — the safety-connectivity scorer read the selected
+    design's own SAFE part as unwired on a fully wired model (measured:
+    exactly 0.938, the 3/4 signature)."""
+    from src.dse.design_space import DesignConfiguration
+    from src.dse.evaluator import DesignEvaluator
+    from src.simulation.syntax_checker import check_syntax
+    from src.simulation.validator import SimulationValidator
+    from src.sysml.lite_model import build_lite_model
+
+    base = """package P {{
+    port def DataPort;
+    requirement def REQ_SAFE_001 {{ doc /* failsafe */ }}
+    part def PropulsionSystem {{
+        out port data : DataPort;
+        satisfy requirement REQ_SAFE_001;
+        state def FailsafeBehavior {{
+            state Nominal;
+            state Halted;
+            transition halt first Nominal if faultDetected then Halted;
+        }}
+        attribute faultDetected : Boolean = false;
+    }}
+    part def FlightController {{ in port data : DataPort; }}
+    part def Catalog_r6Impl :> PropulsionSystem {{
+        attribute rotorCount : Real = 6.0;
+    }}
+    part propulsionSystem : {ptype};
+    part flightController : FlightController;
+    connect propulsionSystem.data to flightController.data;
+}}"""
+
+    def safety(ptype):
+        text = base.format(ptype=ptype)
+        model = build_lite_model(text, model_name="P")
+        ev = DesignEvaluator(quality_threshold=0.75).evaluate(
+            DesignConfiguration(name="t", parameters={}), model,
+            syntax_result=check_syntax(text),
+            sim_result=SimulationValidator().validate(text, model_name="P"),
+            requirements=["REQ_SAFE_001: enter failsafe on fault"],
+        )
+        return ev.criteria_scores["safety_assurance"]
+
+    assert safety("Catalog_r6Impl") == safety("PropulsionSystem")
