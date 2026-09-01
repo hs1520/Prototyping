@@ -194,6 +194,14 @@ def normalise_planned_behavior_identities(
 
     normalised: list[PlannedBehavior] = []
     audit: list[str] = []
+    actions_by_owner: dict[str, set[str]] = {}
+    for behavior in behaviors:
+        for state in behavior.states:
+            for action in (state.entry_action, state.do_action):
+                if action:
+                    actions_by_owner.setdefault(
+                        behavior.owner, set()
+                    ).add(action)
     for behavior in behaviors:
         state_ids = {state.state_id for state in behavior.states}
         initial = behavior.initial_state
@@ -212,8 +220,33 @@ def normalise_planned_behavior_identities(
                 )
         stripped_transitions = []
         transitions_changed = False
+        owner_actions = actions_by_owner.get(behavior.owner, set())
+        taken_transition_ids = {
+            t.transition_id for t in behavior.transitions
+        }
         for transition in behavior.transitions:
             updated = transition
+            # A transition named after an action SHADOWS the action def in
+            # scope: the materialised `entry action x : armSystem;` resolves
+            # to the transition (a usage), and the zero-warning terminal
+            # gate fails on usage-feature-typing (measured, s0v15 — the
+            # plan itself declared transition_id armSystem beside
+            # entry_action armSystem). The transition id is the junior,
+            # unreferenced artifact — rename it, audited.
+            if transition.transition_id in owner_actions:
+                renamed = f"{transition.transition_id}Transition"
+                if (
+                    renamed not in owner_actions
+                    and renamed not in taken_transition_ids
+                ):
+                    audit.append(
+                        f"{behavior.owner}::{behavior.behavior_id} "
+                        f"transition_id {transition.transition_id!r} -> "
+                        f"{renamed!r} (shadowed the same-owner action "
+                        "definition it is named after)"
+                    )
+                    taken_transition_ids.add(renamed)
+                    updated = replace(updated, transition_id=renamed)
             for field_name in ("source", "target"):
                 value = getattr(transition, field_name)
                 if "::" not in value:

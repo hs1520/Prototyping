@@ -280,3 +280,53 @@ def test_self_qualified_transition_endpoints_are_stripped_and_audited():
     # foreign prefix untouched — the validator refuses it
     assert transitions["foreign"].source == "OtherBehavior::Locked"
     assert sum("transition toReleasing" in line for line in audit) == 2
+
+
+def test_a_transition_named_after_an_action_is_renamed_out_of_shadow():
+    """s0v15: the plan declared transition_id armSystem beside entry_action
+    armSystem in one machine; materialised, the transition shadows the
+    action def in scope, `entry action x : armSystem` resolves to a usage,
+    and the zero-warning terminal gate fails on usage-feature-typing.
+    The transition id is the junior, unreferenced artifact — renamed."""
+    behaviors, audit = normalise_planned_behavior_identities([
+        PlannedBehavior.from_dict({
+            "owner": "FlightController",
+            "behavior_id": "PowerOnSelfTestBehavior",
+            "initial_state": "PowerOn",
+            "states": [
+                {"state_id": "PowerOn", "role": "INITIAL",
+                 "do_action": "performSelfTest"},
+                {"state_id": "Armed", "role": "RESPONSE",
+                 "entry_action": "armSystem"},
+            ],
+            "transitions": [{
+                "transition_id": "armSystem", "source": "PowerOn",
+                "target": "Armed", "trigger_kind": "ACCEPT",
+                "trigger": "SelfTestPassed",
+            }],
+        })
+    ])
+    transition = behaviors[0].transitions[0]
+    assert transition.transition_id == "armSystemTransition"
+    assert any(
+        "'armSystem' -> 'armSystemTransition'" in line for line in audit
+    )
+    # a transition NOT colliding is untouched
+    behaviors2, audit2 = normalise_planned_behavior_identities([
+        PlannedBehavior.from_dict({
+            "owner": "FlightController",
+            "behavior_id": "B",
+            "initial_state": "S",
+            "states": [
+                {"state_id": "S", "role": "INITIAL"},
+                {"state_id": "T", "role": "RESPONSE",
+                 "entry_action": "doThing"},
+            ],
+            "transitions": [{
+                "transition_id": "toT", "source": "S", "target": "T",
+                "trigger_kind": "ACCEPT", "trigger": "Ev",
+            }],
+        })
+    ])
+    assert behaviors2[0].transitions[0].transition_id == "toT"
+    assert not any("transition_id" in line for line in audit2)
