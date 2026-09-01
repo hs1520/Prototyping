@@ -1243,3 +1243,77 @@ class TestMCTSGrounding:
         cfg = DesignConfiguration(name="best", parameters={})
         text = build_dse_design_constraints(cfg)
         assert text == ""
+
+
+class TestTerminalFatalAdvisoriesSpendBudget:
+    def test_quality_met_with_fatal_advisory_iterates_instead_of_exiting(
+        self, monkeypatch
+    ):
+        """Nine measured anchor rolls exited at iteration 1 with
+        max_iterations=4 never used: rule score ~0.9 beat the threshold on
+        the first draw, so every terminal-fatal issue the riders surfaced
+        stayed advice for iterations that never happened — then failed the
+        zero-warning/zero-deviation terminal gates. Quality met with a
+        KNOWN fatal advisory and budget remaining now spends an iteration."""
+        from src.agents.refinement import _RefinementEngine
+
+        model_a = _make_model("model_a")
+        model_b = _make_model("model_b")
+
+        orch = _make_orch(max_iterations=2, quality_threshold=0.50)
+        orch.evaluator = FakeEvaluator([
+            FakeEvalResult(weighted_total=0.90, issues=[]),
+            FakeEvalResult(weighted_total=0.91, issues=[]),
+            FakeEvalResult(weighted_total=0.91, issues=[]),
+        ])
+        orch.cot = FakeCot([
+            FakeCotResult(_scores={"overall": 0.9}, final_answer=""),
+            FakeCotResult(_scores={"overall": 0.9}, final_answer=""),
+        ])
+        orch.design_agent = FakeDesignAgent([model_b])
+
+        calls = {"count": 0}
+
+        def fake_fatal(self, model, requirements):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return ["[PLAN-CONFORMANCE] fake unplanned connection"]
+            return []
+
+        monkeypatch.setattr(
+            _RefinementEngine, "_terminal_fatal_advisories", fake_fatal
+        )
+
+        _refine(orch, model_a, [])
+
+        # the fatal advisory bought exactly one refinement round
+        assert orch.design_agent.call_count == 1
+        assert calls["count"] >= 2
+
+    def test_exhausted_budget_still_exits_with_fatal_advisories(
+        self, monkeypatch
+    ):
+        """Bounded: no budget left → exit as before; the terminal gate
+        stays the judge (fail-loud, never an infinite loop)."""
+        from src.agents.refinement import _RefinementEngine
+
+        model_a = _make_model("model_a")
+        orch = _make_orch(max_iterations=1, quality_threshold=0.50)
+        orch.evaluator = FakeEvaluator([
+            FakeEvalResult(weighted_total=0.90, issues=[]),
+        ])
+        orch.cot = FakeCot([
+            FakeCotResult(_scores={"overall": 0.9}, final_answer=""),
+        ])
+        orch.design_agent = FakeDesignAgent([])
+
+        monkeypatch.setattr(
+            _RefinementEngine, "_terminal_fatal_advisories",
+            lambda self, model, requirements: [
+                "[PLAN-CONFORMANCE] fake unplanned connection"
+            ],
+        )
+
+        _refine(orch, model_a, [])
+
+        assert orch.design_agent.call_count == 0

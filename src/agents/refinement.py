@@ -1773,10 +1773,48 @@ class _RefinementEngine:
                             dse_best_config=dse_best_config,
                         )
                     )
-                    print(f"  ✓ Quality threshold {self.quality_threshold} reached",
-                          flush=True)
-                    return current_model, score, sim_result
+                    # ── Terminal-fatal advisories spend the budget ────────
+                    # Nine measured anchor rolls exited here at iteration 1
+                    # with max_iterations=4 never used: the rule score sits
+                    # ~0.9 on the first draw, so the loop never iterated,
+                    # and every advisory the riders surfaced stayed advice
+                    # for iterations that never happened — then failed the
+                    # zero-warning/zero-deviation terminal gates. Quality
+                    # met is not done while a KNOWN terminal-fatal issue
+                    # survives the bounded passes and budget remains.
+                    fatal_advisories = self._terminal_fatal_advisories(
+                        current_model, requirements
+                    )
+                    if (
+                        fatal_advisories
+                        and iteration + 1 < self.max_iterations
+                    ):
+                        print(
+                            f"  ~ Quality met, but "
+                            f"{len(fatal_advisories)} terminal-fatal "
+                            "advisory issue(s) survived the bounded passes "
+                            "— spending an iteration on them instead of "
+                            "exiting",
+                            flush=True,
+                        )
+                        if isinstance(eval_result.issues, list):
+                            eval_result.issues = [
+                                issue for issue in eval_result.issues
+                                if not str(issue).startswith(
+                                    _FATAL_ADVISORY_PREFIXES
+                                )
+                            ] + fatal_advisories
+                        _force_llm_refinement = True
+                    else:
+                        print(f"  ✓ Quality threshold "
+                              f"{self.quality_threshold} reached",
+                              flush=True)
+                        return current_model, score, sim_result
 
+            # The fatal-advisory continue path goes straight to the P1
+            # refinement trigger below; the forced sim-fix block is for
+            # failed hard gates, which is not this case.
+            if score >= self.quality_threshold and not _force_llm_refinement:
                 # Score met but hard failures remain — one targeted fix pass
                 issues_desc = ", ".join(filter(None, [
                     "behavioral" if not behavioral_ok else "",
@@ -3209,6 +3247,26 @@ class _RefinementEngine:
             return r
 
 
+    def _terminal_fatal_advisories(self, model, requirements):
+        """Advisory issues the terminal qualification gates fail closed on,
+        recomputed on the CURRENT text (the bounded passes may have already
+        cleared some)."""
+        from ..prototyping.namespace_integrity import (
+            namespace_integrity_issues,
+        )
+        from ..utils.sysml_text_utils import get_sysml_text
+
+        text = get_sysml_text(model)
+        issues = []
+        issues.extend(_syntax_warning_issues(check_syntax(text)))
+        issues.extend(namespace_integrity_issues(text))
+        issues.extend(
+            self._plan_conformance_issues(text, model, requirements)
+        )
+        issues.extend(self._semantic_fidelity_issues(text, model))
+        issues.extend(_requirement_coverage_issues(text, requirements))
+        return issues
+
     def _plan_conformance_issues(
         self, model_text: str, model, requirements,
     ) -> List[str]:
@@ -3508,6 +3566,13 @@ class _RefinementEngine:
             )
 
         return issues
+
+
+#: Advisory prefixes whose issues the terminal qualification fails closed on.
+_FATAL_ADVISORY_PREFIXES = (
+    "[SYNTAX-WARNING]", "[NAMESPACE]", "[PLAN-CONFORMANCE]",
+    "[SEMANTIC-FIDELITY]", "[REQ-COVERAGE]",
+)
 
 
 def _syntax_warning_issues(syntax_result) -> list:
