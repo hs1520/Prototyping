@@ -356,6 +356,17 @@ class GenerationPipelineMixin:
         )
 
     def _phase_terminal_commit(self, c: GenerationContext) -> None:
+        # Terminal deterministic normalisation, regardless of which exit
+        # path produced the text: a late writer (surgical merge, AG layer)
+        # can introduce mechanically-fixable spellings AFTER the last
+        # in-loop syntax gate ran. Measured on s0v11: a justification
+        # doc "..." written mid-refinement reached qualification as a
+        # parser error the assembly-time fixer never saw.
+        from ..sysml.text_normalization import fix_doc_syntax
+        c.final_sysml, n_doc_fixed = fix_doc_syntax(c.final_sysml)
+        if n_doc_fixed:
+            print(f"  ⟳ terminal normalisation: fixed {n_doc_fixed} "
+                  "doc spelling(s) — no LLM needed", flush=True)
         c.planned_action_preparation = prepare_planned_actions(
             c.final_sysml,
             model_plan=self._active_model_generation_plan,

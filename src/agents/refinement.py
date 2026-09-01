@@ -1446,6 +1446,15 @@ class _RefinementEngine:
                 dse_best_config=dse_best_config,
             )
         )
+        current_model, sim_result, _connects_removed = (
+            self._unplanned_connect_removal_pass(
+                current_model=current_model,
+                sim_result=sim_result,
+                rule_score=score,
+                requirements=requirements,
+                dse_best_config=dse_best_config,
+            )
+        )
         current_model, sim_result, _response_repaired = (
             self._response_conformance_repair_pass(
                 current_model=current_model,
