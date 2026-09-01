@@ -223,6 +223,12 @@ class GenerationPipelineMixin:
         revised_text, conformance = apply_generation_plan(
             text, outcome.plan
         )
+        # A mechanically-fixable doc spelling in the underlying text must
+        # not veto the revision: s0v11's acceptance check read
+        # syntax_ok=False from a doc "..." a late writer left behind, and
+        # the revision was rejected for a defect it never caused.
+        from ..sysml.text_normalization import fix_doc_syntax
+        revised_text, _n = fix_doc_syntax(revised_text)
         after_report = validate_structural_obligations(
             revised_text,
             outcome.plan.structural_obligations,
