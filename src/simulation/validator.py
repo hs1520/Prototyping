@@ -57,6 +57,11 @@ class SimulationResult:
     num_connections: int = 0
     num_actions: int = 0
     isolated_parts: List[str] = field(default_factory=list)  # parts with no connect statements
+    #: Unconnected parts whose part def the model itself declares passive
+    #: (`// PLAN-PASSIVE` marker). Not defects: a structural body exchanges
+    #: nothing by plan, so these are excluded from the isolation penalty and
+    #: from refinement's wire-it-in feedback, and listed here for the audit.
+    passive_unconnected_parts: List[str] = field(default_factory=list)
     role_assignments: Dict[str, List[str]] = field(default_factory=dict)
     weakly_connected_components: List[List[str]] = field(default_factory=list)
     role_scenario_definitions: List[Dict[str, Any]] = field(
@@ -156,6 +161,11 @@ class SimulationResult:
         if self.isolated_parts:
             lines.append(f"  Isolated parts:  {', '.join(self.isolated_parts)}"
                          f"  ({len(self.isolated_parts)} part(s) with no connections)")
+        if self.passive_unconnected_parts:
+            lines.append(
+                "  Declared passive (unconnected by plan):  "
+                f"{', '.join(self.passive_unconnected_parts)}"
+            )
         if self.behavioral_result and self.behavioral_result.scenario_results:
             lines.append(f"  Behavioral Score:  {self.behavioral_score:.3f}"
                          f"  ({self.behavioral_result.passed_count()}/"
@@ -252,8 +262,20 @@ class SimulationValidator:
             {c.source.split(".")[0] for c in bg.connections}
             | {c.target.split(".")[0] for c in bg.connections}
         )
+        unconnected = [p for p in bg.parts if p not in connected_in_graph]
+        # A declared-passive structural body exchanges nothing BY PLAN
+        # (// PLAN-PASSIVE marker; scenario selection already exempts it in
+        # scenarios.py). Charging it the isolation penalty docked a perfect
+        # run 10% per passive body, and the isolated-parts feedback told
+        # refinement to wire it in — pushing the LLM against the plan's own
+        # passivity discipline.
+        result.passive_unconnected_parts = [
+            p for p in unconnected
+            if bg.parts[p].def_name in bg.passive_defs
+        ]
         result.isolated_parts = [
-            p for p in bg.parts if p not in connected_in_graph
+            p for p in unconnected
+            if bg.parts[p].def_name not in bg.passive_defs
         ]
         if result.isolated_parts:
             result.issues.append(

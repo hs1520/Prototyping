@@ -286,6 +286,12 @@ class ReportingMixin:
         if sim_result.isolated_parts:
             iso_str = f"  ║  ⚠ Isolated parts   : {', '.join(sim_result.isolated_parts)}"
             print(f"{iso_str:<{W+4}}║")
+        passive_parts = getattr(sim_result, "passive_unconnected_parts", ())
+        if passive_parts:
+            passive_str = (
+                f"  ║  Passive (by plan)  : {', '.join(passive_parts)}"
+            )
+            print(f"{passive_str:<{W+4}}║")
         print(f"  ╠{'═'*W}╣")
 
         # Per-scenario table

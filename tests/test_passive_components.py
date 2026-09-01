@@ -75,6 +75,53 @@ def test_declared_passive_part_generates_no_scenarios():
     assert not any("airframe" in s.target_nodes or "airframe" in s.entry_nodes for s in without)
 
 
+_UNCONNECTED_AIRFRAME = """package P {{
+    port def DataPort;
+    part def Airframe {{{marker}
+    }}
+    part def PerceptionSystem {{
+        out port data : DataPort;
+    }}
+    part def FlightController {{
+        in port data : DataPort;
+    }}
+    part def System {{
+        part airframe : Airframe;
+        part perceptionSystem : PerceptionSystem;
+        part flightController : FlightController;
+        connect perceptionSystem.data to flightController.data;
+    }}
+}}"""
+
+
+def test_declared_passive_part_is_not_charged_the_isolation_penalty():
+    """Measured on the s0v5 anchor: a perfect run (19/19 requirement paths,
+    20/20 advisory scenarios) read reachability 0.9 because the plan-passive
+    airframe has no connect statements and the scorer charged it the
+    isolation penalty — while the isolated-parts feedback simultaneously
+    told refinement to wire it in, against the plan's own passivity
+    discipline. Passivity is the model's recorded decision; the scorer must
+    read it. An UNDECLARED unconnected part keeps the penalty."""
+    from src.simulation.validator import SimulationValidator
+
+    passive = SimulationValidator().validate(
+        _UNCONNECTED_AIRFRAME.format(
+            marker="\n        // PLAN-PASSIVE Airframe: structural body only"
+        ),
+        model_name="P",
+    )
+    assert passive.passive_unconnected_parts == ["airframe"]
+    assert passive.isolated_parts == []
+    assert passive.reachability_score == 1.0
+
+    undeclared = SimulationValidator().validate(
+        _UNCONNECTED_AIRFRAME.format(marker=""), model_name="P",
+    )
+    assert undeclared.isolated_parts == ["airframe"]
+    assert undeclared.passive_unconnected_parts == []
+    assert undeclared.reachability_score < 1.0
+
+
 def test_passive_component_plans_exactly_the_structural_mount():
     """A passive body plans one structural attachment port -- fixed name and
     type -- because a mounting interface is a legitimate connection point (the
