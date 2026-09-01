@@ -145,3 +145,86 @@ def test_repair_pass_is_skipped_without_surgical_refinement():
     assert accepted is False
     assert orchestrator.last_namespace_repair_attempts == []
     assert intelligence.calls["chat"] == []
+
+
+def _failing_scenario():
+    from src.simulation.simulator import ScenarioResult
+
+    return ScenarioResult(
+        scenario_name="emergency_x_to_y", description="pre-existing miss",
+        tags=["safety"], reachable=False, path=[],
+        missing_nodes=["y"], unreachable_targets=["y"], issues=["no path"],
+    )
+
+
+def test_a_pre_existing_scenario_failure_does_not_veto_the_repair():
+    """Measured on the s0v7 anchor: the baseline carried one failed advisory
+    scenario (16/17), and the old absolute gate — repaired model must have
+    ZERO failed scenarios — auto-rejected the namespace repair as
+    'regression'; terminal qualification then failed on the very duplicate
+    the repair had fixed. Regression is relative: worse than before."""
+    baseline = SimulationResult(
+        model_name="M", scenario_results=[_failing_scenario()],
+    )
+    intelligence = ScriptedRefinementIntelligence(
+        chat=(_RENAMED_BLOCK,),
+        evaluate=(SimpleNamespace(
+            weighted_total=0.9, issues=[], recommendations=[],
+            criteria_scores={},
+        ),),
+    )
+    orchestrator = Orchestrator(
+        _NoCallLLM(), max_iterations=1, quality_threshold=0.5,
+        use_surgical_refinement=True,
+    )
+    closure = RefinementClosure(
+        orchestrator,
+        intelligence=intelligence,
+        # the repaired model re-simulates with the SAME pre-existing miss
+        simulation_runner=lambda _text, name: SimulationResult(
+            model_name=name, scenario_results=[_failing_scenario()],
+        ),
+    )
+    engine = closure._RefinementClosure__implementation
+    model = build_lite_model(_DUPLICATE_MODEL, model_name="M")
+
+    repaired_model, _sim, accepted = engine._namespace_repair_pass(
+        model, baseline, rule_score=0.9, requirements=[],
+        dse_best_config=None,
+    )
+
+    assert accepted is True
+    attempts = orchestrator.last_namespace_repair_attempts
+    assert [item["status"] for item in attempts] == ["ACCEPTED"]
+
+
+def test_a_repair_that_adds_a_scenario_failure_is_still_rejected():
+    baseline = SimulationResult(model_name="M", scenario_results=[])
+    intelligence = ScriptedRefinementIntelligence(
+        chat=(_RENAMED_BLOCK,),
+        evaluate=(SimpleNamespace(
+            weighted_total=0.9, issues=[], recommendations=[],
+            criteria_scores={},
+        ),),
+    )
+    orchestrator = Orchestrator(
+        _NoCallLLM(), max_iterations=1, quality_threshold=0.5,
+        use_surgical_refinement=True,
+    )
+    closure = RefinementClosure(
+        orchestrator,
+        intelligence=intelligence,
+        simulation_runner=lambda _text, name: SimulationResult(
+            model_name=name, scenario_results=[_failing_scenario()],
+        ),
+    )
+    engine = closure._RefinementClosure__implementation
+    model = build_lite_model(_DUPLICATE_MODEL, model_name="M")
+
+    repaired_model, _sim, accepted = engine._namespace_repair_pass(
+        model, baseline, rule_score=0.9, requirements=[],
+        dse_best_config=None,
+    )
+
+    assert accepted is False
+    assert repaired_model is model

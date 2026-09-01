@@ -995,8 +995,15 @@ class _RefinementEngine:
         after = len(check_user_namespace_integrity(
             repaired.merged_text)["duplicate_members"])
         from .verification_audit import behavioral_result_regressed
+        # Relative, not absolute: "regression" means WORSE THAN BEFORE. The
+        # old `bool(failed_scenarios())` demanded a repaired model with ZERO
+        # failed advisory scenarios, so a baseline carrying any pre-existing
+        # failure auto-rejected every repair — measured on the s0v7 anchor,
+        # whose 16/17 baseline vetoed the namespace repair that its terminal
+        # qualification then failed for want of.
         regressed = (
-            bool(repaired_sim.failed_scenarios())
+            len(repaired_sim.failed_scenarios())
+            > len(sim_result.failed_scenarios())
             or behavioral_result_regressed(sim_result, repaired_sim)
             or repaired_eval.weighted_total < rule_score - 0.05
         )
@@ -1131,8 +1138,15 @@ class _RefinementEngine:
         after = len(self._response_conformance_issues(
             repaired.merged_text, current_model.name))
         from .verification_audit import behavioral_result_regressed
+        # Relative, not absolute: "regression" means WORSE THAN BEFORE. The
+        # old `bool(failed_scenarios())` demanded a repaired model with ZERO
+        # failed advisory scenarios, so a baseline carrying any pre-existing
+        # failure auto-rejected every repair — measured on the s0v7 anchor,
+        # whose 16/17 baseline vetoed the namespace repair that its terminal
+        # qualification then failed for want of.
         regressed = (
-            bool(repaired_sim.failed_scenarios())
+            len(repaired_sim.failed_scenarios())
+            > len(sim_result.failed_scenarios())
             or behavioral_result_regressed(sim_result, repaired_sim)
             or repaired_eval.weighted_total < rule_score - 0.05
         )
@@ -1259,8 +1273,11 @@ class _RefinementEngine:
         remaining = self._verification_gap_issues(
             anchored.merged_text, current_model.name)
         from .verification_audit import behavioral_result_regressed
+        # Relative, not absolute — see the namespace pass: a pre-existing
+        # advisory failure must not veto an anchor that fixes what it fixes.
         regressed = (
-            bool(anchor_sim.failed_scenarios())
+            len(anchor_sim.failed_scenarios())
+            > len(sim_result.failed_scenarios())
             or behavioral_result_regressed(sim_result, anchor_sim)
             or anchor_eval.weighted_total < rule_score - 0.05
         )
