@@ -380,8 +380,18 @@ class DesignEvaluator:
         # keys it can actually check; otherwise (no config, or a variation config
         # of variant choices) it is dropped and its weight redistributed so the
         # free 1.0 doesn't inflate the total.
-        has_dse = dse_config is not None and any(
-            k in (dse_config.parameters or {}) for k in self._DSE_SCALAR_KEYS
+        # Scalar keys are the legacy parametric-MCTS shape. The flagship
+        # variation mode selects catalogue variants ({"propulsionSystem":
+        # "catalog_r6_p16_c6"}); the dimension's own semantics ("how well
+        # the committed model realises the selected DSE decisions") applies
+        # to those decisions identically, but the gate predated the mode —
+        # so the one arm doing MORE verifiable work was scored on less.
+        has_dse = dse_config is not None and (
+            any(
+                k in (dse_config.parameters or {})
+                for k in self._DSE_SCALAR_KEYS
+            )
+            or bool(self._variant_choices(dse_config))
         )
         weights = derive_dimension_weights(requirements)
         active_weights = {
@@ -703,6 +713,20 @@ class DesignEvaluator:
     # Dimension 2: MCTS Fidelity (25 %)
     # ------------------------------------------------------------------
 
+    @classmethod
+    def _variant_choices(
+        cls, dse_config: Optional[DesignConfiguration],
+    ) -> Dict[str, str]:
+        """Variation-mode selections: string params outside the scalar set."""
+        if dse_config is None:
+            return {}
+        return {
+            str(key): str(value)
+            for key, value in (dse_config.parameters or {}).items()
+            if key not in cls._DSE_SCALAR_KEYS
+            and isinstance(value, str) and value
+        }
+
     def _score_dse_fidelity(
         self,
         config: DesignConfiguration,
@@ -719,6 +743,32 @@ class DesignEvaluator:
             return 1.0
 
         params = dse_config.parameters
+        # ── Variation-mode fidelity: chosen variant materialised? ────────
+        # The variant emitter's naming contract (agents/exploration.py):
+        # type name = f"{variant.capitalize()}{usage.capitalize()}Impl".
+        # Full credit needs the def to exist AND the usage retyped to it —
+        # the selected design actually realised, not merely catalogued.
+        variant_choices = self._variant_choices(dse_config)
+        if variant_choices:
+            text = _sysml_text(model)
+            realised = 0.0
+            for usage, variant in variant_choices.items():
+                expected = (
+                    f"{variant.capitalize()}{usage.capitalize()}Impl"
+                )
+                def_present = re.search(
+                    rf"\bpart\s+def\s+{re.escape(expected)}\b", text
+                )
+                retyped = re.search(
+                    rf"\bpart\s+{re.escape(usage)}\s*:\s*"
+                    rf"{re.escape(expected)}\b", text
+                )
+                if def_present and retyped:
+                    realised += 1.0
+                elif def_present:
+                    realised += 0.5
+            return realised / len(variant_choices)
+
         facts = extract_dse_model_facts(
             _sysml_text(model),
             params,

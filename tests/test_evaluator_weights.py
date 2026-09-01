@@ -96,13 +96,22 @@ class TestDseFidelityNA:
             dse_config=dse_config, requirements=requirements,
         )
 
-    def test_variation_config_drops_dse_fidelity(self):
+    def test_variation_config_now_scores_dse_fidelity(self):
+        """The old contract dropped the dimension for variation configs so a
+        free 1.0 could not inflate the total. It is now SCORED for them —
+        the dimension's own semantics (selected decisions realised in the
+        model) applies to variant choices identically, and an unrealised
+        choice earns 0.0, not a gift (the anti-inflation concern is served
+        by grading, not by blindness). Measured: the FULL arm materialised
+        its selected catalogue variant and was scored on fewer dimensions
+        than the arms doing less."""
         variation_cfg = DesignConfiguration(
             name="v", parameters={"propulsionSystem": "hexa", "powerSystem": "p6"}
         )
         result = self._evaluate(variation_cfg)
-        assert "dse_fidelity" not in result.criteria_scores
-        assert "dse_fidelity" not in result.weights_used
+        assert "dse_fidelity" in result.weights_used
+        # neither variant def exists in the fixture model → nothing realised
+        assert result.criteria_scores["dse_fidelity"] == 0.0
 
     def test_catalog_config_keeps_dse_fidelity(self):
         catalog_cfg = DesignConfiguration(

@@ -448,3 +448,54 @@ def test_a_retyped_usage_still_counts_as_the_planned_safe_part():
         return ev.criteria_scores["safety_assurance"]
 
     assert safety("Catalog_r6Impl") == safety("PropulsionSystem")
+
+
+def test_variation_mode_activates_and_scores_dse_fidelity():
+    """The dse_fidelity dimension (10% prior) predated variation DSE: its
+    gate only knew legacy scalar keys, so the arm doing MORE verifiable
+    work (materialising the selected catalogue variant) was scored on
+    fewer dimensions. A variant choice now activates the dimension; full
+    credit needs def + retyped usage, catalogued-only earns half, and no
+    config keeps the dimension dropped."""
+    from src.dse.design_space import DesignConfiguration
+    from src.dse.evaluator import DesignEvaluator
+    from src.simulation.syntax_checker import check_syntax
+    from src.simulation.validator import SimulationValidator
+    from src.sysml.lite_model import build_lite_model
+
+    base = """package P {{
+    port def DataPort;
+    part def PropulsionSystem {{ out port data : DataPort; }}
+    part def FlightController {{ in port data : DataPort; }}
+    part def Catalog_r6PropulsionsystemImpl :> PropulsionSystem {{
+        attribute rotorCount : Real = 6.0;
+    }}
+    part propulsionSystem : {ptype};
+    part flightController : FlightController;
+    connect propulsionSystem.data to flightController.data;
+}}"""
+    config = DesignConfiguration(
+        name="recommended",
+        parameters={"propulsionSystem": "catalog_r6"},
+    )
+
+    def run(ptype, dse_config):
+        text = base.format(ptype=ptype)
+        model = build_lite_model(text, model_name="P")
+        return DesignEvaluator(quality_threshold=0.75).evaluate(
+            DesignConfiguration(name="t", parameters={}), model,
+            dse_config=dse_config,
+            syntax_result=check_syntax(text),
+            sim_result=SimulationValidator().validate(text, model_name="P"),
+            requirements=[],
+        )
+
+    realised = run("Catalog_r6PropulsionsystemImpl", config)
+    assert realised.criteria_scores["dse_fidelity"] == 1.0
+    assert "dse_fidelity" in realised.weights_used
+
+    catalogued_only = run("PropulsionSystem", config)
+    assert catalogued_only.criteria_scores["dse_fidelity"] == 0.5
+
+    without_config = run("PropulsionSystem", None)
+    assert "dse_fidelity" not in without_config.weights_used
