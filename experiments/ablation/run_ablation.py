@@ -67,7 +67,8 @@ _INFRA_MARKERS = (
     # TYPED_MODEL_PLAN_UNAVAILABLE — both measured misclassifications.
     "provider error", "rate limit", "resource_exhausted",
     "resource exhausted", "quota", "service unavailable", "overloaded",
-    "timed out", "deadline exceeded", "connection refused",
+    "timed out", "wall-clock timeout", "deadline exceeded",
+    "connection refused",
     "connection reset", "connection aborted", "connectionerror",
     "eof occurred", "broken pipe",
 )
