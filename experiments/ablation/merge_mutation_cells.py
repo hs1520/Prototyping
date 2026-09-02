@@ -18,7 +18,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "experiments" / "ablation"))
-from mutation_study import render  # noqa: E402
+from mutation_study import render, residual_probes  # noqa: E402
 
 
 def main() -> int:
@@ -41,6 +41,14 @@ def main() -> int:
             rec["source_campaign"] = manifest["campaign"]
             rec["source_commit"] = manifest.get("git_commit")
             rec["source_runs_dir"] = str(cdir / "runs")
+            # re-probe residual defects with the current probe set (probe fixes
+            # after a run must not leave stale measurements in the merge)
+            stem = f"{rec['arm']}_{rec['set']}"
+            for suffix in ("final", "failed"):
+                model = cdir / "runs" / f"{stem}.{suffix}.sysml"
+                if model.exists() and rec.get("edits"):
+                    rec["residual"] = residual_probes(rec["edits"], model.read_text(encoding="utf-8"))
+                    break
             latest[(rec["arm"], rec["set"])] = rec
             taken.append(f"{rec['arm']}:{rec['set']}")
         provenance.append({"campaign": manifest["campaign"], "commit": manifest.get("git_commit"), "cells": taken})

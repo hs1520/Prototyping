@@ -247,7 +247,12 @@ def residual_probes(edits: List[Dict], terminal_text: str) -> Dict[str, Any]:
         elif op == "DROP-CONNECT":
             present = e["target"] not in terminal_text
         elif op == "PORT-DIRECTION":
-            present = bool(re.search(rf"out port {e['target']} :", terminal_text))
+            # The flipped declaration was the (only) `in port <name>`; the
+            # producer side legitimately keeps an `out port <name>`, so test
+            # for the consumer-side in-port being absent, not for any out-port
+            # being present (first study run reported 1/1 residual in every
+            # cell, including the ones whose terminal model had restored it).
+            present = not re.search(rf"\bin port {e['target']} :", terminal_text)
         elif op == "DROP-TRANSITION":
             present = e["target"] not in terminal_text
         elif op == "DROP-ENTRY-ACTION":
