@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Deque, Iterable, Mapping, Protocol
+from typing import Any, Deque, Iterable, Mapping, Optional, Protocol
 
 
 class RefinementIntelligence(Protocol):
-    def chat(self, prompt: str, *, system_prompt: str) -> str: ...
+    def chat(
+        self, prompt: str, *, system_prompt: str, label: Optional[str] = None,
+    ) -> str: ...
 
     def generate(self, payload: Mapping[str, Any]) -> Any: ...
 
@@ -25,8 +27,18 @@ class RuntimeRefinementIntelligence:
     def __init__(self, runtime: Any) -> None:
         self._runtime = runtime
 
-    def chat(self, prompt: str, *, system_prompt: str) -> str:
-        return self._runtime.llm.chat(prompt, system_prompt=system_prompt)
+    def chat(
+        self, prompt: str, *, system_prompt: str, label: Optional[str] = None,
+    ) -> str:
+        llm = self._runtime.llm
+        if label is None:
+            return llm.chat(prompt, system_prompt=system_prompt)
+        try:
+            return llm.chat(prompt, system_prompt=system_prompt, label=label)
+        except TypeError:
+            # Test doubles predate the label keyword; attribution is
+            # observational and must never change what the caller receives.
+            return llm.chat(prompt, system_prompt=system_prompt)
 
     def generate(self, payload: Mapping[str, Any]) -> Any:
         return self._runtime.design_agent.run(dict(payload))
@@ -81,7 +93,9 @@ class ScriptedRefinementIntelligence:
         response = queue.popleft()
         return response(payload) if callable(response) else response
 
-    def chat(self, prompt: str, *, system_prompt: str) -> str:
+    def chat(
+        self, prompt: str, *, system_prompt: str, label: Optional[str] = None,
+    ) -> str:
         return str(self._next("chat", {
             "prompt": prompt,
             "system_prompt": system_prompt,

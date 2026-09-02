@@ -1476,7 +1476,9 @@ class ChainOfThoughtPrompter:
             ),
             Message(role="user", content=prompt),
         ]
-        response = self.llm.complete(messages, temperature=0.9)
+        response = self.llm.complete(
+            messages, temperature=0.9, label="requirements_extraction",
+        )
         return self._parse_cot_response(response.content)
 
     def generate_design(
@@ -1504,7 +1506,9 @@ class ChainOfThoughtPrompter:
             Message(role="system", content=SYSML_EXPERT_SYSTEM_PROMPT),
             Message(role="user", content=prompt),
         ]
-        response = self.llm.complete(messages, temperature=temperature)
+        response = self.llm.complete(
+            messages, temperature=temperature, label="design_generation",
+        )
         return self._parse_cot_response(response.content)
 
     def evaluate_design(
@@ -1524,7 +1528,9 @@ class ChainOfThoughtPrompter:
             Message(role="system", content=SYSML_EXPERT_SYSTEM_PROMPT),
             Message(role="user", content=prompt),
         ]
-        response = self.llm.complete(messages, temperature=0.2)
+        response = self.llm.complete(
+            messages, temperature=0.2, label="design_evaluation",
+        )
         return self._parse_cot_response(response.content)
 
     def refine_design(
@@ -1551,7 +1557,9 @@ class ChainOfThoughtPrompter:
             ),
             Message(role="user", content=prompt),
         ]
-        response = self.llm.complete(messages, temperature=0.4, max_tokens=65536)
+        response = self.llm.complete(
+            messages, temperature=0.4, max_tokens=65536, label="refinement_full",
+        )
         return self._parse_cot_response(response.content)
 
     # ------------------------------------------------------------------

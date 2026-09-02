@@ -924,4 +924,6 @@ def attempt_surgical_refinement(
         )
         return _try(content) if ok else None
     audit.llm_invoked = True
-    return _try(str(llm.chat(prompt, system_prompt=SURGICAL_SYSTEM_PROMPT)))
+    return _try(str(llm.chat(
+        prompt, system_prompt=SURGICAL_SYSTEM_PROMPT, label="surgical_refinement",
+    )))

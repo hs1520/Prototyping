@@ -25,8 +25,35 @@ HEADLINE_METRICS = (
     "iterations",
     "llm_calls",
     "llm_total_tokens",
+    "llm_live_calls",
+    "llm_live_tokens",
+    "replayed_calls",
+    "replayed_tokens",
     "elapsed_s",
+    # mechanism ledger (was the ablated layer exercised, and how much?)
+    "mech_refine_iterations",
+    "mech_plan_retries",
+    "mech_tier0_fixes",
+    "mech_syntax_gate_llm_attempts",
+    "mech_det_connectivity_fixes",
+    "mech_surgical_refinement_accepted",
+    "mech_surgical_exit_passes",
+    "mech_closure_initial_gaps",
+    "mech_closure_attempts",
+    "mech_closure_accepted",
+    "mech_closure_full_rewrite_passes",
+    "mech_closure_surgical_passes",
+    "mech_plan_det_additions",
+    "mech_plan_conformance_rejections",
 )
+
+#: Categorical gate outcomes counted over ALL runs of an arm (failed runs
+#: stay in the denominator: a rejected model is the arm's result, not noise).
+GATE_OUTCOMES = {
+    "qualified": lambda r: r.get("qualification_status") == "QUALIFIED",
+    "closure_closed": lambda r: r.get("functional_closure_status") == "CLOSED",
+    "paths_7of7": lambda r: r.get("controlled_pass") == 7,
+}
 
 #: Metrics worth a per-seed paired comparison against FULL.
 PAIRED_METRICS = (
@@ -51,12 +78,18 @@ def aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         # an arm's entire failure rate.
         infra = [r for r in failed if r.get("infrastructure_failure")]
         genuine = [r for r in failed if not r.get("infrastructure_failure")]
+        counted = ok_runs + genuine
         entry: Dict[str, Any] = {
             "runs_ok": len(ok_runs),
             "runs_failed": len(genuine),
             "runs_infra_failed": len(infra),
             "failed_seeds": sorted(r["seed"] for r in genuine),
             "infra_failed_seeds": sorted(r["seed"] for r in infra),
+            "runs_counted": len(counted),
+            "gates": {
+                name: sum(1 for r in counted if predicate(r))
+                for name, predicate in GATE_OUTCOMES.items()
+            },
         }
         for metric in HEADLINE_METRICS:
             values = [
@@ -141,6 +174,63 @@ def render_markdown(
                  f"`{json.dumps(manifest.get('base_pipeline_kwargs'))}`  ·  "
                  f"mcts_iterations: {manifest.get('mcts_iterations')}\n")
 
+    lines.append("## Gate outcomes (all counted runs; genuine failures stay "
+                 "in the denominator)\n")
+    lines.append("| arm | runs | qualified | closure CLOSED | 7/7 role paths "
+                 "| reachability | total tokens |")
+    lines.append("|---|---|---|---|---|---|---|")
+    for arm, entry in summary["aggregate"].items():
+        n = entry.get("runs_counted", 0)
+        gates = entry.get("gates") or {}
+        lines.append(
+            f"| {arm} | {n} "
+            f"| {gates.get('qualified', 0)}/{n} "
+            f"| {gates.get('closure_closed', 0)}/{n} "
+            f"| {gates.get('paths_7of7', 0)}/{n} "
+            f"| {_fmt(entry.get('reachability'))} "
+            f"| {_fmt(entry.get('llm_total_tokens'))} |"
+        )
+    lines.append("")
+
+    lines.append("## Mechanism ledger (successful runs; mean ± std)\n")
+    lines.append(
+        "Whether the layer an arm removes was exercised. A zero row in FULL "
+        "means the matching ablation is uninformative on that trajectory."
+    )
+    lines.append("")
+    lines.append("| arm | refine iters | Tier-0 fixes | Tier-1 syntax LLM "
+                 "| det. connectivity | surgical accepted | surgical exit "
+                 "passes | closure gaps | closure att./acc. | plan det. adds |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    for arm, entry in summary["aggregate"].items():
+        def m(key: str, decimals: int = 1) -> str:
+            return _fmt(entry.get(key), decimals)
+        lines.append(
+            f"| {arm} | {m('mech_refine_iterations')} | {m('mech_tier0_fixes')} "
+            f"| {m('mech_syntax_gate_llm_attempts')} "
+            f"| {m('mech_det_connectivity_fixes')} "
+            f"| {m('mech_surgical_refinement_accepted')} "
+            f"| {m('mech_surgical_exit_passes')} "
+            f"| {m('mech_closure_initial_gaps')} "
+            f"| {m('mech_closure_attempts')} / {m('mech_closure_accepted')} "
+            f"| {m('mech_plan_det_additions')} |"
+        )
+    lines.append("")
+
+    replayed = [r for r in records if r.get("replayed_calls")]
+    if replayed:
+        lines.append("## Prefix replay (trajectory-matched arms)\n")
+        lines.append("| arm | seed | replayed calls | replayed tokens | live "
+                     "calls | live tokens | total tokens |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for r in sorted(replayed, key=lambda x: (x["arm"], x["seed"])):
+            lines.append(
+                f"| {r['arm']} | {r['seed']} | {r.get('replayed_calls')} "
+                f"| {r.get('replayed_tokens'):,} | {r.get('llm_live_calls')} "
+                f"| {r.get('llm_live_tokens'):,} | {r.get('llm_total_tokens'):,} |"
+            )
+        lines.append("")
+
     lines.append("## Per-arm aggregate (successful runs)\n")
     lines.append("| arm | ok/failed | final_score | controlled 7-scenario "
                  "pass rate | reachability | LLM calls | total tokens | "
@@ -202,7 +292,13 @@ def render_markdown(
         "the generate-phase score), so cross-arm score comparisons must "
         "use generate_phase_score; final_score differences between "
         "DSE-bearing and DSE-less arms reflect the measurement point and "
-        "the terminal enrichment layer, not generation quality."
+        "the terminal enrichment layer, not generation quality. Under "
+        "--prefix-from-baseline every non-FULL arm replays FULL's archived "
+        "call prefix for the same seed and goes live at the first request "
+        "the ablated component changes: differences are attributable to the "
+        "component, not to provider sampling; total tokens include the "
+        "replayed prefix so effort is comparable with FULL, while wall time "
+        "covers live calls only."
     )
     lines.append("")
     return "\n".join(lines)

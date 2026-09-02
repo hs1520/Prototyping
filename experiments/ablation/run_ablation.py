@@ -134,6 +134,12 @@ class PrefixReplayLLM:
         self._cursor = 0
         self._live = False
         self.replayed_calls = 0
+        self.replayed_prompt_tokens = 0
+        self.replayed_completion_tokens = 0
+
+    @property
+    def replayed_tokens(self) -> int:
+        return self.replayed_prompt_tokens + self.replayed_completion_tokens
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
@@ -155,12 +161,28 @@ class PrefixReplayLLM:
                 self._cursor += 1
                 self.replayed_calls += 1
                 payload = record.get("response") or {}
-                return LLMResponse(
+                response = LLMResponse(
                     content=str(payload.get("content") or ""),
                     model=str(payload.get("model") or ""),
                     prompt_tokens=int(payload.get("prompt_tokens") or 0),
                     completion_tokens=int(payload.get("completion_tokens") or 0),
                 )
+                self.replayed_prompt_tokens += response.prompt_tokens or 0
+                self.replayed_completion_tokens += response.completion_tokens or 0
+                # Archive the replayed call too, so this run's calls.jsonl is
+                # its complete trajectory (prefix + live) and can itself seed
+                # a later replay. The inner ledger still counts live calls only.
+                notify = getattr(self._inner, "_notify_call_observers", None)
+                if callable(notify):
+                    try:
+                        notify(
+                            messages=messages, response=response,
+                            temperature=resolved_temp, max_tokens=resolved_max,
+                            retries=0, label=record.get("label"),
+                        )
+                    except Exception:
+                        pass
+                return response
         if not self._live:
             self._live = True
             print(f"  [resume] replayed {self.replayed_calls} archived "
@@ -171,6 +193,112 @@ class PrefixReplayLLM:
             **({} if max_tokens is None else {"max_tokens": max_tokens}),
             **kwargs,
         )
+
+
+#: Narration markers of the repair mechanisms, counted from the archived
+#: per-run stdout. They exist so the ablation can state whether the
+#: component an arm removes was exercised at all on that trajectory — a
+#: "no difference" cell is uninformative when FULL never invoked the layer.
+_LOG_MARKERS = {
+    # Tier 0 deterministic syntax rewrites (syntax gate, before any LLM call)
+    "tier0_fixes": ("┌─ [DOC-FIX]", "┌─ [RO-FIX]", "┌─ [KW-FIX]",
+                    "┌─ [LEV-FIX]", "┌─ [ATTR-INJ]"),
+    # Tier 1 localized LLM syntax repair attempts
+    "syntax_gate_llm_attempts": ("[SYNTAX-GATE] attempt",),
+    # deterministic connectivity repairs accepted by the simulation guard
+    "det_connectivity_fixes": ("direction fix (deterministic)",
+                               "connect fix (deterministic)"),
+    # block-level surgical refinement candidates accepted in the main loop
+    "surgical_refinement_accepted": ("✓ Surgical refinement:",),
+    # terminal functional-closure targeted passes
+    "closure_passes_narrated": ("│  Pass ",),
+}
+
+
+def _log_counts(log_text: str) -> Dict[str, int]:
+    return {
+        key: sum(log_text.count(marker) for marker in markers)
+        for key, markers in _LOG_MARKERS.items()
+    }
+
+
+def _calls_by_label(calls_path: Path) -> Dict[str, Dict[str, int]]:
+    """Per-stage call/token attribution from the archived call log."""
+    out: Dict[str, Dict[str, int]] = {}
+    if not calls_path.exists():
+        return out
+    for line in calls_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        label = str(record.get("label") or "unlabelled")
+        payload = record.get("response") or {}
+        cell = out.setdefault(label, {"calls": 0, "tokens": 0})
+        cell["calls"] += 1
+        cell["tokens"] += int(payload.get("prompt_tokens") or 0) + int(
+            payload.get("completion_tokens") or 0
+        )
+    return out
+
+
+def _mechanism_ledger(
+    result: Dict[str, Any],
+    orchestrator: Any,
+    log_path: Path,
+    calls_path: Optional[Path],
+) -> Dict[str, Any]:
+    """Was each ablatable mechanism exercised, and how much did it do?
+
+    Structured sources first (closure record, plan conformance, pipeline
+    state lists); narration counts fill the layers that leave no record.
+    """
+    ledger: Dict[str, Any] = {}
+    closure = result.get("functional_closure") or {}
+    contexts = closure.get("repair_contexts") or []
+    ledger["refine_iterations"] = result.get("iterations")
+    ledger["plan_retries"] = result.get("step1_plan_retries")
+    ledger["closure_ran"] = bool(closure)
+    ledger["closure_initial_gaps"] = len(closure.get("initial_gap_req_ids") or [])
+    ledger["closure_attempts"] = int(closure.get("attempts") or 0)
+    ledger["closure_accepted"] = int(closure.get("accepted_repairs") or 0)
+    ledger["closure_full_rewrite_passes"] = sum(
+        1 for c in contexts if isinstance(c, dict)
+        and c.get("generator") == "FULL_REWRITE"
+    )
+    ledger["closure_surgical_passes"] = sum(
+        1 for c in contexts if isinstance(c, dict) and "surgical_audit" in c
+    )
+    exit_lists = (
+        "last_namespace_repair_attempts",
+        "last_response_conformance_repair_attempts",
+        "last_verification_anchor_attempts",
+        "last_unplanned_connect_removal_attempts",
+    )
+    ledger["surgical_exit_passes"] = sum(
+        len(getattr(orchestrator, name, None) or []) for name in exit_lists
+    )
+    conformance = result.get("generation_plan_conformance") or {}
+    ledger["plan_det_additions"] = sum(
+        len(conformance.get(key) or []) for key in (
+            "deterministically_added_connections",
+            "deterministically_added_ports",
+            "deterministically_retyped_ports",
+            "deterministically_added_port_defs",
+        )
+    )
+    ledger["plan_conformance_rejections"] = len(
+        result.get("plan_conformance_rejections") or []
+    )
+    try:
+        ledger.update(_log_counts(log_path.read_text(encoding="utf-8")))
+    except OSError:
+        pass
+    if calls_path is not None:
+        ledger["calls_by_label"] = _calls_by_label(calls_path)
+    return ledger
 
 
 def _git(*args: str) -> str:
@@ -373,6 +501,39 @@ def run_one(
             "report_path": str(runs_dir / f"{stem}.report.json"),
             "log_path": str(log_path),
         })
+        # Effort accounting under prefix replay: the ledger counts live
+        # calls only, so add the replayed prefix back to make the arm's
+        # total comparable with an unreplayed FULL. Wall time stays live.
+        replayed_calls = int(getattr(llm, "replayed_calls", 0) or 0)
+        if replayed_calls:
+            replayed_tokens = int(getattr(llm, "replayed_tokens", 0) or 0)
+            record.update({
+                "llm_live_calls": usage.get("calls"),
+                "llm_live_tokens": usage.get("total_tokens"),
+                "replayed_calls": replayed_calls,
+                "replayed_tokens": replayed_tokens,
+                "llm_calls": int(usage.get("calls") or 0) + replayed_calls,
+                "llm_total_tokens": (
+                    int(usage.get("total_tokens") or 0) + replayed_tokens
+                ),
+            })
+        # Mechanism ledger: observational, must never taint the run record.
+        try:
+            calls_archive = (
+                Path(record["calls_capture_path"])
+                if record.get("calls_capture_path") else None
+            )
+            ledger = _mechanism_ledger(
+                result, pipeline.orchestrator, log_path, calls_archive,
+            )
+            record["mechanism_ledger"] = ledger
+            for key, value in ledger.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    record[f"mech_{key}"] = value
+        except Exception as ledger_error:
+            record["mechanism_ledger_error"] = (
+                f"{type(ledger_error).__name__}: {ledger_error}"
+            )
     except Exception as error:
         error_text = f"{type(error).__name__}: {error}"
         record.update({
@@ -434,6 +595,18 @@ def main() -> int:
     parser.add_argument("--allow-dirty", action="store_true",
                         help="permit a real-provider campaign on a dirty "
                              "worktree (recorded either way)")
+    parser.add_argument("--prefix-from-baseline", action="store_true",
+                        help="trajectory-matched ablation: every non-FULL "
+                             "arm replays FULL's archived call prefix for "
+                             "the same seed (free, byte-identical) and goes "
+                             "live from the first request the ablated "
+                             "component changes; FULL must run first in "
+                             "this campaign or be named via "
+                             "--baseline-campaign")
+    parser.add_argument("--baseline-campaign", default="",
+                        help="campaign dir whose runs/FULL_seed<N>.calls.jsonl "
+                             "supply the replay prefix (default: this "
+                             "campaign)")
     args = parser.parse_args()
 
     commit = _git("rev-parse", "HEAD")
@@ -476,6 +649,8 @@ def main() -> int:
         "mcts_iterations": args.mcts_iterations,
         "git_commit": commit,
         "git_dirty": dirty,
+        "prefix_from_baseline": bool(args.prefix_from_baseline),
+        "baseline_campaign": args.baseline_campaign or None,
         "git_untracked": untracked,
         "arm_registry": registry_manifest(),
         "python": sys.version,
@@ -504,22 +679,55 @@ def main() -> int:
     records_path = campaign_dir / "records.jsonl"
     total = len(args.arms) * args.seeds
     done = 0
+    baseline_dir = (
+        Path(args.baseline_campaign) if args.baseline_campaign else campaign_dir
+    )
     for arm_name in args.arms:
         for seed in range(args.seeds):
             done += 1
             print(f"\n=== [{done}/{total}] {arm_name} seed={seed} "
                   f"({args.provider}) ===", flush=True)
+            run_resume = resume_calls
+            if (
+                args.prefix_from_baseline and arm_name != BASELINE_ARM
+                and run_resume is None
+            ):
+                prefix_path = (
+                    baseline_dir / "runs" / f"{BASELINE_ARM}_seed{seed}.calls.jsonl"
+                )
+                if prefix_path.exists():
+                    run_resume = [
+                        json.loads(line)
+                        for line in prefix_path.read_text().splitlines()
+                        if line.strip()
+                    ]
+                    print(f"    prefix : {len(run_resume)} archived "
+                          f"{BASELINE_ARM} call(s) from {prefix_path.name}",
+                          flush=True)
+                else:
+                    print(f"    prefix : none ({prefix_path.name} missing) "
+                          "— running live", flush=True)
             record = run_one(
                 args.provider, arm_name, seed, base_kwargs,
                 args.mcts_iterations, campaign_dir,
-                resume_calls=resume_calls,
+                resume_calls=run_resume,
             )
+            if run_resume is not None and run_resume is not resume_calls:
+                record["prefix_source"] = str(
+                    baseline_dir / "runs" / f"{BASELINE_ARM}_seed{seed}.calls.jsonl"
+                )
             records.append(record)
             with open(records_path, "a", encoding="utf-8") as records_file:
                 records_file.write(json.dumps(record, default=str) + "\n")
             status = "✓" if record.get("ok") else f"✗ {record.get('error')}"
-            print(f"    {status}  score={record.get('final_score')}  "
-                  f"tokens={record.get('llm_total_tokens')}  "
+            replay_note = (
+                f"  replayed={record.get('replayed_calls')} calls/"
+                f"{record.get('replayed_tokens')} tok"
+                if record.get("replayed_calls") else ""
+            )
+            print(f"    {status}  qual={record.get('qualification_status')}  "
+                  f"closure={record.get('functional_closure_status')}  "
+                  f"tokens={record.get('llm_total_tokens')}{replay_note}  "
                   f"{record.get('elapsed_s')}s", flush=True)
 
     summary = {

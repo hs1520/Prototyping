@@ -2568,6 +2568,7 @@ class _RefinementEngine:
                     propose=lambda prompt, system_prompt: self._intelligence.chat(
                         prompt,
                         system_prompt=system_prompt,
+                        label="connectivity_repair",
                     ),
                     connectivity_system_prompt=_CONNECTIVITY_FIX_SYSTEM,
                     port_system_prompt=_PORT_FIX_SYSTEM,
@@ -2752,6 +2753,7 @@ class _RefinementEngine:
                     raw = self._intelligence.chat(
                         prompt,
                         system_prompt=_TRANSITION_FIX_SYSTEM,
+                        label="transition_repair",
                     )
                 except Exception as exc:
                     print(f"  │    ✗ LLM error: {exc}", flush=True)
@@ -3101,7 +3103,8 @@ class _RefinementEngine:
         t0 = time.perf_counter()
         try:
             raw_fix = self._intelligence.chat(
-                prompt, system_prompt=_SURGICAL_FIX_SYSTEM
+                prompt, system_prompt=_SURGICAL_FIX_SYSTEM,
+                label="syntax_repair_tier1",
             )
         except Exception as exc:
             print(f"  ║  │  ✗ LLM error: {exc}", flush=True)

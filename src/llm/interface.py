@@ -387,13 +387,20 @@ class LLMInterface(ABC):
         system_prompt: str = "",
         temperature: Optional[float] = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        label: Optional[str] = None,
     ) -> str:
-        """Simple single-turn chat interface."""
+        """Simple single-turn chat interface.
+
+        ``label`` names the pipeline stage for call observers (usage
+        attribution); it never reaches the provider.
+        """
         messages: List[Message] = []
         if system_prompt:
             messages.append(Message(role="system", content=system_prompt))
         messages.append(Message(role="user", content=user_message))
-        response = self.complete(messages, temperature=temperature, max_tokens=max_tokens)
+        response = self.complete(
+            messages, temperature=temperature, max_tokens=max_tokens, label=label,
+        )
         return response.content
 
     def complete_with_escalation(
@@ -402,6 +409,7 @@ class LLMInterface(ABC):
         validate: Callable[[str], bool],
         temperatures: Tuple[float, ...] = ESCALATION_TEMPERATURES,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        label: Optional[str] = None,
     ) -> Tuple[LLMResponse, bool]:
         """Low-temperature-first completion with temperature escalation.
 
@@ -412,7 +420,9 @@ class LLMInterface(ABC):
         """
         last: Optional[LLMResponse] = None
         for temp in temperatures:
-            last = self.complete(messages, temperature=temp, max_tokens=max_tokens)
+            last = self.complete(
+                messages, temperature=temp, max_tokens=max_tokens, label=label,
+            )
             try:
                 if validate(last.content):
                     return last, True
@@ -428,16 +438,20 @@ class LLMInterface(ABC):
         validate: Optional[Callable[[str], bool]] = None,
         temperatures: Tuple[float, ...] = ESCALATION_TEMPERATURES,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        label: Optional[str] = None,
     ) -> Tuple[str, bool]:
         """chat() variant of :meth:`complete_with_escalation`; returns (content, ok)."""
         if validate is None:
-            return self.chat(user_message, system_prompt, max_tokens=max_tokens), True
+            return self.chat(
+                user_message, system_prompt, max_tokens=max_tokens, label=label,
+            ), True
         messages: List[Message] = []
         if system_prompt:
             messages.append(Message(role="system", content=system_prompt))
         messages.append(Message(role="user", content=user_message))
         response, ok = self.complete_with_escalation(
-            messages, validate, temperatures=temperatures, max_tokens=max_tokens
+            messages, validate, temperatures=temperatures, max_tokens=max_tokens,
+            label=label,
         )
         return response.content, ok
 
