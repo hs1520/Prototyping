@@ -263,13 +263,35 @@ def residual_probes(edits: List[Dict], terminal_text: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 class MutatedDesignAgent:
-    def __init__(self, sysml_text: str, plan: Dict[str, Any], model_name: str) -> None:
+    """Serve the mutated archived candidate for the INITIAL generation request only.
+
+    Every later request that carries an ``existing_model`` — whole-rewrite
+    refinement (refinement_transaction), closure full-rewrite fallback and
+    SITL linking (refinement.py) — is delegated to the real design agent, so
+    those paths cost real LLM calls exactly as in production. The first study
+    run (20260902_175355_mut_s0) answered *every* request with the mutated
+    text: NO-SURGICAL's "full rewrite" silently returned the defective model
+    and the FULL/NO-DETFIX BEHAVIOUR fallbacks were free — those cells were
+    re-run with this delegation in place.
+    """
+
+    def __init__(self, sysml_text: str, plan: Dict[str, Any], model_name: str,
+                 delegate: Any = None) -> None:
         self._text, self._plan, self._name = sysml_text, plan, model_name
+        self._delegate = delegate
         self.name = "MutatedDesignAgent"
+        self.served_mutated = 0
+        self.delegated = 0
 
     def run(self, task: Dict[str, Any]):
         from src.agents.base_agent import AgentResult
         from src.sysml.lite_model import build_lite_model
+        if task.get("existing_model") is not None:
+            if self._delegate is None:
+                raise RuntimeError("MutatedDesignAgent: refinement request but no delegate")
+            self.delegated += 1
+            return self._delegate.run(task)
+        self.served_mutated += 1
         model = build_lite_model(self._text, model_name=self._name)
         if getattr(model, "metadata", None) is None:
             model.metadata = {}
@@ -302,7 +324,9 @@ def run_one(provider: str, arm_name: str, set_name: str, mutated_text: str, edit
         if hasattr(llm, "add_call_observer"):
             llm.add_call_observer(_capture_observer(calls_path))
         pipeline = PrototypingPipeline(llm=llm, **kwargs)
-        pipeline.orchestrator.design_agent = MutatedDesignAgent(mutated_text, plan, SYSTEM_NAME)
+        agent = MutatedDesignAgent(mutated_text, plan, SYSTEM_NAME,
+                                   delegate=pipeline.orchestrator.design_agent)
+        pipeline.orchestrator.design_agent = agent
         log_path = runs / f"{stem}.log"
         with open(log_path, "w", encoding="utf-8") as log, contextlib.redirect_stdout(log):
             result = pipeline.orchestrator.generate(
@@ -329,6 +353,7 @@ def run_one(provider: str, arm_name: str, set_name: str, mutated_text: str, edit
             "llm_calls": usage.get("calls"), "llm_total_tokens": usage.get("total_tokens"),
             "residual": residual_probes(edits, terminal),
             "mechanism_ledger": _mechanism_ledger(result, pipeline.orchestrator, log_path, calls_path),
+            "design_agent": {"served_mutated": agent.served_mutated, "delegated_rewrites": agent.delegated},
         })
     except Exception as error:
         text = f"{type(error).__name__}: {error}"
@@ -374,6 +399,9 @@ def main() -> int:
     ap.add_argument("--source-seed", type=int, default=0)
     ap.add_argument("--arms", nargs="*", default=["FULL", "NO-REFINE", "NO-SURGICAL", "NO-DETFIX", "NO-REPAIR"])
     ap.add_argument("--sets", nargs="*", default=["CONTROL", "SYNTAX", "CONNECT", "BEHAVIOUR"])
+    ap.add_argument("--cells", nargs="*", default=None, metavar="ARM:SET",
+                    help="explicit arm×set cells to run (overrides the --arms × --sets product); "
+                         "used to re-run cells after a harness fix")
     ap.add_argument("--max-iterations", type=int, default=4)
     ap.add_argument("--label", default="mutation")
     ap.add_argument("--out-root", default=str(REPO / "experiments/ablation/results"))
@@ -393,6 +421,13 @@ def main() -> int:
     stamp = time.strftime("%Y%m%d_%H%M%S")
     out_dir = Path(args.out_root) / f"{stamp}_{args.label}"
     out_dir.mkdir(parents=True, exist_ok=False)
+    cells = ([tuple(c.split(":", 1)) for c in args.cells] if args.cells
+             else [(arm, s) for s in args.sets for arm in args.arms])
+    for arm, s in cells:
+        if arm not in ARMS or s not in MUTATION_SETS:
+            print(f"✗ unknown cell {arm}:{s}"); return 2
+    args.sets = list(dict.fromkeys(s for _, s in cells))
+    args.arms = list(dict.fromkeys(arm for arm, _ in cells))
     mutated: Dict[str, Tuple[str, List[Dict]]] = {}
     for s in args.sets:
         mtext, edits = apply_set(s, text)
@@ -401,6 +436,7 @@ def main() -> int:
     manifest = {
         "campaign": out_dir.name, "source": str(src_dir / "runs" / stem), "source_digest": sha256_text(text),
         "sets": {s: e for s, (_, e) in mutated.items()}, "arms": args.arms, "provider": args.provider,
+        "cells": [f"{arm}:{s}" for arm, s in cells],
         "git_commit": _git("rev-parse", "HEAD"), "git_dirty": dirty, "started": stamp,
         "base_pipeline_kwargs": {"max_iterations": args.max_iterations, "dse_mode": "variation", "verbose": False},
     }
@@ -409,19 +445,19 @@ def main() -> int:
     for s, (_, e) in mutated.items():
         print(f"  set {s:10s} {len(e)} edit(s): {[x['op'] for x in e]}")
     records: List[Dict[str, Any]] = []
-    total = len(args.sets) * len(args.arms); done = 0
-    for s in args.sets:
-        for arm in args.arms:
-            done += 1
-            print(f"\n=== [{done}/{total}] {arm} × {s} ===", flush=True)
-            rec = run_one(args.provider, arm, s, mutated[s][0], mutated[s][1], plan,
-                          manifest["base_pipeline_kwargs"], out_dir)
-            records.append(rec)
-            with open(out_dir / "records.jsonl", "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(rec, default=str) + "\n")
-            print(f"    {'✓' if rec.get('ok') else '✗ ' + str(rec.get('error'))[:80]}  qual={rec.get('qualification_status')} "
-                  f"closure={rec.get('functional_closure_status')} calls={rec.get('llm_calls')} tokens={rec.get('llm_total_tokens')} "
-                  f"{rec.get('elapsed_s')}s", flush=True)
+    total = len(cells); done = 0
+    for arm, s in cells:
+        done += 1
+        print(f"\n=== [{done}/{total}] {arm} × {s} ===", flush=True)
+        rec = run_one(args.provider, arm, s, mutated[s][0], mutated[s][1], plan,
+                      manifest["base_pipeline_kwargs"], out_dir)
+        records.append(rec)
+        with open(out_dir / "records.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, default=str) + "\n")
+        da = rec.get("design_agent") or {}
+        print(f"    {'✓' if rec.get('ok') else '✗ ' + str(rec.get('error'))[:80]}  qual={rec.get('qualification_status')} "
+              f"closure={rec.get('functional_closure_status')} calls={rec.get('llm_calls')} tokens={rec.get('llm_total_tokens')} "
+              f"rewrites={da.get('delegated_rewrites')} {rec.get('elapsed_s')}s", flush=True)
     (out_dir / "summary.md").write_text(render(records, manifest), encoding="utf-8")
     print(f"\nsaved: {out_dir}")
     return 0 if all(r.get("ok") for r in records) else 1
