@@ -928,6 +928,13 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
 # Accept machine: nominal + emergency branch scenarios
 # ---------------------------------------------------------------------------
 
+def _identifier_words(text: str) -> List[str]:
+    """Lower-case words of an identifier soup: camelCase and snake_case split."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text or "")
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
+    return [w for w in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if w]
+
+
 def _classify_accept_transitions(sm: StateMachineDef):
     """
     将 accept 转移分成正常功能响应和应急分支。
@@ -951,8 +958,18 @@ def _classify_accept_transitions(sm: StateMachineDef):
             state.entry_action_def if state else None,
             state.do_action if state else None,
             state.do_action_def if state else None,
-        ))).lower()
-        return any(marker in semantic_name for marker in emergency_markers)
+        )))
+        # Match whole identifier words, not substrings: the 3-seed ablation
+        # (FULL seed 1, 2026-09-02) lost a correct model because
+        # "defaultToMechanicallyLockedState" contains "fault" and the
+        # power-on transition was filed as an emergency branch, leaving the
+        # nominal chain with no first step. Plural/inflected forms
+        # ("faults", "aborted") still match via the prefix test.
+        return any(
+            word.startswith(marker)
+            for word in _identifier_words(semantic_name)
+            for marker in emergency_markers
+        )
 
     nominal, emergency = [], []
     for t in sm.transitions:

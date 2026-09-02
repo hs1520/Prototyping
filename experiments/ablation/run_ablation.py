@@ -579,6 +579,9 @@ def main() -> int:
     )
     parser.add_argument("--seeds", type=int, default=3,
                         help="seeds per arm (0..N-1, shared across arms)")
+    parser.add_argument("--seed-ids", type=int, nargs="*", default=None,
+                        help="explicit seed ids to run (overrides --seeds); "
+                             "used to re-run one seed after an instrument fix")
     parser.add_argument("--mcts-iterations", type=int, default=20,
                         help="DSE budget per run (flagship run_pipeline.py uses 20)")
     parser.add_argument("--max-iterations", type=int, default=4,
@@ -609,6 +612,10 @@ def main() -> int:
                              "campaign)")
     args = parser.parse_args()
 
+    seed_ids = (
+        list(args.seed_ids) if args.seed_ids is not None
+        else list(range(args.seeds))
+    )
     commit = _git("rev-parse", "HEAD")
     # Tracked modifications make a campaign non-reproducible; pre-existing
     # untracked scratch dirs do not — they are recorded, not refused.
@@ -643,7 +650,7 @@ def main() -> int:
         "requirements_digest": sha256_text("\n".join(DRONE_REQUIREMENTS)),
         "frozen_set_digest": getattr(DRONE_FROZEN_REQUIREMENTS, "digest", None),
         "provider": args.provider,
-        "seeds": list(range(args.seeds)),
+        "seeds": seed_ids,
         "arms_requested": list(args.arms),
         "base_pipeline_kwargs": base_kwargs,
         "mcts_iterations": args.mcts_iterations,
@@ -664,7 +671,7 @@ def main() -> int:
 
     resume_calls: Optional[List[Dict[str, Any]]] = None
     if args.resume_calls:
-        if len(args.arms) != 1 or args.seeds != 1:
+        if len(args.arms) != 1 or len(seed_ids) != 1:
             print("✗ --resume-calls applies to exactly one arm × one seed")
             return 2
         resume_calls = [
@@ -677,13 +684,13 @@ def main() -> int:
 
     records: List[Dict[str, Any]] = []
     records_path = campaign_dir / "records.jsonl"
-    total = len(args.arms) * args.seeds
+    total = len(args.arms) * len(seed_ids)
     done = 0
     baseline_dir = (
         Path(args.baseline_campaign) if args.baseline_campaign else campaign_dir
     )
     for arm_name in args.arms:
-        for seed in range(args.seeds):
+        for seed in seed_ids:
             done += 1
             print(f"\n=== [{done}/{total}] {arm_name} seed={seed} "
                   f"({args.provider}) ===", flush=True)
