@@ -1,13 +1,10 @@
-"""
-Configuration module for managing environment variables.
-"""
+"""Configuration module for managing environment variables."""
 
 import os
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
@@ -15,28 +12,24 @@ load_dotenv(dotenv_path=env_path)
 class Config:
     """Application configuration from environment variables."""
 
-    # LLM Configuration
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_API_KEY_TEST: str = os.getenv("GEMINI_API_KEY_TEST", "")
 
     VERTEX_API_KEY: str = os.getenv("VERTEX_API_KEY", "")
 
-    # Practical switch: use test key by default to control costs.
+    # Default to the test key to control cost.
     GEMINI_USE_TEST_KEY: str = os.getenv("GEMINI_USE_TEST_KEY", "true")
 
-    # LangSmith Configuration
     LANGSMITH_API_KEY: str = os.getenv("LANGSMITH_API_KEY", "")
     LANGSMITH_TRACING: str = os.getenv("LANGSMITH_TRACING", "true")
     LANGCHAIN_TRACING_V2: str = os.getenv("LANGCHAIN_TRACING_V2", "true")
     LANGSMITH_ENDPOINT: str = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
     LANGSMITH_PROJECT: str = os.getenv("LANGSMITH_PROJECT", "default")
 
-    # Vector Database Configuration
     PINECONE_API_KEY: str = os.getenv("PINECONE_API_KEY", "")
 
     @classmethod
     def _as_bool(cls, value: str) -> Optional[bool]:
-        """Parse common truthy/falsey strings. Return None when unset/unknown."""
         if value is None:
             return None
 
@@ -57,7 +50,7 @@ class Config:
         if configured is not None:
             return configured
 
-        # Fallback: prioritize saving cost if switch value is invalid.
+        # Invalid switch value: fall back to the test key.
         return True
 
     @classmethod
@@ -67,7 +60,7 @@ class Config:
         if select_test and cls.GEMINI_API_KEY_TEST:
             return cls.GEMINI_API_KEY_TEST
         return cls.GEMINI_API_KEY
-    
+
     @classmethod
     def get_vertex_api_key(cls) -> str:
         """Return the Vertex API key."""
@@ -85,12 +78,10 @@ class Config:
         os.environ["LANGSMITH_ENDPOINT"] = cls.LANGSMITH_ENDPOINT
         os.environ["LANGSMITH_PROJECT"] = cls.LANGSMITH_PROJECT
 
-        # Keep GEMINI_API_KEY as the active runtime key used by SDK defaults.
         selected_key = cls.get_gemini_api_key(use_test=use_test)
         if selected_key:
             os.environ["GEMINI_API_KEY"] = selected_key
 
-        # Preserve explicit test key env var for debugging/introspection.
         if cls.GEMINI_API_KEY_TEST:
             os.environ["GEMINI_API_KEY_TEST"] = cls.GEMINI_API_KEY_TEST
 

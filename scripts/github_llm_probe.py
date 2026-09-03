@@ -1,17 +1,4 @@
-"""Quick connectivity check for calling AI with GitHub CLI authentication.
-
-Usage:
-    python scripts/github_llm_probe.py
-    python scripts/github_llm_probe.py --prompt "Write a quicksort in Python"
-    python scripts/github_llm_probe.py --model openai/gpt-4.1-mini --show-json
-
-Prerequisites:
-- GitHub CLI installed: gh --version
-- Logged in via GitHub CLI: gh auth login
-- Account has access to GitHub Models/Copilot APIs
-
-If authentication is missing, the script will guide you to log in and then retry once.
-"""
+"""Quick connectivity check for calling AI with GitHub CLI authentication."""
 
 from __future__ import annotations
 
@@ -83,7 +70,6 @@ def call_github_models_chat(
         timeout=timeout,
     )
 
-    # Raise for 4xx/5xx so failures are explicit in CLI output.
     response.raise_for_status()
     return response.json()
 
@@ -284,7 +270,6 @@ def main() -> int:
             status = exc.response.status_code if exc.response is not None else "unknown"
             body = exc.response.text if exc.response is not None else str(exc)
 
-            # Some environments return auth failures as 401/403 from the endpoint.
             if status in (401, 403) and not has_retried_after_login:
                 print(f"[AUTH ERROR] status={status} body={body}", file=sys.stderr)
                 if not prompt_user_login():

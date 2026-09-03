@@ -19,14 +19,14 @@ def _model(name: str = "D"):
     return build_lite_model(f"package {name} {{}}", model_name=name)
 
 
-def test_model_revision_detects_text_tampering():
+def test_revision_detects_tampering():
     revision = ModelRevision.capture(_model())
 
     with pytest.raises(ValueError, match="digest"):
         replace(revision, sysml="package Changed {}").materialize()
 
 
-def test_typestate_carries_requirements_without_hidden_cross_run_state():
+def test_typestate_carries_requirements():
     runtime = Orchestrator(
         llm=MockLLM(),
         max_iterations=1,
@@ -83,8 +83,7 @@ def test_typestate_carries_requirements_without_hidden_cross_run_state():
         first.evidence["syntax_error_count"] = 99
 
 
-def test_fail_closed_verdict_carries_the_repairs_the_plan_refused():
-    """The run dies at the gate, so the diagnosis has to travel with the error."""
+def test_fail_closed_lists_refused_repairs():
     runtime = Orchestrator(
         llm=MockLLM(),
         max_iterations=1,
@@ -117,7 +116,7 @@ def test_fail_closed_verdict_carries_the_repairs_the_plan_refused():
     ]
 
 
-def test_orchestrator_uses_composition_not_refinement_inheritance():
+def test_no_refinement_inheritance():
     assert "src.agents.refinement" not in {
         base.__module__ for base in Orchestrator.__mro__
     }

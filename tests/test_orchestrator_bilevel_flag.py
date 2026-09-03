@@ -1,11 +1,3 @@
-"""Tests for the catalog bilevel DSE path (_explore_bilevel).
-
-With the legacy scalar MCTS removed, the non-variation Phase-3 branch is the
-bilevel MO-MCTS + inner BO over the catalog operator space.  These tests cover
-the severity→redundancy chain, the inner-BO-tuned frequency, the report shapes
-(DesignSpace / pareto_front), and the failure fallback (empty config, never
-breaking the pipeline).
-"""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -21,7 +13,7 @@ def _model():
     return SimpleNamespace(part_definitions=parts, name="TestSystem")
 
 
-def test_bilevel_severity_drives_redundancy_and_tunes_frequency():
+def test_severity_drives_redundancy():
     reqs = [
         "REQ-SAFE-001: autoland on dual-engine failure. [SEV:Catastrophic]",
         "REQ-PERF-001: maintain 50 Hz control.",
@@ -29,13 +21,12 @@ def test_bilevel_severity_drives_redundancy_and_tunes_frequency():
     ds, cfg, front = Orchestrator._explore_bilevel(
         SimpleNamespace(), _model(), reqs, random_seed=0
     )
-    assert cfg.parameters["redundancy_level"] == "triple"        # severity-driven
-    # control_frequency tuned by the INNER BO toward the PERF target (~50 Hz)
+    assert cfg.parameters["redundancy_level"] == "triple"
     assert 40.0 <= cfg.parameters["control_frequency_hz"] <= 75.0
-    assert cfg.parameters["num_sensors"] >= 3                     # coherent with redundancy
+    assert cfg.parameters["num_sensors"] >= 3
 
 
-def test_bilevel_returns_complete_config_for_injectors():
+def test_config_complete_for_injectors():
     _, cfg, _ = Orchestrator._explore_bilevel(
         SimpleNamespace(), _model(), ["REQ-SAFE-001: x. [SEV:Major]"], random_seed=0
     )
@@ -56,11 +47,11 @@ def test_bilevel_report_shapes():
     assert front, "outer MO-MCTS must return a non-empty Pareto front"
     for alt in front:
         assert isinstance(alt, DesignConfiguration)
-        assert alt.scores            # multi-objective vector attached
+        assert alt.scores
         assert "redundancy_level" in alt.parameters
 
 
-def test_bilevel_failure_returns_empty_config(monkeypatch):
+def test_bilevel_failure_empty_config(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("simulated bilevel failure")
 
@@ -68,7 +59,7 @@ def test_bilevel_failure_returns_empty_config(monkeypatch):
     ds, cfg, front = Orchestrator._explore_bilevel(
         SimpleNamespace(), _model(), [], random_seed=0
     )
-    # DSE failure must not break the pipeline: refinement still runs, with no
+    # DSE failure does not break the pipeline: refinement still runs, with no
     # architectural decisions injected.
     assert cfg.parameters == {}
     assert front == []

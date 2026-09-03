@@ -1,7 +1,7 @@
-"""Requirement-ID normalisation — a neutral utility with no contract-layer deps.
+"""Requirement-ID normalisation, with no contract-layer dependencies.
 
-Relocated here during the Layer-2 excision so that verification and SITL code can
-normalise requirement identifiers without the removed external-contract modules.
+Moved here in the Layer-2 excision so verification and SITL code can normalise
+requirement identifiers without the removed external-contract modules.
 """
 from __future__ import annotations
 

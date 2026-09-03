@@ -1,31 +1,23 @@
 """Single source of truth for what the bounded A/G checker obliges an author to do.
 
-Every obligation the checker enforces is enumerated here exactly once and placed in
-one of two categories:
+Every enforced obligation appears here once, in one of two categories:
 
 ``CONVENTION``
-    A rule of the notation: a required shape, element name, or structural link. The
+    A notation rule: a required shape, element name, or structural link. The
     deterministic emitter satisfies these by construction, so they were never
-    written down — which is precisely the defect this module fixes. A convention
-    the generator is never told is unsatisfiable by any author and, worse, makes the
-    checker's diagnostic unactionable: three separate measured Vertex runs stalled
-    on rules that existed only inside the emitter and the checker.
+    written down; three measured Vertex runs stalled on rules that existed only
+    inside the emitter and the checker.
 
 ``SPEC_VALUED``
-    The checker compares against a per-requirement answer it holds internally (for
-    example REQ_SAFE_005's response-set members and precedence edges). The *form*
-    may be published; the *value* must never be, because that value is what the
-    LLM-authored arm is measuring. Publishing it would turn a generation-accuracy
-    number into a transcription score.
+    The checker compares against an answer it holds internally (REQ_SAFE_005's
+    response-set members and precedence edges). The form may be published, the
+    value not, since that value is what the LLM-authored arm measures.
 
-The authoring rules given to a generator are rendered from the ``CONVENTION``
-entries here, so a rule cannot be added to the checker and silently omitted from
-the prompt: ``test_option2_ag_convention.py`` fails if any checker diagnostic code
-or named priority obligation has no entry, and fails if any withheld value reaches
-the rendered prompt.
-
-This module holds no gold and imports nothing from the evaluator or the checker; it
-is plain data so that both sides can be cross-checked against it independently.
+Authoring rules are rendered from the ``CONVENTION`` entries, so a rule cannot be
+added to the checker and omitted from the prompt: ``test_option2_ag_convention.py``
+fails if a checker diagnostic code or named priority obligation has no entry, or if
+a withheld value reaches the rendered prompt. This module holds no gold and imports
+nothing from the evaluator or the checker.
 """
 from __future__ import annotations
 
@@ -37,20 +29,18 @@ from . import ag_profile as profile
 CONVENTION = "CONVENTION"
 SPEC_VALUED = "SPEC_VALUED"
 
-#: Tiers exist because rule-set size is itself a variable. A leaner hand-written
-#: prompt outscored the full rendered set on the same chain and checker, so
-#: "state every rule" is not automatically the best policy and the split must be
-#: measurable rather than assumed.
-#: CORE — without it the package does not parse, or the A/G graph cannot be
-#: extracted and composed at all.
-#: REFINEMENT — what a particular safety pattern additionally requires once the
-#: decomposition is already well formed.
+# Tiers make rule-set size a measurable variable: a leaner hand-written prompt
+# outscored the full rendered set on the same chain and checker.
+# CORE - without it the package does not parse or the A/G graph cannot be
+# extracted and composed.
+# REFINEMENT - what a safety pattern additionally requires once the
+# decomposition is well formed.
 CORE = "CORE"
 REFINEMENT = "REFINEMENT"
 
-#: Failure scope for the named obligations inside the aggregate priority check.
-#: This belongs beside the obligation itself: the router must not maintain a
-#: second list that can drift from what the checker and prompt call the rule.
+# Failure scope for the named obligations inside the aggregate priority check.
+# Kept beside the obligation so the router does not hold a second list that
+# can drift from the checker and prompt.
 PRIORITY_INPUT_OR_CONTRACT = "PRIORITY_INPUT_OR_CONTRACT"
 PRIORITY_MODEL_WIRING = "PRIORITY_MODEL_WIRING"
 
@@ -61,19 +51,17 @@ class Obligation:
 
     obligation_id: str
     category: str
-    #: Published to the author. Empty only when nothing about the obligation can be
-    #: stated without revealing the answer it is checked against.
+    # Published to the author. Empty only when nothing about the obligation can be
+    # stated without revealing the answer it is checked against.
     authoring_rule: str = ""
-    #: What the checker holds internally that must never reach a prompt.
     withheld: str = ""
-    #: Whether the rule is needed for a well-formed decomposition at all (CORE) or
-    #: refines an already-well-formed one (REFINEMENT). Lets rule-set size be
-    #: ablated instead of assumed.
+    # Whether the rule is needed for a well-formed decomposition (CORE) or refines
+    # one (REFINEMENT). Lets rule-set size be ablated.
     tier: str = CORE
-    #: Optional routing scope. Priority obligations use it to distinguish a
-    #: missing/contradictory contract or response vocabulary (BLOCKED) from
-    #: topology already authorised inside an existing behavior definition
-    #: (dependency-closed surgical repair).
+    # Optional routing scope. Priority obligations use it to distinguish a
+    # missing/contradictory contract or response vocabulary (BLOCKED) from
+    # topology already authorised inside an existing behavior definition
+    # (dependency-closed surgical repair).
     failure_scope: str | None = None
 
     def __post_init__(self) -> None:
@@ -104,29 +92,19 @@ class Obligation:
 class PatternRoles:
     """The roles one safety pattern's invariants must fill, and how to say so.
 
-    A pattern is *defined* by these roles: a locked-until-authorised-release model
-    that never says where power loss leads has not stated the pattern, however it
-    names its invariants. The checker therefore refuses an invariant set that
-    leaves a role unfilled — which is CONVENTION, not gold, and must be published:
-    stating "which roles" leaves "which concepts fill them" entirely to the author,
-    exactly as a notation rule leaves the engineering to the engineer.
-
-    Two measured chains failed on precisely this. Both stated well-formed
-    invariants that simply did not cover the pattern's roles, because nothing in
-    the prompt had ever said which roles the pattern has.
+    The roles define the pattern, so the checker refuses an invariant set that leaves
+    one unfilled. This is CONVENTION and is published: naming the roles still leaves
+    the choice of concepts to the author. Two measured chains stated well-formed
+    invariants that did not cover the pattern's roles, because no prompt named them.
     """
 
     pattern: str
-    #: Role names, identical to ``ag_contracts.PATTERN_INVARIANT_ROLES``; the two
-    #: are pinned to each other in the tests.
     roles: Tuple[str, ...]
-    #: The invariant shapes that fill them, in the decision format's terms.
     authoring_rule: str
 
 
-#: What each invariant pattern's invariants must SAY. The shapes are the ones the
-#: checker derives its roles from, read off the reference implementation rather
-#: than assumed.
+# What each invariant pattern's invariants state. The shapes are the ones the
+# checker derives its roles from, read off the reference implementation.
 INVARIANT_ROLE_OBLIGATIONS: Tuple[PatternRoles, ...] = (
     PatternRoles(
         profile.LOCKED_UNTIL_RELEASE_PATTERN,
@@ -170,14 +148,13 @@ INVARIANT_ROLE_OBLIGATIONS: Tuple[PatternRoles, ...] = (
 )
 
 
-#: Obligations attached to individual decision fields. A decision prompt that
-#: names a field without stating what the checker will do with it is the same
-#: defect as an unstated convention: `timing_segment_required` was offered as a
-#: bare `true/false`, a measured seed set it true for a component whose guarantee
-#: is simply available at the boundary, and the run lost the timed chain to four
-#: diagnostics at once (TIMING_BUDGET_EXCEEDED, REALIZATION_TRIGGER_MISSING,
-#: REALIZATION_UNREACHABLE, PRIORITY_TOPOLOGY_INCOMPLETE/
-#: recovery_power_available_at_boundary).
+# Obligations attached to individual decision fields: naming a field without
+# saying what the checker does with it is an unstated convention.
+# `timing_segment_required` was offered as a bare `true/false`, a seed set it
+# true for a component whose guarantee is available at the boundary, and the
+# run lost the timed chain to four diagnostics (TIMING_BUDGET_EXCEEDED,
+# REALIZATION_TRIGGER_MISSING, REALIZATION_UNREACHABLE,
+# PRIORITY_TOPOLOGY_INCOMPLETE/recovery_power_available_at_boundary).
 DECISION_FIELD_OBLIGATIONS: Tuple[Tuple[str, str], ...] = (
     (
         "timing_segment_required",
@@ -250,7 +227,6 @@ def render_invariant_role_rules() -> str:
     )
 
 
-#: Obligations keyed by checker diagnostic code.
 DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
         profile.CODE_SOURCE_PROVENANCE_MISSING, CONVENTION,
@@ -477,9 +453,9 @@ DIAGNOSTIC_OBLIGATIONS: Tuple[Obligation, ...] = (
     ),
 )
 
-#: Named obligations inside the PRIORITY_TOPOLOGY_INCOMPLETE check. These are
-#: reported individually so a failure says which fact is wrong; each still needs a
-#: category, because several compare against REQ_SAFE_005's reviewed answer.
+# Named obligations inside the PRIORITY_TOPOLOGY_INCOMPLETE check. These are
+# reported individually so a failure says which fact is wrong; each still needs a
+# category, because several compare against REQ_SAFE_005's reviewed answer.
 PRIORITY_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
         "response_member_provenance", CONVENTION,
@@ -596,10 +572,10 @@ PRIORITY_OBLIGATIONS: Tuple[Obligation, ...] = (
     ),
 )
 
-#: Obligations enforced by the syntax gate rather than by an A/G diagnostic code.
-#: They have no checker code, so they are excluded from the "stale entry" check —
-#: but they are every bit as unsatisfiable when unstated. The missing imports below
-#: cost every seed of one measured run its first iteration.
+# Obligations enforced by the syntax gate rather than by an A/G diagnostic
+# code. They have no checker code, so they are excluded from the "stale entry"
+# check, and are still unsatisfiable when unstated: the missing imports below
+# cost every seed of one run its first iteration.
 GATE_OBLIGATIONS: Tuple[Obligation, ...] = (
     Obligation(
         "stdlib_imports", CONVENTION,
@@ -639,7 +615,7 @@ ALL_OBLIGATIONS: Tuple[Obligation, ...] = (
 
 
 def withheld_values() -> Tuple[str, ...]:
-    """Everything the checker holds that must never reach a generation prompt."""
+    """Values the checker holds that are withheld from generation prompts."""
     return tuple(
         item.withheld for item in ALL_OBLIGATIONS
         if item.category == SPEC_VALUED and item.withheld
@@ -649,13 +625,10 @@ def withheld_values() -> Tuple[str, ...]:
 def render_authoring_rules(tiers: Tuple[str, ...] = (CORE, REFINEMENT)) -> str:
     """The checker's obligations as a numbered rule block for a generation prompt.
 
-    Rendered from the entries above rather than hand-written, so a rule added to
-    the checker cannot be silently omitted from what the author is told.
-
-    ``tiers`` selects how much to state. It defaults to everything, but rule-set
-    size is a measured variable, not a settled one: a leaner prompt has scored
-    better than the full set on the same chain and checker, so the ability to
-    state only CORE exists to keep that comparable rather than anecdotal.
+    Rendered from the entries above, so a rule added to the checker cannot be omitted
+    from what the author is told. ``tiers`` defaults to everything; rule-set size is a
+    measured variable - a leaner prompt has scored better on the same chain and
+    checker - so stating only CORE stays available for comparison.
     """
     rules = [
         item.authoring_rule for item in ALL_OBLIGATIONS

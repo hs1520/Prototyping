@@ -1,4 +1,3 @@
-"""Lite-model caches must never claim edits absent from emitted SysML text."""
 from __future__ import annotations
 
 from src.agents.generated_model_admission import (
@@ -16,7 +15,7 @@ _REQ = (
 )
 
 
-def test_lite_traceability_keeps_missing_satisfy_visible_for_refinement():
+def test_missing_satisfy_stays_visible():
     text = """package D {
         requirement def REQ_SAFE_001 { doc /* battery return requirement */ }
         part def BatteryReturnController {
@@ -41,7 +40,7 @@ def test_lite_traceability_keeps_missing_satisfy_visible_for_refinement():
     assert model.to_sysml_text() == text
 
 
-def test_lite_requirement_cache_does_not_fabricate_missing_definition():
+def test_cache_no_fabricated_requirement():
     text = "package D { part def BatteryReturnController { } }"
     model = build_lite_model(text, model_name="D")
 

@@ -1,8 +1,8 @@
 """Authoritative vocabulary for the bounded Assume/Guarantee profile.
 
-These are serialized strings, so the module intentionally exposes strings and
-ordered tuples rather than Enums.  Generators, checkers, assurance routing and
-evaluators all import the same values without changing archived JSON shapes.
+These values are serialized, so the module exposes strings and ordered tuples
+rather than Enums; generators, checkers, assurance routing and evaluators import
+the same values without changing archived JSON shapes.
 """
 from __future__ import annotations
 

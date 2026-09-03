@@ -1,16 +1,11 @@
-"""Did the measurement actually reach steady state?
+"""Check whether a measurement reached steady state.
 
-A mean taken over a window that is still accelerating is not a cruise speed —
-it is a function of how long the window was. The 2026-08-30 authoritative run
-recorded a "nil-wind cruise" of 21.2 m/s and then a *higher* 28.9 m/s after a
-15 m/s headwind was injected; both numbers came from a dash that never stopped
-accelerating, because the airframe carried no parasitic drag.
-
-Every speed this harness reports now passes through :func:`steady_state`. A
-series that has not plateaued yields ``steady=False``, and the caller must
-report INCONCLUSIVE rather than a number. Reporting no value is honest;
-reporting an accelerating vehicle's instantaneous speed as its cruise speed is
-not.
+A mean over a still-accelerating window is a function of the window length, not
+a cruise speed: one run recorded a 21.2 m/s nil-wind cruise and then a higher
+28.9 m/s against a 15 m/s headwind, both from a dash that never stopped
+accelerating. Every speed the harness reports passes through
+:func:`steady_state`; a series that has not plateaued yields ``steady=False``
+and the caller reports inconclusive rather than a number.
 """
 from __future__ import annotations
 
@@ -18,20 +13,16 @@ import math
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
 
-#: Total trend-driven change across the window, as a fraction of the window
-#: mean, below which the series counts as plateaued.
 DEFAULT_MAX_DRIFT_FRACTION = 0.05
-#: A window shorter than this cannot distinguish plateau from noise.
+# A window shorter than this cannot distinguish plateau from noise.
 DEFAULT_MIN_SAMPLES = 8
 DEFAULT_MIN_DURATION_S = 3.0
 DEFAULT_MAX_TREND_T_STAT = 2.0
-#: A trend must be BOTH statistically significant and practically meaningful.
-#: The t-statistic is |slope| / standard-error, so with many samples and little
-#: noise any nonzero slope becomes "significant": a measured cruise point that
-#: went 15.91 -> 15.91 m/s over 9.9 s, a drift of 0.015%, was rejected as a
-#: "statistically significant trend". Significance says the slope is real; it
-#: says nothing about whether it matters. Below this fraction of the mean the
-#: trend is real and irrelevant, and the window is a plateau.
+# A trend must be both statistically significant and practically large. The
+# t-statistic is |slope| / standard-error, so with many samples and little noise
+# any nonzero slope is significant: a cruise point going 15.91 -> 15.91 m/s over
+# 9.9 s (0.015% drift) was rejected as a trend. Below this fraction of the mean
+# the window counts as a plateau.
 DEFAULT_MIN_PRACTICAL_DRIFT_FRACTION = 0.01
 
 
@@ -96,7 +87,6 @@ def _linear_slope(times: Sequence[float], values: Sequence[float]) -> float:
 def _trend_t_stat(
     times: Sequence[float], values: Sequence[float], slope: float,
 ) -> float:
-    """Signal-to-noise ratio of the fitted slope under ordinary least squares."""
     n = len(values)
     mean_t = sum(times) / n
     mean_v = sum(values) / n
@@ -125,10 +115,10 @@ def steady_state(
 ) -> SteadyState:
     """Classify ``[(time_s, value)]`` as plateaued or still trending.
 
-    Both tests must pass: the least-squares trend must move the value by less
-    than ``max_drift_fraction`` of the mean across the window, and the two half
-    means must agree to within the same fraction. The half-mean test catches a
-    monotone ramp whose endpoints a single slope fit can flatter.
+    Both tests must pass: the least-squares trend moves the value by less than
+    ``max_drift_fraction`` of the mean, and the two half means agree to within the
+    same fraction. The half-mean test catches a monotone ramp a single slope fit
+    can flatter.
     """
     ordered = sorted(samples, key=lambda item: item[0])
     n = len(ordered)

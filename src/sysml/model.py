@@ -1,52 +1,4 @@
-"""
-model.py
-
-Enhanced SysML v2-oriented domain model for parsing, semantic projection,
-round-trip engineering, and agent-centric reasoning.
-
-Design goals:
-  - More complete than a lightweight project-specific IR
-  - Closer to SysML v2 / KerML concepts
-  - Still practical for Python applications using Syside
-  - Supports Definition / Usage / Relationship / Reference distinctions
-  - Supports source tracing, diagnostics, and agent metadata
-  - Supports spatial/geometric modeling (SpatialItems, CSG, CoordinateFrame)
-  - Supports item usage with inline shape specialization (:>>)
-
-NOTE:
-  This is NOT a full OMG SysML v2 metamodel implementation.
-  It is a high-fidelity engineering domain model suitable for:
-    - Syside parse/sema projection
-    - Multi-agent workflows
-    - RAG indexing
-    - Round-trip text generation
-
-Changelog vs original:
-  REMOVED:
-    - OccurrenceKind enum (unused, no references anywhere in the codebase)
-    - Feature.is_end (SysML connector-end semantics; not used by any subclass __str__)
-    - Feature.is_composite (never referenced in any __str__ or logic)
-    - PartDefinition.expressions (stored as raw strings with no semantics; use AttributeUsage instead)
-    - RefineRelationship.__str__ outputting a comment instead of valid SysML
-
-  FIXED:
-    - Import.__str__ now respects visibility (private/protected prefix)
-    - AttributeUsage.__str__ now respects visibility (private prefix)
-    - PartUsage.__str__ now respects visibility
-    - Specialization now carries optional value for :>> attr = value assignments
-    - Generalization and Specialization are separated clearly in PartDefinition.__str__
-
-  ADDED:
-    - GeometryKind enum for primitive shape types
-    - CsgKind enum for CSG Boolean operations
-    - ScalarValue dataclass for typed numeric values with units
-    - CoordinateTransform dataclass for Translation/Rotation/TranslationRotationSequence
-    - CoordinateFrame dataclass for spatial reference frames
-    - GeometryShape dataclass (Cylinder, Box, Cone, Sphere, etc.)
-    - CsgOperation dataclass for differencesOf / intersectionsOf / unionsOf
-    - ItemUsage class for "item :>> shape : Cylinder { ... }" constructs
-    - SysMLModel.metadata_definitions list for metadata def support
-"""
+"""model.py"""
 
 from __future__ import annotations
 
@@ -55,10 +7,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
-
-# ============================================================================
-# Enumerations
-# ============================================================================
 
 class VisibilityKind(str, Enum):
     PUBLIC = "public"
@@ -114,20 +62,14 @@ class GeometryKind(str, Enum):
 
 
 class CsgKind(str, Enum):
-    """
-    CSG Boolean operation kinds corresponding to SysML SpatialItems attributes.
-    differencesOf  -> attribute :> differencesOf[1]  { item :>> elements = (A, B); }
-    intersectionsOf -> attribute :> intersectionsOf[1] { ... }
-    unionsOf        -> attribute :> unionsOf[1]        { ... }
+    """CSG Boolean operation kinds mapping to SysML SpatialItems attributes.
+
+    Each kind emits `attribute :> <kind>[1] { item :>> elements = (A, B); }`.
     """
     DIFFERENCE = "differencesOf"
     INTERSECTION = "intersectionsOf"
     UNION = "unionsOf"
 
-
-# ============================================================================
-# Primitive helper objects
-# ============================================================================
 
 @dataclass
 class SourcePoint:
@@ -158,9 +100,7 @@ class ElementRef:
 
 @dataclass
 class MultiplicityRange:
-    """
-    Expressive multiplicity.  upper=None means '*'.
-    """
+    """Expressive multiplicity. upper=None means '*'."""
     lower: Optional[int] = 1
     upper: Optional[int] = 1
     is_ordered: bool = False
@@ -196,23 +136,11 @@ class Diagnostic:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-# ============================================================================
-# Spatial / Geometry helpers
-# ============================================================================
-
 @dataclass
 class ScalarValue:
-    """
-    A typed numeric value with an optional unit reference.
-
-    Examples:
-      ScalarValue(18.0, "mm")       -> 18 [mm]
-      ScalarValue(49.60, "mm")      -> 49.60 [mm]
-      ScalarValue(3.14159)          -> 3.14159
-    """
+    """A typed numeric value with an optional unit reference."""
     value: float = 0.0
     unit: str = ""
-    # Optional expression string when the value is not a literal (e.g. "height * tan(20 * pi/180)")
     expression: str = ""
 
     def __str__(self) -> str:
@@ -224,35 +152,15 @@ class ScalarValue:
 
 @dataclass
 class GeometryShape:
-    """
-    A primitive geometry shape.  Corresponds to SpatialItems shapes like
-    Cylinder, Box, Cone, Sphere.
-
-    All dimensional parameters are ScalarValue to carry units.
-    Unused dimensions should be left as None.
-
-    Examples (Cylinder):
-      GeometryShape(kind=GeometryKind.CYLINDER, radius=ScalarValue(18,"mm"),
-                    height=ScalarValue(30,"mm"))
-      -> Cylinder { :>> radius = 18 [mm]; :>> height = 30 [mm]; }
-
-    Examples (Box):
-      GeometryShape(kind=GeometryKind.BOX, length=ScalarValue(160,"mm"),
-                    width=ScalarValue(15,"mm"), height=ScalarValue(8,"mm"))
-      -> Box { :>> length = 160 [mm]; :>> width = 15 [mm]; :>> height = 8 [mm]; }
-    """
+    """A primitive geometry shape."""
     kind: GeometryKind = GeometryKind.CUSTOM
-    custom_type_ref: str = ""          # used when kind == CUSTOM
+    custom_type_ref: str = ""
 
-    # Cylinder / Cone / Sphere
     radius: Optional[ScalarValue] = None
-    # Cylinder / Cone / Box
     height: Optional[ScalarValue] = None
-    # Box
     length: Optional[ScalarValue] = None
     width: Optional[ScalarValue] = None
 
-    # Documentation attached to the shape (e.g. "propeller stay-out volume")
     doc: str = ""
 
     def type_name(self) -> str:
@@ -279,18 +187,11 @@ class GeometryShape:
 
 @dataclass
 class TransformStep:
-    """
-    One step in a TranslationRotationSequence.
-
-    kind:  "Translation" | "Rotation"
-    args:  raw SysML expression string, e.g. "(175, 0, -1)[source]"
-    angle: for Rotation steps, e.g. "45['°']"
-    axis:  for Rotation steps, e.g. "(0, 0, 1)[source]"
-    """
-    kind: str = "Translation"          # "Translation" | "Rotation"
-    vector: str = ""                   # Translation vector expression
-    axis: str = ""                     # Rotation axis expression
-    angle: str = ""                    # Rotation angle expression
+    """One step in a TranslationRotationSequence."""
+    kind: str = "Translation"
+    vector: str = ""
+    axis: str = ""
+    angle: str = ""
 
     def __str__(self) -> str:
         if self.kind == "Translation":
@@ -302,33 +203,19 @@ class TransformStep:
 
 @dataclass
 class CoordinateFrame:
-    """
-    Represents a SysML coordinateFrame attribute.
-
-    name:        the attribute that is redefined — usually "coordinateFrame"
-    outer_name:  if set, an enclosing named attribute redefines coordinateFrame.
-                 e.g. "datum" in:  attribute datum :>> coordinateFrame { ... }
-    m_refs:      measurement unit references, e.g. ["mm", "mm", "mm"]
-    steps:       TransformStep list for TranslationRotationSequence
-    doc:         documentation string
-    is_redefinition: True -> renders as ":>> coordinateFrame"
-                     False -> renders as "attribute coordinateFrame"
-    """
+    """Represents a SysML coordinateFrame attribute."""
     name: str = "coordinateFrame"
-    outer_name: str = ""          # e.g. "datum"
+    outer_name: str = ""
     m_refs: List[str] = field(default_factory=list)
     steps: List[TransformStep] = field(default_factory=list)
     doc: str = ""
     is_redefinition: bool = True
 
     def __str__(self) -> str:
-        # Case 1: attribute datum :>> coordinateFrame { ... }
         if self.outer_name:
             header = f"attribute {self.outer_name} :>> {self.name} {{"
-        # Case 2: :>> coordinateFrame { ... }
         elif self.is_redefinition:
             header = f":>> {self.name} {{"
-        # Case 3: attribute coordinateFrame { ... }
         else:
             header = f"attribute {self.name} {{"
 
@@ -349,16 +236,7 @@ class CoordinateFrame:
 
 @dataclass
 class CsgOperation:
-    """
-    A CSG Boolean operation expressed as a SysML attribute specialization.
-
-    Corresponds to:
-      attribute :> differencesOf[1]   { item :>> elements = (A, B); }
-      attribute :> intersectionsOf[1] { item :>> elements = (A, B, C); }
-      attribute :> unionsOf[1]        { item :>> elements = (A, B); }
-
-    operand_names: ordered list of part/item names participating in the operation.
-    """
+    """A CSG Boolean operation expressed as a SysML attribute specialization."""
     kind: CsgKind = CsgKind.DIFFERENCE
     operand_names: List[str] = field(default_factory=list)
     multiplicity: int = 1
@@ -371,10 +249,6 @@ class CsgOperation:
             f"}}"
         )
 
-
-# ============================================================================
-# Base metamodel-like hierarchy
-# ============================================================================
 
 @dataclass
 class Element:
@@ -404,7 +278,6 @@ class NamedElement(Element):
             self.name = f"Unnamed_{self.__class__.__name__}_{self.id[:8]}"
 
     def _visibility_prefix(self) -> str:
-        """Return 'private ', 'protected ', or '' for use in __str__ output."""
         if self.visibility == VisibilityKind.PRIVATE:
             return "private "
         if self.visibility == VisibilityKind.PROTECTED:
@@ -469,10 +342,6 @@ class Relationship(NamedElement):
     relationship_kind: str = ""
 
 
-# ============================================================================
-# Relationship types
-# ============================================================================
-
 @dataclass
 class Import(Relationship):
     is_recursive: bool = True
@@ -482,8 +351,6 @@ class Import(Relationship):
     def __str__(self) -> str:
         vis = self._visibility_prefix()
         if self.target:
-            # path already contains ::* for wildcard imports (e.g. "ISQ::*")
-            # Don't append ::* again if it's already in the path
             display = self.target.display()
             if self.is_wildcard and not display.endswith("::*"):
                 display = display + "::*"
@@ -501,12 +368,7 @@ class Generalization(Relationship):
 
 @dataclass
 class Specialization(Relationship):
-    """
-    Represents a :>> redefinition/subsetting relationship.
-    'value' carries the right-hand side for inline assignments:
-      :>> radius = 18 [mm]   -> value = "18 [mm]"
-    When value is None, the relationship is a pure type subsetting.
-    """
+    """Represents a :>> redefinition/subsetting relationship."""
     specialization_kind: str = "specialization"
     relationship_kind: str = "specialization"
     value: Optional[str] = None
@@ -531,13 +393,8 @@ class RefineRelationship(Relationship):
     relationship_kind: str = "refine"
 
     def __str__(self) -> str:
-        # SysML v2 valid syntax for refinement inside a requirement context
         return f"refine {self.target.display() if self.target else '<unknown>'};"
 
-
-# ============================================================================
-# Definitions
-# ============================================================================
 
 @dataclass
 class Package(Namespace):
@@ -565,17 +422,12 @@ class RequirementDefinition(Definition):
     definition_kind: DefinitionKind = DefinitionKind.REQUIREMENT
     text: str = ""
     subject_refs: List[ElementRef] = field(default_factory=list)
-    # `subject vehicle : Vehicle;`-style declarations.  When set, rendered as
-    #   subject {name} : {type};
     subject_name: str = ""
     subject_type_ref: Optional[ElementRef] = None
     derived_from: List[ElementRef] = field(default_factory=list)
     refined_by: List[ElementRef] = field(default_factory=list)
-    # Free-form constraint expressions, default kind = "assert".
     constraints: List[str] = field(default_factory=list)
-    # Constraint clauses with explicit kind ("require"|"assume"|"assert").
     constraint_clauses: List[Tuple[str, str]] = field(default_factory=list)
-    # Nested attribute usages (e.g. `attribute actualRange : LengthValue;`)
     nested_attributes: List["AttributeUsage"] = field(default_factory=list)
     status: str = ""
 
@@ -607,45 +459,24 @@ class RequirementUsage(Usage):
     usage_kind: str = "requirement"
     requirement_ref: Optional[ElementRef] = None
 
-    # Body members  ───────────────────────────────────────────────────────────
-    # `requirement <C1> rangeRequirementSmall :> smallEVRequirement : RangeRequirement {
-    #     doc /* ... */
-    #     subject :>> vehicle = vehicle_compact;
-    #     attribute :>> requiredRange = 130[km];
-    #     assume constraint { vehicle.mass < 900[kg] }
-    # }`
     doc: str = ""
-    alias_id: str = ""                    # the <C1> short name in angle brackets
+    alias_id: str = ""
     subject_assignments: List[str] = field(default_factory=list)
-    # raw constraint expressions; rendered as `assume constraint { expr }` or
-    # `require constraint { expr }`, kind = "assume" | "require" | "assert"
-    constraint_clauses: List[Tuple[str, str]] = field(default_factory=list)  # (kind, expr)
+    constraint_clauses: List[Tuple[str, str]] = field(default_factory=list)
     nested_attributes: List["AttributeUsage"] = field(default_factory=list)
     nested_requirements: List["RequirementUsage"] = field(default_factory=list)
-    # rhs assignment for `requirement xxx :>> y = z;` form
     rhs_assignment: Optional[str] = None
-    # When non-empty (one of "require"/"assume"/"assert"), this RequirementUsage
-    # is a constraint-membership reference like
-    #   `require rangeRequirement { :>> actualRange = simulatedRange; }`
-    # and is rendered with that keyword instead of the default `requirement`.
     constraint_kind: str = ""
 
     def __str__(self) -> str:
-        # Build header: keyword [<alias>] name [specs] [: type]
         alias = f" <{self.alias_id}>" if self.alias_id else ""
         type_str = f" : {self.requirement_ref.display()}" if self.requirement_ref else ""
 
-        # Specialization clauses (:> super, :>> redef target)
         spec_parts: List[str] = []
         gen_targets = [g.target.display() for g in self.generalizations if g.target]
         if gen_targets:
             spec_parts.append(":> " + ", ".join(gen_targets))
 
-        # Detect anonymous redefinition: when the usage has a single :>> spec
-        # whose target name matches our own name, render as
-        #   `requirement :>> name [...]`  (omit the standalone name)
-        # This matches source forms like
-        #   `requirement :>> vehicleRequirement = smallEVRequirement;`
         anonymous_redef_target = ""
         for spec in self.specializations:
             if spec.target is None:
@@ -656,27 +487,19 @@ class RequirementUsage(Usage):
             if (spec.specialization_kind == "redefinition"
                     and tgt == self.name and not anonymous_redef_target):
                 anonymous_redef_target = tgt
-                continue   # don't emit it twice; placed in header below
+                continue
             if spec.specialization_kind == "redefinition":
                 spec_parts.append(f":>> {tgt}")
             else:
                 spec_parts.append(f":> {tgt}")
         spec_str = (" " + " ".join(spec_parts)) if spec_parts else ""
 
-        # Header construction
-        # The default keyword is `requirement`, but when this usage represents
-        # a constraint-membership reference (`require <name> { :>> ... }`,
-        # `assume <name> { ... }`, `assert <name> { ... }`), the SysML keyword
-        # is the constraint kind instead.
         keyword = self.constraint_kind if self.constraint_kind else "requirement"
         if anonymous_redef_target:
-            # `<keyword> :>> name [other-specs] [: Type]`
             head = f"{keyword} :>> {anonymous_redef_target}{spec_str}{type_str}"
         else:
             head = f"{keyword}{alias} {self.name}{spec_str}{type_str}"
 
-        # `requirement xxx :>> rangeRequirement = rangeRequirementSmall;` form:
-        # if rhs_assignment is set and no body, render as one-liner.
         has_body = bool(
             self.doc or self.subject_assignments or self.constraint_clauses
             or self.nested_attributes or self.nested_requirements
@@ -730,11 +553,9 @@ class AttributeUsage(Usage):
         unit_str = f" [{self.unit}]" if self.unit else ""
         mult = f"[{self.multiplicity}]" if self.multiplicity and str(self.multiplicity) != "1" else ""
 
-        # Short-name alias: `<'A⋅h'>` — stored in metadata by the parser.
         short_name = self.metadata.get("short_name", "") if hasattr(self, "metadata") and self.metadata else ""
         alias_str = f" <'{short_name}'>" if short_name else ""
 
-        # Render specializations (:> subsetting, :>> redefinition)
         spec_parts: List[str] = []
         is_pure_redef = False
         for spec in self.specializations:
@@ -780,13 +601,9 @@ class PortUsage(Usage):
 
 @dataclass
 class ActionParameter(Feature):
-    # When True the parameter renders with the SysML `return` keyword
-    # (corresponds to syside's ReturnParameterMembership).  Otherwise it
-    # uses the in/out direction (FeatureDirection).
     is_return: bool = False
 
     def __str__(self) -> str:
-        # Specialization clauses: :>> redef, :> subset
         spec_parts: List[str] = []
         for spec in self.specializations:
             if spec.target is None:
@@ -817,16 +634,10 @@ class ActionDefinition(Definition):
     postconditions: List[str] = field(default_factory=list)
     body: str = ""
 
-    # AnalysisCaseDefinition extras (also valid on ActionDefinition where unused):
-    # `requirement vehicleRequirement : VehicleRequirement;` — feature-membership
-    # `objective rangeAnalysisObjective { ... }`              — objective-membership
-    # `subject vehicle : Vehicle;`                            — subject-membership
     nested_requirements: List["RequirementUsage"] = field(default_factory=list)
     objective_requirement: Optional["RequirementUsage"] = None
     subject_parameter: Optional[ActionParameter] = None
 
-    # The SysML keyword used in __str__ output. Subclasses (e.g.
-    # AnalysisDefinition) override this to render "analysis def" instead.
     _keyword: str = "action def"
 
     def add_parameter(self, parameter: ActionParameter) -> None:
@@ -841,13 +652,10 @@ class ActionDefinition(Definition):
         lines = [f"{self._keyword} {self.name}{gen} {{"]
         if self.short_description:
             lines.append(f"    doc /* {self.short_description} */")
-        # Subject member (analysis def / requirement def) renders BEFORE
-        # parameters using the `subject` keyword instead of in/out.
         if self.subject_parameter is not None:
             sp = self.subject_parameter
             sp_type = f" : {sp.type_ref.display()}" if sp.type_ref else ""
             lines.append(f"    subject {sp.name}{sp_type};")
-        # Parameters render with their own direction / return / specializations.
         for p in self.parameters:
             for ln in str(p).splitlines():
                 lines.append(f"    {ln}")
@@ -856,8 +664,6 @@ class ActionDefinition(Definition):
                 lines.append(f"    {ln}")
         if self.objective_requirement is not None:
             obj = self.objective_requirement
-            # Render the objective block: replace the "requirement" keyword with
-            # "objective" since SysML uses a special keyword for this membership.
             obj_text = str(obj)
             if obj_text.startswith("requirement "):
                 obj_text = "objective " + obj_text[len("requirement "):]
@@ -875,11 +681,8 @@ class ActionDefinition(Definition):
 
 @dataclass
 class AnalysisDefinition(ActionDefinition):
-    """
-    Represents a SysML v2 `analysis def` (a specialization of action def in
-    KerML/SysML v2; in syside it appears as `AnalysisCaseDefinition`).
-    Inherits all action-definition fields and behavior; only the rendered
-    keyword and definition_kind differ.
+    """SysML v2 `analysis def` - a specialization of action def; syside calls it
+    `AnalysisCaseDefinition`.
     """
     definition_kind: DefinitionKind = DefinitionKind.ANALYSIS
     _keyword: str = "analysis def"
@@ -914,35 +717,21 @@ class ActionUsage(Usage):
 
 @dataclass
 class AnalysisUsage(Usage):
-    """
-    Represents a SysML v2 `analysis xxx : SomeAnalysis { ... }` usage,
-    corresponding to syside's `AnalysisCaseUsage`.
-
-    Examples:
-      analysis smallEVAnalysis : VehicleAnalysis {
-          subject :>> vehicle :> vehicle_compact;
-          requirement :>> vehicleRequirement = smallEVRequirement;
-      }
-      analysis rangeAnalysisSmall :> smallEVAnalysis : RangeAnalysis {
-          requirement :>> rangeRequirement = rangeRequirementSmall;
-          return simulatedRange = vehicle.vehicleBehavior.output.distance;
-      }
+    """SysML v2 `analysis xxx : SomeAnalysis { ... }` usage; syside's
+    `AnalysisCaseUsage`.
     """
     usage_kind: str = "analysis"
-    analysis_ref: Optional[ElementRef] = None      # the type after ':' (RangeAnalysis)
+    analysis_ref: Optional[ElementRef] = None
     doc: str = ""
-    # Body members
-    subject_assignments: List[str] = field(default_factory=list)  # raw rhs text
+    subject_assignments: List[str] = field(default_factory=list)
     nested_requirements: List["RequirementUsage"] = field(default_factory=list)
     nested_attributes: List["AttributeUsage"] = field(default_factory=list)
     return_assignments: List[Tuple[str, Optional[str], Optional[str]]] = field(default_factory=list)
-    # Each return assignment: (name, type_path_or_None, rhs_or_None)
     out_parameters: List[ActionParameter] = field(default_factory=list)
 
     def __str__(self) -> str:
         type_str = f" : {self.analysis_ref.display()}" if self.analysis_ref else ""
 
-        # Specialization clauses
         spec_parts: List[str] = []
         gen_targets = [g.target.display() for g in self.generalizations if g.target]
         if gen_targets:
@@ -988,53 +777,23 @@ class AnalysisUsage(Usage):
         return "\n".join(lines)
 
 
-# ============================================================================
-# Item usage (item :>> shape : Cylinder { ... })
-# ============================================================================
-
 @dataclass
 class ItemUsage(Usage):
-    """
-    Represents a SysML item usage, commonly used for shape/geometry members.
-
-    Examples:
-      item :>> shape : Cylinder { :>> radius = 18 [mm]; :>> height = 30 [mm]; }
-      item fieldOfView :> subSpatialParts { ... }
-
-    is_redefinition: True -> renders as "item :>> name"
-                     False -> renders as "item name"
-    subtype_ref: the concrete type after ':' (e.g. Cylinder, Box, Cone)
-    shape: optional GeometryShape carrying dimension values
-    coordinate_frame: optional spatial frame for positioned items
-    """
+    """Represents a SysML item usage, commonly used for shape/geometry members."""
     usage_kind: str = "item"
     is_redefinition: bool = False
-    subtype_ref: Optional[ElementRef] = None     # the :>> target type
+    subtype_ref: Optional[ElementRef] = None
     shape: Optional[GeometryShape] = None
     coordinate_frame: Optional[CoordinateFrame] = None
-    item_ref: Optional[str] = None               # for "item :>> shape = motorShape.shape"
+    item_ref: Optional[str] = None
     nested_items: List["ItemUsage"] = field(default_factory=list)
     nested_attributes: List[AttributeUsage] = field(default_factory=list)
 
     def __str__(self) -> str:
-        """
-        Three distinct SysML item syntaxes:
-
-          1. Redefinition (anonymous, :>>):
-               item :>> shape : Cylinder { ... }
-               item :>> shape = motorShape.shape;
-
-          2. Named subsetting (:>):
-               item fieldOfView :> subSpatialParts { ... }
-
-          3. Named typing (:):
-               item myItem : SomeType;
-        """
         has_body = (self.shape or self.coordinate_frame
                     or self.nested_items or self.nested_attributes)
 
         if self.is_redefinition:
-            # ── Case 1: :>> (anonymous items like :>> shape) ──────────────
             if self.item_ref:
                 return f"item :>> {self.name} = {self.item_ref};"
 
@@ -1055,10 +814,6 @@ class ItemUsage(Usage):
             else:
                 lines_out.append(f"item :>> {self.name} {{")
         else:
-            # ── Case 2/3: named item (fieldOfView etc.) ───────────────────
-            # Determine relationship operator from specializations
-            # :> subsetting  ->  "item name :> target { ... }"
-            # no relation    ->  "item name : Type;" or "item name { ... }"
             sub_target = ""
             for spec in self.specializations:
                 if spec.specialization_kind == "subsetting" and spec.target:
@@ -1066,7 +821,6 @@ class ItemUsage(Usage):
                     break
 
             if sub_target:
-                # item fieldOfView :> subSpatialParts { ... }
                 if not has_body:
                     return f"item {self.name} :> {sub_target};"
                 lines_out = [f"item {self.name} :> {sub_target} {{"]
@@ -1080,7 +834,6 @@ class ItemUsage(Usage):
                     return f"item {self.name};"
                 lines_out = [f"item {self.name} {{"]
 
-        # ── Body ──────────────────────────────────────────────────────────
         for na in self.nested_attributes:
             for ln in str(na).splitlines():
                 lines_out.append(f"    {ln}")
@@ -1091,22 +844,16 @@ class ItemUsage(Usage):
             for ln in str(self.coordinate_frame).splitlines():
                 lines_out.append(f"    {ln}")
 
-        # Always close the block — never rely on inner content's closing brace
+        # Close the block here rather than relying on inner content's brace
         lines_out.append("}")
         return "\n".join(lines_out)
 
-
-# ============================================================================
-# Part definitions and usages (with spatial extensions)
-# ============================================================================
 
 @dataclass
 class PartUsage(Usage):
     usage_kind: str = "part"
     part_ref: Optional[ElementRef] = None
 
-    # Body members — populated when the part-usage carries its own definitions.
-    # e.g.  part vehicle : Vehicle { attribute :>> mass = 1000[kg]; part battery : Battery {...}; ... }
     nested_attributes: List["AttributeUsage"] = field(default_factory=list)
     nested_parts: List["PartUsage"] = field(default_factory=list)
     nested_actions: List["ActionUsage"] = field(default_factory=list)
@@ -1124,7 +871,6 @@ class PartUsage(Usage):
         type_str = f" : {self.part_ref.display()}" if self.part_ref else ""
         mult = f"[{self.multiplicity}]" if self.multiplicity and str(self.multiplicity) != "1" else ""
 
-        # Collect specialization clauses (:> super, :>> redef target)
         spec_parts: List[str] = []
         gen_targets: List[str] = [g.target.display() for g in self.generalizations if g.target]
         if gen_targets:
@@ -1185,18 +931,9 @@ class PartUsage(Usage):
         return "\n".join(lines)
 
 
-
 @dataclass
 class PartDefinition(Definition):
-    """
-    Represents a SysML part def with full structural and spatial support.
-
-    Spatial fields:
-      spatial_parts: sub-parts declared with :> subSpatialParts
-      items: item members (usually shape assignments)
-      coordinate_frame: top-level coordinateFrame attribute
-      csg_operation: CSG Boolean operation for this part's shape
-    """
+    """Represents a SysML part def with structural and spatial members."""
     definition_kind: DefinitionKind = DefinitionKind.PART
     ports: List[PortUsage] = field(default_factory=list)
     attributes: List[AttributeUsage] = field(default_factory=list)
@@ -1207,7 +944,6 @@ class PartDefinition(Definition):
     satisfy_relationships: List[SatisfyRelationship] = field(default_factory=list)
     refine_relationships: List[RefineRelationship] = field(default_factory=list)
     constraints: List[str] = field(default_factory=list)
-    # Spatial extensions
     items: List[ItemUsage] = field(default_factory=list)
     coordinate_frame: Optional[CoordinateFrame] = None
     csg_operation: Optional[CsgOperation] = None
@@ -1279,10 +1015,7 @@ class PartDefinition(Definition):
 
 @dataclass
 class ItemDefinition(Definition):
-    """
-    Represents a SysML item def.
-    ports, attributes, items allow richer item definitions beyond a bare label.
-    """
+    """Represents a SysML item def; ports, attributes and items go beyond a bare label."""
     definition_kind: DefinitionKind = DefinitionKind.ITEM
     attributes: List[AttributeUsage] = field(default_factory=list)
     items: List[ItemUsage] = field(default_factory=list)
@@ -1351,10 +1084,7 @@ class ConnectionDefinition(Definition):
 
 @dataclass
 class MetadataDefinition(Definition):
-    """
-    Represents a SysML metadata def, used for model annotations.
-    attributes holds the typed attribute members.
-    """
+    """Represents a SysML metadata def, used for model annotations. attributes holds the typed attribute members."""
     definition_kind: DefinitionKind = DefinitionKind.METADATA
     attributes: List[AttributeUsage] = field(default_factory=list)
 
@@ -1370,10 +1100,6 @@ class MetadataDefinition(Definition):
         lines.append("}")
         return "\n".join(lines)
 
-
-# ============================================================================
-# Connections
-# ============================================================================
 
 @dataclass
 class ConnectionEnd(Element):
@@ -1420,17 +1146,9 @@ class ConnectionUsage(Usage):
         return f"connect {src} to {tgt};"
 
 
-# ============================================================================
-# Model root
-# ============================================================================
-
 @dataclass
 class SysMLModel(Element):
-    """
-    Top-level engineering container.
-    Holds packages, definitions, usages, relationships, diagnostics,
-    and convenience indices.
-    """
+    """Top-level engineering container."""
     name: str = "Model"
     description: str = ""
     namespace: str = ""
@@ -1456,8 +1174,6 @@ class SysMLModel(Element):
     confidence: float = 0.0
     ast_version: str = ""
 
-    # ---- add helpers --------------------------------------------------------
-
     def add_requirement_definition(self, req: RequirementDefinition) -> None:
         self.requirement_definitions.append(req)
 
@@ -1467,15 +1183,10 @@ class SysMLModel(Element):
     def add_top_level_usage(self, usage: Usage) -> None:
         self.top_level_usages.append(usage)
 
-    # ---- query helpers ------------------------------------------------------
-
-    # ---- text generation ----------------------------------------------------
-
     def to_sysml_text(self) -> str:
-        # The actual package name from the source SysML lives in `namespace`
-        # (set by the parser when it encounters `package <Name>`).  `self.name`
-        # is the user-supplied label for this Python model object — it is NOT
-        # the SysML package name.  Prefer namespace when available.
+        # The source package name lives in `namespace` (set by the parser at
+        # `package <Name>`); `self.name` is the label for this Python model object,
+        # not the SysML package name. Prefer namespace when available.
         pkg_name = self.namespace or self.name
         lines = [f"package {pkg_name} {{"]
 
@@ -1546,8 +1257,8 @@ class SysMLModel(Element):
             lines.append("")
 
         for rel in self.top_level_relationships:
-            # Imports are already emitted above via add_import / Package.imports
-            # Skip them here to avoid duplicate output
+            # Imports are emitted above via add_import / Package.imports
+            # Skip them here to avoid duplicates
             if isinstance(rel, Import):
                 continue
             lines.append(f"    {rel}")

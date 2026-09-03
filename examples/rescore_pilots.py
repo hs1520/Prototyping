@@ -1,19 +1,15 @@
 """Measure what the coverage-denominator fix changes, per archived model.
 
-Not a re-run: the archived models are read from disk and no provider is called.
-
-It deliberately does NOT compare against the archived `final_score`. That number
-was computed with the run's simulation result, which is not fully archived, so a
-fresh evaluation would score `behavioral_verification` as N/A=1.0 and the
-difference would mix the fix with a missing input. One R1 run moved +0.0223 that
-way, with no A/G contract anywhere in it.
-
-Instead both denominators are evaluated on the same model in the same process,
-so the delta is attributable to the change and nothing else.
-
-R0-CURRENT is absent: the archiving gap that left the baseline without a
-committed model was fixed after every pilot here had run. The change is a no-op
-for a model carrying no contracts, which the R1-BBCTX rows show empirically.
+Not a re-run: archived models are read from disk, no provider is called. It
+does not compare against the archived `final_score`, which was computed with a
+simulation result that is not fully archived - a fresh evaluation would score
+`behavioral_verification` as N/A=1.0 and mix the fix with a missing input (one
+R1 run moved +0.0223 that way with no A/G contract in it). Both denominators
+are instead evaluated on the same model in the same process, so the delta is
+attributable to the change. R0-CURRENT is absent because the archiving gap that
+left the baseline without a committed model was fixed after these pilots ran;
+the change is a no-op for a model carrying no contracts, as the R1-BBCTX rows
+show.
 """
 from __future__ import annotations
 
@@ -31,15 +27,14 @@ ARMS = ("R0-CURRENT", "R1-BBCTX", "R2-BBAG")
 
 
 def _score(model, requirements, *, stakeholder_only: bool):
-    """Evaluate once under one denominator rule."""
     import src.dse.evaluator as evaluator
 
     original_req = evaluator._STAKEHOLDER_REQ
     original_tx = evaluator._GUARDED_TRANSITION
     if not stakeholder_only:
-        # the archived rules: every requirement def counted, contracts
-        # included; and a guarded transition had to put `if` immediately
-        # after the source state, so an `accept` clause hid it
+        # the archived rules: every requirement def counted, contracts included;
+        # a guarded transition needed `if` right after the source state, so an
+        # `accept` clause hid it
         evaluator._STAKEHOLDER_REQ = re.compile(r"(?!)")
         evaluator._GUARDED_TRANSITION = re.compile(
             r"\btransition\s+\w+\s+first\s+\w+\s+if\s+[^;]+?"

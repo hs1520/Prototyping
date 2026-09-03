@@ -1,14 +1,4 @@
-"""
-SysML v2 behavioral simulation package.
-
-Validates generated SysML v2 models by building a port-connection graph
-and checking whether key operational scenarios are structurally reachable.
-
-Public API:
-    validate_model(sysml_text, model_name, scenarios) -> SimulationResult
-    SimulationResult
-    ScenarioResult
-"""
+"""SysML v2 behavioral simulation package."""
 
 from .validator import SimulationValidator, SimulationResult
 from .simulator import ScenarioResult

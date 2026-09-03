@@ -1,12 +1,3 @@
-"""
-tests/test_error_localizer.py
-
-Unit tests for src/simulation/error_localizer.py.
-
-Run with:
-    python tests/test_error_localizer.py
-"""
-
 from __future__ import annotations
 
 import sys
@@ -19,10 +10,6 @@ from src.simulation.error_localizer import (
 )
 from src.sysml.text_normalization import strip_code_fences
 
-
-# ---------------------------------------------------------------------------
-# 测试用 SysML 模型（所有名称正确）
-# ---------------------------------------------------------------------------
 
 SYSML = """\
 package DroneSystem {
@@ -42,9 +29,6 @@ package DroneSystem {
 }
 """
 
-# ---------------------------------------------------------------------------
-# 辅助
-# ---------------------------------------------------------------------------
 
 _PASS = 0
 _FAIL = 0
@@ -69,27 +53,19 @@ def _line_of(text: str, sub: str) -> int:
     raise ValueError(f"'{sub}' not found")
 
 
-# ---------------------------------------------------------------------------
-# T1 — strip_code_fences
-# ---------------------------------------------------------------------------
-
 def test_strip_fences():
     print("T1  strip_code_fences")
     cases = [
         ("```sysml\nfoo\n```",       "foo"),
         ("```\nfoo\nbar\n```",       "foo\nbar"),
         ("~~~sysml\nfoo\n~~~",       "foo"),
-        ("foo\nbar",                 "foo\nbar"),   # 无围栏不变
+        ("foo\nbar",                 "foo\nbar"),
         ("```sysml\n  x;\n```\n",   "  x;"),
     ]
     for raw, expected in cases:
         result = strip_code_fences(raw)
         ok(f"strip({raw[:20]!r}…)", result == expected, f"got {result!r}")
 
-
-# ---------------------------------------------------------------------------
-# T2 — extract_error_context：单个 part def 块内的错误
-# ---------------------------------------------------------------------------
 
 def test_extract_single_block():
     print("T2  extract_error_context — 单块")
@@ -108,14 +84,8 @@ def test_extract_single_block():
     ok("features_in_summary", "powerOut" in chunks[0].decl_summary)
 
 
-# ---------------------------------------------------------------------------
-# T3 — extract_error_context：两块不同的 part def
-# ---------------------------------------------------------------------------
-
 def test_extract_two_blocks():
     print("T3  extract_error_context — 两个不同块")
-    # 错误 1：DroneAssembly 的 connect 行
-    # 错误 2：FlightController 内部（type 名不对）
     typo = SYSML.replace("bm.powerOut", "bm.powerOt")
     ln1 = _line_of(typo, "connect")
     ln2 = _line_of(typo, "in port powerIn")
@@ -133,13 +103,8 @@ def test_extract_two_blocks():
     ok("sorted_asc",       chunks[0].start_line < chunks[1].start_line)
 
 
-# ---------------------------------------------------------------------------
-# T4 — extract_error_context：包级别错误（窗口模式）
-# ---------------------------------------------------------------------------
-
 def test_extract_pkg_level():
     print("T4  extract_error_context — 包级别窗口")
-    # 模拟一个在 package 声明行的错误（第 1 行，不在任何 part def 里）
     errs = [{"line": 1, "col": 0, "message": "No Namespace named 'DroneSystemX' found.", "code": ""}]
     chunks = extract_error_context(SYSML, errs)
 
@@ -148,19 +113,11 @@ def test_extract_pkg_level():
     ok("line1_in_range",   chunks[0].start_line <= 1 <= chunks[0].end_line)
 
 
-# ---------------------------------------------------------------------------
-# T5 — extract_error_context：空错误列表
-# ---------------------------------------------------------------------------
-
 def test_extract_empty():
     print("T5  extract_error_context — 空列表")
     chunks = extract_error_context(SYSML, [])
     ok("empty_result", chunks == [])
 
-
-# ---------------------------------------------------------------------------
-# T6 — merge_fixed_chunk：行数不变
-# ---------------------------------------------------------------------------
 
 def test_merge_same_lines():
     print("T6  merge_fixed_chunk — 行数不变")
@@ -177,13 +134,8 @@ def test_merge_same_lines():
     ok("no_warning",       result.warning is None)
     ok("powerOut_fixed",   "bm.powerOut" in result.merged_text)
     ok("powerOt_gone",     "bm.powerOt"  not in result.merged_text)
-    # 确保其他内容未被破坏
     ok("bm_present",       "part bm : BatteryMonitor" in result.merged_text)
 
-
-# ---------------------------------------------------------------------------
-# T7 — merge_fixed_chunk：行数有小幅变化（在阈值内）
-# ---------------------------------------------------------------------------
 
 def test_merge_line_delta():
     print("T7  merge_fixed_chunk — 行数小幅变化")
@@ -192,7 +144,6 @@ def test_merge_line_delta():
     errs = [{"line": ln, "col": 0, "message": "No Feature named 'powerOt' found.", "code": ""}]
     chunk = extract_error_context(typo, errs)[0]
 
-    # 修复后多了一行注释
     fixed_chunk_text = chunk.chunk_text.replace(
         "bm.powerOt", "bm.powerOut"
     ) + "\n        // fixed"
@@ -203,10 +154,6 @@ def test_merge_line_delta():
     ok("has_warning",      result.warning is not None)
 
 
-# ---------------------------------------------------------------------------
-# T8 — merge_fixed_chunk：行数变化超限，合并被拒绝
-# ---------------------------------------------------------------------------
-
 def test_merge_rejected():
     print("T8  merge_fixed_chunk — 行数超限拒绝")
     typo = SYSML.replace("bm.powerOut", "bm.powerOt")
@@ -214,7 +161,6 @@ def test_merge_rejected():
     errs = [{"line": ln, "col": 0, "message": "No Feature named 'powerOt' found.", "code": ""}]
     chunk = extract_error_context(typo, errs)[0]
 
-    # 制造一个行数变化超过阈值的返回（加 20 行）
     bloated = chunk.chunk_text + ("\n    // pad" * 20)
     result = merge_fixed_chunk(typo, chunk, bloated, max_line_delta=15)
 
@@ -223,10 +169,6 @@ def test_merge_rejected():
     ok("has_warning",      result.warning is not None)
 
 
-# ---------------------------------------------------------------------------
-# T9 — merge_fixed_chunk：自动去除 LLM markdown 围栏
-# ---------------------------------------------------------------------------
-
 def test_merge_strips_fences():
     print("T9  merge_fixed_chunk — 自动去除围栏")
     typo = SYSML.replace("bm.powerOut", "bm.powerOt")
@@ -234,7 +176,6 @@ def test_merge_strips_fences():
     errs = [{"line": ln, "col": 0, "message": "No Feature named 'powerOt' found.", "code": ""}]
     chunk = extract_error_context(typo, errs)[0]
 
-    # LLM 返回了 markdown 围栏
     fenced = "```sysml\n" + chunk.chunk_text.replace("bm.powerOt", "bm.powerOut") + "\n```"
     result = merge_fixed_chunk(typo, chunk, fenced)
 
@@ -242,10 +183,6 @@ def test_merge_strips_fences():
     ok("powerOut_fixed",   "bm.powerOut" in result.merged_text)
     ok("no_fences",        "```" not in result.merged_text)
 
-
-# ---------------------------------------------------------------------------
-# T10 — build_fix_prompt：格式检查
-# ---------------------------------------------------------------------------
 
 def test_build_fix_prompt():
     print("T10  build_fix_prompt — 格式")
@@ -262,14 +199,9 @@ def test_build_fix_prompt():
     ok("has_types",        "BatteryMonitor" in prompt)
     ok("has_constraint",   "no explanations" in prompt.lower() or "no markdown" in prompt.lower())
     ok("has_code_fence",   "```sysml" in prompt)
-    # prompt 仍应紧凑：不超过 70 行
     ok("prompt_compact",   len(prompt.split("\n")) <= 70,
        f"lines={len(prompt.split(chr(10)))}")
 
-
-# ---------------------------------------------------------------------------
-# T11 — build_fix_prompt：语义保持规则
-# ---------------------------------------------------------------------------
 
 def test_semantic_rules_present():
     print("T11  build_fix_prompt — 语义保持规则")
@@ -285,13 +217,8 @@ def test_semantic_rules_present():
     ok("no_new_ports",        "Do NOT add new ports" in prompt)
 
 
-# ---------------------------------------------------------------------------
-# T12 — 缺失 guard 变量 → 推荐声明（Boolean / Real 推断）
-# ---------------------------------------------------------------------------
-
 def test_missing_feature_hints():
     print("T12  build_fix_prompt — 缺失变量推荐声明")
-    # 一个 part def，guard 引用了未声明的变量
     src = (
         "package P {\n"
         "    part def Monitor {\n"
@@ -316,45 +243,30 @@ def test_missing_feature_hints():
     prompt = build_fix_prompt(chunk)
 
     ok("has_missing_block", "Missing state variables" in prompt)
-    # batteryCharge 是连续量 → Real
     ok("battery_is_real",
        "attribute batteryCharge : Real = 0.0;" in prompt,
        "prompt has no Real decl for batteryCharge")
-    # sensorSelfTestFailed 暗示布尔 → Boolean
     ok("sensor_is_bool",
        "attribute sensorSelfTestFailed : Boolean = false;" in prompt,
        "prompt has no Boolean decl for sensorSelfTestFailed")
-    # 明确指示不要绑到现成端口
     ok("explicit_no_rebind",
        "do NOT rebind the name to an existing port" in prompt)
 
 
-# ---------------------------------------------------------------------------
-# T13 — _infer_attr_decl 单元测试（Boolean / Real 推断）
-# ---------------------------------------------------------------------------
-
 def test_infer_attr_decl():
     print("T13  _infer_attr_decl — 类型推断")
     infer = _mod._infer_attr_decl
-    # 布尔类（后缀）
     ok("Failed→bool",    infer("sensorFailed")      == "attribute sensorFailed : Boolean = false;")
     ok("Detected→bool",  infer("collisionDetected") == "attribute collisionDetected : Boolean = false;")
     ok("Active→bool",    infer("linkActive")        == "attribute linkActive : Boolean = false;")
-    # 布尔类（前缀）
     ok("isReady→bool",   infer("isReady")           == "attribute isReady : Boolean = false;")
     ok("hasFault→bool",  infer("hasFault")          == "attribute hasFault : Boolean = false;")
-    # 数值类
     ok("charge→real",    infer("batteryCharge")     == "attribute batteryCharge : Real = 0.0;")
     ok("timeToHub→real", infer("timeToHub")         == "attribute timeToHub : Real = 0.0;")
 
 
-# ---------------------------------------------------------------------------
-# T14 — 回归：单位括号 [bit] 不应被当作 guard 变量声明 attribute
-# ---------------------------------------------------------------------------
-
 def test_unit_bracket_not_declared():
     print("T14  build_fix_prompt — 单位括号不声明属性")
-    # 复现 drone 回归场景：encryptionLevel 用了 syside 不认识的单位 [bit]
     src = (
         "package P {\n"
         "    part def CommunicationSystem {\n"
@@ -368,13 +280,10 @@ def test_unit_bracket_not_declared():
     chunk = extract_error_context(src, errs)[0]
     prompt = build_fix_prompt(chunk)
 
-    # 关键：绝不能建议声明 `attribute bit ...`
     ok("no_junk_attr_bit",   "attribute bit :" not in prompt,
        "prompt wrongly recommends declaring `attribute bit`")
-    # 也不应出现"Missing state variables"块（因为唯一的缺失名是单位）
     ok("no_missing_block",   "Missing state variables" not in prompt,
        "unit-only error should not produce a missing-variable block")
-    # prompt 应包含单位规则（规则 3）
     ok("has_unit_rule",      "unit annotation" in prompt)
 
 
@@ -402,21 +311,12 @@ def test_missing_feature_hints_skips_unit():
     chunk = extract_error_context(src, errs)[0]
     hints = hints_fn(chunk)
 
-    # 只应为 batteryCharge 生成建议，bit 被跳过
     joined = "\n".join(hints)
     ok("bit_skipped",      "bit" not in joined.replace("batteryCharge", ""),
        f"hints leaked unit name: {hints}")
     ok("battery_kept",     "batteryCharge" in joined, f"hints={hints}")
     ok("exactly_one_hint", len(hints) == 1, f"hints={hints}")
 
-
-# ---------------------------------------------------------------------------
-# 入口
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# T16 — syside 的期望终结符集合不得淹没修复 prompt
-# ---------------------------------------------------------------------------
 
 _SYSIDE_DUMP = (
     "Unexpected 'part', expected one of [\"NAME\", \"}\", \"dependency\", "
@@ -432,20 +332,18 @@ def test_condense_diagnostic():
     from src.simulation.syntax_checker import condense_diagnostic
 
     condensed = condense_diagnostic(_SYSIDE_DUMP)
-    # 被拒绝的 token 和位置信息是唯一有用的部分，必须保留
     ok("keeps_head",      "Unexpected 'part'" in condensed)
     ok("keeps_some_alts", '"NAME"' in condensed)
     ok("drops_the_rest",  '"Dependency_repeat1"' not in condensed)
     ok("says_how_many",   "more]" in condensed)
     ok("much_shorter",    len(condensed) < len(_SYSIDE_DUMP) / 2,
        f"{len(_SYSIDE_DUMP)} -> {len(condensed)}")
-    # 没有期望集合的诊断原样通过 —— 这是压缩，不是重写
     for intact in ("Unexpected identifier.",
                    "No Feature named 'batteryLow' found."):
         ok("passthrough", condense_diagnostic(intact) == intact, intact)
 
 
-def test_fix_prompt_is_not_drowned_by_the_expected_set():
+def test_diagnostic_condensed_in_prompt():
     print("T17  build_fix_prompt — 诊断压缩后才进 prompt")
     ln = _line_of(SYSML, "part def FlightController")
     errs = [{"line": ln, "col": 4, "message": _SYSIDE_DUMP, "code": ""}]
@@ -481,7 +379,7 @@ if __name__ == "__main__":
     test_unit_bracket_not_declared()
     test_missing_feature_hints_skips_unit()
     test_condense_diagnostic()
-    test_fix_prompt_is_not_drowned_by_the_expected_set()
+    test_diagnostic_condensed_in_prompt()
 
     print(f"\n{_PASS} passed, {_FAIL} failed")
     sys.exit(0 if _FAIL == 0 else 1)

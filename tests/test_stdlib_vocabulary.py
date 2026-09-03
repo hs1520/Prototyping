@@ -1,15 +1,12 @@
-"""Every claimed standard-library name must actually resolve under syside.
+"""Every claimed standard-library name resolves under syside.
 
-The vocabulary tables serve two opposite roles: ``generation_plan``'s tables
-decide which imports make a planned name resolvable, and ``diagnostics``'
-tables decide which reference errors the in-loop checker may treat as false
-positives.  A plausible-but-nonexistent name in either table produces the same
-silent failure: materialisation writes it faithfully, the repair loop never
-sees the error (it is "suppressed as a stdlib false positive"), and the run
-fails only at the unfiltered terminal qualification.  Measured: the ablation
-pilot of 2026-08-29 was NOT_QUALIFIED on ``AngleValue`` — one of five phantom
-type names the tables carried.  These tests pin every table to syside ground
-truth with one probe model per table kind.
+``generation_plan``'s tables decide which imports make a planned name
+resolvable; ``diagnostics``' tables decide which reference errors the in-loop
+checker treats as false positives. A nonexistent name in either fails silently:
+materialisation writes it, the repair loop never sees the error, and the run
+fails only at the unfiltered terminal qualification (the 2026-08-29 pilot was
+NOT_QUALIFIED on ``AngleValue``, one of five phantom names). Each table is
+pinned to syside with one probe model per table kind.
 """
 from __future__ import annotations
 
@@ -34,8 +31,6 @@ _PROBE_HEADER = (
 )
 _PROBE_FOOTER = "    }\n}\n"
 
-#: KerML/ScalarValues scalar type names that are legitimately usable as
-#: attribute types but do not end in "Value".
 _SCALAR_TYPE_NAMES = {
     "Real", "Integer", "Boolean", "String", "Rational", "Complex",
     "Natural", "ScalarValue", "NumericalValue",
@@ -45,11 +40,6 @@ _SCALAR_TYPE_NAMES = {
 def _failures_by_name(
     names: Sequence[str], lines: Sequence[str]
 ) -> Dict[str, List[str]]:
-    """One syside check over ``lines`` (one probe per name, same order).
-
-    Returns {probed name: [unfiltered error messages]}, attributing each
-    parser/semantic error to the name whose line produced it.
-    """
     header_lines = _PROBE_HEADER.count("\n")
     text = (
         _PROBE_HEADER
@@ -71,7 +61,7 @@ def _type_failures(names: Sequence[str]) -> Dict[str, List[str]]:
     )
 
 
-def test_generation_plan_type_table_matches_the_standard_library():
+def test_plan_type_table_resolves():
     names = sorted(
         name
         for members in _STANDARD_LIBRARY_TYPES.values()
@@ -84,7 +74,7 @@ def test_generation_plan_type_table_matches_the_standard_library():
     )
 
 
-def test_constraint_plan_value_types_all_resolve():
+def test_value_types_resolve():
     failures = _type_failures(sorted(RESOLVABLE_VALUE_TYPES))
     assert not failures, (
         "phantom entries in RESOLVABLE_VALUE_TYPES — the gate that exists "
@@ -92,10 +82,10 @@ def test_constraint_plan_value_types_all_resolve():
     )
 
 
-def test_suppression_table_only_hides_names_that_really_exist():
-    # Package names (SysML, KerML, Quantities, …) suppress import-absence
-    # complaints and are not attribute types; probe only the type-shaped
-    # entries — a phantom among them hides a REAL error from the repair loop.
+def test_suppressed_names_exist():
+    # Package names (SysML, KerML, Quantities, ...) suppress import-absence
+    # complaints and are not attribute types, so probe only the type-shaped
+    # entries; a phantom among them hides an error from the repair loop.
     names = sorted(
         name for name in _STDLIB_TYPE_NAMES
         if name.endswith("Value") or name in _SCALAR_TYPE_NAMES
@@ -107,7 +97,7 @@ def test_suppression_table_only_hides_names_that_really_exist():
     )
 
 
-def test_every_unit_resolves_bare_or_has_an_explicit_resolution():
+def test_every_unit_resolves():
     bare_units = sorted(_SI_UNIT_NAMES - set(_UNIT_RESOLUTIONS))
     failures = _failures_by_name(
         bare_units,
@@ -122,7 +112,7 @@ def test_every_unit_resolves_bare_or_has_an_explicit_resolution():
     )
 
 
-def test_unit_resolutions_stay_within_the_unit_vocabulary():
+def test_resolutions_within_vocabulary():
     orphans = set(_UNIT_RESOLUTIONS) - _SI_UNIT_NAMES
     assert not orphans, (
         f"_UNIT_RESOLUTIONS entries missing from _SI_UNIT_NAMES: {orphans}"
@@ -130,13 +120,12 @@ def test_unit_resolutions_stay_within_the_unit_vocabulary():
 
 
 # ---------------------------------------------------------------------------
-# Unit registry: single authority, end-to-end through syside (pilot 2 failed
-# on `m_s` because emission, resolution, and comparison each had their own
-# partial table).
+# Unit registry: one authority, end-to-end through syside. Pilot 2 failed on
+# `m_s` because emission, resolution and comparison each had a partial table.
 # ---------------------------------------------------------------------------
 
 
-def test_every_registry_unit_survives_syside_with_its_resolution():
+def test_registry_units_survive_syside():
     from src.prototyping.unit_registry import RESOLUTIONS, UNITS
 
     constructs = "\n    ".join(
@@ -172,7 +161,7 @@ def test_every_registry_unit_survives_syside_with_its_resolution():
     )
 
 
-def test_registry_views_and_consumers_agree():
+def test_registry_views_agree():
     from src.prototyping.activated_constraint_plan import sysml_unit_name
     from src.prototyping.requirement_semantics import (
         _normalise_unit,
@@ -187,9 +176,6 @@ def test_registry_views_and_consumers_agree():
     assert _SI_UNIT_NAMES == set(EMISSION_TOKENS)
     assert _UNIT_RESOLUTIONS == RESOLUTIONS
     for unit in UNITS:
-        # Emission and comparison are inverses through the registry: what the
-        # pipeline writes into brackets canonicalises back to what the
-        # obligation carries.
         assert sysml_unit_name(unit.canonical) == unit.emission
         assert _normalise_unit(unit.emission) == unit.canonical
         assert quantity_type_for_unit(unit.emission) == unit.quantity_type

@@ -1,11 +1,10 @@
-"""Traceability-only verification usages for quantities the model calc set cannot evaluate.
+"""Traceability-only verification usages for quantities the calc set cannot evaluate.
 
 Speed needs a drag/thrust model the estimator does not expose, range needs a
-non-zero design cruise speed, altitude is a geofence CONFIG bound. Fabricating an
-`assert` for these would invent physics; the emitter instead declares the
-verification ROUTE in-model (requirement usage + verification usage whose doc names
-the responsible tier), so the model states HOW every quantified requirement is
-verified — evaluable or not.
+non-zero design cruise speed, and altitude is a geofence CONFIG bound. Rather
+than assert invented physics, the emitter declares the verification route
+in-model (requirement usage + verification usage whose doc names the
+responsible tier).
 """
 from __future__ import annotations
 
@@ -26,30 +25,26 @@ _REQS = [
     "REQ-CONS-001: The system shall not exceed an operating altitude of 120 m above ground level.",
 ]
 
-# cruise_speed_mps = 0 → range/speed are NOT evaluable in-model.
 _DESIGN = DesignInputs(
     payload_mass_kg=1.5, battery_capacity_mah=16000.0, battery_cells=6,
     rotor_count=6, rotor_radius_m=0.2032, cruise_speed_mps=0.0,
 )
 
 
-def test_non_evaluable_quantities_get_traceability_verification_defs():
+def test_non_evaluable_verification_defs():
     out, ok = inject_endurance_analysis(_MODEL, _REQS, design=_DESIGN)
     assert ok and not check_syntax(out).has_errors
-    # Evaluable closure unchanged: endurance/MTOW keep their asserts.
     assert "assert constraint enduranceMeetsReq" in out
     assert "assert constraint mtowWithinReq" in out
-    # Non-evaluable quantities: verification usage + tier note, NO fabricated assert.
     assert "verification req_perf_003_check" in out
     assert "verification req_cons_001_check" in out
     assert "forward_flight tier" in out
     assert "geofence parameter consistency" in out
-    assert "speedMeetsReq" not in out          # no invented speed assert
-    assert "altitudeWithinReq" not in out      # no invented altitude assert
+    assert "speedMeetsReq" not in out
+    assert "altitudeWithinReq" not in out
 
 
-def test_evaluable_requirements_are_not_duplicated_as_traceability_defs():
+def test_evaluable_not_duplicated():
     out, ok = inject_endurance_analysis(_MODEL, _REQS, design=_DESIGN)
     assert ok
-    # Endurance already has an evaluable verification usage — exactly one.
     assert out.count("verification req_perf_002_check") == 1

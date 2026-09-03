@@ -1,11 +1,10 @@
 """Step-1 incremental correction: identity-keyed merge + authorization gate.
 
-The correction used to ask for one complete replacement JSON (15-25k output
-tokens to change a handful of fields) and trusted an instruction to keep
-unimplicated fields still. Now the retry returns only implicated entries
-(``"plan_patch": true``), the harness merges them into the repair base by
-identity key — unpatched entries cannot drift by construction — and a diff
-gate rejects any change (patch or full replacement) no issue names.
+The correction used to ask for a complete replacement JSON (15-25k output
+tokens for a handful of fields) and rely on an instruction to leave the rest
+alone. The retry now returns only implicated entries (``"plan_patch": true``),
+the harness merges them into the repair base by identity key, and a diff gate
+rejects any change no issue names.
 """
 from __future__ import annotations
 
@@ -31,7 +30,6 @@ def _requirements() -> list[str]:
 
 
 def _healthy_payload() -> Dict[str, Any]:
-    """The run-2 plan with the fixes that make it PASS current validators."""
     payload = json.loads(
         (_FIXTURES / "whole_model_generation_plan.json").read_text()
     )
@@ -42,10 +40,7 @@ def _healthy_payload() -> Dict[str, Any]:
     return payload
 
 
-# ── unit: merge ─────────────────────────────────────────────────────────────
-
-
-def test_merge_upserts_in_place_appends_new_and_removes_by_identity():
+def test_merge_upsert_append_remove():
     base = {
         "components": [
             {"name": "A", "responsibility": "old"},
@@ -68,7 +63,7 @@ def test_merge_upserts_in_place_appends_new_and_removes_by_identity():
 
     assert [c["name"] for c in merged["components"]] == ["A", "B", "C"]
     assert merged["components"][0]["responsibility"] == "new"
-    assert merged["components"][1] is not base["components"][1]  # deep copy
+    assert merged["components"][1] is not base["components"][1]
     assert merged["components"][1] == {"name": "B", "responsibility": "keep"}
     assert merged["behaviors"] == []
     assert audit["replaced"] == ["components:A"]
@@ -76,7 +71,7 @@ def test_merge_upserts_in_place_appends_new_and_removes_by_identity():
     assert audit["removed"] == ["behaviors:('A', 'Ab')"]
 
 
-def test_merge_refuses_entries_without_identity_and_audits_them():
+def test_merge_refuses_identityless():
     base = {"components": [{"name": "A", "responsibility": "keep"}]}
     merged, audit = merge_plan_patch(
         base,
@@ -88,7 +83,7 @@ def test_merge_refuses_entries_without_identity_and_audits_them():
     ]
 
 
-def test_merge_replaces_other_top_level_keys_wholesale():
+def test_merge_replaces_top_level_keys():
     merged, audit = merge_plan_patch(
         {"components": [], "system_rationale": "old"},
         {"plan_patch": True, "system_rationale": "new"},
@@ -97,10 +92,7 @@ def test_merge_replaces_other_top_level_keys_wholesale():
     assert audit["top_level_replaced"] == ["system_rationale"]
 
 
-# ── unit: authorization gate ────────────────────────────────────────────────
-
-
-def test_gate_authorizes_by_name_and_by_base_index_form():
+def test_gate_authorizes_name_and_index():
     base = {"components": [
         {"name": "PayloadMech", "responsibility": "old"},
         {"name": "NavUnit", "responsibility": "old"},
@@ -121,7 +113,7 @@ def test_gate_authorizes_by_name_and_by_base_index_form():
     ) == []
 
 
-def test_gate_rejects_changes_additions_and_removals_no_issue_names():
+def test_gate_rejects_unnamed_changes():
     base = {
         "components": [{"name": "A", "responsibility": "x"}],
         "behaviors": [{
@@ -145,9 +137,7 @@ def test_gate_rejects_changes_additions_and_removals_no_issue_names():
     ]
 
 
-def test_gate_does_not_let_an_owner_mention_authorize_its_behaviors():
-    """One part owns many behaviours; naming the owner must not license
-    rewriting all of them (the frozen-plan revision gate's measured rule)."""
+def test_owner_mention_not_behaviors():
     base = {"behaviors": [{
         "owner": "FlightController", "behavior_id": "NavBehavior",
         "initial_state": "S",
@@ -164,15 +154,12 @@ def test_gate_does_not_let_an_owner_mention_authorize_its_behaviors():
     ) == []
 
 
-def test_gate_flags_unnamed_top_level_field_changes():
+def test_gate_flags_top_level_change():
     assert unauthorized_plan_changes(
         {"components": [], "notes": "a"},
         {"components": [], "notes": "b"},
         ["an unrelated issue"],
     ) == ["top-level field 'notes' changed but no issue names it"]
-
-
-# ── integration: the Step-1 retry loop ──────────────────────────────────────
 
 
 @dataclass
@@ -206,7 +193,7 @@ def _generate(payloads: List[Any]):
     return outcome, prompter
 
 
-def test_an_incremental_patch_repairs_only_the_implicated_entry():
+def test_patch_repairs_implicated_entry():
     healthy = _healthy_payload()
     broken = json.loads(json.dumps(healthy))
     fixed_component = None
@@ -229,17 +216,14 @@ def test_an_incremental_patch_repairs_only_the_implicated_entry():
     assert attempts[1]["patch_audit"]["replaced"] == [
         "components:PayloadMechanism"
     ]
-    # the retry prompt taught the patch protocol, with the base present
     assert '"plan_patch": true' in prompter.contexts[1]
     assert "PREVIOUS PARSEABLE PLAN" in prompter.contexts[1]
-    # every unpatched surface survived byte-identically
     merged = outcome.metadata["whole_model_generation_plan"]
     assert merged["behaviors"] == ModelPlanDump(healthy)["behaviors"]
     assert merged["connections"] == ModelPlanDump(healthy)["connections"]
 
 
 def ModelPlanDump(payload):
-    """Round-trip the payload through the plan IR for comparable dicts."""
     from src.prototyping.generation_plan import ModelGenerationPlan
 
     return ModelGenerationPlan.from_payload(
@@ -248,13 +232,13 @@ def ModelPlanDump(payload):
     ).to_dict()
 
 
-def test_an_unimplicated_patch_edit_is_recorded_not_rejected():
-    """The audit is OBSERVATIONAL. Semantic repair is measurably non-local
-    (a live seed-0 anchor run died in 6 rejected attempts / 215k tokens when
-    this was an enforcing gate), so an unimplicated edit lands and is
-    recorded — visible drift, never a dead end. The structural non-drift
-    guarantee is the merge: entries the patch does not mention cannot move
-    at all."""
+def test_unimplicated_edit_recorded():
+    """The audit is observational: an unimplicated edit lands and is recorded.
+
+    Semantic repair is non-local - as an enforcing gate it killed a seed-0 anchor
+    run in 6 rejected attempts / 215k tokens. Structural non-drift comes from the
+    merge instead: entries the patch does not mention cannot move.
+    """
     healthy = _healthy_payload()
     broken = json.loads(json.dumps(healthy))
     fixed_component = None
@@ -264,8 +248,8 @@ def test_an_unimplicated_patch_edit_is_recorded_not_rejected():
             fixed_component = json.loads(json.dumps(component))
             component["responsibility"] = ""
         elif tampered_other is None and component["requirements"]:
-            # Semantically inert on its own — the original anchor text is
-            # preserved — so the run stays PASS and only the audit speaks.
+            # Inert on its own (the anchor text is preserved), so the run stays PASS and
+            # only the audit reports it.
             tampered_other = json.loads(json.dumps(component))
             tampered_other["responsibility"] += (
                 " Also archives telemetry snapshots."
@@ -286,7 +270,6 @@ def test_an_unimplicated_patch_edit_is_recorded_not_rejected():
         tampered_other["name"] in violation
         for violation in attempts[1]["unauthorized_changes"]
     )
-    # the audited edit landed — drift is visible, not silently discarded
     final = outcome.metadata["whole_model_generation_plan"]
     by_name = {c["name"]: c for c in final["components"]}
     assert "archives telemetry" in (
@@ -294,13 +277,14 @@ def test_an_unimplicated_patch_edit_is_recorded_not_rejected():
     )
 
 
-def test_a_missing_semantic_binding_is_repairable_through_the_patch_channel():
-    """The s0v4 anchor run died here: semantic_bindings had no identity
-    channel, so an instruction-obedient patch could not add the binding a
-    'has no typed semantic binding' issue demanded, and a full list resent
-    under the wholesale top-level rule would have nuked every other binding.
-    Six attempts converged to exactly these stuck issues and burned 170k
-    tokens. Bindings now merge by obligation_id like every other entry."""
+def test_missing_binding_repairable():
+    """Bindings merge by obligation_id like every other entry.
+
+    The s0v4 anchor run died here: semantic_bindings had no identity channel, so a
+    patch could not add the binding a 'has no typed semantic binding' issue
+    demanded, and resending the full list under the wholesale top-level rule would
+    have dropped every other binding (six attempts, 170k tokens).
+    """
     healthy = _healthy_payload()
     broken = json.loads(json.dumps(healthy))
     restored = broken["semantic_bindings"].pop()
@@ -320,7 +304,6 @@ def test_a_missing_semantic_binding_is_repairable_through_the_patch_channel():
     assert attempts[1]["patch_audit"]["added"] == [
         f"semantic_bindings:{restored['obligation_id']}"
     ]
-    # the other eight bindings survived untouched — no wholesale nuke
     final = outcome.metadata["whole_model_generation_plan"]
     assert len(final["semantic_bindings"]) == len(
         healthy["semantic_bindings"]
@@ -328,7 +311,7 @@ def test_a_missing_semantic_binding_is_repairable_through_the_patch_channel():
     assert "semantic_bindings by obligation_id" in prompter.contexts[1]
 
 
-def test_a_patch_with_no_repair_base_asks_for_a_full_plan():
+def test_patch_without_base_asks_full():
     healthy = _healthy_payload()
     outcome, prompter = _generate([
         {"plan_patch": True, "components": []},
@@ -341,15 +324,17 @@ def test_a_patch_with_no_repair_base_asks_for_a_full_plan():
         "no parseable repair base" in issue
         for issue in attempts[0]["issues"]
     )
-    # without a base, the retry instruction demands one complete object
     assert "complete replacement JSON object" in prompter.contexts[1]
     assert outcome.plan.status == "PASS"
 
 
-def test_a_format_failure_keeps_the_outstanding_semantic_issues_in_view():
-    """A format failure replaces nothing: the repair base still carries the
-    last round's semantic issues, but the old retry prompt showed only the
-    parse error — the next attempt had nothing to fix but the fence."""
+def test_format_failure_keeps_issues():
+    """A format failure replaces nothing: the repair base keeps the last round's
+    semantic issues.
+
+    The old retry prompt showed only the parse error, so the next attempt had
+    nothing to fix but the fence.
+    """
     healthy = _healthy_payload()
     broken = json.loads(json.dumps(healthy))
     fixed_component = None
@@ -360,8 +345,8 @@ def test_a_format_failure_keeps_the_outstanding_semantic_issues_in_view():
     assert fixed_component is not None
 
     outcome, prompter = _generate([
-        broken,                                       # semantic issues
-        None,                                         # unparseable response
+        broken,
+        None,
         {"plan_patch": True, "components": [fixed_component]},
     ])
 

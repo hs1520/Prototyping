@@ -1,24 +1,17 @@
-"""Static verification-readiness audit — feeds matrix `unassigned` gaps back into refinement.
+"""Static verification-readiness audit - feeds matrix `unassigned` gaps back into refinement.
 
-The verification matrix runs at the END of the pipeline, so requirements that end up
-``unassigned`` (no verification tier anchors them at all) are discovered only after
-generation is over and never flow back to the model. ``build_matrix()`` with no
-execution results already computes the linker/text tiers exactly (execution results
-only upgrade planned tiers to verified; they never create a first anchor); the ONE
-anchor source unavailable at refinement time is Phase 8 (datasheet/forward-flight
-verdicts), so requirements whose quantified family Phase 8 will decide are excluded
-statically via requirement_spec instead. This module runs that projection inside the
-Phase 4-5 refinement loop and turns each remaining unassigned requirement into a
-surgical-refinement issue, so the model can grow a genuine verification anchor (a
-linkable guard/attribute or a state-machine behaviour) while the LLM is still in
-the loop.
-
-Honesty boundary: the issues only ask for MODEL anchors that the parameter linker or
-the behavioural simulator can genuinely exercise. Requirements that explicitly need
-external measurement (CEP, attitude RMS, RTCM corrections) are excluded from the
-surgical issue list and remain visibly unassigned in the matrix. The surgical gates
-(requirement-def set frozen, satisfy links may not shrink) prevent a model repair from
-rewriting the spec instead.
+The verification matrix runs at the END of the pipeline, so requirements that end
+up ``unassigned`` are found after generation and never flow back to the model.
+``build_matrix()`` with no execution results already computes the linker/text tiers
+(execution results only upgrade planned tiers to verified; they never create a
+first anchor), and the one anchor source unavailable at refinement time is Phase 8,
+so requirements whose quantified family Phase 8 will decide are excluded statically
+via requirement_spec. Each remaining unassigned requirement becomes a
+surgical-refinement issue asking only for model anchors the parameter linker or the
+behavioural simulator can exercise; requirements needing external measurement (CEP,
+attitude RMS, RTCM corrections) stay visibly unassigned in the matrix, and the
+surgical gates (requirement-def set frozen, satisfy links may not shrink) stop a
+repair from rewriting the spec.
 """
 from __future__ import annotations
 
@@ -53,19 +46,21 @@ _INHIBITION_REPAIR_GUIDANCE = (
 
 
 def _requires_external_evidence(text: str) -> bool:
-    """Return True for criteria a SysML edit cannot truthfully verify.
+    """True for criteria a SysML edit cannot verify.
 
-    This deliberately keys on the measured quantity, not a generic ``HIL`` tag:
-    many behavioural requirements can still gain a useful executable model
-    anchor even when HIL is their eventual acceptance method.
+    Keys on the measured quantity, not a generic ``HIL`` tag: a behavioural
+    requirement can still gain an executable model anchor even when HIL is its
+    eventual acceptance method.
     """
     return any(pattern.search(text or "") for pattern in _EXTERNAL_EVIDENCE_PATTERNS)
 
 
 def _phase8_will_anchor(req_id: str, text: str) -> bool:
-    """True when Phase 8 (datasheet/forward-flight verdicts) will anchor this
-    requirement downstream — statically decidable from the requirement text via
-    requirement_spec, so the audit does not flag it as a gap at refinement time."""
+    """True when Phase 8 (datasheet/forward-flight verdicts) anchors this requirement.
+
+    Decidable statically from the requirement text via requirement_spec, so the
+    audit does not flag it as a gap at refinement time.
+    """
     try:
         from ..dse.requirement_spec import extract_requirements
         from ..realization.closure_types import (
@@ -96,8 +91,8 @@ def verification_gap_issues(
 ) -> List[str]:
     """Return surgical-refinement issues for requirements no verification tier anchors.
 
-    Best-effort: any parsing/linker failure returns [] — the audit must never break
-    the refinement loop (same contract as the other best-effort phases).
+    Best-effort: any parsing/linker failure returns [], so the audit does not break
+    the refinement loop.
     """
     if not (model_text or "").strip():
         return []
@@ -140,35 +135,26 @@ def verification_gap_issues(
             and "planned_no_response" in row.tiers
             and normalise_req_id(row.req_id) in unmeasurable
         ):
-            # Two independent signals agree that there is nothing here for a
-            # model to anchor: the planner recorded that the requirement
-            # obliges no discrete response, and the extractor flagged it as
-            # carrying no measurable criterion. Asking the surgical LLM to
-            # repair the model would ask it to invent an anchor the requirement
-            # does not provide. The row stays UNASSIGNED in the matrix -- the
-            # gap is real -- but it is a requirement-side gap, not a
-            # model-side one, and it does not block closure.
+            # Two signals agree there is nothing to anchor: the planner recorded no obliged
+            # discrete response and the extractor found no measurable criterion. A surgical
+            # repair would have to invent an anchor the requirement does not provide. The
+            # row stays UNASSIGNED as a requirement-side gap and does not block closure.
             continue
         if not behavioral_failed and "planned_unverifiable_response" in row.tiers:
-            # The planner recorded that a discrete response IS obliged but no
-            # reachable-action marker can evidence it. No surgical repair can
-            # make the gate check what its vocabulary cannot express, so
-            # asking for one would fail-close the run with no way out. The
-            # row stays UNASSIGNED and carries its own tier in the matrix --
-            # the gap is real and stays visible -- but it is a
-            # gate-capability gap, not a model-side one. What keeps this from
-            # becoming a closure dodge is that the record is not free: plan
-            # validation demands a rationale for it, and the planning prompt
-            # offers declared response_markers as the sanctioned route for
-            # any response a reachable action CAN evidence.
+            # A discrete response is obliged but no reachable-action marker can evidence
+            # it. No surgical repair makes the gate check what its vocabulary cannot
+            # express, so asking for one fail-closes the run with no way out. The row stays
+            # UNASSIGNED under its own tier: a gate-capability gap, not a model-side one.
+            # The record is not free - plan validation demands a rationale, and declared
+            # response_markers remain the route for any response a reachable action can
+            # evidence.
             continue
         text = " ".join((row.text or "").split())[:220]
         if _phase8_will_anchor(row.req_id, text):
             continue
         if not behavioral_failed and _requires_external_evidence(text):
-            # Keep the row UNASSIGNED in the verification matrix, but do not ask
-            # the surgical LLM to fabricate model evidence for a measured
-            # hardware/HIL quantity.
+            # The row stays UNASSIGNED in the matrix; the surgical LLM is not asked to
+            # invent model evidence for a measured hardware/HIL quantity.
             continue
         if behavioral_failed:
             repair_guidance = (
@@ -187,10 +173,9 @@ def verification_gap_issues(
             continue
         default_guidance = ""
         low = text.lower()
-        # Inhibition phrasing wins over power-on/default keywords: a phrase
-        # like "shall not transition ... during the power-on self-test"
-        # names the phase, not a default state, and the matrix routes it the
-        # same way (is_inhibition_requirement is the single shared test).
+        # Inhibition phrasing wins over power-on/default keywords: "shall not
+        # transition ... during the power-on self-test" names the phase, not a default
+        # state, and the matrix routes it the same way via is_inhibition_requirement.
         if not is_inhibition_requirement(low) and any(
             k in low
             for k in ("power-on", "power on", "default", "startup", "start-up")
@@ -203,10 +188,9 @@ def verification_gap_issues(
                 "state to an entry action or explicit initial attribute value."
             )
         elif is_inhibition_requirement(low):
-            # An inhibition requirement is satisfied by the transition that is
-            # NOT taken. Repeated probe runs showed the surgical LLM adding a
-            # response action for it instead, which the simulator cannot credit:
-            # nothing fires. Name the shape that does anchor.
+            # An inhibition requirement is satisfied by the transition not taken. Probe
+            # runs showed the surgical LLM adding a response action instead, which the
+            # simulator cannot credit because nothing fires. Name the shape that anchors.
             default_guidance = _INHIBITION_REPAIR_GUIDANCE
         issues.append(
             f"{_ISSUE_PREFIX} {row.req_id} has no verification anchor at any tier — it "
@@ -240,12 +224,11 @@ def functional_verification_gap_issues(
     planned_intents: Optional[Mapping[str, str]] = None,
     planned_markers: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> List[str]:
-    """Model-fixable functional gaps that require a dedicated closure pass.
+    """Model-fixable functional gaps that need a dedicated closure pass.
 
-    ``verification_gap_issues`` already excludes external-measurement and
-    downstream Phase-8 evidence. This view only selects FUNC rows, so the
-    pipeline can make executable functional semantics a terminal gate without
-    asking the LLM to fabricate HIL/field evidence.
+    ``verification_gap_issues`` already drops external-measurement and downstream
+    Phase-8 evidence; this view keeps only FUNC rows, so executable functional
+    semantics can be a terminal gate without asking for HIL/field evidence.
     """
     return [
         issue for issue in verification_gap_issues(

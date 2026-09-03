@@ -1,38 +1,31 @@
 """Re-derive archived behavioural verdicts under the repaired intent lookup.
 
-Context. Through the v21 era, functional_behavior_status looked recorded
-response intents up by the trace's hyphenated requirement id while every
-producer keys them REQ_XXX_NNN, so at that check the recorded decisions were
-silently ignored and keyword inference governed (the matrix's separate
+Through the v21 era, functional_behavior_status looked recorded response
+intents up by the trace's hyphenated requirement id while producers key them
+REQ_XXX_NNN, so keyword inference governed at that check (the matrix's
 planned_no_response bucket normalised its own keys and was unaffected). The
-lookup was repaired together with v22. This probe recomputes, for every
-archived run that recorded intents, the per-requirement behavioural status
-both ways -- keyword fallback (bug-era) and recorded intents honoured
-(repaired) -- and re-runs the terminal functional-closure audit on the
-archived extraction-path run. Deterministic; no LLM calls.
+lookup was repaired with v22. This probe recomputes per-requirement behavioural
+status both ways - keyword fallback and recorded intents honoured - for every
+archived run that recorded intents, and re-runs the terminal functional-closure
+audit on the archived extraction-path run. Deterministic; no LLM calls.
 
 Archived result (2026-08-28) in
-examples/output/probe_intent_key_regression_20260828/report.json. Summary of
-that run of this script:
+examples/output/probe_intent_key_regression_20260828/report.json:
   - reference pilot batches (pilot_n6_0c26731_*, 32 runs): the only verdict
-    difference is REQ-FUNC-002 (obstacle avoidance), which GAINS
-    behaviorally-verified when its recorded 'navigate' intent is honoured --
-    the keyword table knows no avoidance vocabulary, so the bug-era gate had
-    held that requirement to nothing. Conservative direction: archived
-    reports under-credit, none over-credit.
+    difference is REQ-FUNC-002 (obstacle avoidance), which gains
+    behaviorally-verified once its recorded 'navigate' intent is honoured; the
+    keyword table has no avoidance vocabulary. Archived reports under-credit,
+    none over-credit.
   - Study-A anchor (runs/f99ac140): REQ-FUNC-002/005/007 gain
-    behaviorally-verified at this check; the archived matrix had already
-    anchored 005 and 007 behaviourally through the guard-assignment path, so
-    the published rows change only for FUNC-002 (planned/gazebo_deferred ->
-    would also carry behavioural evidence). Conservative direction again.
-  - extraction-path run (runs/fc9f76ee, 31 requirements): the one adverse
-    case. Keyword inference read 'receive a flight waypoint sequence' as a
-    navigate obligation and credited it behaviorally-verified; the plan had
-    recorded none (reception obliges no discrete response). Honouring the
-    record withdraws that credit. The run's terminal functional closure
-    still passes (0 gaps): the requirement is covered by the none +
-    extractor-unmeasurable two-signal rule, so the one statement the report
-    cites this run for -- that the extraction path closes -- survives.
+    behaviorally-verified at this check, but 005 and 007 were already anchored
+    behaviourally through the guard-assignment path, so only FUNC-002 changes
+    in the published rows. Same direction.
+  - extraction-path run (runs/fc9f76ee, 31 requirements): the adverse case.
+    Keyword inference read 'receive a flight waypoint sequence' as a navigate
+    obligation; the plan had recorded none, so honouring the record withdraws
+    that credit. Terminal functional closure still passes (0 gaps) under the
+    none + extractor-unmeasurable two-signal rule, so the claim this run
+    supports - that the extraction path closes - holds.
 """
 from __future__ import annotations
 

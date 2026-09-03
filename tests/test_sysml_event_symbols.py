@@ -47,7 +47,7 @@ def _plan() -> BehaviorObligationPlan:
     ))
 
 
-def test_behavior_materialization_reclassifies_empty_action_event_definition():
+def test_empty_action_reclassified():
     fragment = """action def FaultSignal {}
 state def ControllerBehavior {
     entry; then idle;
@@ -67,7 +67,7 @@ state def ControllerBehavior {
     ]
 
 
-def test_missing_event_definition_is_materialized_as_an_item_definition():
+def test_missing_event_becomes_item():
     materialized, report = materialize_behavior_obligations("", _plan())
 
     assert report["status"] == "PASS"
@@ -76,7 +76,7 @@ def test_missing_event_definition_is_materialized_as_an_item_definition():
     assert "attribute def FaultSignal" not in materialized
 
 
-def test_existing_item_event_definition_is_reused_without_cross_kind_duplicate():
+def test_existing_item_reused():
     fragment = """item def FaultSignal;
 state def ControllerBehavior {
     entry; then idle;
@@ -93,7 +93,7 @@ state def ControllerBehavior {
     assert "attribute def FaultSignal" not in materialized
 
 
-def test_ag_extractor_reads_all_supported_event_definition_kinds():
+def test_extractor_reads_all_kinds():
     canonical = """package AG {
     action def FaultSignal {}
     requirement def SystemContract {
@@ -119,7 +119,7 @@ def test_ag_extractor_reads_all_supported_event_definition_kinds():
     )
 
 
-def test_one_item_event_definition_has_no_namespace_warning():
+def test_single_item_no_warning():
     model = """package P {
     item def FaultSignal;
     part def Controller {
@@ -141,7 +141,7 @@ def test_one_item_event_definition_has_no_namespace_warning():
     ]
 
 
-def test_registry_canonicalizes_interface_and_behavior_cross_kind_duplicate():
+def test_cross_kind_duplicate_canonicalized():
     model = """package P {
     item def FaultSignal;
     action def FaultSignal {}
@@ -170,7 +170,7 @@ def test_registry_canonicalizes_interface_and_behavior_cross_kind_duplicate():
     ).total_errors() == 0
 
 
-def test_registry_refuses_to_reclassify_nonempty_executable_action():
+def test_nonempty_action_not_reclassified():
     model = """package P {
     action def FaultSignal {
         action performResponse;
@@ -188,7 +188,7 @@ def test_registry_refuses_to_reclassify_nonempty_executable_action():
     ]
 
 
-def test_registry_preserves_specialized_event_item_semantics():
+def test_specialized_item_preserved():
     model = """package P {
     item def BaseSignal;
     item def FaultSignal :> BaseSignal {
@@ -205,7 +205,7 @@ def test_registry_preserves_specialized_event_item_semantics():
     assert "attribute severity : Integer;" in materialized
 
 
-def test_registry_removes_port_definition_drift_and_preserves_rich_item():
+def test_port_def_drift_removed():
     model = """package P {
     private import ScalarValues::*;
     port def OverrideCommand {
@@ -239,7 +239,7 @@ def test_registry_removes_port_definition_drift_and_preserves_rich_item():
     ).total_errors() == 0
 
 
-def test_conformance_rejects_every_unregistered_accept_target():
+def test_unregistered_accept_rejected():
     model = """package P {
     item def RegisteredSignal;
     item def UnplannedSignal;
@@ -267,7 +267,7 @@ def test_conformance_rejects_every_unregistered_accept_target():
     }]
 
 
-def test_accept_without_any_frozen_registry_is_failure_not_not_applicable():
+def test_accept_without_registry_fails():
     report = check_planned_event_symbol_conformance(
         """package P {
         item def FaultSignal;
@@ -285,7 +285,7 @@ def test_accept_without_any_frozen_registry_is_failure_not_not_applicable():
     assert report["accept_bindings"][0]["status"] == "FAIL"
 
 
-def test_owner_port_accept_reference_is_rejected_before_registry_freeze():
+def test_port_accept_reference_rejected():
     class Port:
         name = "obstacleData"
 

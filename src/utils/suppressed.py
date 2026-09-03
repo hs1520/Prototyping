@@ -1,7 +1,7 @@
-"""Process-local visibility for intentionally suppressed exceptions.
+"""Process-local visibility for suppressed exceptions.
 
-The pipeline deliberately keeps many best-effort phases non-fatal. This module
-preserves that control flow while making those fallbacks visible in run reports.
+The pipeline keeps many best-effort phases non-fatal; this module preserves
+that control flow and makes the fallbacks visible in run reports.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ _SUPPRESSED: Dict[str, Dict[str, Any]] = {}
 
 
 def record_suppressed(where: str, exc: BaseException) -> None:
-    """Record a swallowed exception without ever raising from the recorder."""
+    """Record a swallowed exception; the recorder does not raise."""
     try:
         key = str(where or "unknown")
         try:

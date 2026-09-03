@@ -1,9 +1,9 @@
 """Prompt-mandated wiring is planned by construction and cannot drift.
 
-Measured failure this pins: both authoring prompts mandate the SafetyMonitor
-interconnect, the step-1 plan stochastically omitted it, and conformance then
-flagged prompt-mandated structure as unplanned (four ports + two connections
-on ablation pilot 2 and authoritative run 219eb9bb)."""
+Both authoring prompts mandate the SafetyMonitor interconnect; the step-1 plan
+sometimes omitted it, and conformance then flagged the mandated structure as
+unplanned (four ports + two connections on ablation pilot 2 and run 219eb9bb).
+"""
 from __future__ import annotations
 
 import json
@@ -40,18 +40,12 @@ def _payload(**overrides):
     return payload
 
 
-# ---------------------------------------------------------------------------
-# Single source of truth: the templates carry the module's blocks verbatim,
-# and every table entry appears in both blocks.
-# ---------------------------------------------------------------------------
-
-
-def test_templates_carry_the_authoritative_blocks_verbatim():
+def test_templates_carry_blocks_verbatim():
     assert PLAN_SIDE_RULES_BLOCK in ARCHITECTURE_DECOMPOSITION_TEMPLATE
     assert PART_SIDE_RULES_BLOCK in PART_DEFINITIONS_TEMPLATE
 
 
-def test_every_mandated_link_is_stated_in_both_blocks():
+def test_links_stated_in_both_blocks():
     for link in MANDATED_LINKS:
         for block in (PLAN_SIDE_RULES_BLOCK, PART_SIDE_RULES_BLOCK):
             assert f"out {'port ' if 'DataPort' in block else ''}{link.port_name}" \
@@ -64,12 +58,7 @@ def test_every_mandated_link_is_stated_in_both_blocks():
             )
 
 
-# ---------------------------------------------------------------------------
-# Augmentation behaviour
-# ---------------------------------------------------------------------------
-
-
-def test_missing_wiring_is_planned_with_ports_connections_and_notes():
+def test_missing_wiring_is_planned():
     augmented, notes = augment_architecture_payload(_payload())
 
     ports = {
@@ -95,7 +84,7 @@ def test_augmentation_is_idempotent():
     assert second == first
 
 
-def test_absent_roles_leave_the_payload_untouched():
+def test_absent_roles_leave_payload():
     payload = _payload(components=[
         {"name": "PowerSystem", "responsibility": "powers",
          "requirements": [], "ports": []},
@@ -106,7 +95,7 @@ def test_absent_roles_leave_the_payload_untouched():
     assert augmented["connections"] == []
 
 
-def test_conflicting_declaration_is_never_overwritten():
+def test_conflict_not_overwritten():
     payload = _payload()
     payload["components"][1]["ports"] = [
         {"name": "overrideCmd", "direction": "in", "type": "DataPort",
@@ -125,14 +114,14 @@ def test_conflicting_declaration_is_never_overwritten():
     )
 
 
-def test_passive_endpoint_skips_the_link_with_a_note():
+def test_passive_endpoint_skips_link():
     payload = _payload()
     payload["components"][3]["passive"] = True
     _augmented, notes = augment_architecture_payload(payload)
     assert any("passive" in note and "sensorStatus" in note for note in notes)
 
 
-def test_ambiguous_role_skips_the_link_with_a_note():
+def test_ambiguous_role_skips_link():
     payload = _payload()
     payload["components"].append(
         {"name": "BackupController", "responsibility": "backup",
@@ -143,13 +132,12 @@ def test_ambiguous_role_skips_the_link_with_a_note():
 
 
 # ---------------------------------------------------------------------------
-# Archived regression: run 219eb9bb's plan omitted the wiring its model
-# carried; with the wiring planned by construction the conformance gate must
-# stop flagging it.
+# Archived regression: run 219eb9bb's plan omitted the wiring its model carried;
+# with the wiring planned by construction conformance no longer flags it.
 # ---------------------------------------------------------------------------
 
 
-def test_archived_219eb9bb_conformance_loses_its_unplanned_wiring_issues():
+def test_archived_219eb9bb_conforms():
     from src.prototyping.generation_plan import (
         ModelGenerationPlan,
         apply_generation_plan,

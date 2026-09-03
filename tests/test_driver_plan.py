@@ -1,13 +1,8 @@
-"""
-tests/test_driver_plan.py
+"""Layer 2 tests: multi-variable driver plan.
 
-Layer 2 tests: multi-variable driver plan.
-
-For a bare `A OP B` guard (both sides variables) the simulator should
-generate TWO driver plans:
-  • drive_LHS — sweep A across B's held value
-  • drive_RHS — sweep B so the relation reverses
-This verifies the *relationship*, not just A crossing some constant.
+For a bare `A OP B` guard (both sides variables) the simulator generates two
+driver plans: drive_LHS sweeps A across B's held value, drive_RHS sweeps B so
+the relation reverses.
 
 Run with:
     python tests/test_driver_plan.py
@@ -42,12 +37,7 @@ def ok(name: str, cond: bool, msg: str = "") -> None:
     assert cond, f"{name}: {msg}"
 
 
-# ---------------------------------------------------------------------------
-# Helpers — build StateMachineDef objects in-memory (no syside needed)
-# ---------------------------------------------------------------------------
-
 def _sm_with_guard(guard: GuardCondition, initial_values: dict) -> StateMachineDef:
-    """Wrap a guard in a minimal nominal→fault state machine."""
     sm = StateMachineDef(
         name="Beh", owner_part="Owner",
         initial_state="Nominal",
@@ -66,11 +56,7 @@ def _sm_with_guard(guard: GuardCondition, initial_values: dict) -> StateMachineD
     return sm
 
 
-# ---------------------------------------------------------------------------
-# T1 — _guard_endpoints
-# ---------------------------------------------------------------------------
-
-def test_endpoints():
+def test_guard_endpoints():
     print("T1  _guard_endpoints")
     g = GuardCondition(kind="comparison", operator="<=",
                        lhs=VarRef("a"), rhs=VarRef("b"))
@@ -85,10 +71,6 @@ def test_endpoints():
                         rhs=BinOp("+", VarRef("b"), Const(5.0)))
     ok("rhs_arith_not_bare", _guard_endpoints(g3) == ("a", None))
 
-
-# ---------------------------------------------------------------------------
-# T2 — two-variable guard generates two driver plans
-# ---------------------------------------------------------------------------
 
 def test_two_plans_for_var_vs_var():
     print("T2  A OP B → 两条驱动轨迹")
@@ -109,18 +91,12 @@ def test_two_plans_for_var_vs_var():
     ok("lhs_sweeps_a", p_lhs.swept_var == "a")
     ok("rhs_sweeps_b", p_rhs.swept_var == "b")
 
-    # drive_LHS must hold 'b' constant in every step
     held_b_values = {s.get("b") for s in p_lhs.sequence}
     ok("lhs_holds_b", held_b_values == {30.0}, f"b values seen: {held_b_values}")
 
-    # drive_RHS must hold 'a' constant in every step
     held_a_values = {s.get("a") for s in p_rhs.sequence}
     ok("rhs_holds_a", held_a_values == {100.0}, f"a values seen: {held_a_values}")
 
-
-# ---------------------------------------------------------------------------
-# T3 — constant-RHS guard still generates ONE plan (back-compat)
-# ---------------------------------------------------------------------------
 
 def test_one_plan_for_const_rhs():
     print("T3  A OP <const> → 单驱动轨迹(向后兼容)")
@@ -135,7 +111,7 @@ def test_one_plan_for_const_rhs():
     ok("swept_a", plans[0].swept_var == "a")
 
 
-def test_unresolved_engineering_threshold_has_no_driver_plan():
+def test_unresolved_threshold_no_plan():
     guard = GuardCondition(
         kind="comparison",
         operator="<=",
@@ -148,7 +124,7 @@ def test_unresolved_engineering_threshold_has_no_driver_plan():
     assert _build_driver_plans(sm) == []
 
 
-def test_unresolved_engineering_threshold_fails_closed_in_simulation():
+def test_unresolved_threshold_fails_closed():
     if not _SYSIDE_OK:
         return
     sysml = """\
@@ -182,7 +158,7 @@ package T {
     ]
 
 
-def test_quantity_default_resolves_arithmetic_guard_threshold():
+def test_quantity_default_resolves_guard():
     if not _SYSIDE_OK:
         return
     sysml = """\
@@ -236,10 +212,6 @@ package T {
     )
 
 
-# ---------------------------------------------------------------------------
-# T4 — bool / compound back-compat
-# ---------------------------------------------------------------------------
-
 def test_bool_compat():
     print("T4  bool / compound 兼容")
     g_bool = GuardCondition(kind="bool_true", attribute="flag")
@@ -247,12 +219,11 @@ def test_bool_compat():
     plans = _build_driver_plans(sm)
     ok("bool_one_plan", len(plans) == 1)
     ok("bool_name", plans[0].name == "flip_bool")
-    # _build_test_sequence shim still returns the first sequence
     seq = _build_test_sequence(sm)
     ok("shim_returns_seq", len(seq) == 20, f"len={len(seq)}")
 
 
-def test_bool_false_driver_crosses_from_true_to_false():
+def test_bool_false_driver_crosses():
     guard = GuardCondition(kind="bool_false", attribute="systemSafe")
     sm = _sm_with_guard(guard, initial_values={"systemSafe": True})
 
@@ -264,7 +235,7 @@ def test_bool_false_driver_crosses_from_true_to_false():
     assert plans[0].sequence[-1] == {"systemSafe": False}
 
 
-def test_mixed_comparison_and_negated_boolean_guard_executes():
+def test_mixed_guard_executes():
     if not _SYSIDE_OK:
         return
     sysml = """\
@@ -300,10 +271,6 @@ package T {
     ) or scenario.fired_actions
 
 
-# ---------------------------------------------------------------------------
-# T5 — end-to-end: both directions of A <= B fire (true relationship)
-# ---------------------------------------------------------------------------
-
 def test_e2e_both_sides_fire():
     print("T5  端到端:A<=B 两个方向都能触发(关系真的被验证)")
     if not _SYSIDE_OK:
@@ -330,23 +297,16 @@ package T {
     ok("scenario_present", len(rs) == 1, f"got {[r.name for r in sim.scenario_results]}")
     r = rs[0]
     ok("scenario_passes", r.passed, f"violations={r.violations}")
-    # Timeline should mention BOTH drive_LHS and drive_RHS (both directions fired)
     tl = " ".join(r.timeline)
     ok("drive_lhs_in_timeline", "drive_LHS" in tl, f"timeline:\n{tl}")
     ok("drive_rhs_in_timeline", "drive_RHS" in tl, f"timeline:\n{tl}")
 
 
-# ---------------------------------------------------------------------------
-# T6 — Layer-2 strength: one-sided relation still passes (with a notice)
-# ---------------------------------------------------------------------------
-
 def test_e2e_one_sided_relation():
-    """
-    With initial a=100, b=200 and guard `a <= b`, the relation is ALREADY
-    satisfied — the state machine fires immediately on drive_LHS (the very
-    first variable binding triggers the guard).  drive_RHS would need to push
-    b BELOW 100, which it does too because flipped operator drives b down.
-    Either way the test asserts pass and that at least one plan fired.
+    """With a=100, b=200 and guard `a <= b` the relation already holds.
+
+    drive_LHS fires on the first variable binding; drive_RHS pushes b below 100
+    because the flipped operator drives b down. Either way at least one plan fires.
     """
     print("T6  端到端:初值已满足关系 — 仍 pass")
     if not _SYSIDE_OK:
@@ -375,7 +335,7 @@ package T {
 
 
 if __name__ == "__main__":
-    test_endpoints()
+    test_guard_endpoints()
     test_two_plans_for_var_vs_var()
     test_one_plan_for_const_rhs()
     test_bool_compat()

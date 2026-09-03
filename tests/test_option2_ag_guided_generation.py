@@ -1,4 +1,3 @@
-"""R2 A/G decisions must guide generation, not be appended only at the end."""
 from __future__ import annotations
 
 import copy
@@ -36,7 +35,7 @@ def _orchestrator() -> Orchestrator:
     )
 
 
-def test_r2_freezes_a_plan_for_every_design_generation_step():
+def test_plan_frozen_for_every_step():
     orchestrator = _orchestrator()
     plan = orchestrator._prepare_ag_guided_generation(_REQS)
     assert plan["stage"] == "PRE_GENERATION_A_G_PLANNING"
@@ -55,7 +54,7 @@ def test_r2_freezes_a_plan_for_every_design_generation_step():
     )
 
 
-def test_frozen_ag_package_remains_planning_input_before_first_commit():
+def test_frozen_package_stays_input():
     orchestrator = _orchestrator()
     orchestrator._active_ag_generation_plan = (
         orchestrator._prepare_ag_guided_generation(_REQS)
@@ -78,7 +77,7 @@ def test_frozen_ag_package_remains_planning_input_before_first_commit():
     assert materialized.metadata["ag_planning_reports"][0]["verdict"] == "PASS"
 
 
-def test_terminal_reconciliation_reuses_the_frozen_plan_without_reauthoring():
+def test_terminal_reuses_frozen_plan():
     orchestrator = _orchestrator()
     orchestrator._active_ag_generation_plan = (
         orchestrator._prepare_ag_guided_generation(_REQS)
@@ -128,7 +127,7 @@ def test_terminal_reconciliation_reuses_the_frozen_plan_without_reauthoring():
     assert orchestrator.last_ag_binding_report["status"] == "PASS"
 
 
-def test_design_handoff_carries_the_frozen_plan_as_a_typed_input():
+def test_handoff_carries_frozen_plan():
     orchestrator = _orchestrator()
     orchestrator.last_requirement_input = {
         "mode": "frozen", "requirement_set_digest": "digest",
@@ -158,16 +157,13 @@ def _planning_model() -> str:
     return Orchestrator._requirement_planning_model(_REQS)
 
 
-def test_the_pre_generation_gate_admits_a_correct_decision_set():
-    """The gate must be satisfiable at generation stage.
+def test_gate_admits_correct_decisions():
+    """The gate has to be satisfiable at generation stage.
 
-    It compiles the candidate and checks it before the ordinary architecture
-    spends four more provider calls. But the emitted package never contains
-    `requirement def REQ_SAFE_005` — the authoritative requirement lives in the
-    model, which at this point is still the frozen planning inputs. Checking the
-    package alone made SOURCE_PROVENANCE_MISSING unsatisfiable by construction,
-    so every decision set the LLM could return was refused and the arm could not
-    generate at all.
+    It checks the candidate before the architecture spends four more provider calls,
+    but the emitted package holds no `requirement def REQ_SAFE_005` - at this point
+    the requirement lives in the frozen planning inputs. Checking the package alone
+    made SOURCE_PROVENANCE_MISSING unsatisfiable, so every decision set was refused.
     """
     orchestrator = _decided_orchestrator(_CORRECT)
     spec = orchestrator._generate_llm_decided_ag_spec(
@@ -176,8 +172,7 @@ def test_the_pre_generation_gate_admits_a_correct_decision_set():
     assert spec.source_requirement == "REQ_SAFE_005"
 
 
-def test_the_pre_generation_gate_still_refuses_an_over_budget_decision_set():
-    """Admitting the correct set must not have cost the gate its teeth."""
+def test_gate_refuses_over_budget():
     over_budget = copy.deepcopy(_CORRECT)
     over_budget["components"][0]["latency_budget_seconds"] = 0.4
     orchestrator = _decided_orchestrator(over_budget)
@@ -187,12 +182,10 @@ def test_the_pre_generation_gate_still_refuses_an_over_budget_decision_set():
         )
 
 
-def test_the_gate_reads_provenance_from_the_requirement_inputs_it_is_given():
-    """Pins *why* the gate passes: the requirement inputs, not the package.
+def test_gate_reads_input_provenance():
+    """Pins why the gate passes: the requirement inputs, not the package.
 
-    Withhold them and the same correct decisions are refused for missing source
-    provenance — which is exactly the failure a package-only check produced on
-    every run.
+    Withhold them and the same decisions are refused for missing source provenance.
     """
     orchestrator = _decided_orchestrator(_CORRECT)
     with pytest.raises(RuntimeError, match="SOURCE_PROVENANCE_MISSING"):
@@ -202,7 +195,7 @@ def test_the_gate_reads_provenance_from_the_requirement_inputs_it_is_given():
         )
 
 
-def test_authored_guidance_uses_authored_behavior_not_reviewed_realization_gold():
+def test_guidance_uses_authored_behavior():
     package = emit_ag_package(REQ_SAFE_005_CHAIN).replace(
         "SafetyResponseArbitration", "AuthoredArbitration"
     ).replace(
@@ -216,12 +209,11 @@ def test_authored_guidance_uses_authored_behavior_not_reviewed_realization_gold(
     assert "SafetyResponseArbitration" not in guidance["behavior"]
 
 
-def test_ag_planning_is_a_board_task_with_its_own_archived_session():
-    """§5.3 rule 1, applied to the role that actually makes the A/G decisions.
+def test_planning_is_board_task():
+    """§5.3 rule 1, applied to the role that makes the A/G decisions.
 
-    Freezing the plan used to happen before the board existed, so the only LLM
-    work in the run whose engineering is judged had no envelope, no session and
-    no transcript — the one thing §5.3 says every result must record.
+    Freezing the plan used to happen before the board existed, so that LLM work had
+    no envelope, no session and no transcript.
     """
     import json
 
@@ -229,8 +221,6 @@ def test_ag_planning_is_a_board_task_with_its_own_archived_session():
     from src.prototyping.task_session import SessionStatus
 
     class _RealisticDecisionLLM(LLMInterface):
-        """Carries the real observer machinery, so archiving is exercised."""
-
         def _complete_impl(self, messages, temperature, max_tokens):
             return LLMResponse(content=json.dumps(_CORRECT), model="stub")
 
@@ -254,7 +244,6 @@ def test_ag_planning_is_a_board_task_with_its_own_archived_session():
     ]
     assert len(planning) == 1, "one bounded session for the planning task"
     assert planning[0]["status"] == SessionStatus.COMPLETED.value
-    # the decision turns are archived, not merely counted
     roles = [message["role"] for message in planning[0]["messages"]]
     assert "assistant" in roles and "user" in roles
 
@@ -267,8 +256,7 @@ def test_ag_planning_is_a_board_task_with_its_own_archived_session():
     assert payload["context_envelope_digest"]
 
 
-def test_planning_and_design_never_share_a_session():
-    """Rule 6: one permanent session shared by all Agents is prohibited."""
+def test_planning_design_sessions_differ():
     orchestrator = Orchestrator(
         _DecisionLLM(_CORRECT),
         revised_experiment_arm="R2-BBAG",
@@ -290,15 +278,13 @@ def test_planning_and_design_never_share_a_session():
     assert len({item["task_id"] for item in sessions}) == 2
 
 
-def test_generation_drafts_are_archived_on_the_board_but_never_authority():
-    """The board now sees the intermediate drafts — as evidence, not as input.
+def test_drafts_archived_not_authority():
+    """The board sees the intermediate drafts as evidence, not as input.
 
-    Before this, nothing was published between the DesignAgent task opening and
-    the finished model being committed, so no knowledge source could subscribe
-    to a step's output and no coordination metric covered generation. Making
-    them records fixes that; letting a later stage *build from* them would
-    recreate the external-authority design that was removed, so the
-    ContextBuilder must refuse the topic.
+    Nothing used to be published between the DesignAgent task opening and the model
+    commit, so no knowledge source could subscribe to a step's output and no
+    coordination metric covered generation. Building from them would restore the
+    removed external authority, so the ContextBuilder refuses the topic.
     """
     from src.agents.orchestrator import Orchestrator
     from src.prototyping.blackboard import RecordType
@@ -330,10 +316,8 @@ def test_generation_drafts_are_archived_on_the_board_but_never_authority():
     assert payload["multi_turn"] is True
     assert payload["fragment"] == "part def FlightController;"
     assert payload["fragment_digest"]
-    # the record announces that it decides nothing
     assert payload["authority"] == "NONE_ARCHIVAL_ONLY"
 
-    # and the ContextBuilder refuses to let a later stage build from it
     with pytest.raises(ValueError, match="authoritative requirements"):
         orchestrator.context_builder.build_design_context(
             task_id=task.task_id,
@@ -342,18 +326,14 @@ def test_generation_drafts_are_archived_on_the_board_but_never_authority():
         )
 
 
+def test_plan_owns_boolean_concepts():
+    """Two runs died on `attribute airborne : Real = 0.0;`.
 
-def test_the_plan_owns_ag_boolean_concepts_so_generation_cannot_mistype_them():
-    """Two measured runs died on `attribute airborne : Real = 0.0;`.
-
-    These concepts are typed by the A/G contract, but they are not planned
-    attributes — they come from the frozen A/G decisions, so nothing owned their
-    declared type and the terminal gate was the first thing to see the
-    contradiction, by which point it could only fail the run.
-
-    Declaring them in the typed plan puts them under the existing
-    planned-attribute materialiser. The terminal gate is deliberately left
-    fail-closed: it goes back to being a check that should never fire.
+    These concepts are typed by the A/G contract but come from the frozen decisions,
+    so nothing owned their declared type and the terminal gate saw the contradiction
+    first, too late to do anything but fail. Declaring them in the typed plan puts
+    them under the planned-attribute materialiser; the terminal gate stays
+    fail-closed.
     """
     from src.prototyping.ag_behavior_plan import (
         behavior_boolean_concepts,
@@ -368,11 +348,10 @@ def test_the_plan_owns_ag_boolean_concepts_so_generation_cannot_mistype_them():
     )
 
     behavior_plan = compile_behavior_obligation_plan([REQ_SAFE_005_CHAIN])
-    # only what a component CONSUMES: a guarantee is an output, generation
+    # only what a component consumes: a guarantee is an output, generation
     # realises it as a directed port, and the terminal binder accepts a port as a
-    # carrier of the truth concept. Planning it as an attribute too made
-    # recoveryActuationPowerAvailable both at once in a measured run, which the
-    # binder correctly reports as AMBIGUOUS.
+    # carrier of the concept. Planning it as an attribute too made
+    # recoveryActuationPowerAvailable both at once, reported as AMBIGUOUS.
     expected = {
         obligation.owner_def: (
             set(behavior_boolean_concepts(obligation))
@@ -409,12 +388,10 @@ def test_the_plan_owns_ag_boolean_concepts_so_generation_cannot_mistype_them():
             assert planned[owner].get(concept) == "Boolean", (
                 f"{owner}::{concept} must be planned Boolean"
             )
-    # the guarantee is deliberately NOT planned as an attribute
     assert "recoveryActuationPowerAvailable" not in (
         planned["RecoveryPowerSupply"]
     )
 
-    # and the existing materialiser then corrects a mistyped declaration
     component = next(
         item for item in plan.components if item.name == "RecoveryPowerSupply"
     )
@@ -431,15 +408,13 @@ def test_the_plan_owns_ag_boolean_concepts_so_generation_cannot_mistype_them():
     assert "RecoveryPowerSupply.airborne" in report["restored_attributes"]
 
 
-def test_a_planned_port_name_is_never_also_planned_as_an_attribute():
-    """The collision this guards against was introduced, measured, and removed.
+def test_port_name_not_also_attribute():
+    """Guards a collision that a fix once introduced.
 
-    A first version of the plan-ownership fix declared every Boolean A/G concept
-    as an attribute, including the ones a component guarantees. Those are
-    outputs, generation realises them as directed ports, and the run then failed
-    with `recoveryActuationPowerAvailable cannot be both a port and an attribute`
-    plus an AMBIGUOUS terminal binding — a defect created by the fix for another
-    defect.
+    A first version of the plan-ownership fix declared every Boolean A/G concept as
+    an attribute, including guaranteed ones. Those are outputs realised as directed
+    ports, so the run failed with `recoveryActuationPowerAvailable cannot be both a
+    port and an attribute` plus an AMBIGUOUS terminal binding.
     """
     from src.prototyping.ag_behavior_plan import compile_behavior_obligation_plan
     from src.prototyping.generation_plan import (
@@ -454,7 +429,6 @@ def test_a_planned_port_name_is_never_also_planned_as_an_attribute():
                 "name": obligation.owner_def,
                 "responsibility": "x",
                 "requirements": ["REQ_SAFE_005"],
-                # the guarantee, declared as the outgoing port it really is
                 "ports": [
                     {"name": concept, "direction": "out",
                      "type": "StatusPort", "external": False}

@@ -1,14 +1,10 @@
 """Stale-read/write rejection rate (design §13, Group A).
 
 The metric is rejected / attempted operations against a superseded revision. A
-rejection raises `StaleRevisionError` and aborts, so nothing about it reached the
-record log — which only ever holds operations that succeeded — and the metric could
-not be computed from archived artifacts at all. It is therefore counted at the
-guard itself and carried in the blackboard snapshot.
-
-The denominator must stay honest: a run that never went stale reports no rate
-rather than a vacuous 1.0, and a permitted stale read has to move the denominator,
-or the rate would be 1.0 by construction and would evidence nothing.
+rejection raises `StaleRevisionError` and aborts, so it never reaches the record
+log and cannot be computed from archived artifacts; it is counted at the guard
+and carried in the blackboard snapshot. A run that never went stale reports no
+rate rather than 1.0, and a permitted stale read moves the denominator.
 """
 from __future__ import annotations
 
@@ -40,13 +36,13 @@ def _metrics(board) -> dict:
     )["stale_rejection_rate"]
 
 
-def test_a_run_that_never_went_stale_reports_no_rate():
+def test_no_stale_reports_no_rate():
     out = _metrics(_board())
     assert out["attempted"] == 0
     assert out["value"] is None, "a run with no stale attempt must not report 1.0"
 
 
-def test_a_rejected_stale_publish_is_counted():
+def test_rejected_stale_publish_counted():
     board = _board()
     stale = board.current_revision
     board.commit_model(
@@ -62,8 +58,7 @@ def test_a_rejected_stale_publish_is_counted():
     assert out["value"] == 1.0
 
 
-def test_a_permitted_stale_read_moves_the_denominator():
-    """Without this the rate is 1.0 by construction and evidences nothing."""
+def test_permitted_stale_moves_denominator():
     board = _board()
     stale = board.current_revision
     board.commit_model(
@@ -79,7 +74,7 @@ def test_a_permitted_stale_read_moves_the_denominator():
     assert out["value"] == 0.0
 
 
-def test_a_rejected_stale_commit_is_counted():
+def test_rejected_stale_commit_counted():
     board = _board()
     stale = board.current_revision
     digest = board.current_model.model_digest
@@ -94,7 +89,7 @@ def test_a_rejected_stale_commit_is_counted():
     assert _metrics(board)["rejected"] == 1
 
 
-def test_a_commit_on_a_superseded_digest_is_counted():
+def test_superseded_digest_counted():
     board = _board()
     with pytest.raises(StaleRevisionError):
         board.commit_model(
@@ -104,9 +99,7 @@ def test_a_commit_on_a_superseded_digest_is_counted():
     assert _metrics(board)["rejected"] == 1
 
 
-def test_irrelevance_uses_the_explicit_record_dependency_closure():
-    """The ratio is now operational: required topics plus explicitly linked
-    diagnostics/evidence/previous attempts form the record dependency closure."""
+def test_irrelevance_uses_dependency_closure():
     out = compute_coordination_metrics(
         {"blackboard": _board().snapshot(), "contexts": [], "task_sessions": []}
     )
@@ -117,16 +110,15 @@ def test_irrelevance_uses_the_explicit_record_dependency_closure():
     assert set(composition) >= {
         "items", "required_topic_items", "supplementary_items", "note"
     }
-    # it must not present itself as a quality ratio
     assert "value" not in composition
     assert "not evidence of" in composition["note"]
 
 
-def test_gold_metric_coverage_surfaces_an_incomplete_freeze():
-    """A gold fact family is optional in the schema, so a freeze can omit one and
-    still validate — which is how the REQ_SAFE_005 freeze came to lack
-    realization_links, leaving a named primary metric uncomputable and unnoticed.
-    The omission must be visible at freeze time."""
+def test_gold_coverage_incomplete_freeze():
+    """A gold fact family is optional in the schema, so a freeze can validate without
+    one: the REQ_SAFE_005 freeze lacked realization_links and left a primary metric
+    uncomputable. Surfaced at freeze time.
+    """
     from src.prototyping.ag_gold_template import gold_metric_coverage
 
     complete = {
@@ -142,6 +134,5 @@ def test_gold_metric_coverage_surfaces_an_incomplete_freeze():
     assert "realization_links" in out["unsupported_metrics"]
     assert "realization" in out["unsupported_metrics"]["realization_links"]
 
-    # an empty family counts as absent, not as present-but-empty
     emptied = dict(complete, realization_links=[])
     assert "realization_links" in gold_metric_coverage(emptied)["unsupported_metrics"]

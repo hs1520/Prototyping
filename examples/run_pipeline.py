@@ -1,23 +1,10 @@
-"""手动运行完整 DSE 流程（generate → variation 双层 DSE → 精修/仿真 → Phase 7 验证）。
-
-前置：
-  - conda 环境 AI-Prototyping（含 langsmith / numpy / scipy / syside）
-  - .env 提供 Vertex 凭据（src.config 自动加载）
-
-运行：
-  cd <repo>
-  PYTHONPATH=. /Users/huangsongyi/miniforge3/envs/AI-Prototyping/bin/python examples/run_pipeline.py
-
-改 system / 需求：编辑下面的 SYSTEM 和 DESC。
-切 DSE 路径：改 PrototypingPipeline(dse_mode=...) — "variation"(默认,双层) / "bilevel"(算子目录)。
-"""
+"""手动运行完整 DSE 流程（generate -> variation 双层 DSE -> 精修/仿真 -> Phase 7 验证）。"""
 import os
 import sys
 import src.config  # noqa: F401  (loads .env)
 from src.prototyping.provider_factory import create_llm
 from src.app.pipeline import PrototypingPipeline
 
-# Reuse the industry-grade v2 system description + INCOSE-style requirements.
 sys.path.insert(0, os.path.dirname(__file__))
 from drone_system_v2 import (  # noqa: E402
     DRONE_DESCRIPTION,
@@ -36,28 +23,26 @@ if __name__ == "__main__":
     pipe = PrototypingPipeline(llm=llm, max_iterations=4, verbose=False, dse_mode="variation")
     print("dse_mode → use_variation_dse:", pipe.orchestrator.use_variation_dse, flush=True)
 
-    # Split generate / explore so we capture BOTH the pre-DSE model and the post-DSE model.
+    # Split generate / explore to capture the pre-DSE and post-DSE models.
     gen = pipe.orchestrator.generate(system_name=SYSTEM, system_description=DESC,
                                      frozen_requirements=DRONE_FROZEN_REQUIREMENTS)
-    initial_sysml = gen["model_sysml"]                          # after generate, BEFORE DSE
-    res = pipe.orchestrator.explore(gen, mcts_iterations=20)    # DSE + refinement + verification
-    final_sysml = res["model_sysml"]                            # AFTER DSE
-    # This script drives the orchestrator directly (to capture the pre-DSE model),
-    # bypassing the pipeline entry points that auto-save — so save explicitly.
+    initial_sysml = gen["model_sysml"]
+    res = pipe.orchestrator.explore(gen, mcts_iterations=20)
+    final_sysml = res["model_sysml"]
+    # Drives the orchestrator directly to capture the pre-DSE model, bypassing the
+    # auto-saving pipeline entry points, so save explicitly.
     pipe.save_run_report(res)
 
-    # Restore VERBATIM requirement doc text (the LLM paraphrases/corrupts it during generation,
-    # e.g. SAFE-005 "all other safety responses" → "all calculations"). Deterministic fidelity pass.
+    # Restore verbatim requirement doc text; generation paraphrases it (SAFE-005
+    # "all other safety responses" -> "all calculations"). Deterministic pass.
     from src.dse.requirement_spec import bind_current_payload, enforce_requirement_text
     for fn in (enforce_requirement_text, bind_current_payload):
-        # enforce_requirement_text: restore verbatim requirement doc text (LLM paraphrase fix)
-        # bind_current_payload: bind currentPayloadMass=0.0 → rated payload (un-vacuum the bound)
         initial_sysml = fn(initial_sysml, DRONE_REQUIREMENTS)
         final_sysml = fn(final_sysml, DRONE_REQUIREMENTS)
 
-    # artifact_store.output_dir() documents examples/output ROOT as never
-    # being a writable artifact bundle; honour PROTOTYPING_OUTPUT_DIR when
-    # the caller sets it (default unchanged for manual runs).
+    # artifact_store.output_dir() treats the examples/output root as not a
+    # writable artifact bundle; honour PROTOTYPING_OUTPUT_DIR when set (default
+    # unchanged for manual runs).
     outdir = os.environ.get("PROTOTYPING_OUTPUT_DIR") or os.path.join(
         os.path.dirname(__file__), "output")
     os.makedirs(outdir, exist_ok=True)
@@ -77,9 +62,9 @@ if __name__ == "__main__":
     dv = res.get("dse_verification")
     print("DSE→SITL verify  :", dv["summary"] if dv else "(no quantified requirements)")
 
-    # Opt-in high-fidelity verification: fly the DSE-recommended design in Gazebo (~5 min, Docker).
-    # Gated by RUN_GAZEBO=1 — off by default (heavy, like RUN_SITL). Run BEFORE coverage so its
-    # verdict can upgrade the endurance requirement to flight-verified.
+    # Opt-in Gazebo flight of the DSE-recommended design (~5 min, Docker), gated
+    # by RUN_GAZEBO=1 and off by default. Runs before coverage so its verdict can
+    # upgrade the endurance requirement to flight-verified.
     gv = None
     if os.environ.get("RUN_GAZEBO") == "1":
         design = getattr(pipe.orchestrator, "last_recommended_design", None)
@@ -88,11 +73,10 @@ if __name__ == "__main__":
         gv = verify_recommended_design(design, DRONE_REQUIREMENTS)
         print("gazebo verify  :", summary_line(gv))
 
-    # Opt-in architecture-axis calibration: sweep quad/hexa/octa variants of the
-    # recommended design through Gazebo and rank-correlate the estimator's hover
-    # power against the measured one — the high-fidelity anchor the architecture
-    # dimension lacks on SITL-default (frame mass fixed → octa==quad).  Three
-    # flights ≈15 min, so it has its own gate on top of RUN_GAZEBO.
+    # Opt-in architecture-axis calibration: sweep quad/hexa/octa variants through
+    # Gazebo and rank-correlate estimated against measured hover power. SITL-default
+    # fixes frame mass (octa==quad), so it gives no such anchor. Three flights
+    # ~15 min, hence a gate on top of RUN_GAZEBO.
     if (os.environ.get("RUN_GAZEBO") == "1"
             and os.environ.get("RUN_GAZEBO_CALIB") == "1"):
         design = getattr(pipe.orchestrator, "last_recommended_design", None)
@@ -108,8 +92,8 @@ if __name__ == "__main__":
                 print(f"  {p.label}: predicted {p.predicted_power_w:.0f} W, "
                       f"measured {measured}, stable={p.hover_stable}")
 
-    # Honest verification-coverage of the satisfy claims: satisfy = allocation/intent, not
-    # proof. Report how many requirements actually have evidence vs are allocated-only.
+    # satisfy is allocation/intent, not proof: report how many requirements have
+    # evidence versus are allocated-only.
     from src.dse.requirement_coverage import classify_requirement_coverage, coverage_summary
     cov = classify_requirement_coverage(final_sysml, DRONE_REQUIREMENTS, dynamic=True, gazebo=gv)
     print("req evidence     :", coverage_summary(cov))

@@ -1,20 +1,19 @@
 """Draft evaluator-only gold generator for bounded A/G chains.
 
 Produces a DRAFT gold artifact for supervisor review and freeze (candidate doc
-§4/§5, design §13/§16). The draft is derived from the student-approved Stage-2
-decomposition (``ag_chains``), NOT from the runtime checker: this module imports
-neither ``ag_extractor`` nor ``ag_contracts``, so gold can never be a checker
-export (finding F3). Until a supervisor confirms and freezes it, the draft is not
-authoritative, and its ``EVALUATOR_GOLD`` role keeps it out of the pipeline (the
-ContextBuilder rejects that role/topic).
+§4/§5, design §13/§16). The draft comes from the student-approved Stage-2
+decomposition (``ag_chains``), not from the runtime checker: this module imports
+neither ``ag_extractor`` nor ``ag_contracts``, so gold cannot be a checker export
+(finding F3). Until a supervisor freezes it the draft is not authoritative, and its
+``EVALUATOR_GOLD`` role keeps it out of the pipeline (the ContextBuilder rejects
+that role/topic).
 
-What the draft measures: with deterministic emission it verifies that the
-emit → extract → check pipeline faithfully reproduces the selected decomposition
-(expected F1≈1.0, and it already caught extractor/ordering bugs). Under the current
-deterministic intervention this must not be called LLM accuracy. An LLM-authored
-intervention would require its own frozen configuration/version and evidence gate.
-Gold cannot independently validate the selected decomposition itself — that is
-the human reviewer's responsibility, which is why every field carries a review note.
+With deterministic emission the draft verifies that the emit -> extract -> check
+pipeline reproduces the selected decomposition (expected F1~1.0; it has caught
+extractor/ordering bugs), which is not LLM accuracy. An LLM-authored intervention
+needs its own frozen configuration/version and evidence gate. Gold cannot validate
+the selected decomposition itself - that is the reviewer's job, which is why every
+field carries a review note.
 """
 from __future__ import annotations
 
@@ -75,8 +74,8 @@ def build_gold_draft(
 ) -> Dict[str, Any]:
     """Build a review-ready DRAFT from a student-approved A/G decomposition.
 
-    Allocations and discharge edges are pre-filled from the decomposition intent so
-    the reviewer confirms rather than transcribes; an assumption that is neither an
+    Allocations and discharge edges are pre-filled from the decomposition intent so the
+    reviewer confirms rather than transcribes; an assumption that is neither an
     environment/system assumption nor produced by an upstream guarantee is left
     ``by = None`` and flagged UNRESOLVED for the reviewer.
     """
@@ -235,7 +234,6 @@ _REQUIRED_NAMESPACE = REVISED_EXPERIMENT_NAMESPACE
 
 
 def _contains_key(obj: Any, target: str) -> bool:
-    """Return whether a forbidden semantic key occurs anywhere in an artifact."""
     if isinstance(obj, Mapping):
         return any(
             str(key) == target or _contains_key(value, target)
@@ -246,10 +244,10 @@ def _contains_key(obj: Any, target: str) -> bool:
     return False
 
 
-#: Which §13 Group B metric each gold fact family makes computable. A family is
-#: optional in the schema, so a freeze can omit one and still validate — which is
-#: how the REQ_SAFE_005 freeze came to lack `realization_links`, leaving a named
-#: primary metric uncomputable and unnoticed for months.
+# Which §13 Group B metric each gold fact family makes computable. Families are
+# optional in the schema, so a freeze can omit one and still validate: the
+# REQ_SAFE_005 freeze lacked `realization_links`, leaving a named primary metric
+# uncomputable.
 GOLD_METRIC_SUPPORT: Dict[str, str] = {
     "allocations": "guarantee allocation accuracy",
     "discharge_edges": "assumption-discharge P/R/F1",
@@ -263,10 +261,9 @@ GOLD_METRIC_SUPPORT: Dict[str, str] = {
 def gold_metric_coverage(gold: Dict[str, Any]) -> Dict[str, Any]:
     """Which §13 Group B metrics this gold can and cannot support.
 
-    Reported rather than enforced. Requiring every family would invalidate an
-    existing freeze, and whether to re-freeze is the supervisor's decision, not
-    this module's. What this does guarantee is that an omission is visible at
-    freeze time instead of surfacing months later as a metric nobody can compute.
+    Reported, not enforced: requiring every family would invalidate an existing freeze,
+    and re-freezing is the supervisor's decision. The report makes an omission visible
+    at freeze time rather than later as a metric nobody can compute.
     """
     supported, unsupported = {}, {}
     for family, metric in GOLD_METRIC_SUPPORT.items():
@@ -290,12 +287,11 @@ def gold_metric_coverage(gold: Dict[str, Any]) -> Dict[str, Any]:
 def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
     """Return the freeze-completeness problems of a supervisor gold file.
 
-    An empty list means the file satisfies every gate the post-hoc evaluator
-    enforces (``FROZEN`` status, evaluator role/namespace, a named reviewer and
-    date, both blind+independent review flags) and carries no leftover DRAFT
-    review markers or unresolved ``by: null`` discharge edges. This validates
-    STRUCTURE only — it never authors or second-guesses gold values (F3), so it
-    imports no checker and reads no prediction. It lets a supervisor confirm a
+    An empty list means the file passes every gate the post-hoc evaluator enforces
+    (``FROZEN`` status, evaluator role/namespace, a named reviewer and date, both
+    blind+independent review flags) and carries no leftover DRAFT review markers or
+    unresolved ``by: null`` discharge edges. Structure only: it authors no gold values
+    (F3), imports no checker and reads no prediction, so a supervisor can confirm a
     freeze is complete before the gold is pooled.
     """
     problems = validate_frozen_envelope(
@@ -374,8 +370,8 @@ def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
             problems.append(f"duplicate discharge edge {key!r}")
         discharge_keys.add(key)
 
-    # A2 is part of the frozen evaluator contract, not an optional reporting
-    # decoration.  The selected bounded chains have explicit category coverage.
+    # A2 is part of the frozen evaluator contract, not optional reporting. The
+    # selected bounded chains have explicit category coverage.
     required_categories = {
         "REQ_SAFE_004": ("invariants",),
         "REQ_SAFE_005": ("timing", "priority"),
@@ -616,11 +612,10 @@ def frozen_gold_gate(
 ) -> list[str]:
     """Legacy convenience check for frozen gold coverage.
 
-    This function still selects chains from live code, so an empty result is *not*
-    authority to pool. It remains for draft/freeze diagnostics and compatibility.
-    The sole pooling decision is
-    :func:`evaluation_readiness.build_evaluation_readiness_manifest`, which binds
-    a frozen experiment configuration, requirement and architecture digests, the
+    This still selects chains from live code, so an empty result is not authority to
+    pool; it is kept for draft/freeze diagnostics and compatibility. The pooling
+    decision is :func:`evaluation_readiness.build_evaluation_readiness_manifest`, which
+    binds a frozen experiment configuration, requirement and architecture digests, the
     complete selected chain/run sets, and blind labels.
     """
     from .ag_chains import select_ag_chains

@@ -195,7 +195,7 @@ def _wait_mode(ctx: SitlTestContext, mode: str, timeout_s: float = 35.0) -> tupl
 
 
 @pytest.mark.sitl
-def test_sitl_recommended_design_flies(sitl_bridge):
+def test_recommended_design_flies(sitl_bridge):
     assert sitl_bridge.launch_sitl(wait_s=8.0)
     mav = None
     try:
@@ -212,7 +212,7 @@ def test_sitl_recommended_design_flies(sitl_bridge):
 
 
 @pytest.mark.sitl
-def test_sitl_parachute_actuates_independent_probe(sitl_bridge):
+def test_parachute_actuates(sitl_bridge):
     assert sitl_bridge.launch_sitl(wait_s=8.0)
     mav = None
     try:
@@ -257,7 +257,7 @@ def test_sitl_parachute_actuates_independent_probe(sitl_bridge):
 
 
 @pytest.mark.sitl
-def test_sitl_battery_failsafe_enters_rtl(sitl_bridge):
+def test_battery_failsafe_enters_rtl(sitl_bridge):
     assert sitl_bridge.launch_sitl(wait_s=8.0)
     mav = None
     try:

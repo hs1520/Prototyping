@@ -1,9 +1,3 @@
-"""All four architecture operators in one multi-objective search.
-
-redundancy (3) x topology (2) x sensing (3) x protocol (3) = 54 architectures.
-Demonstrates the outer engine is operator-agnostic: adding operators just extends
-the `operators=[...]` list and the combinatorial space grows automatically.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,12 +33,10 @@ class Ctx:
 
 
 def _objectives(state, ctx):
-    # capability: redundancy masking + sensing depth + protocol interop
     masked = {"single": 0, "dual": 1, "triple": 1}[state["arbitration"]]
     rel = kofn_reliability(SENSE[state["sensing"]], masked, ctx.channel_reliability)
     interop = PROTO[state["protocol"]][2]
     capability = 0.6 * rel + 0.4 * interop
-    # cost: more channels / sensors / nodes / richer protocol = lower efficiency
     units = (
         {"single": 1, "dual": 2, "triple": 3}[state["arbitration"]]
         + SENSE[state["sensing"]]
@@ -64,7 +56,7 @@ def _make():
     )
 
 
-def test_terminal_states_resolve_all_four_points():
+def test_terminal_states_four_points():
     front = _make().search(iterations=300)
     for state, _ in front.members:
         assert set(state) == {"arbitration", "topology", "sensing", "protocol"}
@@ -79,16 +71,15 @@ def test_front_non_dominated():
                 assert not dominates(b, a)
 
 
-def test_front_spans_capability_cost_tradeoff():
+def test_front_spans_tradeoff():
     front = _make().search(iterations=300)
     caps = [o["capability"] for _, o in front.members]
     costs = [o["cost_efficiency"] for _, o in front.members]
-    # a real trade-off front spans a range on both axes
     assert max(caps) - min(caps) > 0.05
     assert max(costs) - min(costs) > 0.05
 
 
-def test_every_front_member_resolves_to_valid_sysml():
+def test_front_members_valid_sysml():
     from src.simulation.syntax_checker import check_syntax
 
     red, dec, sen, pro = _OPS

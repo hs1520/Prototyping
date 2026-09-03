@@ -1,14 +1,13 @@
-"""Pipeline writers may not manufacture namespace defects.
+"""Pipeline writers do not manufacture namespace defects.
 
-Measured on the 2026-08-30 authoritative draws: 59 of 61 shadowing warnings
-sat directly beside pipeline injection markers — the emitter's bare
-``do action X;`` spelling declared nested members that shadowed the injected
-part-level ``action def X``, and both the assembly state-def injector and the
-planned-behavior materializer re-declared behaviours that already existed in
-the extractor-invisible usage spelling. The cures: typed usage spelling from
-the emitter, spelling-robust presence checks, usage replacement instead of
-sibling injection, and a shadow-fingerprint guard that reverts any injection
-piece that leaves the model with more duplicates or shadows than it had.
+On the 2026-08-30 authoritative draws, 59 of 61 shadowing warnings sat beside
+injection markers: the emitter's bare ``do action X;`` spelling shadowed the
+injected part-level ``action def X``, and both the assembly state-def injector
+and the planned-behavior materializer re-declared behaviours already present in
+the extractor-invisible usage spelling. Cures: typed usage spelling,
+spelling-robust presence checks, usage replacement instead of sibling injection,
+and a shadow-fingerprint guard that reverts a piece leaving more duplicates or
+shadows than before.
 """
 from __future__ import annotations
 
@@ -53,7 +52,7 @@ _OWNER_SHELL = """package M {{
 """
 
 
-def test_materialization_is_shadow_free_and_extractor_visible():
+def test_materialization_shadow_free():
     text, report = materialize_owned_planned_behaviors(
         _OWNER_SHELL.format(body=""), (_behavior(),),
     )
@@ -66,10 +65,11 @@ def test_materialization_is_shadow_free_and_extractor_visible():
     assert not check_syntax(text).has_errors
 
 
-def test_bodied_usage_spelling_is_replaced_not_duplicated():
-    """Draws #1/#4: the behaviour already existed as a part-level bodied
-    usage (`state Name { ... }`); injecting a def beside it double-declared
-    the name. The usage must be replaced by the plan-blessed def."""
+def test_bodied_usage_replaced():
+    """Draws #1/#4: the behaviour already existed as a part-level bodied usage
+    (`state Name { ... }`), so injecting a def beside it double-declared the name.
+    The usage is replaced by the plan-blessed def.
+    """
     usage_body = (
         "        state LockdownBehavior {\n"
         "            state Anything;\n"
@@ -85,7 +85,7 @@ def test_bodied_usage_spelling_is_replaced_not_duplicated():
     assert _shadow_fingerprint(text) == (0, 0)
 
 
-def test_existing_action_declaration_is_not_redeclared():
+def test_existing_action_not_redeclared():
     body = "        action def lockActuator {}\n"
     text, report = materialize_owned_planned_behaviors(
         _OWNER_SHELL.format(body=body), (_behavior(),),
@@ -95,12 +95,14 @@ def test_existing_action_declaration_is_not_redeclared():
     assert _shadow_fingerprint(text) == (0, 0)
 
 
-def test_guard_reverts_a_materialization_that_would_shadow():
-    """Real bypass shape: the owner already declares an ACTION def named like
-    the behaviour (draw #3's cross-kind pair, arriving via materialization) —
-    the state-spelling pre-checks cannot see an action def, and adding the
-    state def creates the same-name sibling pair syside flags. The
-    fingerprint guard must revert the piece and report it."""
+def test_guard_reverts_shadowing():
+    """Bypass shape: the owner already declares an action def named like the behaviour
+    (draw #3's cross-kind pair, arriving via materialization).
+
+    The state-spelling pre-checks cannot see an action def, so adding the state def
+    creates the same-name sibling pair syside flags; the fingerprint guard reverts
+    the piece and reports it.
+    """
     body = "        action def LockdownBehavior {}\n"
     before = _OWNER_SHELL.format(body=body)
     text, report = materialize_owned_planned_behaviors(before, (_behavior(),))
@@ -108,11 +110,10 @@ def test_guard_reverts_a_materialization_that_would_shadow():
     assert "LockdownBehavior" in report["reverted"][0]["behavior"]
     assert "state def LockdownBehavior" not in text
     assert _shadow_fingerprint(text) == _shadow_fingerprint(before)
-    # the miss is loud: conformance reports the behaviour as absent
     assert any("Lockdown" in issue for issue in report["issues"])
 
 
-def test_assembly_injector_skips_usage_spelling_and_reverts_shadowing():
+def test_assembly_injector_reverts():
     inject = AssemblyFinalizer._inject_missing_state_defs
 
     fragment = (
@@ -125,7 +126,6 @@ def test_assembly_injector_skips_usage_spelling_and_reverts_shadowing():
         "}\n"
     )
 
-    # 1. behaviour already present as a bodied usage → skip, no marker
     assembled_usage = (
         "package M {\n"
         "    part def SafetyMonitor {\n"
@@ -139,7 +139,7 @@ def test_assembly_injector_skips_usage_spelling_and_reverts_shadowing():
     assert injected == []
     assert "injected by pipeline" not in result
 
-    # 2. absent → injected, and the bare `do action guardAct;` fragment does
+    # 2. absent -> injected, and the bare `do action guardAct;` fragment does
     #    not collide because no part-level guardAct exists
     assembled_absent = (
         "package M {\n"
@@ -153,10 +153,9 @@ def test_assembly_injector_skips_usage_spelling_and_reverts_shadowing():
     assert "// (injected by pipeline)" in result
     assert _shadow_fingerprint(result) == (0, 0)
 
-    # 3. the part declares `action def GuardBehavior` — a state def of the
-    #    same name is exactly the cross-kind sibling pair the terminal gate
-    #    rejects (draw #3's shape), and no state-spelling pre-check sees an
-    #    action def → the fingerprint guard reverts the piece
+    # 3. the part declares `action def GuardBehavior`; a same-name state def is the
+    #    cross-kind sibling pair the terminal gate rejects, and no state-spelling
+    #    pre-check sees an action def -> the fingerprint guard reverts the piece
     assembled_colliding = (
         "package M {\n"
         "    part def SafetyMonitor {\n"
@@ -169,7 +168,7 @@ def test_assembly_injector_skips_usage_spelling_and_reverts_shadowing():
     assert result == assembled_colliding
 
 
-def test_plan_rejects_behavior_id_colliding_with_owner_action_name():
+def test_plan_rejects_id_collision():
     colliding = (
         _behavior(behavior_id="LockdownBehavior", entry_action="lockActuator"),
         _behavior(behavior_id="OtherBehavior",

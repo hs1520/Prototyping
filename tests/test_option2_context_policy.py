@@ -1,19 +1,12 @@
 """The required-context policy is ablation-derived, and stays that way (§18-Q1).
 
-The intended method was to read required categories off observed failures. When
-the policy was derived (2026-07-26) the archive had none: every archived task was
-COMPLETED except ten BLOCKED by design (§11 routes an integration gap to BLOCKED),
-and no session was REJECTED or STALE. So "required" is given an operational meaning
-instead — remove the category and the task raises, returns nothing, or silently
-returns a worse answer — and every entry in `REQUIRED_CONTEXT_BY_ROLE` is
-re-derived here.
-
-One archived run post-dates that derivation and does carry failures; the archive
-test below pins it as a named, superseded exception rather than letting it
-silently widen the premise.
-
-Without this file the policy would be a list of plausible-sounding categories, and
-§13's required-context-coverage metric would have a denominator nobody can justify.
+Reading required categories off observed failures was not possible: at
+derivation (2026-07-26) every archived task was COMPLETED except ten BLOCKED by
+design, with no REJECTED or STALE session. "Required" therefore means
+operational - remove the category and the task raises, returns nothing, or
+silently returns a worse answer - and every entry in `REQUIRED_CONTEXT_BY_ROLE`
+is re-derived here. One later run does carry failures, pinned by the archive
+test below as a named exception.
 """
 from __future__ import annotations
 
@@ -45,8 +38,7 @@ def _board() -> tuple[Blackboard, str]:
     return board, record.record_id
 
 
-def test_design_agent_cannot_work_without_the_authoritative_source():
-    """failure_mode: raises. The strongest kind — it cannot go unnoticed."""
+def test_design_needs_authoritative_source():
     board, record_id = _board()
     builder = ContextBuilder(board)
 
@@ -69,29 +61,27 @@ def test_design_agent_cannot_work_without_the_authoritative_source():
         )
 
 
-def test_verification_planning_needs_the_committed_slice():
-    """failure_mode: empty_result. It plans nothing rather than planning wrongly."""
+def test_planning_needs_model_slice():
     assert plan_verification(_MODEL)["planned"] == 2
     assert plan_verification("")["planned"] == 0
 
 
-def test_stripping_the_source_text_degrades_the_plan_silently():
-    """failure_mode: silent_degradation — the dangerous one.
+def test_stripped_source_degrades_plan():
+    """failure_mode: silent_degradation.
 
-    The count of planned requirements does not move, so nothing looks wrong, and
-    every method quietly becomes `inspection`. A coverage metric that only asked
-    "was a slice present" would score this 1.0.
+    The planned-requirement count does not move while every method becomes
+    `inspection`, so a metric asking only whether a slice was present scores 1.0.
     """
     full = plan_verification(_MODEL)
     stripped = plan_verification(re.sub(r"doc /\*.*?\*/", "", _MODEL, flags=re.S))
 
-    assert stripped["planned"] == full["planned"]          # nothing failed
-    assert set(full["tier_histogram"]) != {"inspection"}   # the real plan varies
+    assert stripped["planned"] == full["planned"]
+    assert set(full["tier_histogram"]) != {"inspection"}
     assert set(stripped["tier_histogram"]) == {"inspection"}
     assert all(not item["has_doc"] for item in stripped["entries"])
 
 
-def test_every_policy_entry_names_a_measured_failure_mode():
+def test_policy_entries_name_failure_mode():
     for role, requirements in REQUIRED_CONTEXT_BY_ROLE.items():
         assert requirements, role
         for item in requirements:
@@ -102,10 +92,11 @@ def test_every_policy_entry_names_a_measured_failure_mode():
             assert len(item.evidence) > 40, (role, item.category)
 
 
-def test_the_repair_agent_is_blocked_without_resolvable_diagnostics():
-    """failure_mode: blocked. The repair slice is derived from the failure
-    record's element pointers, so an unresolvable diagnostic must fail closed —
-    §11 allows no whole-model fallback — rather than repair a guessed scope."""
+def test_repair_blocked_without_diagnostics():
+    """failure_mode: blocked. The repair slice comes from the failure record's
+    element pointers, so an unresolvable diagnostic fails closed (§11 allows no
+    whole-model fallback).
+    """
     import importlib.util
 
     from src.prototyping.ag_assurance import route_failure_diagnostics
@@ -180,16 +171,13 @@ def test_the_repair_agent_is_blocked_without_resolvable_diagnostics():
     assert no_envelopes == []
 
 
-def test_a_role_without_a_policy_is_not_scored_as_perfect():
-    """A missing denominator must read as "not scored", never as 1.0 — the same
-    rule that makes an arm without an A/G layer `n/a` rather than 0.00."""
+def test_role_without_policy_unscored():
     assert context_coverage({"agent_role": "ArchitectureAgent"}) is None
     assert context_coverage({
         "agent_role": "VerificationAgent",
         "model_context": _MODEL,
         "source_requirements": [_REQ],
     }) == {"required": 2, "present": 2, "missing": []}
-    # and the silent-degradation category is what a slice-only check would miss
     assert context_coverage({
         "agent_role": "VerificationAgent",
         "model_context": "requirement def REQ_SAFE_005 { }",
@@ -198,24 +186,21 @@ def test_a_role_without_a_policy_is_not_scored_as_perfect():
     }
 
 
-# The one archived run allowed to carry failure statuses. Archived 2026-08-11
-# from the since-superseded commit its directory name records (pre-rewrite id):
-# its seed-1 R2 repair loop stormed against undischargeable diagnostics —
-# 3 REJECTED (`target_not_removed_or_regression`) and 14 BLOCKED
-# (`automatic_repair_budget_exhausted`). The corrected implementation's
-# reference batches (`pilot_n6_0c26731_20260821_*`) archive zero REJECTED, so
-# this run stays history, not precedent.
+# The one archived run allowed to carry failure statuses, from 2026-08-11 and the
+# superseded commit its directory name records: its seed-1 R2 repair loop hit
+# undischargeable diagnostics - 3 REJECTED (`target_not_removed_or_regression`)
+# and 14 BLOCKED (`automatic_repair_budget_exhausted`). Reference batches
+# (`pilot_n6_0c26731_20260821_*`) archive zero REJECTED.
 _SUPERSEDED_FAILURE_RUN = "pilot_n6_4bb7544_20260811_2316"
 
 
-def test_the_archive_offered_no_context_failure_to_learn_from():
-    """Pins the premise of the whole method, so a future reader does not assume
-    the policy was derived from failures that never happened.
+def test_archive_has_no_context_failures():
+    """Pins the premise: the policy was not derived from failures, because there were
+    none.
 
-    The premise is dated, not eternal: the policy predates every archived
-    failure. `_SUPERSEDED_FAILURE_RUN` is the single post-derivation run that
-    carries any, and it is pinned by name so the invariant keeps failing for
-    new rejections instead of quietly absorbing them.
+    The policy predates every archived failure. `_SUPERSEDED_FAILURE_RUN` is the one
+    post-derivation run that carries any, pinned by name so new rejections still
+    fail the check.
     """
     import glob
     import json
@@ -237,20 +222,16 @@ def test_the_archive_offered_no_context_failure_to_learn_from():
     assert superseded <= {"COMPLETED", "BLOCKED", "REJECTED"}, superseded
 
 
-def test_the_repair_slice_carries_what_an_omission_fault_needs():
+def test_repair_slice_covers_omission():
     """§17 risk row "context selection omits a necessary dependency", measured.
 
-    The dependency-closed slicer normally closes over symbols the sliced elements
-    reference, which can run in the wrong direction for an omission fault. The
-    actionable trigger diagnostic now names complete-concept signal candidates,
-    so that name may itself pull an existing declaration into the base slice.
-    The invariant is not which of the two context builders found it; it is that
-    the final repair context always carries the declaration and contract facts
-    needed to restore the omitted edge.
-
-    `ag_repair._ag_context_supplement` adds the two A/G facts the diagnostic
-    implies — the contract being realized and the package's declared signals — and
-    nothing else. It is prompt context; the accept gates are untouched.
+    The slicer closes over symbols the sliced elements reference, which runs the
+    wrong way for an omission fault; the trigger diagnostic now names
+    complete-concept signal candidates, which can pull the declaration into the base
+    slice. Invariant: the final repair context carries the declaration and contract
+    facts needed to restore the omitted edge. `ag_repair._ag_context_supplement`
+    adds only those two A/G facts, as prompt context; the accept gates are
+    unchanged.
     """
     import re
 
@@ -301,5 +282,4 @@ def test_the_repair_slice_carries_what_an_omission_fault_needs():
     )
     assert declaration in supplemented
     assert f"requirement def {failure.get('contract')}" in supplemented
-    # and it stays a slice: prompt context, not the whole model
     assert len(supplemented.splitlines()) < len(injured.splitlines()) / 2

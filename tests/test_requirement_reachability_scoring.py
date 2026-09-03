@@ -1,10 +1,3 @@
-"""The evaluator's structural term is trace-first by design: it prefers the
-plan-obligation pass rate over the untraced role heuristic, whose scenario
-count scales with component richness and is not comparable across
-configurations. The plan payload lives on the orchestrator runtime, and the
-refinement engine read it from itself instead, so the requirement-traced
-score was unset on every archived run and the fallback silently governed
-every score. These tests pin the wiring."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -69,22 +62,23 @@ def _engine(runtime):
     return engine
 
 
-def test_plan_payload_is_found_on_the_runtime():
+def test_plan_payload_from_runtime():
     runtime = SimpleNamespace(_active_model_generation_plan=_PLAN)
     assert _engine(runtime)._active_plan_payload() is _PLAN
 
 
-def test_engine_local_payload_takes_precedence():
+def test_engine_payload_precedence():
     runtime = SimpleNamespace(_active_model_generation_plan={"components": []})
     engine = _engine(runtime)
     object.__setattr__(engine, "_active_model_generation_plan", _PLAN)
     assert engine._active_plan_payload() is _PLAN
 
 
-def test_requirement_reachability_is_attached_from_the_runtime_plan():
-    """Replay an archived pilot cell: with the plan read from the runtime,
-    the requirement-traced score must be attached (it was None on every
-    archived run while the engine read the plan from itself)."""
+def test_reachability_attached():
+    """Replay an archived pilot cell: with the plan read from the runtime, the
+    requirement-traced score is attached (None on every archived run while the
+    engine read the plan from itself).
+    """
     import json
     import os
     import pytest

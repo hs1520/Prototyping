@@ -20,15 +20,15 @@ from ..dse.requirement_spec import (
 from .bottom_up import RealizedMetrics
 
 
-# Datasheet realization can decide only quantities that emerge from component choice
-# with ZERO assumed constants (the closure admission rule): hover/endurance from
-# motor+prop bench curves and pack capacity, total mass from component masses, and
-# payload-carrying capacity as the hover-throttle margin at the rated delivery
-# payload (realized metrics are computed carrying it; throttle comes from bench-curve
-# interpolation). Forward-flight speed/range need an assumed drag area, so they are
-# evaluated in a separate lumped forward-flight tier; all unknown future families
-# stay deferred. Attitude/behaviour clauses inside a payload requirement are NOT
-# covered at this tier (flight-dynamics evidence).
+# Datasheet realization decides only quantities that follow from component
+# choice with no assumed constants (the closure admission rule):
+# hover/endurance from motor+prop bench curves and pack capacity, total mass
+# from component masses, and payload capacity as the hover-throttle margin at
+# the rated delivery payload (realized metrics carry it; throttle comes from
+# bench-curve interpolation). Forward-flight speed/range need an assumed drag
+# area, so they go to the separate lumped forward-flight tier; unknown families
+# stay deferred. Attitude/behaviour clauses inside a payload requirement are
+# not covered here (flight-dynamics evidence).
 CLOSURE_SCOPE_FAMILIES = {"time", "mass", "payload"}
 FORWARD_FLIGHT_SCOPE_FAMILIES = {"speed", "range"}
 
@@ -99,13 +99,11 @@ def _structured_targets(requirements: List[str]) -> Tuple[ReqSpec, ...]:
     )
 
 
-# "hover throttle margin of at least 30 percent" → 0.30 (fraction)
 _MARGIN_RE = re.compile(
     r"margin of at least\s+(\d+(?:\.\d+)?)\s*(?:percent|%)", re.IGNORECASE)
 
 
 def _margin_target(requirements: List[str], req_id: str) -> Optional[float]:
-    """Explicit hover-throttle margin stated in the payload requirement, if any."""
     rid = req_id.replace("_", "-")
     for line in requirements or []:
         if rid in str(line).replace("_", "-"):
@@ -149,12 +147,11 @@ def requirement_verdicts(design, metrics: RealizedMetrics,
             realized_value = metrics.total_mass_kg
             met = realized_value <= target
         elif fam == "payload":
-            # Closure-admissible with zero assumed constants: realized metrics are
-            # computed CARRYING the rated delivery payload (payload_split), and
-            # hover throttle comes from bench-curve interpolation. The verdict is
-            # the hover-throttle margin at that load; the estimator has no
-            # throttle model, so estimator_value stays 0.0. Attitude/behaviour
-            # clauses in the same requirement are NOT covered at this tier.
+            # Closure-admissible with no assumed constants: realized metrics carry the
+            # rated delivery payload (payload_split), and hover throttle comes from
+            # bench-curve interpolation. The verdict is the hover-throttle margin at that
+            # load; the estimator has no throttle model, so estimator_value stays 0.0.
+            # Attitude/behaviour clauses in the same requirement are not covered here.
             margin_target = _margin_target(requirements, spec.req_id)
             realized_value = max(0.0, 1.0 - metrics.hover_throttle)
             estimator_value = 0.0

@@ -1,8 +1,7 @@
 """Second student-approved A/G candidate: REQ_SAFE_004 startup inhibit.
 
-Exercises a structurally different property KIND (a Boolean unreachability
-invariant, not a timed chain) and a second safety pattern (STARTUP_INHIBIT),
-which is the strongest available generality evidence for the bounded A/G method.
+Exercises a different property kind - a Boolean unreachability invariant rather
+than a timed chain - and a second safety pattern (STARTUP_INHIBIT).
 """
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ def _model() -> str:
     )
 
 
-def test_startup_inhibit_chain_is_valid_sysml_and_passes_the_ag_trace():
+def test_chain_valid_and_passes():
     model = _model()
     syntax = check_syntax(model)
     assert syntax.has_errors is False
@@ -49,7 +48,7 @@ def test_startup_inhibit_chain_is_valid_sysml_and_passes_the_ag_trace():
     assert len(report.discharge_edges) == 4
 
 
-def test_compound_system_observation_uses_the_published_g_observed_name():
+def test_g_observed_name_required():
     renamed = _model().replace(
         "require constraint g_observed",
         "require constraint sys_observed",
@@ -60,10 +59,10 @@ def test_compound_system_observation_uses_the_published_g_observed_name():
     }
 
 
-def test_trigger_diagnostic_names_an_actionable_full_concept_signal():
-    """A shortened event name is declared and syntactically valid, but it does
-    not identify the assumption concept the bounded realization check consumes.
-    The diagnostic must tell a repair agent the exact convention it missed.
+def test_trigger_diagnostic_names_signal():
+    """A shortened event name is syntactically valid but does not identify the
+    assumption concept the bounded realization check consumes, so the diagnostic
+    names the convention that was missed.
     """
     broken = _model().replace(
         "SensorFailureReportedSignal", "SensorFailureSignal"
@@ -89,7 +88,7 @@ def test_trigger_diagnostic_names_an_actionable_full_concept_signal():
     )
 
 
-def test_trigger_repair_is_authorized_when_a_compatible_signal_already_exists():
+def test_trigger_repair_with_signal():
     """Moving the declaration across the edit boundary changes the route: an
     existing compatible signal lets a behavior-only patch repair the accept edge.
     """
@@ -115,7 +114,7 @@ def test_trigger_repair_is_authorized_when_a_compatible_signal_already_exists():
     assert failure["route"] == "DEPENDENCY_CLOSED_SURGICAL_REPAIR"
 
 
-def test_unreachable_repair_respects_the_same_signal_declaration_boundary():
+def test_unreachable_repair_boundary():
     transition = (
         "        transition onStartupInhibitActiveSignal first preArm "
         "accept StartupInhibitActiveSignal then armingInhibited;\n"
@@ -165,33 +164,30 @@ def test_unreachable_repair_respects_the_same_signal_declaration_boundary():
     )
 
 
-def test_startup_inhibit_pattern_conformance_passes_without_a_timing_criterion():
+def test_pattern_passes_without_timing():
     report = check_ag_graph(extract_ag_graph(_model(), revision=1))
     pattern = check_safety_pattern_conformance(
         extract_ag_graph(_model(), revision=1), report
     )
     assert pattern["verdict"] == "PASS"
     assert {c["pattern"] for c in pattern["cases"]} == {"STARTUP_INHIBIT"}
-    # the whole point: a startup invariant conforms with no timing obligation
     assert all(c["timing_criterion_present"] is False for c in pattern["cases"])
     assert all(c["status"] == "PASS" for c in pattern["cases"])
 
 
-def test_the_two_chains_use_two_distinct_patterns():
+def test_two_distinct_patterns():
     assert REQ_SAFE_005_CHAIN.pattern == "TRIGGERED_TIMED_FAILSAFE_RESPONSE"
     assert REQ_SAFE_004_CHAIN.pattern == "STARTUP_INHIBIT"
-    # both are selected when both requirements are present in a run
     chosen = select_ag_chains([
         "REQ-SAFE-005: deploy parachute", "REQ-SAFE-004: prevent arming",
     ])
     assert {c.source_requirement for c in chosen} == {"REQ_SAFE_005", "REQ_SAFE_004"}
 
 
-def test_startup_inhibit_pattern_needs_real_topology_not_a_label():
-    # Strip the realizing behavior: pattern conformance must FAIL (a pattern is
-    # never a PASS by selection alone, §16), and routing flags the model faults.
+def test_pattern_needs_topology():
+    # Strip the realizing behavior: pattern conformance fails (selection alone is
+    # not a PASS, §16) and routing flags the model faults.
     model = _model()
-    # remove every realization edge so no behavior is reachable
     broken = "\n".join(
         line for line in model.splitlines()
         if "dependency realize" not in line
@@ -208,7 +204,7 @@ def test_startup_inhibit_pattern_needs_real_topology_not_a_label():
     assert len(routes["failures"]) >= 1
 
 
-def test_startup_inhibit_latch_resets_only_on_a_new_power_cycle():
+def test_latch_resets_on_power_cycle():
     broken = _model().replace(
         "accept PowerCycleSignal then poweredOff;",
         "accept SensorFailureReportedSignal then poweredOff;",
@@ -228,8 +224,7 @@ def test_startup_inhibit_latch_resets_only_on_a_new_power_cycle():
     assert latch["invariant_preserved"] is False
 
 
-def test_startup_inhibit_reset_requires_a_completed_passing_self_test():
-    """Power-cycle reset alone must not clear a previously latched inhibit."""
+def test_reset_requires_self_test():
     model = _model()
     mutations = (
         (
@@ -254,7 +249,7 @@ def test_startup_inhibit_reset_requires_a_completed_passing_self_test():
         }
 
 
-def test_startup_inhibit_checker_rejects_unauthorised_direct_transition():
+def test_rejects_unauthorised_transition():
     approved = (
         "transition resetAfterPowerCycle first startupInhibited "
         "accept PowerCycleSignal then poweredOff;"
@@ -278,7 +273,7 @@ def test_startup_inhibit_checker_rejects_unauthorised_direct_transition():
     assert "unsatisfied:" in diagnostic.message
 
 
-def test_startup_inhibit_checker_requires_each_approved_invariant_not_just_a_label():
+def test_requires_each_invariant():
     broken = "\n".join(
         line for line in _model().splitlines()
         if "inv__SAFE004_LATCH_EFFECT" not in line
@@ -296,7 +291,7 @@ def test_startup_inhibit_checker_requires_each_approved_invariant_not_just_a_lab
     assert "missing_role:" in diagnostic.message
 
 
-def test_startup_inhibit_runtime_checker_requires_invariant_semantics():
+def test_requires_invariant_semantics():
     without_invariants = "\n".join(
         line for line in _model().splitlines()
         if "require constraint inv__" not in line
@@ -310,7 +305,7 @@ def test_startup_inhibit_runtime_checker_requires_invariant_semantics():
     }
 
 
-def test_invariant_provenance_constraint_must_live_on_the_system_contract():
+def test_invariant_on_system_contract():
     model = _model()
     invariant_line = next(
         line for line in model.splitlines()

@@ -1,9 +1,3 @@
-"""Integration test: RedundantizeComponent wired into multi-objective MCTS.
-
-Demonstrates the bilevel outer layer end-to-end:
-  operator (variation resolution) → MO-MCTS → Pareto front,
-with every front member's resolved SysML validated through Syside.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -22,7 +16,6 @@ class Ctx:
 
 
 def _objectives(state, ctx):
-    """Two maximised objectives from the resolved redundancy choice."""
     variant = state["arbitration"]
     channels = CATALOG[variant][1]
     return {
@@ -43,29 +36,27 @@ def _make() -> MultiObjectiveMCTS:
     )
 
 
-def test_hypervolume_sweep_is_correct():
+def test_hypervolume_sweep():
     arc = ParetoArchive(["a", "b"], [0.0, 0.0])
     arc.add({"x": "1"}, {"a": 0.85, "b": 1.0})
     arc.add({"x": "2"}, {"a": 0.9775, "b": 0.667})
     arc.add({"x": "3"}, {"a": 0.99663, "b": 0.333})
-    # strips: 0.85*1.0 + 0.1275*0.667 + 0.01913*0.333 ≈ 0.9414
     assert abs(arc.hypervolume() - 0.9414) < 1e-2
 
 
 def test_dominates():
     assert dominates([1.0, 1.0], [0.5, 0.5])
-    assert not dominates([1.0, 0.4], [0.5, 0.5])  # trade-off → no domination
+    assert not dominates([1.0, 0.4], [0.5, 0.5])
 
 
-def test_front_contains_all_three_variants():
+def test_front_has_three_variants():
     mcts = _make()
     front = mcts.search(iterations=50)
     variants = {s["arbitration"] for s, _ in front.members}
-    # single (cheap, low reliability), dual, triple (reliable, costly) — all on the front
     assert variants == {"single", "dual", "triple"}
 
 
-def test_front_is_non_dominated():
+def test_front_non_dominated():
     mcts = _make()
     front = mcts.search(iterations=50)
     vecs = [(o["reliability"], o["cost_efficiency"]) for _, o in front.members]
@@ -75,8 +66,7 @@ def test_front_is_non_dominated():
                 assert not dominates(b, a), "front member is dominated"
 
 
-def test_every_front_member_resolves_to_valid_sysml():
-    """Valid-by-construction holds inside the search loop, not just in unit tests."""
+def test_front_members_valid_sysml():
     op = RedundantizeComponent()
     mcts = _make()
     front = mcts.search(iterations=50)
@@ -86,14 +76,13 @@ def test_every_front_member_resolves_to_valid_sysml():
         assert not result.has_errors, result.short_summary()
 
 
-def test_hypervolume_positive_after_search():
+def test_hypervolume_positive():
     mcts = _make()
     front = mcts.search(iterations=50)
     assert front.hypervolume() > 0.0
 
 
-def test_infeasible_variants_pruned_when_few_sensors():
-    """With 1 sensor, dual/triple are infeasible → front collapses to single."""
+def test_infeasible_variants_pruned():
     op = RedundantizeComponent()
     mcts = MultiObjectiveMCTS(
         operators=[op],

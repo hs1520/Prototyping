@@ -1,8 +1,8 @@
 """Isolated, atomic artifact bundles for authoritative pipeline runs.
 
-Scientific runs never write shared filenames.  A writer holds the repository-wide
-lock, builds one run directory, finalizes it, and only then atomically advances the
-``latest`` symlink.  Incomplete runs remain inspectable but can never become latest.
+A writer holds the repository-wide lock, builds one run directory, finalizes it,
+and only then atomically advances the ``latest`` symlink. Runs write no shared
+filenames, and an incomplete run stays inspectable but does not become latest.
 """
 from __future__ import annotations
 
@@ -41,13 +41,7 @@ def _configured_artifact_dir(value: str, *, variable: str) -> Path:
 
 
 def output_dir() -> Path:
-    """Resolve the writable artifact directory for a runner.
-
-    Authoritative child processes always receive ``PROTOTYPING_OUTPUT_DIR`` and
-    therefore write into their open run bundle. Ad-hoc/standalone commands write
-    below ``examples/output/scratch``. The output root itself is never a writable
-    artifact bundle and legacy files found there have no authority.
-    """
+    """Resolve the writable artifact directory for a runner."""
     configured = os.environ.get(OUTPUT_DIR_ENV)
     if configured:
         return _configured_artifact_dir(configured, variable=OUTPUT_DIR_ENV)
@@ -57,8 +51,8 @@ def output_dir() -> Path:
 def latest_output_dir() -> Path:
     """Resolve and validate the latest published bundle for read-only consumers.
 
-    This deliberately fails closed. Falling back to the output root would make a
-    stale legacy file indistinguishable from a published artifact.
+    Fails closed: falling back to the output root would make a stale legacy file
+    indistinguishable from a published artifact.
     """
     latest = output_root() / LATEST_NAME
     if not latest.exists():
@@ -78,9 +72,9 @@ def latest_output_dir() -> Path:
 def input_dir() -> Path:
     """Resolve the artifact input authority for a runner.
 
-    An explicit input wins. Authoritative child processes traditionally pass one
-    open bundle as both input and output, so ``PROTOTYPING_OUTPUT_DIR`` remains the
-    second choice. Standalone readers otherwise consume only published ``latest``.
+    An explicit input wins; authoritative child processes pass one open bundle as both
+    input and output, so ``PROTOTYPING_OUTPUT_DIR`` is second. Otherwise standalone
+    readers consume published ``latest`` only.
     """
     configured = os.environ.get(INPUT_DIR_ENV)
     if configured:

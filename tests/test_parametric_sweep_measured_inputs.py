@@ -1,15 +1,12 @@
 """The parametric sweep supplies measured inputs instead of demanding literals.
 
-Measured conflict this pins (authoritative run 00e4d333): the sweep required
-a numeric initial value for the constrained attribute, while the typed
-semantic binding convention requires exactly those runtime attributes to be
-initialised from a reference chain into the measurement port — never a local
-literal.  Every binding-bound ALWAYS constraint therefore failed behaviour
-execution mechanically ("Cannot sweep 'currentX': no initial value found",
-six identical failures).  The sweep now recognises reference-chain
-initialisers as measured inputs and synthesises the start value inside the
-valid region — recorded, never silent — while a genuinely missing
-initialiser on a non-measured attribute remains the hard failure it was.
+The sweep required a numeric initial value while the typed binding convention
+initialises those runtime attributes from a reference chain into the measurement
+port, so every binding-bound ALWAYS constraint failed behaviour execution
+("Cannot sweep 'currentX': no initial value found", six times in run 00e4d333).
+Reference-chain initialisers now count as measured inputs and the start value is
+synthesised inside the valid region and recorded; a missing initialiser on a
+non-measured attribute stays a hard failure.
 """
 from __future__ import annotations
 
@@ -48,7 +45,7 @@ def _model(initializer_line: str) -> str:
 }}"""
 
 
-def test_reference_chain_initialiser_is_swept_as_a_measured_input():
+def test_reference_chain_swept():
     scenarios = _constraint_results(_model(
         "attribute currentCruiseAirspeed : Real = airspeed.payload.cruiseAirspeed;"
     ))
@@ -60,7 +57,7 @@ def test_reference_chain_initialiser_is_swept_as_a_measured_input():
     assert any("measured input" in line for line in scenario.timeline)
 
 
-def test_a_missing_initialiser_on_a_plain_attribute_still_fails():
+def test_missing_initialiser_fails():
     scenarios = _constraint_results(_model(
         "attribute currentCruiseAirspeed : Real;"
     ))
@@ -71,7 +68,7 @@ def test_a_missing_initialiser_on_a_plain_attribute_still_fails():
     assert any("no initial value" in v for v in scenario.violations)
 
 
-def test_a_literal_initialiser_keeps_the_original_semantics():
+def test_literal_initialiser_kept():
     scenarios = _constraint_results(_model(
         "attribute currentCruiseAirspeed : Real = 20.0;"
     ))
@@ -82,7 +79,7 @@ def test_a_literal_initialiser_keeps_the_original_semantics():
     assert "measured_input_start_synthesized" not in scenario.tags
 
 
-def test_archived_models_execute_every_constraint_scenario():
+def test_archived_models_all_execute():
     fixtures = {
         "00e4d333": (
             _REPO / "examples/output/runs"

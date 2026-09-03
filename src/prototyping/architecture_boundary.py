@@ -2,14 +2,13 @@
 
 Freeze-review finding (round 1, P1): guarantee ownership cannot be derived from the
 stakeholder requirement text alone, because the component decomposition
-(`propulsionMonitor`, `armingAuthority`, …) is a **design decision**, not part of
-the requirement. So the architecture is frozen as its own authoritative artifact,
-with full provenance, and the evaluator gold cites its digest. Owner-allocation
-gold then measures **conformance to an approved architecture**; it does not, on its
-own, become an architecture-generation accuracy metric.
+(`propulsionMonitor`, `armingAuthority`, ...) is a design decision. So the
+architecture is frozen as its own authoritative artifact, with full provenance, and
+the evaluator gold cites its digest. Owner-allocation gold then measures conformance
+to an approved architecture, not architecture-generation accuracy.
 
-Like the gold this is DRAFT until a supervisor **independently** reviews and
-freezes it. It authors nothing from the runtime checker (F3): it imports neither
+Like the gold, this is DRAFT until a supervisor independently reviews and freezes
+it. It authors nothing from the runtime checker (F3): it imports neither
 ``ag_extractor`` nor ``ag_contracts``.
 """
 from __future__ import annotations
@@ -34,7 +33,7 @@ _SCHEMA_VERSION = "1.0"
 def architecture_boundary_digest(boundary: Mapping[str, Any]) -> str:
     """Digest the boundary content, excluding the self-referential digest field.
 
-    The gold cites this digest, so it must be stable and independent of the
+    The gold cites this digest, so it stays stable and independent of the
     ``artifact_digest`` slot itself.
     """
     return canonical_artifact_digest(boundary)
@@ -45,11 +44,11 @@ def build_architecture_boundary_draft(
 ) -> Dict[str, Any]:
     """A review-ready DRAFT architecture boundary for one chain.
 
-    Component ids, interfaces (consumes/produces/trigger), and owner→guarantee
-    allocations are pre-filled from the student-approved decomposition candidate
-    so the reviewer
-    confirms rather than transcribes; each component's *responsibility* is left for
-    the reviewer to state as a design decision (not from the stakeholder text).
+    Component ids, interfaces (consumes/produces/trigger) and owner->guarantee
+    allocations are pre-filled from the approved decomposition candidate so the
+    reviewer confirms rather than transcribes; each component's responsibility is
+    left for the reviewer to state as a design decision, not taken from the
+    stakeholder text.
     """
     components = [
         {
@@ -106,11 +105,11 @@ def build_architecture_boundary_draft(
 def validate_frozen_boundary(boundary: Mapping[str, Any]) -> List[str]:
     """Return the freeze-completeness problems of an architecture-boundary file.
 
-    Empty ⇒ the file is a complete, self-consistent frozen boundary: evaluator
-    role/namespace, FROZEN status, a named reviewer + date + independent-review
-    flag, every component's responsibility stated, non-empty allocations, no
-    leftover review markers, and an ``artifact_digest`` that matches the content.
-    Structure only — it never authors or second-guesses the architecture (F3).
+    Empty ⇒ a complete, self-consistent frozen boundary: evaluator role/namespace,
+    FROZEN status, a named reviewer + date + independent-review flag, every component's
+    responsibility stated, non-empty allocations, no leftover review markers, and an
+    ``artifact_digest`` that matches the content. Structure only; it authors no
+    architecture (F3).
     """
     problems = validate_frozen_envelope(
         boundary,

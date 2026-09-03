@@ -5,29 +5,25 @@ import re
 
 
 # ---------------------------------------------------------------------------
-# SysML v2 standard library types — implicitly available in all conformant
-# tools (SysML v2 Pilot, Cameo, Rhapsody).  syside flags these as undefined
-# because it doesn't inject them automatically, but they are NOT real model
-# errors in practice.
+# SysML v2 standard library types, implicitly available in conformant tools
+# (SysML v2 Pilot, Cameo, Rhapsody). syside does not inject them and flags
+# them as undefined; they are false positives.
 # ---------------------------------------------------------------------------
 
 _STDLIB_TYPE_NAMES = {
-    # ScalarValues (KerML)
     "Real", "Integer", "Boolean", "String", "Rational", "Complex",
     "ScalarValue", "NumericalValue",
-    # ISQ / SI units.  Only names that actually exist in the standard library
-    # belong here: suppressing a nonexistent name (AngleValue, VelocityValue,
-    # VoltageValue, CurrentValue, ChargeValue once sat here) hides a REAL
-    # reference error from the repair loop, so it survives silently until the
-    # unfiltered terminal qualification fails the run.  Membership is pinned by
-    # tests/test_stdlib_vocabulary.py.
+    # ISQ / SI units. Only names that exist in the standard library belong here:
+    # suppressing a nonexistent one (AngleValue, VelocityValue, VoltageValue,
+    # CurrentValue and ChargeValue once sat here) hides a reference error from the
+    # repair loop until terminal qualification fails the run. Membership is pinned
+    # by tests/test_stdlib_vocabulary.py.
     "ISQ", "SI", "LengthValue", "MassValue", "TimeValue", "DurationValue",
     "SpeedValue", "AccelerationValue", "ForceValue",
     "EnergyValue", "PowerValue", "FrequencyValue", "AngularMeasureValue",
     "PlaneAngleValue", "ThermodynamicTemperatureValue", "TemperatureValue",
     "ElectricPotentialValue", "ElectricCurrentValue", "ElectricChargeValue",
     "DimensionOneValue",
-    # SysML standard packages
     "SysML", "KerML", "ScalarValues", "Quantities",
     "Occurrences", "Transfers", "Connections",
     "Requirements", "Constraints", "Parts", "Ports",
@@ -36,64 +32,41 @@ _STDLIB_TYPE_NAMES = {
 }
 
 # SI / ISQ unit feature names used in attribute definitions like `= 15.0 [m/s]`
-# syside reports these as "No Feature named 'X' found." — also false positives.
+# syside reports these as "No Feature named 'X' found." - also false positives.
 _STDLIB_UNIT_NAMES = {
-    # Length / area / volume
     "m", "km", "cm", "mm", "um", "nm",
-    # Time
     "s", "ms", "us", "ns", "min", "h", "hr",
-    # Mass
     "kg", "g", "mg",
-    # Angle
     "deg", "rad", "grad",
-    # Frequency
     "Hz", "kHz", "MHz", "GHz",
-    # Speed
     "m_s", "km_h", "knot",
-    # Acceleration
     "m_s2",
-    # Force / pressure
     "N", "kN", "Pa", "kPa", "MPa", "bar",
-    # Energy / power
     "J", "kJ", "W", "kW", "MW",
-    # Voltage / current / charge
     "V", "mV", "kV", "A", "mA", "C", "Ah",
-    # Temperature  (Cel = UCUM/SI symbol for degree Celsius — the SI library's
-    # canonical name; degC/degF are LLM-friendly aliases)
+    # Temperature (Cel = the SI library's canonical degree-Celsius symbol;
+    # degC/degF are aliases)
     "K", "degC", "Cel", "degF",
-    # Energy / charge capacity & rotation (common in drone/EV domains)
     "Wh", "kWh", "mAh", "rpm", "Nm",
-    # Sound
     "dB", "dBA",
-    # Percentage / dimensionless
     "pct", "percent",
-    # Data / information units (LLM commonly annotates comms attributes with these)
     "bit", "bits", "byte", "bytes", "B",
     "kbit", "Kbit", "Mbit", "Gbit",
     "kB", "MB", "GB", "TB",
     "bps", "kbps", "Kbps", "Mbps", "Gbps", "baud",
-    # Misc
     "G", "g_force", "lx", "lm", "cd",
-    # Compound unit names that LLM might use
     "mm_hr", "m_s2", "rad_s",
-    # SysML unit packages
     "SI", "ISQ",
     # Archived/best-effort callers still parse legacy state spellings. Evidence
-    # and terminal paths always pass ``filter_stdlib_diagnostics=False`` and
-    # therefore cannot use this compatibility allowance.
+    # and terminal paths pass ``filter_stdlib_diagnostics=False``, so they do not
+    # get this allowance.
     "initial", "final", "done", "accept",
 }
 
 
 def is_stdlib_sema_error(message: str) -> bool:
-    """
-    Return True if this sema error is purely about a missing standard-library
-    type or unit — i.e. a false positive caused by syside's strict parsing mode.
-
-    Patterns matched:
-      "No Type named '<X>' found."      — stdlib type (Real, Boolean …)
-      "No Namespace named '<X>' found." — stdlib package (SI, ISQ …)
-      "No Feature named '<X>' found."   — SI unit symbol (m, Hz, deg …)
+    """Return True if the sema error only reports a missing standard-library type
+    or unit - a false positive from syside's strict parsing mode.
     """
     m = re.search(r"No (?:Type|Namespace|Feature) named '([^']+)' found", message)
     if not m:

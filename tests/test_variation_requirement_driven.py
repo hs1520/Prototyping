@@ -1,10 +1,9 @@
 """Requirement-driven variant proposal for the variation-DSE path.
 
-When requirements carry quantified targets, _propose_variants must (a) skip
-components that don't drive a quantified requirement, (b) emit variant metrics
-under canonical family attribute names so the domain objective parses them back
-to the same family — making the Pareto front discriminate (the failure mode that
-collapsed the front: variant points whose attributes didn't map to any family).
+With quantified targets, _propose_variants skips components that drive no
+quantified requirement and emits variant metrics under canonical family
+attribute names, so the domain objective parses them back to the same family.
+Variant points whose attributes mapped to no family collapsed the Pareto front.
 """
 from __future__ import annotations
 
@@ -20,7 +19,7 @@ from src.simulation.syntax_checker import check_syntax
 _REQS = [
     "REQ-PERF-001: cruise at least 18 m/s.",
     "REQ-PERF-002: endurance at least 30 min.",
-    "REQ-FUNC-003: navigate autonomously.",  # no numeric target
+    "REQ-FUNC-003: navigate autonomously.",
 ]
 
 
@@ -43,7 +42,7 @@ def _relevant_chat(prompt):
     return json.dumps({"relevant": False})
 
 
-def test_relevant_component_emits_design_input_attrs():
+def test_relevant_component_emits_attrs():
     spec = Orchestrator._propose_variants(
         _orch(_relevant_chat), "propulsionSystem", "Propulsion", _REQS
     )
@@ -51,20 +50,20 @@ def test_relevant_component_emits_design_input_attrs():
     rationale, reqs, variants = spec
     assert reqs == ["REQ-PERF-001", "REQ-PERF-002"]
     assert len(variants) == 2
-    # battery CAPACITY is inner-BO optimized → NOT variant-declared; cells/payload are
+    # battery capacity is inner-BO optimized, not variant-declared; cells/payload are
     assert "batteryCapacityMah" not in variants[0].attrs
     assert "batteryCells" in variants[0].attrs and "massKg" in variants[0].attrs
-    assert "enduranceMinutes" not in variants[0].attrs  # emergent → derived, not declared
+    assert "enduranceMinutes" not in variants[0].attrs
 
 
-def test_irrelevant_component_is_skipped():
+def test_irrelevant_component_skipped():
     spec = Orchestrator._propose_variants(
         _orch(_relevant_chat), "flightController", "FC", _REQS
     )
-    assert spec is None  # relevant:false → not made into a variation point
+    assert spec is None
 
 
-def test_satisfies_must_reference_real_requirement_ids():
+def test_satisfies_needs_real_req_ids():
     def bogus(_):
         return json.dumps({
             "relevant": True, "rationale": "x", "satisfies": ["REQ-NOPE-999"],
@@ -74,7 +73,7 @@ def test_satisfies_must_reference_real_requirement_ids():
     assert Orchestrator._propose_variants(_orch(bogus), "prop", "P", _REQS) is None
 
 
-def test_unbacked_voltage_families_are_rejected_before_dse():
+def test_unbacked_voltage_rejected():
     def invented(_):
         return json.dumps({
             "relevant": True,
@@ -91,7 +90,7 @@ def test_unbacked_voltage_families_are_rejected_before_dse():
     ) is None
 
 
-def test_no_quantified_targets_dispatches_to_generic():
+def test_no_targets_dispatch_generic():
     called = {}
     fake = SimpleNamespace(
         llm=SimpleNamespace(chat=lambda p: "{}"),
@@ -101,7 +100,7 @@ def test_no_quantified_targets_dispatches_to_generic():
     assert called.get("hit") == ("comp", "T")
 
 
-def test_aligned_variants_yield_discriminating_front():
+def test_aligned_variants_yield_front():
     spec = Orchestrator._propose_variants(
         _orch(_relevant_chat), "propulsionSystem", "Propulsion", _REQS
     )
@@ -116,18 +115,15 @@ def test_aligned_variants_yield_discriminating_front():
     text, ok = introduce_variation(model, "propulsionSystem", "Propulsion",
                                    variants, rationale, reqs)
     assert ok and not check_syntax(text).has_errors
-    assert objective_names(_REQS) == ["time_sat", "cost_efficiency"]   # speed is settable (L1)
+    assert objective_names(_REQS) == ["time_sat", "cost_efficiency"]
     vps = admitted(parse_variation_points(text))[0]
     endur = architecture_objectives(vps, {"propulsionSystem": "endur"}, text, _REQS)
     fast = architecture_objectives(vps, {"propulsionSystem": "fast"}, text, _REQS)
-    # estimator-derived endurance-vs-cost trade-off → neither dominates the other
     assert endur["time_sat"] > fast["time_sat"]
     assert fast["cost_efficiency"] > endur["cost_efficiency"]
 
 
-def test_exploration_summary_is_self_consistent(capsys):
-    """Front-size line must agree with the top-N list, and the evaluated count
-    must come from the diagnostics the variation path records (not 0)."""
+def test_summary_self_consistent(capsys):
     from src.dse.design_space import DesignSpace, DesignConfiguration
 
     ds = DesignSpace(name="V")
@@ -142,26 +138,24 @@ def test_exploration_summary_is_self_consistent(capsys):
     ds.objective_weights = {"iterations_run": 8.0, "configurations_evaluated": 8.0, "early_stopped": 0.0}
     Orchestrator._print_exploration_summary(ds, front[0], front)
     out = capsys.readouterr().out
-    assert "Explored 8 configurations" in out          # from diagnostics, not 0
-    assert "Pareto front size: 2" in out               # agrees with the 2 listed
+    assert "Explored 8 configurations" in out
+    assert "Pareto front size: 2" in out
     assert "top 2" in out
 
 
-def test_search_budget_scales_with_variant_density():
-    """Denser variant sets (more variants per point) must enlarge the search
-    budget, so wider discrete spaces aren't under-explored."""
+def test_budget_scales_with_density():
     from src.dse.variation_dse import VariationOperator
 
     class _P:
         def __init__(self, n): self.variant_names = [f"v{i}" for i in range(n)]
-    sparse = [VariationOperator(_P(2)), VariationOperator(_P(2))]   # 4 choices
-    dense = [VariationOperator(_P(5)), VariationOperator(_P(5))]    # 10 choices
+    sparse = [VariationOperator(_P(2)), VariationOperator(_P(2))]
+    dense = [VariationOperator(_P(5)), VariationOperator(_P(5))]
     b_sparse = max(60, 30 * sum(len(o.variants) for o in sparse))
     b_dense = max(60, 30 * sum(len(o.variants) for o in dense))
     assert b_dense > b_sparse
 
 
-def test_out_of_bound_variants_are_filtered():
+def test_out_of_bound_variants_filtered():
     import json
     reqs = ["REQ-FUNC-003: payload gross mass up to 2.5 kg.",
             "REQ-PERF-002: endurance at least 25 minutes."]
@@ -170,7 +164,7 @@ def test_out_of_bound_variants_are_filtered():
             "satisfies": ["REQ-FUNC-003", "REQ-PERF-002"],
             "variants": [{"name": "a", "design": {"payload_mass_kg": 2.0}},
                          {"name": "b", "design": {"payload_mass_kg": 2.5}},
-                         {"name": "c", "design": {"payload_mass_kg": 10.0}},   # over-spec
-                         {"name": "d", "design": {"payload_mass_kg": 25.0}}]})  # over-spec
+                         {"name": "c", "design": {"payload_mass_kg": 10.0}},
+                         {"name": "d", "design": {"payload_mass_kg": 25.0}}]})
     spec = Orchestrator._propose_variants(_orch(chat), "payloadSystem", "Payload", reqs)
-    assert [v.name for v in spec[2]] == ["a", "b"]   # >2.5kg variants dropped
+    assert [v.name for v in spec[2]] == ["a", "b"]

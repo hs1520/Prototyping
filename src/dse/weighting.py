@@ -1,20 +1,13 @@
 """Requirement-traceable weighting + weight-simplex sensitivity (pain point A).
 
-The search itself is weight-free (it returns a Pareto front). Weights enter only
-to *recommend* one design from the front. Two moves remove the subjectivity the
-old hardcoded 0.40/0.30/0.15/0.15 had:
-
-  1. ``derive_weights`` — objective weights come from the requirement set's own
-     composition (category counts x priority), so every weight is traceable to the
-     input, not chosen by hand.
-
-  2. ``sensitivity`` — we do not claim one weight vector is "correct". We sample
-     the whole weight simplex (Dirichlet) and report how robust a recommendation
-     is: the fraction of weight space in which it wins, and how often each design
-     would be selected. This is the defensible answer to "where do your weights
-     come from?".
-
-Pure-Python (no numpy). See docs/DSE_REDESIGN.md §三-A.
+The search is weight-free (it returns a Pareto front); weights enter only to
+recommend one design from the front, replacing the hardcoded
+0.40/0.30/0.15/0.15. ``derive_weights`` takes objective weights from the
+requirement set's own composition (category counts x priority), so every weight
+traces to the input. ``sensitivity`` samples the whole weight simplex (Dirichlet)
+and reports how robust a recommendation is: the fraction of weight space in which
+it wins, and how often each design would be selected. Pure-Python (no numpy). See
+docs/DSE_REDESIGN.md §三-A.
 """
 from __future__ import annotations
 
@@ -26,11 +19,6 @@ from typing import Dict, List, Optional, Sequence, Tuple
 Objectives = Dict[str, float]
 State = Dict[str, str]
 FrontMember = Tuple[State, Objectives]
-
-
-# ---------------------------------------------------------------------------
-# 1. Requirement-traceable weights
-# ---------------------------------------------------------------------------
 
 
 def derive_weights(
@@ -46,8 +34,8 @@ def derive_weights(
                                    "cost_efficiency": ["CONS"]}
     ``priorities``           optional per-category priority multiplier (default 1).
 
-    The result is traceable: a project with more SAFE requirements gets a higher
-    reliability weight *because of its requirements*, not by fiat.
+    Traceable: a project with more SAFE requirements gets a higher reliability weight
+    because of its requirements.
     """
     priorities = priorities or {}
     raw: Dict[str, float] = {}
@@ -58,9 +46,9 @@ def derive_weights(
     return _normalise(raw, len(objective_categories))
 
 
-# severity -> per-requirement importance (Minor ≈ a baseline requirement of 1.0;
-# nonlinear so one catastrophic dominates many minor ones — a documented policy,
-# itself a candidate sensitivity axis like the weight simplex).
+# severity -> per-requirement importance (Minor ~ a baseline requirement of 1.0;
+# nonlinear so one catastrophic dominates many minor ones). Policy, and itself a
+# candidate sensitivity axis like the weight simplex.
 from .requirements_profile import RequirementProfile, Severity  # noqa: E402
 
 SEVERITY_IMPORTANCE: Dict[Severity, float] = {
@@ -73,7 +61,6 @@ SEVERITY_IMPORTANCE: Dict[Severity, float] = {
 
 
 def _safe_mass(profile: RequirementProfile, default_severity: Severity) -> float:
-    """Severity-weighted mass of the SAFE requirements (not their count)."""
     mass = sum(SEVERITY_IMPORTANCE[s] for s in profile.safe_severities)
     mass += profile.unclassified_safe * SEVERITY_IMPORTANCE[default_severity]
     return mass
@@ -82,7 +69,7 @@ def _safe_mass(profile: RequirementProfile, default_severity: Severity) -> float
 def _normalise(raw: Dict[str, float], n: int) -> Dict[str, float]:
     total = sum(raw.values())
     if total <= 0:
-        return {o: 1.0 / n for o in raw}  # no signal → uniform, by construction
+        return {o: 1.0 / n for o in raw}
     return {o: v / total for o, v in raw.items()}
 
 
@@ -92,14 +79,14 @@ def derive_weights_from_profile(
     priorities: Optional[Dict[str, float]] = None,
     default_severity: Severity = Severity.MAJOR,
 ) -> Dict[str, float]:
-    """Severity-weighted objective weights (the principled upgrade to count-based).
+    """Severity-weighted objective weights (the upgrade to count-based).
 
-    The SAFE category contributes its *severity mass* (Σ importance per hazard
-    severity) rather than its count, so a single Catastrophic requirement outweighs
-    many Minor ones. Other categories contribute their count (baseline 1 each).
+    The SAFE category contributes its severity mass (Σ importance per hazard
+    severity) rather than its count, so one Catastrophic requirement outweighs many
+    Minor ones; other categories contribute their count (baseline 1 each).
     Unclassified SAFE requirements use ``default_severity`` (flagged via
-    ``profile.unclassified_safe``). Mirrors the redundancy rule's severity input,
-    but aggregates by SUM (overall safety burden) rather than MAX (worst hazard).
+    ``profile.unclassified_safe``). Same severity input as the redundancy rule, but
+    aggregated by SUM (overall safety burden) rather than MAX (worst hazard).
     """
     priorities = priorities or {}
     raw: Dict[str, float] = {}
@@ -116,17 +103,11 @@ def derive_weights_from_profile(
     return _normalise(raw, len(objective_categories))
 
 
-# ---------------------------------------------------------------------------
-# 2. Scalarisation + recommendation
-# ---------------------------------------------------------------------------
-
-
 def _weighted_sum(obj: Objectives, w: Dict[str, float]) -> float:
     return sum(w.get(k, 0.0) * v for k, v in obj.items())
 
 
 def _chebyshev(obj: Objectives, w: Dict[str, float], ideal: Objectives) -> float:
-    # augmented Chebyshev (maximisation): higher is better
     terms = [w.get(k, 0.0) * (ideal[k] - obj.get(k, 0.0)) for k in ideal]
     aug = 0.001 * sum(w.get(k, 0.0) * obj.get(k, 0.0) for k in ideal)
     return -max(terms) + aug
@@ -149,17 +130,12 @@ def recommend(
     raise ValueError(f"unknown method {method!r}")
 
 
-# ---------------------------------------------------------------------------
-# 3. Weight-simplex sensitivity
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class SensitivityReport:
     objective_names: List[str]
-    selection_frequency: Dict[str, float]   # label -> fraction of simplex it wins
+    selection_frequency: Dict[str, float]
     nominal_label: str
-    nominal_robustness: float               # fraction of simplex the nominal wins
+    nominal_robustness: float
     n_samples: int
     labeler: object = field(default=None, repr=False)
 
@@ -177,7 +153,7 @@ class SensitivityReport:
 
 
 def _dirichlet(names: Sequence[str], rng: random.Random) -> Dict[str, float]:
-    # Dirichlet(1,...,1) = normalise iid Exponential(1) → uniform over the simplex
+    # Dirichlet(1,...,1) = normalise iid Exponential(1) -> uniform over the simplex
     g = {n: -math.log(rng.random()) for n in names}
     s = sum(g.values())
     return {n: v / s for n, v in g.items()}

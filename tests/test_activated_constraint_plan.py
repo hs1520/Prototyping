@@ -101,7 +101,7 @@ def _model(controller_body: str) -> str:
     }}"""
 
 
-def test_frozen_constraint_cannot_invent_a_500_newton_threshold():
+def test_no_invented_500_n_threshold():
     requirement = (
         "REQ-SAFE-005: The recovery system shall deploy within "
         "0.5 seconds after a critical propulsion failure."
@@ -158,12 +158,12 @@ def test_frozen_constraint_cannot_invent_a_500_newton_threshold():
     )
 
 
-def test_units_the_frozen_text_states_are_accepted_in_both_spellings():
-    """A stated unit must not be rejected in every spelling of itself.
+def test_stated_units_both_spellings():
+    """A stated unit is accepted in every spelling of itself.
 
-    'degree' and 'minutes' were absent from the vocabulary, so a plan could
-    satisfy neither 'deg' nor 'degree' and simply alternated between them
-    until the attempt budget ran out.
+    'degree' and 'minutes' were absent from the vocabulary, so a plan satisfied
+    neither 'deg' nor 'degree' and alternated between them until the attempt
+    budget ran out.
     """
     assert {"degree", "deg"} <= _unit_tokens(
         "roll and pitch RMS within 1.0 degree"
@@ -171,13 +171,11 @@ def test_units_the_frozen_text_states_are_accepted_in_both_spellings():
     assert {"minutes", "min"} <= _unit_tokens(
         "sustain flight for a minimum of 25 minutes"
     )
-    # "m/s" must survive as itself rather than decomposing into "m" and "s"
     assert {"m/s", "m_s"} <= _unit_tokens("a closing speed of 1.5 m/s")
-    # a unit the text never states is still rejected
     assert "N" not in _unit_tokens("within 1.0 degree")
 
 
-def test_requirement_identifier_digits_are_not_accepted_as_a_bound():
+def test_req_id_digits_not_a_bound():
     attributes = [
         {
             "name": "currentDelay",
@@ -224,7 +222,7 @@ def test_requirement_identifier_digits_are_not_accepted_as_a_bound():
     )
 
 
-def test_state_active_property_is_serialized_inside_owning_state():
+def test_state_property_inside_state():
     attributes = [
         {
             "name": "currentGroundSpeed",
@@ -252,11 +250,10 @@ def test_state_active_property_is_serialized_inside_owning_state():
             "state": "FlightBehavior::Cruise",
         },
         "provenance": {"kind": "DESIGN_DECISION"},
-        # INSPECTION, not STATE_EXECUTION: the subject is unbound, so the state
-        # executor cannot sweep it and the plan validator now says so (see
-        # activated_constraint_plan._state_execution_obstacle). What this
-        # test protects is unchanged: the constraint must still be serialised
-        # inside the owning state.
+        # INSPECTION rather than STATE_EXECUTION: the subject is unbound, so the
+        # state executor cannot sweep it and the plan validator says so (see
+        # activated_constraint_plan._state_execution_obstacle). The test still
+        # checks that the constraint is serialised inside the owning state.
         "verification_tier": "INSPECTION",
     }]
     plan = ModelGenerationPlan.from_payload(
@@ -296,7 +293,7 @@ def test_state_active_property_is_serialized_inside_owning_state():
     assert constraint_report["planned_state_active_count"] == 1
 
 
-def test_state_active_constraint_executes_without_fake_runtime_initial_value():
+def test_no_fake_runtime_initial_value():
     attributes = [
         {
             "name": "currentGroundSpeed",
@@ -379,7 +376,7 @@ def test_state_active_constraint_executes_without_fake_runtime_initial_value():
     assert "no initial value" not in " ".join(constraint_result.violations)
 
 
-def test_materialized_state_owned_constraint_is_syside_valid():
+def test_state_owned_constraint_valid():
     model = """package P {
         private import ScalarValues::*;
         part def Controller {
@@ -423,7 +420,7 @@ def test_materialized_state_owned_constraint_is_syside_valid():
     assert syntax.sema_errors == []
 
 
-def test_state_active_reference_must_be_behavior_qualified_and_reachable():
+def test_reference_qualified_reachable():
     attributes = [
         {
             "name": "currentGroundSpeed",
@@ -474,7 +471,7 @@ def test_state_active_reference_must_be_behavior_qualified_and_reachable():
     ]
 
 
-def test_plan_restores_owned_invariant_and_removes_unplanned_assertion():
+def test_restores_owned_invariant():
     attributes = [
         {
             "name": "currentLoad",
@@ -522,7 +519,7 @@ def test_plan_restores_owned_invariant_and_removes_unplanned_assertion():
     ) in updated
 
 
-def test_qualified_owner_and_plan_annotation_control_parametric_evidence():
+def test_annotation_gates_parametric():
     text = """package P {
         part def Controller {
             attribute currentLoad : Real = 0;
@@ -545,7 +542,7 @@ def test_qualified_owner_and_plan_annotation_control_parametric_evidence():
     assert "design_constraint" in result.scenario_results[0].tags
 
 
-def test_qualification_uses_provenance_specific_behavior_denominators():
+def test_provenance_denominators():
     requirement_pass = BehavioralScenarioResult(
         name="requiredBehavior",
         state_machine="Controller::RequiredBehavior",
@@ -603,18 +600,16 @@ def test_qualification_uses_provenance_specific_behavior_denominators():
     assert "REQUIREMENT_BEHAVIOR_EXECUTION" not in qualification["failed_checks"]
 
 
-def test_a_unit_suffixed_type_is_normalised_rather_than_duplicated():
-    """A real pilot run failed qualification on exactly this.
+def test_unit_suffixed_type_not_duped():
+    """A pilot run failed qualification on this.
 
-    The model declared `attribute currentSeparation : LengthValue [m] = ...`.
-    The materialiser's attribute pattern did not accept a unit after the type,
-    found no match by that name, and appended its own declaration — leaving the
-    same attribute twice in one part def, which USER_NAMESPACE_INTEGRITY and the
-    Syside namespace-distinguishability warning both correctly rejected.
-
-    Normalising loses nothing: the project writes units on the value
-    (`= 5 [m]`), never on the type, and the quantity is carried by the type name
-    plus the separately tracked semantic binding.
+    The model declared `attribute currentSeparation : LengthValue [m] = ...`. The
+    materialiser's attribute pattern did not accept a unit after the type, matched
+    nothing, and appended its own declaration, leaving the attribute twice in one
+    part def - rejected by USER_NAMESPACE_INTEGRITY and Syside's
+    namespace-distinguishability warning. Normalising is safe: units are written
+    on the value (`= 5 [m]`), never on the type, and the quantity is carried by
+    the type name plus the separately tracked semantic binding.
     """
     from src.prototyping.activated_constraint_plan import (
         materialize_planned_attributes,
@@ -650,20 +645,17 @@ def test_a_unit_suffixed_type_is_normalised_rather_than_duplicated():
     assert report["materialized_attributes"] == [], "nothing may be appended"
     for name in ("currentSeparation", "minSeparationThreshold"):
         assert text.count(f"attribute {name} :") == 1, f"{name} declared twice"
-    # normalised to the project's form: unit on the value, not on the type
     assert "LengthValue [m]" not in text
     assert "attribute minSeparationThreshold : LengthValue = 5 [m];" in text
 
 
-def test_a_value_type_the_pipeline_cannot_emit_fails_the_plan():
+def test_unknown_value_type_fails():
     """One archived run failed Syside with "No Type named 'StateEnum' found."
 
-    The plan had `lockState : StateEnum = Locked`, and the materialiser wrote it
-    faithfully, because validation only checked that the name was a well-formed
-    identifier — which StateEnum is. The plan has no way to declare a type, so
-    anything outside the library set becomes a reference to nothing.
-
-    Failing the plan lets generation retry inside its bounded budget, instead of
+    The plan had `lockState : StateEnum = Locked` and validation only checked that
+    the name was a well-formed identifier, which StateEnum is. The plan cannot
+    declare a type, so anything outside the library set is a reference to nothing;
+    failing the plan lets generation retry inside its bounded budget instead of
     committing a model that cannot parse.
     """
     from src.prototyping.activated_constraint_plan import (
@@ -694,15 +686,14 @@ def test_a_value_type_the_pipeline_cannot_emit_fails_the_plan():
         )
 
 
-def test_equality_state_constraint_must_claim_inspection_not_execution():
-    """The plan may not promise execution evidence the executor cannot produce.
+def test_equality_claims_inspection():
+    """The plan does not promise execution evidence the executor cannot produce.
 
-    `behavioral_sim` probes a constraint's satisfaction boundary by perturbing
-    the right-hand value and requiring one side to satisfy and the other not to.
-    Equality fails that by construction, so every `==` STATE_ACTIVE constraint
-    was reported "boundary is not live" no matter what the model said. Measured
-    on pilot_n6_20260802/seed-3, the only seed to plan equality state
-    constraints and the only run in its arm to lose the qualification gate.
+    `behavioral_sim` probes a constraint's satisfaction boundary by perturbing the
+    right-hand value and requiring one side to satisfy and the other not to.
+    Equality fails that by construction, so every `==` STATE_ACTIVE constraint was
+    reported "boundary is not live" regardless of the model - measured on
+    pilot_n6_20260802/seed-3, which lost the qualification gate.
     """
     from src.prototyping.activated_constraint_plan import (
         ConstraintPlan,
@@ -728,11 +719,11 @@ def test_equality_state_constraint_must_claim_inspection_not_execution():
     assert "live satisfaction boundary" in obstacle
 
 
-def test_the_executor_really_cannot_discharge_an_equality_boundary():
-    """Pins the executor behaviour the rule above exists to respect.
+def test_executor_rejects_equality():
+    """Pins the executor behaviour the rule above depends on.
 
-    If the liveness probe ever learns to handle `==`, this fails and the plan
-    rule should be revisited rather than the constraint being routed around.
+    If the liveness probe learns to handle `==`, this fails and the plan rule
+    should be revisited rather than the constraint routed around.
     """
     from src.simulation.behavioral_sim import eval_op
 
@@ -746,21 +737,20 @@ def test_the_executor_really_cannot_discharge_an_equality_boundary():
         assert eval_op(valid, operator, rhs)
         assert not eval_op(invalid, operator, rhs)
 
-    # Equality: both perturbed sides violate, so no assignment of valid/invalid
-    # sides exists and the probe can never report a live boundary.
+    # Equality: both perturbed sides violate, so no valid/invalid assignment
+    # exists and the probe reports no live boundary.
     assert not eval_op(rhs + epsilon, "==", rhs)
     assert not eval_op(rhs - epsilon, "==", rhs)
 
 
-def test_state_execution_on_a_constant_subject_is_reported_not_rejected():
+def test_constant_subject_reported():
     """The plan may claim executable evidence its executor cannot produce.
 
-    A STATE_ACTIVE constraint whose subject carries only an initial value
-    compares that constant to itself, so the behavioural executor refuses it
-    for want of a bound runtime measurement and the requirement lands
-    unanchored. `_state_execution_obstacle` documents why the validator does
-    not reject this today; until that is settled the disagreement must at
-    least be visible.
+    A STATE_ACTIVE constraint whose subject carries only an initial value compares
+    that constant to itself, so the behavioural executor refuses it for want of a
+    bound runtime measurement and the requirement lands unanchored.
+    `_state_execution_obstacle` records why the validator does not reject this
+    yet; this test keeps the disagreement visible.
     """
     requirement = (
         "REQ_FUNC_006: The system shall incorporate a revised waypoint "
@@ -799,18 +789,16 @@ def test_state_execution_on_a_constant_subject_is_reported_not_rejected():
         requirements=[requirement],
     )
 
-    # reported ...
     assert any(
         "claims STATE_EXECUTION" in item
         and "waypointModificationLatency" in item
         for item in plan.advisories
     )
     assert plan.advisories == tuple(plan.to_dict()["advisories"])
-    # ... and deliberately not blocking: no advisory text leaks into issues
     assert not any("claims STATE_EXECUTION" in item for item in plan.issues)
 
 
-def test_a_bound_runtime_measurement_raises_no_state_execution_advisory():
+def test_bound_measurement_no_advisory():
     requirement = (
         "REQ_FUNC_006: The system shall incorporate a revised waypoint "
         "sequence into the active flight plan within 1.0 second."
@@ -862,13 +850,13 @@ def test_a_bound_runtime_measurement_raises_no_state_execution_advisory():
     assert plan.advisories == ()
 
 
-def test_percent_unit_does_not_detach_later_state_machines():
+def test_percent_unit_keeps_machines():
     """`= 25 [%]` is a parse error, and parse errors do not stay local.
 
-    syside reparents every declaration after the unclosed expression, so the
-    state machines of *later* parts lose their owning part. That silently
-    disabled the whole behavioural tier — the crash it caused downstream was
-    swallowed as "non-fatal" — and left timed requirements unanchored.
+    syside reparents every declaration after the unclosed expression, so state
+    machines of later parts lose their owning part. The downstream crash was
+    swallowed as non-fatal, disabling the behavioural tier and leaving timed
+    requirements unanchored.
     """
     from src.simulation.state_extractor import extract_state_machines
     from src.simulation.syntax_checker import check_syntax
@@ -898,7 +886,7 @@ def test_percent_unit_does_not_detach_later_state_machines():
     assert [m.owner_part for m in machines] == ["Monitor"]
 
 
-def test_long_unit_spellings_are_emitted_as_resolvable_sysml_names():
+def test_long_unit_spellings_resolve():
     from src.prototyping.activated_constraint_plan import sysml_unit_name
     from src.simulation.syntax_checker import check_syntax
 
@@ -912,11 +900,9 @@ def test_long_unit_spellings_are_emitted_as_resolvable_sysml_names():
             f"[{expected}]; assert constraint K {{ a == 1 }} }} }}"
         )
         assert not check_syntax(src).has_errors, expected
-    # Slash units are NOT left alone: `[m/s]` breaks every word-character
-    # bracket reader, so the registry emits the identifier-safe token and
-    # closes its resolution with `alias m_s for SI::'m/s'` (ablation pilot 2
-    # failed on exactly this passthrough).
+    # Slash units are rewritten: `[m/s]` breaks word-character bracket readers,
+    # so the registry emits the identifier-safe token and resolves it with
+    # `alias m_s for SI::'m/s'` (ablation pilot 2 failed on the passthrough).
     assert sysml_unit_name("m/s") == "m_s"
     assert sysml_unit_name("km/h") == "km_h"
-    # a token already identifier-safe is left alone
     assert sysml_unit_name("kg") == "kg"

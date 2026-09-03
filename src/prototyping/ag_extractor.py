@@ -1,13 +1,13 @@
 """Extract a bounded Assume-Guarantee graph from committed SysML v2 text.
 
-This is the extractor half of Increment 2 (§6.2, §15 of
-``docs/OPTION2_IMPLEMENTATION_DESIGN.md``). The committed SysML model is the sole
-semantic authority: A/G facts are read *out of* the model using the validated
-bounded convention and never supplied from JSON. The output :class:`AGGraph`
-carries the source revision/digest and per-element spans so the derived
-``ag_contract_graph.json`` view (§14) is fully attributable and regenerable.
+The extractor half of Increment 2 (§6.2, §15 of
+``docs/OPTION2_IMPLEMENTATION_DESIGN.md``). The committed SysML model is the
+semantic authority: A/G facts are read out of the model using the validated
+bounded convention, never supplied from JSON. The output :class:`AGGraph` carries
+the source revision/digest and per-element spans, so the derived
+``ag_contract_graph.json`` view (§14) stays attributable and regenerable.
 
-Bounded convention (validated against the Syside gate — see
+Bounded convention (validated against the Syside gate - see
 ``tests/test_option2_ag_sysml_spike.py`` and ``test_option2_ag_checker.py``):
 
     requirement def <ContractName> {
@@ -19,9 +19,9 @@ Bounded convention (validated against the Syside gate — see
     }
     dependency decomposition from <System> to <Component>;
 
-An ``assume constraint`` whose name begins with ``env`` is an explicit
-environment assumption. The decomposition edge source is the system contract; the
-targets are components.
+An ``assume constraint`` whose name begins with ``env`` is an explicit environment
+assumption. The decomposition edge source is the system contract; the targets are
+components.
 """
 from __future__ import annotations
 
@@ -48,24 +48,22 @@ from ..utils.sysml_text_utils import (
 )
 
 _REQ_DEF_RE = re.compile(r"\brequirement\s+def\s+(\w+)\s*\{")
-#: `attribute <name> : <Type>[::<Type>][ [unit] ] [= <number> [ [unit] ]];`
-#:
-#: The type may be qualified and may carry a unit suffix, and the initializer is
-#: optional. A pattern accepting only a bare single-word type with a value was
-#: blind to `maxLatency : DurationValue [s] = 0.5 [s]` — a legal spelling that
-#: made a timed chain extract with NO deadline, so the checker then judged it as
-#: not a timed pattern at all (PATTERN_DECLARATION_INCONSISTENT). Found by a
-#: spelling-invariance probe rather than by a run, which is the point of having
-#: one.
+# `attribute <name> : <Type>[::<Type>][ [unit] ] [= <number> [ [unit] ]];`
+#
+# The type may be qualified and carry a unit suffix; the initializer is optional.
+# A pattern accepting only a bare single-word type with a value missed
+# `maxLatency : DurationValue [s] = 0.5 [s]`, so a timed chain extracted with no
+# deadline and the checker then judged it untimed
+# (PATTERN_DECLARATION_INCONSISTENT). Found by a spelling-invariance probe.
 _ATTR_RE = re.compile(
     r"\battribute\s+(\w+)\s*:\s*(\w+(?:::\w+)*)"
     r"(?:\s*\[[^\]]*\])?"
     r"\s*(?:=\s*(-?[\d.]+)"
     r"\s*(?:\[([^\]]+)\])?)?\s*;"
 )
-#: Same, for a Boolean carrying an explicit default. `= true|false` stays
-#: required here because the value IS the fact being read; what widens is the
-#: type, which may be written `ScalarValues::Boolean`.
+# Same, for a Boolean with an explicit default. `= true|false` stays required
+# because the value is the fact being read; only the type widens, and it may be
+# written `ScalarValues::Boolean`.
 _BOOL_ATTR_RE = re.compile(
     r"\battribute\s+(\w+)\s*:\s*(?:\w+::)*Boolean"
     r"(?:\s*\[[^\]]*\])?"
@@ -88,24 +86,20 @@ _ASSERT_CONSTRAINT_RE = re.compile(
 )
 # The transition name is optional in SysML v2 (``TransitionUsage =
 # 'transition' ( UsageDeclaration 'first' )? ...``, and a UsageDeclaration may
-# be empty), so ``transition first idle accept X then done;`` is legal and the
-# syntax gate accepts it.  The pattern used to demand ``transition <name>
-# first``; on a model that spelled every transition without a name it parsed
-# zero transitions, so the realisation had no reachable trigger, no reachable
-# response and no trigger-response path -- three diagnostics and a failed
-# qualification raised against a model that was right.  Measured on one
-# archived pilot seed (pilot_n6_4bb7544, seed 1, R2-BBAG).
+# be empty), so ``transition first idle accept X then done;`` is legal. Demanding
+# ``transition <name> first`` parsed zero transitions on a model that named none,
+# raising three diagnostics and a failed qualification against a sound model.
+# Measured on pilot_n6_4bb7544, seed 1, R2-BBAG.
 _TRANSITION_RE = re.compile(
     r"\btransition\b(?:\s+(?!first\b)\w+)?\s+first\s+(\w+)\s+accept\s+(\w+)"
     r"(?:\s+if\s+(.+?))?\s+then\s+(\w+)\s*;",
     re.DOTALL,
 )
-# A state entry action has two legal spellings and the generators disagree on
-# which to use: `ag_emitter` writes the bare `entry action deployParachute;`,
-# while the chain_of_thought prompts teach the typed
+# A state entry action has two legal spellings: `ag_emitter` writes the bare
+# `entry action deployParachute;`, the chain_of_thought prompts teach the typed
 # `entry action onParachute : deployParachute;`.  Both name the same action
 # definition, so the optional usage label is skipped and the captured group is
-# always the definition.  Reading only the first identifier returns the label.
+# always the definition; the first identifier would be the label.
 _ENTRY_ACTION_RE = re.compile(r"\bentry\s+action\s+(?:\w+\s*:\s*)?(\w+)")
 _VERIFICATION_DEF_RE = re.compile(r"\bverification\s+def\s+(\w+)\s*\{")
 _VERIFY_REQ_RE = re.compile(
@@ -119,17 +113,15 @@ _CMP_RE = re.compile(r"^(\w+)\s*(<=|>=|==|<|>)\s*([A-Za-z_][\w]*|-?[\d.]+)$")
 _IDENT_RE = re.compile(r"^(\w+)$")
 _BOOL_TOKEN_RE = re.compile(r"\s*(\(|\)|not\b|and\b|or\b|[A-Za-z_]\w*)", re.I)
 
-# Attribute names that carry a timing budget/deadline.
 _COMPONENT_BUDGET_KEYS = ("latencybudget",)
 _SYSTEM_BUDGET_KEYS = ("maxlatency", "deadline", "systemdeadline")
-#: Deliberately NOT budget keys: the margin is not the deadline, and reading it as
-#: one would let a reserved margin masquerade as the whole budget.
+# Not budget keys: the margin is not the deadline, and reading it as one lets
+# a reserved margin stand in for the whole budget.
 _SEGMENT_GROUP_KEY = "timingsegmentgroup"
 _MARGIN_KEY = "timingmargin"
 
 
 def _boolean_ast(expr: str) -> Optional[Dict[str, object]]:
-    """Parse the fixed Identifier/Not/And/Or subset used by the bounded profile."""
     source = str(expr or "").strip()
     tokens: List[str] = []
     cursor = 0
@@ -195,11 +187,6 @@ def _boolean_ast(expr: str) -> Optional[Dict[str, object]]:
 def _parse_expr(
     expr: str, attrs: Mapping[str, Optional[float]]
 ) -> Tuple[str, str, Dict[str, object]]:
-    """Return (concept, kind, extra) for one constraint body.
-
-    kind ∈ {"boolean", "numeric", "unsupported"}. Numeric right-hand sides that
-    name a declared attribute are resolved to that attribute's default value.
-    """
     body = " ".join((expr or "").split())
     m = _CMP_RE.match(body)
     if m:
@@ -276,14 +263,14 @@ def _parse_contract(name: str, block: str, span: Span) -> Contract:
     source = _SOURCE_REQ_RE.search(block)
     pattern = _SAFETY_PATTERN_RE.search(block)
     timing_origin = _TIMING_ORIGIN_RE.search(block)
-    # Composition structure and reserved margin. Both are optional: absent, the
+    # Composition structure and reserved margin, both optional; absent, the
     # composition is the plain sum it always was.
     group = attrs.get(_SEGMENT_GROUP_KEY)
     margin = attrs.get(_MARGIN_KEY)
 
     return Contract(
         name=name,
-        role="component",  # provisional; fixed once edges are known
+        role="component",
         assumptions=tuple(assumptions),
         guarantees=tuple(guarantees),
         timing_budget=timing_budget,
@@ -294,7 +281,7 @@ def _parse_contract(name: str, block: str, span: Span) -> Contract:
         timing_margin=margin,
         timing_margin_unit=attr_units.get(_MARGIN_KEY),
         timing_origin=timing_origin.group(1) if timing_origin else None,
-        observation=None,  # set for the system contract only
+        observation=None,
         element_id=name,
         span=span,
         source_requirement=source.group(1).upper().replace("-", "_") if source else None,
@@ -331,7 +318,6 @@ def _parse_behavior(name: str, block: str, span: Span) -> BehaviorRealization:
 
 
 def _extract_priority(text: str) -> Dict[str, object]:
-    """Extract the bounded priority facts from authoritative SysML constructs."""
     contract_match = re.search(
         r"\brequirement\s+def\s+SafetyResponsePriorityContract\s*\{", text
     )
@@ -387,9 +373,9 @@ def _extract_priority(text: str) -> Dict[str, object]:
             contract,
         )
     ]
-    # Wiring can be judged from the selection/precedence contract even when the
-    # enum vocabulary itself is malformed or incomplete. Coupling these made a
-    # blocked response-set defect manufacture repairable transition/action faults.
+    # Wiring is judged from the selection/precedence contract even when the enum
+    # vocabulary is malformed or incomplete. Coupling them made a blocked
+    # response-set defect manufacture transition/action faults.
     known_responses = list(dict.fromkeys([
         *members,
         selected,
@@ -409,7 +395,6 @@ def _extract_priority(text: str) -> Dict[str, object]:
         return re.sub(r"[^a-z0-9]", "", value.lower())
 
     def response_member(state_name: str) -> Optional[str]:
-        """Map an authored state name to its declared enum member structurally."""
         state_key = name_key(state_name)
         matches = [
             member
@@ -464,8 +449,8 @@ def _extract_priority(text: str) -> Dict[str, object]:
         transition.target for transition in selection_transitions
     }
 
-    # The response-selection guarantee is derived from the contract that realizes
-    # this arbitration behavior. It is not a reviewed state/signal/action name.
+    # The response-selection guarantee comes from the contract realizing this
+    # arbitration behavior, not from a reviewed state/signal/action name.
     realizing_contracts = re.findall(
         r"\bdependency\s+\w+\s+from\s+(\w+)\s+to\s+"
         r"SafetyResponseArbitration\s*;",
@@ -588,18 +573,17 @@ def _extract_invariants(
 
 
 _PACKAGE_RE = re.compile(r"\bpackage\s+(\w+)\s*\{")
-# The emitter stamps this exact marker on every A/G system contract (see
-# ``ag_emitter.emit_ag_package``); it is the reliable signal that a top-level
-# package carries a bounded A/G chain candidate rather than base model content.
+# The emitter stamps this marker on every A/G system contract (see
+# ``ag_emitter.emit_ag_package``); it marks a top-level package as a bounded A/G
+# chain candidate rather than base model content.
 _AG_PACKAGE_MARKER = "bounded A/G system contract for"
 
 
 def _top_level_packages(text: str) -> List[Tuple[str, int, int]]:
-    """Return (name, start, end_exclusive) for each top-level package block."""
     result: List[Tuple[str, int, int]] = []
     consumed_to = 0
     for m in _PACKAGE_RE.finditer(text):
-        if m.start() < consumed_to:  # nested inside an already-consumed package
+        if m.start() < consumed_to:
             continue
         brace = text.index("{", m.start())
         end = find_block_end(text, brace)
@@ -618,19 +602,17 @@ def extract_ag_graphs(
 ) -> List[AGGraph]:
     """Extract one bounded A/G graph per selected chain in the committed model.
 
-    A model may carry several independent A/G chains (one selected decomposition
-    per selected requirement — the drone system co-selects REQ_SAFE_004 and
-    REQ_SAFE_005). Each chain is emitted as its own top-level package with a
-    single system contract, so each is a self-contained A/G decomposition that
-    must be checked independently: pooling two system contracts into one graph
-    would make the decomposition root ambiguous (``system=None``).
+    A model may carry several independent A/G chains, one selected decomposition per
+    selected requirement (the drone system co-selects REQ_SAFE_004 and REQ_SAFE_005).
+    Each is its own top-level package with a single system contract and is checked
+    independently; pooling two system contracts into one graph leaves the
+    decomposition root ambiguous (``system=None``).
 
-    With zero or one A/G package this returns exactly ``[extract_ag_graph(...)]``
-    — byte-identical to the single-chain path. With two or more, the base model
-    (which carries the immutable source ``requirement def`` provenance) is paired
-    with each A/G package in turn so every per-chain graph both resolves its
-    system contract uniquely and keeps its source-requirement provenance. Every
-    per-chain graph reports the committed model's revision/digest, not the slice's.
+    With zero or one A/G package this returns ``[extract_ag_graph(...)]``, identical to
+    the single-chain path. With two or more, the base model (which carries the source
+    ``requirement def`` provenance) is paired with each A/G package in turn, so every
+    per-chain graph resolves its system contract and keeps its source-requirement
+    provenance. Each reports the committed model's revision/digest, not the slice's.
     """
     text = sysml_text or ""
     digest = model_digest if model_digest is not None else text_digest(text)
@@ -667,12 +649,7 @@ def extract_ag_graph(
     revision: Optional[int] = None,
     model_digest: Optional[str] = None,
 ) -> AGGraph:
-    """Parse committed SysML v2 text into a bounded A/G graph (§6.2).
-
-    This resolves a single system contract. For a model that may carry more than
-    one selected chain, use :func:`extract_ag_graphs`, which returns one graph
-    per chain and degrades to ``[this]`` when only one chain is present.
-    """
+    """Parse committed SysML v2 text into a bounded A/G graph (§6.2)."""
     text = sysml_text or ""
     digest = model_digest if model_digest is not None else text_digest(text)
     parse_diags: List[AGDiagnostic] = []
@@ -688,9 +665,9 @@ def extract_ag_graph(
             continue
         block = text[brace + 1:end]
         contract = _parse_contract(name, block, Span(brace + 1, end))
-        # Only a requirement def that declares assume/require constraints is an A/G
-        # contract (§6.2). Ordinary stakeholder requirement defs imported into the
-        # model carry no A/G semantics and must not pollute the graph.
+        # Only a requirement def declaring assume/require constraints is an A/G
+        # contract (§6.2); imported stakeholder requirement defs carry no A/G
+        # semantics and stay out of the graph.
         if (
             (contract.assumptions or contract.guarantees)
             and _PRIORITY_AUXILIARY_MARKER not in block
@@ -756,7 +733,6 @@ def extract_ag_graph(
     elif len(raw) == 1:
         system_name = next(iter(raw))
     else:
-        # Ambiguous: fall back to a name-based heuristic and record it.
         candidates = [n for n in raw if "system" in n.lower()]
         if len(candidates) == 1:
             system_name = candidates[0]
@@ -771,7 +747,6 @@ def extract_ag_graph(
     components: List[Contract] = []
     for name, contract in raw.items():
         if name == system_name:
-            # The system observation is its first Boolean guarantee concept.
             obs = next(
                 (g.concept for g in contract.guarantees if g.kind == "boolean"),
                 None,

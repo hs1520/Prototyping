@@ -1,21 +1,17 @@
 """Regression suite for the plan-frozen repair deadlock (2026-08-31 run 2).
 
-The authoritative run terminated NOT_QUALIFIED after 8 idle refinement
-iterations against ``structural_repair_blocked``. Root causes, each pinned
-here against the run's archived plan and final model (zero LLM):
-
-- D1 — ``requirement_realizations[].behavior_kind`` contradicted the same
-  plan's ``behaviors[]``; the obligation compiled from the contradictory kind
-  failed a structurally correct model (17/19). behaviors[] is the sole writer
-  of every behaviour it names, so the kind is derived data and is now
-  reconciled deterministically at parse time.
-- D2 — the inhibition gate was scoped per-behaviour against that behaviour's
-  own source requirement and measured ZERO fires on the plan whose vehicle
-  separated its payload during an active abort. It is now anchored on the
-  whole plan (held state + departure vocabulary + fail-loud).
-- The futility loop — ``structural_repair_blocked`` had no consumer, so the
-  loop paid for iterations that could not progress.
-- The missing edge — no path back to revise a wrong frozen plan;
+The run terminated NOT_QUALIFIED after 8 idle refinement iterations against
+``structural_repair_blocked``. Root causes, pinned against the run's archived
+plan and final model (zero LLM):
+- D1 - ``requirement_realizations[].behavior_kind`` contradicted the same plan's
+  ``behaviors[]`` and failed a structurally correct model (17/19). behaviors[]
+  is the sole writer, so the kind is derived and reconciled at parse time.
+- D2 - the inhibition gate was scoped per-behaviour and fired zero times on the
+  plan whose vehicle separated its payload during an active abort; it is now
+  anchored on the whole plan (held state + departure vocabulary + fail-loud).
+- The futility loop - ``structural_repair_blocked`` had no consumer, so the loop
+  paid for iterations that could not progress.
+- The missing edge - no path back to revise a wrong frozen plan;
   ``PlanRevision`` is that path, issue-authorized and diff-gated.
 """
 from __future__ import annotations
@@ -65,16 +61,12 @@ def _run2_model_text() -> str:
     return (_FIXTURES / "final_model.sysml").read_text()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# D1 — behavior_kind is derived data, reconciled toward the sole writer
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 class TestBehaviorKindReconciliation:
-    def test_run2_archived_plan_now_qualifies_its_own_model(self):
-        """The exact archived plan against the exact final model: 17/19 with
-        the contradictory ACTION_DEF kinds, 19/19 once the kind is reconciled
-        toward behaviors[]. This is the whole of run 2's NOT_QUALIFIED."""
+    def test_run2_plan_kinds_reconciled(self):
+        """The archived plan against the final model: 17/19 with the contradictory
+        ACTION_DEF kinds, 19/19 once the kind is reconciled toward behaviors[]; that
+        is run 2's NOT_QUALIFIED.
+        """
         plan = ModelGenerationPlan.from_dict(_run2_plan_payload())
 
         kinds = {
@@ -97,7 +89,7 @@ class TestBehaviorKindReconciliation:
             item["status"] == "PASS" for item in report["results"]
         )
 
-    def test_reconciliation_is_audited_and_idempotent(self):
+    def test_reconciliation_audited_idempotent(self):
         plan = ModelGenerationPlan.from_dict(_run2_plan_payload())
         audit = [
             item for item in plan.behavior_identity_reconciliations
@@ -107,15 +99,12 @@ class TestBehaviorKindReconciliation:
         assert any("REQ_FUNC_006" in item for item in audit)
         assert any("sole writer" in item for item in audit)
 
-        # Round-trip: the reconciled payload re-parses without new audit rows.
         second = ModelGenerationPlan.from_dict(plan.to_dict())
         assert list(second.behavior_identity_reconciliations).count(
             audit[0]
         ) == 1
 
-    def test_direct_compiler_rejects_an_unreconciled_contradiction(self):
-        """Direct callers that bypass from_payload's reconciliation must not
-        silently compile a contradictory obligation."""
+    def test_compiler_rejects_contradiction(self):
         plan = ModelGenerationPlan.from_dict(_run2_plan_payload())
         contradictory = [
             item.__class__.from_dict({
@@ -139,10 +128,6 @@ class TestBehaviorKindReconciliation:
             "contradicts behaviors[]" in issue for issue in issues
         )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# D2 — the inhibition gate is anchored on the whole plan
-# ─────────────────────────────────────────────────────────────────────────────
 
 _SAFE_006 = (
     "REQ-SAFE-006: The system shall maintain the payload in the mechanically "
@@ -176,7 +161,6 @@ def _release_behavior(guard: str = "") -> PlannedBehavior:
 
 
 def _abort_lock_behavior() -> PlannedBehavior:
-    """The run-1 decomposition: the abort machine spins in its own corner."""
     return PlannedBehavior(
         owner="PayloadMechanism",
         behavior_id="DeliveryAbortLockManagement",
@@ -196,9 +180,7 @@ def _abort_lock_behavior() -> PlannedBehavior:
 
 
 class TestPlanWideInhibitionGate:
-    def test_the_run2_plan_shape_now_fires_exactly_once(self):
-        """Measured before this change: 0 fires on the real plan. The gate
-        must name the one transition that separated the payload."""
+    def test_run2_plan_fires_one_issue(self):
         plan = ModelGenerationPlan.from_dict(_run2_plan_payload())
         issues = _plan_inhibition_issues(
             plan.planned_behaviors,
@@ -210,9 +192,7 @@ class TestPlanWideInhibitionGate:
         assert "abort" in issues[0]
         assert "guard" in issues[0]
 
-    def test_two_machine_decomposition_no_longer_evades_the_gate(self):
-        """D2 verbatim: inhibition decomposed into a second, uncoupled state
-        machine. Per-behaviour scoping measured 0 fires on this shape."""
+    def test_two_machines_caught_by_gate(self):
         issues = _plan_inhibition_issues(
             [_release_behavior(), _abort_lock_behavior()],
             source_requirements_by_id([_SAFE_006, _FUNC_005]),
@@ -222,7 +202,7 @@ class TestPlanWideInhibitionGate:
             for issue in issues
         )
 
-    def test_a_guard_naming_the_condition_satisfies_both_machines(self):
+    def test_condition_guard_satisfies_gate(self):
         issues = _plan_inhibition_issues(
             [
                 _release_behavior("not deliveryAbortConditionActive"),
@@ -232,9 +212,7 @@ class TestPlanWideInhibitionGate:
         )
         assert issues == []
 
-    def test_a_plan_with_no_anchor_fails_loud_instead_of_skipping(self):
-        """No held state, no departure vocabulary: the plan cannot express
-        the inhibition, and saying nothing is how run 1 shipped."""
+    def test_plan_without_anchor_fails_loud(self):
         unrelated = PlannedBehavior(
             owner="FlightController",
             behavior_id="WaypointNavigationBehavior",
@@ -258,7 +236,7 @@ class TestPlanWideInhibitionGate:
         assert len(issues) == 1
         assert "cannot express this inhibition" in issues[0]
 
-    def test_forbidden_state_entries_need_the_condition_guard(self):
+    def test_forbidden_state_needs_guard(self):
         requirement = (
             "REQ-SAFE-004: The system shall not transition to the armed "
             "state if any onboard sensor reports a failure."
@@ -304,11 +282,6 @@ class TestPlanWideInhibitionGate:
         ) == []
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Futility guard — blocked signatures
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 class _MetadataModel:
     def __init__(self, metadata: Dict[str, Any]) -> None:
         self.metadata = metadata
@@ -334,7 +307,7 @@ class TestStructuralBlockSignature:
             _MetadataModel({"last_sysml_text": "package P {}"})
         ) is None
 
-    def test_identical_block_state_yields_identical_signature(self):
+    def test_identical_block_same_signature(self):
         first = _structural_block_signature(
             _MetadataModel(dict(self._BLOCKED))
         )
@@ -344,7 +317,7 @@ class TestStructuralBlockSignature:
         assert first == second
         assert first[0] == frozenset({"STRUCT_REQ_FUNC_006_001"})
 
-    def test_changed_text_or_obligations_break_the_signature(self):
+    def test_changed_text_breaks_signature(self):
         base = _structural_block_signature(
             _MetadataModel(dict(self._BLOCKED))
         )
@@ -361,11 +334,6 @@ class TestStructuralBlockSignature:
         assert _structural_block_signature(
             _MetadataModel(progressed)
         ) != base
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Plan revision — issue-authorized, validated, bounded
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -411,12 +379,12 @@ def _blocked_record(requirement_id: str = "REQ_FUNC_006") -> Dict[str, Any]:
 
 
 def _guarded_revision(frozen_payload: Mapping[str, Any]) -> Dict[str, Any]:
-    """A minimal VALID revision of the run-2 payload.
+    """A minimal valid revision of the run-2 payload.
 
-    The frozen plan re-validated under the current gates carries exactly one
-    issue — the plan-wide inhibition gate on the unguarded release boundary —
-    so any acceptable revision must guard it. That guard is itself
-    issue-authorized: the authorizing issue names the behaviour."""
+    Re-validated under the current gates the frozen plan carries one issue - the
+    plan-wide inhibition gate on the unguarded release boundary - so an acceptable
+    revision guards it, and the authorizing issue names the behaviour.
+    """
     revised = json.loads(json.dumps(dict(frozen_payload)))
     for behavior in revised["behaviors"]:
         if behavior.get("behavior_id") == "PayloadReleaseBehavior":
@@ -426,7 +394,7 @@ def _guarded_revision(frozen_payload: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 class TestPlanRevision:
-    def test_an_issue_authorized_revision_is_accepted(self):
+    def test_authorized_revision_accepted(self):
         frozen_payload = _run2_plan_payload()
         requirements = _run2_requirements()
         revised_payload = _guarded_revision(frozen_payload)
@@ -445,16 +413,15 @@ class TestPlanRevision:
         assert outcome.record["status"] == "ACCEPTED"
         assert outcome.plan is not None
         assert prompter.call_count == 1
-        # The authorizing issues reached the reviser verbatim.
         assert "REQ_FUNC_006" in prompter.contexts[0]
         assert "FROZEN PLAN" in prompter.contexts[0]
 
-    def test_an_unauthorized_component_change_is_rejected(self):
+    def test_unauthorized_component_rejected(self):
         frozen_payload = _run2_plan_payload()
         requirements = _run2_requirements()
         tampered = _guarded_revision(frozen_payload)
-        # Semantically valid on its own — a passive bracket passes every
-        # validator — but no issue authorizes touching the component surface.
+        # Semantically valid on its own - a passive bracket passes every
+        # validator - but no issue authorizes touching the component surface.
         tampered["components"].append({
             "name": "AuxiliaryBracket",
             "responsibility": "Purely structural mounting bracket.",
@@ -480,7 +447,7 @@ class TestPlanRevision:
             for issue in attempt["issues"]
         )
 
-    def test_a_change_to_an_unnamed_behavior_is_rejected(self):
+    def test_unnamed_behavior_change_rejected(self):
         frozen_payload = _run2_plan_payload()
         requirements = _run2_requirements()
         tampered = _guarded_revision(frozen_payload)
@@ -506,7 +473,7 @@ class TestPlanRevision:
             for issue in attempt["issues"]
         )
 
-    def test_revision_fails_closed_when_no_json_arrives(self):
+    def test_revision_fails_closed_no_json(self):
         frozen_payload = _run2_plan_payload()
         prompter = _FakePrompter([None, None])
 
@@ -519,7 +486,7 @@ class TestPlanRevision:
 
         assert outcome.plan is None
         assert outcome.record["status"] == "REJECTED"
-        assert prompter.call_count == 2  # bounded
+        assert prompter.call_count == 2
 
     def test_diff_gate_names_every_violation(self):
         frozen = ModelGenerationPlan.from_dict(_run2_plan_payload())
@@ -538,15 +505,8 @@ class TestPlanRevision:
         assert any("connections changed" in item for item in violations)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# D3 / D4 — the pipeline may not teach the LLM to damage the model
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 class TestDiagnosticFalsePositives:
-    def test_inherited_and_by_design_portless_parts_are_not_reported(self):
-        """D3: 10 catalogue `Impl :> Base` variants and the analysis closure
-        were reported as defects of the model the DSE itself generated."""
+    def test_portless_parts_not_reported(self):
         from src.dse.diagnostics import diagnose
         from src.sysml.lite_model import build_lite_model
 
@@ -573,7 +533,7 @@ class TestDiagnosticFalsePositives:
         assert "DseDesignAnalysis" not in port_issues[0]
         assert "MountingBracket" not in port_issues[0]
 
-    def test_sim_feedback_header_matches_its_payload_and_syntax(self):
+    def test_feedback_header_matches_payload(self):
         """D4: the header prescribed `connect` with `::` endpoints above
         missing-behaviour issues, while the same prompt states `::` breaks
         the parser."""
@@ -600,11 +560,6 @@ class TestDiagnosticFalsePositives:
         assert "`::` breaks the parser" in feedback
         assert "<source_part>.<port>" in feedback
         assert "<source_part>::<port>" not in feedback
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Pipeline wiring — the revision consumes the blockage, bounded and audited
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _wired_context_and_orch(prompter):
@@ -664,7 +619,7 @@ def _wired_context_and_orch(prompter):
 
 
 class TestPlanRevisionWiring:
-    def test_a_rejected_revision_leaves_the_frozen_plan_standing(self):
+    def test_rejected_revision_keeps_plan(self):
         prompter = _FakePrompter([None, None])
         orch, context = _wired_context_and_orch(prompter)
         frozen = dict(context.final_model.metadata[
@@ -682,7 +637,7 @@ class TestPlanRevisionWiring:
         assert "structural_repair_blocked" in context.final_model.metadata
         assert prompter.call_count == 2
 
-    def test_an_accepted_monotonic_revision_is_applied_and_audited(self):
+    def test_accepted_revision_applied(self):
         revised = _guarded_revision(_run2_plan_payload())
         prompter = _FakePrompter([revised])
         orch, context = _wired_context_and_orch(prompter)
@@ -697,7 +652,6 @@ class TestPlanRevisionWiring:
         assert "structural_repair_blocked" not in (
             context.final_model.metadata
         )
-        # The committed plan and the orchestrator's active plan both moved.
         committed = context.final_model.metadata[
             "whole_model_generation_plan"
         ]
@@ -707,9 +661,9 @@ class TestPlanRevisionWiring:
         )
         assert release["transitions"][0]["guard"]
         assert orch._active_model_generation_plan == committed
-        assert context.final_score == 0.95  # the stubbed re-refinement ran
+        assert context.final_score == 0.95
 
-    def test_revision_can_be_disabled_for_ablation(self):
+    def test_revision_can_be_disabled(self):
         prompter = _FakePrompter([None])
         orch, context = _wired_context_and_orch(prompter)
         orch.enable_plan_revision = False

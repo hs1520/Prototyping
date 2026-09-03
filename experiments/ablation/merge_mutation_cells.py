@@ -1,12 +1,4 @@
-"""Merge mutation-study cells from several campaigns into one analysable campaign.
-
-Latest record per (arm, set) wins in source order; each record keeps its
-source campaign/commit; summary.md is regenerated with mutation_study.render.
-
-Usage:
-    python experiments/ablation/merge_mutation_cells.py --label mut_s0_merged \
-        <campaign_A> <campaign_B> [...]
-"""
+"""Merge mutation-study cells from several campaigns into one analysable campaign."""
 from __future__ import annotations
 
 import argparse
@@ -41,8 +33,8 @@ def main() -> int:
             rec["source_campaign"] = manifest["campaign"]
             rec["source_commit"] = manifest.get("git_commit")
             rec["source_runs_dir"] = str(cdir / "runs")
-            # re-probe residual defects with the current probe set (probe fixes
-            # after a run must not leave stale measurements in the merge)
+            # re-probe residual defects with the current probe set, so probe fixes
+            # after a run do not leave stale measurements in the merge
             stem = f"{rec['arm']}_{rec['set']}"
             for suffix in ("final", "failed"):
                 model = cdir / "runs" / f"{stem}.{suffix}.sysml"

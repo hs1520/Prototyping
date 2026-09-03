@@ -1,16 +1,13 @@
 """Deterministic emitter for the bounded A/G contract layer (Stage 2-3, §12).
 
-A student-approved A/G *decomposition candidate* is
-rendered into valid SysML v2 and merged into the model, so the committed model —
-the sole semantic authority (§6.2) — actually carries the contracts and R2-BBAG
-traces are non-empty. Emission is deterministic and syntax-gate-valid; it uses
-only the validated convention (`requirement def` + `assume`/`require constraint`
-+ `dependency decomposition`) and invents no keywords. The emitted layer is the
-inverse of ``ag_extractor`` and round-trips to a checker PASS for a sound chain.
-
-For the three bounded MVP chains it also renders the selected minimal behaviour
-topology used by the conformance checker. It does not claim formal proof or
-physical verification.
+A student-approved A/G decomposition candidate is rendered into valid SysML v2 and
+merged into the model, so the committed model (the semantic authority, §6.2)
+carries the contracts and R2-BBAG traces are non-empty. Emission uses only the
+validated convention (`requirement def` + `assume`/`require constraint` +
+`dependency decomposition`), is the inverse of ``ag_extractor``, and round-trips to
+a checker PASS for a sound chain. For the three bounded MVP chains it also renders
+the minimal behaviour topology the conformance checker uses. No formal proof or
+physical verification is claimed.
 """
 from __future__ import annotations
 
@@ -31,9 +28,9 @@ class AGAssumptionSpec:
 class AGRealizationPathSpec:
     """One approved guarantee-producing path in the bounded behavior profile.
 
-    These facts describe the student-approved decomposition candidate used to
-    prepare evaluator-gold drafts.  They are not runtime checker output and do
-    not make a draft independent or frozen.
+    Describes the student-approved decomposition candidate used to prepare
+    evaluator-gold drafts; not runtime checker output, and it leaves a draft neither
+    independent nor frozen.
     """
 
     source: str
@@ -45,13 +42,13 @@ class AGRealizationPathSpec:
 
 @dataclass(frozen=True)
 class AGComponentSpec:
-    name: str                       # component requirement-def name
-    owner_def: str                  # responsible component type
-    owner_usage: str                # concrete satisfying part usage
-    guarantee: str                  # Boolean concept the component publishes
-    behavior: str                   # realizing state definition
-    # ``None`` represents a continuously maintained state guarantee rather than
-    # an event-triggered transition (for example recovery-power availability).
+    name: str
+    owner_def: str
+    owner_usage: str
+    guarantee: str
+    behavior: str
+    # ``None`` means a continuously maintained state guarantee rather than an
+    # event-triggered transition (e.g. recovery-power availability).
     trigger_signal: Optional[str]
     initial_state: str
     response_state: str
@@ -61,8 +58,8 @@ class AGComponentSpec:
     additional_guarantees: Tuple[str, ...] = ()
     latency_budget: Optional[float] = None
     timing_segment_required: Optional[bool] = None
-    #: Segments sharing a group are concurrent; the group contributes its maximum.
-    #: None means "own group", i.e. serial — the composition addition assumed.
+    # Segments sharing a group are concurrent; the group contributes its maximum.
+    # None means "own group", i.e. serial - the composition addition assumed.
     timing_segment_group: Optional[int] = None
     realization_paths: Tuple[AGRealizationPathSpec, ...] = ()
 
@@ -78,21 +75,21 @@ class AGPrioritySpec:
     edges: Tuple[Tuple[str, str], ...]
     trigger: str
     selected_response: str
-    # Evaluator gold must identify the approved design input that supplies the
-    # concrete response-set members; the stakeholder requirement only says
-    # "all other safety responses" and does not enumerate them.
+    # Evaluator gold names the approved design input supplying the concrete
+    # response-set members; the stakeholder requirement only says "all other
+    # safety responses".
     source_kind: str
     source_id: str
-    #: Per-member provenance: (response id, source kind, source element id).
-    #: Runtime-generated catalogs use EXISTING_MODEL_BEHAVIOR; reviewed specs may
-    #: retain their independently approved source for backward compatibility.
+    # Per-member provenance: (response id, source kind, source element id).
+    # Runtime-generated catalogs use EXISTING_MODEL_BEHAVIOR; reviewed specs may
+    # retain their independently approved source for backward compatibility.
     member_provenance: Tuple[Tuple[str, str, str], ...] = ()
-    #: Arbitration element names used when no runtime response catalog is bound.
-    #: These were hard-coded to REQ_SAFE_005's names, which silently made the
-    #: unbound path single-chain: a second arbitrating chain rendered its own
-    #: trigger and response state under the parachute chain's identifiers, and
-    #: the selection transition then reached a state its arbiter never declared.
-    #: The defaults keep REQ_SAFE_005 and its frozen gold byte-identical.
+    # Arbitration element names used when no runtime response catalog is bound.
+    # Hard-coding REQ_SAFE_005's names made the unbound path single-chain: a
+    # second arbitrating chain rendered its own trigger and response state under
+    # the parachute chain's identifiers, and the selection transition then reached
+    # a state its arbiter never declared. The defaults keep REQ_SAFE_005 and its
+    # frozen gold byte-identical.
     trigger_signal: str = "CriticalPropulsionFailureDetectedSignal"
     selected_state: str = "parachuteDeploymentSelected"
     selection_transition: str = "selectParachute"
@@ -110,12 +107,12 @@ class AGInvariantSpec:
 
 @dataclass(frozen=True)
 class AGChainSpec:
-    source_requirement: str         # immutable stakeholder req id (provenance)
-    package: str                    # SysML package name for the contract layer
-    system_contract: str            # system requirement-def name
-    system_assumptions: Tuple[str, ...]  # Boolean environment/trigger concepts
-    observation: str                # observed system-level Boolean concept
-    deadline: Optional[float]       # system deadline (maxLatency), seconds
+    source_requirement: str
+    package: str
+    system_contract: str
+    system_assumptions: Tuple[str, ...]
+    observation: str
+    deadline: Optional[float]
     components: Tuple[AGComponentSpec, ...]
     verification: str = "ParachuteDeploymentVerification"
     # Student-selected safety-pattern kind for this chain (provenance). The
@@ -127,10 +124,10 @@ class AGChainSpec:
     invariants: Tuple[AGInvariantSpec, ...] = ()
     selected_model_elements: Tuple[str, ...] = ()
     system_observation_concepts: Tuple[str, ...] = ()
-    #: Deadline the design deliberately does not apportion. Explicit, because
-    #: "how much reserve a safety response keeps" is a design decision the
-    #: requirement does not contain — the measured divergence between 0.1+0.35
-    #: (0.05 s held back) and 0.2+0.3 (none) was exactly this decision, unstated.
+    # Deadline the design does not apportion. Explicit, because how much reserve
+    # a safety response keeps is a design decision the requirement omits: the
+    # divergence between 0.1+0.35 (0.05 s held back) and 0.2+0.3 (none) was this
+    # decision, unstated.
     timing_margin: Optional[float] = None
 
 
@@ -142,9 +139,9 @@ def _sysml_identifier(value: str) -> str:
     token = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value)
     if not token or token[0].isdigit():
         token = f"id_{token}"
-    # A reserved word survives the character wash but not the parser; most
-    # emitted names are prefixed or suffixed by construction, and this guard
-    # covers the ones rendered bare (e.g. the response-set enum name).
+    # A reserved word survives the character wash but not the parser. Most emitted
+    # names are prefixed or suffixed by construction; this guard covers the bare
+    # ones (e.g. the response-set enum name).
     from .sysml_reserved import SYSML_RESERVED_WORDS
     if token in SYSML_RESERVED_WORDS:
         token = f"id_{token}"
@@ -158,13 +155,11 @@ def _capitalise(value: str) -> str:
 def arbitration_response_state(spec: AGChainSpec) -> Optional[str]:
     """The state name the arbitration behaviour is emitted with.
 
-    Two fields of the spec describe this one state and they do not agree: the
-    action comes from ``arbiter.response_action`` while the state comes from the
-    priority block, so ``component.response_state`` is not what reaches the
-    model. Reading the component field instead produced a model whose response
-    action matched the plan and whose state did not — `parachute_deployment`
-    against a planned `parachuteResponseSelected`. Anything that needs to name
-    this state must ask here rather than re-deriving it.
+    Two spec fields describe this state and disagree: the action comes from
+    ``arbiter.response_action``, the state from the priority block, so
+    ``component.response_state`` is not what reaches the model - reading it gave
+    `parachute_deployment` against a planned `parachuteResponseSelected`. Callers
+    naming this state ask here rather than re-deriving it.
     """
     priority = getattr(spec, "priority", None)
     if priority is None:
@@ -187,9 +182,8 @@ def _dedup(concepts: Iterable[str]) -> list[str]:
 def ag_event_signals(spec: AGChainSpec) -> Tuple[str, ...]:
     """Return every event type accepted by the standalone A/G behaviors.
 
-    The list is the shared authority for standalone declaration and terminal
-    canonical import. It deliberately contains event *types*, never executable
-    response actions.
+    Shared authority for standalone declaration and terminal canonical import; it
+    holds event types, not executable response actions.
     """
     signals: list[str] = []
     if spec.priority is not None:
@@ -263,20 +257,20 @@ def emit_ag_package(
     """Render one student-approved A/G chain candidate as valid SysML v2."""
     include_implementation = mode is EmissionMode.COMPLETE
     out: list[str] = [f"package {spec.package} {{"]
-    # Official release-corpus models explicitly import the standard-library
-    # namespaces they use. Keeping these imports in every standalone package makes
-    # raw Syside semantic diagnostics clean rather than relying on diagnostic
-    # suppression in the project-wide legacy syntax wrapper.
+    # Release-corpus models import the standard-library namespaces they use.
+    # Keeping these imports in every standalone package keeps raw Syside semantic
+    # diagnostics clean without suppression in the project-wide legacy syntax
+    # wrapper.
     out.extend([
         "    private import ScalarValues::*;",
         "    private import ISQ::*;",
         "    private import SI::*;",
     ])
 
-    # System contract. The doc annotation carries the immutable source-requirement
-    # provenance and selected safety_pattern, so the committed model (the sole
-    # authority) declares which bounded pattern the conformance checker must apply
-    # — three untimed patterns cannot be told apart by topology alone.
+    # System contract. The doc annotation carries source-requirement provenance
+    # and the selected safety_pattern, so the committed model declares which
+    # bounded pattern the conformance checker applies: three untimed patterns
+    # cannot be told apart by topology alone.
     out.append(f"    requirement def {spec.system_contract} {{")
     out.append(
         f"        doc /* bounded A/G system contract for {spec.source_requirement}"
@@ -323,7 +317,6 @@ def emit_ag_package(
         )
     out.append("    }")
 
-    # Component contracts.
     for comp in spec.components:
         out.append(f"    requirement def {comp.name} {{")
         concepts = _dedup([
@@ -361,9 +354,9 @@ def emit_ag_package(
             )
         out.append("    }")
 
-    # Explicit priority semantics for the bounded SAFE_005 profile.  The enum,
-    # requirement constraints, and guarded state transitions are all authoritative
-    # SysML; the evaluator JSON is extracted from these constructs.
+    # Priority semantics for the bounded SAFE_005 profile. The enum, requirement
+    # constraints and guarded state transitions are the authoritative SysML; the
+    # evaluator JSON is extracted from them.
     if spec.priority is not None:
         priority = spec.priority
         enum_name = _sysml_identifier(priority.response_set_id)
@@ -407,17 +400,15 @@ def emit_ag_package(
             )
         out.append("    }")
 
-        # The arbitration behavior itself consumes this signal.  It therefore
-        # needs a package-level definition even when a component spec names the
-        # same trigger but delegates its behavior to this shared topology.
-        # LLM-decided priority is a runtime catalog even when the architecture
-        # boundary has no pre-existing member provenance.  The reviewed
-        # deterministic fixture remains on its historical topology so independent
-        # evaluator gold is not silently rewritten to follow an implementation
-        # change.  The previous check used only ``priority.member_provenance`` and
-        # therefore sent a valid decided spec down the legacy hard-coded
-        # parachute path: its enum selected ``parachuteResponseSelected`` while
-        # behavior targeted ``parachuteDeploymentSelected``.
+        # The arbitration behavior consumes this signal, so it needs a package-level
+        # definition even when a component spec names the same trigger and delegates
+        # to this shared topology. LLM-decided priority counts as a runtime catalog
+        # even without member provenance in the boundary; the reviewed deterministic
+        # fixture stays on its historical topology so evaluator gold is not rewritten
+        # to follow an implementation change. Checking only
+        # ``priority.member_provenance`` sent a valid decided spec down the legacy
+        # hard-coded parachute path: its enum selected ``parachuteResponseSelected``
+        # while behavior targeted ``parachuteDeploymentSelected``.
         runtime_catalog_bound = (
             bool(priority.member_provenance)
             or priority.source_kind == DERIVED_SOURCE_KIND
@@ -485,8 +476,8 @@ def emit_ag_package(
                 "from SafetyResponsePriorityContract to SafetyResponseArbitration;"
             )
 
-    # Explicit component owners and legal satisfaction relationships. Ownership
-    # is never inferred from the name of a contract definition.
+    # Explicit component owners and satisfaction relationships; ownership is not
+    # inferred from a contract definition's name.
     if include_implementation:
         for comp in spec.components:
             out.append(f"    part def {comp.owner_def};")
@@ -496,7 +487,6 @@ def emit_ag_package(
                 f"    satisfy requirement {usage} : {comp.name} by {comp.owner_usage};"
             )
 
-    # Reachable trigger -> response-state -> entry-action realizations.
     emitted_signal_defs: set[str] = (
         {"CriticalPropulsionFailureDetectedSignal"}
         if spec.priority is not None
@@ -629,7 +619,7 @@ def emit_ag_package(
         )
         out.append("    }")
 
-    # Decomposition edges (unique names → no namespace-shadowing warning).
+    # Decomposition edges (unique names -> no namespace-shadowing warning).
     for comp in spec.components:
         out.append(
             f"    dependency decompose{comp.name} "

@@ -1,22 +1,19 @@
-"""W-UNIFORM arm — offline replay of the recommendation step (zero LLM cost).
+"""W-UNIFORM arm - offline replay of the recommendation step (zero LLM cost).
 
-The search itself is weight-free (it returns a Pareto front); weights enter
-only when ONE design is recommended from the front.  This replay re-runs that
+The search is weight-free (it returns a Pareto front); weights enter only when
+one design is recommended from that front. This replay re-runs the
 recommendation on the fronts saved by FULL runs under two weight vectors:
 
-  nominal — requirement-derived weights, recomputed with the exact production
+  nominal - requirement-derived weights, recomputed with the production
             function (``variation_dse._recommendation_weights``);
-  uniform — 1/n per objective (the ablation).
+  uniform - 1/n per objective (the ablation).
 
 and reports whether the pick flips, plus each pick's weight-simplex
-robustness.  Replay fidelity is checked: when production picked by weights
-alone (``recommended_by != "datasheet"``), the replayed nominal pick must
-match the run's recorded ``best_config``; a mismatch is flagged loudly
-instead of being silently misreported.
-
-Only variation-mode fronts are replayed — the bilevel arm recommends through
-a different weighting path (``pipeline_adapter``), and pooling the two would
-compare unlike things.
+robustness. Fidelity check: when production picked by weights alone
+(``recommended_by != "datasheet"``), the replayed nominal pick must match the
+run's recorded ``best_config``, and a mismatch is flagged rather than
+reported. Only variation-mode fronts are replayed; the bilevel arm recommends
+through ``pipeline_adapter``, so pooling the two would compare unlike things.
 
 Usage:
     python experiments/ablation/posthoc_weights.py <campaign_dir> [--arm FULL]

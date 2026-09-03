@@ -1,15 +1,14 @@
-"""
-semantic_classifier.py
+"""semantic_classifier.py
 
 LLM 辅助的状态机语义分类器。
 
-把 SysML 模型里的每个 state def 喂给 LLM，让它返回一个语义标签
-（BATTERY_RTB、GCS_LOSS、PARACHUTE_DEPLOY 等），用于 RequirementLinker
-按语义查 catalogue，而不是依赖 req ID 精确匹配。
+把模型里的每个 state def 喂给 LLM，取回一个语义标签（BATTERY_RTB、
+GCS_LOSS、PARACHUTE_DEPLOY 等），供 RequirementLinker 按语义查 catalogue，
+不依赖 req ID 精确匹配。
 
 公共 API:
-  SEMANTIC_TAGS         — 全部支持的标签集合
-  classify_state_machines(model, llm) → Dict[state_def_name, tag]
+  SEMANTIC_TAGS         - 全部支持的标签集合
+  classify_state_machines(model, llm) -> Dict[state_def_name, tag]
 """
 
 from __future__ import annotations
@@ -25,25 +24,21 @@ if TYPE_CHECKING:
     from src.llm.interface import LLMInterface
 
 
-# 与 _REQ_CATALOGUE 的 semantic_tag 字段对齐（包含 Type B 新增标签）
 SEMANTIC_TAGS: List[str] = [
-    # 原有安全类标签
-    "BATTERY_RTB",            # 电池低 → 返航
-    "BATTERY_LAND",           # 电池更低 → 紧急降落
-    "GCS_LOSS",               # 通信丢失 → 安全降落
-    "SENSOR_ARMING_INHIBIT",  # 传感器故障 → 阻止解锁
-    "PARACHUTE_DEPLOY",       # 引擎故障 → 部署降落伞
-    "PAYLOAD_ABORT_LOCK",     # 投递取消 → 锁定载荷
-    "SENSOR_GROUND_ALERT",    # 传感器故障 → 地面报警（STATUSTEXT）
-    # 原有配置类标签
-    "ALTITUDE_FENCE",         # 高度围栏
-    "CONTROL_LOOP_RATE",      # 飞控循环频率
-    "MAVLINK_PROTOCOL",       # MAVLink 协议
-    # Type B 新增标签
-    "MAX_SPEED",              # 最大导航速度 → WPNAV_SPEED
-    "RADIUS_FENCE",           # 运营半径 → FENCE_RADIUS
-    "RTCM_GPS",               # RTCM 差分校正 → GPS_INJECT_TO
-    "UNKNOWN",                # 兜底：无法分类
+    "BATTERY_RTB",
+    "BATTERY_LAND",
+    "GCS_LOSS",
+    "SENSOR_ARMING_INHIBIT",
+    "PARACHUTE_DEPLOY",
+    "PAYLOAD_ABORT_LOCK",
+    "SENSOR_GROUND_ALERT",
+    "ALTITUDE_FENCE",
+    "CONTROL_LOOP_RATE",
+    "MAVLINK_PROTOCOL",
+    "MAX_SPEED",
+    "RADIUS_FENCE",
+    "RTCM_GPS",
+    "UNKNOWN",
 ]
 
 _TAG_DESCRIPTIONS = """\
@@ -91,12 +86,7 @@ def classify_state_machines(
     llm: "LLMInterface",
     verbose: bool = False,
 ) -> Dict[str, str]:
-    """
-    用 LLM 给模型里的每个 state def 打语义标签。
-
-    返回 {state_def_name: tag}。LLM 调用失败或解析失败时返回空字典
-    （RequirementLinker 会 fallback 到 req ID 查表）。
-    """
+    """用 LLM 给模型里的每个 state def 打语义标签。"""
     snippets = _extract_state_def_snippets(model)
     if not snippets:
         return {}
@@ -136,10 +126,6 @@ def classify_state_machines(
 
     return cleaned
 
-
-# ---------------------------------------------------------------------------
-# Layer 3b: 需求文本 → ArduPilot 参数直接推断
-# ---------------------------------------------------------------------------
 
 # ArduPilot Copter 参数白名单，防止 LLM 幻觉
 _ARDU_PARAM_WHITELIST: Dict[str, str] = {
@@ -232,7 +218,6 @@ def suggest_params_from_requirements(
             print(f"  [REQ-PARAM] JSON parse failed; raw[:200]={raw[:200]!r}")
         return {}
 
-    # 校验：只保留白名单内的参数名，过滤 UNKNOWN
     valid_params = set(_ARDU_PARAM_WHITELIST.keys())
     result: Dict[str, Dict] = {}
     for req_id, entry in parsed.items():
@@ -259,12 +244,7 @@ def suggest_params_from_requirements(
 
 
 def extract_req_texts_from_model(model: "SysMLLiteModel") -> Dict[str, str]:
-    """
-    从 SysML 原始文本里提取每个 requirement def 的 doc 注释文本。
-
-    格式：requirement def REQ_XXX { doc /* text */ }
-    返回 {req_id: requirement_text}。
-    """
+    """从 SysML 原始文本里提取每个 requirement def 的 doc 注释文本。"""
     try:
         text = model.to_sysml_text()
     except Exception:
@@ -273,7 +253,6 @@ def extract_req_texts_from_model(model: "SysMLLiteModel") -> Dict[str, str]:
         return {}
 
     result: Dict[str, str] = {}
-    # 匹配 requirement def REQ_xxx { ... doc /* text */ ... }
     for m in re.finditer(
         r'\brequirement\s+def\s+(\w+)\s*\{[^}]*?/\*\s*(.*?)\s*\*/[^}]*?\}',
         text,
@@ -286,7 +265,6 @@ def extract_req_texts_from_model(model: "SysMLLiteModel") -> Dict[str, str]:
 
 
 def _extract_state_def_snippets(model: "SysMLLiteModel") -> List[str]:
-    """从模型文本里抽出每个 state def 的代码块（含 guard 与 entry action）。"""
     try:
         text = model.to_sysml_text()
     except Exception:
@@ -295,7 +273,6 @@ def _extract_state_def_snippets(model: "SysMLLiteModel") -> List[str]:
         return []
 
     snippets: List[str] = []
-    # state def <Name> { ... }  — 用括号配对找闭合
     for m in STATE_DEF_RE.finditer(text):
         name = m.group(1)
         brace_open = text.index('{', m.start())
@@ -316,15 +293,12 @@ def _extract_state_def_snippets(model: "SysMLLiteModel") -> List[str]:
 
 
 def _parse_json_dict(raw: str) -> Optional[Dict[str, str]]:
-    """容忍 markdown 围栏与前后散文，提取首个 JSON 对象。"""
     if not raw:
         return None
-    # 去除 ```json ... ``` 或 ``` ... ``` 围栏
     fenced = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
     if fenced:
         candidate = fenced.group(1)
     else:
-        # 找第一个 { ... } 的最外层
         start = raw.find('{')
         if start < 0:
             return None

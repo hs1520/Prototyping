@@ -13,7 +13,7 @@ def _bridge(tmp_path: Path) -> SITLBridge:
     return bridge
 
 
-def test_shared_pymavlink_runtime_is_valid_python():
+def test_runtime_is_valid_python():
     runtime = render_pymavlink_runtime("tcp:127.0.0.1:5760")
 
     compile(runtime, "<sitl-runtime>", "exec")
@@ -21,7 +21,7 @@ def test_shared_pymavlink_runtime_is_valid_python():
     assert "def wait_mode(" in runtime
 
 
-def test_both_generated_script_families_use_one_runtime(tmp_path):
+def test_both_families_one_runtime(tmp_path):
     bridge = _bridge(tmp_path)
     generic = bridge._render_test_script(SITLTestSpec(
         req_id="REQ_SAFE_001",

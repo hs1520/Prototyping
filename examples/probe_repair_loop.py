@@ -1,19 +1,14 @@
-"""Run the Increment 3 repair loop for real, once, on a single chain.
+"""Run the Increment 3 repair loop once, on a single chain.
 
-DIAGNOSTIC ONLY — no manifest, no digest binding, not evidence.
+Diagnostic only: no manifest, no digest binding, not evidence.
 
-Why it exists: a single chain is the cheapest way to inspect one bounded surgical
-repair turn in isolation. The production multi-chain controller now runs the same
-repair as a fixpoint, but a full arm also pays for base-model and three-chain A/G
-generation before that one turn. This probe reuses an already generated model so
-the repair mechanism can be diagnosed without repeating those calls.
-
-By default this drives that gate deliberately: take one chain out of a real
-committed model and inject one model-semantic fault. With ``--no-inject`` it
-instead uses an existing, naturally generated failure from the supplied model.
-Both paths run route, envelope, bounded session, provider call, surgical merge,
-preservation gates, target-diagnostic removal, and committed-revision recheck.
-They remain diagnostics rather than experiment evidence.
+A single chain is the cheapest way to inspect one bounded surgical repair turn;
+a full arm pays for base-model and three-chain A/G generation first, so this
+probe reuses an already generated model. By default it takes one chain out of a
+committed model and injects one model-semantic fault; ``--no-inject`` uses an
+existing failure from the supplied model instead. Both paths run route,
+envelope, bounded session, provider call, surgical merge, preservation gates,
+target-diagnostic removal and committed-revision recheck.
 
     .venv/bin/python examples/probe_repair_loop.py --confirm-external-call
 """
@@ -45,8 +40,8 @@ DEFAULT_MODEL = (
 def _single_chain(text: str, requirement: str) -> str:
     """One chain's package plus its authoritative requirement def.
 
-    Repair is a single-chain capability, so a multi-chain model must be reduced
-    before the loop is reachable at all.
+    Repair is single-chain, so a multi-chain model is reduced before the loop is
+    reachable.
     """
     package = re.search(
         rf"package {requirement}_AG \{{.*?\n\}}", text, re.S
@@ -64,7 +59,6 @@ def _single_chain(text: str, requirement: str) -> str:
 
 
 def _injure(text: str) -> tuple[str, str]:
-    """Remove one responding state's entry action: a model-semantic fault."""
     match = re.search(r"state (\w+) \{ entry action (set\w+); \}", text)
     if match is None:
         raise SystemExit("no entry action to remove")
@@ -118,9 +112,8 @@ def main() -> int:
         return 1
 
     board = Blackboard("Drone")
-    # the authoritative publication must byte-match the committed `doc` text: the
-    # commit gate compares them and refuses otherwise, which it did on the first
-    # attempt here — protection working, not an obstacle to route around
+    # publication must byte-match the committed `doc` text; the commit gate
+    # compares them and refuses otherwise
     doc = re.search(
         rf"requirement def {args.requirement} \{{[^}}]*?doc /\*(.*?)\*/",
         injured, re.S,
@@ -156,7 +149,7 @@ def main() -> int:
         analysis_record_id=analysis.record_id,
     )
 
-    # the audit is why a rejection is actionable rather than opaque
+    # the audit is what makes a rejection actionable
     audit = next(
         (item.payload for item in reversed(board.records(topic="repair.decision"))
          if item.payload.get("audit")), {}
@@ -196,9 +189,8 @@ def main() -> int:
         print(f"recheck of committed: {after.verdict} "
               f"{sorted({d.code for d in after.errors()})}")
     if decision.status != "ACCEPTED":
-        # the application-owned transcript is the whole point of §5.3: without it a
-        # rejected repair is a verdict with no visible cause. include_messages is
-        # opt-in, and asking for the digest only (the default) is what hid it.
+        # §5.3's application-owned transcript: without it a rejected repair shows no
+        # cause. include_messages is opt-in; the default digest-only view hides it.
         snapshot = sessions.snapshot(include_messages=True)
         for item in snapshot.get("sessions", []):
             for turn in item.get("messages", []) or []:

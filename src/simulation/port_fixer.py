@@ -1,26 +1,21 @@
-"""
-port_fixer.py
+r"""port_fixer.py
 
-外科式端口缺失修复:当 connectivity_fixer 报告"no valid connections to add"
-(因为某个 part 缺少必要的 out/in port,导致连接不上)时,本模块给指定的
-part def 添加端口声明,再让后续 connectivity_fixer 接上。
+外科式端口缺失修复:connectivity_fixer 报"no valid connections to add"
+(某个 part 缺 out/in port 接不上)时,本模块给指定 part def 补端口声明,
+再由 connectivity_fixer 接上。
 
-为什么需要本模块(对比 connectivity_fixer)
-──────────────────────────────────────────
-connectivity_fixer 的硬规则禁止"凭空造端口",因为旧做法里 LLM 会捏造
-不存在的端口名(如 `airframe.telemetryOut`)制造表面合法但实际崩溃的
-connect。该规则解决了"造假端口"问题,但留下盲区:**真实需要补端口**
-的情况也被阻止。port_fixer 用同样的"窄上下文 + 程序校验"思路填补这个
-盲区——LLM 只准返回 `<PartName>: <direction> port <name> : <Type>;`
-行,程序逐条校验、合法的才插入对应 part def 块。
+connectivity_fixer 禁止凭空造端口,因为 LLM 会捏造端口名(如
+`airframe.telemetryOut`);该规则也挡住了真正需要补端口的情况。
+port_fixer 用同样的窄上下文 + 程序校验思路填补:LLM 只返回
+`<PartName>: <direction> port <name> : <Type>;` 行,校验通过才插入。
 
-校验规则(任一不过 → 丢弃)
-─────────────────────────
+校验规则(任一不过 -> 丢弃)
+────────────────────────
   1. PartName 必须是已存在的 part def
   2. 端口名不能与该 part def 已有端口冲突
   3. 方向必须是 in / out / inout
   4. 端口类型必须是已声明的 port def(或保留类型 DataPort)
-  5. 名字符合标识符规则(\\w+)
+  5. 名字符合标识符规则(\w+)
 
 公共 API
 ────────
@@ -41,17 +36,13 @@ from .connectivity_fixer import PortDirectory
 from ..utils.sysml_text_utils import named_block_span
 
 
-# ---------------------------------------------------------------------------
-# 数据类
-# ---------------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class PortAdd:
     """A proposed new port to add into a given part def."""
-    part_def: str        # 例如 "PropulsionSystem"
-    direction: str       # 'in' | 'out' | 'inout'
-    name: str            # 例如 "propulsionStatus"
-    port_type: str       # PortDef 名称,例如 "DataPort"
+    part_def: str
+    direction: str
+    name: str
+    port_type: str
 
     def to_sysml(self) -> str:
         return f"{self.direction} port {self.name} : {self.port_type};"
@@ -60,7 +51,7 @@ class PortAdd:
 @dataclass
 class PortValidation:
     accepted: List[PortAdd] = field(default_factory=list)
-    rejected: List[Tuple[str, str]] = field(default_factory=list)  # (raw, reason)
+    rejected: List[Tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -70,49 +61,29 @@ class PortMergeResult:
     added_descriptions: List[str] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# 正则
-# ---------------------------------------------------------------------------
-
 _PORT_DEF_RE = re.compile(r'\bport\s+def\s+(\w+)')
-# LLM 输出格式: <PartName>: <direction> port <name> : <Type>;
 _LINE_RE = re.compile(
     r'(\w+)\s*:\s*(in|out|inout)\s+port\s+(\w+)\s*:\s*(\w+)\s*;',
     re.IGNORECASE,
 )
 
 
-# ---------------------------------------------------------------------------
-# 块匹配辅助
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# 已声明 port def 收集(用于类型校验)
-# ---------------------------------------------------------------------------
-
 def collect_port_defs(sysml_text: str) -> Set[str]:
     """Return the set of port def names declared in *sysml_text*."""
     return {m.group(1) for m in _PORT_DEF_RE.finditer(sysml_text)}
 
-
-# ---------------------------------------------------------------------------
-# Prompt 构建
-# ---------------------------------------------------------------------------
 
 def build_port_fix_prompt(
     directory: PortDirectory,
     port_defs: Set[str],
     failed_scenarios: List[Dict],
 ) -> str:
+    """Build a prompt asking the LLM to propose port additions that unblock the
+    failed reachability scenarios.
     """
-    Build a focused prompt asking the LLM to propose port ADDITIONS that
-    unblock the failed reachability scenarios.
-    """
-    # ── Existing part / port directory ────────────────────────────────────
     dir_lines: List[str] = [
         "[EXISTING PART DEFS WITH PORTS]:",
     ]
-    # Group instances by their part def type so the LLM sees the type-level picture
     type_to_ports: Dict[str, Dict[str, str]] = {}
     for inst, typ in directory.instance_type.items():
         if typ not in type_to_ports:
@@ -127,14 +98,11 @@ def build_port_fix_prompt(
         dir_lines.append(f"  {typ}  →  {port_str}")
     dir_block = "\n".join(dir_lines)
 
-    # ── Available port types ──────────────────────────────────────────────
     types_block = "[AVAILABLE PORT TYPES]: " + ", ".join(sorted(port_defs))
 
-    # ── Failed scenarios ──────────────────────────────────────────────────
     fail_lines: List[str] = [
         "[UNREACHABLE SCENARIOS] (signals can't flow because some part lacks a port):"
     ]
-    # Map src/tgt instances back to their part def types for the LLM
     inst_to_type = dict(directory.instance_type)
     for s in failed_scenarios:
         src = s.get("src", "?")
@@ -171,10 +139,6 @@ def build_port_fix_prompt(
     )
 
 
-# ---------------------------------------------------------------------------
-# LLM 返回解析
-# ---------------------------------------------------------------------------
-
 def extract_port_additions(llm_response: str) -> List[PortAdd]:
     """Extract all `<Part>: <direction> port <name> : <Type>;` lines."""
     cleaned = re.sub(r'```[a-zA-Z]*', '', llm_response).replace('```', '')
@@ -189,10 +153,6 @@ def extract_port_additions(llm_response: str) -> List[PortAdd]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# 校验
-# ---------------------------------------------------------------------------
-
 def validate_port_additions(
     items: List[PortAdd],
     directory: PortDirectory,
@@ -201,9 +161,7 @@ def validate_port_additions(
     """Validate each proposed port addition against existing structure."""
     result = PortValidation()
 
-    # Build set of part def names from directory.instance_type
     part_defs_in_model: Set[str] = set(directory.instance_type.values())
-    # Build set of (part_def, port_name) already declared, via instance ports
     existing_ports: Dict[str, Set[str]] = {pd: set() for pd in part_defs_in_model}
     for inst, ports in directory.instances.items():
         typ = directory.instance_type.get(inst, "")
@@ -215,23 +173,19 @@ def validate_port_additions(
     for item in items:
         raw = item.to_sysml()
 
-        # Rule 1: part def must exist
         if item.part_def not in part_defs_in_model:
             result.rejected.append((raw, f"未知 part def '{item.part_def}'"))
             continue
 
-        # Rule 3: direction
         if item.direction not in ("in", "out", "inout"):
             result.rejected.append((raw, f"无效方向 '{item.direction}'"))
             continue
 
-        # Rule 4: port type must be declared (or be the built-in DataPort)
         if item.port_type not in port_defs and item.port_type != "DataPort":
             result.rejected.append(
                 (raw, f"端口类型 '{item.port_type}' 未声明 port def"))
             continue
 
-        # Rule 2: port name conflict (in same part def, including this batch)
         key = (item.part_def, item.name)
         if item.name in existing_ports.get(item.part_def, set()):
             result.rejected.append(
@@ -242,29 +196,21 @@ def validate_port_additions(
                 (raw, f"批次内重复声明 '{item.part_def}.{item.name}'"))
             continue
 
-        # Accept
         result.accepted.append(item)
         seen_this_batch.add(key)
 
     return result
 
 
-# ---------------------------------------------------------------------------
-# 合并 — 插入到指定 part def 块的端口区
-# ---------------------------------------------------------------------------
-
 def merge_port_additions(
     sysml_text: str, accepted: List[PortAdd],
 ) -> PortMergeResult:
-    """
-    Insert each accepted port declaration into its part def block, immediately
-    after the last existing port declaration (or right after the opening `{`
-    if no ports exist yet).
+    """Insert each accepted port declaration into its part def block, after the last
+    existing port declaration or after the opening `{`.
     """
     if not accepted:
         return PortMergeResult(merged_text=sysml_text, n_added=0)
 
-    # Group by part def for efficient single-pass insertion per block
     by_part: Dict[str, List[PortAdd]] = {}
     for item in accepted:
         by_part.setdefault(item.part_def, []).append(item)
@@ -275,21 +221,17 @@ def merge_port_additions(
     # Process in reverse text order so earlier offsets stay valid
     insertions: List[Tuple[int, str]] = []
     for pname, items in by_part.items():
-        # Locate the part def block
         span = named_block_span(text, "part", pname)
         if span is None:
             continue
         brace, end = span
         body = text[brace + 1: end]
 
-        # Find indent and insertion position
-        # Default indent: 8 spaces (typical inside package > part def)
         port_match = re.search(
             r'\n(\s*)(in|out|inout)\s+port\s+\w+', body
         )
         if port_match:
             indent = port_match.group(1)
-            # Insert after the last port declaration line
             last_port_re = re.compile(
                 r'(in|out|inout)\s+port\s+\w+\s*:\s*\w+\s*;'
             )
@@ -304,11 +246,9 @@ def merge_port_additions(
             indent = "        "
             offset_in_body = 0
 
-        # Build the new block of port lines
         new_lines = "".join(
             f"\n{indent}{item.to_sysml()}" for item in items
         )
-        # Absolute insertion position (within the full text)
         insert_at = brace + 1 + offset_in_body
         insertions.append((insert_at, new_lines))
         for item in items:

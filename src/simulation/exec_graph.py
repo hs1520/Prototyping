@@ -1,5 +1,4 @@
-"""
-exec_graph.py
+"""exec_graph.py
 
 Builds a networkx DiGraph from a BehavioralGraph.
 
@@ -10,20 +9,17 @@ Node attributes:
   - def_name:  (parts) PartDefinition name for type-based classification
 
 Edge kinds:
-  - egress       Part → OutPort  (signal leaves the part)
-  - ingress      InPort → Part   (signal enters the part)
-  - has_port     Part ↔ Port for direction="none" (unknown — bidirectional)
-  - connection   Port → Port     (declared connect statement)
+  - egress       Part -> OutPort  (signal leaves the part)
+  - ingress      InPort -> Part   (signal enters the part)
+  - has_port     Part ↔ Port for direction="none" (unknown - bidirectional)
+  - connection   Port -> Port     (declared connect statement)
 
 Signal flow topology:
   SourcePart ──egress──► OutPort ──connection──► InPort ──ingress──► TargetPart
 
-Direction-based edges replace the old "has_port / port_owned_by" bidirectional
-pair that caused false reachability (any two parts sharing any connected port
-looked reachable in both directions).
-
-For ports whose direction is "none" (not declared), both edges are added as a
-conservative fallback so valid paths are not missed.
+Direction-based edges replace the old bidirectional "has_port / port_owned_by"
+pair, under which any two parts sharing a connected port looked reachable both
+ways. Ports with direction "none" get both edges as a fallback.
 """
 
 from __future__ import annotations
@@ -40,9 +36,7 @@ from .extractor import BehavioralGraph
 
 
 def build_exec_graph(bg: BehavioralGraph) -> "nx.DiGraph":
-    """
-    Convert BehavioralGraph → networkx DiGraph with direction-aware edges.
-    """
+    """Convert BehavioralGraph -> networkx DiGraph with direction-aware edges."""
     if not _HAS_NX:
         raise ImportError(
             "networkx is required for simulation. Install with: pip install networkx"
@@ -50,36 +44,29 @@ def build_exec_graph(bg: BehavioralGraph) -> "nx.DiGraph":
 
     G = nx.DiGraph()
 
-    # ── Part nodes ──────────────────────────────────────────────────────────
     for pid, part in bg.parts.items():
         G.add_node(pid, type="part", def_name=part.def_name)
 
-    # ── Port nodes + direction-aware part↔port edges ────────────────────────
     for port_id, port in bg.ports.items():
         G.add_node(port_id, type="port", direction=port.direction, owner=port.part_name)
 
         d = port.direction
         if d == "out":
-            # Signal leaves the part through this port
             G.add_edge(port.part_name, port_id, kind="egress")
         elif d == "in":
-            # Signal enters the part through this port
             G.add_edge(port_id, port.part_name, kind="ingress")
         elif d == "inout":
-            # Signal can flow in both directions
             G.add_edge(port.part_name, port_id, kind="egress")
             G.add_edge(port_id, port.part_name, kind="ingress")
         else:
-            # Direction not declared — conservative: allow both
+            # Direction not declared - conservative: allow both
             G.add_edge(port.part_name, port_id, kind="has_port")
             G.add_edge(port_id, port.part_name, kind="has_port")
 
-    # ── Connection edges (port → port) ──────────────────────────────────────
     for conn in bg.connections:
         src = conn.source
         tgt = conn.target
 
-        # Ensure endpoints exist (fallback for unresolved port ids)
         if src not in G:
             G.add_node(src, type="port", direction="none",
                        owner=src.split(".")[0])
@@ -91,10 +78,6 @@ def build_exec_graph(bg: BehavioralGraph) -> "nx.DiGraph":
 
     return G
 
-
-# ---------------------------------------------------------------------------
-# Graph query helpers
-# ---------------------------------------------------------------------------
 
 def reachable_from(G: "nx.DiGraph", source: str) -> Set[str]:
     """Return all nodes reachable from *source* via directed edges."""

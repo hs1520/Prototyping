@@ -1,26 +1,20 @@
-"""
-Multi-agent Orchestrator for MBSE prototyping.
-
-Coordinates the different specialized agents to implement the
-full rapid prototyping pipeline, combining forward and backward
-inference with design space exploration.
-"""
+"""Multi-agent Orchestrator for MBSE prototyping."""
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-# Re-exported deliberately: `ag_assurance_source._shared_check_syntax` late-binds
-# to `orchestrator.check_syntax` so a caller can instrument the strict shared
-# syntax gate by replacing this module attribute.  Importing it elsewhere is not
-# a substitute — the seam is this name on this module.
+# Re-exported: `ag_assurance_source._shared_check_syntax` late-binds to
+# `orchestrator.check_syntax`, so replacing this module attribute
+# instruments the strict shared syntax gate. The seam is this name on this
+# module.
 from ..simulation.syntax_checker import check_syntax
 
-# The shared helpers and the run-state record are defined once, in
-# `orchestrator_support`, which every knowledge-source module imports.  They are
-# re-exported here because `agents/__init__` and existing tests import them from
-# this module, and so that `PrototypingState` is a single class rather than two
-# structurally identical ones reached by different import paths.
+# The shared helpers and the run-state record live in
+# `orchestrator_support`, which every knowledge-source module imports.  They
+# are re-exported here because `agents/__init__` and existing tests import
+# them from this module, and so `PrototypingState` stays a single class
+# rather than two structurally identical ones reached by different paths.
 from .orchestrator_support import PrototypingState, _public_realization
 
 from .ag_assurance_source import AGAssuranceMixin
@@ -45,17 +39,7 @@ class Orchestrator(
     ExplorationMixin,
     ReportingMixin,
 ):
-    """
-    Multi-agent orchestrator for AI-assisted MBSE rapid prototyping.
-
-    Implements a cyclic design process:
-    1. Requirements extraction (RequirementsAgent)
-    2. Initial design generation (DesignAgent)
-    3. Design space definition and exploration (MCTS)
-    4. Design evaluation and scoring
-    5. Design refinement based on feedback (DesignAgent)
-    6. Repeat until quality threshold is met
-    """
+    """Multi-agent orchestrator for AI-assisted MBSE rapid prototyping."""
 
     def prototype(
         self,
@@ -68,10 +52,7 @@ class Orchestrator(
         parse_strict: Optional[bool] = None,
         frozen_requirements: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """
-        Full pipeline: generate a validated model then run DSE (MCTS).
-        Convenience wrapper — calls generate() then explore().
-        """
+        """Full pipeline: generate a validated model then run DSE (MCTS)."""
         gen_result = self.generate(
             system_name=system_name,
             system_description=system_description,
@@ -85,10 +66,6 @@ class Orchestrator(
             mcts_seed=mcts_seed,
             mcts_patience=mcts_patience,
         )
-
-    # ---------------------------------------------------------------------- #
-    #  Stage 1 — Generate a validated SysML v2 model (no DSE)                #
-    # ---------------------------------------------------------------------- #
 
     def generate(
         self,

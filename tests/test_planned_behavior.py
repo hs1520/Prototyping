@@ -60,7 +60,7 @@ def _constraint() -> ConstraintPlan:
     )
 
 
-def test_state_active_constraint_requires_exact_typed_behavior_identity():
+def test_constraint_needs_typed_behavior():
     issues = validate_planned_behaviors(
         (),
         component_names={"FlightController"},
@@ -77,7 +77,7 @@ def test_state_active_constraint_requires_exact_typed_behavior_identity():
     ]
 
 
-def test_behavior_plan_rejects_unreachable_activation_state():
+def test_unreachable_state_rejected():
     behavior = PlannedBehavior(
         owner="FlightController",
         behavior_id="FlightControllerBehavior",
@@ -105,7 +105,7 @@ def test_behavior_plan_rejects_unreachable_activation_state():
     ) in issues
 
 
-def test_response_state_requires_executable_entry_or_do_action():
+def test_response_state_needs_action():
     behavior = PlannedBehavior(
         owner="FlightController",
         behavior_id="FlightControllerBehavior",
@@ -138,7 +138,7 @@ def test_response_state_requires_executable_entry_or_do_action():
     )
 
 
-def test_do_action_is_preserved_as_executable_state_behavior():
+def test_do_action_preserved():
     behavior = PlannedBehavior(
         owner="FlightController",
         behavior_id="FlightControllerBehavior",
@@ -165,9 +165,9 @@ def test_do_action_is_preserved_as_executable_state_behavior():
     compiled, report = materialize_planned_behaviors("", (behavior,))
 
     assert report["status"] == "PASS"
-    # Named, typed usage spelling: the bare `do action X;` declared a nested
-    # member named X that shadowed the part-level `action def X` — the
-    # measured mass-shadowing source of the 2026-08-30 draws.
+    # Named, typed usage spelling: the bare `do action X;` declared a nested member
+    # X that shadowed the part-level `action def X` - the shadowing source of the
+    # 2026-08-30 draws.
     assert (
         "do action runAvoidingObstacle : maintainObstacleSeparation;"
         in compiled
@@ -186,7 +186,7 @@ def test_do_action_is_preserved_as_executable_state_behavior():
     )
 
 
-def test_fragment_compiler_replaces_llm_state_identity_drift():
+def test_fragment_compiler_fixes_drift():
     fragment = """
 // OWNER: FlightController
 state def FlightControllerBehavior {
@@ -212,7 +212,7 @@ state def FlightControllerBehavior {
     assert compiled.count("state def FlightControllerBehavior") == 1
 
 
-def test_owned_compiler_replaces_assembly_identity_drift():
+def test_owned_compiler_fixes_drift():
     assembled = """
 package DeliveryUAV {
     part def FlightController {
@@ -240,7 +240,7 @@ package DeliveryUAV {
     assert "action def executeObstacleAvoidance {}" in compiled
 
 
-def test_constraint_compiler_is_the_only_state_constraint_writer():
+def test_only_compiler_writes_constraints():
     assembled = """
 package DeliveryUAV {
     item def ObstacleDetectedSignal;
@@ -277,7 +277,6 @@ _INHIBITION_REQ = (
 
 
 def _release_plan(guard: str = "") -> PlannedBehavior:
-    """The behaviour the authoritative run actually generated, guard optional."""
     return PlannedBehavior(
         owner="PayloadMechanism",
         behavior_id="PayloadReleaseBehavior",
@@ -305,12 +304,12 @@ def _validate(behavior: PlannedBehavior) -> list[str]:
     )
 
 
-def test_an_inhibition_requirement_may_not_leave_its_held_state_unguarded():
-    """The generated plan, verbatim. Every structural check passed on it — the
-    states exist, the identifiers are legal, the response state is reachable —
-    and the vehicle separated its payload during an active abort, reproduced at
-    three tiers. Nothing had asked whether the state the requirement says to
-    HOLD could be left unconditionally."""
+def test_held_state_needs_guard():
+    """The generated plan, verbatim. Every structural check passed - states exist,
+    identifiers legal, response state reachable - yet the vehicle separated its
+    payload during an active abort. Nothing checked whether the held state could be
+    left unconditionally.
+    """
     issues = _validate(_release_plan())
 
     assert issues
@@ -319,22 +318,20 @@ def test_an_inhibition_requirement_may_not_leave_its_held_state_unguarded():
     assert "abort" in issues[0]
 
 
-def test_a_guard_naming_the_inhibiting_condition_satisfies_the_obligation():
+def test_matching_guard_satisfies():
     assert _validate(_release_plan("not deliveryAbortActive")) == []
 
 
-def test_a_guard_that_names_some_other_condition_does_not_satisfy_it():
-    """A guard is not a token: it has to name the condition the requirement
-    conditions the inhibition on."""
+def test_other_guard_not_enough():
     issues = _validate(_release_plan("not batteryLow"))
     assert issues and "leaves Locked unconditionally" in issues[0]
 
 
-def test_the_guard_reaches_the_emitted_sysml_composed_with_the_accept():
-    """An inhibition is accept AND guard: the event still arrives, and the
-    transition must not fire while the condition holds. Emitting one or the
-    other makes "release on arrival" and "release on arrival unless aborted"
-    the same model."""
+def test_guard_emitted_with_accept():
+    """An inhibition is accept plus guard: the event still arrives and the transition
+    does not fire while the condition holds. Emitting only one makes "release on
+    arrival" and "release on arrival unless aborted" the same model.
+    """
     text = emit_planned_behavior(_release_plan("not deliveryAbortActive"))
 
     assert "accept DeliveryCoordinateSatisfied" in text
@@ -342,10 +339,10 @@ def test_the_guard_reaches_the_emitted_sysml_composed_with_the_accept():
     assert text.index("accept") < text.index("if not") < text.index("then Releasing")
 
 
-def test_a_writer_that_drops_the_guard_is_caught_by_conformance():
-    """Dropping a guard leaves a model that parses, keeps every state reachable
-    and fires unconditionally — a change that reads as harmless. It is the
-    whole of the defect, so the conformance check has to name it."""
+def test_dropped_guard_caught():
+    """Dropping a guard leaves a model that parses, keeps every state reachable and
+    fires unconditionally, so the conformance check has to name it.
+    """
     behavior = _release_plan("not deliveryAbortActive")
     unguarded = emit_planned_behavior(_release_plan())
     report = check_planned_behavior_conformance(
@@ -355,9 +352,7 @@ def test_a_writer_that_drops_the_guard_is_caught_by_conformance():
     assert any("dropped its guard" in issue for issue in report["issues"])
 
 
-def test_a_non_inhibition_requirement_is_not_forced_to_carry_guards():
-    """The rule follows the requirement's parsed intent, so an ordinary
-    behavioural requirement is untouched."""
+def test_non_inhibition_needs_no_guard():
     issues = validate_planned_behaviors(
         [_release_plan()],
         component_names={"PayloadMechanism"},

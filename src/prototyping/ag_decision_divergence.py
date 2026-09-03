@@ -2,29 +2,24 @@
 
 The three robustness pillars cannot tell the two emitter-rendered R2 modes apart.
 Both `DETERMINISTIC_SPEC_EMITTER` and `LLM_DECIDED_SPEC` render through
-`ag_emitter`, so conformance is guaranteed by the renderer rather than earned by
-the decisions: a full 3x3 pilot of each produced pattern-conformance reports
-differing only in the model digest. Everything that actually differed — the timing
-apportionment, the response-set enumeration — was invisible to every pillar.
+`ag_emitter`, so conformance comes from the renderer: a 3x3 pilot of each produced
+pattern-conformance reports differing only in the model digest, while the timing
+apportionment and response-set enumeration were invisible to every pillar.
 
-This measures that difference. It is deliberately reported as **divergence, not
-accuracy**, because for the facts at issue there is no ground truth to be accurate
-against:
+This measures that difference, reported as divergence rather than accuracy, because
+the facts at issue have no ground truth:
 
 ``REQUIREMENT_DETERMINED``
-    The requirement text fixes the answer — the safety pattern it instantiates,
-    what starts the timing, the stated deadline. A divergence here is a defect: the
-    author misread a requirement that says what it means.
+    The requirement text fixes the answer - the safety pattern, what starts the
+    timing, the stated deadline. A divergence here is a defect.
 ``DESIGNER_SUPPLIED``
-    The requirement text does not contain the answer — how the deadline divides
-    across components, which responses exist and in what order. A divergence here
-    is a different design decision, not an error. Apportioning 0.2 + 0.3 and
-    0.1 + 0.35 are both internally consistent and both meet a 0.5 s deadline; one
-    holds margin, the other does not, and the requirement is silent on margin.
+    The requirement text is silent - how the deadline divides, which responses
+    exist and in what order. A divergence is a different design decision:
+    0.2 + 0.3 and 0.1 + 0.35 both meet a 0.5 s deadline, one holding margin.
 
 Comparing against the committed chain spec is not gold scoring: that spec is the
-student-approved decomposition, and for DESIGNER_SUPPLIED facts it is one defensible
-choice rather than the correct one.
+student-approved decomposition, and for DESIGNER_SUPPLIED facts it is one
+defensible choice rather than the correct one.
 Kept deliberately: thesis baseline/evidence code, exercised by its own tests and invoked on demand rather than wired into the runtime pipeline. Do not remove as dead code.
 """
 from __future__ import annotations
@@ -36,8 +31,8 @@ DIVERGENCE_SCHEMA_VERSION = "1.0"
 REQUIREMENT_DETERMINED = "REQUIREMENT_DETERMINED"
 DESIGNER_SUPPLIED = "DESIGNER_SUPPLIED"
 
-#: Why each fact carries its provenance class. Stated here so the classification is
-#: reviewable rather than implicit in the comparison code.
+# Provenance class per fact, stated here so the classification is reviewable
+# rather than implicit in the comparison code.
 FACT_PROVENANCE: Dict[str, tuple] = {
     "safety_pattern": (
         REQUIREMENT_DETERMINED,
@@ -97,10 +92,9 @@ def _facts_from_graph(graph: Any) -> Dict[str, Any]:
                 is not None else None)
         ),
         "priority_trigger": priority.get("trigger"),
-        # nested under the extracted arbitration topology, not at the top level;
-        # reading it from the top level returned None for every model and made the
-        # deterministic emitter — which renders the reviewed spec verbatim — report
-        # a divergence from it
+        # nested under the extracted arbitration topology; reading the top level
+        # returned None for every model, so the deterministic emitter reported a
+        # divergence from the spec it renders verbatim
         "selected_response": (
             (priority.get("arbitration_topology") or {}).get("selection") or {}
         ).get("selected_response"),
@@ -152,7 +146,6 @@ def _facts_from_spec(spec: Any) -> Dict[str, Any]:
 
 
 def _comparable(value: Any) -> Any:
-    """Numeric strings compare by value, so '0.5' and '0.50' are not a divergence."""
     if isinstance(value, str):
         try:
             return float(value)

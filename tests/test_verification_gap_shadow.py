@@ -1,12 +1,10 @@
-"""The mid-loop verification-gap audit must see planned materialisation.
+"""The mid-loop verification-gap audit sees planned materialisation.
 
-Planned attributes materialise only at the terminal enforcement (deliberately
-after every LLM rewrite).  The ablation pilot showed the cost of auditing the
-raw loop text instead: REQ_CONS_001's 120 m threshold attribute was part of
-the plan all along, yet the audit flagged the requirement as unanchored and a
-surgical anchor pass was spent — and rejected — on a gap the terminal
-materialisation closed moments later.  These tests pin the shadow audit to
-the committed pilot artifacts that exposed it.
+Planned attributes materialise only at the terminal enforcement, after every
+LLM rewrite. Auditing the raw loop text instead flagged REQ_CONS_001 as
+unanchored although its 120 m threshold attribute was in the plan, and a
+surgical anchor pass was spent - and rejected - on a gap the terminal
+materialisation closed. Pinned against the committed pilot artifacts.
 """
 from __future__ import annotations
 
@@ -46,7 +44,7 @@ def _engine(plan_payload) -> _RefinementEngine:
     return engine
 
 
-def test_plan_committed_anchors_do_not_raise_gap_issues():
+def test_planned_anchors_raise_no_gap():
     engine = _engine(_pilot_plan())
     issues = engine._verification_gap_issues(
         _pilot_text_without_threshold(), "AutonomousDrone"
@@ -57,7 +55,7 @@ def test_plan_committed_anchors_do_not_raise_gap_issues():
     )
 
 
-def test_without_a_plan_the_gap_is_still_reported():
+def test_gap_reported_without_plan():
     engine = _engine(None)
     issues = engine._verification_gap_issues(
         _pilot_text_without_threshold(), "AutonomousDrone"
@@ -67,7 +65,7 @@ def test_without_a_plan_the_gap_is_still_reported():
     )
 
 
-def test_shadow_falls_back_to_the_raw_text_on_a_broken_plan():
+def test_broken_plan_falls_back_to_text():
     engine = _engine({"nonsense": True})
     text = _pilot_text_without_threshold()
     assert engine._planned_materialization_shadow(text) == text

@@ -1,11 +1,11 @@
 """A compound requirement asserts more than one thing, and its halves can have
 different verification means.
 
-REQ-INTF-001 asks for MAVLink v2.0 *over an AES-256 encrypted channel*. SITL
-tests the protocol; nothing in simulation tests the encryption. While that was
-one obligation over the whole sentence, the untestable half dragged the testable
-one out of scope — and had the testable half been tested, its evidence would
-have appeared to close the encryption clause too. Both directions are wrong.
+REQ-INTF-001 asks for MAVLink v2.0 over an AES-256 encrypted channel: SITL
+tests the protocol, nothing in simulation tests the encryption. As one
+obligation over the whole sentence, the untestable half pulled the testable
+one out of scope, and evidence for the testable half would have appeared to
+close the encryption clause too.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ _INTF_001 = (
 )
 
 
-def test_capability_and_untestable_medium_become_separate_obligations():
+def test_capability_and_medium_split():
     obligations = compile_verification_obligations("REQ_INTF_001", _INTF_001)
 
     assert len(obligations) == 2
@@ -39,7 +39,7 @@ def test_capability_and_untestable_medium_become_separate_obligations():
     assert medium.obligation_id.endswith("M")
 
 
-def test_a_protocol_test_closes_the_protocol_half_and_not_the_encrypted_half():
+def test_protocol_closes_only_protocol():
     obligations = compile_verification_obligations("REQ_INTF_001", _INTF_001)
     sitl = EvidenceClaim(
         description="L2 wire-level MAVLink v2 conformance (PASS)",
@@ -60,13 +60,11 @@ def test_a_protocol_test_closes_the_protocol_half_and_not_the_encrypted_half():
 
     assert results[capability.obligation_id].status == "verified"
     assert results[medium.obligation_id].status == "out-of-sim-scope"
-    # and the evidence does not cross over
     assert "MAVLink" in results[capability.obligation_id].evidence[0]
     assert all("MAVLink" not in e for e in results[medium.obligation_id].evidence)
 
 
-def test_an_inspection_finding_no_longer_stamps_every_clause():
-    """The defect: one 'encrypted' put the whole requirement out of scope."""
+def test_inspection_not_every_clause():
     obligations = compile_verification_obligations("REQ_INTF_001", _INTF_001)
     inspection = EvidenceClaim(
         description="inspection/analysis item",
@@ -78,25 +76,18 @@ def test_an_inspection_finding_no_longer_stamps_every_clause():
     capability, medium = obligations
 
     assert results[medium.obligation_id].status == "out-of-sim-scope"
-    # the protocol clause is simply unverified — open, not declared untestable
     assert results[capability.obligation_id].status == "unverified"
 
 
-# --------------------------------------------------------------------------
-# the splitter declines far more often than it fires
-# --------------------------------------------------------------------------
-
-def test_a_condition_is_not_a_medium():
-    """'operate across an ambient temperature range' is one obligation. Splitting
-    it would leave 'The system shall operate', which asserts nothing."""
+def test_condition_not_medium():
     assert split_capability_and_medium(
         "The system shall operate across an ambient temperature range of "
         "-10 °C to +45 °C."
     ) is None
 
 
-def test_an_untestable_term_inside_the_main_clause_does_not_split():
-    """REQ-FUNC-004: 'a continuously encrypted bidirectional data link' — the
+def test_untestable_in_clause_no_split():
+    """REQ-FUNC-004: 'a continuously encrypted bidirectional data link' - the
     encryption qualifies the link itself, and no word-level cut separates them
     without inventing a requirement."""
     assert split_capability_and_medium(
@@ -106,19 +97,19 @@ def test_an_untestable_term_inside_the_main_clause_does_not_split():
     ) is None
 
 
-def test_a_means_is_not_a_medium_and_must_not_be_split_off():
-    """"authenticate ... using an AES challenge" — the AES challenge IS the
-    authentication, not a channel the authentication runs over. Splitting it
-    left a testable "authenticate every operator command" that a protocol-level
-    test could close while the mechanism went untested. A medium is separable
-    from the capability; a means is not."""
+def test_means_not_medium():
+    """"authenticate ... using an AES challenge" - the AES challenge is the
+    authentication, not a channel it runs over. Splitting it left a testable
+    "authenticate every operator command" that a protocol-level test could close
+    while the mechanism went untested. A medium is separable; a means is not.
+    """
     assert split_capability_and_medium(
         "The system shall authenticate every operator command and reject "
         "unsigned packets using an AES challenge over the uplink."
     ) is None
 
-    # the contrast that must keep splitting: the channel is a medium, and
-    # MAVLink v2 conformance over it is a real, separate capability
+    # still splits: the channel is a medium and MAVLink v2 conformance
+    # over it is a separate capability
     split = split_capability_and_medium(_INTF_001)
     assert split is not None
     capability, medium = split
@@ -126,31 +117,28 @@ def test_a_means_is_not_a_medium_and_must_not_be_split_off():
     assert "AES-256 encrypted RF channel" in medium
 
 
-def test_a_word_that_merely_contains_an_untestable_term_does_not_split():
-    """"materialized" is not "material"."""
+def test_substring_term_no_split():
     assert split_capability_and_medium(
         "The system shall serve cached query results to the operator console "
         "using a materialized database view over a replicated store."
     ) is None
 
 
-def test_a_conformance_qualifier_is_not_a_medium():
-    """'in accordance with the ASTM F3411-22 standard' says HOW the same
-    capability must behave, not what it runs over."""
+def test_conformance_qualifier_not_medium():
     assert split_capability_and_medium(
         "The system shall broadcast remote identification and real-time spatial "
         "positioning data in accordance with the ASTM F3411-22 standard."
     ) is None
 
 
-def test_inspection_terms_match_words_not_substrings():
+def test_inspection_terms_match_words():
     assert split_capability_and_medium(
         "The system shall log every accepted mission command and parameter "
         "update using a materialized database view."
     ) is None
 
 
-def test_a_requirement_with_no_untestable_term_is_never_split():
+def test_no_untestable_term_no_split():
     obligations = compile_verification_obligations(
         "REQ_PERF_003",
         "The system shall achieve a cruise airspeed of at least 18 m/s in "
@@ -159,7 +147,7 @@ def test_a_requirement_with_no_untestable_term_is_never_split():
     assert [o.kind for o in obligations] == ["behavior", "speed"]
 
 
-def test_positive_safe_state_under_abort_compiles_as_inhibition():
+def test_abort_safe_state_inhibition():
     abort_lock = compile_verification_obligations(
         "REQ_SAFE_006",
         "The system shall maintain the payload in the mechanically locked state "
@@ -176,7 +164,7 @@ def test_positive_safe_state_under_abort_compiles_as_inhibition():
     assert controlled_flight[0].kind is ObligationKind.CONTROLLED_FLIGHT
 
 
-def test_evidence_capabilities_close_only_semantically_matching_obligations():
+def test_capabilities_close_matching_only():
     inhibition = compile_verification_obligations(
         "REQ_SAFE_006",
         "The system shall maintain the payload in the mechanically locked state "
@@ -209,7 +197,7 @@ def test_evidence_capabilities_close_only_semantically_matching_obligations():
     assert evaluate_evidence(protocol, [wire])[0].status == "verified"
 
 
-def test_parachute_timing_does_not_close_safety_precedence():
+def test_timing_not_close_precedence():
     obligations = compile_verification_obligations(
         "REQ_SAFE_005",
         "The system shall deploy the ballistic recovery parachute within 0.5 "
@@ -237,7 +225,7 @@ def test_parachute_timing_does_not_close_safety_precedence():
     ]
 
 
-def test_unaccepted_engineering_criterion_is_conditional_evidence():
+def test_unaccepted_criterion_conditional():
     obligations = compile_verification_obligations(
         "REQ_SAFE_007",
         "The system shall maintain controlled flight following the failure of "
@@ -271,7 +259,7 @@ def test_unaccepted_engineering_criterion_is_conditional_evidence():
     assert result.sensitivity[1].passed_runs == 5
 
 
-def test_an_l2_check_closes_only_the_kinds_it_actually_measured():
+def test_l2_closes_measured_kinds():
     from src.prototyping.verification_matrix import _L2_EVIDENCE_CAPABILITIES
 
     assert _L2_EVIDENCE_CAPABILITIES == {
@@ -288,7 +276,7 @@ def test_an_l2_check_closes_only_the_kinds_it_actually_measured():
     }
 
 
-def test_a_timed_l2_result_closes_the_numeric_clause_it_measured():
+def test_timed_l2_closes_numeric_clause():
     obligations = compile_verification_obligations(
         "REQ_FUNC_006",
         "The system shall incorporate a revised waypoint sequence into the "
@@ -311,7 +299,6 @@ def test_a_timed_l2_result_closes_the_numeric_clause_it_measured():
     results = evaluate_evidence(obligations, [timed])
     assert [r.status for r in results] == ["verified", "verified"]
 
-    # the same result from a check that measured no interval closes only behaviour
     untimed = EvidenceClaim(
         description="L2 disconnect_gcs→wait_mode (PASS)",
         status="verified",

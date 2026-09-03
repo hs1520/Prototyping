@@ -1,9 +1,9 @@
 """Plan-first SysML v2 event symbols with one package-level writer.
 
-Transition ``accept`` syntax owns an accept-action usage.  Its referenced event
-type is an ``item def``; executable state responses remain ``action def``.
-This module prevents independently generated interface and behavior fragments
-from declaring the same event name using both definition kinds.
+Transition ``accept`` syntax owns an accept-action usage; its referenced event
+type is an ``item def``, while executable state responses stay ``action def``.
+Keeps separately generated interface and behavior fragments from declaring one
+event name under both kinds.
 """
 from __future__ import annotations
 
@@ -36,10 +36,9 @@ def collect_planned_event_symbols(
 ) -> tuple[PlannedEventSymbol, ...]:
     """Derive every accepted event type from the frozen behavior plans.
 
-    ``components`` remains in the signature for archived callers, but structural
-    ports are deliberately not excluded.  An ``accept`` trigger is a classifier
-    identity, never a reference to an owning port usage.  Plan validation rejects
-    such collisions before this registry is frozen.
+    ``components`` stays in the signature for archived callers; structural ports
+    are not excluded, since an ``accept`` trigger is a classifier identity rather
+    than a port-usage reference, and plan validation rejects collisions first.
     """
     del components
     sources: dict[str, list[str]] = {}

@@ -1,4 +1,3 @@
-"""Increment-4 evaluation core: coordination metrics + artifact writing."""
 from __future__ import annotations
 
 import json
@@ -26,7 +25,6 @@ _REQS = [
 
 
 def _r2_run_result():
-    """Drive the real R2 orchestrator seam and assemble a run-result dict."""
     orch = Orchestrator(_NoCallLLM(), revised_experiment_arm="R2-BBAG")
     orch.last_requirement_input = {"mode": "frozen", "requirement_set_digest": "d"}
     orch._prepare_design_handoff("DeliveryUAV", _REQS)
@@ -48,20 +46,17 @@ def _r2_run_result():
     }
 
 
-def test_coordination_metrics_are_computed_from_run_artifacts():
+def test_metrics_from_run_artifacts():
     result = _r2_run_result()
     m = compute_coordination_metrics(
         result["collaboration"], llm_usage=result["llm_usage"]
     )
     assert m["artifact_role"] == "R1_COORDINATION_METRICS"
     assert m["semantic_authority"] == "COMMITTED_SYSML_MODEL"
-    # two migrated handoffs now (Requirements->Design, Design->Verification), each
-    # revision-pinned; the metric denominator is no longer an illustrative single.
     assert m["context_revision_consistency"]["value"] == 1.0
     assert m["counts"]["migrated_handoffs"] == 2
     assert m["cross_agent_handoff_completeness"]["value"] == 1.0
     assert m["cross_agent_handoff_completeness"]["illustrative_single_handoff"] is False
-    # invariants hold across both roles: no stale-revision use, no contamination
     assert m["stale_revision_use"]["count"] == 0
     assert m["cross_role_contamination"]["count"] == 0
     assert m["source_threshold_unit_preservation"]["value"] == 1.0
@@ -69,7 +64,7 @@ def test_coordination_metrics_are_computed_from_run_artifacts():
     assert m["mvp_caveats"]
 
 
-def test_write_revised_run_artifacts_serialises_the_producible_views(tmp_path):
+def test_writer_serialises_views(tmp_path):
     result = _r2_run_result()
     report = PrototypingPipeline.build_run_report(result)
     assert report["pattern_conformance_report"]["verdict"] == "PASS"
@@ -90,7 +85,6 @@ def test_write_revised_run_artifacts_serialises_the_producible_views(tmp_path):
     ] == 0
     written = write_revised_run_artifacts(result, tmp_path)
 
-    # the producible §14 subset is on disk
     for name in (
         "shared_model_final", "blackboard_snapshot", "model_revision_log",
         "blackboard_event_log", "context_envelopes", "task_sessions",
@@ -101,7 +95,6 @@ def test_write_revised_run_artifacts_serialises_the_producible_views(tmp_path):
         assert name in written
         assert (tmp_path / written[name].split("/")[-1]).exists()
 
-    # the A/G graph and metrics round-trip as valid JSON
     ag = json.loads((tmp_path / "ag_contract_graph.json").read_text())
     assert ag["verdict"] == "PASS"
     pattern = json.loads(
@@ -113,14 +106,12 @@ def test_write_revised_run_artifacts_serialises_the_producible_views(tmp_path):
     authoring = json.loads((tmp_path / "ag_authoring_attempts.json").read_text())
     assert authoring["attempts"] == []
     metrics = json.loads((tmp_path / "coordination_metrics.json").read_text())
-    # two sessions: the DesignAgent handoff and the VerificationAgent handoff
     assert metrics["counts"]["sessions"] == 2
-    # the event log is one JSON object per line
     log_lines = (tmp_path / "blackboard_event_log.jsonl").read_text().splitlines()
     assert all(json.loads(line)["topic"] for line in log_lines)
 
 
-def test_writer_rejects_a_non_revised_run():
+def test_writer_rejects_legacy_run():
     import pytest
     with pytest.raises(ValueError, match="requires a BLACKBOARD_AG_V1 run"):
         write_revised_run_artifacts({"model_sysml": "x"}, "/tmp/nope")
@@ -134,9 +125,7 @@ def test_writer_rejects_a_non_revised_run():
         }, "/tmp/nope")
 
 
-def test_metrics_flag_stale_and_contamination_when_present():
-    # A shared-session-style snapshot: two sessions on the same role/task (the
-    # R1-LONG failure mode) and a session left on an uncommitted base revision.
+def test_flags_stale_and_contamination():
     collaboration = {
         "blackboard": {
             "semantic_authority": "COMMITTED_SYSML_MODEL",
@@ -159,14 +148,14 @@ def test_metrics_flag_stale_and_contamination_when_present():
     assert m["cross_role_contamination"]["count"] == 1
 
 
-def test_contamination_is_reported_as_a_property_not_as_a_measured_rate():
-    """§18-Q2, option B. A session owns one role and one task by construction, so
-    contamination cannot occur — 0 is entailed by the design, not observed.
+def test_contamination_is_property():
+    """§18-Q2, option B. A session owns one role and one task by construction, so 0 is
+    entailed by the design, not observed.
 
     Reporting it as a coordination rate would restate a definition as a finding,
-    which is the same over-claim this project polices elsewhere (an arm with no
-    A/G layer is `n/a`, not 0.00). It becomes measurable only under the R1-LONG
-    shared-session diagnostic, which is not implemented.
+    like scoring an arm with no A/G layer 0.00 instead of `n/a`. It becomes
+    measurable only under the R1-LONG shared-session diagnostic, which is not
+    implemented.
     """
     metrics = compute_coordination_metrics({
         "blackboard": {
@@ -188,7 +177,7 @@ def test_contamination_is_reported_as_a_property_not_as_a_measured_rate():
     assert "structurally impossible" in contamination["note"]
     assert "R1-LONG" in contamination["note"]
 
-    # and the pillar-2 evidence must still rest on metrics that CAN fail
+    # pillar-2 evidence still rests on metrics that can fail
     for falsifiable in ("context_revision_consistency", "stale_revision_use",
                         "required_context_coverage", "envelope_truncation",
                         "stale_session_detection"):
@@ -196,7 +185,7 @@ def test_contamination_is_reported_as_a_property_not_as_a_measured_rate():
         assert metrics[falsifiable].get("kind") != "ARCHITECTURAL_PROPERTY"
 
 
-def test_context_consistency_uses_revision_at_creation_not_revision_history():
+def test_consistency_uses_creation_rev():
     collaboration = {
         "blackboard": {
             "semantic_authority": "COMMITTED_SYSML_MODEL",
@@ -221,7 +210,7 @@ def test_context_consistency_uses_revision_at_creation_not_revision_history():
     assert metrics["context_revision_consistency"]["value"] == 0.0
 
 
-def test_handoff_requires_same_envelope_and_pre_activation_publication():
+def test_handoff_needs_prior_publish():
     collaboration = {
         "blackboard": {
             "semantic_authority": "COMMITTED_SYSML_MODEL",
@@ -261,7 +250,7 @@ def test_handoff_requires_same_envelope_and_pre_activation_publication():
     assert handoff["failures"][0]["missing_or_late_topics"] == ["needed.topic"]
 
 
-def test_stale_revision_use_is_measured_at_the_message_event():
+def test_stale_use_at_message_event():
     board = Blackboard("stale-turn")
     registry = TaskSessionRegistry()
     session = registry.open(

@@ -1,10 +1,7 @@
-"""Tests for Design Space Exploration and MCTS."""
-
 import pytest
 
 from tests._dep_stubs import install_missing_dep_stubs
 
-# Stub heavy optional deps not installed in the test environment
 install_missing_dep_stubs()
 from src.dse.design_space import (
     DesignConfiguration,
@@ -38,8 +35,8 @@ class TestDesignParameter:
         assert param.is_valid(100.0)
         assert param.is_valid(10.0)
         assert param.is_valid(1000.0)
-        assert not param.is_valid(5.0)   # below min
-        assert not param.is_valid(2000.0)  # above max
+        assert not param.is_valid(5.0)
+        assert not param.is_valid(2000.0)
 
     def test_categorical_parameter(self):
         param = DesignParameter(
@@ -104,7 +101,7 @@ class TestDesignConfiguration:
         new_config = config.copy_with_changes({"a": 99})
         assert new_config.parameters["a"] == 99
         assert new_config.parameters["b"] == 2
-        assert new_config.scores == {}  # scores reset
+        assert new_config.scores == {}
         assert new_config.parent_id == config.id
         assert new_config.id != config.id
 
@@ -171,7 +168,7 @@ class TestDesignSpace:
         design_space.add_configuration(c1)
         design_space.add_configuration(c2)
         design_space.add_configuration(c3)
-        
+
         pareto = design_space.get_pareto_front()
         pareto_names = [c.name for c in pareto]
         assert "c1" in pareto_names
@@ -218,9 +215,9 @@ class TestDesignEvaluator:
         result = evaluator.evaluate(config, simple_model)
         assert isinstance(result, EvaluationResult)
         assert 0.0 <= result.weighted_total <= 1.0
-        # A model with an unsatisfied requirement and attribute-less parts must
-        # surface issues and recommendations (criterion names may evolve, so we
-        # assert the evaluator flags problems rather than matching exact text).
+        # A model with an unsatisfied requirement and attribute-less parts should
+        # surface issues and recommendations; criterion names may evolve, so assert
+        # on the flags rather than exact text.
         assert result.issues, "deficient model should produce issues"
         assert result.recommendations, "deficient model should produce recommendations"
 
@@ -233,7 +230,6 @@ class TestDesignEvaluator:
     def test_is_acceptable(self, evaluator, simple_model):
         config = DesignConfiguration(name="test")
         result = evaluator.evaluate(config, simple_model)
-        # Just test the method is callable
         assert isinstance(result.is_acceptable(), bool)
 
     def test_simple_score(self, evaluator):
@@ -246,7 +242,4 @@ class TestDesignEvaluator:
         assert all(0.0 <= v <= 1.0 for v in scores.values())
 
     def test_default_criteria_count(self, evaluator):
-        # 7 dimensions: requirement_satisfaction, mcts_fidelity,
-        # structural_integrity, safety_assurance, interface_correctness,
-        # syntactic_validity, behavioral_reachability.
         assert len(evaluator.criteria) == 7

@@ -1,28 +1,26 @@
 """Cross-domain probe of the v22 declared-intent mechanism (one real LLM loop).
 
-Purpose. v22 (see experiment_arms.COMMON_GENERATION_PIPELINE_VERSION) lets a
-FUNC realization record a response intent outside the built-in table by
-declaring `response_markers`, and lets `unverifiable`/`none` record the two
-honesty cases. This probe exercises that contract against a REAL provider on
-requirements from a different domain (building management), where two of the
-four obliged responses (alert, unlock) have no built-in intent. It is a probe,
-not an experiment arm: one system, one loop, no comparison.
+v22 (see experiment_arms.COMMON_GENERATION_PIPELINE_VERSION) lets a FUNC
+realization declare `response_markers` for an intent outside the built-in
+table, and record `unverifiable`/`none` for the two honesty cases. This runs
+that contract against a live provider on building-management requirements,
+where two of the four obliged responses (alert, unlock) have no built-in
+intent. One system, one loop, no comparison.
 
 Archived result (2026-08-28, vertex / gemini-3.1-pro-preview) in
 examples/output/probe_v22_declared_intents_20260828/:
   - accepted_plan.json  : the plan that reached status PASS through the
-    pipeline's own bounded retry loop (TypedPlanGeneration, max 6 attempts).
+    pipeline's bounded retry loop (TypedPlanGeneration, max 6 attempts).
     Recorded decisions: alert -> declared intent 'alert' markers ['alert'];
     unlock -> declared intent 'unlock' markers ['unlock']; self_test ->
     built-in, markers empty; monitor -> none with rationale. The declared
     responses are realized by reachable states (FaultAlert entry
     alertOperators; FireEmergency entry unlockDoors).
-  - attempt1_payload.json : the raw first-attempt payload (its intent fields
-    were already correct; the retries repaired unrelated state-declaration
-    defects).
+  - attempt1_payload.json : the raw first-attempt payload; its intent fields
+    were already correct and the retries repaired unrelated state-declaration
+    defects.
 
-Re-running this script makes new LLM calls and overwrites nothing; it writes
-to a fresh date-stamped directory.
+Re-running makes new LLM calls and writes to a fresh date-stamped directory.
 """
 from __future__ import annotations
 

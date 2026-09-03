@@ -1,14 +1,11 @@
-"""Datasheet-grounded hover endurance — an INDEPENDENT cross-check of the analytic estimator.
+"""Datasheet-grounded hover endurance, an independent cross-check of the analytic estimator.
 
-Pipeline: design all-up mass → required hover thrust per motor (m·g / N) → look up the real
-motor+prop curve (component_data) for the per-motor hover current → battery endurance from
-usable capacity. Adds a constant avionics hotel load. This replaces the estimator's lumped
-FOM/ETA_DRIVE with a real motor operating point, so a divergence between the two is a genuine
-signal (the lumped efficiency was off), not noise.
-
-Honest scope: static-bench current (no ground effect / forward flight / pack sag), so this is
-higher-fidelity than the lumped estimator but still NOT ground truth — real flight ~10-20% off.
-Gazebo's role (separate) is the trimmed-hover DYNAMICS, not this power number.
+Pipeline: design all-up mass -> hover thrust per motor (m*g / N) -> per-motor hover current from
+the motor+prop curve (component_data) -> endurance from usable battery capacity, plus a constant
+avionics hotel load. It replaces the estimator's lumped FOM/ETA_DRIVE with a measured operating
+point, so a divergence between the two points at the lumped efficiency. Scope: static-bench
+current (no ground effect, forward flight or pack sag), so expect ~10-20% off real flight; Gazebo
+covers the trimmed-hover dynamics instead.
 """
 from __future__ import annotations
 
@@ -25,8 +22,8 @@ class DatasheetEndurance:
     total_mass_kg: float
     hover_thrust_per_motor_g: float
     hover_current_per_motor_a: float
-    total_hover_current_a: float          # motors + avionics hotel load
-    twr_max: float                        # full-throttle thrust-to-weight
+    total_hover_current_a: float
+    twr_max: float
     endurance_min: float
     source_url: str
 
@@ -34,10 +31,10 @@ class DatasheetEndurance:
 def datasheet_endurance(total_mass_kg: float, rotor_count: int,
                         battery_capacity_mah: float,
                         motor: MotorProp = MN5008_KV340_18x61) -> DatasheetEndurance:
-    """Hover endurance from a real motor+prop curve. Raises if the motor can't lift the design."""
+    """Hover endurance from the motor+prop curve."""
     thrust_per_motor_g = (total_mass_kg * 1000.0) / rotor_count
-    cur_a, _pwr_w = motor.interp_at_thrust(thrust_per_motor_g)        # per motor at hover
-    avionics_a = AVIONICS_POWER_W / motor.voltage_v                   # hotel load → current
+    cur_a, _pwr_w = motor.interp_at_thrust(thrust_per_motor_g)
+    avionics_a = AVIONICS_POWER_W / motor.voltage_v
     total_a = cur_a * rotor_count + avionics_a
     usable_ah = (battery_capacity_mah / 1000.0) * USABLE
     endurance_min = (usable_ah / total_a) * 60.0

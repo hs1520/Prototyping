@@ -1,12 +1,11 @@
-"""The mandatory catalog seed fails loudly, and authoritatively fails fast.
+"""The mandatory catalog seed names its failure reason and stops an authoritative run.
 
-Measured on the 2026-08-30 authoritative attempt: the seed's one-line
-"could not form" message conflated four bail points (the actual one — the
-surgery's zero-error post-check rejecting a parse-broken input — took a
-manual replay to identify), and the run then spent the whole downstream
-phase sequence before the finalizer refused publication for the missing
-Phase 8 recommendation. Failure reasons are now named, and an authoritative
-run (PROTOTYPING_AUTHORITATIVE=1) stops at the seed instead.
+On the 2026-08-30 attempt the seed's one-line "could not form" message
+conflated four bail points (identifying the real one, the surgery's zero-error
+post-check rejecting a parse-broken input, took a manual replay), and the run
+then ran the whole downstream phase sequence before the finalizer refused
+publication for the missing Phase 8 recommendation. Under
+PROTOTYPING_AUTHORITATIVE=1 it now stops at the seed.
 """
 from __future__ import annotations
 
@@ -22,7 +21,6 @@ _QUANTIFIED_REQS = [
     "minutes when carrying the maximum rated payload at nominal cruise speed.",
 ]
 
-# no propulsion/airframe/power-named component → the seed cannot pick a host
 _HOSTLESS_MODEL = """package M {
     part def Controller {
         attribute speed : Real = 1.0;
@@ -41,7 +39,7 @@ class _NoCallLLM:
         raise AssertionError("fail-fast must trigger before any LLM call")
 
 
-def test_introduce_variation_names_each_bail_point():
+def test_variation_names_bail_points():
     ok_model = "package M {\n    part def P;\n    part host : P;\n}\n"
 
     _, ok = introduce_variation(ok_model, "host", "P", _VARIANTS[:1], "r", [])
@@ -50,14 +48,14 @@ def test_introduce_variation_names_each_bail_point():
     _, ok = introduce_variation(ok_model, "missing", "P", _VARIANTS, "r", [])
     assert not ok and "not found" in vi.LAST_FAILURE_REASON
 
-    broken = ok_model + "\nstray }"  # pre-existing parse damage
+    broken = ok_model + "\nstray }"
     _, ok = introduce_variation(broken, "host", "P", _VARIANTS, "r", [])
     assert not ok
     assert "post-surgery text fails to parse" in vi.LAST_FAILURE_REASON
     assert "error-free" in vi.LAST_FAILURE_REASON
 
 
-def test_introduce_variation_clears_the_reason_on_success():
+def test_variation_clears_reason():
     model = "package M {\n    part def P;\n    part host : P;\n}\n"
     _, ok = introduce_variation(model, "host", "P", _VARIANTS, "r", ["REQ-1"])
     assert ok
@@ -68,7 +66,7 @@ def _orchestrator() -> Orchestrator:
     return Orchestrator(_NoCallLLM(), max_iterations=1, quality_threshold=0.5)
 
 
-def test_authoritative_run_fails_fast_when_the_seed_cannot_form(monkeypatch):
+def test_authoritative_fails_fast_no_seed(monkeypatch):
     monkeypatch.setenv("PROTOTYPING_AUTHORITATIVE", "1")
     orch = _orchestrator()
     model = build_lite_model(_HOSTLESS_MODEL, model_name="M")
@@ -82,7 +80,7 @@ def test_authoritative_run_fails_fast_when_the_seed_cannot_form(monkeypatch):
     assert orch.last_variation_proposal_source == "catalog-seed-unavailable"
 
 
-def test_non_authoritative_run_keeps_the_legacy_limp_along(monkeypatch):
+def test_non_authoritative_limps_along(monkeypatch):
     monkeypatch.delenv("PROTOTYPING_AUTHORITATIVE", raising=False)
     orch = _orchestrator()
     monkeypatch.setattr(
@@ -97,7 +95,7 @@ def test_non_authoritative_run_keeps_the_legacy_limp_along(monkeypatch):
     assert orch.last_variation_proposal_source == "catalog-seed-unavailable"
 
 
-def test_unquantified_requirements_never_trip_the_fail_fast(monkeypatch):
+def test_unquantified_no_fail_fast(monkeypatch):
     monkeypatch.setenv("PROTOTYPING_AUTHORITATIVE", "1")
     orch = _orchestrator()
     monkeypatch.setattr(
@@ -114,10 +112,12 @@ def test_unquantified_requirements_never_trip_the_fail_fast(monkeypatch):
     assert orch.last_variation_proposal_source == "catalog-seed-not-required"
 
 
-def test_model_rank_key_prefers_repaired_model_on_score_ties():
-    """The 2026-08-30 shape: four iterations all at 0.700; only the first
-    still carried the parser error. Strict score-only `>` kept the broken
-    first model; the rank key must not."""
+def test_rank_key_prefers_repaired():
+    """The 2026-08-30 shape: four iterations at 0.700, only the first still carrying
+    the parser error.
+
+    Strict score-only `>` kept the broken first model; the rank key does not.
+    """
     from types import SimpleNamespace
 
     from src.agents.refinement import RefinementClosure
@@ -138,7 +138,7 @@ def test_model_rank_key_prefers_repaired_model_on_score_ties():
 
     first_broken = key(0.700, broken, 0)
     later_clean = key(0.700, clean, 1)
-    assert later_clean > first_broken            # tie → fewer errors wins
-    assert key(0.700, clean, 3) > key(0.700, clean, 1)  # full tie → later wins
-    assert key(0.800, broken, 0) > later_clean   # score still dominates
-    assert key(0.700, None, 2) == (0.700, 0, 2)  # no syntax result → 0 errors
+    assert later_clean > first_broken
+    assert key(0.700, clean, 3) > key(0.700, clean, 1)
+    assert key(0.800, broken, 0) > later_clean
+    assert key(0.700, None, 2) == (0.700, 0, 2)

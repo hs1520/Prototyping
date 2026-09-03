@@ -1,5 +1,3 @@
-"""Tests for UC3M Pinecone ingestion helpers."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,7 +5,7 @@ from pathlib import Path
 from src.rag.ingest_uc3m_to_pinecone import _extract_verify_summary, iter_records, make_record_id
 
 
-def test_make_record_id_is_structured_and_readable():
+def test_record_id_is_structured():
     record_id = make_record_id(
         "content_descriptions.csv",
         1,
@@ -18,14 +16,14 @@ def test_make_record_id_is_structured_and_readable():
     assert "#row-000001" in record_id
 
 
-def test_make_record_id_changes_with_source_csv():
+def test_record_id_varies_by_source():
     first = make_record_id("content_descriptions.csv", 1)
     second = make_record_id("training.csv", 1)
 
     assert first != second
 
 
-def test_iter_records_uses_structured_id(tmp_path: Path):
+def test_iter_records_uses_record_id(tmp_path: Path):
     csv_path = tmp_path / "sample.csv"
     csv_path.write_text(
         "file_path,raw_content,descriptions,embeddings\n"
@@ -43,7 +41,7 @@ def test_iter_records_uses_structured_id(tmp_path: Path):
     assert record["source_csv"] == "sample.csv"
 
 
-def test_extract_verify_summary_from_dict_response():
+def test_verify_summary_from_dict():
     result = {
         "result": {
             "hits": [
@@ -76,9 +74,7 @@ class _StubSearchResponse:
         }
 
 
-def test_extract_verify_summary_from_object_response():
+def test_verify_summary_from_object():
     hits, first_file_path = _extract_verify_summary(_StubSearchResponse())
     assert hits == 1
     assert first_file_path.endswith("1a-Parts Tree.sysml")
-
-

@@ -1,14 +1,12 @@
-"""Inner-layer Bayesian optimization — bilevel DSE continuous parameter search.
+"""Inner-layer Bayesian optimization - bilevel DSE continuous parameter search.
 
-Given a fixed architecture (chosen by the outer MO-MCTS), the inner layer tunes
-continuous parameters (e.g. control_frequency_hz). This is the "continuous" half
-of the heterogeneous bilevel design: outer = discrete structure via MCTS, inner =
-continuous parameters via Bayesian optimization (GP surrogate + Expected
-Improvement). See docs/DSE_REDESIGN.md §五.
-
-Pure-Python (no numpy/scipy): a 1-D GP with an RBF kernel solved by Cholesky, and
-EI maximised over a candidate grid. BO is sample-efficient by design, so the
-matrices stay tiny (n_init + n_iter points). Extensible to D dimensions later.
+For a fixed architecture from the outer MO-MCTS, the inner layer tunes continuous
+parameters (e.g. control_frequency_hz): outer = discrete structure via MCTS,
+inner = continuous parameters via GP surrogate + Expected Improvement
+(docs/DSE_REDESIGN.md §五). Pure-Python (no numpy/scipy): a 1-D GP with an RBF
+kernel solved by Cholesky, EI maximised over a candidate grid. BO is
+sample-efficient, so the matrices stay tiny (n_init + n_iter points). Extensible
+to D dimensions later.
 """
 from __future__ import annotations
 
@@ -22,13 +20,7 @@ Vector = List[float]
 Matrix = List[List[float]]
 
 
-# ---------------------------------------------------------------------------
-# Minimal linear algebra (Cholesky solve)
-# ---------------------------------------------------------------------------
-
-
 def _cholesky(a: Matrix) -> Matrix:
-    """Lower-triangular Cholesky factor of a symmetric positive-definite matrix."""
     n = len(a)
     L = [[0.0] * n for _ in range(n)]
     for i in range(n):
@@ -50,7 +42,6 @@ def _solve_lower(L: Matrix, b: Vector) -> Vector:
 
 
 def _solve_upper(LT: Matrix, b: Vector) -> Vector:
-    # LT is L transposed (upper); solve LT x = b by back-substitution
     n = len(LT)
     x = [0.0] * n
     for i in reversed(range(n)):
@@ -59,24 +50,13 @@ def _solve_upper(LT: Matrix, b: Vector) -> Vector:
 
 
 def _chol_solve(L: Matrix, b: Vector) -> Vector:
-    """Solve A x = b given A = L Lᵀ."""
     y = _solve_lower(L, b)
     n = len(L)
     LT = [[L[j][i] for j in range(n)] for i in range(n)]
     return _solve_upper(LT, y)
 
 
-# ---------------------------------------------------------------------------
-# Standard normal (for Expected Improvement) — stdlib, still numpy/scipy-free
-# ---------------------------------------------------------------------------
-
-
 _STD_NORMAL = NormalDist()
-
-
-# ---------------------------------------------------------------------------
-# Bayesian optimizer (1-D, maximisation)
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -135,7 +115,6 @@ class BayesianOptimizer:
         return improvement * _STD_NORMAL.cdf(z) + sigma * _STD_NORMAL.pdf(z)
 
     def optimize(self) -> BOResult:
-        # initial design
         for _ in range(self.n_init):
             x = self.rng.uniform(self.lo, self.hi)
             self._xs.append(x)
@@ -152,7 +131,6 @@ class BayesianOptimizer:
             alpha = _chol_solve(L, self._ys)
             best = max(self._ys)
 
-            # maximise EI over a candidate grid
             best_ei, next_x = -1.0, self.lo
             for g in range(self.grid + 1):
                 cand = self.lo + (self.hi - self.lo) * g / self.grid

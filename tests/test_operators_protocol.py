@@ -1,4 +1,3 @@
-"""Tests for the #3 ReplaceInterfaceProtocol operator."""
 from __future__ import annotations
 
 import pytest
@@ -32,7 +31,7 @@ def test_resolve_parses(op: ReplaceInterfaceProtocol, variant: str) -> None:
 
 
 @pytest.mark.parametrize("variant", ["mavlink", "can", "ethernet"])
-def test_data_ports_typed_by_chosen_protocol(op: ReplaceInterfaceProtocol, variant: str) -> None:
+def test_data_ports_typed_by_protocol(op: ReplaceInterfaceProtocol, variant: str) -> None:
     signal = CATALOG[variant][0]
     text = op.resolve(variant)
     assert f"out port telemetry : {signal}" in text
@@ -41,7 +40,6 @@ def test_data_ports_typed_by_chosen_protocol(op: ReplaceInterfaceProtocol, varia
 
 @pytest.mark.parametrize("variant", ["mavlink", "can", "ethernet"])
 def test_power_ports_untouched(op: ReplaceInterfaceProtocol, variant: str) -> None:
-    """Domain separation: power ports keep PowerPort, never a protocol signal."""
     text = op.resolve(variant)
     assert "in port power : PowerPort;" in text
 

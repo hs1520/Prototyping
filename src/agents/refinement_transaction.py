@@ -1,11 +1,10 @@
 """Private implementation of one refinement-candidate transaction.
 
-The outer refinement loop decides *when* another iteration is needed.  This
-module owns everything that must happen atomically once it does: feedback
-construction, candidate generation, frozen-plan reconciliation, local
-evaluation, regression/connectivity guards, and deterministic simulation
-repair.  The Refinement Closure facade publishes its stable outcome; this
-module is deliberately not a caller-facing test surface.
+The outer loop decides when another iteration is needed; this module owns what
+happens atomically once it does: feedback construction, candidate generation,
+frozen-plan reconciliation, local evaluation, regression/connectivity guards,
+and deterministic simulation repair. The Refinement Closure facade publishes
+the outcome; this module is not a caller-facing test surface.
 """
 from __future__ import annotations
 
@@ -56,15 +55,13 @@ class _RefinementOutcome:
     model: SysMLModel
     decision: _RefinementDecision
     candidate_rule_score: Optional[float] = None
-    #: Frozen-plan violations that caused a PLAN_CONFORMANCE_FAILED decision.
-    #: The conformance report is computed here and discarded with the
-    #: candidate, so without carrying it out a rejected refinement leaves only
-    #: a count and the reason it was rejected is unrecoverable afterwards.
+    # Frozen-plan violations behind a PLAN_CONFORMANCE_FAILED decision. The
+    # conformance report is discarded with the candidate, so without carrying it
+    # out a rejected refinement leaves only a count.
     plan_conformance_issues: tuple[str, ...] = ()
-    #: Additive violations deterministically stripped so the candidate's
-    #: in-plan edits could proceed to the normal gates (empty when no salvage
-    #: happened).  Audit trail: without it an accepted-after-salvage candidate
-    #: is indistinguishable from a clean one.
+    # Additive violations stripped so the candidate's in-plan edits reach the
+    # normal gates (empty when no salvage happened). Without it an
+    # accepted-after-salvage candidate looks identical to a clean one.
     plan_conformance_salvage: tuple[str, ...] = ()
 
     @property
@@ -73,12 +70,7 @@ class _RefinementOutcome:
 
 
 class _RefinementTransaction:
-    """Generate, validate, accept, and repair one refinement candidate.
-
-    ``simulate`` and ``repair_simulation`` are local-substitutable internal
-    seams.  The production caller supplies the existing deterministic
-    simulation functions; interface tests supply in-memory stand-ins.
-    """
+    """Generate, validate, accept, and repair one refinement candidate."""
 
     def __init__(
         self,
@@ -203,15 +195,12 @@ class _RefinementTransaction:
                     str(issue) for issue in (conformance.get("issues") or ())
                 )
                 # ── Conformance-scoped salvage ────────────────────────────
-                # All-or-nothing rejection killed in-plan edits together with
-                # their collateral (s0v16: two forced refinements carrying
-                # the fidelity asserts the terminal gate then failed on were
-                # both rejected whole).  Strip the ADDITIVE violations
-                # deterministically and re-judge; a candidate that removed or
-                # contradicted planned structure still re-checks FAIL and is
-                # rejected exactly as before.  Acceptance discipline is
-                # unchanged — the salvaged text passes through the same
-                # syntax/simulation/score gates below.
+                # All-or-nothing rejection killed in-plan edits along with their collateral
+                # (s0v16: two forced refinements carrying the fidelity asserts the terminal
+                # gate then failed on were rejected whole). Strip the additive violations and
+                # re-judge; a candidate that removed or contradicted planned structure still
+                # re-checks FAIL. The salvaged text passes the same syntax/simulation/score
+                # gates below.
                 from ..prototyping.generation_plan import (
                     strip_unplanned_additions,
                 )
@@ -346,12 +335,10 @@ def _build_refinement_feedback(request: _RefinementRequest) -> str:
     lines.extend(f"- {item}" for item in request.evaluation.recommendations)
 
     if request.simulation_issues:
-        # The remediation must match the issue category: these failures are
-        # missing signal paths OR missing behaviour definitions, and the old
-        # header prescribed connect statements for both — with `::` endpoint
-        # syntax the same prompt elsewhere (correctly) says breaks the
-        # parser. The LLM was being taught to fix a behaviour gap with a
-        # broken connect.
+        # The remediation matches the issue category: these failures are missing
+        # signal paths or missing behaviour definitions, and the old header prescribed
+        # connect statements for both, using the `::` endpoint syntax the same prompt
+        # elsewhere calls a parser error.
         lines.extend((
             "",
             "Behavioral simulation failures:\n"

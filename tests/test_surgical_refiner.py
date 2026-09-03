@@ -1,9 +1,3 @@
-"""Surgical (block-level) refinement: parse → merge → gates → fallback.
-
-Pins the new refinement contract: the LLM returns only changed blocks, the
-merge preserves everything else by construction, invalid/lossy merges are
-rejected locally, and the orchestrator falls back to the legacy full rewrite.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -86,8 +80,6 @@ def _refine(orch, model, requirements, **kwargs):
 
 
 class _ScriptedLLM:
-    """Duck-typed LLM returning scripted responses per temperature step."""
-
     def __init__(self, responses: List[str]):
         self._responses = list(responses)
         self.calls = 0
@@ -125,10 +117,8 @@ def _repair_packet(*, affected=("FlightController",)):
     return packet
 
 
-# ── extraction ───────────────────────────────────────────────────────────────
-
 class TestExtractBlocks:
-    def test_fenced_blocks_split_into_top_level_elements(self):
+    def test_fenced_blocks_split(self):
         raw = (
             "Here is the fix:\n```sysml\n"
             "part def FlightController { in port sensorIn : SensorPort; }\n"
@@ -140,19 +130,17 @@ class TestExtractBlocks:
         assert elements[0].startswith("part def FlightController")
         assert elements[1] == "connect imu.dataOut to fc.sensorIn;"
 
-    def test_whole_package_wrapper_is_unwrapped(self):
+    def test_package_wrapper_unwrapped(self):
         raw = "```sysml\npackage X {\n    part def A { }\n    part def B { }\n}\n```"
         elements = extract_sysml_blocks(raw)
         assert [e.split()[2] for e in elements] == ["A", "B"]
 
-    def test_prose_only_output_yields_nothing(self):
+    def test_prose_yields_nothing(self):
         assert extract_sysml_blocks("I would suggest improving the model.") == []
 
 
-# ── merge ────────────────────────────────────────────────────────────────────
-
 class TestMergeBlocks:
-    def test_replaces_named_block_and_keeps_everything_else(self):
+    def test_named_block_replaced(self):
         replacement = (
             "part def FlightController {\n"
             "        in port sensorIn : SensorPort;\n"
@@ -165,12 +153,11 @@ class TestMergeBlocks:
         assert out is not None
         assert out.replaced == ["FlightController"]
         assert "loopRate : Real = 200.0" in out.merged_text
-        # untouched blocks and wiring survive verbatim
         assert "connect imu.dataOut to fc.sensorIn;" in out.merged_text
         assert "part def Imu" in out.merged_text
         assert out.merged_text.count("part def FlightController") == 1
 
-    def test_new_block_and_statement_are_appended(self):
+    def test_new_block_appended(self):
         out = merge_blocks(_BASE, [
             "part def BatteryMonitor { out port alertOut : CommandPort; }",
             "part bm : BatteryMonitor;",
@@ -181,20 +168,18 @@ class TestMergeBlocks:
         body_end = out.merged_text.rfind("}")
         assert "part def BatteryMonitor" in out.merged_text[:body_end]
 
-    def test_duplicate_statement_is_not_added_twice(self):
+    def test_duplicate_statement_not_added(self):
         out = merge_blocks(_BASE, ["connect  imu.dataOut  to  fc.sensorIn ;"])
-        assert out is None  # normalised duplicate → nothing changed → no-op
+        assert out is None
 
     def test_noop_returns_none(self):
         assert merge_blocks(_BASE, []) is None
 
 
-# ── gated attempt ────────────────────────────────────────────────────────────
-
 class TestAttemptSurgicalRefinement:
     _ISSUES = ["FlightController: loopRate too low for REQ-PERF-001"]
 
-    def test_valid_fix_is_merged_and_gated(self):
+    def test_valid_fix_merged(self):
         llm = _ScriptedLLM([
             "```sysml\npart def FlightController {\n"
             "    in port sensorIn : SensorPort;\n"
@@ -206,33 +191,32 @@ class TestAttemptSurgicalRefinement:
         assert "200.0" in out.merged_text
         assert "connect imu.dataOut to fc.sensorIn;" in out.merged_text
 
-    def test_connect_floor_gate_rejects_shedding_merge(self):
-        # a syntactically valid merge that nonetheless lost a connect must be
-        # rejected by the gate (prevention of the reachability-collapse mode)
+    def test_connect_floor_gate_rejects_shed(self):
+        # the gate rejects a syntactically valid merge that lost a connect
+        # (reachability-collapse mode)
         from src.simulation.surgical_refiner import _gates_ok
 
         shed = _BASE.replace("    connect imu.dataOut to fc.sensorIn;\n", "")
         ok, why = _gates_ok(_BASE, shed)
         assert not ok
         assert "connect" in why
-        # sanity: the same gate passes a connect-preserving change
         ok2, _ = _gates_ok(_BASE, _BASE.replace("100.0", "200.0"))
         assert ok2
 
-    def test_unparseable_output_returns_none_for_fallback(self):
+    def test_unparseable_output_returns_none(self):
         llm = _ScriptedLLM(["Sorry, I cannot help with that."])
         assert attempt_surgical_refinement(llm, _BASE, self._ISSUES) is None
 
-    def test_invalid_sysml_merge_returns_none(self):
+    def test_invalid_sysml_returns_none(self):
         llm = _ScriptedLLM(["```sysml\npart def FlightController { in port broken\n```"])
         assert attempt_surgical_refinement(llm, _BASE, self._ISSUES) is None
 
-    def test_no_issues_short_circuits_without_llm_call(self):
+    def test_no_issues_skips_llm(self):
         llm = _ScriptedLLM(["anything"])
         assert attempt_surgical_refinement(llm, _BASE, []) is None
         assert llm.calls == 0
 
-    def test_scoped_packet_allows_only_the_resolved_owner_block(self):
+    def test_packet_allows_owner_block(self):
         llm = _ScriptedLLM([
             "```sysml\npart def FlightController {\n"
             "    in port sensorIn : SensorPort;\n"
@@ -247,7 +231,7 @@ class TestAttemptSurgicalRefinement:
         assert out is not None
         assert out.replaced == ["FlightController"]
 
-    def test_scoped_packet_rejects_an_unrelated_existing_block(self):
+    def test_packet_rejects_unrelated_block(self):
         llm = _ScriptedLLM([
             "```sysml\npart def Imu {\n"
             "    out port dataOut : SensorPort;\n"
@@ -266,7 +250,7 @@ class TestAttemptSurgicalRefinement:
             "replacement_out_of_scope:part:Imu"
         ]
 
-    def test_scoped_packet_rejects_arbitrary_new_definition(self):
+    def test_packet_rejects_new_definition(self):
         llm = _ScriptedLLM([
             "```sysml\npart def UnrelatedSubsystem { }\n```"
         ])
@@ -277,7 +261,7 @@ class TestAttemptSurgicalRefinement:
 
         assert out is None
 
-    def test_invalid_packet_is_rejected_before_an_llm_call(self):
+    def test_invalid_packet_skips_llm(self):
         llm = _ScriptedLLM(["anything"])
         packet = _repair_packet()
         packet["scope"]["affected_elements"] = ["Imu"]
@@ -291,7 +275,7 @@ class TestAttemptSurgicalRefinement:
         assert audit.llm_invoked is False
         assert audit.rejection_reasons == ["repair_packet_invalid"]
 
-    def test_dependency_slice_hides_unselected_requirements_and_components(self):
+    def test_slice_hides_unselected(self):
         issues = [
             "[VERIFY-GAP] REQ_FUNC_006 missing waypoint timing anchor",
             "[VERIFY-GAP] REQ_FUNC_008 missing report timing anchor",
@@ -311,7 +295,7 @@ class TestAttemptSurgicalRefinement:
         assert "part def CommunicationSystem" not in context.text
         assert context.context_line_count < context.full_model_line_count
 
-    def test_dependency_slice_enforces_owner_scope_without_a_packet(self):
+    def test_slice_enforces_owner_scope(self):
         issues = ["[VERIFY-GAP] REQ_FUNC_006 missing waypoint timing anchor"]
         context = build_dependency_closed_context(
             _CONTEXT_MODEL,
@@ -340,7 +324,7 @@ class TestAttemptSurgicalRefinement:
         assert "REQ_FUNC_008" not in llm.last_prompt
         assert "part def CommunicationSystem" not in llm.last_prompt
 
-    def test_context_issue_scope_mismatch_blocks_before_llm(self):
+    def test_scope_mismatch_blocks_llm(self):
         context = build_dependency_closed_context(
             _CONTEXT_MODEL,
             ["[VERIFY-GAP] REQ_FUNC_006 missing waypoint timing anchor"],
@@ -366,7 +350,7 @@ class TestAttemptSurgicalRefinement:
             "repair_context_issue_scope_mismatch"
         ]
 
-    def test_packet_with_out_of_scope_requirement_is_not_silently_trimmed(self):
+    def test_out_of_scope_req_not_trimmed(self):
         packet = _repair_packet()
         packet["scope"]["req_ids"] = ["REQ_SAFE_001", "REQ_SAFE_999"]
 
@@ -379,7 +363,7 @@ class TestAttemptSurgicalRefinement:
 
         assert context is None
 
-    def test_escalation_recovers_from_bad_low_temp_answer(self):
+    def test_escalation_recovers(self):
         from src.llm.interface import LLMInterface, LLMResponse
 
         class _EscalatingLLM(LLMInterface):
@@ -401,21 +385,23 @@ class TestAttemptSurgicalRefinement:
         llm = _EscalatingLLM()
         out = attempt_surgical_refinement(llm, _BASE, self._ISSUES)
         assert out is not None and "rate : Real = 400.0" in out.merged_text
-        assert llm.temps[0] < 0.5 <= llm.temps[-1]  # escalated after the bad answer
+        assert llm.temps[0] < 0.5 <= llm.temps[-1]
 
 
 class TestPromptShape:
-    def test_prompt_contains_model_issues_and_hint(self):
+    def test_prompt_has_model_and_issues(self):
         prompt = build_surgical_prompt(_BASE, ["FlightController loop rate wrong"])
         assert "CURRENT MODEL" in prompt
         assert "FlightController loop rate wrong" in prompt
         assert "Likely affected elements: FlightController" in prompt
 
-    def test_guidance_that_verbatim_repeats_the_issues_is_dropped(self):
-        """run3's surgical prompts carried every long issue twice — once
-        numbered under ISSUES TO FIX and once verbatim under ADDITIONAL
-        GUIDANCE. Only lines that add something survive; when nothing does,
-        the section disappears."""
+    def test_duplicate_guidance_dropped(self):
+        """run3's surgical prompts carried every long issue twice, numbered under ISSUES
+        TO FIX and verbatim under ADDITIONAL GUIDANCE.
+
+        Only lines that add something survive; when nothing does, the section
+        disappears.
+        """
         issue = "FlightController loop rate wrong"
         prompt = build_surgical_prompt(
             _BASE, [issue],
@@ -429,14 +415,12 @@ class TestPromptShape:
         )
         assert "ADDITIONAL GUIDANCE" not in all_duplicate
 
-    def test_blank_line_runs_in_the_context_are_compressed(self):
-        """Materialization leaves multi-blank-line gaps; the prompt copy is
-        read-only context, so the gaps compress to one blank line."""
+    def test_blank_lines_compressed(self):
         gappy = _BASE + "\n\n\n\n\npackage Extra {\n}\n"
         prompt = build_surgical_prompt(gappy, ["FlightController loop rate wrong"])
         assert "\n\n\n" not in prompt.split("ISSUES TO FIX")[0]
 
-    def test_prompt_serializes_scoped_repair_packet_as_authoritative_data(self):
+    def test_prompt_serializes_packet(self):
         prompt = build_surgical_prompt(
             _BASE,
             ["[SEMANTIC-TRACE] REQ_SAFE_001 command mismatch"],
@@ -456,14 +440,9 @@ class TestPromptShape:
         assert "auto-land on low battery" in prompt
 
 
-# ── orchestrator integration ─────────────────────────────────────────────────
-
 class TestOrchestratorIntegration:
-    def test_surgical_path_bypasses_full_rewrite(self, capsys):
-        """When the surgical merge succeeds, the legacy whole-model rewrite
-        (design_agent.run) must not be invoked at all."""
-
-        class _Eval:  # minimal evaluator double
+    def test_surgical_bypasses_rewrite(self, capsys):
+        class _Eval:
             quality_threshold = 0.9
 
             def evaluate(self, config, model, **kw):
@@ -510,12 +489,14 @@ class TestOrchestratorIntegration:
         assert _NeverAgent.call_count == 0
 
 
-def test_syntax_warnings_become_visible_refinement_issues():
-    """The terminal gate fails closed on every warning, but the in-loop
-    syntax gate returns on has_errors alone — a warning class without a
-    bespoke normalizer was invisible to every repair mechanism until
-    qualification (measured on s0v8: one usage-typed-by-non-classifier
-    warning, NOT_QUALIFIED)."""
+def test_syntax_warnings_become_issues():
+    """The terminal gate fails closed on every warning while the in-loop syntax gate
+    returns on has_errors alone.
+
+    A warning class without a normalizer was invisible to every repair mechanism
+    until qualification (s0v8: one usage-typed-by-non-classifier warning,
+    NOT_QUALIFIED).
+    """
     from types import SimpleNamespace
     from src.agents.refinement import _syntax_warning_issues
 

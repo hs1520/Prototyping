@@ -1,7 +1,7 @@
 """Shared SysML text-pattern contract: supertype-tolerant named-block lookup.
 
-The DSE variation layer emits ``part def X :> Y { ... }``; every consolidated
-lookup must find those blocks exactly as it finds plain ``part def X { ... }``.
+The DSE variation layer emits ``part def X :> Y { ... }``, and every
+consolidated lookup finds those blocks as it finds plain ``part def X { ... }``.
 """
 from src.utils.sysml_text_utils import (
     PART_DEF_RE,
@@ -24,7 +24,7 @@ _SUPERTYPED = (
 _BODILESS = "part def Ghost;\npart def Real { attribute x; }\n"
 
 
-def test_scan_finds_plain_and_supertyped_part_defs():
+def test_scan_part_defs():
     names = [m.group(1) for m in PART_DEF_RE.finditer(_SUPERTYPED)]
     assert names == ["SensorSuite", "LidarSuite", "Nested"]
 
@@ -41,39 +41,38 @@ def test_named_span_plain():
     assert "attribute mass;" in _PLAIN[opening + 1:closing]
 
 
-def test_named_span_supertyped_with_nested_block():
+def test_named_span_nested_block():
     span = named_block_span(_SUPERTYPED, "part", "LidarSuite")
     assert span is not None
     opening, closing = span
     body = _SUPERTYPED[opening + 1:closing]
     assert "attribute range;" in body
-    assert "part def Nested" in body  # nested block stays inside the span
+    assert "part def Nested" in body
 
 
-def test_named_span_rejects_bodiless_and_missing():
+def test_named_span_rejects_bodiless():
     assert named_block_span(_BODILESS, "part", "Ghost") is None
     assert named_block_span(_BODILESS, "part", "Absent") is None
     span = named_block_span(_BODILESS, "part", "Real")
     assert span is not None
 
 
-def test_named_pattern_respects_name_boundary():
+def test_named_pattern_name_boundary():
     text = "part def MotorMount { }\npart def Motor { attribute m; }\n"
     match = named_def_pattern("part", "Motor").search(text)
     assert match is not None
     assert text[match.start():].startswith("part def Motor {")
 
 
-def test_named_pattern_never_crosses_statements():
-    # a bodiless declaration followed by an unrelated block must not merge
+def test_named_pattern_no_crossing():
     text = "part def A;\npart def B { attribute x; }\n"
     assert named_def_pattern("part", "A").search(text) is None
 
 
-def test_header_tail_never_crosses_newlines():
-    # Prose in a comment must not mint a phantom def that swallows the next
-    # block (observed in two archived pilot models: `// "Every part def MUST
-    # have >= 1 satisfy link"` captured name MUST + the following block).
+def test_header_tail_no_newlines():
+    # Prose in a comment does not mint a phantom def that swallows the next block
+    # (two archived pilot models: `// "Every part def MUST have >= 1 satisfy
+    # link"` captured name MUST plus the following block).
     text = (
         'package P {\n'
         '  // Added to satisfy the rule: "Every part def MUST have >= 1 satisfy link"\n'

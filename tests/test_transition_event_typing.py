@@ -18,7 +18,7 @@ def _model(event_declaration: str) -> str:
 }}"""
 
 
-def test_transition_repair_accepts_only_package_item_event_classifier():
+def test_accepts_item_def_event():
     summary = build_state_machine_summary(
         _model("item def FaultSignal;"),
         "ControllerBehavior",
@@ -37,7 +37,7 @@ def test_transition_repair_accepts_only_package_item_event_classifier():
     assert result.rejected == []
 
 
-def test_transition_repair_rejects_action_definition_as_event_type():
+def test_rejects_action_def_event():
     summary = build_state_machine_summary(
         _model("action def FaultSignal {}"),
         "ControllerBehavior",

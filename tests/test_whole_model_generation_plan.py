@@ -67,7 +67,7 @@ _PAYLOAD = {
 }
 
 
-def test_typed_plan_validates_and_deterministically_materialises_connections():
+def test_plan_materialises_connections():
     plan = ModelGenerationPlan.from_payload(
         _PAYLOAD,
         requirements=["REQ-FUNC-001: propagate status."],
@@ -90,7 +90,7 @@ def test_typed_plan_validates_and_deterministically_materialises_connections():
     assert "connect producer.status to consumer.status;" in updated
 
 
-def test_terminal_compiler_closes_root_standard_library_imports():
+def test_closes_standard_library_imports():
     model = """package P {
         part def Controller {
             attribute enabled : Boolean = true;
@@ -116,11 +116,13 @@ def test_terminal_compiler_closes_root_standard_library_imports():
     assert not strict.warnings
 
 
-def test_planned_port_retype_materialises_the_planned_definition():
-    """Enforcing a planned port type must not create a dangling reference.
-    Measured before this existed: retyping DataPort -> SensorStatusPort left
-    two `No Type named 'SensorStatusPort'` errors on a committed model,
-    because the planned type had no definition in the text."""
+def test_port_retype_adds_definition():
+    """Enforcing a planned port type does not create a dangling reference.
+
+    Retyping DataPort -> SensorStatusPort once left two `No Type named
+    'SensorStatusPort'` errors on a committed model, because the planned type had
+    no definition in the text.
+    """
     from src.prototyping.generation_plan import (
         materialize_planned_port_definitions,
     )
@@ -166,7 +168,6 @@ def test_planned_port_retype_materialises_the_planned_definition():
     )
     assert not strict.has_errors, strict.short_summary()
 
-    # idempotent, and an unplanned type is never legalised
     again, more = materialize_planned_port_definitions(updated, comps, conns)
     assert again == updated and more == []
     stray = updated.replace(
@@ -178,14 +179,15 @@ def test_planned_port_retype_materialises_the_planned_definition():
     assert all("InventedPort" not in line for line in added2)
 
 
-def test_terminal_compiler_resolves_project_unit_tokens():
-    """`deg`, `degC` and `percent` are project tokens, not SI-library names:
-    the SI library names the angle unit `degree` and defines no percent unit,
-    so `import SI::*` alone leaves `[deg]`/`[degC]`/`[percent]` as reference
-    errors (measured on the archived extraction run: qualification failed
-    SYSML_SYNTAX_AND_SEMANTICS on exactly those). The import closure must emit
-    the aliases and the conversion-defined percent, and the result must be
-    clean under the strict, unfiltered check."""
+def test_resolves_project_unit_tokens():
+    """`deg`, `degC` and `percent` are project tokens, not SI-library names: SI names
+    the angle unit `degree` and defines no percent unit, so `import SI::*` alone
+    leaves `[deg]`/`[degC]`/`[percent]` as reference errors (the archived extraction
+    run failed SYSML_SYNTAX_AND_SEMANTICS on those).
+
+    The import closure emits the aliases and the conversion-defined percent, and the
+    result is clean under the strict, unfiltered check.
+    """
     model = """package P {
         part def Controller {
             attribute heading : Real = 30.0 [deg];
@@ -213,7 +215,7 @@ def test_terminal_compiler_resolves_project_unit_tokens():
     assert second["added_unit_resolutions"] == []
 
 
-def test_terminal_compiler_does_not_duplicate_sufficient_member_imports():
+def test_no_duplicate_member_imports():
     model = """package P {
         private import ScalarValues::Boolean;
         part def Controller {
@@ -228,7 +230,7 @@ def test_terminal_compiler_does_not_duplicate_sufficient_member_imports():
     assert report["added_imports"] == []
 
 
-def test_typed_plan_rejects_multiple_drivers_before_sysml_generation():
+def test_rejects_multiple_drivers():
     payload = {
         **_PAYLOAD,
         "components": [
@@ -260,7 +262,7 @@ def test_typed_plan_rejects_multiple_drivers_before_sysml_generation():
     assert any("more than one planned driver" in item for item in plan.issues)
 
 
-def test_step1_plan_rejects_owner_port_as_accept_event_classifier():
+def test_rejects_port_as_event_classifier():
     payload = copy.deepcopy(_PAYLOAD)
     payload["schema_version"] = "9.0"
     payload["behaviors"] = [{
@@ -293,7 +295,7 @@ def test_step1_plan_rejects_owner_port_as_accept_event_classifier():
     )
 
 
-def test_step1_plan_rejects_event_name_used_as_planned_port_type():
+def test_rejects_event_name_as_port_type():
     payload = copy.deepcopy(_PAYLOAD)
     payload["schema_version"] = "9.0"
     for component in payload["components"]:
@@ -330,7 +332,7 @@ def test_step1_plan_rejects_event_name_used_as_planned_port_type():
     ) in plan.issues
 
 
-def test_step1_requires_plan_owned_timed_functional_evidence_chain():
+def test_requires_timed_evidence_chain():
     requirement = (
         "REQ-FUNC-006: The system shall incorporate a revised waypoint "
         "sequence into the active flight plan within 1.0 second of receiving "
@@ -428,10 +430,11 @@ def test_step1_requires_plan_owned_timed_functional_evidence_chain():
     )
 
 
-def test_step1_requires_the_response_the_closure_gate_will_demand():
-    """The deadlock this prevents: the gate demands an accept-triggered
-    navigate response, but only plan-declared symbols are legal accept
-    targets, so a plan without the behavior can never be repaired into one."""
+def test_requires_response_gate_demands():
+    """Prevents a deadlock: the gate demands an accept-triggered navigate response,
+    but only plan-declared symbols are legal accept targets, so a plan without the
+    behavior cannot be repaired into one.
+    """
     requirement = (
         "REQ-FUNC-001: The drone shall navigate to GPS waypoints with "
         "< 1 m precision"
@@ -489,7 +492,7 @@ def test_step1_requires_the_response_the_closure_gate_will_demand():
     }
 
 
-def test_a_response_state_the_plan_cannot_reach_does_not_discharge_the_intent():
+def test_unreachable_response_no_discharge():
     requirement = (
         "REQ-FUNC-001: The drone shall navigate to GPS waypoints with "
         "< 1 m precision"
@@ -507,7 +510,7 @@ def test_a_response_state_the_plan_cannot_reach_does_not_discharge_the_intent():
                 "entry_action": "navigateToWaypoint",
             },
         ],
-        "transitions": [],          # nothing leads to the response state
+        "transitions": [],
         "provenance": {
             "kind": "FROZEN_REQUIREMENT",
             "requirement_id": "REQ_FUNC_001",
@@ -526,7 +529,7 @@ def test_a_response_state_the_plan_cannot_reach_does_not_discharge_the_intent():
     )
 
 
-def test_typed_plan_rejects_item_type_that_disagrees_with_endpoints():
+def test_rejects_item_type_mismatch():
     payload = {
         **_PAYLOAD,
         "connections": [{
@@ -541,7 +544,7 @@ def test_typed_plan_rejects_item_type_that_disagrees_with_endpoints():
     assert any("does not match endpoint type" in item for item in plan.issues)
 
 
-def test_terminal_conformance_rejects_unplanned_ports_and_connections():
+def test_rejects_unplanned_ports():
     plan = ModelGenerationPlan.from_payload(
         _PAYLOAD,
         requirements=["REQ_FUNC_001: propagate status."],
@@ -571,7 +574,7 @@ def test_terminal_conformance_rejects_unplanned_ports_and_connections():
     ]
 
 
-def test_step2_definition_contract_rejects_unplanned_part_definition():
+def test_rejects_unplanned_part_def():
     plan = ModelGenerationPlan.from_payload(_PAYLOAD)
     report = validate_part_definition_fragment(
         """part def Producer {}
@@ -584,7 +587,7 @@ def test_step2_definition_contract_rejects_unplanned_part_definition():
     assert report["unplanned_part_definitions"] == ["StatusData"]
 
 
-def test_plan_rejects_port_attribute_member_name_collision():
+def test_rejects_member_name_collision():
     payload = copy.deepcopy(_PAYLOAD)
     payload["components"][0]["attributes"] = [{
         "name": "status",
@@ -601,11 +604,11 @@ def test_plan_rejects_port_attribute_member_name_collision():
     ) in plan.issues
 
 
-def test_plan_allows_same_feature_name_on_different_components():
+def test_same_name_different_components():
     assert ModelGenerationPlan.from_payload(_PAYLOAD).status == "PASS"
 
 
-def test_terminal_conformance_rejects_unplanned_non_container_part_def():
+def test_rejects_unplanned_non_container():
     plan = ModelGenerationPlan.from_payload(_PAYLOAD)
     model = """package P {
         port def DataPort;
@@ -625,7 +628,7 @@ def test_terminal_conformance_rejects_unplanned_non_container_part_def():
     ] == ["StatusData"]
 
 
-def test_external_plan_port_cannot_be_silently_internalized():
+def test_external_port_not_internalized():
     payload = {
         "components": [
             {
@@ -680,7 +683,7 @@ def test_external_plan_port_cannot_be_silently_internalized():
     ]
 
 
-def test_missing_planned_port_and_connection_are_restored_from_plan_only():
+def test_missing_port_restored_from_plan():
     plan = ModelGenerationPlan.from_payload(
         _PAYLOAD,
         requirements=["REQ_FUNC_001: propagate status."],
@@ -706,7 +709,7 @@ def test_missing_planned_port_and_connection_are_restored_from_plan_only():
     assert "connect producer.status to consumer.status;" in repaired
 
 
-def test_terminal_qualification_is_independent_of_continuous_score():
+def test_qualification_ignores_score():
     model_text = """package P {
         requirement def REQ_FUNC_001 { doc /* propagate status */ }
         part def Producer {
@@ -734,7 +737,7 @@ def test_terminal_qualification_is_independent_of_continuous_score():
     assert "BOUNDED_A_G_ASSURANCE" in qualification["failed_checks"]
 
 
-def test_expected_generation_plan_is_fail_closed_when_metadata_is_lost():
+def test_lost_metadata_fails_closed():
     model_text = """package P {
         requirement def REQ_FUNC_001 { doc /* propagate status */ }
         part def Producer { satisfy requirement REQ_FUNC_001; }
@@ -760,13 +763,13 @@ def test_expected_generation_plan_is_fail_closed_when_metadata_is_lost():
     ]
 
 
-def test_a_planned_port_written_with_the_wrong_type_is_retyped():
-    """One measured run failed with four ports reported as BOTH missing and
-    unplanned: same component, same name, same direction, different type.
+def test_wrong_port_type_retyped():
+    """The plan owns a port's type as it owns an attribute's, so a type mismatch is
+    repaired rather than reported twice.
 
-    "Does this port exist?" looked only at the name, so nothing added the port
-    and nothing corrected it. The plan owns a port's type exactly as it owns an
-    attribute's, so the mismatch is repaired rather than reported twice.
+    One run reported four ports as both missing and unplanned - same component,
+    name and direction, different type - because the existence check looked only at
+    the name.
     """
     from types import SimpleNamespace
 
@@ -796,14 +799,13 @@ def test_a_planned_port_written_with_the_wrong_type_is_retyped():
 
     assert "in port overrideCmd : CommandPort;" in text
     assert "DataPort" not in text
-    # the port that already agreed is untouched, and not reported
     assert "out port telemetry : StatusPort;" in text
     assert changes == ["FlightController.overrideCmd (DataPort -> CommandPort)"]
 
 
-def test_a_wrong_direction_is_left_alone_because_it_is_a_design_question():
-    """Retyping is a notation repair. A direction reversal changes what the
-    connections mean, so it stays a reported mismatch rather than a silent edit.
+def test_wrong_direction_left_alone():
+    """Retyping is a notation repair; a direction reversal changes what the
+    connections mean, so it stays a reported mismatch.
     """
     from types import SimpleNamespace
 
@@ -829,10 +831,7 @@ def test_a_wrong_direction_is_left_alone_because_it_is_a_design_question():
     assert changes == []
 
 
-def test_terminal_conformance_admits_justified_conservative_extension():
-    """Extension contract (schema 4.1): a specialization-consistent addition
-    carrying an in-body doc /* rationale; satisfies REQ_... */ is a
-    JUSTIFIED_EXTENSION, not a violation."""
+def test_admits_justified_extension():
     plan = ModelGenerationPlan.from_payload(
         _PAYLOAD,
         requirements=["REQ_FUNC_001: propagate status."],
@@ -860,12 +859,12 @@ def test_terminal_conformance_admits_justified_conservative_extension():
     assert report["justified_extension_connections"] == [
         "producer.extra -> consumer.extraIn"
     ]
-    # raw inventory keeps its meaning; the ISSUES are what got reclassified
+    # raw inventory keeps its meaning; the issues are what got reclassified
     assert len(report["unplanned_ports"]) == 2
     assert not any("unplanned" in issue for issue in report["issues"])
 
 
-def test_extension_without_requirement_link_still_fails():
+def test_unlinked_extension_fails():
     plan = ModelGenerationPlan.from_payload(
         _PAYLOAD,
         requirements=["REQ_FUNC_001: propagate status."],
@@ -889,13 +888,13 @@ def test_extension_without_requirement_link_still_fails():
     assert report["justified_extension_ports"] == []
 
 
-def test_rewiring_planned_ports_is_not_an_extension():
+def test_rewiring_not_extension():
     plan = ModelGenerationPlan.from_payload(
         _PAYLOAD,
         requirements=["REQ_FUNC_001: propagate status."],
     )
-    # an unplanned connection between purely PLANNED ports alters the planned
-    # information flow — never justifiable as an extension
+    # an unplanned connection between planned ports alters the planned information
+    # flow, so it does not count as an extension
     model = """package P {
         port def DataPort;
         part def Producer { out port status : DataPort; }
@@ -910,9 +909,9 @@ def test_rewiring_planned_ports_is_not_an_extension():
     }"""
 
     _, report = apply_generation_plan(model, plan)
-    # the port itself is justified; the connection is too (it serves the
-    # declared extension through planned source) — but a connection touching
-    # NO extension port must fail:
+    # the port is justified and so is the connection (it serves the declared
+    # extension through a planned source); a connection touching no extension port
+    # fails:
     model2 = model.replace(
         " { doc /* second sink; satisfies REQ_FUNC_001 */ }", ";"
     )
@@ -921,10 +920,6 @@ def test_rewiring_planned_ports_is_not_an_extension():
     assert any("unplanned connection" in i for i in report2["issues"])
 
 
-# ---------------------------------------------------------------------------
-# Declared (out-of-vocabulary) response intents and the unverifiable record
-# ---------------------------------------------------------------------------
-
 _ALERT_REQ = (
     "REQ-FUNC-001: The system shall alert the operators within 5 minutes "
     "of an equipment fault."
@@ -932,8 +927,6 @@ _ALERT_REQ = (
 
 
 def _alert_payload() -> dict:
-    """A plan whose FUNC requirement obliges a response outside the built-in
-    intent table (alert), realized locally with a reachable alert action."""
     payload = copy.deepcopy(_PAYLOAD)
     payload["components"][0]["responsibility"] = (
         "Monitors equipment and alerts the operators."
@@ -977,7 +970,7 @@ def _alert_payload() -> dict:
     return payload
 
 
-def test_declared_intent_with_anchored_markers_and_reachable_response_passes():
+def test_anchored_markers_pass():
     plan = ModelGenerationPlan.from_payload(
         _alert_payload(),
         requirements=[_ALERT_REQ],
@@ -986,7 +979,7 @@ def test_declared_intent_with_anchored_markers_and_reachable_response_passes():
     assert not plan.issues
 
 
-def test_out_of_vocabulary_intent_without_markers_is_a_plan_defect():
+def test_intent_without_markers_defect():
     payload = _alert_payload()
     payload["requirement_realizations"][0]["response_markers"] = []
 
@@ -1002,10 +995,10 @@ def test_out_of_vocabulary_intent_without_markers_is_a_plan_defect():
     )
 
 
-def test_a_marker_not_anchored_in_the_effect_phrase_is_refused():
-    """The anti-self-grading rule: the planner cannot declare a marker its
-    own behaviours happen to satisfy unless the requirement's effect phrase
-    names it."""
+def test_unanchored_marker_refused():
+    """Anti-self-grading rule: the planner cannot declare a marker its own behaviours
+    satisfy unless the requirement's effect phrase names it.
+    """
     payload = _alert_payload()
     payload["requirement_realizations"][0]["response_markers"] = ["hovering"]
 
@@ -1020,13 +1013,11 @@ def test_a_marker_not_anchored_in_the_effect_phrase_is_refused():
     )
 
 
-def test_declared_intent_still_demands_a_reachable_declared_response():
-    """Declared markers buy checkability, not a pass: the plan must still
-    carry a reachable state producing the declared response."""
+def test_intent_demands_reachable_response():
     payload = _alert_payload()
     payload["behaviors"][0]["states"][1] = {
         "state_id": "alerting", "role": "RESPONSE",
-    }  # response state no longer produces the alert action
+    }
 
     plan = ModelGenerationPlan.from_payload(
         payload, requirements=[_ALERT_REQ],
@@ -1039,7 +1030,7 @@ def test_declared_intent_still_demands_a_reachable_declared_response():
     )
 
 
-def test_unverifiable_requires_a_rationale_and_then_obliges_no_behavior():
+def test_unverifiable_needs_rationale():
     payload = _alert_payload()
     realization = payload["requirement_realizations"][0]
     realization["response_intent"] = "unverifiable"
@@ -1068,7 +1059,7 @@ def test_unverifiable_requires_a_rationale_and_then_obliges_no_behavior():
     assert not any("needs a planned" in issue for issue in reasoned.issues)
 
 
-def test_response_markers_survive_the_plan_serialisation_round_trip():
+def test_markers_survive_round_trip():
     plan = ModelGenerationPlan.from_payload(
         _alert_payload(), requirements=[_ALERT_REQ],
         require_source_anchored_paths=True,
@@ -1077,11 +1068,7 @@ def test_response_markers_survive_the_plan_serialisation_round_trip():
     assert realization["response_markers"] == ["alert"]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  strip_unplanned_additions — the conformance-scoped salvage knife
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_strip_unplanned_additions_removes_each_additive_class():
+def test_strip_removes_each_class():
     from src.prototyping.generation_plan import strip_unplanned_additions
 
     text = """package P {
@@ -1112,15 +1099,13 @@ def test_strip_unplanned_additions_removes_each_additive_class():
     assert "invented" not in stripped
     assert "Gadget" not in stripped
     assert "gadget" not in stripped
-    # the in-plan edits survive intact
     assert "out port signal : SignalPort" in stripped
     assert "assert constraint altitudeBound" in stripped
     assert "connect source.signal to sink.signal" in stripped
-    # no dangling header remains from the part-def deletion
     assert "part def\n" not in stripped and "part def ;" not in stripped
 
 
-def test_strip_sweeps_connects_referencing_a_dropped_usage():
+def test_strip_sweeps_dangling_connects():
     from src.prototyping.generation_plan import strip_unplanned_additions
 
     text = """package P {
@@ -1139,7 +1124,7 @@ def test_strip_sweeps_connects_referencing_a_dropped_usage():
     assert any("dropped usage b" in item for item in removed)
 
 
-def test_conformance_report_carries_salvage_targets():
+def test_report_carries_salvage_targets():
     payload = {
         "components": [
             {
@@ -1191,7 +1176,6 @@ def test_conformance_report_carries_salvage_targets():
     assert report["status"] == "FAIL"
     targets = report["salvage_targets"]
     assert ["Source", "invented", "out", "SignalPort"] in targets["ports"]
-    # and the salvage round-trips to PASS
     from src.prototyping.generation_plan import strip_unplanned_additions
     stripped, removed = strip_unplanned_additions(model, targets)
     assert removed

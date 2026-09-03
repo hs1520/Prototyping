@@ -1,9 +1,4 @@
-"""
-Chain of Thought (CoT) prompting module.
-
-Implements structured Chain of Thought prompting techniques for guiding
-LLMs through complex MBSE design reasoning tasks.
-"""
+"""Chain of Thought (CoT) prompting module."""
 
 from __future__ import annotations
 
@@ -270,9 +265,6 @@ Work through these steps before writing the model:
 Provide the complete refined model in a single ```sysml code block. No prose after the block.
 """
 
-# ---------------------------------------------------------------------------
-# Multi-step design generation templates (Phase 2-a)
-# ---------------------------------------------------------------------------
 
 ARCHITECTURE_DECOMPOSITION_TEMPLATE = """You are decomposing a system into its top-level architectural components.
 
@@ -753,18 +745,6 @@ No prose after the block.
 """
 
 def _build_profile_block(profile: Optional[Dict[str, Any]]) -> str:
-    """
-    Build the platform profile injection block for BEHAVIOR_TEMPLATE.
-
-    When profile is None → returns empty string (platform-agnostic mode).
-    When profile is provided → returns a constraint block that forces LLM
-    to use MAVLink-compatible command names in mode machine transitions.
-
-    Profile keys:
-      platform      : str                 e.g. "ArduPilot Copter"
-      mode_vocabulary: List[str]          e.g. ["CMD_RTL", "CMD_LAND", ...]
-      emergency_mode : str                e.g. "CMD_LAND"
-    """
     if not profile:
         return ""
 
@@ -809,14 +789,13 @@ PLATFORM PROFILE — {platform} (MANDATORY — overrides default naming):
 """
 
 
-# The canonical spellings inside this template (deployParachute,
-# CMD_PARACHUTE, initiateEmergencyLand, ...) are EXAMPLES, demoted from
-# contract to suggestion on 2026-08-31: every verifier resolves identity via
-# the frozen plan's bindings (verification_binding) or semantic resolution,
-# and the identity ratchet (tests/test_identity_ratchet.py) pins that a model
-# naming things its own way scores identically. Keeping familiar names here
-# merely lowers the semantic-fallback burden for plan-less arms — do not add
-# code that depends on these spellings, and do not "fix" a model toward them.
+# The spellings in this template (deployParachute, CMD_PARACHUTE,
+# initiateEmergencyLand, ...) are examples, not a contract: since 2026-08-31 every
+# verifier resolves identity via the frozen plan's bindings (verification_binding)
+# or semantic resolution, and tests/test_identity_ratchet.py pins that a model
+# naming things its own way scores identically. They only lower the
+# semantic-fallback burden for plan-less arms, so do not add code that depends on
+# them and do not "fix" a model toward them.
 BEHAVIOR_TEMPLATE = """Generate the SysML v2 behavioral fragment for the system below.
 Write ONLY executable response action definitions and state definitions — no part def, no port, no attribute, no connect, no satisfy yet. Planned accepted-event item definitions are compiler-owned: reference their exact names in `accept`, but do not redeclare them as actions.
 
@@ -1388,15 +1367,7 @@ class CoTResult:
 
 
 class ChainOfThoughtPrompter:
-    """
-    Implements Chain of Thought prompting for MBSE design tasks.
-
-    Supports multiple CoT patterns:
-    - Zero-shot CoT: "Think step by step"
-    - Few-shot CoT: Provide examples with reasoning
-    - Tree of Thought: Explore multiple reasoning paths
-    - Self-consistency: Generate multiple solutions and vote
-    """
+    """Implements Chain of Thought prompting for MBSE design tasks."""
 
     def __init__(self, llm: LLMInterface):
         self.llm = llm
@@ -1410,7 +1381,6 @@ class ChainOfThoughtPrompter:
         system_prompt: Optional[str] = None,
         stage: Optional[str] = None,
     ) -> str:
-        """Issue one independent turn with an explicit optional role prompt."""
         messages = [
             Message(
                 role="system",
@@ -1432,20 +1402,13 @@ class ChainOfThoughtPrompter:
         *,
         system_prompt: Optional[str] = None,
     ) -> CoTResult:
-        """
-        Use CoT prompting to extract structured requirements from a description.
-
-        fixed_requirements: manually written requirements that MUST appear verbatim
-        in the output.  The LLM is instructed to include them as-is and continue
-        numbering new requirements from the next available ID per category.
-        """
+        """Use CoT prompting to extract structured requirements from a description."""
         description_block = system_description
         if context:
             description_block += f"\n\nAdditional context: {context}"
 
         fixed_block = ""
         if fixed_requirements:
-            # Compute next available ID per category from fixed list
             max_num: dict = defaultdict(int)
             for req in fixed_requirements:
                 m = re.match(r"REQ-([A-Z]+)-(\d+):", req.strip())
@@ -1488,9 +1451,7 @@ class ChainOfThoughtPrompter:
         context: str = "",
         temperature: float = 0.5,
     ) -> CoTResult:
-        """
-        Use CoT prompting to generate a SysML v2 design.
-        """
+        """Use CoT prompting to generate a SysML v2 design."""
         req_text = "\n".join(f"  {r}" for r in requirements)
         context_block = (
             f"\nRelevant domain context:\n{context}\n"
@@ -1516,9 +1477,7 @@ class ChainOfThoughtPrompter:
         model_text: str,
         requirements: List[str],
     ) -> CoTResult:
-        """
-        Use CoT prompting to evaluate a SysML v2 model against requirements.
-        """
+        """Use CoT prompting to evaluate a SysML v2 model against requirements."""
         req_text = "\n".join(f"  - {r}" for r in requirements)
         prompt = EVALUATION_COT_TEMPLATE.format(
             model=model_text,
@@ -1541,9 +1500,7 @@ class ChainOfThoughtPrompter:
         *,
         system_prompt: Optional[str] = None,
     ) -> CoTResult:
-        """
-        Use CoT prompting to refine a design based on evaluation feedback.
-        """
+        """Use CoT prompting to refine a design based on evaluation feedback."""
         issues_text = "\n".join(f"  - {i}" for i in issues)
         prompt = REFINEMENT_COT_TEMPLATE.format(
             model=model_text,
@@ -1562,10 +1519,6 @@ class ChainOfThoughtPrompter:
         )
         return self._parse_cot_response(response.content)
 
-    # ------------------------------------------------------------------
-    # Multi-step generation methods (Phase 2-a)
-    # ------------------------------------------------------------------
-
     def decompose_architecture(
         self,
         system_name: str,
@@ -1575,11 +1528,10 @@ class ChainOfThoughtPrompter:
     ) -> CoTResult:
         """Step 1: Produce a typed whole-model JSON generation plan."""
         req_text = "\n".join(f"  {r}" for r in requirements)
-        # The varying block (correction context, repair base) renders at the
-        # template TAIL: everything before it — instructions, schema,
-        # requirements — is byte-stable across a run's retry attempts, so
-        # the ~20KB static prefix stays eligible for provider-side implicit
-        # prefix caching instead of being invalidated by each correction.
+        # The varying block (correction context, repair base) renders at the template
+        # tail, so everything before it - instructions, schema, requirements - is
+        # byte-stable across a run's retry attempts and the ~20KB static prefix stays
+        # eligible for provider-side implicit prefix caching.
         context_block = (
             f"\nRelevant domain context:\n{context}\n"
             if context and context.strip()
@@ -1767,11 +1719,7 @@ comments and blank lines, do not repeat declarations, start immediately with
         requirements: List[str],
         num_samples: int = 3,
     ) -> CoTResult:
-        """
-        Generate multiple design candidates and return the most consistent one.
-
-        Implements the self-consistency CoT technique for more reliable results.
-        """
+        """Generate multiple design candidates and return the most consistent one."""
         candidates = []
         for _ in range(num_samples):
             result = self.generate_design(
@@ -1781,7 +1729,6 @@ comments and blank lines, do not repeat declarations, start immediately with
             )
             candidates.append(result)
 
-        # Select the candidate with the most SysML content (heuristic for completeness)
         best = max(
             candidates,
             key=lambda r: len(r.extracted_sysml or ""),
@@ -1791,11 +1738,9 @@ comments and blank lines, do not repeat declarations, start immediately with
         return best
 
     def _parse_cot_response(self, response_text: str) -> CoTResult:
-        """Parse an LLM response to extract CoT steps, SysML, and JSON."""
         result = CoTResult(final_answer=response_text)
         response_digest = sha256_text(response_text or "")
 
-        # Extract SysML code blocks
         sysml_pattern = r"```sysml\n(.*?)```"
         sysml_matches = re.findall(sysml_pattern, response_text, re.DOTALL)
         if sysml_matches:
@@ -1805,10 +1750,9 @@ comments and blank lines, do not repeat declarations, start immediately with
                 "  ⚠ [INCOMPLETE SYSML] LLM response ended before closing ```"
             )
 
-        # Extract an explicitly delimited JSON response. Fence matching is
-        # intentionally tolerant of case, spaces, and CRLF, but we never scan
-        # arbitrary prose for a brace fragment because that can promote an
-        # explanatory example into the authoritative generation plan.
+        # Extract an explicitly delimited JSON response. Fence matching tolerates case,
+        # spaces and CRLF; arbitrary prose is not scanned for a brace fragment, which
+        # could promote an explanatory example into the authoritative generation plan.
         json_matches = re.findall(
             r"```[ \t]*json[ \t]*\r?\n(.*?)```",
             response_text,
@@ -1830,11 +1774,10 @@ comments and blank lines, do not repeat declarations, start immediately with
             "response_digest": response_digest,
             "source": json_source or "NONE",
             "status": (
-                # An opened but never closed ```json fence is the signature of
-                # a response the provider cut off (HIGH thinking spending the
-                # shared output budget, finish_reason MAX_TOKENS).  Reporting
-                # it as "absent" is what made a truncation indistinguishable
-                # from a model that answered in prose.
+                # An opened but never closed ```json fence marks a response the provider cut off
+                # (HIGH thinking spending the shared output budget, finish_reason MAX_TOKENS).
+                # Reporting it as "absent" made truncation indistinguishable from a model that
+                # answered in prose.
                 "JSON_FENCE_UNCLOSED"
                 if not json_candidate and re.search(
                     r"```[ \t]*json[ \t]*\r?\n",
@@ -1865,7 +1808,6 @@ comments and blank lines, do not repeat declarations, start immediately with
                     })
         result.metadata["json_parse"] = json_diagnostic
 
-        # Extract numbered steps
         step_pattern = r"(\d+)\.\s+([A-Z][^:]+):\s*(.*?)(?=\n\d+\.|$)"
         step_matches = re.findall(step_pattern, response_text, re.DOTALL)
         for num, description, content in step_matches:

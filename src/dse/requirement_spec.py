@@ -1,11 +1,12 @@
-"""Structured requirement extraction: free-text requirements → controlled-vocabulary specs.
+"""Structured requirement extraction: free-text requirements -> controlled-vocabulary specs.
 
-ONE auditable parse replaces the scattered keyword heuristics (endurance_target /
-max_rated_payload / range_requirement / mass-limit) that proved brittle — a length unit
-can't tell range from altitude, "payload" appears in MTOW text, "second" isn't endurance.
-An LLM does the semantic understanding when available (robust to phrasing; output pinned to
-a controlled vocabulary + validated), and a deterministic rule extractor is the offline/test
-fallback. Consumers query specs by quantity instead of re-grepping requirement text.
+One auditable parse replaces the scattered keyword heuristics (endurance_target /
+max_rated_payload / range_requirement / mass-limit), which were brittle: a length
+unit can't tell range from altitude, "payload" appears in MTOW text, "second"
+isn't endurance. An LLM does the semantic parse when available (output pinned to
+a controlled vocabulary + validated), with a deterministic rule extractor as the
+offline/test fallback. Consumers query specs by quantity instead of re-grepping
+requirement text.
 """
 from __future__ import annotations
 
@@ -14,14 +15,12 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-# ── controlled vocabulary (canonical unit in the comment) ─────────────────────────────
-ENDURANCE = "endurance"   # flight time,           minutes,  >=
-MASS_MTOW = "mtow"        # max take-off/all-up mass, kg,     <=
-PAYLOAD = "payload"       # rated carried payload,  kg,       <=
-RANGE = "range"           # operational/flight range, metres, >=
-SPEED = "speed"           # cruise/airspeed,        m/s,      >=
+ENDURANCE = "endurance"
+MASS_MTOW = "mtow"
+PAYLOAD = "payload"
+RANGE = "range"
+SPEED = "speed"
 ALTITUDE = "altitude"     # vertical limit,         metres,   <=  (classified so it is NOT
-                          #                                        mistaken for range)
 QUANTITIES = (ENDURANCE, MASS_MTOW, PAYLOAD, RANGE, SPEED, ALTITUDE)
 _OPERATORS = (">=", "<=", "==")
 
@@ -29,13 +28,12 @@ _OPERATORS = (">=", "<=", "==")
 @dataclass(frozen=True)
 class ReqSpec:
     req_id: str
-    quantity: str         # one of QUANTITIES
-    operator: str         # ">=", "<=", "=="
-    value: float          # in the canonical unit: minutes / kg / metres / m·s⁻¹
+    quantity: str
+    operator: str
+    value: float
     unit: str
 
 
-# ── deterministic rule extractor (consolidates the former scattered keyword constants) ──
 _NUM_UNIT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([A-Za-z/%°]+(?:\s*/\s*[A-Za-z]+)?)?")
 _REQ_ID_RE = re.compile(r"REQ[-_][A-Z]+[-_]\d+")
 _TIME_UNIT_MIN = {"minute": 1.0, "minutes": 1.0, "min": 1.0, "mins": 1.0,
@@ -86,8 +84,6 @@ def _first(body: str, unit_map) -> Optional[Tuple[float, str]]:
 
 
 def _rule_extract(requirements) -> List[ReqSpec]:
-    """Behaviour-preserving deterministic extractor: the consolidated keyword logic, now in
-    one place producing structured specs (quantity + operator + canonical-unit value)."""
     specs: List[ReqSpec] = []
     for r in requirements or []:
         low = r.lower()
@@ -100,15 +96,15 @@ def _rule_extract(requirements) -> List[ReqSpec]:
         is_range = any(k in low for k in _RANGE_TERMS) and not is_vertical
 
         op = _operator_for(body)
-        t = _first(body, _TIME_UNIT_MIN)        # endurance (minutes; hours→minutes)
+        t = _first(body, _TIME_UNIT_MIN)
         if t:
             specs.append(ReqSpec(rid, ENDURANCE, op, t[0], t[1]))
-        mss = _first(body, _MASS_UNIT_KG)        # MTOW (take-off) vs payload (carry)
+        mss = _first(body, _MASS_UNIT_KG)
         if mss and is_mtow:
             specs.append(ReqSpec(rid, MASS_MTOW, "<=", mss[0], mss[1]))
         elif mss and is_carry:
             specs.append(ReqSpec(rid, PAYLOAD, "<=", mss[0], mss[1]))
-        ln = _first(body, _LEN_UNIT_M)           # operational range vs altitude
+        ln = _first(body, _LEN_UNIT_M)
         if ln and is_range:
             range_op = op
             if ("maximum range" in low or "max range" in low) and not any(
@@ -118,7 +114,7 @@ def _rule_extract(requirements) -> List[ReqSpec]:
             specs.append(ReqSpec(rid, RANGE, range_op, ln[0], ln[1]))
         elif ln and is_vertical:
             specs.append(ReqSpec(rid, ALTITUDE, "<=", ln[0], ln[1]))
-        sp = _first(body, _SPEED_UNIT_MPS)       # cruise/airspeed
+        sp = _first(body, _SPEED_UNIT_MPS)
         is_wind_condition = (
             any(k in low for k in _CONDITION_SPEED_TERMS)
             and not any(k in low for k in ("nil-wind", "nil wind", "no-wind", "no wind"))
@@ -139,7 +135,6 @@ def _rule_extract(requirements) -> List[ReqSpec]:
     return specs
 
 
-# ── LLM extractor (robust to phrasing; output validated against the vocabulary) ─────────
 _LLM_SYSTEM = "You convert systems-engineering requirements into structured quantitative specs."
 _LLM_PROMPT = """Extract EVERY quantitative constraint from the requirements below as JSON.
 
@@ -174,7 +169,7 @@ def _llm_extract(requirements, llm) -> Optional[List[ReqSpec]]:
         q = str(d.get("quantity", "")).strip().lower()
         op = str(d.get("operator", "")).strip()
         if q not in QUANTITIES or op not in _OPERATORS:
-            continue                                  # validate against the controlled vocab
+            continue
         try:
             specs.append(ReqSpec(str(d.get("req_id", "")), q, op, float(d["value"]),
                                  str(d.get("unit", ""))))
@@ -187,10 +182,13 @@ _CACHE: dict = {}
 
 
 def extract_requirements(requirements, llm=None) -> List[ReqSpec]:
-    """Structured specs for the requirements. Uses ``llm`` (an object with ``.chat(prompt,
-    system_prompt=...)``) when given — robust to phrasing, validated against the vocabulary;
-    falls back to the deterministic rule extractor on any failure or when no LLM. Memoised by
-    requirements so the pipeline can prime once with the LLM and deep callers reuse it."""
+    """Structured specs for the requirements.
+
+    Uses ``llm`` (an object with ``.chat(prompt, system_prompt=...)``) when given,
+    validated against the vocabulary; falls back to the deterministic rule extractor
+    on any failure or when no LLM. Memoised by requirements so the pipeline primes
+    once with the LLM and deep callers reuse it.
+    """
     key = tuple(requirements or [])
     if key in _CACHE:
         return _CACHE[key]
@@ -214,8 +212,9 @@ def max_value(specs: List[ReqSpec], quantity: str, operator: Optional[str] = Non
 
 def max_spec(specs: List[ReqSpec], quantity: str, operator: Optional[str] = None) -> Optional[ReqSpec]:
     """Largest-value spec of ``quantity``. ``operator`` filters by direction so a metric
-    clause only fires for the meaningful bound — e.g. range capability is a ">=" target, so
-    a "<=" operational-radius/geofence requirement is NOT claimed satisfied by RangeM."""
+    clause only fires for the matching bound - range capability is a ">=" target, so a
+    "<=" operational-radius/geofence requirement is not claimed satisfied by RangeM.
+    """
     best: Optional[ReqSpec] = None
     for s in specs:
         if s.quantity == quantity and (operator is None or s.operator == operator) \
@@ -225,8 +224,9 @@ def max_spec(specs: List[ReqSpec], quantity: str, operator: Optional[str] = None
 
 
 def min_spec(specs: List[ReqSpec], quantity: str, operator: Optional[str] = None) -> Optional[ReqSpec]:
-    """Smallest-value spec of ``quantity`` — the BINDING bound for a conjunction of
-    "<=" limits (every limit must hold, so the tightest one governs)."""
+    """Smallest-value spec of ``quantity`` - the binding bound for a conjunction of "<="
+    limits, since every limit holds and the tightest governs.
+    """
     best: Optional[ReqSpec] = None
     for s in specs:
         if s.quantity == quantity and (operator is None or s.operator == operator) \
@@ -241,10 +241,10 @@ _REQDOC_RE = re.compile(
 
 
 def enforce_requirement_text(model_text: str, requirements: List[str]) -> str:
-    """Overwrite each ``requirement def`` doc body with the VERBATIM canonical requirement text
-    from the input list — the LLM paraphrases doc strings during generation and can corrupt the
-    meaning (e.g. 'all other safety responses' → 'all calculations'). This restores fidelity.
-    Requirements unknown to the input list are left untouched."""
+    """Overwrite each ``requirement def`` doc body with the verbatim canonical
+    requirement text from the input list: the LLM paraphrases doc strings during
+    generation and can corrupt the meaning.
+    """
     canon = {}
     for r in requirements or []:
         m = _REQ_ID_RE.search(r)
@@ -268,10 +268,10 @@ _CUR_PAYLOAD_RE = re.compile(
 
 
 def bind_current_payload(model_text: str, requirements: List[str]) -> str:
-    """Bind the LLM's placeholder ``current…Payload…Mass : Real = 0.0`` to the actual rated
-    delivery payload (the max PAYLOAD spec), so the generated ``payloadMassBound`` constraint
-    becomes a REAL check (rated payload ≤ declared capacity) instead of the vacuous 0.0 ≤ max.
-    No payload requirement → model unchanged."""
+    """Bind the LLM's placeholder ``current...Payload...Mass : Real = 0.0`` to the rated
+    delivery payload (the max PAYLOAD spec), so the generated ``payloadMassBound``
+    constraint checks rated payload <= declared capacity instead of 0.0 <= max.
+    """
     rated = max_value(extract_requirements(requirements), "payload")
     if not rated or rated <= 0:
         return model_text

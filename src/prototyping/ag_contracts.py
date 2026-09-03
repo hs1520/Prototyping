@@ -1,27 +1,23 @@
 """Bounded Assume-Guarantee contract model and compositional checker (R2-BBAG).
 
-This implements the checker half of Increment 2 in
-``docs/OPTION2_IMPLEMENTATION_DESIGN.md`` (§6, §9). The data structures mirror
-§6.1 (SystemContract / ComponentContract + decomposes/discharged_by/… edges) and
-the checker runs the bounded §6.4 / §9 obligations:
+The checker half of Increment 2 in ``docs/OPTION2_IMPLEMENTATION_DESIGN.md``
+(§6, §9). Data structures mirror §6.1 (SystemContract / ComponentContract plus
+decomposes/discharged_by/... edges); the bounded §6.4 / §9 obligations are:
 
   * per-contract completeness (READY / INCOMPLETE / UNSUPPORTED, §6.3);
   * one responsible owner per component guarantee (§16);
   * assumption discharge by explicit environment or upstream guarantee (§6.4),
-    computed as a monotone availability fixpoint — the bounded A/G composition;
+    computed as a monotone availability fixpoint;
   * unit-safe numeric / Boolean compatibility (§6.4);
   * additive timing-budget composition (§6.4, §7);
-  * whether the component guarantees collectively support the system guarantee;
+  * whether the component guarantees support the system guarantee;
   * circular-assumption detection (§17 unsoundness risk).
 
-Boundary (§2, §13): this is bounded, A/G-*inspired* compositional checking, not a
-sound formal proof calculus. A model-level PASS means the extracted graph is
-complete and internally compatible — never that the physical system passed.
-
-The checker consumes an already-extracted :class:`AGGraph` (see
-``ag_extractor.py``); the SysML model remains the sole semantic authority and a
-fact absent from the committed model is INCOMPLETE/UNSUPPORTED here, never
-supplied from JSON (§6.2).
+This is A/G-inspired bounded checking, not a proof calculus (§2, §13): a PASS
+means the extracted graph is complete and internally compatible. The input is
+an already-extracted :class:`AGGraph` (``ag_extractor.py``); a fact absent
+from the committed model is INCOMPLETE/UNSUPPORTED, never supplied from JSON
+(§6.2).
 """
 from __future__ import annotations
 
@@ -67,31 +63,26 @@ from .ag_profile import (
     UNTIMED_PATTERNS as PROFILE_UNTIMED_PATTERNS,
 )
 
-# ag-bounded-8: priority response members must carry provenance in committed
-# SysML. The checker still knows no reviewed response names; it checks only that
-# each declared member says whether it came from existing model behavior or an
-# approved/derived design source. Verdicts therefore remain gold-blind, but differ
-# from v7 and may not be pooled.
+# ag-bounded-8: priority response members carry provenance in committed SysML.
+# The checker knows no reviewed response names; it checks only that each
+# declared member says whether it came from existing model behavior or an
+# approved/derived design source. Gold-blind, but differs from v7, so the two
+# are not pooled.
 #
-# ag-bounded-9 admits THRESHOLD_TRIGGERED_RESPONSE: a triggered pattern that
-# states no deadline. It carries the timed pattern's arbitration obligations and
-# drops exactly the timing ones — no apportioned budget, and no
-# trigger_matches_timing_origin cross-check, which for an untimed chain would be
-# demanding the deadline the pattern exists to do without. A boundary component
-# also stops being mandatory where nothing is apportioned, while any that is
-# declared is still held to its obligation. The timed pattern's own obligations
-# are unchanged and separately pinned, but the set of accepted declarations and
-# the untimed verdicts differ, so v8 and v9 may not be pooled.
-# ag-bounded-10: the extractor now reads a deadline written with a
-# qualified or unit-suffixed type (`maxLatency : DurationValue [s] = ...`),
-# which it previously missed entirely — a timed chain then extracted with
-# no budget and was judged not to be a timed pattern. Verdicts on all 14
-# archived R2 runs are unchanged, because the emitter never wrote that
-# spelling; what changed is the input space the checker can see, so v9 and
-# v10 are not pooled.
+# ag-bounded-9 admits THRESHOLD_TRIGGERED_RESPONSE, a triggered pattern with
+# no deadline: it keeps the timed pattern's arbitration obligations and drops
+# the timing ones - no apportioned budget, no trigger_matches_timing_origin
+# cross-check. A boundary component stops being mandatory where nothing is
+# apportioned, and any declared one is still held to its obligation. The timed
+# pattern is unchanged, but accepted declarations and untimed verdicts differ,
+# so v8 and v9 are not pooled.
+# ag-bounded-10: the extractor now reads a deadline written with a qualified
+# or unit-suffixed type (`maxLatency : DurationValue [s] = ...`), which it
+# previously missed, so a timed chain extracted with no budget. Verdicts on
+# all 14 archived R2 runs are unchanged because the emitter never wrote that
+# spelling; the visible input space changed, so v9 and v10 are not pooled.
 AG_CHECKER_VERSION = "ag-bounded-10"
 
-# Completeness states (§6.3).
 READY = "READY"
 INCOMPLETE = "INCOMPLETE"
 UNSUPPORTED = "UNSUPPORTED"
@@ -124,37 +115,32 @@ _ERROR_CODES = frozenset({
 _TIMED_PATTERN = TIMED_PATTERN
 _TRIGGERED_PATTERNS = frozenset(PROFILE_TRIGGERED_PATTERNS)
 _INVARIANT_PATTERNS = frozenset(PROFILE_INVARIANT_PATTERNS)
-#: Every pattern that must not apportion a deadline — the untimed triggered
-#: pattern for the same reason the invariant ones do: it owns no interval.
+# Patterns that apportion no deadline; the untimed triggered pattern owns no
+# interval, like the invariant ones.
 _UNTIMED_PATTERNS = frozenset(PROFILE_UNTIMED_PATTERNS)
 _KNOWN_PATTERNS = frozenset(PROFILE_KNOWN_PATTERNS)
 
-#: The roles each invariant pattern is *defined* by. An invariant set that leaves
-#: one of them unfilled has not stated the pattern, whatever it names its
-#: invariants — so this is a completeness obligation, not a comparison against any
-#: requirement's reviewed answer, and it is published to authors verbatim.
-#:
-#: Public because a checker obligation the generator is never told is unsatisfiable
-#: by any author: ``ag_convention`` republishes these role names as an authoring
-#: rule and the two tables are pinned to each other in the tests, so a role added
-#: here cannot go unstated in the prompts.
+# The roles each invariant pattern is defined by. An invariant set leaving one
+# unfilled has not stated the pattern, so this is a completeness obligation
+# rather than a comparison against a reviewed answer.
+#
+# Public so authors can be told: ``ag_convention`` republishes these role names
+# as an authoring rule and the tests pin the two tables together, so a role
+# added here cannot go unstated in the prompts.
 _INVARIANT_SOURCE_KINDS = frozenset(PROFILE_INVARIANT_SOURCE_KINDS)
 _PRIORITY_MEMBER_SOURCE_KINDS = {
     "EXISTING_MODEL_BEHAVIOR",
     "STUDENT_APPROVED_DECOMPOSITION",
     DERIVED_SOURCE_KIND,
 }
-# REQ_SAFE_005's reviewed response set and precedence ordering used to be pinned
-# here and compared against directly. That made a gold-blind runtime verdict depend
-# on the reviewed answer, contradicting this module's own contract (a PASS means
-# the graph is complete and *internally* compatible) and making the priority
-# topology unmeasurable in the LLM-authored arm — it could only be recalled, never
-# derived. Those comparisons now live solely in
-# `ag_eval_semantics.priority_agreement`, which scores them against frozen gold.
+# REQ_SAFE_005's reviewed response set and precedence ordering used to be
+# pinned here, which made a gold-blind runtime verdict depend on the reviewed
+# answer and left the priority topology unmeasurable in the LLM-authored arm.
+# The comparisons now live only in `ag_eval_semantics.priority_agreement`,
+# which scores them against frozen gold.
 
 
 def _norm(concept: str, aliases: Mapping[str, str]) -> str:
-    """Canonical concept token: lower-cased, alias-resolved (§6.4 declared aliases)."""
     key = (concept or "").strip().lower()
     return aliases.get(key, key)
 
@@ -172,7 +158,7 @@ class Span:
 class Assumption:
     concept: str
     expr: str
-    kind: str  # "boolean" | "numeric" | "timing" | "unsupported"
+    kind: str
     is_environment: bool = False
     variable: Optional[str] = None
     comparator: Optional[str] = None
@@ -186,7 +172,7 @@ class Assumption:
 class Guarantee:
     concept: str
     expr: str
-    kind: str  # "boolean" | "numeric" | "timing" | "unsupported"
+    kind: str
     variable: Optional[str] = None
     comparator: Optional[str] = None
     value: Optional[float] = None
@@ -198,27 +184,26 @@ class Guarantee:
 @dataclass(frozen=True)
 class Contract:
     name: str
-    role: str  # "system" | "component"
+    role: str
     assumptions: Tuple[Assumption, ...] = ()
     guarantees: Tuple[Guarantee, ...] = ()
-    timing_budget: Optional[float] = None  # component latency budget / system deadline
+    timing_budget: Optional[float] = None
     timing_unit: Optional[str] = None
     timing_value_literal: Optional[str] = None
     timing_segment_required: Optional[bool] = None
-    #: Segments sharing a group run CONCURRENTLY, so the group contributes its
-    #: maximum rather than its sum. Undeclared means "own group" — i.e. serial,
-    #: which is what plain addition already assumed.
+    # Segments sharing a group run concurrently, so the group contributes its
+    # maximum, not its sum. Undeclared means own group, i.e. serial, which is what
+    # plain addition assumed.
     timing_segment_group: Optional[int] = None
-    #: Deadline the system deliberately does NOT apportion (system contract only).
     timing_margin: Optional[float] = None
     timing_margin_unit: Optional[str] = None
     timing_origin: Optional[str] = None
-    observation: Optional[str] = None  # system-level observed signal concept
+    observation: Optional[str] = None
     element_id: Optional[str] = None
     span: Optional[Span] = None
     owners: Tuple[str, ...] = ()
     source_requirement: Optional[str] = None
-    declared_pattern: Optional[str] = None  # selected safety pattern (system only)
+    declared_pattern: Optional[str] = None
 
     def boolean_guarantee_concepts(self) -> Tuple[str, ...]:
         return tuple(g.concept for g in self.guarantees if g.kind == "boolean")
@@ -226,7 +211,7 @@ class Contract:
 
 @dataclass(frozen=True)
 class AGEdge:
-    kind: str  # "decomposes" (§6.1); others reserved for later increments
+    kind: str
     src: str
     dst: str
     subject: Optional[str] = None
@@ -263,8 +248,8 @@ class AGDiagnostic:
     code: str
     message: str
     contract: Optional[str] = None
-    subject: Optional[str] = None  # assumption/guarantee concept
-    severity: str = "error"  # "error" | "warning"
+    subject: Optional[str] = None
+    severity: str = "error"
     provenance: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
@@ -301,7 +286,7 @@ class AGGraph:
 
 @dataclass
 class AGReport:
-    verdict: str  # "PASS" | "FAIL" | "INCOMPLETE"
+    verdict: str
     system_completeness: str
     component_completeness: Dict[str, str]
     diagnostics: Tuple[AGDiagnostic, ...]
@@ -324,12 +309,11 @@ class AGReport:
         return tuple(d for d in self.diagnostics if d.severity == "error")
 
     def to_dict(self) -> Dict[str, Any]:
-        # Shape of the derived, read-only ``ag_contract_graph.json`` audit view
-        # (§14): every derived report cites the source model revision and digest
-        # and the checker version, and can be regenerated deterministically. The
-        # ``graph`` block carries the predicted structure so the independent
-        # post-hoc evaluator can score it against gold without re-running the
-        # checker (§13 separation).
+        # Shape of the read-only ``ag_contract_graph.json`` audit view (§14): the
+        # report cites the source model revision, digest and checker version, and is
+        # deterministically regenerable. The ``graph`` block carries the predicted
+        # structure so the independent post-hoc evaluator can score it without
+        # re-running the checker (§13 separation).
         return {
             "artifact_role": "RUNTIME_A_G_PREDICTION",
             "evidence_role": "INTERVENTION_RUNTIME_CHECK",
@@ -374,12 +358,10 @@ class AGReport:
 def _classify_completeness(
     contract: Contract, *, owner_count: Optional[int]
 ) -> Tuple[str, List[AGDiagnostic]]:
-    """READY / INCOMPLETE / UNSUPPORTED for one contract (§6.3)."""
     diags: List[AGDiagnostic] = []
     prov = {"element_id": contract.element_id,
             "span": contract.span.as_dict() if contract.span else None}
 
-    # UNSUPPORTED: the bounded checker cannot represent a required property.
     if any(g.kind == "unsupported" for g in contract.guarantees) or \
        any(a.kind == "unsupported" for a in contract.assumptions):
         diags.append(AGDiagnostic(
@@ -389,7 +371,6 @@ def _classify_completeness(
         ))
         return UNSUPPORTED, diags
 
-    # INCOMPLETE: a required semantic field or discharge link is missing.
     reasons: List[str] = []
     if not contract.guarantees:
         reasons.append("no guarantee (require constraint)")
@@ -428,9 +409,9 @@ def _classify_completeness(
             LOCKED_UNTIL_RELEASE_PATTERN,
         }
     )
-    # A component contract may deliberately use A=true (no assume constraints),
-    # for example a normally-safe lock mechanism. System contracts still need an
-    # explicit envelope unless their selected profile is a pure invariant.
+    # A component contract may use A=true (no assume constraints), e.g. a
+    # normally-safe lock mechanism. System contracts still need an explicit
+    # envelope unless their profile is a pure invariant.
     if (
         contract.role == "system"
         and not contract.assumptions
@@ -481,7 +462,6 @@ def _classify_completeness(
 
 
 def _check_ownership(graph: AGGraph) -> Tuple[Dict[str, int], List[AGDiagnostic]]:
-    """Every component guarantee has exactly one responsible owner (§16)."""
     diags: List[AGDiagnostic] = []
     owner_count: Dict[str, int] = {
         c.name: len(set(c.owners)) for c in graph.components
@@ -519,20 +499,10 @@ def _check_ownership(graph: AGGraph) -> Tuple[Dict[str, int], List[AGDiagnostic]
 def _check_discharge(
     graph: AGGraph, aliases: Mapping[str, str]
 ) -> Tuple[Dict[str, str], List[AGDiagnostic]]:
-    """Assumption discharge as a monotone availability fixpoint (§6.4).
-
-    A component activates once every non-environment Boolean assumption concept is
-    available; activation publishes its Boolean guarantee concepts. Seeded by the
-    system assumptions (environment/trigger) plus any environment-marked component
-    assumptions. This is the bounded A/G composition: a concept is either an
-    explicit environment assumption or discharged by an upstream guarantee.
-    """
     diags: List[AGDiagnostic] = []
     discharge: Dict[str, str] = {}
     discharge_edges: List[Dict[str, Any]] = []
 
-    # available_by[concept] = "environment" (system/env-declared) or the producing
-    # component, so each emitted discharge edge records what discharged it.
     available: set = set()
     available_by: Dict[str, str] = {}
     if graph.system:
@@ -586,11 +556,11 @@ def _check_discharge(
                     available_by.setdefault(c, comp.name)
                 changed = True
 
-    # Distinguish a genuine cycle from a cascade behind an upstream gap (§16, §17).
-    # producer[c] = component whose Boolean guarantee publishes concept c; C depends
-    # on producer[c] for each non-environment Boolean assumption c. An assumption is
-    # CIRCULAR only when its producer can transitively reach C back through the
-    # dependency graph (a real cycle); otherwise it is a plain undischarged gap.
+    # Distinguish a cycle from a cascade behind an upstream gap (§16, §17).
+    # producer[c] = component whose Boolean guarantee publishes concept c; C
+    # depends on producer[c] for each non-environment Boolean assumption c. An
+    # assumption is CIRCULAR only when its producer transitively reaches C back
+    # through the dependency graph; otherwise it is an undischarged gap.
     producer: Dict[str, str] = {}
     for comp in graph.components:
         for concept in comp.boolean_guarantee_concepts():
@@ -617,7 +587,6 @@ def _check_discharge(
             stack.extend(dep.get(node, ()))
         return False
 
-    # One discharge edge per Boolean assumption, recording status and source.
     for comp in graph.components:
         prov = {"element_id": comp.element_id,
                 "span": comp.span.as_dict() if comp.span else None}
@@ -672,16 +641,12 @@ def _compose_timing(
 ) -> Tuple[Optional[float], Dict[str, Any]]:
     """Compose component budgets by declared structure, not by blanket addition.
 
-    Plain addition is only sound for a SERIAL chain. It was applied unconditionally,
-    which happened to be right for the one encoded timed chain and would be wrong —
-    conservatively, but wrong — for any chain with concurrent segments: two 0.3 s
-    responses running side by side occupy 0.3 s, not 0.6 s, so a valid design would
-    be reported as exceeding its deadline.
-
-    Segments declaring the same ``timingSegmentGroup`` are concurrent and contribute
-    their MAXIMUM; groups compose serially and contribute their SUM. An undeclared
-    segment is its own group, so a model that says nothing composes exactly as
-    before and no existing verdict moves.
+    Plain addition is sound only for a serial chain: two concurrent 0.3 s
+    responses occupy 0.3 s, not 0.6 s, so a valid design would be reported as
+    exceeding its deadline. Segments sharing a ``timingSegmentGroup`` are
+    concurrent and contribute their maximum; groups compose serially and
+    contribute their sum. An undeclared segment is its own group, so a model that
+    says nothing composes as before.
     """
     groups: Dict[Any, List[Tuple[str, float]]] = {}
     for index, component in enumerate(components):
@@ -721,11 +686,6 @@ def _compose_timing(
 
 
 def _check_timing(graph: AGGraph) -> Tuple[Dict[str, Any], List[AGDiagnostic]]:
-    """Timing-budget composition (§6.4, §7, §18-Q5).
-
-    Serial segments add, concurrent segments take their maximum, and a declared
-    margin is deadline the design deliberately does not apportion.
-    """
     diags: List[AGDiagnostic] = []
     budgets = {c.name: c.timing_budget for c in graph.components
                if c.timing_budget is not None}
@@ -733,15 +693,14 @@ def _check_timing(graph: AGGraph) -> Tuple[Dict[str, Any], List[AGDiagnostic]]:
     margin = (graph.system.timing_margin if graph.system else None) or 0.0
     total, composition = _compose_timing(graph.components)
 
-    # Unit safety: all declared timing units must agree (§6.4).
     units = {c.timing_unit for c in graph.all_contracts()
              if c.timing_budget is not None and c.timing_unit is not None}
     missing_units = [
         c.name for c in graph.all_contracts()
         if c.timing_budget is not None and c.timing_unit is None
     ]
-    # a margin is a duration too: unstated or mismatched units would let 50 ms of
-    # reserve be compared against a deadline in seconds
+    # a margin is a duration too: without units 50 ms of reserve is compared
+    # against a deadline in seconds
     if graph.system is not None and graph.system.timing_margin is not None:
         if graph.system.timing_margin_unit is None:
             missing_units.append(f"{graph.system.name}.timingMargin")
@@ -804,7 +763,6 @@ def _flat_token(value: str) -> str:
 def _check_realization(
     graph: AGGraph, aliases: Mapping[str, str]
 ) -> Tuple[List[Dict[str, Any]], List[AGDiagnostic]]:
-    """Require a reachable trigger -> response entry-action for each guarantee."""
     diags: List[AGDiagnostic] = []
     links: List[Dict[str, Any]] = []
     behaviors = {item.name: item for item in graph.behaviors}
@@ -927,8 +885,8 @@ def _check_realization(
             (state, action) for state, action in behavior.entry_actions.items()
             if (
                 state in reachable
-                # A clear/reset action consumes or negates a positive guarantee;
-                # a substring match alone would falsely call it a realization.
+                # A clear/reset action negates a positive guarantee; a substring match alone
+                # would count it as a realization.
                 and not _flat_token(action).startswith("clear")
                 and any(
                     token and token in _flat_token(action)
@@ -936,19 +894,18 @@ def _check_realization(
                 )
             )
         ]
-        # An explicitly untimed availability invariant is established in the
-        # initial state at the chain boundary; it must not invent an unbudgeted
-        # activation transition. All other component guarantees require a real
-        # reachable trigger-response transition.
+        # An untimed availability invariant is established in the initial state at the
+        # chain boundary and has no activation transition. Other component guarantees
+        # require a reachable trigger-response transition.
         availability_invariant = (
             comp.timing_segment_required is False
             and behavior.initial_state in behavior.entry_actions
             and bool(action_matches)
         )
-        # An A=true lifecycle component is driven by typed interface events rather
-        # than by a permanent environment predicate.  Its reachable transitions
-        # are the structural trigger evidence; requiring a conjunctive assumption
-        # for power-on/power-loss events would change their event semantics.
+        # An A=true lifecycle component is driven by typed interface events, not a
+        # permanent environment predicate, so its reachable transitions are the
+        # trigger evidence; a conjunctive assumption would change the event
+        # semantics of power-on/power-loss.
         unconditional_lifecycle = not comp.assumptions and bool(used_transitions)
         trigger_ok = trigger_ok or availability_invariant or unconditional_lifecycle
         if not trigger_ok:
@@ -983,14 +940,11 @@ def _check_realization(
                 },
             ))
         if not action_matches:
-            # Name the concept the action must carry. The message used to say only
-            # "for its guarantee", and a measured repair attempt answered it by
-            # naming the action after the STATE it sits in
+            # Name the concept the action carries. The message used to say only "for its
+            # guarantee", and a repair answered it by naming the action after its state
             # (`setParachuteDeploymentSelected` for a contract guaranteeing
-            # `parachuteResponseSelected`) — a plausible guess the gate correctly
-            # refused. The concept is in the committed model the author already
-            # reads, so saying it is actionability, not an answer: the checker
-            # stays gold-blind.
+            # `parachuteResponseSelected`), which the gate refused. The concept is already
+            # in the committed model, so naming it keeps the checker gold-blind.
             diags.append(AGDiagnostic(
                 CODE_REALIZATION_ACTION_MISSING,
                 f"{comp.name} has no reachable response entry action naming one "
@@ -1007,10 +961,9 @@ def _check_realization(
             "trigger_ok": trigger_ok,
             "response_actions": [action for _state, action in action_matches],
             "response_states": [state for state, _action in action_matches],
-            # Exact committed-model paths used by the independent post-hoc
-            # realization evaluator.  Competing transitions that do not enter a
-            # guarantee-producing state are intentionally excluded; priority
-            # topology is evaluated in its own category.
+            # Committed-model paths used by the post-hoc realization evaluator. Competing
+            # transitions that do not enter a guarantee-producing state are excluded;
+            # priority topology has its own category.
             "response_paths": [
                 {
                     "source": transition.source,
@@ -1108,9 +1061,8 @@ def _ast_identifiers(node: Any) -> set[str]:
 def _ast_shape(node: Any) -> tuple:
     """Canonical structural shape for the fixed runtime-profile AST subset.
 
-    This is runtime profile validation, not evaluator comparison or theorem
-    proving. It prevents an arbitrary invariant from passing merely because it
-    carries an approved identifier.
+    Profile validation only, so an arbitrary invariant does not pass just because
+    it carries an approved identifier.
     """
     if not isinstance(node, Mapping):
         return ("INVALID",)
@@ -1160,9 +1112,9 @@ def _behavior_for_contract(
 def _negated_identifiers(node: Any) -> set[str]:
     """Identifiers appearing under a negation in a bounded Boolean AST.
 
-    An invariant's negated consequents name what it forbids — the states a startup
-    inhibit must keep the system out of — so they are read from the AST rather than
-    from a list of this chain's state names.
+    Negated consequents name what the invariant forbids, e.g. the states a
+    startup inhibit keeps the system out of, so they are read from the AST rather
+    than from a list of state names.
     """
     if not isinstance(node, Mapping):
         return set()
@@ -1178,23 +1130,16 @@ def _negated_identifiers(node: Any) -> set[str]:
 def _invariant_roles(graph: AGGraph) -> Dict[str, str]:
     """The concepts a locked-until-authorised-release chain's invariants define.
 
-    The pattern's topology follows from its invariants rather than from any
-    chain's element names:
+    The topology follows from the invariants rather than from element names:
 
       * ``<power-on> => <locked>``            fixes the default-safe state;
       * ``<unlocked> => <authorisation>``     fixes the only way out of it;
       * ``not <power> => <locked>``           fixes where power loss returns to.
 
-    Deriving the roles this way is what lets the obligation be checked without the
-    checker holding REQ_SAFE_008's state names, signals and action spellings — the
-    condition that made a PASS on this chain partly recall rather than a verdict.
-
-    The unlocked state may be a concept of its own or simply ``not <locked>``:
-    ``not <locked> => <authorisation>`` states the release obligation exactly as
-    ``<unlocked> => <authorisation>`` does, and a measured run wrote it that way.
-    Rejecting a logical form because the author did not introduce a second name for
-    the complement of a concept is the same defect as rejecting an element name —
-    it makes a PASS depend on phrasing rather than on what the model asserts.
+    Deriving the roles this way lets the obligation be checked without the checker
+    holding REQ_SAFE_008's state names, signals and action spellings. The unlocked
+    state may be a concept of its own or simply ``not <locked>``: both state the
+    release obligation, and a measured run wrote it the second way.
     """
     roles: Dict[str, str] = {}
     implications: List[Tuple[Any, str]] = []
@@ -1209,20 +1154,19 @@ def _invariant_roles(graph: AGGraph) -> Dict[str, str]:
             continue
         consequent_name = next(iter(consequents))
         concluded[consequent_name] = concluded.get(consequent_name, 0) + 1
-        # A negated antecedent is either de-energise-to-lock or the release rule
-        # phrased over the complement of the locked concept. Both are collected
-        # first and told apart below, once every conclusion is known; reading them
-        # in declaration order instead made the roles depend on the order the
-        # author happened to list them in, which is not a property of the pattern.
+        # A negated antecedent is either de-energise-to-lock or the release rule over
+        # the complement of the locked concept. Collect both and tell them apart once
+        # every conclusion is known; declaration order made the roles depend on how
+        # the author listed them.
         if isinstance(antecedent, Mapping) and antecedent.get("node") == "Not":
             operand = _ast_identifiers(antecedent.get("expr"))
             if len(operand) == 1:
                 negated.append((next(iter(operand)), consequent_name))
             continue
         implications.append((antecedent, consequent_name))
-    # Two invariants conclude the locked concept — power-on defaults to it and
-    # power loss returns to it — so the concept concluded more than once is it.
-    # Identifying it first is what tells the two negated-antecedent forms apart.
+    # Two invariants conclude the locked concept (power-on defaults to it, power
+    # loss returns to it), so the concept concluded most often is it. Identifying
+    # it first tells the two negated-antecedent forms apart.
     ranked = sorted(concluded.items(), key=lambda item: -item[1])
     locked_concept = (
         ranked[0][0]
@@ -1231,10 +1175,8 @@ def _invariant_roles(graph: AGGraph) -> Dict[str, str]:
     )
     for operand, consequent_name in negated:
         if operand == locked_concept:
-            # not <locked> => <authorisation>: the release rule, with the unlocked
-            # state expressed as the complement of the locked one
             roles["locked"] = operand
-            roles["unlocked"] = operand      # filled in negated position
+            roles["unlocked"] = operand
             roles["authorisation"] = consequent_name
         else:
             roles["power"] = operand
@@ -1244,11 +1186,10 @@ def _invariant_roles(graph: AGGraph) -> Dict[str, str]:
         if len(antecedents) != 1:
             continue
         antecedent_name = next(iter(antecedents))
-        # <power-on> => <locked> fixes the default-safe state; anything else
-        # implying a single concept is the guarded-release rule. With no
-        # de-energise invariant the locked concept is unknown here, so the
-        # pattern's own word for it is the only remaining signal — that model
-        # fails on the missing power role regardless.
+        # <power-on> => <locked> fixes the default-safe state; anything else implying
+        # a single concept is the guarded-release rule. With no de-energise invariant
+        # the locked concept is unknown, so the pattern's own word for it is the only
+        # signal left; that model fails on the missing power role anyway.
         if consequent_name == roles.get("locked") or (
             "locked" not in roles and "lock" in consequent_name.lower()
         ):
@@ -1264,7 +1205,7 @@ def _startup_inhibit_roles(graph: AGGraph) -> Dict[str, Any]:
     """The concepts a startup-inhibit chain's invariants define.
 
     As with de-energise-to-lock, the topology follows from the invariants rather
-    than from any chain's element names:
+    than from element names:
 
       * ``<condition> => not <forbidden> ...``  names the states inhibition forbids;
       * ``<latch> => <inhibited> ...``          names the latch and what it inhibits;
@@ -1279,11 +1220,9 @@ def _startup_inhibit_roles(graph: AGGraph) -> Dict[str, Any]:
         negated = _negated_identifiers(consequent)
         antecedents = _ast_identifiers(antecedent)
         if negated and len(antecedents) == 1 and len(negated) == 1:
-            # <reset> => not <latch>
             roles["reset"] = next(iter(antecedents))
             roles["latch"] = next(iter(negated))
         elif negated:
-            # <condition> => not <forbidden> and not <forbidden>
             roles["forbidden"] |= negated
         elif len(antecedents) == 1:
             roles.setdefault("latch", next(iter(antecedents)))
@@ -1295,11 +1234,10 @@ def _startup_inhibit_topology_obligations(
     graph: AGGraph,
     realization_links: List[Dict[str, Any]],
 ) -> Tuple[Dict[str, bool], Optional[str]]:
-    """Does the model latch inhibition on failure and clear it only on a pass?
+    """Whether the model latches inhibition on failure and clears it only on a pass.
 
     Judged against the chain's own invariants, so a conforming model may name its
-    states and signals however it likes — the condition for a generated model to be
-    checkable rather than merely recalled.
+    states and signals freely.
     """
     roles = _startup_inhibit_roles(graph)
     latch = roles.get("latch")
@@ -1347,8 +1285,8 @@ def _startup_inhibit_topology_obligations(
     inhibit_state = next(iter(inhibit_states))
     obligations["inhibit_not_initial"] = inhibit_state != behavior.initial_state
 
-    # inhibition and the pass that clears it must be alternatives of the same
-    # decision point, or the latch is not a self-test outcome at all
+    # inhibition and the pass that clears it are alternatives of one decision
+    # point, otherwise the latch is not a self-test outcome
     entering = {
         transition.source for transition in behavior.transitions
         if transition.target == inhibit_state
@@ -1358,9 +1296,8 @@ def _startup_inhibit_topology_obligations(
         if transition.target in reset_states
     }
     obligations["common_decision_source"] = bool(entering and (entering & clearing))
-    # A latch that is released by the very event that set it is not a latch. The
-    # triggers leaving the inhibited state must differ from the ones that reach it,
-    # or the failure signal both inhibits and clears.
+    # The triggers leaving the inhibited state differ from the ones reaching it;
+    # otherwise the failure signal both sets and clears the latch.
     latching_triggers = {
         transition.trigger for transition in behavior.transitions
         if transition.target == inhibit_state
@@ -1370,7 +1307,6 @@ def _startup_inhibit_topology_obligations(
         for transition in behavior.transitions
         if transition.source == inhibit_state
     )
-    # and nothing may transition into a state the invariants forbid
     forbidden = {_flat_token(item) for item in roles.get("forbidden") or ()}
     obligations["forbidden_states_unreachable"] = not any(
         _flat_token(transition.target) in forbidden
@@ -1383,14 +1319,14 @@ def _locked_release_topology_obligations(
     graph: AGGraph,
     realization_links: List[Dict[str, Any]],
 ) -> Tuple[Dict[str, bool], Optional[str]]:
-    """Does the model instantiate de-energise-to-lock, judged against its own
-    invariants rather than against REQ_SAFE_008's spellings?
+    """Whether the model instantiates de-energise-to-lock, judged against its own
+    invariants rather than against REQ_SAFE_008's spellings.
 
-    The obligations are the pattern's meaning: the default state is the locked one,
-    the only way out of it is the authorisation event, and losing power returns to
-    it. Which identifiers carry those roles comes from the declared invariants, so a
-    model that names its states differently but behaves correctly conforms — and a
-    model that reproduces the reviewed names while wiring them wrongly does not.
+    The obligations are the default state being the locked one, authorisation
+    being the only way out of it, and power loss returning to it. Which
+    identifiers carry those roles comes from the declared invariants, so a model
+    that names its states differently still conforms, and reviewed names with
+    wrong wiring do not.
     """
     roles = _invariant_roles(graph)
     locked = roles.get("locked")
@@ -1423,7 +1359,6 @@ def _locked_release_topology_obligations(
             "initial_state_present": False,
         }, mechanism.name
 
-    # the event that authorises release, named by the profile's signal convention
     signal = f"{authorisation[:1].upper()}{authorisation[1:]}Signal"
     unlock_transitions = [
         transition for transition in mechanism.transitions
@@ -1445,15 +1380,13 @@ def _locked_release_topology_obligations(
     unlocked_state = next(iter(unlocked_states))
     obligations["unlocked_not_initial"] = unlocked_state != mechanism.initial_state
 
-    # nothing else may reach the unlocked state: authorisation is the only way out
     obligations["authorisation_is_only_unlock_path"] = not any(
         transition.target == unlocked_state and transition.trigger != signal
         for transition in mechanism.transitions
     )
-    # Losing power must return to the default-safe state, on an event distinct from
-    # the one that energises it. Without the distinctness a model can satisfy the
-    # return edge with the power-on signal itself, so the same event both energises
-    # and de-energises — incoherent, and it passed until this was added.
+    # Losing power returns to the default-safe state on an event distinct from the
+    # one that energises it; without that, a model satisfies the return edge with
+    # the power-on signal itself and one event both energises and de-energises.
     energising = {
         transition.trigger for transition in mechanism.transitions
         if transition.source == mechanism.initial_state
@@ -1464,7 +1397,6 @@ def _locked_release_topology_obligations(
         and transition.trigger not in energising
         for transition in mechanism.transitions
     )
-    # the default state must actually establish the locked guarantee
     obligations["initial_state_establishes_locked"] = (
         _flat_token(locked) in _flat_token(
         mechanism.entry_actions.get(mechanism.initial_state, "")
@@ -1498,10 +1430,9 @@ def _check_profile_semantics(
             else STARTUP_INHIBIT_PATTERN
         )
     )
-    # Which pattern a given requirement *ought* to instantiate is an accuracy
-    # question answered by the evaluator against frozen gold, not here: this
-    # checker is gold-blind and may only ask whether the model is internally
-    # consistent with the pattern it declares.
+    # Which pattern a requirement ought to instantiate is an accuracy question the
+    # evaluator answers against frozen gold. This checker is gold-blind: it asks
+    # only whether the model is internally consistent with the declared pattern.
     if declared_pattern is not None and declared_pattern not in _KNOWN_PATTERNS:
         diagnostics.append(AGDiagnostic(
             CODE_PATTERN_DECLARATION_INCONSISTENT,
@@ -1576,8 +1507,8 @@ def _check_profile_semantics(
             isinstance(topology, Mapping)
             and topology.get("selection_action_connected") is True
         )
-        # Identify the participants structurally, by the role each plays in the
-        # committed model, rather than by this chain's reviewed element names.
+        # Identify participants by the role each plays in the committed model, not by
+        # this chain's reviewed element names.
         observation = system.observation or ""
         observing_component = next(
             (
@@ -1595,9 +1526,8 @@ def _check_profile_semantics(
             {},
         )
         # The arbiter is whichever contract the published arbitration behavior
-        # realizes. Keep the actual behavior as structured provenance too: the
-        # failure router needs an existing state-def target before it may
-        # authorize dependency-closed repair.
+        # realizes. The behavior is kept as structured provenance because the failure
+        # router needs an existing state-def target before authorizing repair.
         arbitration_behavior = next(
             (
                 behavior
@@ -1623,8 +1553,8 @@ def _check_profile_semantics(
             )
             for concept in item.boolean_guarantee_concepts()
         }
-        # a guarantee available at the boundary carries no timing segment, so its
-        # behaviour is a single initial state that simply establishes it
+        # a guarantee available at the boundary carries no timing segment: its
+        # behaviour is a single initial state that establishes it
         boundary_components = [
             item for item in graph.components
             if item.timing_segment_required is False
@@ -1656,13 +1586,11 @@ def _check_profile_semantics(
         boundary_guarantees_established = all(
             _establishes_at_boundary(item) for item in boundary_components
         )
-        # A timed chain apportions its deadline, so at least one participant must
-        # be excluded from that apportionment by being available at the boundary;
-        # its absence means every component was charged time and the composition
-        # is not the one the pattern describes. An untimed chain apportions
-        # nothing, so having no boundary component is an ordinary shape, not a
-        # defect — but any boundary component it does declare is held to the same
-        # obligation.
+        # A timed chain apportions its deadline, so at least one participant is
+        # available at the boundary and excluded from the apportionment; without one,
+        # every component was charged time and the composition is not the pattern's.
+        # An untimed chain apportions nothing, so no boundary component is an ordinary
+        # shape, but any it declares is held to the same obligation.
         recovery_power_available_at_boundary = (
             boundary_guarantees_established
             if effective_pattern != _TIMED_PATTERN
@@ -1699,17 +1627,14 @@ def _check_profile_semantics(
             "recovery_power_available_at_boundary": boundary_behavior_elements,
             "deployment_action_connected": observation_behavior_elements,
         }
-        # Each obligation is named so a failure says *which* fact is wrong. A
-        # diagnostic that lumps fourteen conditions under one message is not
-        # actionable — an author (human or LLM) cannot tell what to repair.
-        # Deliberately still ONE diagnostic: the error count stays comparable
-        # with runs measured before the message was itemised.
-        # Every obligation below is INTERNAL: it relates the model to itself, never
-        # to a reviewed answer this module holds. Whether the arbitration matches
-        # the gold response set, ordering, or winner is an accuracy question, and
-        # `ag_eval_semantics.priority_agreement` already answers it against frozen
-        # gold. Asking it here too made a gold-blind runtime verdict depend on the
-        # very facts the LLM-authored arm exists to measure.
+        # Each obligation is named so a failure says which fact is wrong; lumping
+        # fourteen conditions under one message leaves the author nothing to repair.
+        # Still one diagnostic, so the error count stays comparable with runs measured
+        # before the message was itemised.
+        # Every obligation below is internal: it relates the model to itself, never to
+        # a reviewed answer. Whether the arbitration matches the gold response set,
+        # ordering or winner is an accuracy question answered by
+        # `ag_eval_semantics.priority_agreement` against frozen gold.
         edge_endpoints = {name for edge in edges for name in edge}
         obligations = (
             ("response_member_provenance",
@@ -1727,20 +1652,18 @@ def _check_profile_semantics(
             ("trigger_concept",
              bool(trigger)
              and trigger in {a.concept for a in system.assumptions}),
-            # Cross-check only where the trigger is declared twice. A timed chain
-            # states it in the priority contract AND as the system contract's
-            # interval origin, and the two must agree. An untimed chain declares
-            # no interval, so it states the trigger once; there is nothing to
-            # cross-check, and demanding a timing origin would be demanding the
-            # deadline the pattern exists to do without.
+            # Cross-check only where the trigger is declared twice. A timed chain states
+            # it in the priority contract and as the system contract's interval origin,
+            # and the two must agree. An untimed chain declares no interval and states
+            # the trigger once, so there is nothing to cross-check.
             ("trigger_matches_timing_origin",
              effective_pattern != _TIMED_PATTERN
              or trigger == (system.timing_origin or "")),
             ("selection_guarded_by_trigger", selection_when == trigger),
             ("selected_transition_reachable", reachable),
             ("selection_action_connected", selection_action_connected),
-            # the arbiter must both command the downstream responder and record
-            # the selection — one guarantee alone cannot do both
+            # the arbiter both commands the downstream responder and records the
+            # selection, which one guarantee cannot do
             ("arbiter_guarantees",
              len(arbiter_guarantees) >= 2
              and bool(
@@ -1814,14 +1737,13 @@ def _check_profile_semantics(
                         "undeclared_model_elements": undeclared,
                     })
                 ids.add(invariant_id)
-            # WHICH invariants a requirement ought to state is an accuracy
-            # question the evaluator answers against frozen gold. What the pattern
-            # itself requires is that every ROLE it depends on is filled — a
-            # de-energise-to-lock chain that never says where power loss leads has
-            # not stated the pattern, whatever it names its invariants.
+            # Which invariants a requirement ought to state is an accuracy question the
+            # evaluator answers against frozen gold. The pattern itself requires every
+            # role it depends on to be filled: a de-energise-to-lock chain that never
+            # says where power loss leads has not stated the pattern.
             #
-            # Removing the per-requirement table without this lost detection
-            # outright: deleting a required invariant passed.
+            # Removing the per-requirement table without this lost detection: deleting a
+            # required invariant passed.
             needed = PATTERN_INVARIANT_ROLES.get(effective_pattern)
             roles: Dict[str, Any] = {}
             missing_roles: List[str] = []
@@ -1864,13 +1786,11 @@ def _check_profile_semantics(
             else _locked_release_topology_obligations(graph, realization_links)
         )
         if effective_pattern == LOCKED_UNTIL_RELEASE_PATTERN:
-            # "Default safe" means the locking component holds its guarantee
-            # without depending on anything: a mechanism that assumes some
-            # condition is not locked by default, it is locked when that condition
-            # happens to hold. Identified by the role its invariants give it rather
-            # than by this chain's contract name, and required to carry more than
-            # the lock alone so the authorisation and de-energise obligations are
-            # someone's responsibility.
+            # "Default safe" means the locking component holds its guarantee with no
+            # assumptions: a mechanism that assumes a condition is locked only while that
+            # condition holds. Identified by the role its invariants give it, not by this
+            # chain's contract name, and required to carry more than the lock so the
+            # authorisation and de-energise obligations have an owner.
             locked_concept = _invariant_roles(graph).get("locked")
             mechanism = next(
                 (
@@ -1917,11 +1837,6 @@ def _check_profile_semantics(
 def _check_sufficiency(
     graph: AGGraph, discharge_diags: List[AGDiagnostic], aliases: Mapping[str, str]
 ) -> List[AGDiagnostic]:
-    """Do the component guarantees collectively support the system guarantee (§9.9)?
-
-    Bounded MVP: the system observation concept must be produced by some component
-    Boolean guarantee, and no component may be left undischarged.
-    """
     diags: List[AGDiagnostic] = []
     if not graph.system or graph.system.observation is None:
         return diags
@@ -2037,8 +1952,6 @@ def check_ag_graph(
     discharge, discharge_edges, dis_diags = _check_discharge(graph, alias_map)
     diagnostics.extend(dis_diags)
 
-    # Predicted guarantee allocation: each decomposed component owns the Boolean
-    # guarantee concepts it publishes (§6.1 allocated_to), for gold F1 scoring.
     allocated = {e.dst for e in graph.edges if e.kind == "decomposes"}
     allocations = [
         {"owner": comp.owners[0], "contract": comp.name, "guarantee": concept}
@@ -2110,8 +2023,8 @@ def check_ag_graph(
     priority = dict(graph.priority) if graph.priority else None
     if priority is not None:
         topology = dict(priority.get("arbitration_topology") or {})
-        # the observing component is identified by the role it plays — it produces
-        # the system's observed guarantee — not by this chain's element names
+        # the observing component is identified by producing the system's observed
+        # guarantee, not by this chain's element names
         observed = (graph.system.observation or "") if graph.system else ""
         observing = next(
             (

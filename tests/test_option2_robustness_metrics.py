@@ -1,9 +1,3 @@
-"""Robustness metrics for the bounded A/G assurance enhancement.
-
-Honest "detection + bounded repair" measure: the A/G check surfaces incompleteness
-a no-contract pipeline cannot see, and the dependency-closed loop auto-repairs the
-model-semantic subset while routing integration gaps as explicit BLOCKED.
-"""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -14,7 +8,7 @@ from src.sysml.lite_model import build_lite_model
 from src.utils.sysml_text_utils import get_sysml_text
 
 
-def test_clean_run_shows_no_detected_errors_and_full_fulfilment():
+def test_clean_run_no_errors():
     assurance = {
         "ag_contract_graph": {
             "verdict": "PASS",
@@ -42,8 +36,7 @@ def test_clean_run_shows_no_detected_errors_and_full_fulfilment():
     assert m["completeness_final"]["guarantee_realization"] == 1.0
 
 
-def test_detection_and_bounded_repair_are_separated_honestly():
-    # 3 detected: 1 model-semantic (auto-repaired), 2 integration gaps (BLOCKED)
+def test_detection_repair_separated():
     assurance = {
         "ag_contract_graph": {
             "verdict": "FAIL",
@@ -74,27 +67,24 @@ def test_detection_and_bounded_repair_are_separated_honestly():
     assert m["detection"]["by_class"] == {
         "MODEL_SEMANTIC_FAULT": 1, "INTEGRATION_DECOMPOSITION_GAP": 2,
     }
-    # the enhancement is honestly split: 1 auto-repaired, 2 routed for humans
     assert m["repair"]["auto_repaired"] == 1
     assert m["repair"]["routed_blocked"] == 2
     assert m["robustness_delta"]["errors_before_assurance_repair"] == 3
     assert m["robustness_delta"]["errors_after_assurance_repair"] == 2
     assert m["measurement"].endswith("(NOT full auto-fix)")
-    # completeness reflects the final model (C1 + environment discharged; 1/2 realised)
     assert m["completeness_final"]["components_ready"] == round(2 / 3, 4)
     assert m["completeness_final"]["assumption_discharge"] == round(2 / 3, 4)
     assert m["completeness_final"]["guarantee_realization"] == 0.5
 
 
-def test_missing_sections_degrade_without_raising():
+def test_missing_sections_degrade():
     m = compute_robustness_metrics({})
     assert m["detection"]["errors_detected"] == 0
     assert m["requirement_fulfillment_final"]["ag_verdict"] is None
     assert m["completeness_final"]["components_ready"] is None
 
 
-def test_consumes_a_real_r2_assurance_trace():
-    """Smoke test against the actual orchestrator _build_ag_trace output shape."""
+def test_real_r2_assurance_trace():
     class _NoCallLLM:
         def complete(self, *_a, **_k):  # pragma: no cover
             raise AssertionError("LLM should not be called")
@@ -115,7 +105,6 @@ def test_consumes_a_real_r2_assurance_trace():
     assurance = orch._build_collaboration_artifacts(final)
 
     m = compute_robustness_metrics(assurance)
-    # deterministic reviewed A/G -> a robust final model: PASS, no residual errors
     assert m["requirement_fulfillment_final"]["ag_verdict"] == "PASS"
     assert m["robustness_delta"]["errors_after_assurance_repair"] == 0
     assert m["completeness_final"]["guarantee_realization"] == 1.0

@@ -1,17 +1,4 @@
-"""
-simulator.py
-
-ScenarioSimulator: runs reachability checks on an ExecutionGraph (nx.DiGraph)
-for each Scenario, returning structured ScenarioResult objects.
-
-Reachability strategy (three-tier):
-  Tier 1 — Port-level path: find a directed path through the full graph
-            (ports + parts + actions).  Most precise.
-  Tier 2 — Part-level shortcut: check if a "via_*" edge exists between parts.
-            Faster and tolerates unresolved port names.
-  Tier 3 — Undirected fallback: check undirected connectivity for warning-level
-            results (connected but direction may be wrong).
-"""
+"""simulator.py"""
 
 from __future__ import annotations
 
@@ -33,10 +20,10 @@ class ScenarioResult:
     scenario_name: str
     description: str
     tags: List[str]
-    reachable: bool                    # True = all target_nodes reachable
-    path: List[str]                    # representative path (first target)
-    missing_nodes: List[str]           # required_nodes NOT on any path
-    unreachable_targets: List[str]     # target_nodes that have no path
+    reachable: bool
+    path: List[str]
+    missing_nodes: List[str]
+    unreachable_targets: List[str]
     issues: List[str]
     warnings: List[str] = field(default_factory=list)
 
@@ -46,16 +33,12 @@ class ScenarioResult:
 
 
 class ScenarioSimulator:
-    """
-    Run scenario reachability checks against a compiled networkx DiGraph.
-    """
+    """Run scenario reachability checks against a compiled networkx DiGraph."""
 
     def __init__(self, G: "nx.DiGraph") -> None:
         if not _HAS_NX:
             raise ImportError("networkx is required for simulation")
         self.G = G
-
-    # ── Public interface ────────────────────────────────────────────────────
 
     def run(self, scenario: Scenario) -> ScenarioResult:
         issues: List[str] = []
@@ -64,7 +47,6 @@ class ScenarioSimulator:
         representative_path: List[str] = []
         missing_required: List[str] = []
 
-        # Resolve entry nodes (fall back to first matching part if exact id missing)
         entry_nodes = self._resolve_nodes(scenario.entry_nodes, label="entry")
         if not entry_nodes:
             return ScenarioResult(
@@ -91,7 +73,6 @@ class ScenarioSimulator:
                 issues=[f"None of the target nodes exist in graph: {scenario.target_nodes}"],
             )
 
-        # ── Check each target is reachable from some entry ──────────────────
         for tgt in target_nodes:
             reached = False
             best_path: Optional[List[str]] = None
@@ -106,7 +87,6 @@ class ScenarioSimulator:
                     representative_path = best_path
             else:
                 unreachable_targets.append(tgt)
-                # Tier-3: undirected fallback
                 if self._undirected_connected(entry_nodes, tgt):
                     warnings.append(
                         f"'{tgt}' is connected to entry nodes but signal direction may be wrong"
@@ -114,14 +94,12 @@ class ScenarioSimulator:
                 else:
                     issues.append(f"No path to target '{tgt}' from {entry_nodes}")
 
-        # ── Check required intermediate nodes ───────────────────────────────
         for req in scenario.required_nodes:
             req_resolved = self._resolve_node(req)
             if req_resolved is None:
                 missing_required.append(req)
                 issues.append(f"Required node '{req}' not found in graph")
                 continue
-            # req must be reachable from some entry AND must reach some target
             from_entry = any(
                 nx.has_path(self.G, src, req_resolved)
                 for src in entry_nodes
@@ -156,10 +134,7 @@ class ScenarioSimulator:
     def run_all(self, scenarios: List[Scenario]) -> List[ScenarioResult]:
         return [self.run(s) for s in scenarios]
 
-    # ── Helpers ─────────────────────────────────────────────────────────────
-
     def _resolve_node(self, name: str) -> Optional[str]:
-        """Return graph node id for *name*, or None if not found."""
         if name in self.G:
             return name
         lower = name.lower()

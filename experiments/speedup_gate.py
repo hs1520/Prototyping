@@ -1,21 +1,4 @@
-"""Two-step acceptance gate for SITL --speedup adoption (native L2 suite).
-
-Step 1 — clock-source equivalence at 1x:
-    baseline (pre-change code, wall clocks) vs converted code at speedup=1.
-    Verdicts must match exactly; measured latencies within tolerance.
-Step 2 — speedup invariance:
-    converted code at speedup=1 vs speedup=N.
-    Verdicts must match exactly; sim-time measurements within tolerance.
-
-Run one leg:
-    .venv/bin/python experiments/speedup_gate.py run \
-        --model examples/output/final_model.sysml \
-        --out experiments/speedup_gate_results/<label>.json \
-        [--speedup 5]
-
-Compare two legs:
-    .venv/bin/python experiments/speedup_gate.py compare a.json b.json
-"""
+"""Two-step acceptance gate for SITL --speedup adoption (native L2 suite)."""
 from __future__ import annotations
 
 import argparse
@@ -39,8 +22,8 @@ def run_leg(model_path: str, out_path: str, speedup: float) -> int:
     )
     kwargs = {}
     if speedup != 1.0:
-        # Only the converted bridge accepts this; the baseline leg runs
-        # without it, which is the point of step 1.
+        # Only the converted bridge accepts this; the baseline leg runs without
+        # it, as step 1 requires.
         kwargs["speedup"] = speedup
     bridge = SITLBridge(
         model,

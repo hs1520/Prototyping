@@ -16,24 +16,20 @@ class RequirementsDesignMixin:
         description: str,
         additional: List[str],
     ) -> List[str]:
-        """Phase 1: Extract requirements using the RequirementsAgent."""
         result = self.requirements_agent.run({
             "system_description": description,
             "system_name": system_name,
-            # Seed existing_requirements with manually provided ones so the LLM
-            # is aware of them and avoids generating near-duplicates from the start.
+            # Seed existing_requirements with the manual ones so the LLM does not generate
+            # near-duplicates.
             "existing_requirements": additional,
         })
 
         if not result.success and not result.output:
             print(f"  ✗ Requirements extraction failed: {result.reasoning}")
 
-        # RequirementsAgent now returns a unified set (fixed anchors + new additions)
-        # with consistent IDs in one pass — no separate merge step needed.
         requirements = result.output if result.output else list(additional)
         dependencies = result.metadata.get("dependencies", [])
 
-        # Validate unified set
         validation = self.requirements_agent.validate_requirements(requirements)
         self.last_requirement_semantic_analysis = validation.get(
             "requirement_semantic_analysis"
@@ -61,13 +57,11 @@ class RequirementsDesignMixin:
                 "validation_error": str(exc),
             }
 
-        # A requirement the extractor flags as carrying no measurable criterion
-        # can never be anchored by the parameter linker, and if it also obliges no
-        # discrete response it cannot be anchored by the behavioural simulator
-        # either. That fact is known here, at the source, and is recorded on the
-        # requirement-input artefact so the terminal closure gate can distinguish
-        # "the model lacks an anchor" from "the requirement offers nothing to
-        # anchor to" instead of asking the LLM to repair the latter.
+        # A requirement with no measurable criterion cannot be anchored by the
+        # parameter linker, and with no obliged discrete response the behavioural
+        # simulator cannot anchor it either. Record that on the requirement-input
+        # artefact so the terminal closure gate can tell "the model lacks an anchor"
+        # from "the requirement offers nothing to anchor to".
         unmeasurable: set[str] = set()
         for warning in validation.get("warnings") or ():
             if "No measurable criterion" in str(warning):
@@ -76,11 +70,10 @@ class RequirementsDesignMixin:
                     for match in re.findall(r"REQ[-_][A-Z]+[-_]\d+", str(warning), re.I)
                 )
         if isinstance(self.last_requirement_input, dict):
-            # Assign THROUGH the state property, never in place: the getter
-            # returns the live dict shared (via dataclasses.replace) by every
-            # published runtime-state revision, so an in-place write edited the
-            # archived history retroactively and published no new revision —
-            # the audit trail could not reconstruct what the closure gate saw.
+            # Assign through the state property, not in place: the getter returns the live
+            # dict shared by every published runtime-state revision (via
+            # dataclasses.replace), so an in-place write edits archived history and
+            # publishes no new revision.
             updated = dict(self.last_requirement_input)
             updated["unmeasurable_req_ids"] = sorted(unmeasurable)
             self.last_requirement_input = updated
@@ -92,7 +85,6 @@ class RequirementsDesignMixin:
             for warning in validation["warnings"][:3]:
                 print(f"  ⚠ {warning}")
 
-        # Category breakdown — prefer metadata already computed in run(), fall back to validation
         counts = result.metadata.get("counts_by_category") or validation.get("counts_by_category", {})
         category_summary = ", ".join(
             f"{cat}={n}" for cat, n in sorted(counts.items()) if n > 0
@@ -100,7 +92,6 @@ class RequirementsDesignMixin:
         if category_summary:
             print(f"  Categories: {category_summary}")
 
-        # Surface dependency info if found
         if dependencies:
             print(f"  Dependencies: {len(dependencies)} pair(s) identified")
 
@@ -113,9 +104,7 @@ class RequirementsDesignMixin:
 
         return requirements
 
-
     def _use_frozen_requirements(self, frozen: Any) -> List[str]:
-        """Load an immutable requirement artifact without an LLM extraction call."""
         from ..prototyping.requirement_inputs import resolve_frozen_requirement_set
 
         requirements, artifact = resolve_frozen_requirement_set(frozen)
@@ -135,7 +124,6 @@ class RequirementsDesignMixin:
         }
         return requirements
 
-
     def _generate_initial_design(
         self,
         system_name: str,
@@ -143,7 +131,6 @@ class RequirementsDesignMixin:
         parse_strict: Optional[bool] = None,
         platform_profile: Optional[Dict[str, Any]] = None,
     ) -> SysMLModel:
-        """Phase 2: Generate initial SysML v2 design."""
         task = {
             "system_name": system_name,
             "requirements": requirements,

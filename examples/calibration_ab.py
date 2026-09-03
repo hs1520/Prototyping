@@ -1,11 +1,10 @@
 """F1 A/B: does catalog-grid estimator calibration change the search outcome?
 
-Deterministic and offline (no LLM, no SITL): the same synthetic variation space
-and seed are searched twice — once with the legacy textbook constants, once
-under the catalog-calibrated estimator — and the recommendation, inner-BO
-battery sizing and endurance predictions are compared. Also prints the
-catalog-grid L↔M rank check (the honest replacement for the n=3 snap-degenerate
-Pareto rank number).
+Offline and deterministic (no LLM, no SITL): one synthetic variation space and
+seed searched twice - legacy textbook constants vs catalog-calibrated estimator
+- comparing recommendation, inner-BO battery sizing and endurance. Also prints
+the catalog-grid L↔M rank check, which replaces the n=3 snap-degenerate
+Pareto rank number.
 
 Run:
   PYTHONPATH=. .venv/bin/python examples/calibration_ab.py

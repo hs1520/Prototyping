@@ -1,12 +1,10 @@
 """SITL --speedup adoption (plan A): sim-time clocks and scaled pacing.
 
-The rules under test (see sitl_specs.TestContext docstring):
-- waits/send-rates that REPRESENT sim durations scale by wall/speedup;
-- requirement-bound windows read the sim clock (time_boot_ms), wall clock
-  only as watchdog — so measured latencies and verdict strictness do not
-  drift with the speedup factor;
-- the gazebo FDM backend is lockstepped to an external engine and pins
-  speedup back to 1.
+Rules under test (see sitl_specs.TestContext docstring):
+- waits/send-rates representing sim durations scale by wall/speedup;
+- requirement-bound windows read the sim clock (time_boot_ms), wall clock only
+  as watchdog, so latencies and strictness do not drift with the factor;
+- the gazebo FDM backend is lockstepped externally and pins speedup to 1.
 """
 from __future__ import annotations
 
@@ -26,12 +24,12 @@ class _HookedMav:
             hook(self, msg)
 
 
-def test_sim_clock_tracks_time_boot_ms_monotonically():
+def test_clock_tracks_boot_ms():
     clock = SimClock()
     assert clock.now_s() is None
     clock.observe(SimpleNamespace(time_boot_ms=1500))
-    clock.observe(SimpleNamespace(no_stamp=True))          # ignored
-    clock.observe(SimpleNamespace(time_boot_ms=900))       # regression ignored
+    clock.observe(SimpleNamespace(no_stamp=True))
+    clock.observe(SimpleNamespace(time_boot_ms=900))
     assert clock.now_s() == 1.5
     clock.observe(SimpleNamespace(time_boot_ms=2500))
     assert clock.now_s() == 2.5
@@ -39,7 +37,7 @@ def test_sim_clock_tracks_time_boot_ms_monotonically():
     assert clock.elapsed_s(None) is None
 
 
-def test_sim_clock_installs_a_message_hook():
+def test_clock_installs_hook():
     mav = _HookedMav()
     clock = SimClock()
     clock.install(mav)
@@ -47,7 +45,7 @@ def test_sim_clock_installs_a_message_hook():
     assert clock.now_s() == 4.0
 
 
-def test_context_attaches_clock_and_survives_hookless_mavs():
+def test_context_attaches_clock():
     hooked = TestContext(mav=_HookedMav(), mavutil=SimpleNamespace())
     hooked.mav.feed(SimpleNamespace(time_boot_ms=1000))
     assert hooked.clock.now_s() == 1.0
@@ -56,7 +54,7 @@ def test_context_attaches_clock_and_survives_hookless_mavs():
     assert bare.clock.now_s() is None
 
 
-def test_scaled_sleep_divides_by_speedup(monkeypatch):
+def test_scaled_sleep_divides(monkeypatch):
     slept = []
     monkeypatch.setattr(
         "src.sitl.sitl_specs.time.sleep", lambda s: slept.append(s)
@@ -70,56 +68,58 @@ def test_scaled_sleep_divides_by_speedup(monkeypatch):
     assert slept == [0.4, 2.0]
 
 
-def test_sim_window_expires_on_sim_budget_not_wall():
+def test_window_expires_on_sim_time():
     mav = _HookedMav()
     ctx = TestContext(mav=mav, mavutil=SimpleNamespace(), speedup=10.0)
     mav.feed(SimpleNamespace(time_boot_ms=10_000))
     expired = ctx.sim_window(5.0, wall_margin_s=30.0)
     assert not expired()
-    mav.feed(SimpleNamespace(time_boot_ms=10_100))  # budget starts here
+    mav.feed(SimpleNamespace(time_boot_ms=10_100))
     assert not expired()
-    mav.feed(SimpleNamespace(time_boot_ms=15_000))  # 4.9 sim s — inside
+    mav.feed(SimpleNamespace(time_boot_ms=15_000))
     assert not expired()
-    mav.feed(SimpleNamespace(time_boot_ms=15_200))  # 5.1 sim s — budget spent
+    mav.feed(SimpleNamespace(time_boot_ms=15_200))
     assert expired()
 
 
-def test_sim_window_budget_starts_at_first_stamp():
+def test_window_starts_at_first_stamp():
     mav = _HookedMav()
     ctx = TestContext(mav=mav, mavutil=SimpleNamespace())
     expired = ctx.sim_window(2.0, wall_margin_s=30.0)
-    assert not expired()                             # silence is not billed
-    mav.feed(SimpleNamespace(time_boot_ms=60_000))   # clock starts late
     assert not expired()
-    mav.feed(SimpleNamespace(time_boot_ms=62_500))   # 2.5 sim s after start
+    mav.feed(SimpleNamespace(time_boot_ms=60_000))
+    assert not expired()
+    mav.feed(SimpleNamespace(time_boot_ms=62_500))
     assert expired()
 
 
-def test_sim_window_does_not_bill_the_gap_before_it_opened():
-    """The SAFE_003 regression, distilled: the GCS-loss warmup sends
-    heartbeats for 15 sim-seconds and reads nothing, so the clock's latest
-    stamp predates the verify window by ~30 sim-seconds. Seeding the budget
-    from that stale stamp expired a 25s window 1.5s after it opened and
-    turned a passing failsafe test into '超时未切换到 LAND'."""
+def test_window_ignores_earlier_gap():
+    """The SAFE_003 regression: the GCS-loss warmup sends heartbeats for 15
+    sim-seconds and reads nothing, so the clock's latest stamp predates the verify
+    window by ~30 sim-seconds.
+
+    Seeding the budget from that stale stamp expired a 25s window 1.5s after it
+    opened and failed a passing failsafe test with '超时未切换到 LAND'.
+    """
     mav = _HookedMav()
     ctx = TestContext(mav=mav, mavutil=SimpleNamespace())
-    mav.feed(SimpleNamespace(time_boot_ms=52_344))   # last pre-disconnect stamp
+    mav.feed(SimpleNamespace(time_boot_ms=52_344))
     expired = ctx.sim_window(25.0, wall_margin_s=30.0)
     assert not expired()
-    mav.feed(SimpleNamespace(time_boot_ms=82_369))   # first post-reconnect stamp
-    assert not expired()                             # gap is NOT billed
-    mav.feed(SimpleNamespace(time_boot_ms=107_000))  # +24.6 sim s — inside
+    mav.feed(SimpleNamespace(time_boot_ms=82_369))
     assert not expired()
-    mav.feed(SimpleNamespace(time_boot_ms=107_500))  # +25.1 sim s — spent
+    mav.feed(SimpleNamespace(time_boot_ms=107_000))
+    assert not expired()
+    mav.feed(SimpleNamespace(time_boot_ms=107_500))
     assert expired()
 
 
-def test_sim_window_wall_watchdog_terminates_stalled_clock():
+def test_window_wall_watchdog():
     ctx = TestContext(mav=SimpleNamespace(), mavutil=SimpleNamespace())
     expired = ctx.sim_window(0.05, wall_margin_s=0.0)
     assert not expired()
     time.sleep(0.08)
-    assert expired()                                 # old wall-timeout behavior
+    assert expired()
 
 
 def _bridge(**kwargs):
@@ -130,7 +130,7 @@ def _bridge(**kwargs):
     return SITLBridge(model, output_dir=str(kwargs.pop("tmp")), **kwargs)
 
 
-def test_bridge_native_carries_speedup_and_gazebo_pins_it(tmp_path, capsys):
+def test_bridge_speedup_gazebo_pinned(tmp_path, capsys):
     import pytest
 
     native = _bridge(tmp=tmp_path / "n", speedup=5.0)
@@ -145,9 +145,9 @@ def test_bridge_native_carries_speedup_and_gazebo_pins_it(tmp_path, capsys):
 
 
 class _AckMav:
-    """ACKs a command only from the Nth send — the measured SAFE_005 shape:
-    a send followed by a plain sleep vanished; a send followed by a blocking
-    recv pump was processed."""
+    """ACKs a command only from the Nth send (the SAFE_005 shape: a send followed by
+    a plain sleep vanished, one followed by a blocking recv pump was processed).
+    """
 
     def __init__(self, ack_on_attempt=1, result=0):
         self.message_hooks = []
@@ -172,7 +172,7 @@ class _AckMav:
         return message
 
 
-def test_mavlink_commands_are_ack_confirmed_with_bounded_retry():
+def test_command_retries_until_ack():
     from src.sitl.sitl_specs import _send_command_acked
 
     mav = _AckMav(ack_on_attempt=2)
@@ -180,10 +180,10 @@ def test_mavlink_commands_are_ack_confirmed_with_bounded_retry():
     result = _send_command_acked(ctx, 208, [2.0] + [0.0] * 6,
                                  ack_timeout_s=0.05)
     assert result == 0
-    assert mav.sends == 2                       # retried exactly once
+    assert mav.sends == 2
 
 
-def test_total_command_silence_raises_the_true_reason():
+def test_no_ack_raises():
     import pytest
     from src.sitl.sitl_specs import _send_command_acked
 
@@ -195,10 +195,12 @@ def test_total_command_silence_raises_the_true_reason():
     assert mav.sends == 2
 
 
-def test_vertex_worker_pipe_eof_is_retryable():
-    """The Vertex request worker is a fresh per-call process; its pipe
-    dying raises a bare EOFError, which used to give up instantly (a
-    NO-REFINE roll lost 149k tokens to one). A retry spawns a new worker."""
+def test_eof_retryable():
+    """A bare EOFError from the per-call Vertex worker's dying pipe is retryable.
+
+    It used to abort the call outright (149k tokens lost on one NO-REFINE roll);
+    a retry spawns a new worker.
+    """
     from src.llm.interface import VertexLLM
 
     assert VertexLLM._is_retryable(EOFError())

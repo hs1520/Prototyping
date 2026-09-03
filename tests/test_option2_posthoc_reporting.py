@@ -1,4 +1,3 @@
-"""Gate-protected descriptive reporting over archived Option 2 evidence."""
 from __future__ import annotations
 
 import copy
@@ -24,7 +23,7 @@ def _ready_bundle():
     return bundle, manifest
 
 
-def test_ready_report_scores_separate_categories_and_preserves_claim_limits():
+def test_report_scores_separate_categories():
     bundle, manifest = _ready_bundle()
     report = build_posthoc_descriptive_report(
         readiness_manifest=manifest,
@@ -64,7 +63,7 @@ def test_ready_report_scores_separate_categories_and_preserves_claim_limits():
     }
 
 
-def test_report_refuses_a_manifest_not_reproduced_from_the_source_bundle():
+def test_report_refuses_forged_manifest():
     bundle, manifest = _ready_bundle()
     forged = copy.deepcopy(manifest)
     forged["pooling_permitted"] = False
@@ -75,7 +74,7 @@ def test_report_refuses_a_manifest_not_reproduced_from_the_source_bundle():
         )
 
 
-def test_runtime_failure_class_is_compared_without_promoting_checker_pass():
+def test_runtime_failure_not_promoted():
     bundle, manifest = _ready_bundle()
     first_run = manifest["selected_run_ids"][0]
     routing = {

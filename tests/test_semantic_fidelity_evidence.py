@@ -1,15 +1,12 @@
-"""Semantic fidelity follows the plan's evidence routing, never a fixed template.
+"""Semantic fidelity follows the plan's evidence routing rather than a fixed template.
 
-Measured failure this pins (authoritative run 219eb9bb): three obligations
-failed "no assert constraint expresses the frozen subject bound" although
-their evidence existed — the MTOW and endurance asserts live in the binding's
-declared target component (FlightController) while other parts carry the
-satisfy links, and the range assert was removed by the pipeline's own
-capability normaliser (a mission-end bound is not a runtime invariant) with
-only a prose waiver left behind.  The checker now also scans the binding's
-declared owner and recognises the normaliser's delegation marker; every
-assertion criterion stays as strict, and delegation without a marker is
-still a failure.
+In run 219eb9bb three obligations failed "no assert constraint expresses the
+frozen subject bound" while their evidence existed: the MTOW and endurance
+asserts sit in the binding's declared target component (FlightController) while
+other parts carry the satisfy links, and the range assert was removed by the
+capability normaliser, leaving only a prose waiver. The checker now also scans
+the binding's declared owner and recognises the delegation marker; assertion
+criteria stay as strict, and delegation without a marker still fails.
 """
 from __future__ import annotations
 
@@ -62,7 +59,7 @@ def _validate(text, bindings):
     )
 
 
-def test_archived_219eb9bb_passes_via_binding_owner_extension():
+def test_219eb9bb_passes_via_owner():
     # All three archived failures shared one root: the asserts live in the
     # binding's declared owner (FlightController) while other parts carry the
     # satisfy links, so the owner scan never reached them.
@@ -89,10 +86,10 @@ def _without_range_assert(text: str) -> str:
     return stripped
 
 
-def test_a_normaliser_waived_constraint_is_delegated_not_failed():
-    # Remove the materialised range assert but keep the normaliser's waiver
-    # pair (PLAN-CONSTRAINT marker + mission-end line) — the legacy marker
-    # format must route the obligation to the forward-flight tier.
+def test_waived_constraint_delegated():
+    # Remove the materialised range assert, keep the normaliser's waiver pair
+    # (PLAN-CONSTRAINT marker + mission-end line): the legacy marker format routes
+    # the obligation to the forward-flight tier.
     text, bindings = _fixture("219eb9bb-4acd-4d20-b858-d1b1ae46d890")
     report = _validate(_without_range_assert(text), bindings)
     by_req = {item["requirement_id"]: item for item in report["results"]}
@@ -103,7 +100,7 @@ def test_a_normaliser_waived_constraint_is_delegated_not_failed():
     assert report["status"] == "PASS"
 
 
-def test_pilot3_model_still_passes_everything_inline():
+def test_pilot3_passes_inline():
     text, bindings = _fixture("20260829_153525_pilot3")
     report = _validate(text, bindings)
     assert report["status"] == "PASS"
@@ -111,7 +108,7 @@ def test_pilot3_model_still_passes_everything_inline():
     assert report["delegated"] == 0
 
 
-def test_delegation_requires_the_marker_not_just_a_missing_assert():
+def test_delegation_requires_marker():
     text, bindings = _fixture("219eb9bb-4acd-4d20-b858-d1b1ae46d890")
     stripped = "\n".join(
         line for line in _without_range_assert(text).splitlines()
@@ -123,7 +120,7 @@ def test_delegation_requires_the_marker_not_just_a_missing_assert():
     assert report["status"] == "FAIL"
 
 
-def test_binding_owner_extension_never_relaxes_the_threshold_check():
+def test_owner_extension_keeps_threshold():
     text, bindings = _fixture("219eb9bb-4acd-4d20-b858-d1b1ae46d890")
     weakened = text.replace(
         "attribute maxTakeOffMassPayloadBattery : MassValue = 8 [kg];",
@@ -135,7 +132,7 @@ def test_binding_owner_extension_never_relaxes_the_threshold_check():
     assert by_req["REQ_CONS_003"]["status"] == "FAIL"
 
 
-def test_capability_normaliser_emits_the_structured_delegation_marker():
+def test_normaliser_emits_marker():
     model = """package P {
     part def Nav {
         attribute maxOperationalRange : LengthValue = 5 [km];
@@ -147,7 +144,7 @@ def test_capability_normaliser_emits_the_structured_delegation_marker():
     fixed, fixes = fix_capability_semantics(
         model, has_range_floor=True, has_range_ceiling=False
     )
-    assert fixes >= 2   # the rename and the dropped invariant
+    assert fixes >= 2
     assert (
         "// DELEGATED-CONSTRAINT operationalRangeConstraint "
         "tier=FORWARD_FLIGHT_FIDELITY" in fixed
@@ -156,13 +153,14 @@ def test_capability_normaliser_emits_the_structured_delegation_marker():
     assert "assert constraint operationalRangeConstraint" not in fixed
 
 
-def test_binding_declared_runtime_attribute_is_the_subject_identity():
-    """s0v16: all four "failing" obligations had their planned assert in
-    place, under the binding's own constraint name, on the binding's own
-    runtime attribute — and the checker could not see them, because term
-    matching demanded every requirement-text word (currentAltitude carries
-    'altitude' but not 'flight').  The binding's declared identity outranks
-    term matching; without a binding the term test keeps its full strictness.
+def test_runtime_attribute_is_subject():
+    """The binding's declared identity outranks term matching; without a binding the
+    term test keeps its full strictness.
+
+    In s0v16 all four failing obligations had their planned assert in place under
+    the binding's own constraint name and runtime attribute, but term matching
+    demanded every requirement-text word (currentAltitude carries 'altitude', not
+    'flight').
     """
     binding = SemanticBindingPlan.from_dict({
         "obligation_id": "SEM_REQ_CONS_001_001",

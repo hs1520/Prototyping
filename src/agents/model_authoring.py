@@ -11,7 +11,6 @@ from ..prototyping.generation_plan import ModelGenerationPlan
 from .assembly_finalization import AssemblyFinalizer, AssemblyRequest
 
 
-
 ContextRetriever = Callable[[str], str]
 
 
@@ -259,10 +258,11 @@ class ModelAuthoring:
         verbose: bool,
         generation_plan: Optional[Any] = None,
     ):
-        """Step 2: part definitions (structural fragment) with one bounded
-        retry — a structural fragment without a single part definition cannot
-        be repaired meaningfully by the later assembly/refinement stages, so
-        fail before spending calls on interfaces, behaviour, and assembly.
+        """Step 2: part definitions (structural fragment) with one bounded retry.
+
+        A structural fragment without a single part definition cannot be repaired
+        by the later assembly/refinement stages, so fail before spending calls on
+        interfaces, behaviour and assembly.
         Returns ``(step2_result, parts_fragment)``.
         """
         ctx2 = step_context("parts")
@@ -397,9 +397,6 @@ class ModelAuthoring:
         verbose: bool,
         generation_plan: Optional[Any] = None,
     ):
-        """Step 3: interface & flow definitions (item def / typed port def).
-        Returns ``(step3_result, interfaces_fragment)``; the fragment is empty
-        when no code block was extracted (degraded, not fatal)."""
         semantic_requirement_ids = {
             item.requirement_id
             for item in (
@@ -465,9 +462,6 @@ class ModelAuthoring:
         behavior_obligation_plan=None,
         generation_plan=None,
     ):
-        """Step 4: behavioral model — runs only when FUNC/SAFE/OPER
-        requirements exist (the RAG call is skipped entirely otherwise).
-        Returns ``(step4_result_or_None, behavior_fragment)``."""
         behavioral_reqs = [
             r for r in requirements
             if any(f"-{cat}-" in r for cat in self._BEHAVIORAL_CATEGORIES)
@@ -605,16 +599,7 @@ class ModelAuthoring:
         system_name: str,
         requirements: List[str],
     ) -> str:
-        """Build a RAG query tailored to the knowledge needed by each generation step.
-
-        Step 2 (parts): structural SysML constructs — part def, port, attribute.
-        Step 3 (interfaces): item and typed port definitions.
-        Step 4 (behavior): behavioral SysML constructs — state def, fault
-            transition, action def.  Queries are further shaped by the SAFE and
-            FUNC requirement bodies so the retriever finds fault-handling examples.
-        """
         def _req_keywords(reqs: List[str], n: int = 3) -> str:
-            """Extract meaningful words from requirement bodies (skip stop words)."""
             _STOP = {"the", "shall", "must", "will", "system", "that", "with",
                      "from", "into", "when", "than", "this", "have", "been"}
             words: List[str] = []
@@ -623,7 +608,6 @@ class ModelAuthoring:
                 for w in re.findall(r"[A-Za-z]{4,}", body):
                     if w.lower() not in _STOP:
                         words.append(w)
-            # Deduplicate while preserving order
             seen: set = set()
             unique = []
             for w in words:
@@ -639,9 +623,6 @@ class ModelAuthoring:
         perf_reqs = [r for r in requirements if "-PERF-" in r]
 
         if step == "parts":
-            # Structural SysML constructs shaped by PERF and INTF requirements.
-            # PERF → numeric attributes with SI units.
-            # INTF → port def with direction, connect statement.
             perf_kw = _req_keywords(perf_reqs)
             intf_kw = _req_keywords(intf_reqs)
             return (
@@ -650,8 +631,6 @@ class ModelAuthoring:
             ).strip()
 
         if step == "interfaces":
-            # Interface/flow SysML constructs shaped by INTF requirements.
-            # INTF → item def (payload type) + typed port def.
             intf_kw = _req_keywords(intf_reqs)
             return (
                 f"item def flow port def typed signal protocol interface "
@@ -659,10 +638,6 @@ class ModelAuthoring:
             ).strip()
 
         if step == "behavior":
-            # Behavioral SysML constructs shaped by SAFE, FUNC, and OPER requirements.
-            # SAFE → state def with fault-entry transition + emergency action.
-            # FUNC → action def capturing the functional behaviour.
-            # OPER → enum def + mode machine state def with enum-equality transitions.
             oper_reqs = [r for r in requirements if "-OPER-" in r]
             safe_kw = _req_keywords(safe_reqs)
             func_kw = _req_keywords(func_reqs, n=2)

@@ -1,17 +1,12 @@
 """Domain-aware objective for LLM variation-DSE (requirement-target driven).
 
-Generic design-quality dims can't see a quad-vs-vtol trade-off, so the front
-collapsed. This scores each variant against the NUMERIC TARGETS of the
-requirements its variation point links to:
-
-  * a requirement like "cruise speed >= 20 m/s" -> (speed, 20)
-  * a variant's attribute `cruiseSpeedMps = 25` -> (speed, 25)
-  * matched by quantity FAMILY (speed/time/mass/...), satisfaction = value/target
-
-performance = mean satisfaction of the linked requirement targets; cost = the
-chosen variants' cost-family attributes (mass/count/power). The objectivity is
-in the numbers (requirement targets x variant attributes); only the family
-matching is heuristic.
+Generic design-quality dimensions cannot see a quad-vs-vtol trade-off, so the
+front collapsed. Each variant is scored against the numeric targets of the
+requirements its variation point links to: "cruise speed >= 20 m/s" -> (speed, 20),
+a variant attribute `cruiseSpeedMps = 25` -> (speed, 25), matched by quantity
+family, satisfaction = value/target. performance = mean satisfaction over the
+linked targets; cost = the chosen variants' cost-family attributes
+(mass/count/power). Only the family matching is heuristic.
 """
 from __future__ import annotations
 
@@ -27,18 +22,15 @@ from .requirement_spec import (
     max_spec, max_value, min_spec,
 )
 
-# quantity family -> substrings that imply it (checked in name + unit, lowercased)
 _FAMILY = {
     "speed": ["m/s", "mps", "kph", "km/h", "airspeed", "speed", "velocity", "cruise"],
-    # endurance is conventionally minutes/hours; "second" is LATENCY (e.g. a 1.0 s
-    # response-time requirement) — a different quantity that must NOT be mistaken for
-    # flight endurance, or endurance_target/inner-BO would size for ~1 unit. Seconds are
-    # deliberately excluded from this family (they contribute no endurance objective).
+    # endurance is minutes/hours; "second" is latency (a 1.0 s response-time
+    # requirement), so seconds are excluded from this family - otherwise
+    # endurance_target/inner-BO sizes for ~1 unit.
     "time": ["endurance", "duration", "hovertime", "flighttime", "minute", "min", "hour"],
-    # length UNITS only — a bare length cannot tell operational range from altitude /
-    # separation / wingspan, so range TARGETS are extracted text-aware by _range_requirement
-    # (positive range phrase, vertical excluded), NOT by unit alone. (Removed the nouns
-    # altitude/wingspan/baseline: they are lengths but NOT operational range.)
+    # length units only - a bare length cannot tell operational range from altitude or
+    # wingspan, so range targets come from _range_requirement (positive range phrase,
+    # vertical excluded), not from the unit. altitude/wingspan/baseline are excluded.
     "range": ["range", "distance", "km", "meter", "metre"],
     "accuracy": ["accuracy", "precision", "deviation", "resolution", "lines"],
     "mass": ["mass", "weight", "kg", "gram"],
@@ -47,29 +39,28 @@ _FAMILY = {
 }
 _COST_FAMILIES = {"mass", "count", "power"}
 _PERF_FAMILIES = {"speed", "time", "range", "accuracy"}
-# Variant-explorable performance families: EMERGENT metrics the estimator derives
-# from design inputs (a real trade-off + SITL-calibratable). Settable families
-# (speed→WPNAV_SPEED, count→EK3_SRC) are handled directly by L1, NOT as variant
-# objective dimensions — no component variant "owns" cruise speed, so making it a
-# variant family forces speed_sat≡0 and collapses the front (see memory
-# sitl-family-param-mapping). Range needs a cruise-speed input → deferred.
+# Variant-explorable performance families: emergent metrics the estimator derives
+# from design inputs. Settable families (speed->WPNAV_SPEED, count->EK3_SRC) are
+# handled by L1 instead; no component variant owns cruise speed, so making it a
+# variant family forces speed_sat=0 and collapses the front (see memory
+# sitl-family-param-mapping). Range needs a cruise-speed input, so it is deferred.
 _EMERGENT_PERF = {"time"}
 
-# ── Design-input ontology (single source of truth) ──────────────────────────────────
-# Each design input the variants may declare, classified once so every variation-space
-# regularization is driven from here (no scattered field lists). The DSE scores designs by
-# feeding these through the physics estimator, mirroring what SITL produces — so the static
-# ranking can be calibrated.
-#   layer   : "outer" = a discrete variant choice (lives in variant defs)
-#             "inner" = a continuous variable SIZED by the inner BO (must NOT be pinned in a
-#                       variant — stripped for a uniform interface)
-#   concern : owning-concern keywords; a field declared by >1 variation point is kept on the
-#             point whose name/type matches these (else first declarer). () = no canonical owner
-#   req_cond: non-empty → value is a requirement-driven evaluation condition (e.g. payload is
-#             evaluated at the maximum rated payload, per REQ_PERF_002), not the variant value
-#   family  : quantity family for cost-bound filtering (mass/count/power/speed; "" = none) —
-#             the EXACT field→family, so variant-attribute classification no longer relies on
-#             _family_of substring matching (which e.g. mis-read "rotorRadiusM" as count).
+# ── Design-input ontology (single source of truth) ──────────────────────
+# Every design input a variant may declare, classified once so all
+# variation-space regularization is driven from here. The DSE feeds these
+# through the physics estimator, mirroring SITL, so the ranking is calibratable.
+#   layer   : "outer" = a discrete variant choice; "inner" = a continuous
+#             variable sized by the inner BO (stripped from variants for a
+#             uniform interface)
+#   concern : owning-concern keywords; a field declared by >1 point stays on the
+#             point whose name/type matches (else first declarer). () = none
+#   req_cond: non-empty -> the value is a requirement-driven evaluation condition
+#             (payload at the maximum rated payload, per REQ_PERF_002)
+#   family  : quantity family for cost-bound filtering (mass/count/power/speed;
+#             "" = none). The exact field->family, so classification does not
+#             fall back to _family_of substring matching (which read
+#             "rotorRadiusM" as count).
 @dataclass(frozen=True)
 class DesignField:
     field: str
@@ -108,20 +99,18 @@ DESIGN_ONTOLOGY: Tuple[DesignField, ...] = (
     DesignField("cruise_speed_mps", "cruiseSpeedMps", 0.0, "outer", ("propuls", "speed", "cruise"), "", "speed"),
 )
 
-# Derived views (kept for existing callers; all sourced from DESIGN_ONTOLOGY)
 DESIGN_INPUTS: Tuple[Tuple[str, str], ...] = tuple((d.field, d.attr) for d in DESIGN_ONTOLOGY)
-DESIGN_FIELD_ATTR = {d.field: d.attr for d in DESIGN_ONTOLOGY}        # field → SysML attr
-_DESIGN_ATTR_FIELD = {d.attr.lower(): d.field for d in DESIGN_ONTOLOGY}  # lower attr → field
+DESIGN_FIELD_ATTR = {d.field: d.attr for d in DESIGN_ONTOLOGY}
+_DESIGN_ATTR_FIELD = {d.attr.lower(): d.field for d in DESIGN_ONTOLOGY}
 DESIGN_DEFAULTS = {d.field: d.default for d in DESIGN_ONTOLOGY}
 _FIELD_CONCERN = {d.field: d.concern for d in DESIGN_ONTOLOGY if d.concern}
-DESIGN_FIELD_FAMILY = {d.field: d.family for d in DESIGN_ONTOLOGY if d.family}  # field → cost family
+DESIGN_FIELD_FAMILY = {d.field: d.family for d in DESIGN_ONTOLOGY if d.family}
 _INNER_LOOP_FIELDS = tuple(d.field for d in DESIGN_ONTOLOGY if d.layer == "inner")
 
-#: `attribute <name> [: <Type>[::<Type>][ [unit] ]] = <number> [ [unit] ];`
-#: The type may be qualified (`ISQ::LengthValue`, which the A/G emitter writes)
-#: and may carry a unit suffix. A pattern accepting only a bare single-word type
-#: silently skipped both, which is the same blind spot found in four other
-#: modules: a legal spelling the check could not see.
+# `attribute <name> [: <Type>[::<Type>][ [unit] ]] = <number> [ [unit] ];`
+# The type may be qualified (`ISQ::LengthValue`, written by the A/G emitter)
+# and may carry a unit suffix; a pattern accepting only a bare single-word
+# type skipped both.
 _ATTR_RE = re.compile(
     r"\battribute\s+(\w+)"
     r"(?:\s*:\s*\w+(?:::\w+)*(?:\s*\[[^\]]*\])?)?"
@@ -129,27 +118,25 @@ _ATTR_RE = re.compile(
 )
 _REQ_ID_RE = re.compile(r"REQ[-_][A-Z]+[-_]\d+")
 
-# ── Committed-design resolution (single source of truth for read AND write) ────────
-# A resolved model retains every variant `part def X :> Base { ... }` — the Pareto
-# alternatives the trade study formally references — plus the one binding
-# `part <usage> : <ChosenImpl>;` per variation point. The committed design is what
-# the BINDINGS say; an unbound specialised def is documented alternative space.
-# Flat text scans (the old reader, the old capacity write-back heuristic) cannot
-# tell the two apart, which mis-reported the first-declared alternative as the
-# committed design. These helpers resolve bindings the SysML way instead.
+# ── Committed-design resolution (single source for read and write) ──────────
+# A resolved model keeps every variant `part def X :> Base { ... }` (the Pareto
+# alternatives the trade study references) plus one binding
+# `part <usage> : <ChosenImpl>;` per variation point. The bindings define the
+# committed design; an unbound specialised def is documented alternative space.
+# Flat text scans cannot tell the two apart and reported the first-declared
+# alternative as committed, so these helpers resolve the bindings instead.
 _PART_USAGE_RE = re.compile(
     r"\bpart\s+(?!def\b)(\w+)\s*:\s*(\w+)\s*(?:\[[^\]]*\]\s*)?[;{]"
 )
-#: Blocks whose part usages are NOT assembly bindings: the trade study binds every
-#: Pareto alternative via `part altN { part <point> : <Impl>; }` inside its
-#: `analysis def`, and calc/verification defs may declare attribute-shaped params.
+# Blocks whose part usages are not assembly bindings: the trade study binds each
+# Pareto alternative as `part altN { part <point> : <Impl>; }` inside its
+# `analysis def`, and calc/verification defs may declare attribute-shaped params.
 _NON_ASSEMBLY_BLOCK_RE = re.compile(
     r"\b(?:analysis|calc|verification)\s+def\s+\w+[^{;]*\{"
 )
 
 
 def _non_assembly_spans(text: str) -> List[Tuple[int, int]]:
-    """[start, end] body spans of analysis/calc/verification def blocks."""
     spans: List[Tuple[int, int]] = []
     for m in _NON_ASSEMBLY_BLOCK_RE.finditer(text):
         end = find_block_end(text, m.end() - 1)
@@ -165,10 +152,9 @@ def _inside(pos: int, spans: List[Tuple[int, int]]) -> bool:
 def committed_bindings(model_text: str) -> List[Tuple[str, str]]:
     """Ordered ``(usage_name, type_name)`` assembly bindings of *model_text*.
 
-    Scans ``part <name> : <Type>;`` usages outside analysis/calc/verification
-    blocks (whose nested usages formally cite ALTERNATIVES, not the committed
-    system). Order is document order; consumers needing last-wins merge apply it
-    themselves.
+    Scans ``part <name> : <Type>;`` usages outside analysis/calc/verification blocks,
+    whose nested usages cite alternatives rather than the committed system. Order is
+    document order; a last-wins merge is the caller's job.
     """
     text = str(model_text or "")
     masked = _non_assembly_spans(text)
@@ -180,13 +166,12 @@ def committed_bindings(model_text: str) -> List[Tuple[str, str]]:
 
 
 def _unbound_variant_spans(text: str, bound_types: set) -> List[Tuple[int, int]]:
-    """Body spans of specialised (``:>``) part defs no assembly binding selects."""
     spans: List[Tuple[int, int]] = []
     for m in PART_DEF_RE.finditer(text):
         if m.group(1) in bound_types:
             continue
         if ":>" not in text[m.start():m.end()]:
-            continue  # unspecialised def: a base/library type, not an alternative
+            continue  # unspecialised def: base type, not an alternative
         end = find_block_end(text, m.end() - 1)
         if end != -1:
             spans.append((m.end() - 1, end))
@@ -202,16 +187,14 @@ def _family_of(*tokens: str) -> str:
 
 
 def resolve_design_attributes(model_text: str) -> ResolvedDesignAttributes:
-    """Apply parsing, defaults, field identity and family rules in one module.
+    """Apply parsing, defaults, field identity and family rules in one place.
 
-    Downstream modules consume this result instead of importing the ontology's
-    regexes, private maps, case rules or fallback classifier.
-
-    Binding-aware: when the model declares assembly bindings, attributes inside
-    an UNBOUND specialised variant def (a retained Pareto alternative) and inside
-    analysis/calc/verification blocks are excluded — the committed design is what
-    the bindings select, not whichever alternative happens to be declared first.
-    A model with no bindings (bare declarations, fixtures) keeps the flat scan.
+    Downstream modules consume this result instead of the ontology's regexes, private
+    maps, case rules or fallback classifier. Binding-aware: when the model declares
+    assembly bindings, attributes inside an unbound specialised variant def (a retained
+    Pareto alternative) and inside analysis/calc/verification blocks are excluded, since
+    the bindings select the committed design. A model with no bindings (bare
+    declarations, fixtures) keeps the flat scan.
     """
     text = str(model_text or "")
     bindings = committed_bindings(text)
@@ -257,8 +240,8 @@ def resolve_design_attributes(model_text: str) -> ResolvedDesignAttributes:
 def requirement_targets(requirements: List[str]) -> Dict[str, List[Tuple[str, float]]]:
     """{req_id: [(family, target_value), ...]} from requirement text numerics.
 
-    The requirement-id prefix (REQ-PERF-001) is stripped first so its digits are
-    not mistaken for targets; a number's family comes from its own UNIT only.
+    The requirement-id prefix (REQ-PERF-001) is stripped first so its digits are not
+    read as targets; a number's family comes from its own unit.
     """
     out: Dict[str, List[Tuple[str, float]]] = {}
     for r in requirements or []:
@@ -266,10 +249,10 @@ def requirement_targets(requirements: List[str]) -> Dict[str, List[Tuple[str, fl
         if not m:
             continue
         rid = m.group(0).replace("_", "-")
-        body = r.split(":", 1)[1] if ":" in r else r  # drop "REQ-...:" prefix
+        body = r.split(":", 1)[1] if ":" in r else r
         targets: List[Tuple[str, float]] = []
         for num, unit in _NUM_UNIT_RE.findall(body):
-            fam = _family_of(unit or "")   # family from the number's own unit
+            fam = _family_of(unit or "")
             if fam:
                 targets.append((fam, float(num)))
         if targets:
@@ -288,8 +271,9 @@ def objective_families(requirements: List[str]) -> List[str]:
 
 
 def variant_design_inputs(model_text: str, type_name: str) -> Dict[str, float]:
-    """{DesignInputs field: value} for the design-input attributes declared in part
-    def ``type_name`` (e.g. massKg → mass_kg). Non-design attributes are ignored."""
+    """{DesignInputs field: value} for the design-input attributes declared in part def ``type_name``
+    (e.g. massKg -> mass_kg).
+    """
     span = named_block_span(model_text, "part", type_name)
     if span is None:
         return {}
@@ -303,15 +287,16 @@ def variant_design_inputs(model_text: str, type_name: str) -> Dict[str, float]:
 
 
 def architecture_design(vps, choices: Dict[str, str], model_text: str) -> DesignInputs:
-    """Merge the chosen variants' design inputs into one DesignInputs (DESIGN_DEFAULTS
-    fill whatever no variant declares)."""
+    """Merge the chosen variants' design inputs into one DesignInputs (DESIGN_DEFAULTS fill whatever no
+    variant declares).
+    """
     merged: Dict[str, float] = dict(DESIGN_DEFAULTS)
     for vp in vps:
         if vp.point_id in choices:
             merged.update(variant_design_inputs(model_text, vp.type_of(choices[vp.point_id])))
     merged["battery_cells"] = int(merged["battery_cells"])
     merged["rotor_count"] = int(merged["rotor_count"])
-    return DesignInputs(**merged)  # all-up mass emerges in the estimator
+    return DesignInputs(**merged)
 
 
 def objective_names(requirements: List[str]) -> List[str]:
@@ -320,7 +305,6 @@ def objective_names(requirements: List[str]) -> List[str]:
 
 
 def _emergent_for_family(fam: str, metrics: Dict[str, float]) -> float:
-    """Map a requirement quantity-family to the estimator's emergent metric."""
     return {
         "speed": metrics.get("cruise_speed_mps", 0.0),
         "time": metrics.get("endurance_min", 0.0),
@@ -330,9 +314,10 @@ def _emergent_for_family(fam: str, metrics: Dict[str, float]) -> float:
 
 def objectives_from_design(di: DesignInputs, vps, choices: Dict[str, str],
                            requirements: List[str]) -> Dict[str, float]:
-    """Per-family satisfaction + cost_efficiency from a COMPLETE DesignInputs (battery
-    already chosen — by a variant in the single-layer path, or by the inner BO in the
-    bilevel path). Split out so both paths share one scoring rule."""
+    """Per-family satisfaction + cost_efficiency from a complete DesignInputs (battery
+    already chosen by a variant in the single-layer path, or by the inner BO in the
+    bilevel path). Split out so both paths share one scoring rule.
+    """
     metrics = estimate(di)
     req_index = requirement_targets(requirements)
     fams = objective_families(requirements)
@@ -348,13 +333,13 @@ def objectives_from_design(di: DesignInputs, vps, choices: Dict[str, str],
     obj: Dict[str, float] = {
         f + "_sat": (sum(v) / len(v) if v else 0.0) for f, v in fam_sat.items()
     }
-    # cost proxy = emergent all-up mass (bigger battery → heavier → costlier)
+    # cost proxy = emergent all-up mass (bigger battery -> heavier -> costlier)
     obj["cost_efficiency"] = 1.0 / (1.0 + total_mass_kg(di) / 5.0)
     return obj
 
 
 def design_arch_inputs(di: DesignInputs) -> Dict[str, float]:
-    """The NON-capacity design inputs — battery capacity is the inner-BO variable."""
+    """The non-capacity design inputs; battery capacity is the inner-BO variable."""
     return {
         "payload_mass_kg": di.payload_mass_kg, "battery_cells": di.battery_cells,
         "rotor_count": di.rotor_count, "rotor_radius_m": di.rotor_radius_m,
@@ -362,34 +347,34 @@ def design_arch_inputs(di: DesignInputs) -> Dict[str, float]:
     }
 
 
-# ── requirement → analysis-metric mapping: now queries over STRUCTURED specs (controlled
-# vocabulary), not scattered keyword greps. The brittle disambiguations (altitude≠range,
-# payload≠MTOW, second≠endurance) live once in requirement_spec; an LLM does them when
-# available, a deterministic rule extractor otherwise. ────────────────────────────────────
+# ── requirement -> analysis-metric mapping: queries structured specs (controlled
+# vocabulary) rather than keyword greps. The disambiguations (altitude!=range,
+# payload!=MTOW, second!=endurance) live once in requirement_spec, done by an LLM
+# when available and by a rule extractor otherwise. ──────────────────────
 def endurance_target(requirements: List[str]) -> float:
-    """Endurance requirement target (minutes) for the inner BO; largest ">=" ENDURANCE spec. 0 if none."""
+    """Endurance requirement target (minutes) for the inner BO; largest ">=" ENDURANCE spec."""
     return max_value(extract_requirements(requirements), ENDURANCE, ">=")
 
 
 def max_rated_payload(requirements: List[str]) -> float:
-    """Maximum rated payload mass (kg) — the largest PAYLOAD spec. REQ_PERF_002 ties endurance
-    to this load, so endurance/MTOW are evaluated here, not at an arbitrary default. 0.0 if none."""
+    """Maximum rated payload mass (kg) - the largest PAYLOAD spec."""
     return max_value(extract_requirements(requirements), PAYLOAD)
 
 
 def range_requirement(requirements: List[str]) -> Tuple[Optional[str], float]:
-    """(req_id, target_metres) for a range CAPABILITY requirement — the largest ">=" RANGE spec
-    ("must reach at least X"). A "<=" range (operational-radius / geofence limit) is NOT a
-    capability our RangeM satisfies, so it's excluded. (None, 0.0) if none."""
+    """(req_id, target_metres) for a range capability requirement - the largest ">=" RANGE
+    spec. A "<=" range (operational-radius / geofence limit) is a bound, not a capability
+    RangeM satisfies, so it is excluded. (None, 0.0) if none.
+    """
     s = max_spec(extract_requirements(requirements), RANGE, ">=")
     return (s.req_id, s.value) if s else (None, 0.0)
 
 
 def mass_limit(requirements: List[str]) -> Tuple[Optional[str], float]:
-    """(req_id, MTOW limit kg) — the TIGHTEST "<=" MASS_MTOW spec (gross take-off mass),
-    NOT a payload sub-bound; (None, 0.0) if no MTOW limit. A conjunction of upper bounds
-    is governed by its minimum: taking the largest admitted designs that violated the
-    stricter requirement."""
+    """(req_id, MTOW limit kg) - the tightest "<=" MASS_MTOW spec (gross take-off mass, not
+    a payload sub-bound); (None, 0.0) if none. A conjunction of upper bounds is governed
+    by its minimum: taking the largest admitted designs that violated the stricter one.
+    """
     s = min_spec(extract_requirements(requirements), MASS_MTOW, "<=")
     return (s.req_id, s.value) if s else (None, 0.0)
 
@@ -403,7 +388,6 @@ def _point_fields(model_text: str, point) -> set:
 
 
 def _strip_attr_from_type(text: str, type_name: str, attr: str) -> str:
-    """Remove `attribute <attr> : <T> = <v>;` from the body of part def <type_name>."""
     span = named_block_span(text, "part", type_name)
     if span is None:
         return text
@@ -414,12 +398,10 @@ def _strip_attr_from_type(text: str, type_name: str, attr: str) -> str:
 
 
 def normalize_variation_ownership(model_text: str, points) -> Tuple[str, List[str]]:
-    """Deduplicate design-field ownership across variation points (C + A): detect each
-    design field declared by >1 variation point, keep it on its canonical owner (concern
-    match; else first declarer), and STRIP it from the others' variant type defs so the
-    resolved design is coherent and the merge unambiguous. Returns (new_text, notes); the
-    notes (A) record every strip and any point left physics-inert. Best-effort: if the
-    rewrite wouldn't parse, the original text is returned with an explanatory note."""
+    """Deduplicate design-field ownership across variation points (C + A): a field declared by
+    more than one point stays on its canonical owner (concern match, else first declarer)
+    and is stripped from the other variant type defs, so the merge is unambiguous.
+    """
     text = model_text
     notes: List[str] = []
     field_pts: Dict[str, list] = {}
@@ -431,12 +413,11 @@ def normalize_variation_ownership(model_text: str, points) -> Tuple[str, List[st
     for field, pts in field_pts.items():
         if len(pts) < 2:
             continue
-        # A catalog seed encodes a validated COUPLED architecture tuple.  Letting
-        # concern-based ownership move even one of those fields (especially cells)
-        # to an independent LLM point creates rotor/prop/voltage cross-products that
-        # the catalog never asserted.  The seed is therefore the authoritative owner
-        # of every architecture field it declares; other LLM fields retain the normal
-        # ontology-concern ownership rule.
+        # A catalog seed encodes a coupled architecture tuple. Moving one of its
+        # fields (cells especially) to an independent LLM point by concern ownership
+        # creates rotor/prop/voltage cross-products the catalog never asserted, so
+        # the seed owns every architecture field it declares; other LLM fields keep
+        # the ontology-concern rule.
         seed_owners = [
             p for p in pts
             if "catalog architecture seed" in p.rationale.lower()
@@ -472,16 +453,16 @@ def normalize_variation_ownership(model_text: str, points) -> Tuple[str, List[st
             notes.append(f"variation point '{p.point_id}' is now physics-inert "
                          f"(structural-only) after deduplication")
 
-    if notes and check_syntax(text).has_errors:        # never ship an unparsable rewrite
+    if notes and check_syntax(text).has_errors:
         return model_text, ["variation-ownership normalization skipped (rewrite did not parse)"]
     return text, notes
 
 
 def strip_inner_loop_attrs(model_text: str, points) -> Tuple[str, List[str]]:
-    """Strip inner-loop-variable attributes (e.g. batteryCapacityMah) from every variant
-    type, so all variants of a point share ONE consistent design-input interface (only their
-    discrete distinguishing attrs, e.g. batteryCells). Returns (new_text, notes); reverts if
-    the rewrite wouldn't parse."""
+    """Strip inner-loop-variable attributes (batteryCapacityMah) from every variant type,
+    so all variants of a point share one design-input interface and keep only their
+    discrete distinguishing attributes (batteryCells).
+    """
     text = model_text
     stripped: Dict[str, list] = {}
     for p in points:
@@ -502,12 +483,11 @@ def strip_inner_loop_attrs(model_text: str, points) -> Tuple[str, List[str]]:
 
 
 def normalize_variation_space(model_text: str, points) -> Tuple[str, List[str]]:
-    """Single deterministic regularizer for the LLM-declared variation space, all driven by
-    DESIGN_ONTOLOGY: (1) dedup field ownership across variation points (keep each field on its
-    canonical-concern owner, strip from the rest), then (2) strip inner-loop variables (BO-
-    sized, not variant choices) for a uniform per-point interface. One entry point so new
-    ontology-classified smells get a single mount point. Returns (text, notes); each sub-pass
-    self-reverts if its rewrite wouldn't parse."""
+    """Deterministic regularizer for the LLM-declared variation space, driven by
+    DESIGN_ONTOLOGY: (1) dedup field ownership across variation points (each field on its
+    canonical-concern owner, stripped from the rest), then (2) strip inner-loop variables
+    (BO-sized, not variant choices) for a uniform per-point interface.
+    """
     text, notes = normalize_variation_ownership(model_text, points)
     text, strip_notes = strip_inner_loop_attrs(text, points)
     return text, notes + strip_notes
@@ -515,9 +495,10 @@ def normalize_variation_space(model_text: str, points) -> Tuple[str, List[str]]:
 
 def evaluation_overrides(requirements: List[str]) -> Dict[str, float]:
     """Requirement-driven evaluation values for design fields whose ontology marks a
-    ``req_cond`` — e.g. payload is evaluated at the MAXIMUM RATED PAYLOAD (REQ_PERF_002),
-    not the chosen/default variant value. Returns {field: value} (empty if none apply), so
-    the DSE/inner-BO/closure all evaluate at the same requirement-mandated conditions."""
+    ``req_cond`` - payload is evaluated at the maximum rated payload (REQ_PERF_002) rather
+    than the chosen/default variant value. Returns {field: value}, empty if none apply, so
+    the DSE, inner BO and closure evaluate at the same conditions.
+    """
     out: Dict[str, float] = {}
     for d in DESIGN_ONTOLOGY:
         if d.req_cond == "max_rated_payload":
@@ -529,23 +510,25 @@ def evaluation_overrides(requirements: List[str]) -> Dict[str, float]:
 
 def within_requirement_bounds(design: Dict[str, float], satisfies: List[str],
                               requirements: List[str]) -> bool:
-    """True iff a variant's design inputs respect the COST upper bounds of the
-    requirements it SATISFIES — cost families (mass/count/power) must be ≤ the linked
-    requirement's upper bound (e.g. a payload variant can't exceed the payload-mass
-    limit). PERF families (speed) are NOT filtered: they're settable parameters
-    (WPNAV_SPEED, tuned by L1), so a variant's declared cruise speed is not a hard
-    constraint. Bounds come from the requirements, not from the LLM."""
+    """True iff a variant's design inputs respect the cost upper bounds of the
+    requirements it satisfies.
+
+    Cost families (mass/count/power) stay <= the linked requirement's upper bound. Perf
+    families (speed) are not filtered: they are settable parameters (WPNAV_SPEED, tuned by
+    L1), so a declared cruise speed is not a hard constraint. Bounds come from the
+    requirements, not from the LLM.
+    """
     idx = requirement_targets(requirements)
     upper: Dict[str, float] = {}
     for rid in satisfies:
         rid = rid.replace("_", "-")
         for fam, val in idx.get(rid, []):
             if fam in _COST_FAMILIES:
-                upper[fam] = min(upper.get(fam, val), val)   # tightest linked upper bound
+                upper[fam] = min(upper.get(fam, val), val)
     for field, v in design.items():
         if not isinstance(v, (int, float)):
             continue
-        fam = DESIGN_FIELD_FAMILY.get(str(field).strip().lower())  # exact, ontology-driven
+        fam = DESIGN_FIELD_FAMILY.get(str(field).strip().lower())
         if fam in upper and v > upper[fam]:
             return False
     return True

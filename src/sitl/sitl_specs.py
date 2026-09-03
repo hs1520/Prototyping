@@ -1,14 +1,8 @@
-"""
-sitl_specs.py
+"""结构化的 SITL inject / verify spec + handler 注册表。
 
-结构化的 SITL inject / verify spec + handler 注册表。
-
-替代之前的字符串 DSL（"param set X Y" / "wait_mode(LAND, timeout=15)"）。
-新增一种 inject/verify 类型只需:
-  1. 添加一个 Spec dataclass（或扩展现有 dataclass 的 kind）
-  2. 在 INJECT_HANDLERS 或 VERIFY_HANDLERS 注册一个 InjectHandler/VerifyHandler
-
-不再需要在 bridge 里加 if/elif 分支。
+替代早前的字符串 DSL。新增一种类型只需加一个 Spec dataclass（或扩展现有
+dataclass 的 kind），再到 INJECT_HANDLERS / VERIFY_HANDLERS 注册 handler，
+不必改 bridge 的 if/elif 分支。
 """
 
 from __future__ import annotations
@@ -20,28 +14,9 @@ from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 
-# ---------------------------------------------------------------------------
-# Spec dataclasses
-# ---------------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class InjectSpec:
-    """
-    描述一次故障注入。
-
-    kind            handler 注册表的 key，决定如何注入
-    params          注入参数（每个 kind 自定义语义）
-    pre_takeoff_m   注入前若 > 0，则先解锁并起飞到该高度（米）
-
-    Examples:
-      InjectSpec(kind="noop")                          — L1 测试，不注入
-      InjectSpec(kind="set_param",
-                 params={"SIM_BARO_DISABLE": 1.0})
-      InjectSpec(kind="disconnect_gcs", pre_takeoff_m=5.0)
-      InjectSpec(kind="set_param",
-                 params={"SIM_ENGINE_FAIL": 1.0},
-                 pre_takeoff_m=10.0)
-    """
+    """描述一次故障注入。"""
     kind: str
     params: Mapping[str, float] = field(default_factory=dict)
     pre_takeoff_m: float = 0.0
@@ -53,23 +28,7 @@ class InjectSpec:
 
 @dataclass(frozen=True)
 class VerifySpec:
-    """
-    描述如何验证预期行为。
-
-    kind     handler 注册表的 key
-    args     该 kind 的参数（mode 名、关键词、等待时间等）
-    timeout  统一的等待上限（秒）
-
-    Examples:
-      VerifySpec(kind="noop")                              — L1 不验证
-      VerifySpec(kind="wait_mode",
-                 args={"mode": "LAND", "fallback": "RTL"},
-                 timeout=25.0)
-      VerifySpec(kind="assert_arm_rejected")
-      VerifySpec(kind="wait_statustext",
-                 args={"keyword": "arachute"},
-                 timeout=10.0)
-    """
+    """描述如何验证预期行为。"""
     kind: str
     args: Mapping[str, Any] = field(default_factory=dict)
     timeout: float = 10.0
@@ -78,10 +37,6 @@ class VerifySpec:
     def __post_init__(self) -> None:
         object.__setattr__(self, "args", MappingProxyType(dict(self.args)))
 
-
-# ---------------------------------------------------------------------------
-# Test context — handler 间共享的运行时辅助
-# ---------------------------------------------------------------------------
 
 # ArduCopter 模式 ID 硬编码兜底（mode_mapping() 在连接初期可能为空）
 ARDUCOPTER_MODES: Dict[str, int] = {
@@ -96,16 +51,11 @@ ARDUCOPTER_MODES: Dict[str, int] = {
 class TestContext:
     """传给 handler 的运行时上下文。
 
-    speedup — SITL 的 ``--speedup`` 倍率。两条纪律(见 sim_clock.py):
-
-    * **代表仿真时长的等待/发送节拍**按 ``wall/speedup`` 缩放
-      (`scaled_sleep`)——锁步下仿真时间 = 墙钟×speedup,缩放后仿真
-      语义逐字不变。GCS 心跳预热是硬案例:ArduCopter 按仿真时间判断
-      链路存活,1Hz 墙钟节拍在 5× 下是 5 仿真秒的间隔,预热本身就把
-      链路弄丢了。
-    * **需求时限的测量与判定窗口**读仿真时钟(``clock``,来自消息的
-      time_boot_ms),墙钟只作 watchdog——否则测出的延迟被 speedup
-      除,时限类证据假性变好。
+    speedup 是 SITL 的 ``--speedup`` 倍率，两条纪律(见 sim_clock.py):代表仿真
+    时长的等待/发送节拍按 ``wall/speedup`` 缩放(`scaled_sleep`)，否则 1Hz 墙钟
+    心跳在 5x 下是 5 仿真秒间隔,预热期链路就已丢失;需求时限的测量与判定窗口
+    读仿真时钟(``clock``,来自 time_boot_ms),墙钟只作 watchdog,否则延迟被
+    speedup 除。
     """
     mav: Any
     mavutil: Any
@@ -119,7 +69,7 @@ class TestContext:
         self.attach_clock()
 
     def attach_clock(self) -> None:
-        """(重)挂仿真时钟到当前连接;连接被替换后必须重新调用。"""
+        """(重)挂仿真时钟到当前连接;连接被替换后需重新调用。"""
         self.clock.install(self.mav)
 
     def scaled_sleep(self, sim_seconds: float) -> None:
@@ -129,10 +79,9 @@ class TestContext:
     def sim_window(self, sim_timeout_s: float, wall_margin_s: float = 0.0):
         """判定窗口:仿真预算 *sim_timeout_s*,墙钟 watchdog 兜底。
 
-        返回 ``expired() -> bool``。仿真时钟可用时按仿真预算判定(严格度
-        不随 speedup 漂移),通常在 ~sim_timeout/speedup 墙钟秒内到期;
-        时钟无戳或停走时,watchdog(原墙钟超时 + 余量,默认 0 即与旧
-        行为一致)保证循环终止。
+        返回 ``expired() -> bool``。仿真时钟可用时按仿真预算判定,通常在
+        ~sim_timeout/speedup 墙钟秒内到期;时钟无戳或停走时由 watchdog
+        (墙钟超时 + 余量,默认 0)终止循环。
         """
         wall_deadline = time.time() + sim_timeout_s + wall_margin_s
         clock = self.clock
@@ -144,13 +93,13 @@ class TestContext:
             if time.time() >= wall_deadline:
                 return True
             if start_sim is None:
-                # The budget starts at the first stamp observed AFTER the
+                # The budget starts at the first stamp observed after the
                 # window opened. The latest stamp at opening time can be
-                # arbitrarily old — the GCS-loss warmup sends heartbeats for
-                # 15s and reads nothing, and settle sleeps read nothing — so
-                # seeding from it bills the model for time the harness spent
-                # not listening (measured: a 25s budget expired 1.5s after
-                # opening, 30 sim-seconds pre-charged).
+                # arbitrarily old - the GCS-loss warmup sends heartbeats
+                # for 15s and reads nothing, and settle sleeps read
+                # nothing - so seeding from it bills the model for time
+                # the harness spent not listening: a 25s budget expired
+                # 1.5s after opening, 30 sim-seconds pre-charged.
                 if getattr(clock, "observations", 0) > observations_at_open:
                     start_sim = clock.now_s()
                 return False
@@ -181,8 +130,8 @@ class TestContext:
         time.sleep(1)
 
     def force_arm_and_takeoff(self, altitude: float = 3.0) -> bool:
-        """恢复传感器 → 切 GUIDED → 解锁 → 起飞 → 等到达目标高度。"""
-        self.set_param("ARMING_CHECK", 0)   # bypass ALL PreArm checks for SITL
+        """恢复传感器 -> 切 GUIDED -> 解锁 -> 起飞 -> 等到达目标高度。"""
+        self.set_param("ARMING_CHECK", 0)
         self.set_param("SIM_GPS1_ENABLE", 1)
         self.set_param("SIM_BARO_DISABLE", 0)
         # FENCE_ENABLE=1 在没有 GPS fix 时会阻止解锁（Fence requires position）
@@ -190,10 +139,10 @@ class TestContext:
         self.set_param("FENCE_ENABLE", 0)
         time.sleep(0.5)
         self.set_mode("GUIDED")
-        # wait_ready_to_arm：EKF 在启动后需要数秒才能设定 origin/home
-        # （"Arm: Need Position Estimate" / "AHRS: waiting for home"），这些是
-        # 强制硬检查，ARMING_CHECK=0 和 force-arm(21196) 都绕不过。因此必须
-        # 反复重试解锁直到 EKF 就绪，而不是只试一次就放弃。
+        # wait_ready_to_arm：EKF 启动后需要数秒才能设定 origin/home（"Arm: Need
+        # Position Estimate" / "AHRS: waiting for home"），这些是强制硬检查，
+        # ARMING_CHECK=0 和 force-arm(21196) 都绕不过，所以反复重试解锁直到 EKF
+        # 就绪，而不是只试一次。
         arm_ok = False
         deadline = time.time() + 45
         while time.time() < deadline:
@@ -211,16 +160,14 @@ class TestContext:
                 break
             self.scaled_sleep(2)
         if not arm_ok:
-            self.set_param("FENCE_ENABLE", 1)   # 恢复围栏（123 行临时关闭）
+            self.set_param("FENCE_ENABLE", 1)
             return False
 
-        # 起飞指令（检查 ACK）
         self.mav.mav.command_long_send(
             self.mav.target_system, self.mav.target_component,
             self.mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
             0, 0, 0, 0, 0, 0, 0, altitude,
         )
-        # 读取 TAKEOFF ACK（允许 2s 内收到）
         t_ack = self.mav.recv_match(type="COMMAND_ACK", blocking=True, timeout=2)
         takeoff_accepted = (
             t_ack is not None
@@ -228,23 +175,21 @@ class TestContext:
             and t_ack.result == self.mavutil.mavlink.MAV_RESULT_ACCEPTED
         )
 
-        # 若 TAKEOFF 未被接受，改用速度指令强制爬升
         if not takeoff_accepted:
             self.mav.mav.set_position_target_local_ned_send(
                 0,
                 self.mav.target_system, self.mav.target_component,
                 self.mavutil.mavlink.MAV_FRAME_LOCAL_NED,
-                0b0000_1111_1100_0111,  # type_mask: 仅使用速度 vz
-                0, 0, 0,                # pos (ignored)
-                0, 0, -1.5,             # vx=0, vy=0, vz=-1.5 (上升，NED 向下为正)
+                0b0000_1111_1100_0111,
+                0, 0, 0,
+                0, 0, -1.5,
                 0, 0, 0, 0, 0,
             )
 
-        # 等待爬升（目标高度 60%）。注意 relative_alt 是"相对 home 高度"，但 home
-        # 未设定的瞬间该字段可能等于绝对海拔（~584000mm），会让简单的
-        # `>= target` 误判为已起飞 → 在地面就返回 True。因此：
-        #   1. 清掉旧高度帧，取起飞指令后的首个可信读数为基线；
-        #   2. 上限做合理性约束（剔除 > altitude*3 的离谱读数）；
+        # 等待爬升（目标高度 60%）。home 未设定时 relative_alt 可能等于绝对海拔
+        # （~584000mm），裸 `>= target` 会在地面就返回 True。因此：
+        #   1. 清掉旧高度帧，以起飞指令后首个读数为基线；
+        #   2. 剔除 > altitude*3 的离谱读数；
         #   3. 需连续 2 次满足，避免单帧抖动。
         target_mm = int(altitude * 0.6 * 1000)
         plausible_max_mm = int(altitude * 3 * 1000) + 5000
@@ -272,7 +217,6 @@ class TestContext:
                         return True
                 else:
                     hits = 0
-            # 持续发速度指令（若用速度控制则需要持续发送）
             if not takeoff_accepted and time.time() < deadline - 2:
                 self.mav.mav.set_position_target_local_ned_send(
                     0,
@@ -297,11 +241,11 @@ class TestContext:
         self.set_param("COMPASS_ENABLE", 1)
         self.set_param("EK3_ENABLE", 1)
         self.set_param("SIM_GPS1_ENABLE", 1)
-        self.set_param("ARMING_CHECK", 0)   # SITL: bypass PreArm checks
+        self.set_param("ARMING_CHECK", 0)
         self.set_param("BATT_ARM_VOLT", 0)
         self.set_param("FS_GCS_ENABLE", 0)
-        # 关闭 GCS 故障安全——pymavlink 不发心跳，10s 后会强制 LAND 打断起飞
-        # disconnect_gcs 注入会在需要时手动重新启用
+        # 关闭 GCS 故障安全：pymavlink 不发心跳，10s 后会强制 LAND 打断起飞
+        # disconnect_gcs 注入按需重新启用
         self.set_param("FS_GCS_ENABLE", 0)
         time.sleep(0.5)
         self.mav.mav.command_long_send(
@@ -313,31 +257,23 @@ class TestContext:
         self.set_mode("STABILIZE")
 
 
-# ---------------------------------------------------------------------------
-# Handler protocol
-# ---------------------------------------------------------------------------
-
-# Inject handler: (ctx, spec) → None  (用 spec.pre_takeoff_m 自动处理起飞)
 InjectHandler = Callable[[TestContext, InjectSpec], None]
 
-# Verify handler: (ctx, spec) → (passed, message)
 VerifyHandler = Callable[[TestContext, VerifySpec], Tuple[bool, str]]
 
-# Render handler: (spec) → 渲染到独立脚本里的 Python 代码片段
 RenderInjectHandler = Callable[[InjectSpec], str]
 RenderVerifyHandler = Callable[[VerifySpec], str]
 
 
 # ---------------------------------------------------------------------------
-# 起飞前置守卫（进程内 + 渲染脚本共用同一不变量）
+# 起飞前置守卫（进程内 + 渲染脚本共用）
 #
-# 不变量：spec.pre_takeoff_m > 0 表示测试要求机体在空中。起飞失败时必须让
-# 测试 FAIL，否则会在地面发执行器/故障注入指令、再靠 STATUSTEXT 假绿。
-# 进程内 inject 由 _run_single_test 的 try/except 捕获异常 → 记为 False。
+# 不变量：spec.pre_takeoff_m > 0 表示测试要求机体在空中；起飞失败即 FAIL，
+# 否则会在地面发注入指令再靠 STATUSTEXT 判绿。进程内 inject 的异常由
+# _run_single_test 捕获 -> 记为 False。
 # ---------------------------------------------------------------------------
 
 def _require_takeoff(ctx: TestContext, spec: InjectSpec) -> None:
-    """进程内：起飞失败则抛异常，让测试 FAIL（而非在地面继续注入）。"""
     if spec.pre_takeoff_m > 0 and not ctx.force_arm_and_takeoff(
             altitude=spec.pre_takeoff_m):
         raise RuntimeError(
@@ -345,17 +281,12 @@ def _require_takeoff(ctx: TestContext, spec: InjectSpec) -> None:
 
 
 def _render_require_takeoff(spec: InjectSpec) -> str:
-    """渲染脚本：起飞失败则 raise，让生成的测试脚本非零退出（FAIL）。"""
     if spec.pre_takeoff_m <= 0:
         return ""
     return (f"print('  起飞至 {spec.pre_takeoff_m}m ...')\n"
             f"if not force_arm_and_takeoff(mav, altitude={spec.pre_takeoff_m}):\n"
             f"    raise RuntimeError('起飞失败：未能解锁/爬升到目标高度')\n")
 
-
-# ---------------------------------------------------------------------------
-# Inject handlers
-# ---------------------------------------------------------------------------
 
 def _inject_noop(ctx: TestContext, spec: InjectSpec) -> None:
     pass
@@ -366,7 +297,6 @@ def _render_inject_noop(spec: InjectSpec) -> str:
 
 
 def _inject_set_param(ctx: TestContext, spec: InjectSpec) -> None:
-    # 处理特殊 key: _pre_mode（注入前切换模式）
     pre_mode = spec.params.get("_pre_mode")
     if pre_mode:
         ctx.set_mode(str(pre_mode))
@@ -378,7 +308,7 @@ def _inject_set_param(ctx: TestContext, spec: InjectSpec) -> None:
 
     for name, value in spec.params.items():
         if name.startswith("_"):
-            continue   # 跳过特殊控制 key（_pre_mode、_settle_s 等）
+            continue
         ctx.set_param(name, float(value))
 
     # 注入后等待，让 ArduCopter 检测到故障（仿真时长，随 speedup 缩放）
@@ -400,16 +330,15 @@ def _render_inject_set_param(spec: InjectSpec) -> str:
 
 
 def _inject_disconnect_gcs(ctx: TestContext, spec: InjectSpec) -> None:
-    # pre_takeoff_m>0 时要求真实起飞（空中失联才会触发 RTL/LAND；起飞失败则 FAIL）
+    # pre_takeoff_m>0 时要求起飞（空中失联才触发 RTL/LAND；失败则 FAIL）
     _require_takeoff(ctx, spec)
-    # 动作可由条目指定（1=RTL、5=Land），否则保持 ArduPilot 默认 RTL。之前
-    # 硬编码 1 会把 GCS_LOSS_LAND 的 boot 值覆盖回 RTL，verify 等 LAND 必假阴。
+    # 动作由条目指定（1=RTL、5=Land），否则用 ArduPilot 默认 RTL；硬编码 1 会把
+    # GCS_LOSS_LAND 的 boot 值覆盖回 RTL，verify 等 LAND 时假阴。
     ctx.set_param("FS_GCS_ENABLE", float(spec.params.get("FS_GCS_ENABLE", 1)))
     ctx.set_param("FS_GCS_TIMEOUT", float(spec.params.get("FS_GCS_TIMEOUT", 10)))
-    # 预热：以 1Hz 仿真节拍发 15 个 HEARTBEAT（≈15 仿真秒），让 ArduCopter
-    # 建立稳定的 GCS 连接状态。ArduCopter 按仿真时间判定链路存活，所以节拍
-    # 必须随 speedup 缩放——1Hz 墙钟节拍在 5x 下是 5 仿真秒的间隔，预热
-    # 阶段链路就已经"丢失"了。
+    # 预热：以 1Hz 仿真节拍发 15 个 HEARTBEAT（~15 仿真秒）建立 GCS 连接。
+    # ArduCopter 按仿真时间判定链路存活，节拍随 speedup 缩放：1Hz 墙钟节拍在
+    # 5x 下是 5 仿真秒间隔，预热期链路就已丢失。
     for _ in range(15):
         ctx.mav.mav.heartbeat_send(
             ctx.mavutil.mavlink.MAV_TYPE_GCS,
@@ -417,14 +346,14 @@ def _inject_disconnect_gcs(ctx: TestContext, spec: InjectSpec) -> None:
             0, 0, 0,
         )
         ctx.scaled_sleep(1.0)
-    # 关闭连接，彻底切断心跳 → ArduCopter 检测到 GCS 断连
-    # 不在 inject 中 sleep — verify 立即开始轮询模式切换
+    # 关闭连接切断心跳 -> ArduCopter 检测到 GCS 断连
+    # inject 内不 sleep，verify 立即轮询模式切换
     try:
         ctx._gcs_conn_str = getattr(ctx.mav, 'address', "tcp:127.0.0.1:5760")
         ctx.mav.close()
     except Exception:
         ctx._gcs_conn_str = "tcp:127.0.0.1:5760"
-    # 小延迟让 SITL 释放 TCP 端口，让 verify 可以重连
+    # 延迟让 SITL 释放 TCP 端口，供 verify 重连
     time.sleep(2)
 
 
@@ -457,16 +386,13 @@ def _send_command_acked(
     attempts: int = 3,
     ack_timeout_s: float = 3.0,
 ) -> int:
-    """Send COMMAND_LONG and BLOCK for its COMMAND_ACK, retrying bounded.
+    """Send COMMAND_LONG and block for its COMMAND_ACK, with bounded retries.
 
-    The MAVLink command protocol is ACK-confirmed for a reason: a send
-    followed by a plain sleep was measured to vanish without a trace —
-    REQ_SAFE_005's DO_PARACHUTE drew no ACK, no STATUSTEXT and no console
-    line across four instrumented runs, while the identical bytes followed
-    by a blocking recv drew ACK=0 and a released parachute on the first
-    attempt. Pumping the connection right after the send is part of
-    delivering the command; sleeping is not. Raises on total silence so the
-    test fails with the true reason instead of a downstream symptom.
+    A send followed by a plain sleep was measured to vanish: REQ_SAFE_005's
+    DO_PARACHUTE drew no ACK across four instrumented runs, while the same
+    bytes followed by a blocking recv drew ACK=0 and a released parachute.
+    Pumping the connection after the send is part of delivering the command.
+    Raises on silence so the test fails with the cause, not a later symptom.
     """
     for attempt in range(attempts):
         ctx.mav.mav.command_long_send(
@@ -489,16 +415,15 @@ def _send_command_acked(
 
 
 def _inject_mavlink_command(ctx: TestContext, spec: InjectSpec) -> None:
-    """发送任意 MAVLink command_long（用于 gripper、喷射器等执行器命令）。
+    """发送任意 MAVLink command_long（gripper、喷射器等执行器命令）。
 
     spec.params keys:
-      command  — MAVLink 命令 ID（必填）
-      param1..param7 — 命令参数（默认 0）
-      pre_command / pre_param1..pre_param7 / _pre_settle_s — 可选前置命令：
-        先发它并等 _pre_settle_s，再发主命令。用于需要状态转换判别力的
-        用例（如先 RELEASE 再 abort-GRAB——只断言终值时，若初值已等于
-        目标值，主命令没生效也会假绿）。
-      other numeric keys — runtime params applied after takeoff, before command
+      command  - MAVLink 命令 ID（必填）
+      param1..param7 - 命令参数（默认 0）
+      pre_command / pre_param1..pre_param7 / _pre_settle_s - 可选前置命令：
+        先发它并等 _pre_settle_s 再发主命令。用于只断言终值的用例（如先
+        RELEASE 再 abort-GRAB）：初值已等于目标值时主命令失效也会判绿。
+      other numeric keys - runtime params applied after takeoff, before command
     """
     _require_takeoff(ctx, spec)
 
@@ -586,10 +511,6 @@ RENDER_INJECT: Dict[str, RenderInjectHandler] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Verify handlers
-# ---------------------------------------------------------------------------
-
 def _verify_noop(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
     return True, "(no verify)"
 
@@ -602,10 +523,8 @@ def _verify_wait_mode(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
     mode = str(spec.args.get("mode", "")).upper()
     fallback = str(spec.args.get("fallback", "")).upper()
 
-    # 如果连接已关闭（disconnect_gcs 场景），用保存的地址重新建立连接
     conn_ok = False
     try:
-        # 尝试发一个非阻塞 recv 确认 socket 活着
         ctx.mav.recv_match(type="HEARTBEAT", blocking=False)
         conn_ok = True
     except Exception:
@@ -627,7 +546,6 @@ def _verify_wait_mode(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
         try:
             msg = ctx.mav.recv_match(type="HEARTBEAT", blocking=True, timeout=2)
         except Exception:
-            # socket 断开后重连一次
             try:
                 conn_str = getattr(ctx, "_gcs_conn_str", "tcp:127.0.0.1:5760")
                 ctx.mav = ctx.mavutil.mavlink_connection(conn_str)
@@ -693,7 +611,6 @@ def _render_verify_assert_arm_rejected(spec: VerifySpec) -> str:
 
 
 def _verify_wait_statustext(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
-    # 支持单关键词（str）或多候选词（list），任一匹配即通过
     raw = spec.args.get("keyword", "")
     keywords: List[str] = (
         [k.lower() for k in raw] if isinstance(raw, list)
@@ -850,18 +767,16 @@ def _render_verify_skip(spec: VerifySpec) -> str:
 
 
 def _verify_assert_mavlink_v2_link(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
-    """MAVLink v2 framing + bidirectionality + link continuity, measured.
+    """Measure MAVLink v2 framing, bidirectionality and link continuity.
 
-    A configured SERIAL0_PROTOCOL=2 proves the port was *asked* for MAVLink v2;
-    it does not prove the link speaks it, answers, or stays up. This reads the
-    wire: the v2 start-of-frame byte (0xFD) on actually-received packets, a
-    command that must be answered to show the uplink is live, and the largest
-    HEARTBEAT gap over a sampling window.
+    SERIAL0_PROTOCOL=2 only shows the port was asked for MAVLink v2, so this
+    reads the wire instead: the v2 start-of-frame byte (0xFD) on received
+    packets, an answered command for the uplink, and the largest HEARTBEAT gap
+    over a sampling window.
     """
     window = float(spec.args.get("window_s", 8.0))
     max_gap = float(spec.args.get("max_gap_s", 2.0))
 
-    # -- downlink framing: read the real start-of-frame byte --------------
     v2_frames = v1_frames = 0
     beats: List[float] = []
     deadline = time.time() + window
@@ -888,7 +803,6 @@ def _verify_assert_mavlink_v2_link(ctx: TestContext, spec: VerifySpec) -> Tuple[
             f"link is mixed-version: {v2_frames} v2 frames but {v1_frames} v1 frames"
         )
 
-    # -- uplink: a command the vehicle must answer ------------------------
     ctx.mav.mav.command_long_send(
         ctx.mav.target_system, ctx.mav.target_component,
         ctx.mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
@@ -902,7 +816,6 @@ def _verify_assert_mavlink_v2_link(ctx: TestContext, spec: VerifySpec) -> Tuple[
             "answered: no COMMAND_ACK, so the link is not demonstrably bidirectional"
         )
 
-    # -- continuity: the largest gap between heartbeats --------------------
     if len(beats) < 2:
         return False, f"only {len(beats)} heartbeats in {window:.0f} s — continuity not measurable"
     gaps = [b - a for a, b in zip(beats, beats[1:])]
@@ -961,7 +874,6 @@ def _render_verify_assert_mavlink_v2_link(spec: VerifySpec) -> str:
 
 
 def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -> Tuple[bool, str]:
-    """Time adoption of a revised *active controller target* after MISSION_ACK."""
     from .active_route_evidence import (
         ADOPTION_TOLERANCE_M,
         RouteObservation,
@@ -974,7 +886,6 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
     mav, mv = ctx.mav, ctx.mavutil
 
     def upload(items) -> Optional[float]:
-        """Send a mission; return the time MISSION_ACK arrived."""
         mav.mav.mission_count_send(
             mav.target_system, mav.target_component, len(items),
             mv.mavlink.MAV_MISSION_TYPE_MISSION,
@@ -1071,11 +982,10 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
     revised = (home_lat + 0.0015, home_lon + 0.0010, 10.0)
     target = (int(revised[0] * 1e7), int(revised[1] * 1e7))
 
-    # Sample the controller target BEFORE revising. Two things need this: the
-    # baseline has to come through the same NEU-round-trip as the samples after
-    # the revision (comparing a reported coordinate against a commanded one
-    # would charge the transform error to the vehicle), and a latency measured
-    # from the first post-acceptance sample is only an upper bound.
+    # Sample the controller target before revising: the baseline then comes
+    # through the same NEU-round-trip as the post-revision samples, and a
+    # latency measured from the first post-acceptance sample would only be an
+    # upper bound.
     observations = []
     baseline_expired = ctx.sim_window(1.5, wall_margin_s=3.0)
     while not baseline_expired():
@@ -1085,7 +995,7 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
         if prior is None:
             continue
         observations.append(RouteObservation(
-            # The message's own stamp — the vehicle's clock, not ours.
+            # The message's own stamp, from the vehicle's clock.
             observed_at_s=float(prior.time_boot_ms) / 1000.0,
             kind=RouteObservationKind.ACTIVE_CONTROLLER_TARGET,
             lat_e7=int(prior.lat_int), lon_e7=int(prior.lon_int),
@@ -1127,7 +1037,7 @@ def _verify_assert_waypoint_update_latency(ctx: TestContext, spec: VerifySpec) -
         target_lat_e7=target[0], target_lon_e7=target[1],
         observations=observations,
         max_latency_s=limit,
-        # the coordinate the revision replaced, as a fallback basis when the
+        # the coordinate the revision replaced; fallback basis when the
         # pre-revision sampling window caught nothing
         pre_revision_lat_e7=int(original[1][0] * 1e7),
         pre_revision_lon_e7=int(original[1][1] * 1e7),
@@ -1186,10 +1096,6 @@ RENDER_VERIFY: Dict[str, RenderVerifyHandler] = {
     "skip":                _render_verify_skip,
 }
 
-
-# ---------------------------------------------------------------------------
-# Public dispatch
-# ---------------------------------------------------------------------------
 
 def run_inject(ctx: TestContext, spec: InjectSpec) -> None:
     handler = INJECT_HANDLERS.get(spec.kind)

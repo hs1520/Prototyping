@@ -1,27 +1,24 @@
-"""
-requirement_linker.py
+"""requirement_linker.py
 
 Maps SysML requirements to ArduPilot parameters and SITL test specs.
 
-核心设计原则（重构后）：
-  以 guard / attribute 内容作为语义锚点，不依赖 REQ ID 字符串。
-
-  REQ ID 是 LLM 自由命名的标签，跨系统、跨运行不稳定。
-  guard 内容（operator + variable keywords + threshold）才是不变的语义。
+语义锚点是 guard / attribute 内容，不是 REQ ID：REQ ID 由 LLM 自由命名，
+跨系统跨运行不稳定；guard 内容（operator + variable keywords + threshold）
+才稳定。
 
 映射流程：
   part.satisfy(REQ_X)
-    → 取该 part 的状态机 guard（e.g. batterySoc <= 25.0）
-    → 按 guard 内容（operator=<= + var 含 battery）匹配 _CONTENT_CATALOGUE
-    → 得到 ArduPilot 参数（BATT_FS_LOW_PCT = 25.0）
-    → REQ ID 仅用于测试脚本的标签，不参与匹配逻辑
+    -> 取该 part 的状态机 guard（e.g. batterySoc <= 25.0）
+    -> 按 guard 内容（operator=<= + var 含 battery）匹配 _CONTENT_CATALOGUE
+    -> 得到 ArduPilot 参数（BATT_FS_LOW_PCT = 25.0）
+    -> REQ ID 只作测试脚本的标签
 
 五层 Fallback（内容优先）：
-  层1  guard/attr 内容匹配（_CONTENT_CATALOGUE）← 最健壮
+  层1  guard/attr 内容匹配（_CONTENT_CATALOGUE）
   层2  AST 合成器（guard 变量名关键词）
   层3  LLM 状态机语义分类
   层3b LLM 需求文本直接推断
-  层4  全部失败 → unmapped
+  层4  全部失败 -> unmapped
 """
 
 from __future__ import annotations
@@ -51,17 +48,13 @@ from src.sitl.sitl_catalogue import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class ResolvedParam:
     req_id: str
     part_name: str
     param_name: str
     value: Any
-    source: str = ""       # 描述值的来源，例如 "guard:<=:25.0" 或 "attr:maxAltitude"
+    source: str = ""
 
 
 @dataclass(frozen=True)
@@ -88,11 +81,11 @@ class GuardEvidence:
 class AcceptEventGuard:
     """Pseudo-guard for an accept-event transition (no boolean guard).
 
-    Event-driven and guard-driven state machines are two legal SysML spellings
-    of the same behavioral semantics; representing accepts as guard-shaped
-    records lets the exclusive-claim machinery treat both uniformly.
-    ``attribute`` carries the accepted event type name (e.g.
-    ``AbortConditionActive``) so keyword matching and claim keys work unchanged.
+    Event-driven and guard-driven state machines are two SysML spellings of the
+    same behavioral semantics, so accepts are shaped like guards and the
+    exclusive-claim machinery handles both uniformly. ``attribute`` carries the
+    accepted event type name (e.g. ``AbortConditionActive``) so keyword matching
+    and claim keys work unchanged.
     """
     attribute: str
     kind: str = "accept_event"
@@ -122,19 +115,8 @@ class RequirementEvidenceBundle:
         }
 
 
-# ---------------------------------------------------------------------------
-# RequirementLinker
-# ---------------------------------------------------------------------------
-
 class RequirementLinker:
-    """
-    通过 AST（satisfy_relationships + state_extractor guard）将 SysML
-    需求映射到 ArduPilot 参数，不依赖属性名字符串。
-
-    可选传入 llm 启用语义标签分类，使得不在 _REQ_CATALOGUE key 里的 req ID
-    也能通过状态机语义找到匹配的模板（三层 fallback：req ID → 语义标签 →
-    unmapped）。
-    """
+    """通过 AST（satisfy_relationships + state_extractor guard）将 SysML 需求映射到 ArduPilot 参数，不依赖属性名字符串。"""
 
     def __init__(
         self,
@@ -146,12 +128,12 @@ class RequirementLinker:
         self._model = model
         self._llm = llm
         self._verbose = verbose
-        # Requirement → model-identity bindings from the frozen plan. The
-        # sent-command traceability check consumes the ROUTE: a response that
-        # sends through the requirement's own causal-path command leg matches
-        # structurally, whatever the payload item is spelled like (run3 sends
-        # RecoveryCmdData through recoveryCmd — the plan's SAFE_005 route —
-        # and the CHUTE-substring check rejected it).
+        # Requirement -> model-identity bindings from the frozen plan. The
+        # sent-command traceability check reads the route: a response sending
+        # through the requirement's own causal-path command leg matches whatever
+        # the payload item is spelled like (run3's RecoveryCmdData through
+        # recoveryCmd - the plan's SAFE_005 route - was rejected by the
+        # CHUTE-substring check).
         from src.simulation.verification_binding import plan_bindings
         if plan_payload is None:
             metadata = getattr(model, "metadata", None) or {}
@@ -161,29 +143,21 @@ class RequirementLinker:
         self._contract_bundle = None
         self._contracts: Dict[str, Any] = {}
         self._contract_trace_findings: Dict[str, List[Any]] = {}
-        # req_id → part_name
         self._satisfy_map: Dict[str, List[str]] = self._build_satisfy_map()
-        # part_name → List[GuardCondition]
         self._guard_map: Dict[str, List[Any]] = self._build_guard_map()
-        # part_name → {attr_name: float}
         self._attr_map: Dict[str, Dict[str, float]] = self._build_attr_map()
-        # part_name → [port_name, ...]（attr 缺席时的接口/配置类匹配面）
         self._port_map: Dict[str, List[str]] = self._build_port_map()
-        # semantic_tag → ContentEntry（供 Layer 2/3 反查）
         self._tag_to_entry: Dict[str, ContentEntry] = _TAG_TO_ENTRY
-        # part_name → List[SynthesizedSpec]（AST 合成，主层）
         self._ast_specs = self._build_ast_specs()
-        # req_id → tag（LLM 状态机语义分类，第三层 fallback）
         self._semantic_map: Dict[str, str] = self._build_semantic_map()
-        # req_id → {param, value, tier}（LLM 需求文本直接推断，第四层 fallback）
         self._direct_param_map: Dict[str, Dict] = self._build_direct_param_map()
-        # req_id → requirement doc text; used only as a traceability cross-check
-        # against the guard/action-derived semantic tag. The guard remains the
-        # primary matching anchor, but a text/tag family mismatch means the model
-        # is satisfying a requirement with the wrong behavior.
+        # req_id -> requirement doc text, used as a traceability cross-check against
+        # the guard/action-derived semantic tag. The guard stays the primary anchor;
+        # a text/tag family mismatch means the model satisfies the requirement with
+        # the wrong behavior.
         self._req_texts: Dict[str, str] = self._extract_requirement_texts()
         self._traceability_mismatches: Dict[str, Dict[str, str]] = {}
-        # req_id → (part_name, guard, ContentEntry)：独占 guard 分配
+        # req_id -> (part_name, guard, ContentEntry)：独占 guard 分配
         # 同一 guard 只能分配给一个 req，防止多 REQ 共享 part 时全部映射到同一 guard
         self._guard_assignment: Dict[str, Any] = self._assign_guards_exclusive()
         # _lookup_catalogue 结果缓存：避免 _resolve_all 多次调用时重复打印 [CONTENT]
@@ -192,28 +166,25 @@ class RequirementLinker:
         self._evidence_bundle: Optional[RequirementEvidenceBundle] = None
 
     def _assign_guards_exclusive(self) -> Dict[str, Any]:
-        """
-        预分配：将 part 的每个 guard 独占地分配给一个 req。
+        """预分配：把 part 的每个 guard 独占分配给一个 req。
 
-        问题根因：多个 REQ 共享同一 part（如 SafetyMonitor satisfy 5 个 SAFE REQ）时，
-        若不加独占控制，对每个 REQ 调用 _match_by_content 都会返回相同的第一个匹配 guard，
-        导致 BATT_FS_LOW_PCT=25 被写多次而 BATT_FS_CRT_PCT=15 从未被写。
-
-        算法：
-          按 req_id 排序（确定性），对每个 req 贪心地分配第一个未被占用的 guard。
-          返回 {req_id: {"part": str, "guard": GuardCondition, "entry": ContentEntry}}
-          或    {req_id: None}（无 guard 可分配）
+        多个 REQ 共享同一 part（如 SafetyMonitor satisfy 5 个 SAFE REQ）时，
+        _match_by_content 对每个 REQ 都返回同一个首个匹配 guard，于是
+        BATT_FS_LOW_PCT=25 被写多次而 BATT_FS_CRT_PCT=15 从未被写。按 req_id 排序
+        （确定性）后贪心分配第一个未占用的 guard，返回
+        {req_id: {"part": str, "guard": GuardCondition, "entry": ContentEntry}}
+        或 {req_id: None}。
         """
         assignment: Dict[str, Any] = {}
-        claimed: set = set()  # (part_name, guard_attr, guard_op)
+        claimed: set = set()
 
         for req_id in sorted(self._covered_req_ids()):
             part_names = self._satisfy_map.get(req_id, [])
             expected_family = self._requirement_family(req_id)
-            # Doc text present but NO safety-family signal (IP54, regulatory,
-            # environmental...) → this requirement must not claim any safety guard
-            # merely because it satisfies the same part (guard-side analog of the
-            # attr req_text_kws gate). Docless requirements keep legacy matching.
+            # Doc text present but no safety-family signal (IP54, regulatory,
+            # environmental...): the requirement does not claim a safety guard merely
+            # for satisfying the same part (guard-side analog of the attr req_text_kws
+            # gate). Docless requirements keep legacy matching.
             if expected_family is None and self._req_texts.get(req_id, "").strip():
                 continue
             entries = self._family_guard_entries(
@@ -222,19 +193,17 @@ class RequirementLinker:
 
             if self._claim_guard(req_id, entries, part_names, claimed, assignment):
                 continue
-            # Multiple same-family requirements can legitimately point to the
-            # same physical fault guard (e.g. self-test inhibit + alert). Let
-            # them share a same-family guard rather than falling through to an
-            # unrelated AST/LLM tag that traceability then has to block.
+            # Same-family requirements can point to the same physical fault guard
+            # (e.g. self-test inhibit + alert), so let them share it rather than fall
+            # through to an unrelated AST/LLM tag that traceability then blocks.
             if expected_family is not None and self._claim_guard(
                 req_id, entries, part_names, claimed, assignment,
                 allow_claimed=True,
             ):
                 continue
-            # Cross-family fallback (reached for docless requirements, and for
-            # family-known requirements with no same-family guard — where the
-            # wrong-family match must surface as a visible TRACE block per A4,
-            # not silently vanish).
+            # Cross-family fallback: docless requirements, and family-known
+            # requirements with no same-family guard, where the wrong-family
+            # match surfaces as a TRACE block per A4 instead of vanishing.
             all_guard_entries = [
                 entry for entry in _CONTENT_CATALOGUE
                 if entry.guard_matcher is not None
@@ -250,9 +219,6 @@ class RequirementLinker:
         expected_family: Optional[str],
         preferred_tags: List[str],
     ) -> List[ContentEntry]:
-        """Guard-matcher catalogue entries for one requirement: filtered to the
-        requirement's family (when known) and sorted so its preferred semantic
-        tags come first."""
         entries = [
             entry for entry in _CONTENT_CATALOGUE
             if entry.guard_matcher is not None
@@ -281,14 +247,12 @@ class RequirementLinker:
         *entries*, recording it in *assignment* and marking the guard claimed.
 
         A guard already claimed by another requirement is skipped unless
-        ``allow_claimed`` — the caller enables that only for same-family
-        sharing.  Returns True when an assignment was made.
-
-        Entries may carry ``req_text_kws`` / ``req_text_exclude_kws`` gates
-        (the guard-side mirror of the attr-path text gate): a same-family
-        requirement about the OPPOSITE response (e.g. "release the payload")
-        must not claim a lock-semantics guard merely because both satisfy the
-        same part."""
+        ``allow_claimed``, which the caller enables only for same-family sharing;
+        returns True when an assignment was made. Entries may carry
+        ``req_text_kws`` / ``req_text_exclude_kws`` gates, so a same-family
+        requirement about the opposite response (e.g. "release the payload") does
+        not claim a lock-semantics guard through a shared part.
+        """
         req_text = self._requirement_match_text(req_id)
         req_blob = f"{req_id} {req_text}".lower()
         for entry in entries:
@@ -323,11 +287,13 @@ class RequirementLinker:
         return False
 
     def _binding_identity_tags(self) -> Dict[str, str]:
-        """{plan-declared identifier (lower) → semantic tag} for the AST
-        synthesizer: the identity tier of its guard matching. The tag comes
-        from the owning requirement's own text/contract-derived preference —
-        rename-immune — and an identifier claimed by two different tags is
-        refused outright rather than guessed."""
+        """{plan-declared identifier (lower) -> semantic tag} for the AST
+        synthesizer's identity tier of guard matching.
+
+        The tag comes from the owning requirement's own text/contract-derived
+        preference, so it survives renames; an identifier claimed by two different
+        tags is refused rather than guessed.
+        """
         if not self._requirement_bindings:
             return {}
         if not hasattr(self, "_req_texts"):
@@ -345,18 +311,16 @@ class RequirementLinker:
                 )
                 if tag is None:
                     # Families without a preference table (PAYLOAD,
-                    # PARACHUTE) map by family — but the ambiguity domain is
-                    # the WHOLE catalogue gated by each entry's own req_text
-                    # gates, and only a lone survivor assigns the tag. Two
-                    # narrower domains were measured to poison SAFE_008
-                    # ("unique within the AST tag set" missed the power-on
-                    # entry entirely): its PowerOn identity got tagged
-                    # PAYLOAD_ABORT_LOCK and the power-on default test was
-                    # displaced by the release-then-grab flight test.
-                    # SAFE_008's text passes both the abort-lock and
-                    # power-on gates → ambiguous → no identity tag, keyword
-                    # fallback (original routing). SAFE_006 passes only the
-                    # abort gate → unique → identity survives renames.
+                    # PARACHUTE) map by family, but the ambiguity domain is
+                    # the whole catalogue gated by each entry's own req_text
+                    # gates, and only a lone survivor assigns the tag. A
+                    # narrower domain ("unique within the AST tag set")
+                    # missed the power-on entry: SAFE_008's PowerOn identity
+                    # got tagged PAYLOAD_ABORT_LOCK and its power-on default
+                    # test was displaced by the release-then-grab flight
+                    # test. SAFE_008's text passes both the abort-lock and
+                    # power-on gates -> ambiguous -> keyword fallback;
+                    # SAFE_006 passes only the abort gate -> unique.
                     family = self._requirement_family(req_id)
                     req_text = self._requirement_match_text(req_id)
                     req_blob = f"{req_id} {req_text}".lower()
@@ -398,12 +362,6 @@ class RequirementLinker:
         return out
 
     def _build_ast_specs(self):
-        """
-        用 AST 合成器从 guard 变量名 + entry action 名直接推导
-        InjectSpec/VerifySpec，建立 part_name → List[SynthesizedSpec] 索引。
-
-        不依赖 LLM，<1ms，Phase 2 标准命名后接近 100% 覆盖。
-        """
         try:
             from src.sitl.ast_synthesizer import synthesize_specs
             self._identity_tag_map = self._binding_identity_tags()
@@ -418,12 +376,11 @@ class RequirementLinker:
             return {}
 
     def _build_semantic_map(self) -> Dict[str, str]:
-        """
-        用 LLM 给状态机打语义标签，建立 req_id → tag 映射。
+        """用 LLM 给状态机打语义标签，建立 req_id -> tag 映射。
 
-        核心逻辑：一个 part 可能有多个状态机（多个安全行为），不能简单地
-        用 part_name → tag（后写的会覆盖前面）。正确做法是把每个 req 的
-        guard 变量与该 part 的状态机 guard 做交叉匹配，选最接近的 tag。
+        一个 part 可能有多个状态机（多个安全行为），part_name -> tag 会被后写的
+        覆盖；改为把每个 req 的 guard 变量与该 part 的状态机 guard 交叉匹配，
+        取最接近的 tag。
         """
         if self._llm is None:
             return {}
@@ -440,7 +397,6 @@ class RequirementLinker:
                 print(f"  [SEMANTIC] classify failed: {e}")
             return {}
 
-        # 建立 state_def_name → (tag, owner_part, guard_vars) 的详细表
         try:
             from src.simulation.state_extractor import extract_state_machines
             text = self._model.to_sysml_text() or ""
@@ -450,7 +406,6 @@ class RequirementLinker:
             record_suppressed("sitl.requirement_linker.semantic_state_extract", exc)
             sms = []
 
-        # sm_name → (owner_part, guard 涉及的所有属性名)
         sm_detail: Dict[str, Tuple[str, List[str]]] = {}
         for sm in sms:
             guard_attrs: List[str] = []
@@ -461,13 +416,10 @@ class RequirementLinker:
                         guard_attrs.append(attr.lower())
             sm_detail[sm.name] = (sm.owner_part, guard_attrs)
 
-        # 为每个 req 找最匹配的 tag
-        # 策略：req 满足的所有 part 中，找 guard 变量与该 req 最接近的 sm
         req_tag: Dict[str, str] = {}
         for req_id in self._satisfy_map:
-            part_names = self._satisfy_map[req_id]  # 现在是 list
+            part_names = self._satisfy_map[req_id]
 
-            # 收集所有满足该 REQ 的 part 下的候选 sm
             candidate_sms = [
                 (sm_name, sm_to_tag[sm_name], detail)
                 for sm_name, detail in sm_detail.items()
@@ -476,44 +428,31 @@ class RequirementLinker:
             if not candidate_sms:
                 continue
 
-            # 如果只有一个 sm，直接用
             if len(candidate_sms) == 1:
                 req_tag[req_id] = candidate_sms[0][1]
                 continue
 
-            # 多个 sm：用 req_id 关键词与 sm guard 属性做最佳匹配
-            # 把 req_id 拆成小写词（REQ_FUNC_007 → ["func","007"]）
             req_tokens = set(req_id.lower().replace("_", " ").split())
 
             best_tag, best_score = None, -1
             for sm_name, tag, (owner, guard_attrs) in candidate_sms:
-                # 先用 tag 关键词打分
                 tag_tokens = set(tag.lower().replace("_", " ").split())
                 score = len(req_tokens & tag_tokens & set(
                     ["battery","batt","gcs","comm","link","sensor","parachute",
                      "propulsion","engine","payload","abort"]
                 ))
-                # 如果 guard 属性明确出现在 req_id 里，加分
                 for attr in guard_attrs:
                     if any(tok in attr for tok in req_tokens):
                         score += 2
                 if score > best_score:
                     best_score, best_tag = score, tag
 
-            # 只有打到分才采用，否则不误判
             if best_tag and best_score > 0:
                 req_tag[req_id] = best_tag
 
         return req_tag
 
     def _build_direct_param_map(self) -> Dict[str, Dict]:
-        """
-        Layer 3b（第四层 fallback）：用 LLM 从需求文本直接推断 ArduPilot 参数。
-
-        只处理层1-3均未命中的需求（FUNC/PERF/CONS/INTF 类）。
-        输入：需求文本（从 SysML doc 注释提取）。
-        输出：{req_id: {param: str, value: float, tier: str}}。
-        """
         if self._llm is None:
             return {}
         try:
@@ -524,20 +463,16 @@ class RequirementLinker:
         except ImportError:
             return {}
 
-        # 找出层1-3均未命中的 req（有 satisfy 关系但无 catalogue/AST/LLM 匹配）
         unmapped_reqs: Dict[str, str] = {}
         all_req_texts = extract_req_texts_from_model(self._model)
 
         for req_id in self._covered_req_ids():
-            # 层2：AST 合成命中
             parts = self._satisfy_map.get(req_id, [])
             ast_hit = any(self._ast_specs.get(p) for p in parts)
             if ast_hit:
                 continue
-            # 层3：LLM 语义标签命中
             if req_id in self._semantic_map:
                 continue
-            # 三层全未命中 → 送给 Layer 3b
             text = all_req_texts.get(req_id, "")
             if text:
                 unmapped_reqs[req_id] = text
@@ -550,24 +485,14 @@ class RequirementLinker:
         )
         return result
 
-    # ------------------------------------------------------------------
-    # 内容匹配核心方法（Layer 1 — 完全不依赖 REQ ID）
-    # ------------------------------------------------------------------
-
     def _entry_to_dict(self, entry: ContentEntry,
                        guard_val: Optional[float] = None,
                        guard_src: str = "",
                        attr_val: Optional[float] = None,
                        attr_src: str = "") -> Dict[str, Any]:
-        """
-        将 ContentEntry 转换为 _resolve_all 期望的 dict 格式。
-
-        guard_val / attr_val：匹配时已解析的数值，存入 _resolved_* 键，
-        供 _resolve_all 跳过 threshold_slot 机制直接使用。
-        """
         result = {
             "semantic_tag":        entry.semantic_tag,
-            "threshold_slot":      None,          # 内容匹配不再需要
+            "threshold_slot":      None,
             "ardu_params":         entry.ardu_params,
             "_resolved_guard_val": guard_val,
             "_resolved_guard_src": guard_src,
@@ -583,7 +508,6 @@ class RequirementLinker:
             },
         }
         if entry.l2_inject is not None and entry.l2_verify is not None:
-            # 附加 L2 行为检查（主 tier 的参数一致性证据保持不变）
             result["l2_test"] = {
                 "tier":   "L2",
                 "inject": entry.l2_inject,
@@ -597,11 +521,11 @@ class RequirementLinker:
                           entry_tag: str = "") -> bool:
         """判断一条 guard（或 accept 伪 guard）是否匹配 GuardMatcher。
 
-        变量身份判定必须 TAG 一致:变量的计划身份 tag == 本词条的
-        semantic_tag 才算身份命中。"变量属于本需求"式的池放宽被实测击穿
-        两次:SAFE_008 的 PowerOn 身份让它认领 abort 释放-抓取词条,顶掉
-        了自己的上电默认检查——身份池回答"这是谁的元素",不回答"它满足
-        哪个词条"。无 tag 的变量(歧义)不放宽任何词条,关键词兜底。"""
+        身份命中要求 tag 一致：变量的计划身份 tag == 本词条的 semantic_tag。按
+        "变量属于本需求"放宽被实测击穿两次（SAFE_008 的 PowerOn 身份让它认领
+        abort 释放-抓取词条，顶掉自己的上电默认检查），身份池回答"这是谁的
+        元素"，不回答"它满足哪个词条"。无 tag 的变量不放宽，走关键词兜底。
+        """
         kind = getattr(guard, "kind", "")
         var  = getattr(guard, "attribute", "").lower()
         tag_map = getattr(self, "_identity_tag_map", {})
@@ -612,8 +536,6 @@ class RequirementLinker:
             return any(kw in var for kw in gm.var_keywords)
 
         if kind == "accept_event":
-            # accept 事件转移：仅显式声明 "event" 的条目可匹配；
-            # 按事件类型名做关键词匹配，action_kws 检查目标态 entry action。
             if "event" not in gm.operators:
                 return False
             if not _var_matches():
@@ -629,7 +551,6 @@ class RequirementLinker:
         if "bool" in gm.operators and kind == "bool_true":
             if not _var_matches():
                 return False
-            # 可选：检查 entry action 关键词
             if gm.action_kws:
                 action = self._find_guard_action(part_name, guard)
                 if not action or not any(
@@ -638,10 +559,8 @@ class RequirementLinker:
                     return False
             return True
         if "bool" in gm.operators and "event" not in gm.operators:
-            # bool 专属条目遇到非 bool guard：保持原有拒绝语义
             return False
 
-        # comparison guard
         if kind != "comparison":
             return False
         op = getattr(guard, "operator", "")
@@ -655,10 +574,6 @@ class RequirementLinker:
         return True
 
     def _find_guard_action(self, part_name: str, guard) -> Optional[str]:
-        """
-        在 part 的状态机里找到包含该 guard 的转移，返回其 target state 的
-        entry action 名。用于 GuardMatcher.action_kws 区分语义。
-        """
         try:
             from src.simulation.state_extractor import extract_state_machines
             text = self._model.to_sysml_text() or ""
@@ -693,7 +608,6 @@ class RequirementLinker:
         return None
 
     def _guard_response_commands(self, part_name: str, guard) -> tuple[str, set[str]]:
-        """Return entry-action usage and explicit sends for a guard target state."""
         try:
             from src.simulation.state_extractor import extract_state_machines
             text = self._model.to_sysml_text() or ""
@@ -734,7 +648,6 @@ class RequirementLinker:
             return "", set()
 
     def _guard_response_send_ports(self, part_name: str, guard) -> set[str]:
-        """Ports the guard's response state sends through (route identity)."""
         try:
             from src.simulation.state_extractor import extract_state_machines
             text = self._model.to_sysml_text() or ""
@@ -774,11 +687,11 @@ class RequirementLinker:
             return set()
 
     def _terminal_route_ports(self, req_id: str) -> set[str]:
-        """Ports of the requirement's causal path's FINAL hop, per its plan.
+        """Ports of the final hop of the requirement's causal path, per its plan.
 
-        The last hop is the terminal effect leg — for the parachute
-        requirement, SafetyMonitor.recoveryCmd → RecoverySystem.recoveryCmd.
-        A response that sends through it is on the requirement's own route.
+        The terminal effect leg - for the parachute requirement,
+        SafetyMonitor.recoveryCmd -> RecoverySystem.recoveryCmd. A response sending
+        through it is on the requirement's own route.
         """
         from src.simulation.verification_binding import binding_for
         binding = binding_for(self._requirement_bindings, req_id)
@@ -790,7 +703,6 @@ class RequirementLinker:
     def _action_traceability_issue(
         self, req_id: str, tag: str
     ) -> Optional[Dict[str, str]]:
-        """Reject an explicit response command that contradicts its semantic tag."""
         expected_commands = {
             "BATTERY_RTB": {"CMD_RTL"},
             "BATTERY_LAND": {"CMD_LAND"},
@@ -806,23 +718,21 @@ class RequirementLinker:
         action, commands = self._guard_response_commands(
             assigned["part"], assigned["guard"]
         )
-        # Empty action bodies remain abstract behavior allocations.  But once a
-        # command is explicit, checking the wrong command is mandatory.
+        # Empty action bodies stay abstract behavior allocations; an explicit
+        # command is checked against the expected one.
         semantic_match = bool(commands & expected)
         if tag == "PARACHUTE_DEPLOY":
-            # Accept-side widening only — a CHUTE-spelled command is never a
-            # ground for rejection, merely for acceptance.
+            # Accept-side widening only: a CHUTE-spelled command can accept, not reject.
             semantic_match = semantic_match or any(
                 "PARACHUTE" in command or "CHUTE" in command
                 for command in commands
             )
         if not semantic_match:
             # Route identity from the plan: a response sending through the
-            # requirement's own terminal causal-path leg is the commanded
-            # response, whatever the payload item is named. run3 sends
-            # RecoveryCmdData through recoveryCmd (the SAFE_005 route) and
-            # the substring check rejected it, collapsing L2 generation
-            # from ~9 tests to 3.
+            # requirement's own terminal causal-path leg is the commanded response,
+            # whatever the payload item is named. run3's RecoveryCmdData through
+            # recoveryCmd (the SAFE_005 route) was rejected by the substring check,
+            # collapsing L2 generation from ~9 tests to 3.
             route_ports = self._terminal_route_ports(req_id)
             if route_ports:
                 send_ports = self._guard_response_send_ports(
@@ -844,19 +754,16 @@ class RequirementLinker:
         }
 
     def _match_by_content(self, req_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Layer 1（内容驱动）：按 guard/attr 内容匹配，与 REQ ID 完全无关。
+        """Layer 1（内容驱动）：按 guard/attr 内容匹配，与 REQ ID 无关。
 
-        guard 匹配优先使用 _guard_assignment 预分配结果（独占，防止多 REQ
-        抢占同一 guard）。attr 匹配仍在运行时动态进行（属性不存在争用问题）。
-
-        返回 _entry_to_dict(entry, ...) 格式的 dict，或 None。
+        guard 匹配用 _guard_assignment 的预分配结果（独占，防止多 REQ 抢同一
+        guard）；attr 匹配仍在运行时动态进行（属性不存在争用）。返回
+        _entry_to_dict(entry, ...) 格式的 dict，或 None。
         """
         part_names = self._satisfy_map.get(req_id)
         if not part_names:
             return None
 
-        # ── Guard 匹配：使用独占预分配结果 ────────────────────────────
         assigned = getattr(self, "_guard_assignment", {}).get(req_id)
         if assigned is not None:
             pname = assigned["part"]
@@ -873,10 +780,10 @@ class RequirementLinker:
             return self._entry_to_dict(entry, guard_val=g_val, guard_src=g_src)
 
         # ── Attr 匹配：动态搜索（属性不存在争用）─────────────────────
-        # req_text_kws gate：attr 匹配只证明 "satisfy 的 part 上有这个属性"，
-        # 不证明 "这条需求关于这个量"。有需求文本时要求文本命中条目关键词，
-        # 否则 MTOW/温度/法规类需求会被首个 attr 命中的条目错误标为 L1 PASS
-        # （曾发生：FENCE_ALT_MAX "验证" 姿态 RMS、WPNAV_SPEED "验证" MTOW）。
+        # req_text_kws gate：attr 命中只说明 satisfy 的 part 上有这个属性，不说明
+        # 这条需求关于这个量。有需求文本时要求文本命中条目关键词，否则 MTOW/温度/
+        # 法规类需求会被首个 attr 命中的条目错标为 L1 PASS（曾发生：FENCE_ALT_MAX
+        # "验证" 姿态 RMS、WPNAV_SPEED "验证" MTOW）。
         req_text = self._requirement_match_text(req_id)
         req_blob = f"{req_id} {req_text}".lower()
         for entry in _CONTENT_CATALOGUE:
@@ -917,10 +824,10 @@ class RequirementLinker:
                     return self._entry_to_dict(
                         entry, attr_val=resolved, attr_src=src
                     )
-                # ── Port 匹配（attr 未命中时）：接口类 part 合法地只声明
-                # port。port 没有数值，动态 token（@guard/@attr_match/@attr:）
-                # 无从解析，因此静态 ardu_params 是硬前提——即使条目误开
-                # allow_port_match 也不放行，落入诚实的 no-mapping。
+                # ── Port 匹配（attr 未命中时）：接口类 part 可以只声明 port。
+                # port 没有数值，动态 token（@guard/@attr_match/@attr:）无从解析，
+                # 所以静态 ardu_params 是硬前提；条目误开 allow_port_match 也不
+                # 放行，落入 no-mapping。
                 if am.allow_port_match and not self._has_dynamic_params(entry):
                     for port_name in self._port_map.get(pname, []):
                         if tag_map.get(port_name.lower()) != entry.semantic_tag \
@@ -940,7 +847,6 @@ class RequirementLinker:
 
     @staticmethod
     def _has_dynamic_params(entry: ContentEntry) -> bool:
-        """True when any ardu_params value needs a model-resolved number."""
         return any(
             isinstance(value, str) and value.startswith("@")
             for value in entry.ardu_params.values()
@@ -949,27 +855,15 @@ class RequirementLinker:
     def _requirement_match_text(self, req_id: str) -> str:
         """Requirement prose used for semantic matching, without method tags.
 
-        Verification annotations such as ``[V: hardware-in-the-loop]`` describe
-        how evidence will be collected.  Letting their words participate in the
-        matcher caused a waypoint CEP requirement to hit CONTROL_LOOP_RATE solely
-        because the annotation contained the word ``loop``.
+        Verification annotations such as ``[V: hardware-in-the-loop]`` describe how
+        evidence is collected; leaving their words in the matcher hit a waypoint CEP
+        requirement against CONTROL_LOOP_RATE on the word ``loop``.
         """
         text = self._req_texts.get(req_id, "")
         return re.sub(r"\[(?:V|SEV)\s*:[^\]]*\]", " ", text,
                       flags=re.IGNORECASE).strip()
 
-    # ------------------------------------------------------------------
-
     def _lookup_catalogue(self, req_id: str) -> Optional[Dict[str, Any]]:
-        """
-        五层 Fallback（内容优先，REQ ID 无关）：
-
-          层1  _CONTENT_CATALOGUE 内容匹配（guard/attr）← 新，最健壮
-          层2  AST 合成器（guard 变量名关键词）
-          层3  LLM 状态机语义分类
-          层3b LLM 需求文本直接推断
-          层4  全部失败 → None
-        """
         if req_id in self._catalogue_cache:
             return self._catalogue_cache[req_id]
 
@@ -980,24 +874,21 @@ class RequirementLinker:
 
         result: Optional[Dict[str, Any]] = None
 
-        # ── 层1：内容匹配（_CONTENT_CATALOGUE）────────────────────────
         result = self._match_by_content(req_id)
 
         # Part-level fallbacks (AST synthesis / LLM state-machine tags) map the
-        # PART's safety behavior. With doc text present but no safety-family
-        # signal, attributing that behavior to THIS requirement is unjustified —
-        # same rule as the guard/attr text gates (IP54 must not inherit the
-        # SafetyMonitor's GCS spec just because both satisfy the same part).
+        # part's safety behavior. With doc text present but no safety-family signal,
+        # that behavior is not attributed to this requirement - same rule as the
+        # guard/attr text gates (IP54 does not inherit SafetyMonitor's GCS spec
+        # through a shared part).
         _text_without_family = (
             bool(self._req_texts.get(req_id, "").strip())
             and self._requirement_family(req_id) is None
         )
 
-        # ── 层2：AST 合成（遍历所有 satisfying parts）──────────────────
         if result is None and not _text_without_family:
             result = self._lookup_from_ast(req_id, part_names)
 
-        # ── 层3：LLM 状态机语义标签 ────────────────────────────────────
         if result is None and not _text_without_family:
             tag = self._semantic_map.get(req_id)
             if tag and tag in self._tag_to_entry:
@@ -1005,7 +896,6 @@ class RequirementLinker:
                     print(f"  [SEMANTIC] {req_id} → tag={tag} (parts={part_names})")
                 result = self._entry_to_dict(self._tag_to_entry[tag])
 
-        # ── 层3b：LLM 需求文本直接推断 ─────────────────────────────────
         if result is None:
             result = self._lookup_from_direct_param(req_id)
 
@@ -1018,11 +908,10 @@ class RequirementLinker:
     ) -> Optional[Dict[str, Any]]:
         """层2 fallback：AST 合成器。
 
-        遍历 satisfying parts 的合成 spec，把匹配 guard 的阈值解析进
-        ``@guard`` 占位符——避免模型里明明有 guard 却漏成
-        <unresolved:guard>。AST fallback 可以从 guard/action 名推断 inject，
-        但 S4 已把这些目录 tag 固定为确定性的 MAVLink conformance verify，
-        不让旧的 wait_statustext 模板重新引入 run-to-run flaky 验证。
+        遍历 satisfying parts 的合成 spec，把匹配 guard 的阈值填进 ``@guard``
+        占位符，避免模型里有 guard 却漏成 <unresolved:guard>。inject 可从
+        guard/action 名推断，但 verify 沿用 S4 固定的 MAVLink conformance 检查，
+        不回退到 run-to-run flaky 的 wait_statustext 模板。
         """
         for pname in part_names:
             ast_candidates = self._ast_specs.get(pname, [])
@@ -1065,7 +954,6 @@ class RequirementLinker:
         return None
 
     def _lookup_from_direct_param(self, req_id: str) -> Optional[Dict[str, Any]]:
-        """层3b fallback：LLM 从需求文本直接推断的参数建议。"""
         direct = self._direct_param_map.get(req_id)
         if not direct:
             return None
@@ -1093,11 +981,10 @@ class RequirementLinker:
     ) -> Optional[Dict[str, Any]]:
         """Reject semantically inconsistent mappings without breaking flow.
 
-        The linker intentionally derives tests from model behavior (guard/action
-        content). A4 adds the missing cross-check: if the requirement text says
-        GCS loss but the model behavior maps to PARACHUTE, do not emit the
-        parachute test under that requirement ID. Surface a deterministic
-        traceability mismatch instead.
+        Tests are derived from model behavior (guard/action content); A4 adds the
+        cross-check: when the requirement text says GCS loss but the model behavior
+        maps to PARACHUTE, no parachute test is emitted under that requirement ID,
+        only a deterministic traceability mismatch.
         """
         contract_issue = self._contract_traceability_issue(req_id)
         if contract_issue is not None:
@@ -1163,7 +1050,6 @@ class RequirementLinker:
         }
 
     def _contract_traceability_issue(self, req_id: str) -> Optional[Dict[str, str]]:
-        """Expose contract-first trace faults before a model-derived test is emitted."""
         findings = self._contract_trace_findings.get(req_id, ())
         if not findings:
             return None
@@ -1199,19 +1085,18 @@ class RequirementLinker:
                                    model_name: str = "Model") -> List[str]:
         """Refinement-actionable issues for response-traceability mismatches.
 
-        Runs the SAME deterministic gate that later withholds SITL evidence
-        (no LLM, no SITL process) against the in-session model text, so a
-        response action that emits the wrong command family — measured on
-        8 of 24 archived runs as a blocked matrix row discovered only at
-        Phase 9 — reaches the refinement loop while the author can still
-        repair it.  Silence on any parse/link failure: this is an advisory
-        projection, never a new failure mode for generation.
+        Runs the same deterministic gate that later withholds SITL evidence (no LLM,
+        no SITL process) against the in-session model text, so a response action that
+        emits the wrong command family - 8 of 24 archived runs hit it as a blocked
+        matrix row found only at Phase 9 - reaches the refinement loop while the
+        author can still repair it. Silent on any parse/link failure: advisory
+        projection only.
         """
         try:
             from src.sysml.lite_model import build_lite_model
             model = build_lite_model(str(model_text or ""), model_name=model_name)
             mismatches = cls(model, llm=None).traceability_mismatches()
-        except Exception as exc:  # advisory projection must never break the loop
+        except Exception as exc:  # advisory projection does not break the loop
             from src.utils.suppressed import record_suppressed
             record_suppressed("sitl.requirement_linker.static_trace_issues", exc)
             return []
@@ -1277,8 +1162,8 @@ class RequirementLinker:
         """Infer fault-trigger families, excluding ordinary component mentions.
 
         A requirement that merely uploads data to the GCS is not a GCS-loss
-        requirement. A compound contingency naming several trigger families
-        cannot be proven by exercising only one guard.
+        requirement, and a compound contingency naming several trigger families is
+        not proven by exercising one guard.
         """
         contract = self._contracts.get(req_id)
         if contract is not None and contract.obligations:
@@ -1354,7 +1239,6 @@ class RequirementLinker:
     def _response_traceability_issue(
         self, req_id: str, tag: str
     ) -> Optional[Dict[str, str]]:
-        """Detect a no-response boundary mapped to a positive failsafe test."""
         if not tag.upper().startswith("GCS_LOSS"):
             return None
         low = self._requirement_match_text(req_id).lower()
@@ -1381,7 +1265,6 @@ class RequirementLinker:
         }
 
     def _preferred_semantic_tags(self, req_id: str) -> List[str]:
-        """Return deterministic tag preferences within a broad requirement family."""
         contract = self._contracts.get(req_id)
         if contract is not None and contract.obligations:
             preferences: list[str] = []
@@ -1428,10 +1311,9 @@ class RequirementLinker:
             if any(kw in low for kw in ("return", "rtb", "rtl", "base")):
                 return ["BATTERY_RTB", "BATTERY_LAND"]
         if family == "GCS":
-            # Action from the requirement TEXT: land-only → the failsafe action must
-            # be LAND (RTL is a wrong action, not a pass); return-only → RTL. Text
-            # naming both (or neither) keeps the lenient legacy entry — either
-            # failsafe reaction satisfies such a requirement.
+            # Action from the requirement text: land-only -> the failsafe action is
+            # LAND (RTL fails); return-only -> RTL. Text naming both, or neither,
+            # keeps the lenient legacy entry, where either reaction passes.
             has_land = any(kw in low for kw in (
                 "land", "landing", "descend", "descent", "current position",
             ))
@@ -1444,14 +1326,9 @@ class RequirementLinker:
         return []
 
     def _best_ast_spec(self, req_id: str, part_name: str, candidates):
-        """
-        从同一 part 的多个 AST 合成结果中，选与该 req 的 guard 最匹配的那个。
-        利用 _guard_map 里该 part 的 guard 属性集合做交叉比对。
-        """
         if len(candidates) == 1:
             return candidates[0]
 
-        # 用该 req part 的 guard 属性名做匹配
         part_guards = self._guard_map.get(part_name, [])
         part_guard_attrs = {
             getattr(g, "attribute", "").lower()
@@ -1462,8 +1339,7 @@ class RequirementLinker:
         for cand in candidates:
             score = 0
             if cand.guard_var.lower() in part_guard_attrs:
-                score += 3   # guard 变量直接匹配
-            # req_id 词元 vs candidate tag 词元
+                score += 3
             req_tokens = set(req_id.lower().replace("_", " ").split())
             tag_tokens = set(cand.tag.lower().replace("_", " ").split())
             score += len(req_tokens & tag_tokens)
@@ -1471,10 +1347,6 @@ class RequirementLinker:
                 best_score, best = score, cand
 
         return best if best_score >= 0 else None
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     # 这些参数在 SITL 里设置会破坏仿真（如 GPS、EKF），
     # 只做 L1 验证（检 resolved 值），不写进 .parm 文件
@@ -1545,14 +1417,12 @@ class RequirementLinker:
         seen: Dict[str, str] = {}
         for rp in resolved:
             val = self._format_value(rp.value)
-            # 跳过未解析的值（ArduCopter 解析到非数字会行为异常）
             if isinstance(rp.value, str) and rp.value.startswith("<"):
                 lines.append(f"# SKIPPED {rp.param_name}: {val}  [{rp.source}]")
                 continue
             if isinstance(rp.value, str) and "@" in rp.value:
                 lines.append(f"# SKIPPED {rp.param_name}: {val}  [{rp.source}]")
                 continue
-            # 跳过 SITL 不兼容参数（L1 仍验证 resolved 值，但不写进 .parm）
             if rp.param_name in self._SITL_SKIP_PARAMS:
                 lines.append(f"# SITL-SKIP {rp.param_name}: {val}  (L1-validated, not loaded into SITL)")
                 continue
@@ -1564,7 +1434,6 @@ class RequirementLinker:
             elif seen[key] != val:
                 lines.append(f"# CONFLICT {key}: {seen[key]} vs {val} ({rp.req_id})")
 
-        # CHUTE_ALT_MIN=0：测试时不限制降落伞触发高度
         if "CHUTE_ENABLED" in seen and "CHUTE_ALT_MIN" not in seen:
             lines.append(f"{'CHUTE_ALT_MIN':<30} 0  # SITL test: disable alt threshold")
 
@@ -1574,10 +1443,10 @@ class RequirementLinker:
     def _bind_verify_args(verify, attr_val):
         """Resolve ``@attr_match`` inside a verify spec's args.
 
-        A threshold a check compares against has to come from the model, the
-        same way an ``ardu_params`` value does. When it cannot be resolved the
-        spec is DROPPED rather than run against a default: a check that invents
-        its own limit reports a verdict about nothing.
+        A threshold the check compares against comes from the model, the same way an
+        ``ardu_params`` value does. When it cannot be resolved the spec is dropped
+        rather than run against a default: a check that invents its own limit reports
+        a verdict about nothing.
         """
         if verify is None:
             return verify
@@ -1630,19 +1499,14 @@ class RequirementLinker:
                     ))
         return specs
 
-    # ------------------------------------------------------------------
-    # SITL → LLM feedback
-    # ------------------------------------------------------------------
-
     def unresolved_feedback(self) -> List[Dict[str, Any]]:
-        """Turn every unresolved SITL parameter into an actionable model-fix
+        """Turn each unresolved SITL parameter into an actionable model-fix
         instruction for the design LLM.
 
-        After the AST-synthesis threshold fix, an unresolved parameter is a
-        trustworthy "model defect" signal: the requirement matched a catalogue
-        tag, but the model genuinely lacks the guard/attribute the tag needs to
-        supply a value.  Each item names the satisfying part, what element is
-        missing, and which ArduPilot parameter depends on it.
+        Since the AST-synthesis threshold fix, an unresolved parameter means the
+        requirement matched a catalogue tag but the model lacks the guard/attribute
+        that tag needs for a value. Each item names the satisfying part, the missing
+        element, and the ArduPilot parameter that depends on it.
 
         Returns a list of dicts: {req_id, tag, kind, part, param, message}.
         """
@@ -1671,16 +1535,14 @@ class RequirementLinker:
 
     @staticmethod
     def _unresolved_message(req_id, tag, entry, kind, part, param_name) -> str:
-        """State what the model is missing and why it matters — WITHOUT
-        prescribing SysML syntax.
+        """State what the model is missing and why it matters, without prescribing
+        SysML syntax.
 
-        The generation prompt already teaches canonical SysML v2 transition/
-        attribute syntax; re-teaching it here is redundant and risky (a
-        hand-written fragment that drifts from the canonical form would
-        actively mislead the LLM, like the earlier `readonly` mistake).  So the
-        feedback gives only semantic facts — which part, what quantity must be
-        monitored/declared, which ArduPilot parameter depends on it — and lets
-        the LLM apply its own (prompt-grounded, syntax-gate-validated) code.
+        The generation prompt already teaches canonical SysML v2 transition/attribute
+        syntax, and a hand-written fragment that drifts from it misleads the LLM (the
+        earlier `readonly` mistake). So the feedback gives semantic facts only -
+        which part, what quantity to monitor or declare, which ArduPilot parameter
+        depends on it - and lets the LLM write its own syntax-gate-validated code.
         """
         gm = getattr(entry, "guard_matcher", None) if entry else None
         am = getattr(entry, "attr_matcher", None) if entry else None
@@ -1719,9 +1581,9 @@ class RequirementLinker:
     def coverage_stats(self) -> Dict[str, Any]:
         """Machine-readable coverage classification (the numbers behind coverage_report).
 
-        "unmapped" is the honest-gap bucket: requirements the model satisfies but
-        that no SITL check verifies at any tier. Reports must surface this count so
-        "traceability blocked = 0" is not over-read as "everything verified".
+        "unmapped" is the gap bucket: requirements the model satisfies that no SITL
+        check verifies at any tier. Reports carry this count so "traceability
+        blocked = 0" is not read as "everything verified".
         """
         covered = self._covered_req_ids()
         mapped: set = set()
@@ -1813,16 +1675,11 @@ class RequirementLinker:
                 lines.append(f"  – {r}")
         return "\n".join(lines)
 
-    # ------------------------------------------------------------------
-    # Build maps from AST
-    # ------------------------------------------------------------------
-
     def _build_satisfy_map(self) -> Dict[str, List[str]]:
-        """
-        req_id → [part_name, ...]
+        """req_id -> [part_name, ...]
 
-        SysML v2 允许多个 part 同时 satisfy 同一 REQ（联合满足、分层满足、冗余满足）。
-        保留所有满足关系；后续解析按"谁有 guard 就用谁"选取，不靠迭代顺序。
+        SysML v2 允许多个 part 同时 satisfy 同一 REQ（联合、分层、冗余满足），
+        全部保留；后续解析按"谁有 guard 就用谁"选取，不靠迭代顺序。
         """
         m: Dict[str, List[str]] = {}
         for part in self._model.part_definitions:
@@ -1831,14 +1688,9 @@ class RequirementLinker:
         return m
 
     def _build_guard_map(self) -> Dict[str, List[Any]]:
-        """
-        part_name → 该 part 的状态机 guard 列表。
-        使用 state_extractor 提取，与 behavioral_sim 共享同一 AST 路径。
-        """
         from src.simulation.state_extractor import extract_state_machines
         guard_map: Dict[str, List[Any]] = {}
         try:
-            # extract_state_machines 接收 SysML 原始文本，不是 LiteModel 对象
             sysml_text = self._model.to_sysml_text()
             if not sysml_text:
                 return guard_map
@@ -1846,10 +1698,9 @@ class RequirementLinker:
             for sm in state_machines:
                 for trans in sm.fault_transitions():
                     guard_map.setdefault(sm.owner_part, []).extend(trans.guards)
-                # accept 事件驱动的转移没有 guard，fault_transitions() 收不到；
-                # 以伪 guard 形式并入，让事件驱动写法与 guard 写法共享同一条
-                # 独占分配/匹配管线（只有显式声明 "event" operator 的条目会
-                # 匹配它们，存量 bool/comparison 条目行为不变）。
+                # accept 事件驱动的转移没有 guard，fault_transitions() 收不到；以伪 guard
+                # 并入，让事件写法与 guard 写法共用同一条独占分配/匹配管线（只有显式声明
+                # "event" operator 的条目匹配它们，存量 bool/comparison 条目行为不变）。
                 for trans in sm.transitions:
                     if trans.is_initial or trans.guards or not trans.accept_trigger:
                         continue
@@ -1863,13 +1714,12 @@ class RequirementLinker:
         return guard_map
 
     def _build_syside_attr_map(self) -> Dict[str, Dict[str, float]]:
-        """
-        Walk the syside AST and evaluate every AttributeUsage expression,
-        grouped by owner part name.  Returns {part_name: {attr_name: float}}.
+        """Evaluate every AttributeUsage expression in the syside AST, grouped by
+        owner part name.  Returns {part_name: {attr_name: float}}.
 
-        Handles arithmetic expressions and unit-bearing literals that
-        _parse_attr_value (regex-based) cannot evaluate.
-        Falls back to {} when syside is unavailable or parsing fails.
+        Handles arithmetic expressions and unit-bearing literals that the
+        regex-based _parse_attr_value cannot evaluate; returns {} when syside is
+        unavailable or parsing fails.
         """
         if not _SYSIDE_OK:
             return {}
@@ -1888,10 +1738,10 @@ class RequirementLinker:
                     part_name = getattr(owner, "name", None)
                     if not part_name:
                         continue
-                    # An AttributeUsage need not be named — a redefinition
-                    # such as `attribute :>> mass = 5[kg];` is legal and
-                    # reports name None.  Keying the map on that put a None
-                    # into every keyword scan that later reads attr names.
+                    # An AttributeUsage need not be named: a redefinition
+                    # like `attribute :>> mass = 5[kg];` is legal and reports
+                    # name None, and keying the map on that leaked a None into
+                    # every later keyword scan over attr names.
                     attr_name = getattr(attr, "name", None)
                     if not attr_name:
                         continue
@@ -1915,13 +1765,12 @@ class RequirementLinker:
         return result
 
     def _build_port_map(self) -> Dict[str, List[str]]:
-        """part_name → [port names]。
+        """part_name -> [port names]。
 
         接口/配置类需求的 satisfy 目标（CommunicationSystem、PerceptionSystem）
-        在 SysML 里合法地只声明 port（``in port gnssCorrections``）而无属性；
-        AttrMatcher 声明 ``allow_port_match`` 时以 port 名为匹配面。port 无
-        数值，因此只允许全静态 ardu_params 的条目走这条路（_match_by_content
-        强制检查）。
+        在 SysML 里可以只声明 port（``in port gnssCorrections``）而无属性；
+        AttrMatcher 声明 ``allow_port_match`` 时以 port 名为匹配面。port 无数值，
+        因此只允许全静态 ardu_params 的条目走这条路（_match_by_content 强制检查）。
         """
         result: Dict[str, List[str]] = {}
         for part in self._model.part_definitions:
@@ -1934,7 +1783,6 @@ class RequirementLinker:
         return result
 
     def _build_attr_map(self) -> Dict[str, Dict[str, float]]:
-        """part_name → {attr_name: float}，用于 @attr: 直接读属性的情况。"""
         result: Dict[str, Dict[str, float]] = {}
         for part in self._model.part_definitions:
             attrs: Dict[str, float] = {}
@@ -1944,33 +1792,18 @@ class RequirementLinker:
                     attrs[attr.name] = val
             result[part.name] = attrs
 
-        # Augment with syside-evaluated values: handles expressions like
-        # `= 10.0 [m/s]` or `= mass * g` that _parse_attr_value regex misses.
-        # Syside values take precedence when they successfully evaluate.
+        # Augment with syside-evaluated values: expressions like `= 10.0 [m/s]` or
+        # `= mass * g` that the _parse_attr_value regex misses. Syside values win
+        # when they evaluate.
         for part_name, syside_attrs in self._build_syside_attr_map().items():
             result.setdefault(part_name, {}).update(syside_attrs)
 
         return result
 
-    # ------------------------------------------------------------------
-    # 解析
-    # ------------------------------------------------------------------
-
     def _covered_req_ids(self) -> set:
         return set(self._satisfy_map.keys())
 
     def _resolve_all(self) -> List[ResolvedParam]:
-        """
-        遍历所有已映射的 REQ，将 ardu_params 的 token 解析为实际数值。
-
-        token 解析优先级（内容匹配后已预解析的值优先）：
-          @guard       → cat["_resolved_guard_val"]（内容匹配已算好）
-          @attr_match  → cat["_resolved_attr_val"]（内容匹配已算好）
-          @attr:name   → 关键词搜索属性值
-          @attr:name*N → 同上 × N
-          @guard*N / @guard_attr*N → parachute delay 特殊处理
-          number       → 直接使用
-        """
         if self._resolved_cache is not None:
             return list(self._resolved_cache)
         results: List[ResolvedParam] = []
@@ -1982,13 +1815,11 @@ class RequirementLinker:
             part_names = self._satisfy_map[req_id]
             part_name  = part_names[0]
 
-            # 从 cat 取出预解析值（内容匹配路径已解析，其他路径为 None）
             pre_guard_val = cat.get("_resolved_guard_val")
             pre_guard_src = cat.get("_resolved_guard_src") or "guard"
             pre_attr_val  = cat.get("_resolved_attr_val")
             pre_attr_src  = cat.get("_resolved_attr_src") or "attr"
 
-            # parachute delay：按关键词搜索属性（兼容新旧路径）
             chute_delay: Optional[float] = None
             if "CHUTE_DELAY_MS" in cat.get("ardu_params", {}):
                 for pname in part_names:
@@ -2004,7 +1835,6 @@ class RequirementLinker:
                     src = pre_guard_src
 
                 elif raw_value == "@attr_match":
-                    # AttrMatcher 已预解析（含单位换算）
                     val = pre_attr_val if pre_attr_val is not None \
                           else "<unresolved:attr_match>"
                     src = pre_attr_src
@@ -2013,14 +1843,12 @@ class RequirementLinker:
                     raw_value.startswith("@guard*") or
                     raw_value.startswith("@guard_attr*")
                 ):
-                    # parachute: parachuteDeployTime × 1000
                     val = (round(chute_delay * 1000)
                            if chute_delay is not None
                            else "<unresolved:chute_delay>")
                     src = "attr:parachute*1000" if chute_delay else "unresolved"
 
                 elif isinstance(raw_value, str) and raw_value.startswith("@attr:"):
-                    # @attr:name 或 @attr:name*N
                     rest = raw_value[6:]
                     if "*" in rest:
                         attr_name, factor_str = rest.split("*", 1)
@@ -2052,17 +1880,14 @@ class RequirementLinker:
         guard_var: str,
         operators: Optional[List[str]] = None,
     ) -> Tuple[Optional[float], str]:
-        """Resolve the numeric threshold of the model guard whose attribute
-        matches *guard_var* (the variable the AST synthesizer matched).
+        """Resolve the numeric threshold of the model guard whose attribute matches
+        *guard_var* (the variable the AST synthesizer matched).
 
-        Used by the AST-synthesis layer so `@guard` placeholders are filled
-        from the guard that layer actually found — instead of leaking as
-        `<unresolved:guard>` even though the model contains the guard.
-
-        When *operators* is given (the tag's expected operators), a guard
-        whose operator is in that set is preferred.  Returns (None, "") when
-        no matching guard carries a numeric threshold (e.g. a boolean guard,
-        which needs no threshold).
+        Fills `@guard` placeholders from the guard that layer actually found instead
+        of leaking `<unresolved:guard>`. With *operators* given (the tag's expected
+        operators), a guard whose operator is in that set is preferred. Returns
+        (None, "") when no matching guard carries a numeric threshold, e.g. a
+        boolean guard.
         """
         gv = (guard_var or "").lower()
         cands = [
@@ -2082,17 +1907,12 @@ class RequirementLinker:
         return th, f"guard:{op}:{th} (attr:{getattr(g, 'attribute', '?')}, ast)"
 
     def _extract_chute_delay(self, part_name: str) -> Optional[float]:
-        """
-        在 part_name 的属性里，找 parachute/deploy 相关的时间属性。
-        使用语义关键词匹配，不依赖精确属性名。
-        """
         attrs = self._attr_map.get(part_name, {})
         keywords = ["parachute", "deploy", "chute"]
         for name, val in attrs.items():
             nl = name.lower()
             if any(k in nl for k in keywords) and 0.1 <= val <= 5.0:
                 return val
-        # fallback: 找值在 [0.1, 5.0] 范围内的时间属性（秒）
         time_keywords = ["time", "delay", "timeout"]
         for name, val in attrs.items():
             nl = name.lower()
@@ -2105,20 +1925,13 @@ class RequirementLinker:
         part_name: str,
         attr_name: str,
     ) -> Tuple[Any, str]:
-        """
-        在 part_name 的所有属性里，优先精确名字匹配，
-        否则做宽松关键词匹配。
-        """
-        # 先找与 satisfy 该需求的 part，再向其他 part 扩展
         all_parts = [p for p in self._model.part_definitions if p.name == part_name]
         all_parts += [p for p in self._model.part_definitions if p.name != part_name]
 
         for part in all_parts:
             attrs = self._attr_map.get(part.name, {})
-            # 精确匹配
             if attr_name in attrs:
                 return attrs[attr_name], f"attr:{part.name}.{attr_name}"
-            # 宽松：attr_name 的关键词子集
             keywords = re.sub(r'([A-Z])', r' \1', attr_name).lower().split()
             for aname, aval in attrs.items():
                 aname_lower = re.sub(r'([A-Z])', r' \1', aname).lower()

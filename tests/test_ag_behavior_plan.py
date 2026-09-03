@@ -18,7 +18,7 @@ from src.prototyping.ag_decision import build_spec_from_decisions
 from tests.test_option2_ag_decision import _BOUNDARY, _CORRECT
 
 
-def test_all_three_chains_compile_one_typed_obligation_per_component():
+def test_one_obligation_per_component():
     plan = compile_behavior_obligation_plan((
         REQ_SAFE_004_CHAIN,
         REQ_SAFE_005_CHAIN,
@@ -39,7 +39,7 @@ def test_all_three_chains_compile_one_typed_obligation_per_component():
     }
 
 
-def test_continuous_power_availability_is_an_invariant_not_a_fake_state():
+def test_power_availability_invariant():
     plan = compile_behavior_obligation_plan((REQ_SAFE_005_CHAIN,))
     power = next(
         item for item in plan.obligations
@@ -50,7 +50,7 @@ def test_continuous_power_availability_is_an_invariant_not_a_fake_state():
     assert "recoveryActuationPowerAvailable" in power.invariant_expression
 
 
-def test_timed_failsafe_plan_carries_complete_priority_arbitration_topology():
+def test_arbitration_topology_complete():
     plan = compile_behavior_obligation_plan((REQ_SAFE_005_CHAIN,))
     arbiter = next(
         item for item in plan.obligations
@@ -74,7 +74,7 @@ def test_timed_failsafe_plan_carries_complete_priority_arbitration_topology():
     } == lower_members
 
 
-def test_llm_decided_spec_without_realization_paths_is_compiled_losslessly():
+def test_decided_spec_compiles_lossless():
     decided = build_spec_from_decisions(_CORRECT, _BOUNDARY)
     assert any(
         not component.realization_paths
@@ -95,7 +95,7 @@ def test_llm_decided_spec_without_realization_paths_is_compiled_losslessly():
     assert "RecoverySystemBehavior" in rendered
 
 
-def test_lifecycle_roles_without_optional_paths_are_not_fake_invariants():
+def test_no_fake_invariants():
     sparse_specs = []
     for chain in (REQ_SAFE_004_CHAIN, REQ_SAFE_008_CHAIN):
         sparse_specs.append(replace(
@@ -138,7 +138,7 @@ def test_lifecycle_roles_without_optional_paths_are_not_fake_invariants():
     ].initial_state == "lockedUnpowered"
 
 
-def test_step4_materializes_absent_exact_obligations_and_passes_gate():
+def test_step4_materializes_absent():
     plan = compile_behavior_obligation_plan((REQ_SAFE_005_CHAIN,))
     fragment, report = materialize_behavior_obligations(
         "state def UnrelatedBehavior { state idle; }", plan
@@ -155,7 +155,7 @@ def test_step4_materializes_absent_exact_obligations_and_passes_gate():
     assert "state def RecoverySystemBehavior" in fragment
 
 
-def test_step4_replaces_an_incorrect_exact_definition_without_a_duplicate():
+def test_step4_replaces_no_duplicate():
     original = compile_behavior_obligation_plan((REQ_SAFE_005_CHAIN,))
     obligation = next(
         item for item in original.obligations
@@ -180,7 +180,7 @@ def test_step4_replaces_an_incorrect_exact_definition_without_a_duplicate():
     assert "wrongInitial" not in materialized
 
 
-def test_step4_removes_wrong_kind_collision_for_reserved_invariant_identity():
+def test_step4_removes_wrong_kind():
     original = compile_behavior_obligation_plan((REQ_SAFE_005_CHAIN,))
     invariant = next(
         item for item in original.obligations
@@ -201,7 +201,7 @@ def test_step4_removes_wrong_kind_collision_for_reserved_invariant_identity():
     assert report["removed_kind_conflicts"][0]["removed_kind"] == "state def"
 
 
-def test_owned_materializer_enforces_one_owner_qualified_reserved_kind():
+def test_one_owner_qualified_kind():
     original = compile_behavior_obligation_plan((REQ_SAFE_005_CHAIN,))
     invariant = next(
         item for item in original.obligations
@@ -227,7 +227,7 @@ def test_owned_materializer_enforces_one_owner_qualified_reserved_kind():
     assert invariant.invariant_expression in compiled
 
 
-def test_assembled_gate_requires_realization_inside_the_exact_owner():
+def test_gate_requires_exact_owner():
     original = compile_behavior_obligation_plan((REQ_SAFE_005_CHAIN,))
     invariant = next(
         item for item in original.obligations
@@ -246,7 +246,7 @@ def test_assembled_gate_requires_realization_inside_the_exact_owner():
     assert owned["status"] == "FAIL"
 
 
-def test_assembly_restores_a_rewritten_definition_inside_the_exact_owner():
+def test_assembly_restores_definition():
     original = compile_behavior_obligation_plan((REQ_SAFE_005_CHAIN,))
     obligation = next(
         item for item in original.obligations

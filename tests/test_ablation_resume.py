@@ -1,9 +1,9 @@
 """Prefix-replay resume for ablation runs.
 
-s0v12 hung on one provider request 34 minutes in; 187k tokens of identical
-prefix work had to be re-bought because the pipeline holds no checkpoint.
-Every run now captures (request digest, response) per call, and a resumed
-run replays the matching prefix free, going live at the first divergence.
+s0v12 hung on a provider request 34 minutes in and 187k tokens of identical
+prefix work had to be re-bought. Runs now record (request digest, response)
+per call; a resumed run replays the matching prefix free and goes live at the
+first divergence.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _msg(text):
     return [Message(role="user", content=text)]
 
 
-def test_capture_observer_appends_digested_calls(tmp_path):
+def test_observer_appends_digested_calls(tmp_path):
     llm = _CountingLLM()
     calls_path = tmp_path / "calls.jsonl"
     llm.add_call_observer(_capture_observer(calls_path))
@@ -46,7 +46,7 @@ def test_capture_observer_appends_digested_calls(tmp_path):
     )
 
 
-def test_matching_prefix_replays_free_then_goes_live(tmp_path):
+def test_matching_prefix_replays_free(tmp_path):
     recorder = _CountingLLM()
     calls_path = tmp_path / "calls.jsonl"
     recorder.add_call_observer(_capture_observer(calls_path))
@@ -63,16 +63,14 @@ def test_matching_prefix_replays_free_then_goes_live(tmp_path):
     second = resumed.complete(_msg("step two"), temperature=0.2, max_tokens=64)
     third = resumed.complete(_msg("step three"), temperature=0.2, max_tokens=64)
 
-    assert (first.content, second.content) == ("live-1", "live-2")  # replayed
-    assert fresh.live_calls == 1          # only the third call went live
-    assert third.content == "live-1"      # the fresh provider's first call
+    assert (first.content, second.content) == ("live-1", "live-2")
+    assert fresh.live_calls == 1
+    assert third.content == "live-1"
     assert resumed.replayed_calls == 2
-    # the resumed run's OWN capture (on the fresh inner) records live calls,
-    # and its ledger bills only them
     assert resumed.ledger.as_dict()["calls"] == 1
 
 
-def test_divergence_mid_prefix_goes_live_and_stays_live(tmp_path):
+def test_divergence_stays_live(tmp_path):
     recorder = _CountingLLM()
     calls_path = tmp_path / "calls.jsonl"
     recorder.add_call_observer(_capture_observer(calls_path))
@@ -84,8 +82,8 @@ def test_divergence_mid_prefix_goes_live_and_stays_live(tmp_path):
     resumed = PrefixReplayLLM(fresh, recorded)
     resumed.complete(_msg("step one"), temperature=0.2, max_tokens=64)
     resumed.complete(_msg("DIFFERENT"), temperature=0.2, max_tokens=64)
-    # even a later request that WOULD match the archive stays live: replay
-    # past a divergence would splice two different trajectories
+    # a later request matching the archive still goes live: replaying past a
+    # divergence would splice two trajectories
     resumed.complete(_msg("step two"), temperature=0.2, max_tokens=64)
 
     assert resumed.replayed_calls == 1

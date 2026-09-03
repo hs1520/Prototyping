@@ -1,22 +1,13 @@
 """Requirement Evidence for carrying a payload, judged on observed attachment.
 
-REQ-FUNC-003 asks the vehicle to *transport* a payload while holding an
-attitude bound. Whether it was transporting anything at the moment the attitude
-was measured is a physical fact about the simulation, and it was previously
-inferred from the run's configuration::
-
-    cruise_sweep_payload_attached = bool(payload_release and payload_mass_kg > 0)
-
-That is a statement about what the harness was asked to do, not about what the
-vehicle was carrying. The delivery payload is released during the same flight,
-so a cruise window measured after separation would have been counted as
-transport evidence on the strength of a flag set before takeoff.
-
-Attachment is therefore observed per window, from the Gazebo poses of the
-vehicle and the payload model: a payload still on the detachable joint tracks
-the airframe, a released one does not. Windows observed unloaded are reported
-but excluded, and a window whose attachment could not be observed at all is
-never assumed loaded — the absence of an observation is not evidence of one.
+REQ-FUNC-003 asks the vehicle to transport a payload while holding an attitude
+bound. Whether it was carrying anything when the attitude was measured used to be
+inferred from configuration (``payload_release and payload_mass_kg > 0``), which
+says what the harness was asked to do; the delivery payload is released mid-flight,
+so a window measured after separation counted as transport evidence. Attachment is
+now observed per window from the Gazebo poses of vehicle and payload: windows
+observed unloaded are reported but excluded, and a window whose attachment could
+not be observed is not assumed loaded.
 """
 from __future__ import annotations
 
@@ -32,23 +23,19 @@ from src.prototyping.verification_obligations import (
     VerificationCriterion,
 )
 
-#: Attachment is judged on VERTICAL separation, not 3-D distance.
-#:
-#: 3-D distance does not measure what it was asked to. Under a fast dash the
-#: detachable joint is compliant enough that an attached payload trails along
-#: the direction of travel: measured at 1656 m downrange, the vehicle sat at
-#: (…, 1656.59, 9.32) and its still-attached payload at (…, 1665.01, 9.23) —
-#: 8.9 m apart horizontally, 0.09 m apart vertically, both at cruise altitude.
-#: A 2 m 3-D bound called that released, which is a false negative of exactly
-#: the shape this module exists to prevent, only pointing the other way.
-#:
-#: A released payload falls. Vertical separation therefore separates the two
-#: cleanly: 0.09 m while carrying, ~9 m once the box is on the ground and the
-#: vehicle is still at altitude.
+# Attachment is judged on vertical separation, not 3-D distance.
+#
+# Under a fast dash the detachable joint is compliant enough that an attached
+# payload trails: at 1656 m downrange the vehicle sat at (..., 1656.59, 9.32) and
+# its attached payload at (..., 1665.01, 9.23) - 8.9 m apart horizontally, 0.09 m
+# vertically - and a 2 m 3-D bound called that released.
+#
+# A released payload falls, so vertical separation splits the two cleanly: 0.09 m
+# while carrying, ~9 m once the box is down and the vehicle is still at altitude.
 ATTACHED_MAX_VERTICAL_SEPARATION_M = 2.0
 
-#: Kept for reporting only — the horizontal lag is informative about the joint's
-#: compliance, and says nothing about whether the payload is still aboard.
+# Reporting only: the horizontal lag says something about joint compliance, not
+# about whether the payload is aboard.
 ATTACHED_MAX_DISTANCE_M = ATTACHED_MAX_VERTICAL_SEPARATION_M
 
 
@@ -103,8 +90,9 @@ class TransportWindow:
 
     @classmethod
     def from_dict(cls, data: dict) -> "TransportWindow":
-        """Rebuild a window from a recorded run, so the report and the flight
-        judge the same observation rather than two readings of it."""
+        """Rebuild a window from a recorded run, so the report and the flight judge the same
+        observation.
+        """
         state = data.get("attachment") or {}
         return cls(
             label=str(data.get("label", "?")),
@@ -136,9 +124,8 @@ def evaluate_payload_transport(
 ) -> EvidenceClaim:
     """Judge the transport attitude bound on windows observed to be carrying.
 
-    The returned claim declares PAYLOAD_STATE_OBSERVED only when attachment was
-    actually observed, so a run that never looked cannot close the payload
-    clause on configuration alone.
+    The claim declares PAYLOAD_STATE_OBSERVED only when attachment was observed, so
+    a run that never looked cannot close the payload clause on configuration alone.
     """
     measured = [
         window for window in windows

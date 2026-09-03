@@ -1,5 +1,3 @@
-"""Tests for the LLM interface and Chain of Thought prompting."""
-
 import time
 from types import SimpleNamespace
 
@@ -83,7 +81,7 @@ class TestMockLLM:
         assert isinstance(response, str)
         assert len(response) > 0
 
-    def test_call_observer_archives_exact_messages_and_can_be_removed(self):
+    def test_call_observer_archive_remove(self):
         llm = MockLLM()
         events = []
         observer_id = llm.add_call_observer(events.append)
@@ -98,7 +96,7 @@ class TestMockLLM:
         llm.chat("not archived")
         assert len(events) == 1
 
-    def test_call_observer_failure_does_not_retry_provider_call(self):
+    def test_observer_failure_no_retry(self):
         llm = MockLLM()
 
         def fail(_event):
@@ -125,7 +123,6 @@ class TestChainOfThoughtPrompter:
         assert len(result.final_answer) > 0
 
     def test_generate_design(self, cot):
-        # Inject a response with SysML code
         cot.llm.inject_response(
             "Step 1: Design the architecture\n\n"
             "```sysml\n"
@@ -143,7 +140,6 @@ class TestChainOfThoughtPrompter:
         assert "FlightController" in result.extracted_sysml
 
     def test_evaluate_design(self, cot):
-        # Inject a response with JSON scores
         cot.llm.inject_response(
             "Evaluation:\n"
             "The design is mostly complete.\n"
@@ -205,9 +201,7 @@ class TestChainOfThoughtPrompter:
 
 
 class _FlakyLLM(LLMInterface):
-    """Raises a configurable exception for the first N calls, then succeeds."""
-
-    RETRY_DELAYS = (0.0, 0.0)  # no real sleeping in tests
+    RETRY_DELAYS = (0.0, 0.0)
 
     def __init__(self, failures: int = 1, exc: Exception = None):
         self._failures = failures
@@ -222,8 +216,6 @@ class _FlakyLLM(LLMInterface):
 
 
 class _TempSensitiveLLM(LLMInterface):
-    """Returns valid JSON only at temperature >= 0.6 (escalation testing)."""
-
     def __init__(self):
         self.temperatures = []
 
@@ -234,7 +226,7 @@ class _TempSensitiveLLM(LLMInterface):
 
 
 class TestRetryAndTimeout:
-    def test_transient_error_is_retried_then_succeeds(self):
+    def test_transient_error_retried(self):
         llm = _FlakyLLM(failures=2)
         response = llm.complete([Message(role="user", content="hi")])
         assert response.content == "ok"
@@ -242,7 +234,7 @@ class TestRetryAndTimeout:
         assert llm.ledger.retries == 2
         assert llm.ledger.calls == 1
 
-    def test_non_retryable_error_raises_immediately(self):
+    def test_non_retryable_raises(self):
         llm = _FlakyLLM(failures=1, exc=ValueError("bad request: invalid schema"))
         with pytest.raises(ValueError):
             llm.complete([Message(role="user", content="hi")])
@@ -250,16 +242,16 @@ class TestRetryAndTimeout:
         assert llm.ledger.failures == 1
 
     def test_retry_budget_exhaustion_reraises(self):
-        llm = _FlakyLLM(failures=10)  # more failures than RETRY_DELAYS entries
+        llm = _FlakyLLM(failures=10)
         with pytest.raises(RuntimeError):
             llm.complete([Message(role="user", content="hi")])
         assert llm.impl_calls == len(llm.RETRY_DELAYS) + 1
         assert llm.ledger.failures == 1
 
-    def test_max_call_seconds_measures_one_attempt_not_the_retry_chain(self):
-        """A cancelled call is only diagnosable against the client deadline if
-        the recorded duration is one request, so retries and their sleeps must
-        not accumulate into it."""
+    def test_max_call_seconds_one_attempt(self):
+        """The recorded duration is one request, not the retry chain, so a cancelled call
+        can be compared against the client deadline.
+        """
         import time
 
         class _SlowThenFast(LLMInterface):
@@ -281,27 +273,24 @@ class TestRetryAndTimeout:
         assert usage["max_call_seconds"] >= 0.05
         assert usage["max_call_seconds"] <= usage["elapsed_seconds"]
 
-    def test_a_failed_call_still_records_how_long_it_ran(self):
-        """The archived failure context stores the provider's text and nothing
-        else; without this the run cannot say whether the deadline was hit."""
+    def test_failed_call_records_duration(self):
         llm = _FlakyLLM(failures=10)
         with pytest.raises(RuntimeError):
             llm.complete([Message(role="user", content="hi")])
         assert llm.ledger.as_dict()["max_call_seconds"] >= 0.0
         assert llm.ledger.failures == 1
 
-    def test_the_backoff_ladder_outlasts_a_quota_window(self):
+    def test_backoff_ladder_outlasts_quota(self):
         """Three of eighteen paired runs were lost to 429 on 2026-08-11 while
         429 was already retryable: the ladder gave up 62 s after the first
         refusal."""
         assert sum(LLMInterface.RETRY_DELAYS) >= 300
 
-    def test_a_cancelled_vertex_request_is_retried(self):
-        """The exact text a 2026-08-11 pilot failed on, twice.
+    def test_cancelled_request_retried(self):
+        """The text a 2026-08-11 pilot failed on, twice.
 
-        The provider error reaches the classifier as a plain RuntimeError with
-        the status only in its message, so adding 499 to _RETRYABLE_STATUS
-        would have been dead code.
+        The provider error reaches the classifier as a RuntimeError with the status only
+        in its message, so adding 499 to _RETRYABLE_STATUS would be dead code.
         """
         from src.llm.interface import VertexLLM
 
@@ -312,9 +301,7 @@ class TestRetryAndTimeout:
         )
         assert VertexLLM._is_retryable(exc) is True
 
-    def test_this_clients_own_deadline_is_still_not_retried(self):
-        """Retrying a request our own wall clock killed meets the same wall
-        clock again, which is why timeouts are excluded."""
+    def test_own_deadline_not_retried(self):
         from src.llm.interface import VertexLLM
 
         exc = TimeoutError(
@@ -335,26 +322,25 @@ class TestRetryAndTimeout:
             RuntimeError("temporary failure in name resolution"),
         ],
     )
-    def test_dns_connection_failures_are_retryable(self, exc):
+    def test_dns_failures_retryable(self, exc):
         assert LLMInterface._is_retryable(exc)
 
 
 class TestDefaultTemperature:
-    def test_chat_defaults_to_low_temperature(self):
+    def test_chat_default_temperature(self):
         llm = MockLLM()
         llm.chat("anything")
-        # MockLLM records the resolved temperature in metadata
         response = llm.complete([Message(role="user", content="x")])
         assert response.metadata["temperature"] == DEFAULT_TEMPERATURE
 
-    def test_explicit_temperature_is_respected(self):
+    def test_explicit_temperature(self):
         llm = MockLLM()
         response = llm.complete([Message(role="user", content="x")], temperature=0.9)
         assert response.metadata["temperature"] == 0.9
 
 
 class TestEscalation:
-    def test_escalates_until_validation_passes(self):
+    def test_escalates_until_valid(self):
         llm = _TempSensitiveLLM()
 
         def validate(content: str) -> bool:
@@ -367,11 +353,10 @@ class TestEscalation:
         )
         assert ok
         assert response.content == '{"ok": true}'
-        # low temp first, then escalated
         assert llm.temperatures[0] == DEFAULT_TEMPERATURE
         assert llm.temperatures[-1] >= 0.6
 
-    def test_exhaustion_returns_last_response_not_ok(self):
+    def test_exhaustion_returns_last_not_ok(self):
         llm = _TempSensitiveLLM()
         response, ok = llm.complete_with_escalation(
             [Message(role="user", content="x")],
@@ -380,7 +365,7 @@ class TestEscalation:
         assert not ok
         assert response is not None
 
-    def test_chat_with_escalation_returns_content(self):
+    def test_chat_escalation_content(self):
         llm = _TempSensitiveLLM()
         content, ok = llm.chat_with_escalation(
             "json please",
@@ -414,7 +399,7 @@ class TestTokenLedger:
 
 
 class TestGeminiMessageSplit:
-    def test_system_goes_to_instruction_and_roles_are_tagged(self):
+    def test_system_instruction_and_roles(self):
         system_instruction, contents = _split_gemini_messages([
             Message(role="system", content="you are an expert"),
             Message(role="user", content="hello"),
@@ -434,7 +419,7 @@ class TestGeminiMessageSplit:
 
 
 class TestGeminiLLM:
-    def test_complete_uses_config_argument_for_generation_settings(self):
+    def test_complete_uses_config_argument(self):
         captured_kwargs = {}
 
         class FakeModels:
@@ -464,7 +449,7 @@ class TestGeminiLLM:
         assert captured_kwargs["config"]["temperature"] == 0.25
         assert captured_kwargs["config"]["max_output_tokens"] == 123
 
-    def test_system_prompt_is_sent_as_system_instruction(self):
+    def test_system_prompt_sent_as_instruction(self):
         captured_kwargs = {}
 
         class FakeModels:
@@ -493,7 +478,7 @@ class TestGeminiLLM:
         assert contents[0]["role"] == "user"
         assert contents[0]["parts"][0]["text"] == "hello"
 
-    def test_generation_seed_is_forwarded_in_sdk_config(self):
+    def test_vertex_seed_forwarded(self):
         captured_kwargs = {}
 
         class FakeModels:
@@ -517,7 +502,7 @@ class TestGeminiLLM:
 
 
 class TestVertexLLM:
-    def test_sdk_retry_is_disabled_and_timeout_is_forwarded(
+    def test_sdk_retry_off_timeout_forwarded(
         self, monkeypatch
     ):
         from google import genai
@@ -545,7 +530,7 @@ class TestVertexLLM:
         }
         assert vertex._process_isolation is True
 
-    def test_generation_seed_is_forwarded_in_sdk_config(self):
+    def test_vertex_seed_forwarded(self):
         captured_kwargs = {}
 
         class FakeModels:
@@ -570,7 +555,7 @@ class TestVertexLLM:
         assert response.metadata["seed"] == 4321
         assert response.metadata["thinking_level"] == "HIGH"
 
-    def test_deadline_is_not_retried_but_capacity_failure_is(self):
+    def test_deadline_vs_quota_retryable(self):
         assert not VertexLLM._is_retryable(
             RuntimeError("504 DEADLINE_EXCEEDED")
         )
@@ -578,15 +563,15 @@ class TestVertexLLM:
         assert not VertexLLM._is_retryable(RuntimeError("ConnectTimeout"))
         assert VertexLLM._is_retryable(RuntimeError("429 RESOURCE_EXHAUSTED"))
 
-    def test_vertex_retry_count_is_bounded_to_two(self):
+    def test_vertex_retry_bounded_to_two(self):
         assert VertexLLM.RETRY_DELAYS == (10.0, 30.0)
         assert VertexLLM.ARCHITECTURE_MAX_TOKENS == 65536
 
-    def test_vertex_default_timeout_is_ten_minutes(self, monkeypatch):
+    def test_vertex_default_timeout(self, monkeypatch):
         monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
         assert interface_module._default_timeout_seconds(600.0) == 600.0
 
-    def test_hard_timeout_interrupts_blocked_provider_call(self):
+    def test_hard_timeout_interrupts_call(self):
         class BlockingModels:
             def generate_content(self, **kwargs):
                 time.sleep(5.0)
@@ -610,7 +595,7 @@ class TestVertexLLM:
         assert time.monotonic() - started < 0.5
         assert vertex.ledger.failures == 1
 
-    def test_process_isolated_request_returns_response(self):
+    def test_process_isolated_response(self):
         class Models:
             def generate_content(self, **kwargs):
                 return SimpleNamespace(

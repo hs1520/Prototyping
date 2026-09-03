@@ -35,7 +35,7 @@ def _reconcile(propose):
     )
 
 
-def test_valid_connection_is_merged_without_requesting_ports():
+def test_valid_connection_merged():
     calls: list[str] = []
 
     def propose(_prompt: str, system_prompt: str) -> str:
@@ -51,7 +51,7 @@ def test_valid_connection_is_merged_without_requesting_ports():
     assert "connect sensor.dataOut to controller.dataIn;" in result.model_text
 
 
-def test_missing_port_is_added_before_connection_is_revalidated():
+def test_missing_port_added():
     replies = iter(
         [
             "connect power.powerOut to controller.powerIn;",
@@ -70,7 +70,7 @@ def test_missing_port_is_added_before_connection_is_revalidated():
     assert any(item.code == "CONNECTION_REJECTED" for item in result.diagnostics)
 
 
-def test_invalid_port_proposal_is_a_structured_model_failure():
+def test_invalid_port_rejected():
     replies = iter(
         [
             "connect power.powerOut to controller.powerIn;",
@@ -85,7 +85,7 @@ def test_invalid_port_proposal_is_a_structured_model_failure():
     assert any(item.code == "PORT_REJECTED" for item in result.diagnostics)
 
 
-def test_dependency_failure_raises_and_preserves_validated_partial_ports():
+def test_dependency_failure_raises():
     replies = iter(
         [
             "connect power.powerOut to controller.powerIn;",
@@ -109,7 +109,7 @@ def test_dependency_failure_raises_and_preserves_validated_partial_ports():
 
 
 @pytest.mark.parametrize("error", [TypeError("bug"), AssertionError("bug")])
-def test_programming_errors_are_not_misclassified_as_dependency_failures(error):
+def test_programming_errors_propagate(error):
     def propose(_prompt: str, _system: str) -> str:
         raise error
 

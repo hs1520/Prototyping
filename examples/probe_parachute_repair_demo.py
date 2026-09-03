@@ -1,17 +1,14 @@
 """Route-2 repair demonstration for the SAFE-005 parachute traceability block.
 
-Arc: archived model (gate withholds the check) -> one-payload repair on a COPY
--> gate reopens -> the previously withheld L2 executes live in native SITL.
-
-Honesty contract:
-- the archived bundle is never modified; the repaired model is a new, labelled
-  derived artefact (``final_model.repaired.sysml`` + ``repair.diff``);
-- the gate decisions come from the real ``RequirementLinker`` on both models;
-- the executable check runs through the real ``SITLBridge._run_single_test``
-  (same code path as examples/run_sitl_feasibility.py), unmodified;
-- the recorder observes through SITL's second MAVLink port (tcp:5762), so the
-  check under test is not instrumented at all. This demonstrates the gate and
-  the actuator chain; it does NOT claim pipeline self-repair.
+Sequence: archived model (gate withholds the check) -> one-payload repair on a
+copy -> gate reopens -> the withheld L2 executes live in native SITL. The
+archived bundle is not modified; the repair lands in labelled derived artefacts
+(``final_model.repaired.sysml`` + ``repair.diff``). Gate decisions come from
+``RequirementLinker`` on both models, the executable check runs through
+``SITLBridge._run_single_test`` (the path examples/run_sitl_feasibility.py
+uses), and the recorder observes on SITL's second MAVLink port (tcp:5762), so
+the check under test is uninstrumented. This shows the gate and the actuator
+chain, not pipeline self-repair.
 
 Run:
   PYTHONPATH=. .venv/bin/python examples/probe_parachute_repair_demo.py
@@ -52,7 +49,7 @@ def log(line: str) -> None:
 
 
 def gate_snapshot(tag: str, text: str) -> dict:
-    """Real linker run: what the traceability gate decides for SAFE-005."""
+    """Linker run: what the traceability gate decides for SAFE-005."""
     model = build_lite_model(text, model_name=MODEL_NAME)
     ev = RequirementLinker(model, llm=None).compile_evidence()
     mismatches = [dict(m) for m in ev.traceability_mismatches]
@@ -146,11 +143,9 @@ def main() -> int:
     log(f"archived model: {BUNDLE / 'final_model.sysml'}")
     log(f"defect line   : {DEFECT}")
 
-    # ── Phase A: the gate on the ARCHIVED model (blocked) ────────────────
     log("=== PHASE A: gate on the archived model ===")
     before = gate_snapshot("before", archived_text)
 
-    # ── Phase B: one-payload repair on a copy ────────────────────────────
     log("=== PHASE B: one-payload repair (new derived artefact) ===")
     occurrences = archived_text.count(DEFECT)
     if occurrences != 1:
@@ -171,7 +166,6 @@ def main() -> int:
         if line.startswith(("-", "+")) and "send" in line:
             log(f"  {line.rstrip()}")
 
-    # ── Phase C: the gate on the REPAIRED model (reopened) ───────────────
     log("=== PHASE C: gate on the repaired model ===")
     after = gate_snapshot("after", repaired_text)
     safe5_l2 = [s for s in after["safe5_specs"] if s["tier"] == "L2"]
@@ -179,7 +173,6 @@ def main() -> int:
         log("ABORT: repaired model did not produce an executable SAFE_005 spec")
         return 2
 
-    # ── Phase D: execute the previously withheld check, live ─────────────
     log("=== PHASE D: execute the previously withheld L2 in native SITL ===")
     repaired_model = build_lite_model(repaired_text, model_name=MODEL_NAME)
     bridge = SITLBridge(

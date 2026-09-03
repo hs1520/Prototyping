@@ -1,11 +1,3 @@
-"""Requirement-derived evaluator weights, verdict robustness, dse_fidelity N/A,
-and the no-dangling-header constraints builder.
-
-These pin the objectivity fixes: the refinement gate's weighting is traceable
-to the input requirements (not hand-set), every verdict carries a robustness
-number over the weight simplex, and inert dimensions/headers no longer leak
-into scores or prompts.
-"""
 from __future__ import annotations
 
 from src.agents.dse_injectors import build_dse_design_constraints
@@ -36,10 +28,10 @@ class TestDeriveDimensionWeights:
         assert derive_dimension_weights(None) == DIMENSION_WEIGHTS
         assert derive_dimension_weights([]) == DIMENSION_WEIGHTS
 
-    def test_unclassifiable_requirements_return_prior(self):
+    def test_unclassifiable_returns_prior(self):
         assert derive_dimension_weights(["the system shall work"]) == DIMENSION_WEIGHTS
 
-    def test_safe_heavy_boosts_safety_over_interface(self):
+    def test_safe_heavy_boosts_safety(self):
         w = derive_dimension_weights(_SAFE_HEAVY)
         assert w["safety_assurance"] > DIMENSION_WEIGHTS["safety_assurance"]
         assert w["safety_assurance"] > w["interface_quality"]
@@ -48,10 +40,9 @@ class TestDeriveDimensionWeights:
         w = derive_dimension_weights(_INTF_HEAVY)
         assert w["interface_quality"] > DIMENSION_WEIGHTS["interface_quality"]
 
-    def test_weights_sum_to_one_and_invariants_keep_relative_prior(self):
+    def test_weights_sum_one_ratios_kept(self):
         w = derive_dimension_weights(_SAFE_HEAVY)
         assert abs(sum(w.values()) - 1.0) < 1e-9
-        # invariant dims keep their prior ratio (both rescaled identically)
         ratio_prior = DIMENSION_WEIGHTS["syntactic_validity"] / DIMENSION_WEIGHTS["structural_completeness"]
         ratio_derived = w["syntactic_validity"] / w["structural_completeness"]
         assert abs(ratio_prior - ratio_derived) < 1e-9
@@ -63,14 +54,13 @@ class TestVerdictRobustness:
             configuration_name="t", criteria_scores=scores, weighted_total=total
         )
 
-    def test_uniformly_high_scores_are_fully_robust(self):
+    def test_high_scores_fully_robust(self):
         ev = DesignEvaluator(quality_threshold=0.75)
         res = self._result({"a": 0.95, "b": 0.92, "c": 0.90}, 0.92)
         assert ev.verdict_robustness(res) == 1.0
 
-    def test_borderline_mixed_scores_are_not_fully_robust(self):
+    def test_borderline_scores_partly_robust(self):
         ev = DesignEvaluator(quality_threshold=0.75)
-        # nominal pass, but one dimension far below threshold — some weightings flip it
         res = self._result({"a": 0.95, "b": 0.95, "c": 0.30}, 0.78)
         rob = ev.verdict_robustness(res)
         assert 0.0 < rob < 1.0
@@ -82,9 +72,6 @@ class TestVerdictRobustness:
 
 
 class TestDseFidelityNA:
-    """A variation-DSE config (variant choices, no catalog keys) must not buy a
-    free 1.0 × weight — the dimension is N/A and its weight redistributed."""
-
     def _evaluate(self, dse_config, requirements=None):
         from src.sysml.model import PartDefinition, SysMLModel
 
@@ -96,21 +83,19 @@ class TestDseFidelityNA:
             dse_config=dse_config, requirements=requirements,
         )
 
-    def test_variation_config_now_scores_dse_fidelity(self):
-        """The old contract dropped the dimension for variation configs so a
-        free 1.0 could not inflate the total. It is now SCORED for them —
-        the dimension's own semantics (selected decisions realised in the
-        model) applies to variant choices identically, and an unrealised
-        choice earns 0.0, not a gift (the anti-inflation concern is served
-        by grading, not by blindness). Measured: the FULL arm materialised
-        its selected catalogue variant and was scored on fewer dimensions
-        than the arms doing less."""
+    def test_variation_scores_dse_fidelity(self):
+        """Variation configs are scored on dse_fidelity instead of skipping the dimension.
+
+        The dimension's semantics (selected decisions realised in the model) applies to
+        variant choices, and an unrealised choice earns 0.0, so grading handles the
+        inflation concern. Skipping it scored the FULL arm, which materialised its
+        selected catalogue variant, on fewer dimensions than the arms doing less.
+        """
         variation_cfg = DesignConfiguration(
             name="v", parameters={"propulsionSystem": "hexa", "powerSystem": "p6"}
         )
         result = self._evaluate(variation_cfg)
         assert "dse_fidelity" in result.weights_used
-        # neither variant def exists in the fixture model → nothing realised
         assert result.criteria_scores["dse_fidelity"] == 0.0
 
     def test_catalog_config_keeps_dse_fidelity(self):
@@ -120,20 +105,20 @@ class TestDseFidelityNA:
         result = self._evaluate(catalog_cfg)
         assert "dse_fidelity" in result.criteria_scores
 
-    def test_weights_used_recorded_and_normalised(self):
+    def test_weights_used_normalised(self):
         result = self._evaluate(None, requirements=_SAFE_HEAVY)
         assert result.weights_used
         assert abs(sum(result.weights_used.values()) - 1.0) < 1e-3
 
 
 class TestConstraintsNoDanglingHeader:
-    def test_variation_config_yields_empty_constraints(self):
+    def test_variation_constraints_empty(self):
         cfg = DesignConfiguration(
             name="v", parameters={"propulsionSystem": "hexa", "sensorSuite": "lidar"}
         )
         assert build_dse_design_constraints(cfg) == ""
 
-    def test_catalog_config_yields_header_plus_bullets(self):
+    def test_catalog_constraints_have_header(self):
         cfg = DesignConfiguration(
             name="b", parameters={"redundancy_level": "triple"}
         )

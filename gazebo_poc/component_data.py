@@ -9,4 +9,3 @@ from src.realization.catalog import (
 )
 
 __all__ = ["MotorPropPoint", "MotorProp", "MN5008_KV340_18x61", "CATALOG"]
-

@@ -1,30 +1,28 @@
 """F1: calibrate the lumped estimator against the manufacturer-datasheet layer.
 
-The estimator's generic constants (FOM=0.62, ENERGY_DENSITY=150 Wh/kg,
-BASE_FRAME_KG/ROTOR_MASS_COEF) proved biased vs the datasheet tier (~36% low on
-endurance, experiment B; catalog-snap ties made the n=3 Pareto rank check
-uninformative). The fix uses the KEY insight that the calibration set does not
-need DSE designs: **the catalog grid itself is the calibration set** — every
-feasible combo×pack×frame combination carries both a datasheet truth (real
-masses + bench hover current) and an estimator prediction for the identical
-configuration. That gives n in the tens, no snap degeneracy, and a clean
-fit/validate split (fit on the catalog grid, validate out-of-sample on the DSE
-Pareto front via the existing rank_preservation).
+The generic constants (FOM=0.62, ENERGY_DENSITY=150 Wh/kg,
+BASE_FRAME_KG/ROTOR_MASS_COEF) came out biased against the datasheet tier
+(~36% low on endurance, experiment B; catalog-snap ties made the n=3 Pareto
+rank check uninformative). The catalog grid is used as the calibration set
+instead of DSE designs: every feasible comboxpackxframe combination carries
+both a datasheet truth (real masses + bench hover current) and an estimator
+prediction for the same configuration, giving n in the tens, no snap
+degeneracy, and a fit/validate split (fit on the grid, validate on the DSE
+Pareto front via rank_preservation).
 
 Fitted effective parameters (all physical, no black-box regression):
-  * fom_eff             = median(P_ideal / P_datasheet_electrical) — absorbs
+  * fom_eff             = median(P_ideal / P_datasheet_electrical) - absorbs
                           motor+ESC efficiency into one hover system efficiency
                           (applied as fom=fom_eff, eta_drive=1.0);
-  * energy_density      = median over packs of capacity·cells·3.7V / mass;
+  * energy_density      = median over packs of capacity*cells*3.7V / mass;
   * base_frame_kg,
-    rotor_mass_coef     = least-squares dry-mass fit (frame + N·(motor+prop))
-                          vs total disk area over combo×frame pairs.
+    rotor_mass_coef     = least-squares dry-mass fit (frame + N.(motor+prop))
+                          vs total disk area over comboxframe pairs.
 
-Scope note (honesty): the orchestrator applies calibration ONLY around the
-search (run_variation_dse), so the injected SysML calc defs keep the documented
-textbook constants (Automator consistency preserved) and Phase 8's
-estimator_value column keeps the uncalibrated lumped values — the lumped-vs-
-datasheet contrast stays visible.
+Scope: the orchestrator applies calibration only around the search
+(run_variation_dse), so the injected SysML calc defs keep the documented
+textbook constants and Phase 8's estimator_value column keeps the
+uncalibrated lumped values, leaving the lumped-vs-datasheet contrast visible.
 """
 from __future__ import annotations
 
@@ -51,19 +49,19 @@ from .catalog import ComponentCatalog, DEFAULT_CATALOG
 class GridPoint:
     """One feasible catalog configuration with datasheet truth + estimator inputs."""
     label: str
-    design: DesignInputs          # payload-free equivalent configuration
+    design: DesignInputs
     real_mass_kg: float
     ds_endurance_min: float
     disk_area_m2: float
-    # Current-based propulsion power at nominal pack voltage — the SAME arithmetic
-    # the datasheet endurance uses (Ah/I), so the fom fit and the endurance truth
-    # share one power definition (the bench power column can differ from V·I).
+    # Current-based propulsion power at nominal pack voltage, the same arithmetic
+    # the datasheet endurance uses (Ah/I), so the fom fit and the endurance figure
+    # share one power definition (the bench power column can differ from V*I).
     p_prop_current_w: float
 
 
 @dataclass(frozen=True)
 class EstimatorCalibration:
-    fom_eff: float                # ideal/electrical hover efficiency (FOM×η_drive)
+    fom_eff: float
     energy_density_wh_kg: float
     base_frame_kg: float
     rotor_mass_coef: float
@@ -73,8 +71,10 @@ class EstimatorCalibration:
     notes: Tuple[str, ...] = ()
 
     def overrides(self) -> Dict[str, float]:
-        """physics_estimator.set_calibration/calibrated kwargs. fom_eff absorbs
-        drive efficiency, so eta_drive is pinned to 1.0 alongside it."""
+        """Kwargs for physics_estimator.set_calibration/calibrated.
+
+        fom_eff absorbs drive efficiency, so eta_drive is pinned to 1.0.
+        """
         return {
             "fom": self.fom_eff,
             "eta_drive": 1.0,
@@ -98,12 +98,11 @@ class EstimatorCalibration:
 
 def calibration_grid(catalog: ComponentCatalog = DEFAULT_CATALOG,
                      include_clamped: bool = True) -> List[GridPoint]:
-    """Every feasible combo×pack×frame configuration (payload-free).
+    """Every feasible comboxpackxframe configuration (payload-free).
 
     ``include_clamped=False`` keeps only configurations whose hover thrust lies
-    INSIDE the published bench curve: below the lowest bench row the current is
-    clamped (no manufacturer data there), so the datasheet "truth" itself is
-    pessimistic — such points would poison a calibration fit.
+    inside the published bench curve: below the lowest bench row the current is
+    clamped, so the datasheet value is pessimistic and would skew a fit.
     """
     points: List[GridPoint] = []
     for combo in catalog.combos:
@@ -120,19 +119,18 @@ def calibration_grid(catalog: ComponentCatalog = DEFAULT_CATALOG,
                 mass_kg = dry_kg + pack.mass_g / 1000.0
                 per_motor_g = mass_kg * 1000.0 / frame.arms
                 if not include_clamped and per_motor_g < curve_min_g:
-                    continue  # hover point below the published curve → clamped truth
+                    continue
                 try:
                     current_a, power_w = combo.interp_at_thrust(per_motor_g)
                 except ValueError:
-                    continue  # cannot hover — outside the bench curve
-                del power_w  # bench power column can differ from V·I; endurance uses current
+                    continue
+                del power_w  # bench power can differ from V*I; endurance uses I
                 area = frame.arms * math.pi * radius_m ** 2
-                # KNOWN APPROXIMATION (deliberately unchanged 2026-08-26): CELL_V
-                # rates Li-ion packs at LiPo 3.7 V/cell. The fitted calibration
-                # values cited by the dissertation (0.829 / 15.2%) were produced
-                # with this constant; correcting it here would silently diverge
-                # the code from the archived claims. Use pack.operating_voltage_v()
-                # if this is ever refit. forward_flight_check already uses it.
+                # Known approximation, unchanged since 2026-08-26: CELL_V rates Li-ion packs
+                # at LiPo 3.7 V/cell. The fitted calibration values cited by the dissertation
+                # (0.829 / 15.2%) were produced with this constant, so correcting it here
+                # would diverge from the archived claims. Use pack.operating_voltage_v() on a
+                # refit; forward_flight_check already does.
                 v_nom = pack.cells * CELL_V
                 total_a = current_a * frame.arms + AVIONICS_POWER_W / v_nom
                 ds_endurance = (pack.capacity_mah / 1000.0 * USABLE) / total_a * 60.0
@@ -149,11 +147,11 @@ def calibration_grid(catalog: ComponentCatalog = DEFAULT_CATALOG,
 
 
 def _dry_mass_fit(catalog: ComponentCatalog) -> Tuple[float, float, str]:
-    """Bounded least-squares (base_kg, coef) for dry mass = base + coef · disk_area.
+    """Bounded least-squares (base_kg, coef) for dry mass = base + coef . disk_area.
 
     An unconstrained line through this small grid can go unphysical (negative
-    intercept: heavy frames pair with big props), so base is grid-searched over a
-    physical band and coef is the conditional non-negative least-squares slope.
+    intercept, since heavy frames pair with big props), so base is grid-searched
+    over a physical band and coef is the conditional non-negative slope.
     """
     xs, ys = [], []
     for combo in catalog.combos:
@@ -168,7 +166,7 @@ def _dry_mass_fit(catalog: ComponentCatalog) -> Tuple[float, float, str]:
     if n < 2 or max(xs) == min(xs):
         return 0.0, 0.0, f"dry-mass fit degenerate (n={n}); keeping default constants"
     sxx = sum(x * x for x in xs)
-    best: Tuple[float, float, float] | None = None  # (sse, base, coef)
+    best: Tuple[float, float, float] | None = None
     base_hi = min(ys)  # base cannot exceed the lightest dry build
     steps = 29
     for i in range(steps):
@@ -204,7 +202,6 @@ def fit_from_catalog(catalog: ComponentCatalog = DEFAULT_CATALOG) -> EstimatorCa
         notes.append(f"excluded {n_all - len(points)} clamped configurations "
                      "(hover below the lowest published bench row — no manufacturer data)")
 
-    # Stage 1: mass model (battery density from packs, dry mass from combo×frame grid).
     density = median(
         (pack.capacity_mah / 1000.0) * pack.cells * CELL_V / (pack.mass_g / 1000.0)
         for pack in catalog.packs
@@ -214,11 +211,11 @@ def fit_from_catalog(catalog: ComponentCatalog = DEFAULT_CATALOG) -> EstimatorCa
         notes.append(mass_note)
         base, coef = BASE_FRAME_KG, ROTOR_MASS_COEF
 
-    # Stage 2: fom_eff fitted so the ESTIMATOR-side power (ideal power at the
-    # CALIBRATED mass model) matches the current-based datasheet propulsion power —
-    # the same arithmetic the datasheet endurance uses. Fitting at the estimator's
-    # own mass (not the real mass) lets fom_eff absorb the residual mass-model error
-    # instead of leaking it into the endurance prediction.
+    # Stage 2: fom_eff is fitted so the estimator-side power (ideal power at the
+    # calibrated mass model) matches the current-based datasheet propulsion power.
+    # Fitting at the estimator's own mass rather than the real mass lets fom_eff
+    # absorb the residual mass-model error instead of leaking it into the
+    # endurance prediction.
     def _m_est(pt: GridPoint) -> float:
         battery = (pt.design.battery_capacity_mah / 1000.0
                    * pt.design.battery_cells * CELL_V) / density
@@ -263,9 +260,9 @@ def catalog_rank_check(catalog: ComponentCatalog = DEFAULT_CATALOG,
                        fit: Optional[EstimatorCalibration] = None) -> Dict[str, float]:
     """Estimator-vs-datasheet endurance rank correlation on the catalog grid.
 
-    This is the L↔M rank evidence with usable n and no catalog-snap ties (each
-    point is a distinct real configuration) — the Pareto-front rank_preservation
-    stays as the out-of-sample check.
+    L↔M rank evidence with usable n and no catalog-snap ties (each point is a
+    distinct configuration); Pareto-front rank_preservation remains the
+    out-of-sample check.
     """
     points = calibration_grid(catalog, include_clamped=False)
     measured = [p.ds_endurance_min for p in points]

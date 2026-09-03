@@ -29,7 +29,6 @@ _EVALUATOR_ONLY_KEYS = {
 
 
 def _contains_evaluator_only_material(value: Any) -> bool:
-    """Recursively reject evaluator-only artifacts hidden inside board payloads."""
     if isinstance(value, Mapping):
         role = str(value.get("artifact_role", "")).strip().upper()
         if role in _EVALUATOR_ONLY_ROLES:
@@ -75,26 +74,21 @@ class ContextEnvelope:
             result.pop("source_requirements", None)
         return result
 
-    #: Envelope fields that identify bookkeeping rather than content. They are
-    #: archived, never rendered — see :meth:`render_for_prompt`.
     _PROMPT_EXCLUDED_RECORD_KEYS = ("record_id", "task_id", "session_id")
 
     def render_for_prompt(self) -> str:
         """The prompt text for this envelope.
 
-        Deliberately omits the monotonic bookkeeping identifiers — ``task_id``,
-        per-record ``record_id``/``session_id``, and the envelope digest. They
-        tell the model nothing, and including them made every generation prompt
-        sensitive to unrelated board activity: adding one upstream publication
-        shifted every downstream counter, changing the prompt bytes and so the
-        sampled output, with no semantic change at all. That turned "we added a
-        board record" and "we changed generation" into indistinguishable
-        interventions. The identifiers remain in the archived envelope and in
-        ``envelope_digest``, which is where provenance belongs.
+        Omits the monotonic bookkeeping identifiers - ``task_id``, per-record
+        ``record_id``/``session_id``, and the envelope digest. Including them made every
+        generation prompt sensitive to unrelated board activity: one upstream publication
+        shifted every downstream counter, changing the prompt bytes and so the sampled
+        output with no semantic change, which made "we added a board record" and "we
+        changed generation" indistinguishable interventions. They remain in the archived
+        envelope and in ``envelope_digest``.
 
-        ``model_revision`` and ``model_digest`` stay: they are content-derived,
-        stable for identical content, and they are what pins the envelope to a
-        revision.
+        ``model_revision`` and ``model_digest`` stay: content-derived, stable for identical
+        content, and what pins the envelope to a revision.
         """
         requirements = "\n".join(f"- {item}" for item in self.source_requirements)
         protected = ", ".join(self.protected_elements) or "(none declared)"
@@ -130,14 +124,13 @@ class ContextEnvelope:
 class ContextRequirement:
     """One context category a role's task cannot be done without.
 
-    ``failure_mode`` records what actually happens when it is removed, which is
-    the point: a category whose absence RAISES is safe, and one whose absence
-    silently degrades the result is the dangerous kind — the task still reports
-    success on a worse answer.
+    ``failure_mode`` records what happens when it is removed: an absence that raises is
+    visible, while one that degrades the result leaves the task reporting success on a
+    worse answer.
     """
 
     category: str
-    failure_mode: str  # "raises" | "empty_result" | "silent_degradation"
+    failure_mode: str
     evidence: str
     present: Callable[[Mapping[str, Any]], bool]
 
@@ -158,22 +151,21 @@ def _has_diagnostic_records(envelope: Mapping[str, Any]) -> bool:
     return bool(envelope.get("diagnostic_record_ids"))
 
 
-#: What each role's task demonstrably cannot be done without (§18-Q1).
-#:
-#: Derived by ABLATION, not by judgement, because the archive offered nothing to
-#: learn from: across every archived revised run every task is COMPLETED except
-#: ten that are BLOCKED by design (§11 routes an integration gap to BLOCKED), so
-#: there is no observed context failure to generalise from. "Required" is therefore
-#: given an operational meaning — remove the category and the task fails, returns
-#: nothing, or silently returns a worse answer — and each entry below cites the
-#: measured effect. `tests/test_option2_context_policy.py` re-runs every ablation,
-#: so an entry cannot stay in the policy once it stops being load-bearing.
-#:
-#: Deliberately NOT listed: categories the envelope carries for provenance and
-#: protection rather than for the task. VerificationAgent's `source_requirements`
-#: is the clear case — the planner reads the committed slice and never touches it,
-#: so calling it required would inflate the denominator of §13's
-#: required-context-coverage metric with an item no task can fail on.
+# What each role's task cannot be done without (§18-Q1).
+#
+# Derived by ablation rather than judgement: across every archived revised run
+# each task is COMPLETED except ten BLOCKED by design (§11 routes an integration
+# gap to BLOCKED), so there is no observed context failure to generalise from.
+# "Required" means: remove the category and the task fails, returns nothing, or
+# returns a worse answer, and each entry below cites the measured effect.
+# `tests/test_option2_context_policy.py` re-runs every ablation, so an entry
+# cannot stay once it stops being load-bearing.
+#
+# Not listed: categories the envelope carries for provenance and protection
+# rather than for the task. VerificationAgent's `source_requirements` is one -
+# the planner reads the committed slice instead, so requiring it would inflate
+# the denominator of §13's required-context-coverage metric with an item no task
+# can fail on.
 REQUIRED_CONTEXT_BY_ROLE: Mapping[str, Tuple[ContextRequirement, ...]] = {
     "DesignAgent": (
         ContextRequirement(
@@ -240,11 +232,10 @@ def required_context_categories(role: str) -> Tuple[ContextRequirement, ...]:
 
 
 def context_coverage(envelope: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-    """Which of this role's required categories the envelope actually carries.
+    """Which of this role's required categories the envelope carries.
 
-    Returns None for a role with no declared policy: no policy means no
-    denominator, and reporting 1.0 for "nothing was required" would be a vacuous
-    pass — the same error as scoring an arm 0.00 for an intervention it never had.
+    Returns None for a role with no declared policy: no policy means no denominator,
+    and reporting 1.0 for "nothing was required" is a vacuous pass.
     """
     requirements = required_context_categories(envelope.get("agent_role") or "")
     if not requirements:
@@ -402,8 +393,6 @@ class ContextBuilder:
         estimated_tokens = estimate_tokens(envelope.render_for_prompt())
         if estimated_tokens > envelope.token_budget:
             if allow_deterministic_truncation and content:
-                # Required typed records and source requirements have priority.
-                # Only the tail of the model slice is omitted, deterministically.
                 overflow_chars = (estimated_tokens - envelope.token_budget) * 4
                 keep = max(0, len(content) - overflow_chars - 256)
                 omitted_values = omitted_values + ("model_context:tail",)
@@ -487,9 +476,9 @@ class ContextBuilder:
     ) -> ContextEnvelope:
         """Envelope for the A/G planning task, which runs before any model exists.
 
-        The A/G decisions are made from the stakeholder requirements and the
-        frozen architecture boundary alone, so this envelope deliberately
-        carries no model slice: there is no committed revision to slice yet.
+        The A/G decisions come from the stakeholder requirements and the frozen
+        architecture boundary alone, so this envelope carries no model slice: there is no
+        committed revision to slice yet.
         """
         source_ids = tuple(str(item) for item in source_record_ids)
         requirements: list[str] = []
@@ -534,10 +523,10 @@ class ContextBuilder:
     ) -> ContextEnvelope:
         """Context for the second handoff (DesignAgent -> VerificationAgent).
 
-        The relevant model context is only the committed stakeholder requirement
-        defs (the model design produced, sliced to what verification plans), so the
-        envelope stays small and every requirement is present. The authoritative
-        requirements are reproduced from a current-revision SOURCE record.
+        The model context is only the committed stakeholder requirement defs, sliced to
+        what verification plans, so the envelope stays small with every requirement
+        present. The authoritative requirements come from a current-revision SOURCE
+        record.
         """
         from .verification_planning import requirement_def_slice
 
@@ -571,15 +560,13 @@ class ContextBuilder:
             token_budget=token_budget,
         )
 
-    # A `build_repair_context` convenience wrapper lived here and had no callers.
-    # It was not merely unused — it was WEAKER than the path in use: it linked no
-    # diagnostic records (so the repair's typed target was not attributable) and
-    # protected only `requirement_defs`/`unrelated_model_elements`, omitting the
-    # source requirement, thresholds and units. `ag_repair` builds the repair
-    # envelope through `build()` directly with the diagnostic records attached and
-    # the source values protected, because the accept gate checks against them.
-    # Keeping a friendlier-looking wrapper that produces a less safe envelope is a
-    # trap for the next caller, so it is deleted rather than wired up.
+    # A `build_repair_context` wrapper lived here with no callers, and was weaker
+    # than the path in use: it linked no diagnostic records (leaving the repair's
+    # typed target unattributable) and protected only
+    # `requirement_defs`/`unrelated_model_elements`, omitting the source requirement,
+    # thresholds and units. `ag_repair` builds the repair envelope through `build()`
+    # with the diagnostic records attached and the source values protected, since the
+    # accept gate checks against them, so the wrapper was deleted, not wired up.
 
     def snapshot(self) -> dict[str, Any]:
         return {

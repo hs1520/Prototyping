@@ -1,19 +1,14 @@
 """Prompt-mandated safety interconnect wiring, declared once.
 
-Both authoring prompts hard-mandate the SafetyMonitor interconnect (override
-command, communication status, sensor status) whenever the corresponding
-component roles are present — yet whether the step-1 typed plan actually
-declared those ports was left to the model.  When a roll skipped them, plan
-conformance flagged prompt-mandated structure as unplanned (measured: four
-unplanned ports + two unplanned connections on ablation pilot 2 and on
-authoritative run 219eb9bb, failing TYPED_GENERATION_PLAN_CONFORMANCE).
-
-This module is the single source of truth for that wiring: the two prompt
-blocks live here (spliced verbatim into the templates), and the accepted plan
-payload is augmented from the same table (planned-by-construction, the
-catalog-seed pattern), so the authoring mandate and the conformance gate can
-never drift apart.  The assembly stage already materialises planned
-connections deterministically, which makes the augmentation self-healing: a
+Both authoring prompts mandate the SafetyMonitor interconnect (override
+command, communication status, sensor status) when the component roles are
+present, but whether the step-1 typed plan declared those ports was left to the
+model, and a roll that skipped them made plan conformance flag prompt-mandated
+structure as unplanned (four unplanned ports and two unplanned connections on
+ablation pilot 2 and run 219eb9bb, failing TYPED_GENERATION_PLAN_CONFORMANCE).
+The two prompt blocks live here, spliced verbatim into the templates, and the
+accepted plan payload is augmented from the same table, so the mandate and the
+gate cannot drift apart; assembly materialises the planned connections, so a
 roll that forgets the wiring gets it restored rather than flagged.
 """
 from __future__ import annotations
@@ -25,7 +20,7 @@ from typing import Any, Mapping, Tuple
 
 @dataclass(frozen=True)
 class MandatedLink:
-    """One mandated out→in interconnect between two component roles."""
+    """One mandated out->in interconnect between two component roles."""
 
     source_role: str
     target_role: str
@@ -33,17 +28,17 @@ class MandatedLink:
     port_type: str = "DataPort"
 
 
-#: source drives target; the link fires only when BOTH roles resolve to
-#: exactly one planned component (matching the prompts' conditionality).
+# source drives target; the link fires only when both roles resolve to
+# one planned component, matching the prompts' conditionality.
 MANDATED_LINKS: Tuple[MandatedLink, ...] = (
     MandatedLink("safety_monitor", "controller", "overrideCmd"),
     MandatedLink("communication", "safety_monitor", "commStatus"),
     MandatedLink("perception", "safety_monitor", "sensorStatus"),
 )
 
-#: Keyword sets mirror the prompts' own role phrasings ("SafetyMonitor (or
-#: similar safety-enforcement component)", "main controller/autopilot",
-#: "comms/link", "sensor/IMU/camera").
+# Keyword sets mirror the prompts' own role phrasings ("SafetyMonitor (or
+# similar safety-enforcement component)", "main controller/autopilot",
+# "comms/link", "sensor/IMU/camera").
 ROLE_KEYWORDS: Mapping[str, Tuple[str, ...]] = {
     "safety_monitor": ("safetymonitor", "safetyenforcement"),
     "controller": ("controller", "autopilot"),
@@ -51,13 +46,12 @@ ROLE_KEYWORDS: Mapping[str, Tuple[str, ...]] = {
     "perception": ("perception", "sensor", "imu", "camera"),
 }
 
-#: The authoritative copy of the block inside ARCHITECTURE_DECOMPOSITION_TEMPLATE.
-#: tests/test_mandated_wiring.py asserts the template contains it byte-for-byte
-#: AND that every MANDATED_LINKS entry appears in it, so prompt, table, and
-#: augmentation cannot drift apart silently.  (Runtime splicing was rejected:
-#: llm/__init__ eagerly imports chain_of_thought while prototyping/__init__
-#: eagerly imports provider_factory -> llm.interface, so an llm -> prototyping
-#: module-level import closes a package-init cycle.)
+# Authoritative copy of the block in ARCHITECTURE_DECOMPOSITION_TEMPLATE.
+# tests/test_mandated_wiring.py asserts the template contains it byte-for-byte
+# and that every MANDATED_LINKS entry appears in it, so prompt, table and
+# augmentation cannot drift apart. Runtime splicing is not used: llm/__init__
+# imports chain_of_thought and prototyping/__init__ imports provider_factory ->
+# llm.interface, so an llm -> prototyping import closes a package-init cycle.
 PLAN_SIDE_RULES_BLOCK = """\
 - Safety interconnect ports (MANDATORY when these component types appear):
     • If a SafetyMonitor (or similar safety-enforcement component) is listed:
@@ -71,7 +65,6 @@ PLAN_SIDE_RULES_BLOCK = """\
         – SafetyMonitor MUST include `in sensorStatus` in its port list.
 """
 
-#: Rendered verbatim into PART_DEFINITIONS_TEMPLATE.
 PART_SIDE_RULES_BLOCK = """\
 - Safety interconnect ports (MANDATORY — add these whenever the component type is present):
     • If a SafetyMonitor part def is defined:
@@ -91,7 +84,6 @@ def _normalise(name: str) -> str:
 
 
 def _resolve_role(role: str, component_names: list[str]) -> tuple[str | None, bool]:
-    """(unique component name, ambiguous?) for a role, by keyword match."""
     keywords = ROLE_KEYWORDS[role]
     matches = [
         name for name in component_names
@@ -107,10 +99,10 @@ def augment_architecture_payload(
 ) -> tuple[dict[str, Any], list[str]]:
     """Plan the mandated wiring by construction on an LLM plan payload.
 
-    Returns an augmented copy of the payload plus one advisory note per
-    deterministic addition.  Never overwrites anything the model declared: a
-    same-name port with a conflicting direction/type, an ambiguous role, or a
-    passive endpoint skips that link with a note instead.  Idempotent.
+    Returns an augmented copy plus one advisory note per addition. Nothing the
+    model declared is overwritten: a same-name port with a conflicting
+    direction/type, an ambiguous role, or a passive endpoint skips that link with a
+    note. Idempotent.
     """
     notes: list[str] = []
     raw_components = payload.get("components")
@@ -142,7 +134,6 @@ def augment_architecture_payload(
 
     def ensure_port(component_name: str, port_name: str,
                     direction: str, port_type: str) -> bool | None:
-        """True=added, False=already planned compatibly, None=conflict."""
         component = named[component_name]
         existing = port_entry(component, port_name)
         if existing is not None:
@@ -172,7 +163,7 @@ def augment_architecture_payload(
             )
             continue
         if source is None or target is None:
-            continue   # role absent — the mandate's condition does not fire
+            continue
         if named[source].get("passive") or named[target].get("passive"):
             notes.append(
                 f"mandated wiring skipped ({link.port_name}): endpoint is "

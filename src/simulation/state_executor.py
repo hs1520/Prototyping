@@ -1,14 +1,4 @@
-"""
-state_executor.py
-
-单个状态机实例的执行引擎。
-
-用法:
-    inst = StateMachineInstance(sm_def)
-    for t, variables in enumerate(test_sequence):
-        fired = inst.step(variables, time=float(t))
-    print(inst.transition_log)
-"""
+"""state_executor.py"""
 
 from __future__ import annotations
 
@@ -17,10 +7,6 @@ from typing import Any, Dict, List, Optional
 
 from .state_extractor import GuardCondition, StateMachineDef
 
-
-# ---------------------------------------------------------------------------
-# Log entry
-# ---------------------------------------------------------------------------
 
 @dataclass
 class TransitionEvent:
@@ -40,16 +26,8 @@ class TransitionEvent:
         )
 
 
-# ---------------------------------------------------------------------------
-# State machine instance
-# ---------------------------------------------------------------------------
-
 class StateMachineInstance:
-    """
-    Executes a StateMachineDef step-by-step given a sequence of variable dicts.
-
-    State is reset between scenario runs via reset().
-    """
+    """Executes a StateMachineDef step-by-step given a sequence of variable dicts."""
 
     def __init__(self, sm: StateMachineDef) -> None:
         self.sm = sm
@@ -62,24 +40,9 @@ class StateMachineInstance:
         self.transition_log.clear()
         self.fired_actions.clear()
 
-    # ------------------------------------------------------------------ #
-    #  Single time step                                                   #
-    # ------------------------------------------------------------------ #
-
     def step(self, variables: Dict[str, Any], time: float = 0.0,
              command: Optional[str] = None) -> bool:
-        """
-        Evaluate all outgoing transitions from the current state and fire the
-        first eligible one.
-
-        Eligibility rules:
-          • Accept-triggered transition  → fires when *command* matches
-            ``tr.accept_trigger``; optional guards must also hold.
-          • Guard-only transition        → fires when all guards hold
-            (existing behaviour, *command* is ignored).
-
-        Returns True if a transition fired this step.
-        """
+        """Evaluate outgoing transitions from the current state; fire the first eligible one."""
         if self.current_state is None:
             return False
 
@@ -90,10 +53,8 @@ class StateMachineInstance:
                 continue
 
             if tr.accept_trigger:
-                # Accept-triggered: command must match
                 if tr.accept_trigger != command:
                     continue
-                # Optional guard on top of accept
                 if tr.guards and not all(
                     self._eval_guard(g, variables) for g in tr.guards
                 ):
@@ -102,7 +63,6 @@ class StateMachineInstance:
                                       guard_desc=f"accept {tr.accept_trigger}")
                 return True
 
-            # Guard-only transition (original behaviour)
             if not tr.guards:
                 continue
             if all(self._eval_guard(g, variables) for g in tr.guards):
@@ -119,7 +79,6 @@ class StateMachineInstance:
         variables: Dict[str, Any],
         guard_desc: str = "",
     ) -> None:
-        """Record a transition firing and advance current_state."""
         old_state = self.current_state
         self.current_state = tr.target
 
@@ -151,15 +110,11 @@ class StateMachineInstance:
             return False
         return self.sm.entry_action_for_state(self.current_state) is not None
 
-    # ------------------------------------------------------------------ #
-    #  Guard evaluation                                                   #
-    # ------------------------------------------------------------------ #
-
     def _eval_guard(self, guard: GuardCondition, variables: Dict[str, Any]) -> bool:
         # Layer 1: when the guard carries full expression trees, evaluate them
-        # against the COMPLETE environment (driven variables overlaid on the
-        # owner part's initial values), so a variable/arithmetic RHS such as
-        # `batteryCharge <= returnEnergyRequired` resolves correctly.
+        # against the complete environment (driven variables over the owner part's
+        # initial values) so a variable/arithmetic RHS such as
+        # `batteryCharge <= returnEnergyRequired` resolves.
         if guard.kind == "comparison" and guard.lhs is not None and guard.rhs is not None:
             env: Dict[str, Any] = {**(self.sm.initial_values or {}), **variables}
             return guard.eval(env)

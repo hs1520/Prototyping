@@ -15,7 +15,7 @@ REQ = (
 )
 
 
-def test_frozen_requirement_artifact_round_trips_exact_text_and_digest():
+def test_frozen_artifact_round_trips():
     artifact = build_frozen_requirement_set([REQ], name="option2")
 
     requirements, canonical = resolve_frozen_requirement_set(artifact)
@@ -24,7 +24,7 @@ def test_frozen_requirement_artifact_round_trips_exact_text_and_digest():
     assert canonical["requirement_set_digest"] == artifact["requirement_set_digest"]
 
 
-def test_frozen_artifact_rejects_content_changed_after_digest():
+def test_tampered_content_rejected():
     artifact = build_frozen_requirement_set([REQ])
     artifact["requirements"][0] += " changed"
 
@@ -32,7 +32,7 @@ def test_frozen_artifact_rejects_content_changed_after_digest():
         resolve_frozen_requirement_set(artifact)
 
 
-def test_dependency_graph_round_trips_and_normalises_ids():
+def test_graph_normalises_ids():
     prerequisite = "REQ-INTF-001: The system shall receive navigation data."
     artifact = build_frozen_requirement_set(
         [REQ, prerequisite],
@@ -46,7 +46,7 @@ def test_dependency_graph_round_trips_and_normalises_ids():
     ]
 
 
-def test_dependency_graph_rejects_unknown_and_self_endpoints():
+def test_graph_rejects_bad_endpoints():
     with pytest.raises(ValueError, match="unknown endpoint"):
         build_frozen_requirement_set(
             [REQ], dependencies=[{"from": "REQ-SAFE-005", "to": "REQ-X-999"}]
@@ -57,7 +57,7 @@ def test_dependency_graph_rejects_unknown_and_self_endpoints():
         )
 
 
-def test_requirement_change_invalidates_reverse_dependency_closure_only():
+def test_change_invalidates_dependents():
     req_a = "REQ-FUNC-001: The system shall perform A."
     req_b = "REQ-FUNC-002: The system shall perform B."
     req_c = "REQ-FUNC-003: The system shall perform C."
@@ -82,7 +82,7 @@ def test_requirement_change_invalidates_reverse_dependency_closure_only():
     ]
 
 
-def test_dependency_edge_change_propagates_to_its_downstream_dependents():
+def test_edge_change_propagates():
     reqs = [
         "REQ-FUNC-001: The system shall perform A.",
         "REQ-FUNC-002: The system shall perform B.",
@@ -109,7 +109,7 @@ def test_dependency_edge_change_propagates_to_its_downstream_dependents():
     ]
 
 
-def test_authoritative_drone_input_carries_reviewable_dependency_edges():
+def test_drone_input_carries_edges():
     from examples.drone_system_v2 import DRONE_FROZEN_REQUIREMENTS
 
     graph = DRONE_FROZEN_REQUIREMENTS["dependency_graph"]

@@ -1,13 +1,10 @@
-"""Emit a self-contained, ANALYSABLE SysML v2 product-line fragment from a design.
+"""Emit an analysable SysML v2 product-line fragment from a design.
 
-This closes the gap where variant attributes were "bare" (no constraint / analysis /
-satisfy). It mirrors the Python physics estimator into a SysML v2 ``calc def`` that
-**Syside Automator can actually evaluate** (operators only — ``**`` for power/root), so
-the model itself can compute emergent performance, check it against the requirement
-(``assert constraint``), and trace it (``satisfy``) — not just carry numbers.
-
-Single source of truth: the calc def's constants come from ``physics_estimator``, so the
-SysML analysis and the Python DSE/calibration use the SAME physics (they evaluate equal).
+Mirrors the Python physics estimator into a ``calc def`` Syside Automator can
+evaluate (operators only, ``**`` for power/root), so the model computes emergent
+performance, checks it with ``assert constraint`` and traces it with ``satisfy``.
+Constants come from ``physics_estimator``, so the SysML analysis and the Python
+DSE/calibration evaluate the same physics.
 """
 from __future__ import annotations
 
@@ -27,19 +24,17 @@ from .physics_estimator import (
     ETA_DRIVE, FOM, G, RHO, ROTOR_MASS_COEF, USABLE,
 )
 
-# Name of the tool-authored wrapper this emitter injects; other validators
-# reference it to recognise the block as pipeline-owned, not model content.
+# Name of the tool-authored wrapper this emitter injects; validators use it to
+# recognise the block as pipeline-owned rather than model content.
 ANALYSIS_CLOSURE_DEF_NAME = "DseDesignAnalysis"
 
 _USAGE_RE = re.compile(r"\bpart\s+(\w+)\s*:\s*(\w+)\s*;")
-# Endurance(...) argument order ↔ DesignInputs field name
 _ARG_ORDER = ("battery_capacity_mah", "battery_cells", "rotor_count",
               "rotor_radius_m", "payload_mass_kg")
 
 
 def endurance_calc_def(indent: str = "    ") -> str:
-    """SysML v2 ``calc def Endurance`` mirroring physics_estimator.endurance_min.
-    Constants are interpolated from the estimator → one source of truth."""
+    """SysML v2 ``calc def Endurance`` mirroring physics_estimator.endurance_min."""
     pi = math.pi
     return (
         f"{indent}calc def Endurance {{\n"
@@ -60,8 +55,9 @@ def endurance_calc_def(indent: str = "    ") -> str:
 
 
 def mtow_calc_def(indent: str = "    ") -> str:
-    """SysML v2 ``calc def Mtow`` mirroring physics_estimator.total_mass_kg (emergent
-    all-up mass: frame + propulsion + battery self-mass + payload)."""
+    """SysML v2 ``calc def Mtow`` mirroring physics_estimator.total_mass_kg (emergent all-up mass:
+    frame + propulsion + battery self-mass + payload).
+    """
     pi = math.pi
     return (
         f"{indent}calc def Mtow {{\n"
@@ -75,8 +71,7 @@ def mtow_calc_def(indent: str = "    ") -> str:
 
 
 def range_calc_def(indent: str = "    ") -> str:
-    """SysML v2 ``calc def RangeM`` mirroring physics_estimator.range_m (endurance ×
-    cruise speed). Reuses ``Endurance`` via a nested calc invocation (Automator-evaluable)."""
+    """SysML v2 ``calc def RangeM`` mirroring physics_estimator.range_m (endurance x cruise speed)."""
     return (
         f"{indent}calc def RangeM {{\n"
         f"{indent}    in capacityMah : Real; in cells : Real; in rotorCount : Real;\n"
@@ -95,9 +90,9 @@ def emit_endurance_analysis(
     d: DesignInputs, target_min: float, satisfy_req: str = "REQ-PERF-002",
     package_name: str = "AnalyzedProductLine", part_name: str = "AnalyzedDesign",
 ) -> Tuple[str, bool]:
-    """A self-contained analysable SysML fragment: calc def + derived endurance +
-    ``assert constraint`` against the requirement target + ``satisfy``. Returns
-    (sysml, ok); ok=False (empty) if it would not parse."""
+    """Analysable SysML fragment: calc def + derived endurance + ``assert constraint``
+    against the requirement target + ``satisfy``.
+    """
     inv = _invocation(d)
     rid = satisfy_req.replace("-", "_")
     sysml = (
@@ -119,8 +114,6 @@ def emit_endurance_analysis(
 
 
 def _root_part_def(text: str) -> Optional[Tuple[str, int, int]]:
-    """(name, brace_index, close_brace_index) of the part def owning the most part
-    usages — the system assembly the analysis closure attaches to."""
     best = None
     for m in PART_DEF_RE.finditer(text):
         brace = m.end() - 1
@@ -142,9 +135,6 @@ def _inject_attr_into_type(text: str, type_name: str, attr: str, value: float) -
 
 
 def _analysis_scope(text: str) -> Optional[Tuple[str, int, bool]]:
-    """Where the closure attaches: (usages_body, close_brace_index, wrap_in_partdef).
-    Prefer a system root part def (nested assembly); else fall back to package level
-    (flat assembly — the closure goes into a new wrapper part def there)."""
     root = _root_part_def(text)
     if root is not None:
         _, brace, end = root
@@ -164,17 +154,15 @@ def inject_endurance_analysis(
     """Inject an Automator-evaluable endurance/MTOW/range closure: ``calc def`` + derived
     ``enduranceMin``/``mtowKg`` + ``assert constraint`` vs the requirement + ``satisfy``.
 
-    If ``design`` (the DSE's recommended DesignInputs) is given, the invocations use its
-    AUTHORITATIVE values — the exact design the bilevel search scored and the trade study
-    lists — so the closure can't diverge from the optimization (cross-part references are
-    fragile when variation points conflict on a field, e.g. propulsion AND airframe both
-    declaring rotorCount, or when a field's owner isn't a variation point). Without it,
-    falls back to referencing the chosen variants' attributes (legacy path). Either way the
-    design's parameters participate in a real, checkable constraint (closes the bare-attr
-    gap). Works for a nested system part def and a flat package (wrapped in DseDesignAnalysis).
-
-    Returns (model_text, ok); ok=False (unchanged) if there's no endurance target, no
-    assembly, no design-input owners, or the result wouldn't parse."""
+    With ``design`` (the DSE's recommended DesignInputs) the invocations use its values,
+    so the closure cannot diverge from the optimization; cross-part references are fragile
+    when two variation points declare the same field, or when a field's owner is not a
+    variation point. Without it, falls back to the chosen variants' attributes (legacy
+    path). Handles a nested system part def and a flat package (wrapped in
+    DseDesignAnalysis). Returns (model_text, ok); ok=False leaves the text unchanged when
+    there is no endurance target, no assembly, no design-input owners, or the result would
+    not parse.
+    """
     target = endurance_target(list(requirements or []))
     if target <= 0:
         return model_text, False
@@ -183,19 +171,18 @@ def inject_endurance_analysis(
     if sc is None:
         return model_text, False
     body, end, wrap = sc
-    # design field -> (usage name, type). LAST-wins to match architecture_design's merge
-    # (.update): when two variation points declare the same field (e.g. propulsion AND
-    # airframe both set rotorCount — a model smell), the closure must reference the SAME
-    # owner the DSE actually scored, or the constraint diverges from the optimization.
+    # design field -> (usage name, type). Last-wins, matching architecture_design's
+    # .update merge: when two points declare the same field (both setting rotorCount),
+    # the closure uses the owner the DSE scored, else the constraint diverges from it.
     field_owner = {}
     for uname, utype in _USAGE_RE.findall(body):
         for field in variant_design_inputs(text, utype):
             field_owner[field] = (uname, utype)
     if not field_owner and design is None:
-        return model_text, False                      # legacy path needs variant attrs to ref
-    # battery capacity is the inner-BO variable; if the chosen power variant doesn't
-    # declare it, write the chosen value INTO that variant's type so it's referenceable.
-    # (legacy path only — the bound design path references recommendedDesign, not variants.)
+        return model_text, False
+    # battery capacity is the inner-BO variable; if the chosen power variant does not
+    # declare it, write the value into that variant's type so it is referenceable.
+    # Legacy path only: the bound design path references recommendedDesign.
     if design is None and "battery_capacity_mah" not in field_owner and capacity_mah \
             and "battery_cells" in field_owner:
         uname, utype = field_owner["battery_cells"]
@@ -207,9 +194,9 @@ def inject_endurance_analysis(
                 return model_text, False
             _, end, wrap = sc
     reqs = list(requirements or [])
-    # REQ_PERF_002 mandates endurance at the MAXIMUM RATED PAYLOAD — evaluate the analysis
-    # at that load (a requirement-driven condition), not the 0.5 kg default or a lighter
-    # chosen payload variant. Literal, since it's a worst-case condition, not a design var.
+    # REQ_PERF_002 mandates endurance at the maximum rated payload, so evaluate
+    # at that load rather than the 0.5 kg default. Emitted as a literal because
+    # it is a worst-case condition rather than a design variable.
     rated_payload = max_rated_payload(reqs)
 
     def ref(field: str) -> str:
@@ -217,15 +204,15 @@ def inject_endurance_analysis(
             return str(float(rated_payload))
         if field in field_owner:
             return f"{field_owner[field][0]}.{DESIGN_FIELD_ATTR[field]}"
-        return str(float(DESIGN_DEFAULTS[field]))     # nothing owns it → literal default
+        return str(float(DESIGN_DEFAULTS[field]))
 
     design_attr_lines = None
-    if design is not None:                            # authoritative: exactly what DSE scored
-        # Genuine model-internal BINDING (not inline literals): emit the scored design point as a
-        # named `recommendedDesign` part with UNIFIED-name attributes, and have the analysis
-        # REFERENCE them (Automator-evaluable cross-part refs — verified). One traceable source;
-        # editing the design attribute flows into the analysis. addedMassKg = design.payload_mass_kg
-        # already encodes delivery payload + component masses (the DSE's all-up added mass).
+    if design is not None:
+        # Model-internal binding: emit the scored design point as a `recommendedDesign`
+        # part with unified-name attributes and have the analysis reference them
+        # (Automator evaluates cross-part refs), so editing a design attribute flows
+        # into the analysis. addedMassKg = design.payload_mass_kg already covers the
+        # delivery payload + component masses.
         cruise = design.cruise_speed_mps
         design_attr_lines = (
             f"            attribute capacityMah : Real = {float(design.battery_capacity_mah)};\n"
@@ -237,47 +224,44 @@ def inject_endurance_analysis(
         base5 = ("recommendedDesign.capacityMah, recommendedDesign.cells, "
                  "recommendedDesign.rotorCount, recommendedDesign.rotorRadiusM, "
                  "recommendedDesign.addedMassKg")
-    else:                                             # legacy: reference chosen variant attrs
+    else:
         base5 = ", ".join(ref(f) for f in _ARG_ORDER)
         cruise = None
 
-    defs: list = []                                   # calc defs (shared analysis scope)
-    decls: list = []                                  # requirement usages
-    members: list = []                                # derived attrs + constraints + verification
-    satisfied: list = []                              # req usages the DESIGN element satisfies
+    defs: list = []
+    decls: list = []
+    members: list = []
+    satisfied: list = []
     seen = set(re.findall(r"requirement\s+def\s+(\w+)", text))
 
     def add_metric(calc_def_src, rid_raw, attr, expr, op, bound, cname):
         rid = rid_raw.replace("-", "_")
         if calc_def_src:
             defs.append(calc_def_src)
-        if rid not in seen:                           # don't redeclare an existing req def
+        if rid not in seen:
             decls.append(f"        requirement def {rid} {{ attribute target : Real = {bound}; }}")
             seen.add(rid)
         decls.append(f"        requirement {rid.lower()} : {rid};")
         members.append(f"        attribute {attr} : Real = {expr};")
         members.append(f"        assert constraint {cname} {{ {expr} {op} {bound} }}")
-        # Proper evidence chain (issue #4): the DESIGN element satisfies the requirement, and a
-        # verification VERIFIES it (objective → verify), with the assert above as the evaluable
-        # evidence — not a bare `satisfy` floating in the analysis block.
+        # Evidence chain (issue #4): the design element satisfies the requirement and a
+        # verification verifies it (objective -> verify), with the assert above as the
+        # evaluable evidence.
         satisfied.append(rid.lower())
-        # A `verification def` whose objective verifies a sibling requirement
-        # usage draws a subsetting-accessibility warning from the validator (a
-        # definition does not feature its owner's usages); the verification
-        # USAGE form is featured by the owning part and is warning-free.
+        # A `verification def` whose objective verifies a sibling requirement usage draws
+        # a subsetting-accessibility warning (a definition does not feature its owner's
+        # usages); the verification usage form is featured by the owning part, no warning.
         members.append(f"        verification {rid.lower()}_check {{ objective {rid.lower()}_obj "
                        f"{{ verify {rid.lower()}; }} }}")
 
-    # endurance (perf, >=) — the required trigger
     add_metric(endurance_calc_def(indent="        "), satisfy_req,
                "enduranceMin", f"Endurance({base5})", ">=", target, "enduranceMeetsReq")
-    # all-up mass / MTOW (cost, <=) — pick the loosest mass bound = the gross-mass req
     mass_rid, mass_bound = mass_limit(reqs)
     if mass_rid and mass_bound > 0:
         add_metric(mtow_calc_def(indent="        "), mass_rid,
                    "mtowKg", f"Mtow({base5})", "<=", mass_bound, "mtowWithinReq")
-    # range (perf, >=) — only a genuine OPERATIONAL-range requirement (not altitude/
-    # separation, which share the 'metre' unit), and only if the design has a cruise speed
+    # range (perf, >=) - operational-range requirements only (altitude/separation
+    # share the 'metre' unit), and only when the design has a cruise speed
     range_rid, range_tgt = range_requirement(reqs)
     has_cruise = (cruise is not None and cruise > 0) if design is not None \
         else ("cruise_speed_mps" in field_owner)
@@ -287,13 +271,11 @@ def inject_endurance_analysis(
         add_metric(range_calc_def(indent="        "), range_rid,
                    "rangeM", rinv, ">=", range_tgt, "rangeMeetsReq")
 
-    # Traceability-only verification structure: quantified requirements the model's
-    # calc set CANNOT evaluate without assumptions still get an in-model requirement
-    # usage + `verification def` whose doc names the tier that carries the evidence.
-    # No `assert constraint` is emitted for these — speed needs a drag/thrust model
-    # the estimator does not expose, range needs a non-zero design cruise speed, and
-    # altitude is a geofence CONFIG bound, not a capability calc. Fabricating an
-    # assert here would invent physics; declaring the verification route does not.
+    # Traceability-only structure: quantified requirements the calc set cannot
+    # evaluate without assumptions still get a requirement usage + `verification
+    # def` whose doc names the tier holding the evidence. No `assert constraint`
+    # is emitted: speed needs a drag/thrust model the estimator does not expose,
+    # range needs a non-zero cruise speed, altitude is a geofence config bound.
     _TRACE_TIER = {
         SPEED: ("forward_flight tier (lumped momentum, datasheet power caps) "
                 "plus L1 param consistency (WPNAV_SPEED)"),
@@ -326,27 +308,27 @@ def inject_endurance_analysis(
     if design_attr_lines is not None:                 # bound design point first (refs resolve to it)
         sat = "".join(f"            satisfy {r};\n" for r in satisfied)
         members.insert(0, "        part recommendedDesign {\n" + design_attr_lines + sat + "        }")
-    else:                                             # legacy path: design doesn't exist → satisfy
-        members += [f"        satisfy {r};" for r in satisfied]   #   in the closure (as before)
+    else:
+        members += [f"        satisfy {r};" for r in satisfied]
 
     def _compose(extra_decls: list, extra_members: list) -> str:
         core = "\n".join(defs + decls + extra_decls + members + extra_members)
         note = "    // --- DSE analysis closure (Automator-evaluable; analysis BINDS to recommendedDesign) ---\n"
-        # The bound (design) closure owns a `part recommendedDesign` — it MUST live inside the
-        # `part def DseDesignAnalysis` wrapper (excluded from the reachability graph) so it isn't
-        # mistaken for a system component and wired up by the connectivity refiner. Only the legacy
-        # path (no parts, just refs into the root scope) may inline into the root body.
+        # The bound closure owns a `part recommendedDesign`, so it goes inside the
+        # `part def DseDesignAnalysis` wrapper (excluded from the reachability graph) and
+        # the connectivity refiner does not wire it up as a system component. Only the
+        # legacy path (refs into the root scope, no parts) inlines into the root body.
         if wrap or design_attr_lines is not None:
             frag = (
                 f"\n{note}    part def {ANALYSIS_CLOSURE_DEF_NAME} "
                 f"{{\n{core}\n    }}\n"
             )
-        else:                                         # legacy nested → straight into the root body
+        else:
             frag = f"\n        {note}{core}\n"
         return text[:end] + frag + text[end:]
 
-    # Two-stage syntax gate: the traceability block must never regress the evaluable
-    # closure — if it trips the checker, fall back to the evaluable-only fragment.
+    # Two-stage syntax gate: if the traceability block trips the checker, fall back to
+    # the evaluable-only fragment.
     out = _compose(trace_decls, trace_members)
     if (trace_decls or trace_members) and check_syntax(out).has_errors:
         out = _compose([], [])
@@ -360,13 +342,7 @@ def _sig(d: DesignInputs):
 
 def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] = None,
                 bindings=None, indent: str = "    ") -> Tuple[str, bool]:
-    """An ``analysis def DesignTradeStudy`` comparing the DSE Pareto alternatives. Each
-    alternative's endurance/MTOW/(range) is computed by EMBEDDED, Automator-evaluable calc
-    defs (mirrors physics_estimator). When ``bindings`` is given (index-aligned list of
-    ``{point_id: impl_type_name}``), each alternative is FORMALLY bound to the variant
-    definitions it's composed of via a nested ``part alt{i} { part <point> : <Impl>; … }``
-    — object-level traceability (alt3 *uses* Hexa_medium + Power_6s), not a comment.
-    ``alternatives`` is a list of DesignInputs. Returns (block, ok)."""
+    """An ``analysis def DesignTradeStudy`` comparing the DSE Pareto alternatives."""
     alts = list(alternatives or [])
     if not alts:
         return "", False
@@ -396,7 +372,7 @@ def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] 
         uses = ", ".join(f"{pid}={impl}" for pid, impl in b.items()) or "—"
         lines.append(f"{inner}// alt{i}{tag}: uses {uses} | cap={a.battery_capacity_mah}mAh "
                      f"addedMass={a.payload_mass_kg}kg (delivery+components)")
-        if b:                                    # formal object-level binding to variant defs
+        if b:
             lines.append(f"{inner}part alt{i}Design {{")
             for pid, impl in b.items():
                 lines.append(f"{inner}    part {pid} : {impl};")
@@ -406,8 +382,8 @@ def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] 
         if has_range:
             lines.append(f"{inner}attribute alt{i}_rangeM : Real = RangeM({five}, {a.cruise_speed_mps});")
         # per-alternative requirement satisfaction: AND of the hard bounds (Automator-
-        # evaluable), so the trade study self-evidences which candidates are feasible —
-        # the recommendation-vs-feasibility tension becomes a model fact next to (RECOMMENDED).
+        # evaluable), so the trade study records which candidates are feasible next to
+        # (RECOMMENDED).
         clauses = []
         if end_tgt > 0:
             clauses.append(f"alt{i}_enduranceMin >= {end_tgt}")
@@ -420,7 +396,7 @@ def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] 
                          + " and ".join(clauses) + ";")
     lines.append(f"{indent}}}")
     block = "\n".join(lines)
-    # self-validate in a wrapper that stubs the bound impl types (they live in the real
+    # self-validate in a wrapper stubbing the bound impl types (they live in the real
     # model; inject_trade_study re-validates against the full assembly).
     stubs = "".join(f"    part def {impl};\n" for b in binds for impl in set(b.values()))
     ok = not check_syntax(f"package _C {{\n{stubs}{block}\n}}").has_errors
@@ -429,8 +405,7 @@ def trade_study(alternatives, requirements, recommended: Optional[DesignInputs] 
 
 def inject_trade_study(model_text: str, alternatives, requirements,
                        recommended: Optional[DesignInputs] = None, bindings=None) -> Tuple[str, bool]:
-    """Inject the DesignTradeStudy analysis def at package level. Returns (model_text, ok);
-    ok=False (unchanged) if there's nothing to compare or it wouldn't parse."""
+    """Inject the DesignTradeStudy analysis def at package level."""
     block, ok = trade_study(alternatives, requirements, recommended=recommended, bindings=bindings)
     if not ok:
         return model_text, False

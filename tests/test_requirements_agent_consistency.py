@@ -2,7 +2,7 @@ from src.agents.requirements_agent import RequirementsAgent
 from src.llm.interface import MockLLM
 
 
-def test_fixed_requirement_wins_over_llm_copy_with_severity_suffix():
+def test_fixed_requirement_wins():
     manual = (
         "REQ-SAFE-001: The system shall initiate return to base when battery "
         "state of charge reaches 25%."

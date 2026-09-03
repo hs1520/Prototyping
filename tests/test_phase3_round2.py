@@ -1,9 +1,3 @@
-"""Tests for the weighted DesignConfiguration.overall_score.
-
-The scalar-MCTS features this file also used to cover (early stopping,
-seeding, _explore_design_space, inter-parameter constraints) were removed
-with the legacy scalar MCTS.
-"""
 from __future__ import annotations
 
 from tests._dep_stubs import install_missing_dep_stubs
@@ -16,14 +10,8 @@ from src.dse.design_space import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# #1 — Weighted overall_score
-# ─────────────────────────────────────────────────────────────────────────────
-
 class TestWeightedOverallScore:
-
     def test_safety_dominates_simplicity(self):
-        """A safe-but-complex design must outscore an unsafe-but-simple one."""
         safe_complex = DesignConfiguration(
             name="safe_complex",
             scores={
@@ -50,7 +38,7 @@ class TestWeightedOverallScore:
     def test_known_weights_sum_to_one(self):
         assert abs(sum(DEFAULT_DIMENSION_WEIGHTS.values()) - 1.0) < 1e-6
 
-    def test_weighted_score_matches_explicit_calculation(self):
+    def test_score_matches_explicit_calc(self):
         cfg = DesignConfiguration(
             name="calc",
             scores={
@@ -60,18 +48,11 @@ class TestWeightedOverallScore:
                 "simplicity": 1.0,
             },
         )
-        # All scores 1.0 → weighted average = 1.0 regardless of weights
         assert abs(cfg.overall_score - 1.0) < 1e-6
 
-    def test_unknown_dimensions_fall_back_to_equal_weights(self):
-        # All-unknown keys should use equal-weight average
+    def test_unknown_dimensions_equal_weights(self):
         cfg = DesignConfiguration(
             name="unknown",
             scores={"custom_a": 0.4, "custom_b": 0.6},
         )
         assert abs(cfg.overall_score - 0.5) < 1e-6
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# #5 — Early stopping via patience
-# ─────────────────────────────────────────────────────────────────────────────

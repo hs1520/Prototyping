@@ -1,20 +1,18 @@
-"""#3 ReplaceInterfaceProtocol — architecture DSE operator (bilevel outer layer).
+"""#3 ReplaceInterfaceProtocol - architecture DSE operator (bilevel outer layer).
 
 Chooses the communication protocol for data interfaces: generic data ports are
-re-typed to a protocol-specific signal (MAVLink / CAN / Ethernet). Power ports are
+re-typed to a protocol-specific signal (MAVLink / CAN / Ethernet), power ports
 left untouched (domain separation). Replaces the regex
-``apply_inject_protocol_to_sysml_text``.
-
-Valid-by-construction: each protocol is a pre-defined catalog signal port def
-(specialising an abstract ``Signal`` and carrying a protocol-specific item).
-All SysML v2 fragments are Syside 0.8.8 verified. See docs/DSE_OPERATORS.md §#3.
+``apply_inject_protocol_to_sysml_text``. Each protocol is a pre-defined catalog
+signal port def (specialising an abstract ``Signal`` and carrying a
+protocol-specific item); all fragments are Syside 0.8.8 verified. See
+docs/DSE_OPERATORS.md §#3.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
-# variant key -> (signal port def name, frame item def name, interop weight)
 CATALOG: Dict[str, Tuple[str, str, float]] = {
     "mavlink":  ("MAVLinkSignal", "MAVLinkFrame", 0.9),
     "can":      ("CANSignal", "CANFrame", 0.7),
@@ -53,10 +51,6 @@ class ReplaceInterfaceProtocol:
     def interop(self, variant: str) -> float:
         return CATALOG[variant][2]
 
-    # ------------------------------------------------------------------
-    # MO-MCTS contract
-    # ------------------------------------------------------------------
-
     def feasible(self, variant: str, ctx, state=None) -> bool:
         return self.preconditions(
             variant, allowed=getattr(ctx, "allowed_protocols", None)
@@ -66,10 +60,6 @@ class ReplaceInterfaceProtocol:
         if variant not in CATALOG:
             return False
         return allowed is None or variant in allowed
-
-    # ------------------------------------------------------------------
-    # Skeleton declaration
-    # ------------------------------------------------------------------
 
     def declare_skeleton(self) -> str:
         variant_items = "\n".join(
@@ -86,10 +76,6 @@ class ReplaceInterfaceProtocol:
             "}\n"
         )
 
-    # ------------------------------------------------------------------
-    # Resolution — data ports protocol-typed, power ports untouched
-    # ------------------------------------------------------------------
-
     def resolve(self, variant: str) -> str:
         if variant not in CATALOG:
             raise ValueError(f"unknown variant {variant!r}; expected {self.variants}")
@@ -98,9 +84,9 @@ class ReplaceInterfaceProtocol:
             "package ProtocolResolved {\n"
             f"{_catalog_defs()}\n"
             f"    part def {self.target_part} {{\n"
-            f"        out port telemetry : {signal};\n"   # data port -> chosen protocol
+            f"        out port telemetry : {signal};\n"
             f"        in port command : {signal};\n"
-            "        in port power : PowerPort;\n"          # power port left untouched
+            "        in port power : PowerPort;\n"
             "    }\n"
             "}\n"
         )

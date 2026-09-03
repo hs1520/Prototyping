@@ -19,7 +19,7 @@ from src.sitl.sitl_bridge import SITLBridge
 from src.sysml.lite_model import build_lite_model
 
 
-def test_safety_verification_status_marks_partial_when_trace_blocked_and_l2_runs():
+def test_status_partial_trace_blocked():
     status = safety_verification_status(
         [{"req_id": "REQ_SAFE_005", "passed": False}],
         [{"req_id": "REQ_SAFE_003", "passed": False}],
@@ -31,7 +31,7 @@ def test_safety_verification_status_marks_partial_when_trace_blocked_and_l2_runs
     assert status["traceability_blocked"] == 1
 
 
-def test_safety_verification_status_marks_blocked_without_executable_l2():
+def test_status_blocked_without_l2():
     status = safety_verification_status(
         [],
         [{"req_id": "REQ_SAFE_003", "passed": False}],
@@ -41,7 +41,7 @@ def test_safety_verification_status_marks_blocked_without_executable_l2():
     assert status["traceability_blocked"] == 1
 
 
-def test_safety_verification_status_marks_pass_and_fail_without_trace_blocks():
+def test_status_pass_and_fail():
     assert safety_verification_status(
         [{"req_id": "REQ_SAFE_005", "passed": True}],
         [],
@@ -53,7 +53,7 @@ def test_safety_verification_status_marks_pass_and_fail_without_trace_blocks():
     assert safety_verification_status([], [])["status"] == "NOT_RUN"
 
 
-def test_safety_verification_status_preserves_inconclusive_execution():
+def test_status_inconclusive():
     status = safety_verification_status([
         {"passed": True, "conclusive": True},
         {"passed": False, "conclusive": False},
@@ -63,7 +63,7 @@ def test_safety_verification_status_preserves_inconclusive_execution():
     assert status["l2_inconclusive"] == 1
 
 
-def test_single_l2_retries_one_transient_sitl_startup_failure():
+def test_l2_retries_startup_failure():
     class Bridge:
         _connection_string = "tcp:127.0.0.1:5760"
 
@@ -95,10 +95,10 @@ def test_single_l2_retries_one_transient_sitl_startup_failure():
     assert result["passed"] is True
     assert result["message"] == "passed after retry"
     assert bridge.launches == 2
-    assert bridge.stops == 2  # cleanup after failed attempt + final cleanup
+    assert bridge.stops == 2
 
 
-def test_merge_parm_lines_preserves_recommended_design_and_adds_safety_params():
+def test_merge_parm_lines_design_wins():
     merged = merge_parm_lines(
         [
             "FRAME_CLASS                    1",
@@ -122,7 +122,7 @@ def test_merge_parm_lines_preserves_recommended_design_and_adds_safety_params():
     assert "GRIP_TYPE                      1" in merged
 
 
-def test_planned_l2_specs_lists_executable_checks_without_launching_sitl(tmp_path):
+def test_planned_l2_specs_no_sitl(tmp_path):
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_003 {
@@ -145,8 +145,8 @@ def test_planned_l2_specs_lists_executable_checks_without_launching_sitl(tmp_pat
 
     planned = planned_l2_specs(bridge)
 
-    # "trigger safe landing" is land-only text → the action-specific LAND entry
-    # (RTL is a wrong action for this requirement, not an acceptable fallback).
+    # "trigger safe landing" is land-only text -> the action-specific LAND entry;
+    # RTL is the wrong action here, not a fallback.
     assert planned == [{
         "req_id": "REQ_SAFE_003",
         "tier": "L2",
@@ -159,9 +159,9 @@ def test_planned_l2_specs_lists_executable_checks_without_launching_sitl(tmp_pat
     }]
 
 
-def test_parm_freshness_blocks_bilevel_fallback_leftovers():
-    # Latest run produced no recommendation (variation DSE fell back before
-    # Phase 8) — an older recommended.parm on disk must be flagged stale.
+def test_parm_freshness_no_design():
+    # Latest run produced no recommendation (variation DSE fell back before Phase 8),
+    # so an older recommended.parm on disk is flagged stale.
     fresh, reason = parm_freshness(
         ["BATT_CAPACITY        15065", "FRAME_CLASS          2"],
         {"recommended_design_inputs": None},
@@ -170,7 +170,7 @@ def test_parm_freshness_blocks_bilevel_fallback_leftovers():
     assert "no recommended design" in reason
 
 
-def test_parm_freshness_detects_design_mismatch_and_accepts_match():
+def test_parm_freshness_mismatch():
     stale, reason = parm_freshness(
         ["BATT_CAPACITY        15065", "FRAME_CLASS          2"],
         {"recommended_design_inputs": {"battery_capacity_mah": 22000.0, "rotor_count": 4}},
@@ -194,24 +194,23 @@ def test_parm_freshness_detects_design_mismatch_and_accepts_match():
     assert "consistent" in reason
 
 
-def test_parm_freshness_without_run_json_is_rejected():
+def test_parm_freshness_needs_run_json():
     fresh, reason = parm_freshness(["BATT_CAPACITY 1"], None)
     assert fresh is False
     assert "required" in reason
 
 
-def test_retire_stale_parm_renames_leftover_file(tmp_path):
+def test_retire_stale_parm_renames(tmp_path):
     parm = tmp_path / "recommended.parm"
     parm.write_text("BATT_CAPACITY 15065\n", encoding="utf-8")
 
     assert retire_stale_parm(str(parm)) is True
     assert not parm.exists()
     assert (tmp_path / "recommended.parm.stale").read_text() == "BATT_CAPACITY 15065\n"
-    # nothing left to retire → False, and no crash
     assert retire_stale_parm(str(parm)) is False
 
 
-def test_authoritative_publication_blocks_model_fixable_functional_gaps():
+def test_publication_blocks_functional_gap():
     broken = """package D {
         requirement def REQ_FUNC_008 {
             doc /* Transmit a post-flight health report within 5 seconds of landing completion. */
@@ -226,7 +225,7 @@ def test_authoritative_publication_blocks_model_fixable_functional_gaps():
         require_authoritative_functional_closure(broken)
 
 
-def test_authoritative_publication_accepts_closed_functional_behavior():
+def test_publication_accepts_closed():
     closed = """package D {
         action def AutomatedLandingCompleted { }
         requirement def REQ_FUNC_008 {
@@ -253,7 +252,7 @@ def test_authoritative_publication_accepts_closed_functional_behavior():
     assert require_authoritative_functional_closure(closed) == []
 
 
-def test_authoritative_runtime_requires_syside_for_both_consumers(monkeypatch):
+def test_runtime_requires_syside(monkeypatch):
     from src.simulation import syntax_checker
     from src.sysml import lite_model
 
@@ -264,12 +263,12 @@ def test_authoritative_runtime_requires_syside_for_both_consumers(monkeypatch):
         require_authoritative_runtime()
 
 
-def test_coverage_summary_counts_unmapped_requirements(tmp_path):
+def test_coverage_counts_unmapped(tmp_path):
     from examples.run_sitl_feasibility import coverage_summary
 
     # REQ_SAFE_003 maps (GCS guard); REQ_CONS_002 (IP54) satisfies a part with no
-    # relevant guard/attr → honest unmapped bucket, surfaced so "blocked=0" is
-    # not over-read as "everything verified".
+    # relevant guard/attr -> unmapped bucket, surfaced so "blocked=0" is not read
+    # as "everything verified".
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_003 {

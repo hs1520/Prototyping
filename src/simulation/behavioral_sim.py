@@ -1,15 +1,4 @@
-"""
-behavioral_sim.py
-
-行为仿真主模块：为每个从模型提取的状态机自动生成仿真场景，
-注入驱动事件，执行状态机，验证转移是否在正确的时刻触发。
-
-这是真正的行为仿真（行为仿真/状态机执行）：
-  - 从模型定义中提取 guard 条件（e.g. batteryCharge < 15.0）
-  - 按时步让变量值演进（电池从 100% 逐步耗尽）
-  - 验证状态转移在正确的阈值触发，且 entry action 被调用
-  - 跨场景约束检查（RTB 必须早于 Critical）
-"""
+"""behavioral_sim.py"""
 
 from __future__ import annotations
 
@@ -24,21 +13,17 @@ from .constraint_checker import extract_constraints, ParsedConstraint, eval_op
 from ..utils.sysml_text_utils import find_block_end, named_block_span
 
 
-# ---------------------------------------------------------------------------
-# Result data classes
-# ---------------------------------------------------------------------------
-
 @dataclass
 class BehavioralScenarioResult:
     name: str
     state_machine: str
     description: str
     passed: bool
-    timeline: List[str] = field(default_factory=list)  # human-readable event log
+    timeline: List[str] = field(default_factory=list)
     violations: List[str] = field(default_factory=list)
     fired_actions: List[str] = field(default_factory=list)
-    trigger_step: Optional[int] = None      # step at which fault transition fired
-    trigger_value: Optional[float] = None   # variable value at trigger
+    trigger_step: Optional[int] = None
+    trigger_value: Optional[float] = None
     tags: List[str] = field(default_factory=list)
 
 
@@ -79,74 +64,61 @@ class BehavioralSimResult:
         return lines
 
 
-# ---------------------------------------------------------------------------
-# Scenario generation helpers
-# ---------------------------------------------------------------------------
-
-_N_STEPS = 70   # simulation steps per scenario
+_N_STEPS = 70
 
 def _derive_start_and_step(guard: GuardCondition,
                             initial_values: Dict[str, Any]
                             ) -> Tuple[float, float]:
-    """
-    For a comparison guard, return (start_value, step_size) such that the
-    variable crosses the threshold at roughly 85% of _N_STEPS.
-    Uses the model's initial_values when available, otherwise derives a
-    sensible default from the threshold.
-    """
     attr  = guard.attribute
     th    = guard.threshold
     start = initial_values.get(attr)
 
     if guard.operator in ("<", "<="):
-        # Need to decrease below threshold
         if start is None or float(start) <= th:
-            start = th * 3.0 + 10.0    # safe fallback: well above threshold
+            start = th * 3.0 + 10.0
         start = float(start)
         step = (start - th) / (_N_STEPS * 0.85)
         step = max(step, 0.001)
-        return start, -step             # negative → decreasing
+        return start, -step
 
-    else:  # '>', '>='
-        # Need to increase above threshold
+    else:
         if start is None or float(start) >= th:
             start = 0.0
         start = float(start)
         step = (th - start) / (_N_STEPS * 0.85)
         step = max(step, 0.001)
-        return start, +step             # positive → increasing
+        return start, +step
 
 
 @dataclass
 class DriverPlan:
-    """
-    One named trajectory of variable bindings used to drive a state machine.
+    """One named trajectory of variable bindings used to drive a state machine.
 
-    Layer 2 allows multiple plans per guard (e.g. for `A <= B` we generate
-    two: one that pushes A down holding B, and one that pushes B up holding A)
-    so the *relationship* is exercised, not just one operand.
+    Layer 2 allows multiple plans per guard: for `A <= B`, one pushes A down
+    holding B and one pushes B up holding A, so the relationship is exercised
+    rather than one operand.
     """
-    name: str                       # human label, e.g. "drive_LHS" / "drive_RHS"
-    sequence: List[Dict[str, Any]]  # per-step variable bindings
-    swept_var: str = ""             # which variable is being swept (for reporting)
+    name: str
+    sequence: List[Dict[str, Any]]
+    swept_var: str = ""
     start_val: Optional[float] = None
     step_size: Optional[float] = None
 
 
 def _swept_plan(
-    swept: str,                 # the variable being driven
-    held: Dict[str, float],     # all other guard vars (held constant)
-    operator: str,              # the comparison op as seen by THIS sweep
-    threshold: float,           # constant against which `swept` is compared
+    swept: str,
+    held: Dict[str, float],
+    operator: str,
+    threshold: float,
     initial_values: Dict[str, Any],
     name: str,
 ) -> DriverPlan:
+    """Build a single-variable sweep trajectory.
+
+    `swept` ramps across `threshold` under `operator`; `held` variables are
+    emitted unchanged every step so the guard evaluator sees the full
+    environment.
     """
-    Build a single-variable sweep trajectory.  `swept` ramps across
-    `threshold` under `operator`; `held` variables are emitted unchanged
-    every step so the guard evaluator sees the full environment.
-    """
-    # Synthesize a tiny ad-hoc guard to reuse the existing ramp logic.
     pseudo = GuardCondition(
         kind="comparison",
         attribute=swept,
@@ -166,15 +138,12 @@ def _swept_plan(
 
 
 def _guard_endpoints(guard: GuardCondition) -> Tuple[Optional[str], Optional[str]]:
-    """For a comparison guard, return (lhs_var, rhs_var) where each is a bare
-    variable name or None when that side is not a bare VarRef."""
     lhs_var = guard.lhs.name if isinstance(guard.lhs, VarRef) else None
     rhs_var = guard.rhs.name if isinstance(guard.rhs, VarRef) else None
     return lhs_var, rhs_var
 
 
 def _resolve(env: Dict[str, Any], name: str) -> Optional[float]:
-    """Read a numeric attribute without inventing an engineering value."""
     v = env.get(name)
     try:
         return float(v) if v is not None else None
@@ -186,7 +155,6 @@ def _build_comparison_driver_plans(
     guard: GuardCondition,
     initial_values: Dict[str, Any],
 ) -> List[DriverPlan]:
-    """Build bounded trajectories for one numeric comparison guard."""
     lhs_var, rhs_var = _guard_endpoints(guard)
 
     if lhs_var and rhs_var:
@@ -259,7 +227,6 @@ def _build_bounded_and_plans(
     guard: GuardCondition,
     initial_values: Dict[str, Any],
 ) -> List[DriverPlan]:
-    """Satisfy a bounded AND without introducing a general-purpose solver."""
     operands = _flatten_and_operands(guard)
     if not operands:
         return []
@@ -305,20 +272,6 @@ def _build_bounded_and_plans(
 
 
 def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
-    """
-    Generate one or more named DriverPlans for the first fault transition's
-    primary guard.
-
-    Layer 2 behaviour:
-      • Bare-variable LHS, bare-variable RHS (`A OP B`) →  TWO plans:
-          drive_LHS — sweep A across B's value (B held)
-          drive_RHS — sweep B across A's value (A held)
-        The *relationship* itself is verified — passes if ANY plan fires.
-      • Bare LHS, non-bare RHS (constant / arithmetic) →  ONE plan
-        (sweep LHS across the resolved threshold; old behaviour).
-      • Boolean / compound-AND guards → unchanged.
-    """
-    # Accept-triggered mode machine: use command injection plan
     if sm.has_accept_transitions():
         plan = _build_accept_command_plan(sm)
         return [plan] if plan else []
@@ -330,19 +283,17 @@ def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
     guard = ft[0].guards[0]
     init  = sm.initial_values or {}
 
-    # ── Comparison ────────────────────────────────────────────────────────
     if guard.kind == "comparison":
         return _build_comparison_driver_plans(guard, init)
 
     # ── Enum equality: `mode == EnumType::Value` (Layer 3) ───────────────
-    # Walk ALL enum_eq fault transitions on the same attribute in sequence:
-    # hold at initial for 5 steps, then advance one step per phase so the
-    # full mode chain (N-1 transitions) is exercised, not just the first.
+    # Walk every enum_eq fault transition on the attribute in sequence: hold at
+    # initial for 5 steps, then advance one step per phase, so the full mode chain
+    # (N-1 transitions) is exercised.
     if guard.kind == "enum_eq":
         attr = guard.attribute
-        init_val = str(init.get(attr, ""))   # e.g. "BOOT"
+        init_val = str(init.get(attr, ""))
 
-        # Collect target values from every enum_eq fault transition, in order.
         phase_values: List[str] = [
             t.guards[0].enum_value
             for t in ft
@@ -350,8 +301,6 @@ def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
             and t.guards[0].attribute == attr
         ]
 
-        # Build sequence: 5 steps holding initial, then 1 step per phase,
-        # then 5 extra steps at the final phase to let the last transition settle.
         seq: List[Dict[str, Any]] = [{attr: init_val}] * 5
         for val in phase_values:
             seq.append({attr: val})
@@ -360,7 +309,6 @@ def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
 
         return [DriverPlan(name="traverse_modes", sequence=seq, swept_var=attr)]
 
-    # ── Boolean flag ──────────────────────────────────────────────────────
     if guard.kind == "bool_true":
         attr = guard.attribute
         seq = [{attr: False}] * 5 + [{attr: True}] * 15
@@ -375,7 +323,6 @@ def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
             swept_var=attr,
         )]
 
-    # ── Bounded compound AND ──────────────────────────────────────────────
     if guard.kind == "compound":
         return _build_bounded_and_plans(guard, init)
 
@@ -383,18 +330,9 @@ def _build_driver_plans(sm: StateMachineDef) -> List[DriverPlan]:
 
 
 def _build_accept_command_plan(sm: StateMachineDef) -> Optional[DriverPlan]:
-    """
-    Build a command-injection DriverPlan for accept-triggered mode machines.
-
-    Traverses the state graph following accept transitions from the initial
-    state and builds a step sequence that fires each command in order.
-    The special key ``__accept__`` carries the command name; None means
-    "no command this step" (hold).
-    """
     if sm.initial_state is None:
         return None
 
-    # Build adjacency: source_state -> [(accept_trigger, target_state)]
     graph: Dict[str, List[tuple]] = {}
     for t in sm.transitions:
         if t.is_initial or not t.accept_trigger or not t.source or not t.target:
@@ -404,20 +342,18 @@ def _build_accept_command_plan(sm: StateMachineDef) -> Optional[DriverPlan]:
     if not graph:
         return None
 
-    # Walk the nominal chain from initial state
-    steps: List[str] = []   # ordered list of command names
+    steps: List[str] = []
     state = sm.initial_state
     visited: set = set()
     while state not in visited and state in graph:
         visited.add(state)
-        cmd, next_state = graph[state][0]   # take first available transition
+        cmd, next_state = graph[state][0]
         steps.append(cmd)
         state = next_state
 
     if not steps:
         return None
 
-    # Sequence: 2 hold steps, then one command + one hold per transition
     seq: List[Dict[str, Any]] = [{"__accept__": None}, {"__accept__": None}]
     for cmd in steps:
         seq.append({"__accept__": cmd})
@@ -432,14 +368,9 @@ def _build_accept_command_plan(sm: StateMachineDef) -> Optional[DriverPlan]:
 
 
 def _build_test_sequence(sm: StateMachineDef) -> List[Dict[str, Any]]:
-    """Back-compat shim: return the first driver plan's sequence."""
     plans = _build_driver_plans(sm)
     return plans[0].sequence if plans else []
 
-
-# ---------------------------------------------------------------------------
-# Scenario runner
-# ---------------------------------------------------------------------------
 
 def _drive_power_event_to_default(
     sm: StateMachineDef,
@@ -447,14 +378,12 @@ def _drive_power_event_to_default(
     required_state_terms: set,
     result: BehavioralScenarioResult,
 ) -> bool:
-    """Recognise and drive the power-on shape: initial phase state whose every
-    exit lands on the requirement's default-term state.
+    """Recognise and drive the power-on shape: an initial phase state whose
+    exits all land on the requirement's default-term state.
 
-    Returns True when the shape is recognised (the caller then skips the
-    no-initial-semantics violation); any defect found while driving is
-    recorded as a violation on *result*, so a recognised-but-broken shape
-    still fails.  Returns False when this is not the shape — the caller's
-    original violation applies.
+    Returns True when the shape is recognised; defects found while driving are
+    recorded as violations on *result*. Returns False otherwise, and the
+    caller's original violation applies.
     """
     from src.utils.sysml_text_utils import semantic_terms
 
@@ -471,9 +400,9 @@ def _drive_power_event_to_default(
     if any(
         not (required_state_terms & semantic_terms(t.target)) for t in exits
     ):
-        # An escape edge from the initial state to a non-default state:
-        # the machine can leave power-on without passing the default —
-        # exactly what "before any arming" forbids.  Not this shape.
+        # An exit from the initial state to a non-default state lets the machine
+        # leave power-on without passing the default, which "before any arming"
+        # forbids.
         return False
     unguarded = [t for t in exits if not t.guards]
     if not unguarded:
@@ -522,20 +451,14 @@ def run_initialization_scenario(
 ) -> BehavioralScenarioResult:
     """Verify an initialization/default-state machine without inventing a fault.
 
-    Some requirements are invariants ("default to Locked on power-on"), not
-    fault-triggered responses.  They legitimately need no guard transition when
-    the machine has a single default state.  A multi-state declaration is not
-    allowed to hide behind that exception: every declared state must still be
-    structurally reachable from the initial state.
-
-    ``required_state_terms`` — the requirement's default-state vocabulary
-    (e.g. {"locked"}), supplied by the caller from the FROZEN requirement
-    text. A sustaining do-action counts as observable semantics only when
-    the initial state IS that default state: ``Locked { do securePayload }``
-    holds the default continuously (run3's shape, failed here while the L2
-    servo evidence showed the default physically holding), whereas
-    ``PowerOn { do initialize }`` is a phase doing generic activity and
-    crediting it would launder an unreached default into a pass.
+    Invariant requirements ("default to Locked on power-on") need no guard
+    transition when the machine has a single default state, but every declared
+    state must still be reachable from the initial state. ``required_state_terms``
+    is the requirement's default-state vocabulary (e.g. {"locked"}) from the
+    frozen requirement text; a sustaining do-action counts as observable
+    semantics only when the initial state is that default state, so
+    ``Locked { do securePayload }`` qualifies and ``PowerOn { do initialize }``
+    does not.
     """
     result = BehavioralScenarioResult(
         name=sm.name,
@@ -577,12 +500,10 @@ def run_initialization_scenario(
     if entry:
         result.fired_actions.append(entry)
         result.timeline.append(f"Initial entry action: {entry}")
-    # A sustained do-action is observable initialization semantics of the
-    # same rank as an entry action: "default to the mechanically locked
-    # state" modelled as `state Locked { do securePayload; }` HOLDS the
-    # default continuously — arguably the more faithful shape — and run3's
-    # two payload machines were failed here for choosing it while the L2
-    # servo evidence (lock PWM) showed the default physically holding.
+    # A sustained do-action counts as observable initialization semantics
+    # alongside an entry action: `state Locked { do securePayload; }` holds
+    # the default continuously. Run3 failed two payload machines for this
+    # shape while L2 servo evidence (lock PWM) showed the default holding.
     from src.utils.sysml_text_utils import semantic_terms
     do_action = sm.do_action_for_state(initial)
     initial_is_default = bool(
@@ -594,8 +515,8 @@ def run_initialization_scenario(
         result.timeline.append(f"Initial do action: {holding_do}")
 
     # Check conventional Boolean state mirrors such as Locked ↔ isLocked=true
-    # and Disarmed ↔ isArmed=false.  This is intentionally conservative: an
-    # unrelated Boolean attribute is ignored rather than guessed.
+    # and Disarmed ↔ isArmed=false. An unrelated Boolean attribute is ignored
+    # rather than guessed.
     state_key = re.sub(r"[^a-z0-9]", "", initial.lower())
     has_state_mirror = False
     for attr, value in (sm.initial_values or {}).items():
@@ -620,25 +541,18 @@ def run_initialization_scenario(
                 f"expected {expected}"
             )
 
-    # A state name alone is only a declaration, not executable or observable
-    # initialization semantics.  Require a conventional Boolean state mirror
-    # (e.g. isLocked=true), an entry action that performs the default
-    # response, or a do action that sustains it.  This keeps legitimate
-    # single-state invariants compact while rejecting empty shells such as
-    # `state Locked; transition initial ...`.
+    # A state name alone is a declaration, not observable initialization
+    # semantics. Require a Boolean state mirror (e.g. isLocked=true), an entry
+    # action performing the default response, or a do action sustaining it, so
+    # empty shells such as `state Locked; transition initial ...` are rejected.
     #
     # A power-on-shaped machine (initial PowerOn --accept PowerOnEvent-->
-    # Locked{entry lock...}) is equally faithful modelling of "default to X
-    # upon power-on": its INITIAL state legitimately has no semantics — the
-    # semantics live one driven hop away.  This was a documented narrowness
-    # (run3 failed two payload machines here while the L2 servo evidence
-    # showed the default physically holding; s0v15 spent its whole iteration
-    # budget against it): drive the power event instead of failing the shape.
-    # The discipline that keeps discriminating power: EVERY exit from the
-    # initial state must land on a default-term state ("before any arming" —
-    # an escape edge to any other state fails), at least one exit must be
-    # unguarded (an all-guarded default is conditional, not a default), and
-    # the landed state must itself carry observable semantics.
+    # Locked{entry lock...}) also models "default to X upon power-on"; its
+    # initial state carries no semantics because they live one hop away. Run3
+    # and s0v15 both lost against this narrowness, so drive the power event
+    # instead of failing the shape. Conditions kept: every exit from the
+    # initial state lands on a default-term state, at least one exit is
+    # unguarded, and the landed state carries observable semantics.
     if not has_state_mirror and not entry and not holding_do:
         if not _drive_power_event_to_default(
             sm, initial, set(required_state_terms), result
@@ -654,16 +568,11 @@ def run_initialization_scenario(
 
 
 def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
-    """
-    Build a test sequence for *sm*, execute the state machine, and return
-    a BehavioralScenarioResult.
-    """
     ft = sm.fault_transitions()
     description = (
         f"{sm.owner_part}.{sm.name}: verify fault transition fires correctly"
     )
 
-    # Determine tags from state machine / owner name
     tags: List[str] = []
     name_low = sm.name.lower() + sm.owner_part.lower()
     if any(k in name_low for k in ("battery", "power")):
@@ -720,10 +629,10 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
 
     is_mode_machine = (primary_guard is not None and primary_guard.kind == "enum_eq")
 
-    # ── Execute every plan; pass if ANY plan triggers the fault ──────────────
-    # Multi-plan (Layer 2) verifies the *relationship* in `A OP B`: a guard
-    # that only fires in one direction still passes, but we record which plans
-    # fired so the user can see the relation is properly two-sided.
+    # ── Execute every plan; pass if any plan triggers the fault ──────────────
+    # Multi-plan (Layer 2) verifies the relationship in `A OP B`: a guard that
+    # fires in only one direction still passes, and which plans fired is
+    # recorded so the two-sidedness is visible.
     any_fired = False
     fault_states = {s.name for s in sm.states if s.entry_action}
 
@@ -732,11 +641,10 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
         for t, variables in enumerate(plan.sequence):
             command = variables.get("__accept__") if is_accept_machine else None
             fired = inst.step(variables, time=float(t), command=command)
-            # Fault monitors: stop when reaching a fault state (has entry action).
-            # Mode/accept machines: run the full sequence.
-            # The initial/default state may itself have an entry action (e.g.
-            # power-on → Locked).  Do not mistake that pre-existing state for a
-            # newly fired fault response; only stop after this step transitioned.
+            # Fault monitors: stop on reaching a fault state (has entry action).
+            # Mode/accept machines: run the full sequence. The initial state may
+            # itself have an entry action (power-on -> Locked), so only stop after
+            # this step transitioned.
             if (fired and not is_mode_machine and not is_accept_machine
                     and inst.in_fault_state()):
                 break
@@ -744,9 +652,6 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
         events = inst.transition_log
         plan_label = f"[{plan.name}]" if len(plans) > 1 else ""
 
-        # ── Accept machine path ───────────────────────────────────────────────
-        # Verify the nominal command chain: all accept-triggered transitions
-        # must fire in order.  Analogous to the mode-machine path below.
         if is_accept_machine:
             accept_trs = [t for t in sm.transitions
                           if not t.is_initial and t.accept_trigger]
@@ -776,8 +681,6 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
                 )
             continue
 
-        # ── Mode machine path (Layer 3) ───────────────────────────────────────
-        # Verify the complete phase chain: all N-1 enum_eq transitions must fire.
         if is_mode_machine:
             expected_count = len([tr for tr in ft
                                    if tr.guards and tr.guards[0].kind == "enum_eq"])
@@ -807,26 +710,21 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
                 )
             continue
 
-        # ── Fault monitor path (comparison / bool / compound) ────────────────
         if not events:
-            # Plan didn't fire — record but keep trying other plans
             result.timeline.append(
                 f"{plan_label} no trigger over {len(plan.sequence)} steps"
                 f" (swept {plan.swept_var or '?'})"
             )
             continue
 
-        # This plan did fire — capture details from the LAST event
         fault_event = events[-1]
         first_fire = not any_fired
         any_fired = True
 
         if first_fire:
-            # Use the first firing plan's data as the canonical record
             result.trigger_step = int(fault_event.time)
             result.fired_actions = list(inst.fired_actions)
 
-            # Sweep header line for context
             if plan.swept_var:
                 if primary_guard.kind == "comparison":
                     result.timeline.append(
@@ -853,22 +751,21 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
 
             result.timeline.append(fault_event.to_line())
 
-            # ── Check 1: correct target state ─────────────────────────────────
-            # Mode machines: no fault states — any transition is valid.
-            # Detection-only monitors: fault_states is empty (no entry actions
-            # by design) — transition firing is sufficient, skip state check.
+            # ── Check 1: correct target state ─────────────────────────
+            # Mode machines: no fault states, any transition is valid.
+            # Detection-only monitors: fault_states empty, so transition firing is
+            # sufficient; skip the state check.
             if not is_mode_machine and fault_states and fault_event.to_state not in fault_states:
                 result.violations.append(
                     f"Transition target '{fault_event.to_state}' is not a known "
                     f"fault state (expected one of: {fault_states})"
                 )
 
-            # ── Check 2: entry action was called ──────────────────────────────
-            # Mode machines: entry actions are optional — skip.
-            # Detection-only monitors (fault_states empty): no entry action by
-            # design — transition firing is the verification; skip this check.
+            # ── Check 2: entry action was called ──────────────────────
+            # Mode machines: entry actions are optional, skip.
+            # Detection-only monitors (fault_states empty): no entry action, so
+            # transition firing is the verification; skip.
             if not is_mode_machine and fault_states:
-                # Look up whether the target state itself has an entry action
                 target_has_entry = fault_event.to_state in fault_states
                 if target_has_entry and not result.fired_actions:
                     result.violations.append(
@@ -880,16 +777,13 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
                         f"  entry action called: {result.fired_actions[-1]}  ✓"
                     )
                 else:
-                    # fault state with no entry action — detection-only, pass
                     result.timeline.append(
                         "  detection-only fault state (no entry action — command "
                         "dispatch delegated to SafetyArbiter)  ✓"
                     )
 
-            # ── Check 3: trigger at roughly the expected step ────────────────
             if primary_guard.kind == "comparison" and plan.start_val is not None \
                     and plan.step_size is not None:
-                # Compute the value at trigger directly:
                 trig_val = round(plan.start_val + plan.step_size * result.trigger_step, 3)
                 result.trigger_value = trig_val
                 result.timeline.append(
@@ -898,7 +792,6 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
                     f" {primary_guard.threshold})"
                 )
         else:
-            # Subsequent plans that also fired — just note in timeline
             result.timeline.append(
                 f"{plan_label} also fired at step {int(fault_event.time)}  ✓"
             )
@@ -910,7 +803,6 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
         )
         return result
 
-    # Layer 2 informational hint when only one side of a two-sided relation fired
     if len(plans) > 1 and result.timeline:
         fired_names = [p.name for p in plans
                        if any(p.name in tl for tl in result.timeline)]
@@ -924,24 +816,17 @@ def _run_scenario(sm: StateMachineDef) -> BehavioralScenarioResult:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Accept machine: nominal + emergency branch scenarios
-# ---------------------------------------------------------------------------
-
 def _identifier_words(text: str) -> List[str]:
-    """Lower-case words of an identifier soup: camelCase and snake_case split."""
     spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text or "")
     spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
     return [w for w in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if w]
 
 
 def _classify_accept_transitions(sm: StateMachineDef):
-    """
-    将 accept 转移分成正常功能响应和应急分支。
+    """将 accept 转移分成正常功能响应和应急分支。
 
-    不能用“目标状态是否有 entry action”区分两者：正常功能状态也必须能够
-    执行动作，例如收到有效航点修改命令后更新飞行计划，或自动着陆完成后
-    发送健康报告。应急语义应由状态、转移或响应动作的名称明确表达。
+    不能用"目标状态是否有 entry action"区分：正常功能状态也会执行动作
+    （如更新飞行计划、发送健康报告）。应急语义由状态、转移或响应动作的名称表达。
     """
     states = {s.name: s for s in sm.states}
     emergency_markers = (
@@ -959,12 +844,10 @@ def _classify_accept_transitions(sm: StateMachineDef):
             state.do_action if state else None,
             state.do_action_def if state else None,
         )))
-        # Match whole identifier words, not substrings: the 3-seed ablation
-        # (FULL seed 1, 2026-09-02) lost a correct model because
-        # "defaultToMechanicallyLockedState" contains "fault" and the
-        # power-on transition was filed as an emergency branch, leaving the
-        # nominal chain with no first step. Plural/inflected forms
-        # ("faults", "aborted") still match via the prefix test.
+        # Match whole identifier words, not substrings: substring matching filed
+        # "defaultToMechanicallyLockedState" as an emergency branch because it
+        # contains "fault", leaving the nominal chain with no first step. The
+        # prefix test still matches plural/inflected forms ("faults", "aborted").
         return any(
             word.startswith(marker)
             for word in _identifier_words(semantic_name)
@@ -985,7 +868,6 @@ def _classify_accept_transitions(sm: StateMachineDef):
 def _build_nominal_multigraph(
     nominal_trs,
 ) -> Dict[str, List[Tuple[str, str]]]:
-    """保留所有 nominal 出边：{source: [(trigger, target), ...]}"""
     graph: Dict[str, List[Tuple[str, str]]] = {}
     for t in nominal_trs:
         if t.source and t.target and t.accept_trigger:
@@ -997,10 +879,9 @@ def _longest_nominal_path(
     graph: Dict[str, List[Tuple[str, str]]],
     start: str,
 ) -> List[Tuple[str, str]]:
-    """
-    DFS 找从 start 出发的最长无环路径。
-    返回 [(cmd, target_state), ...] 列表。
-    最长路径对应"完整正常运行序列"；捷径/中止路径更短，自然被排除。
+    """DFS 找从 start 出发的最长无环路径，返回 [(cmd, target_state), ...]。
+
+    最长路径即完整正常运行序列；捷径/中止路径更短，被排除。
     """
     def dfs(state: str, visited: frozenset) -> List[Tuple[str, str]]:
         best: List[Tuple[str, str]] = []
@@ -1020,10 +901,6 @@ def _bfs_nav_cmds(
     start: str,
     target: str,
 ) -> Optional[List[str]]:
-    """
-    BFS 找从 start 到 target 的最短命令序列（fallback 用）。
-    返回命令列表，不可达时返回 None。
-    """
     if start == target:
         return []
     queue: deque = deque([(start, [])])
@@ -1043,7 +920,6 @@ def _run_accept_nominal_scenario(
     sm: StateMachineDef,
     longest_path: List[Tuple[str, str]],
 ) -> BehavioralScenarioResult:
-    """沿最长 nominal 路径逐步注入命令，验证所有正常转移全部触发。"""
     cmds = [cmd for cmd, _ in longest_path]
     states = [s for _, s in longest_path]
     chain_desc = " → ".join([sm.initial_state] + states) if states else "(none)"
@@ -1107,13 +983,6 @@ def _run_accept_emergency_scenario(
     longest_path: List[Tuple[str, str]],
     emrg_tr,
 ) -> BehavioralScenarioResult:
-    """
-    导航到 emrg_tr.source，再注入 emergency 命令，验证应急状态被触发。
-
-    导航策略（优先级由高到低）：
-      1. emrg_tr.source 在最长路径上 → 用路径前缀（上下文最真实）
-      2. 否则 → BFS 找任意最短路径（fallback）
-    """
     path_states = [s for _, s in longest_path]
 
     if emrg_tr.source == sm.initial_state:
@@ -1138,17 +1007,16 @@ def _run_accept_emergency_scenario(
         r.violations.append(f"Cannot reach '{emrg_tr.source}' via nominal graph")
         return r
 
-    # Detect trigger conflict: same trigger used by a nominal transition from this source.
-    # Both would fire on the same command → non-deterministic in SysML v2;
-    # the executor picks one, so the emergency may never trigger.
-    # This is a model design issue (missing guard conditions), not a simulator failure.
+    # Trigger conflict: a nominal transition from this source uses the same
+    # trigger. Both fire on the same command -> non-deterministic in SysML v2,
+    # the executor picks one, so the emergency may never trigger. Cause is a
+    # missing guard in the model.
     nominal_triggers = {cmd for cmd, _ in graph.get(emrg_tr.source, [])}
     if emrg_tr.accept_trigger in nominal_triggers:
-        # Untestable, not passed: crediting an unexecuted branch as PASS made
-        # the one genuinely ambiguous transition the one with a free pass.
-        # Mirror the parametric-constraint rule — an untestable scenario leaves
-        # the denominator (tag consumed by _compute_score), and the ambiguity
-        # itself is surfaced as an issue for the refinement loop to see.
+        # Untestable, not passed: crediting an unexecuted branch as PASS gave the
+        # ambiguous transition a free pass. As with parametric constraints, an
+        # untestable scenario leaves the denominator (tag consumed by
+        # _compute_score) and the ambiguity is reported as an issue.
         r.timeline.append(
             f"⚠ UNTESTABLE: trigger '{emrg_tr.accept_trigger}' is shared by a "
             f"nominal transition from '{emrg_tr.source}' — non-deterministic "
@@ -1207,21 +1075,14 @@ def _run_accept_emergency_scenario(
 
 
 def _run_accept_machine_scenarios(sm: StateMachineDef) -> List[BehavioralScenarioResult]:
-    """
-    为 accept-triggered 状态机生成完整场景集：
-      1. nominal 场景（最长路径）
-      2. 每个 emergency 分支各一个场景（最长路径前缀 or BFS fallback）
-    """
     nominal_trs, emergency_trs = _classify_accept_transitions(sm)
     graph = _build_nominal_multigraph(nominal_trs)
     longest_path = _longest_nominal_path(graph, sm.initial_state)
 
-    # An accept machine may legitimately be emergency-only: a recovery mechanism
-    # remains in its safe initial state until a failsafe command arrives. State
-    # persistence is its nominal behaviour; inventing a self-loop merely to create
-    # a command-driven "nominal path" would make the model worse. Only require and
-    # execute a nominal scenario when the model actually declares a nominal
-    # transition. Emergency branches are still exercised individually below.
+    # An accept machine may be emergency-only: a recovery mechanism stays in its
+    # safe initial state until a failsafe command arrives, so state persistence
+    # is its nominal behaviour. Require a nominal scenario only when the model
+    # declares a nominal transition; emergency branches are exercised below.
     results: List[BehavioralScenarioResult] = []
     if nominal_trs:
         results.append(_run_accept_nominal_scenario(sm, longest_path))
@@ -1232,23 +1093,12 @@ def _run_accept_machine_scenarios(sm: StateMachineDef) -> List[BehavioralScenari
     return results
 
 
-# ---------------------------------------------------------------------------
-# Cross-component scenario (SafetyMonitor send → FlightController accept)
-# ---------------------------------------------------------------------------
-
 def _run_cross_component_scenario(
     sm_safety: StateMachineDef,
     sm_flight: StateMachineDef,
     send_cmd: str,
     send_port: str,
 ) -> BehavioralScenarioResult:
-    """
-    联合仿真：
-      1. 驱动 sm_safety 的 guard 变量直到故障转移触发
-      2. 检测到 entry action 含 send(send_cmd, send_port)
-      3. 将 send_cmd 桥接注入 sm_flight
-      4. 验证 sm_flight 进入应急状态
-    """
     r = BehavioralScenarioResult(
         name=f"cross_{sm_safety.name}_to_{sm_flight.name}",
         state_machine="cross_component",
@@ -1262,10 +1112,9 @@ def _run_cross_component_scenario(
 
     fault_states_flight = {s.name for s in sm_flight.states if s.entry_action}
 
-    # 找 sm_flight 里接受 send_cmd 的所有转移（不限于 fault state）
-    # 说明：safety SM 可能发送命令触发正常阶段（如 battery RTB → return phase）
-    # 也可能触发应急阶段（如 propulsion fail → emergency）
-    # 两者都是合法的跨组件因果链，只要命令被接受就 PASS
+    # 找 sm_flight 里接受 send_cmd 的所有转移（不限于 fault state）：safety SM
+    # 的命令可能触发正常阶段（battery RTB）也可能触发应急阶段（propulsion
+    # fail），两者都是合法跨组件因果链，命令被接受即 PASS。
     all_trs_flight = [
         t for t in sm_flight.transitions
         if not t.is_initial
@@ -1278,13 +1127,12 @@ def _run_cross_component_scenario(
         )
         return r
 
-    # 在 sm_flight 里找最近可达的 source 状态（nominal 链上最早有 send_cmd 转移的节点）。
+    # 在 sm_flight 里找最近可达的 source 状态（nominal 链上最早带 send_cmd 的节点）。
     # 用多重图 + BFS：单后继字典会把同一 source 的多条 nominal 出边塌缩成最后一条,
-    # 分叉型状态机上贪心游走会死胡同 → 假 FAIL(权重最高的场景)。
+    # 分叉状态机上贪心游走会走进死胡同 -> 假 FAIL。
     nominal_trs_flight, _ = _classify_accept_transitions(sm_flight)
     multigraph_flight = _build_nominal_multigraph(nominal_trs_flight)
 
-    # 找到最近的可触发 send_cmd 的状态（不限于 fault 目标）：BFS 最短命令序列
     emrg_sources = {t.source for t in all_trs_flight if t.source}
     nav_cmds, state = None, sm_flight.initial_state
     if state in emrg_sources:
@@ -1304,18 +1152,15 @@ def _run_cross_component_scenario(
         )
         return r
 
-    # 为 sm_safety 生成 guard 驱动计划
     plans = _build_driver_plans(sm_safety)
     if not plans:
         r.violations.append(f"Cannot build driver plan for {sm_safety.name}")
         return r
     safety_plan = plans[0]
 
-    # ── 实例化两个状态机 ──────────────────────────────────────────────────
     inst_safety = StateMachineInstance(sm_safety)
     inst_flight = StateMachineInstance(sm_flight)
 
-    # 预导航 sm_flight 到 emergency source 状态
     for i, cmd in enumerate(nav_cmds):
         inst_flight.step({"__accept__": cmd}, time=float(i), command=cmd)
         inst_flight.step({"__accept__": None}, time=float(i) + 0.5)
@@ -1327,7 +1172,6 @@ def _run_cross_component_scenario(
             f"{pre_nav_count}/{len(nav_cmds)} steps → state='{inst_flight.current_state}'"
         )
 
-    # ── 驱动 sm_safety，桥接到 sm_flight ─────────────────────────────────
     safety_fired_at: Optional[int] = None
     base_t = len(nav_cmds) * 2
 
@@ -1342,7 +1186,6 @@ def _run_cross_component_scenario(
                 f"{sm_safety.name} fault fired at t={t:.0f}: "
                 f"{ev.from_state} → {ev.to_state}"
             )
-            # 桥接：向 sm_flight 注入 emergency 命令
             inst_flight.step({"__accept__": send_cmd}, time=t, command=send_cmd)
             inst_flight.step({"__accept__": None}, time=t + 0.5)
             break
@@ -1351,8 +1194,6 @@ def _run_cross_component_scenario(
         r.violations.append(f"{sm_safety.name} guard never fired over the driver plan")
         return r
 
-    # ── 验证 sm_flight 接受了命令并转移 ──────────────────────────────────
-    # 只要有任何转移因 send_cmd 而触发即视为成功（因果链完整）
     cmd_fired = any(
         ev.guard_description == f"accept {send_cmd}"
         for ev in inst_flight.transition_log
@@ -1374,7 +1215,6 @@ def _run_cross_component_scenario(
             f"{sm_flight.name} entered '{target_state}' [{kind}]"
             + (f", entry action: {entry}  ✓" if entry else "")
         )
-        # fault state 需要额外确认 entry action 被调用
         if is_fault and entry and entry not in inst_flight.fired_actions:
             r.violations.append(
                 f"Emergency entry action '{entry}' in '{target_state}' was not called"
@@ -1387,11 +1227,6 @@ def _run_cross_component_scenario(
 def _collect_cross_component_scenarios(
     state_machines: List[StateMachineDef],
 ) -> List[BehavioralScenarioResult]:
-    """
-    扫描所有状态机，寻找 (safety SM with sends) × (accept SM accepting that cmd) 对，
-    为每对生成一个跨组件联合仿真场景。
-    """
-    # 建立 cmd_name → [accept SM] 索引
     accept_index: dict = {}
     for sm in state_machines:
         if not sm.has_accept_transitions():
@@ -1405,7 +1240,7 @@ def _collect_cross_component_scenarios(
 
     for sm in state_machines:
         if sm.has_accept_transitions():
-            continue   # 只扫 guard-triggered SM
+            continue
         for _state_name, cmd, port in sm.all_sends():
             for flight_sm in accept_index.get(cmd, []):
                 pair_key = (sm.name, flight_sm.name, cmd)
@@ -1418,19 +1253,13 @@ def _collect_cross_component_scenarios(
     return results
 
 
-# ---------------------------------------------------------------------------
-# Cross-scenario ordering constraint
-# ---------------------------------------------------------------------------
-
 def _check_battery_ordering(results: List[BehavioralScenarioResult]
                              ) -> Optional[BehavioralScenarioResult]:
-    """
-    Verify that the battery RTB threshold is higher than the critical threshold,
-    ensuring RTB always fires before emergency landing.
+    """Verify the battery RTB threshold is above the critical threshold, so RTB
+    fires before emergency landing.
 
-    Each scenario runs independently, so step numbers are not comparable.
-    Instead we compare the trigger_value (actual variable value at trigger),
-    which reflects the threshold from the model directly.
+    Scenarios run independently, so step numbers are not comparable; compare
+    trigger_value (the variable value at trigger) instead.
     """
     rtb_res  = next((r for r in results if "Rtb"      in r.state_machine or
                                             "rtb"      in r.state_machine.lower()), None)
@@ -1438,7 +1267,7 @@ def _check_battery_ordering(results: List[BehavioralScenarioResult]
                                             "critical" in r.state_machine.lower()), None)
 
     if rtb_res is None or crit_res is None:
-        return None  # No pair to check
+        return None
 
     constraint = BehavioralScenarioResult(
         name="battery_ordering_constraint",
@@ -1471,11 +1300,6 @@ def _check_battery_ordering(results: List[BehavioralScenarioResult]
     return constraint
 
 
-# ---------------------------------------------------------------------------
-# Parametric constraint scenarios  (Option X)
-# ---------------------------------------------------------------------------
-
-# Matches:  [readonly] attribute <name> : <Type> [<unit>] = <number>
 _ATTR_NUM_RE = re.compile(
     r'\b(?:readonly\s+)?attribute\s+(\w+)\s*:[^=;\n]*?=\s*([-+]?\d+(?:\.\d+)?)'
 )
@@ -1483,7 +1307,6 @@ _READONLY_RE = re.compile(r'\breadonly\s+attribute\s+(\w+)')
 
 
 def _extract_all_attrs(sysml_text: str) -> Dict[str, float]:
-    """Return {attr_name: float_value} for every numeric attribute in the SysML source."""
     out: Dict[str, float] = {}
     for m in _ATTR_NUM_RE.finditer(sysml_text):
         try:
@@ -1504,24 +1327,11 @@ def _run_parametric_constraint_scenario(
     readonly_vars: set,
     measured_inputs: frozenset = frozenset(),
 ) -> Optional[BehavioralScenarioResult]:
-    """
-    Build a boundary-sweep scenario for one assert constraint.
-
-    Skipped (returns None) when:
-      - LHS is already in guard_variables  (behavioral_sim already verifies it)
-      - LHS is a readonly attr  (static check covers it)
-      - LHS or RHS values cannot be resolved
-
-    Pass criterion:
-      1. Initial value satisfies the constraint
-      2. Constraint holds throughout the valid range
-      3. Constraint fails when the limit is exceeded  (boundary is live)
-    """
     # Already covered by state machine guard
     if c.lhs in guard_variables:
         return None
 
-    # Readonly LHS → static check is sufficient, skip parametric sweep
+    # Readonly LHS: static check suffices, skip sweep
     if c.lhs in readonly_vars:
         return None
 
@@ -1556,14 +1366,11 @@ def _run_parametric_constraint_scenario(
 
     if lhs_init is None and c.lhs in measured_inputs and rhs_val is not None:
         # A typed-semantic-binding runtime attribute is a measured value: the
-        # binding convention initialises it from a reference chain into the
-        # measurement port and forbids a local literal.  Demanding a numeric
-        # initial value from it made every binding-bound ALWAYS constraint
-        # fail mechanically (authoritative run 00e4d333: six identical
-        # "Cannot sweep" failures).  The sweep's whole purpose is to supply
-        # measured inputs, so it provides the starting point inside the valid
-        # region itself; boundary liveness (criteria 2 and 3) is unchanged,
-        # and the synthesized start is recorded, never silent.
+        # convention initialises it from a reference chain into the measurement
+        # port and carries no local literal, so demanding a numeric initial value
+        # failed every binding-bound ALWAYS constraint. The sweep supplies
+        # measured inputs, so it synthesizes a start inside the valid region and
+        # records it; boundary liveness (criteria 2 and 3) is unchanged.
         rhs_probe = float(rhs_val)
         margin = abs(rhs_probe) * 0.15 + 1.0
         if c.operator in ("<=", "<"):
@@ -1596,7 +1403,6 @@ def _run_parametric_constraint_scenario(
     rhs_f = float(rhs_val)
     op    = c.operator
 
-    # Sweep direction: push lhs toward and past the limit
     if op in ("<=", "<"):
         sweep_end = rhs_f + abs(rhs_f) * 0.15 + 1.0   # always > rhs_f regardless of sign
         step_size = (sweep_end - lhs_f) / _N_STEPS
@@ -1605,11 +1411,9 @@ def _run_parametric_constraint_scenario(
         step_size = (sweep_end - lhs_f) / _N_STEPS
     elif op == "==":
         # A configuration pin: the planned value is the only point where the
-        # constraint holds, so boundary liveness is not a one-sided sweep but
-        # a three-point probe -- hold at the pinned value, violate on either
-        # side of it. The old behaviour reported the operator as unsupported,
-        # so every ``value == planned`` constraint failed behaviour execution
-        # mechanically, whatever the model said.
+        # constraint holds, so boundary liveness is a three-point probe -- hold at
+        # the pinned value, violate on either side. Previously the operator was
+        # reported unsupported, failing every ``value == planned`` constraint.
         delta = abs(rhs_f) * 0.05 + 0.5
         result.timeline.append(
             f"Probing {c.lhs}: hold at {rhs_f:g}, "
@@ -1643,7 +1447,6 @@ def _run_parametric_constraint_scenario(
     if abs(step_size) < 1e-9:
         step_size = (1.0 / _N_STEPS) * (1 if op in (">=", ">") else -1)
 
-    # Run the sweep and record where constraint holds vs fails
     last_hold: Optional[float] = None
     first_fail: Optional[float] = None
     val = lhs_f
@@ -1668,7 +1471,6 @@ def _run_parametric_constraint_scenario(
             f"(boundary live — exceeding {rhs_f} triggers violation)"
         )
 
-    # Pass criteria
     if not eval_op(lhs_f, op, rhs_f):
         result.violations.append(
             f"Initial value {c.lhs}={lhs_f} already violates "
@@ -1730,9 +1532,9 @@ def _run_state_active_constraint_scenario(
 ) -> BehavioralScenarioResult:
     """Verify bounded execution evidence for a state-owned SysML constraint.
 
-    This proves model containment, reachability, response execution, typed
-    runtime binding, and a live numeric boundary. It deliberately does not
-    claim that the external environment will satisfy the bound.
+    Covers model containment, reachability, response execution, typed runtime
+    binding, and a live numeric boundary. It makes no claim about the external
+    environment satisfying the bound.
     """
     result = BehavioralScenarioResult(
         name=f"state_constraint_{c.name}",
@@ -1837,15 +1639,12 @@ def _run_state_active_constraint_scenario(
                 f"Cannot resolve state constraint RHS {c.rhs}"
             )
     if rhs_value is not None:
-        # No epsilon perturbation here, deliberately: probing rhs±ε against rhs
-        # itself is an arithmetic tautology for the ordering operators — it can
-        # never fail and therefore proved nothing while claiming to prove a
-        # "live boundary". Ordering-operator liveness is a theorem (rhs+ε and
-        # rhs−ε always land on opposite sides), and the plan gate
-        # (_LIVE_BOUNDARY_OPERATORS in activated_constraint_plan) already
-        # rejects the operators for which it fails by construction. What this
-        # scenario actually establishes is recorded honestly below: the RHS
-        # resolves to a number and the activation state carries a response.
+        # No epsilon perturbation here: probing rhs+/-ε against rhs itself is an
+        # arithmetic tautology for the ordering operators, so it cannot fail.
+        # Their liveness holds by construction (rhs+ε and rhs−ε land on opposite
+        # sides) and the plan gate (_LIVE_BOUNDARY_OPERATORS in
+        # activated_constraint_plan) rejects the operators where it does not.
+        # What this scenario establishes is recorded below.
         if c.operator not in {">=", ">", "<=", "<"}:
             result.violations.append(
                 f"Constraint operator {c.operator} has no live satisfaction "
@@ -1876,10 +1675,6 @@ def _collect_constraint_scenarios(
     sysml_text: str,
     state_machines: List[StateMachineDef],
 ) -> List[BehavioralScenarioResult]:
-    """
-    For every assert constraint in the model that is NOT covered by an
-    existing state machine guard, produce a parametric sweep scenario.
-    """
     constraints = extract_constraints(sysml_text)
     if not constraints:
         return []
@@ -1887,7 +1682,6 @@ def _collect_constraint_scenarios(
         item.plan_constraint_id is not None for item in constraints
     )
 
-    # Merge attribute values: full-text scan takes precedence over per-SM dicts
     all_initial_values: Dict[str, float] = {}
     for sm in state_machines:
         for k, v in sm.initial_values.items():
@@ -1898,9 +1692,8 @@ def _collect_constraint_scenarios(
     all_initial_values.update(_extract_all_attrs(sysml_text))
 
     # Attributes whose initializer is a reference chain are measured inputs
-    # (the typed-semantic-binding convention): they carry no local literal by
-    # design, so the parametric sweep supplies their value instead of
-    # demanding one.
+    # (typed-semantic-binding convention): they carry no local literal, so the
+    # parametric sweep supplies their value.
     measured_inputs = frozenset(
         match.group("name")
         for match in re.finditer(
@@ -1911,7 +1704,6 @@ def _collect_constraint_scenarios(
         )
     )
 
-    # Variables already verified by state machine guards
     guard_variables: set = set()
     for sm in state_machines:
         for tr in sm.transitions:
@@ -1928,11 +1720,10 @@ def _collect_constraint_scenarios(
 
     results: List[BehavioralScenarioResult] = []
     for c in constraints:
-        # Once the model carries compiler-owned constraint annotations, only
-        # those planned invariants may contribute executable evidence.
-        # Unannotated A/G prose invariants and LLM-authored assertions remain
-        # available to their dedicated checkers but cannot inflate or fail the
-        # parametric denominator.
+        # Once the model carries compiler-owned constraint annotations, only those
+        # planned invariants contribute executable evidence. Unannotated A/G prose
+        # invariants and LLM-authored assertions stay with their own checkers and
+        # do not enter the parametric denominator.
         if plan_owned_model and c.plan_constraint_id is None:
             continue
         if (
@@ -1959,51 +1750,36 @@ def _collect_constraint_scenarios(
     return results
 
 
-# ---------------------------------------------------------------------------
-# Scoring
-# ---------------------------------------------------------------------------
-
 def _compute_score(results: List[BehavioralScenarioResult]) -> float:
     if not results:
-        return 1.0   # neutral: no state machines → no violations
+        return 1.0   # neutral: no state machines -> no violations
     total_w  = 0.0
     passed_w = 0.0
     for r in results:
         if "trigger_conflict" in r.tags:
-            # Untestable (ambiguous trigger): excluded from the denominator —
-            # neither a free PASS nor a penalised FAIL; the ambiguity is
-            # reported through the scenario's issues instead.
+            # Untestable (ambiguous trigger): excluded from the denominator, neither
+            # PASS nor FAIL; the ambiguity is reported through the scenario's issues.
             continue
         if "cross_component" in r.tags:
-            w = 1.5          # 响应链完整性：故障检测后必须能送达执行器，比 nominal 更关键
+            w = 1.5
         elif "emergency" in r.tags:
             w = 0.5          # accept 分支跳转：测试性质与 nominal 相近，保持低权重
         elif "safety" in r.tags:
-            w = 2.0          # 故障检测 guard：安全感知层，最高权重
+            w = 2.0
         else:
             w = 1.0
         total_w  += w
         if r.passed:
             passed_w += w
-    # total_w == 0 now also covers "every scenario was untestable" (all
-    # excluded above) — neutral like the no-scenarios case, not a zero score.
+    # total_w == 0 also covers "every scenario was untestable": neutral, like
+    # the no-scenarios case, rather than a zero score.
     return passed_w / total_w if total_w > 0 else 1.0
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def run_behavioral_simulation(sysml_text: str,
                                model_name: str = "UnknownModel"
                                ) -> BehavioralSimResult:
-    """
-    Main entry point.
-
-    Extracts all state machines from *sysml_text* via syside, generates
-    a simulation scenario for each, executes the state machines, and
-    returns an aggregated BehavioralSimResult.
-    """
+    """Main entry point."""
     state_machines = extract_state_machines(sysml_text)
 
     br = BehavioralSimResult(
@@ -2020,17 +1796,13 @@ def run_behavioral_simulation(sysml_text: str,
             else:
                 scenario_results.append(_run_scenario(sm))
 
-        # 跨组件联合场景（SafetyMonitor send → FlightController accept）
         cross_results = _collect_cross_component_scenarios(state_machines)
         scenario_results.extend(cross_results)
 
-        # Cross-scenario ordering constraint（电池优先级）
         ordering = _check_battery_ordering(scenario_results)
         if ordering is not None:
             scenario_results.append(ordering)
 
-    # Parametric constraint scenarios (Option X):
-    # assert constraints whose LHS is a runtime variable not covered by any guard.
     constraint_scenarios = _collect_constraint_scenarios(sysml_text, state_machines)
     scenario_results.extend(constraint_scenarios)
 

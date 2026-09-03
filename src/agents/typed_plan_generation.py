@@ -25,9 +25,8 @@ if TYPE_CHECKING:
     from ..prototyping.ag_behavior_plan import BehaviorObligationPlan
 
 
-#: Bounded attempts before typed planning fails closed. Attempts and their
-#: correction outcomes are recorded, so the ceiling is headroom rather than an
-#: instruction to spend every call.
+# Bounded attempts before typed planning fails closed. Attempts and correction
+# outcomes are recorded; the ceiling is headroom, not a budget to spend.
 DEFAULT_MAXIMUM_PLAN_ATTEMPTS = 6
 
 
@@ -165,18 +164,14 @@ class TypedPlanGeneration:
                             last_valid_payload, raw_payload
                         )
                         patch_used = True
-                # The diff audit records exactly what the LLM changed against
-                # the payload its issues were computed on — patch or full
-                # replacement alike. It is OBSERVATIONAL: semantic repair is
-                # measurably non-local (adding the behavior a "needs a
-                # navigate response" issue demands, renaming the port a
-                # representation issue implicates — component, connections
-                # and bindings move together), and an enforcing gate killed
-                # a real seed-0 anchor run in 6 rejected attempts / 215k
-                # tokens, its rejection strings then steering the next
-                # attempt to revert legitimate repairs. The structural
-                # non-drift guarantee lives in the merge (unpatched entries
-                # are carried over byte-identically), not here.
+                # The diff audit records what the LLM changed against the payload its
+                # issues were computed on, patch or full replacement. Observational only:
+                # semantic repair is non-local (a "needs a navigate response" issue moves
+                # component, connections and bindings together), and an enforcing gate
+                # cost a seed-0 anchor run 6 rejected attempts / 215k tokens, its
+                # rejection strings then steering the next attempt to revert good
+                # repairs. Non-drift comes from the merge, which carries unpatched
+                # entries over byte-identically.
                 if (
                     candidate_payload is not None
                     and last_valid_payload is not None
@@ -339,10 +334,9 @@ class TypedPlanGeneration:
                 if last_valid_payload is not None else ""
             )
             if last_valid_payload is not None:
-                # Incremental protocol: the retry returns only implicated
-                # entries; the harness merges them into the repair base by
-                # identity key, so unimplicated fields cannot drift and the
-                # response is 10-30x smaller than a full replacement.
+                # Incremental protocol: the retry returns only implicated entries, merged into
+                # the repair base by identity key, so other fields cannot drift and the response
+                # is 10-30x smaller than a full replacement.
                 correction_instruction = (
                     "\nReturn exactly one JSON object in a ```json block "
                     "and no prose, with \"plan_patch\": true, containing "
@@ -378,10 +372,9 @@ class TypedPlanGeneration:
                     + "\n".join(
                         f"- {issue}" for issue in attempt_record["issues"]
                     )
-                    # A format failure replaces nothing: the repair base
-                    # still carries the last round's semantic issues, and
-                    # dropping them from the prompt (measured protocol gap)
-                    # left the next attempt nothing to fix but the fence.
+                    # A format failure replaces nothing: the repair base still carries the last
+                    # round's semantic issues, and dropping them from the prompt left the next
+                    # attempt nothing to fix but the fence.
                     + (
                         "\nSTILL OUTSTANDING from the repair base:\n"
                         + "\n".join(

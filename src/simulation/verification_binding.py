@@ -1,37 +1,30 @@
-"""Requirement → model-identity bindings for the verification harness.
+"""Requirement -> model-identity bindings for the verification harness.
 
 The harness held a hard-coded vocabulary at four independent layers (accept
 event names, action-def names, sent-command spellings), so a structurally
-correct model that named things its own way was scored as defective — run3,
-the first model to close REQ-SAFE-006, scored worse than two earlier models
-that carried the actual defect but used the harness's spellings.
-
-Every one of those identities already exists as validated data: the frozen
-generation plan records, per requirement, the owning component, the behavior,
-the accept-event symbol, the response state and its entry/do actions, the
-transition guards, and (for causal-path realizations) the port route the
-response travels. The plan is validated against the requirement texts at
-freeze time and materialised into the model by a sole writer. Harness-held
-canonical names are therefore duplicated derived data — the same defect class
-as a `behavior_kind` field that contradicts its own `behaviors[]`.
+correct model that named things its own way scored as defective: run3, the
+first model to close REQ-SAFE-006, scored below two earlier models that
+carried the defect but used the harness's spellings. Those identities
+already exist as validated data - the frozen generation plan records, per
+requirement, the owning component, the behavior, the accept-event symbol,
+the response state and its entry/do actions, the transition guards, and
+(for causal-path realizations) the port route the response travels - so
+harness-held canonical names are duplicated derived data.
 
 This module is the single resolution layer both harness sides consume:
 
 - **PLAN** bindings (this module): authoritative, built from the archived
-  plan payload (a plain dict — no prototyping imports, this package sits
+  plan payload (a plain dict - no prototyping imports, this package sits
   below it in the dependency order).
 - **SEMANTIC** resolution (``ModelDrivenMission.resolve_event`` and
   causal-role lookups): the fallback for models that have no plan.
-- A binding that cannot be built is reported as such; a resolution failure
-  must surface as "not measured", never as a model defect. The one inversion:
-  a PLAN-bound name that is absent from the model text IS a model defect —
-  materialisation guarantees presence, so absence means the model diverged
-  from its own plan.
+- A resolution failure is reported as "not measured", not as a model
+  defect. The one inversion: a PLAN-bound name absent from the model text
+  is a defect, since materialisation guarantees presence.
 
-Judgement stays strict: bindings supply IDENTITY only. Whether the bound
-transition carries the required guard, or the bound action sends the required
-command, is still judged by the criteria — a resolver must never substitute
-an element that would pass.
+Bindings supply identity only; whether the bound transition carries the
+required guard, or the bound action sends the required command, is judged
+by the criteria.
 """
 from __future__ import annotations
 
@@ -40,8 +33,6 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from ..utils.req_id import normalise_req_id
 
-#: Response-shaped state roles: the states a requirement's trigger drives the
-#: machine INTO, whose entry/do actions are the requirement's response.
 _RESPONSE_ROLES = ("RESPONSE", "FAULT")
 
 
@@ -53,21 +44,14 @@ class RequirementBinding:
     provenance: str = "PLAN"
     owner: str = ""
     behavior: str = ""
-    #: ACCEPT symbols on transitions into response states.
     trigger_events: Tuple[str, ...] = ()
-    #: GUARD-kind trigger expressions on transitions into response states.
     trigger_conditions: Tuple[str, ...] = ()
     response_states: Tuple[str, ...] = ()
-    #: entry/do action names of the response states — the actions the
-    #: harness previously looked up under its own spellings.
     response_actions: Tuple[str, ...] = ()
-    #: (transition_id, guard) for every transition into a response state,
-    #: guard verbatim ("" = unconditional). Identity only — judging the
-    #: guard's adequacy stays with the criteria.
+    # (transition_id, guard) for every transition into a response state,
+    # guard verbatim ("" = unconditional). Identity only - judging the
+    # guard's adequacy stays with the criteria.
     transition_guards: Tuple[Tuple[str, str], ...] = ()
-    #: (source_component, source_port, target_component, target_port) hops of
-    #: the realization's causal path — the route the response's command
-    #: actually travels (layer-4 identity).
     route: Tuple[Tuple[str, str, str, str], ...] = ()
     issues: Tuple[str, ...] = ()
 
@@ -86,9 +70,9 @@ def plan_bindings(
 ) -> Dict[str, RequirementBinding]:
     """{requirement_id: binding} from an archived plan payload dict.
 
-    Accepts the raw ``whole_model_generation_plan`` dict as stored in run
-    reports and model metadata. Returns {} when no plan is available — the
-    caller then falls back to semantic resolution, never to a verdict.
+    Accepts the raw ``whole_model_generation_plan`` dict as stored in run reports
+    and model metadata. Returns {} when no plan is available; the caller then
+    falls back to semantic resolution, not to a verdict.
     """
     if not isinstance(plan_payload, Mapping):
         return {}
@@ -136,10 +120,9 @@ def plan_bindings(
         for transition in behavior.get("transitions") or ():
             if not isinstance(transition, Mapping):
                 continue
-            # Identity is recorded for EVERY transition: an inhibition guard
-            # can sit on a transition into a NORMAL-role state (run3's
-            # PayloadLockBehavior guards Locked→Unlocked), and the criteria —
-            # not this resolver — decide which transitions matter.
+            # Identity is recorded for every transition: an inhibition guard can sit on
+            # a transition into a NORMAL-role state (run3's PayloadLockBehavior guards
+            # Locked->Unlocked), and the criteria decide which transitions matter.
             kind = str(transition.get("trigger_kind", "")).upper()
             trigger = str(transition.get("trigger") or "")
             if kind == "ACCEPT" and trigger:
@@ -199,18 +182,19 @@ def binding_for(
     return bindings.get(normalise_req_id(str(requirement_id)))
 
 
-#: Tokens that appear in guard expressions without being identities.
 _GUARD_EXPR_STOP = frozenset({"not", "and", "or", "true", "false", "if"})
 
 _IDENTIFIER_RE = __import__("re").compile(r"[A-Za-z_]\w*")
 
 
 def identity_tokens(binding: RequirementBinding) -> frozenset:
-    """Lowercased identifier spellings that ARE this requirement's model
-    elements per its plan: accept-event names, and the flag tokens read by
-    its transition guards / guard-kind triggers. Route ports are deliberately
-    EXCLUDED — ports are plentiful and pooling them was measured to hand
-    unrelated requirements a match (FUNC_004 drifted into the L2 suite)."""
+    """Lowercased identifier spellings of this requirement's model elements per
+    its plan: accept-event names, and the flag tokens read by its transition
+    guards / guard-kind triggers.
+
+    Route ports are excluded: ports are plentiful, and pooling them handed
+    unrelated requirements a match (FUNC_004 drifted into the L2 suite).
+    """
     tokens = {event.lower() for event in binding.trigger_events}
     for expression in (
         *binding.trigger_conditions,

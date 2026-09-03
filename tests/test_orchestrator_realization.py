@@ -9,7 +9,7 @@ from src.dse.physics_estimator import DesignInputs
 from src.dse.variation_dse import VariationDSEResult
 
 
-def test_realization_artifact_is_best_effort_and_public_shape_has_no_internal_report():
+def test_public_artifact_hides_report():
     d = DesignInputs(2.5, 16000, 6, 4, 18 * 0.0254 / 2, 0.0)
     artifact = Orchestrator._realization_artifact(
         d,
@@ -23,7 +23,7 @@ def test_realization_artifact_is_best_effort_and_public_shape_has_no_internal_re
     assert "_report" not in public
 
 
-def test_realization_artifact_reports_deferred_requirement_scope():
+def test_artifact_reports_deferred_scope():
     d = DesignInputs(1.5, 16000, 6, 6, 18 * 0.0254 / 2, 0.0)
     artifact = Orchestrator._realization_artifact(
         d,
@@ -47,7 +47,7 @@ def test_realization_artifact_reports_deferred_requirement_scope():
     }
 
 
-def test_realization_artifact_persists_integration_and_voltage_derating_evidence():
+def test_artifact_persists_derating():
     d = DesignInputs(1.5, 30000, 4, 6, 17 * 0.0254 / 2, 0.0)
     artifact = Orchestrator._realization_artifact(
         d,
@@ -69,12 +69,12 @@ def test_realization_artifact_persists_integration_and_voltage_derating_evidence
     assert "realizedIntegration" in public["realization_model_sysml"]
 
 
-def test_orchestrator_constructor_accepts_realization_inject_flag():
+def test_constructor_accepts_inject_flag():
     orch = Orchestrator(llm=object(), realization_inject=True)
     assert orch.realization_inject is True
 
 
-def test_explore_phase8_returns_realization_and_can_inject(monkeypatch):
+def test_phase8_returns_and_injects(monkeypatch):
     class Model:
         def __init__(self):
             self.metadata = {"last_sysml_text": "package Drone { part def A; }"}
@@ -120,7 +120,7 @@ def test_explore_phase8_returns_realization_and_can_inject(monkeypatch):
     monkeypatch.setattr(RefinementClosure, "refine", fake_refine)
     monkeypatch.setattr(Orchestrator, "_print_final_sim", lambda self, sim: None)
     # Keep Phase 9 explicit so this test documents its Phase 8-only scope.
-    # high-fidelity runner, which would otherwise try to launch native SITL/Gazebo.
+    # high-fidelity runner, which would otherwise launch native SITL/Gazebo.
     orch = Orchestrator(llm=object(), use_variation_dse=True, realization_inject=True,
                         phase9_hifi=None)
     result = orch.explore({
@@ -131,12 +131,12 @@ def test_explore_phase8_returns_realization_and_can_inject(monkeypatch):
     })
     assert result["realization"]["verdict"] == "INFEASIBLE_REALIZATION"
     assert "UnrealizedDesign" in result["model_sysml"]
-    # run report carries the weight-sensitivity slot (None here — the faked
+    # run report carries the weight-sensitivity slot (None here - the faked
     # exploration never ran the DSE), so the field reaches realization_run.json
     assert "weight_sensitivity" in result
 
 
-def test_variation_dse_receives_best_effort_realizability_predicate(monkeypatch):
+def test_dse_receives_realizability(monkeypatch):
     text = """package Drone {
         port def Sig;
         part def LiftIface { in port cmd : Sig; out port thrust : Sig; }
@@ -210,7 +210,7 @@ def test_variation_dse_receives_best_effort_realizability_predicate(monkeypatch)
     assert orch.last_recommended_by == "datasheet"
 
 
-def test_no_recommendation_restores_pre_variation_model_for_refinement(monkeypatch):
+def test_no_recommendation_restores_model(monkeypatch):
     base = """package Drone {
         port def Sig;
         part def LiftIface { in port cmd : Sig; out port thrust : Sig; }

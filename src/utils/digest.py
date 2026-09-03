@@ -1,8 +1,8 @@
 """Shared SHA-256 text fingerprint.
 
-Canonical-JSON digests deliberately stay with their owning protocol modules
-(``frozen_artifact_protocol``, ``blackboard``): their ``default=`` fallbacks and
-failure modes are part of each protocol's contract, not a generic utility.
+Canonical-JSON digests stay with their owning protocol modules
+(``frozen_artifact_protocol``, ``blackboard``): their ``default=`` fallbacks
+and failure modes belong to each protocol's contract.
 """
 from __future__ import annotations
 

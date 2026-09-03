@@ -1,10 +1,3 @@
-"""Plan identifiers are rendered verbatim into SysML text by materialisation
-steps that run after the last syntax gate, so a reserved word in the plan
-becomes a parser error in the committed model (observed: an entry action
-named `return` produced `action def return {}` and two parser errors on an
-otherwise qualifying run). Planning time is the cheapest place to refuse
-one, and a plan issue routes back through the existing retry-with-feedback
-loop."""
 from __future__ import annotations
 
 import pytest
@@ -52,14 +45,14 @@ def _reserved_issues(plan):
     return [i for i in plan.issues if "reserved word" in i]
 
 
-def test_reserved_entry_action_is_a_plan_issue():
+def test_reserved_entry_action_issue():
     plan = ModelGenerationPlan.from_payload(_payload(entry_action="return"))
     issues = _reserved_issues(plan)
     assert issues and "'return'" in issues[0]
     assert plan.status != "PASS"
 
 
-def test_reserved_state_component_port_and_trigger_are_flagged():
+def test_reserved_names_flagged():
     for kwargs in (
         {"component": "part"},
         {"port": "flow"},
@@ -70,16 +63,13 @@ def test_reserved_state_component_port_and_trigger_are_flagged():
         assert _reserved_issues(plan), kwargs
 
 
-def test_legal_identifiers_raise_no_reserved_issue():
+def test_legal_identifiers_pass():
     plan = ModelGenerationPlan.from_payload(_payload())
     assert not _reserved_issues(plan)
 
 
 @pytest.mark.skipif(not _HAS_SYSIDE, reason="syside not installed")
-def test_reserved_word_list_agrees_with_the_parser():
-    """Every listed word must actually be refused by the parser in at least
-    one declaration position the plan renders, and common legal identifiers
-    must not be listed."""
+def test_word_list_matches_parser():
     positions = (
         "package P {{ private import ScalarValues::*; "
         "attribute {w} : Real; }}",
@@ -106,7 +96,7 @@ def test_reserved_word_list_agrees_with_the_parser():
         assert accepted, word
 
 
-def test_ag_decision_identifier_rejects_reserved_words():
+def test_ag_decision_rejects_reserved():
     from src.prototyping.ag_decision import DecisionError, _identifier
     import pytest as _pytest
     assert _identifier("deployParachute", "f") == "deployParachute"
@@ -116,7 +106,7 @@ def test_ag_decision_identifier_rejects_reserved_words():
         _identifier("state", "f")
 
 
-def test_ag_emitter_sanitiser_never_emits_a_reserved_word():
+def test_ag_emitter_sanitises_reserved():
     from src.prototyping.ag_emitter import _sysml_identifier
     assert _sysml_identifier("state") == "id_state"
     assert _sysml_identifier("safe-mode") == "safe_mode"

@@ -1,15 +1,4 @@
-"""
-LLM interface module for AI-assisted MBSE prototyping.
-
-Provides abstract interface and concrete implementations for LLM integration,
-including support for Chain of Thought (CoT) prompting techniques.
-
-The base class is a template method: ``complete()`` resolves the default
-temperature (low, for structured SysML output), retries transient provider
-errors with jittered backoff, enforces a per-request timeout (provider side),
-and records every call into a per-instance :class:`TokenLedger`.  Providers
-implement ``_complete_impl()`` only.
-"""
+"""LLM interface module for AI-assisted MBSE prototyping."""
 
 from __future__ import annotations
 
@@ -28,16 +17,14 @@ from src.config import Config
 from .github_auth import GitHubAuthManager, GitHubCLIAuthError
 
 
-# Structured SysML/JSON generation wants determinism first; escalation helpers
-# raise the temperature only when a low-temperature answer fails validation.
+# Structured SysML/JSON generation defaults to low temperature; escalation
+# raises it only when a low-temperature answer fails validation.
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_MAX_TOKENS = 20480
-# Escalation ladder used by *_with_escalation helpers.
 ESCALATION_TEMPERATURES: Tuple[float, ...] = (DEFAULT_TEMPERATURE, 0.6, 1.0)
 
 
 def _default_timeout_seconds(default: float = 120.0) -> float:
-    """Per-request timeout, overridable via LLM_TIMEOUT_SECONDS."""
     try:
         return float(os.environ.get("LLM_TIMEOUT_SECONDS", str(default)))
     except ValueError:
@@ -51,7 +38,6 @@ def _vertex_request_worker(
     contents: List[Dict[str, Any]],
     config: Dict[str, Any],
 ) -> None:
-    """Execute one Vertex request in a process that the parent can terminate."""
     try:
         response = client.models.generate_content(
             model=model,
@@ -91,7 +77,7 @@ def _vertex_request_worker(
 @dataclass
 class Message:
     """A single message in an LLM conversation."""
-    role: str  # "system", "user", or "assistant"
+    role: str
     content: str
 
     def to_dict(self) -> Dict[str, str]:
@@ -121,10 +107,9 @@ class TokenLedger:
     retries: int = 0
     failures: int = 0
     elapsed_seconds: float = 0.0
-    #: Longest single provider attempt, retries and their sleeps excluded.
-    #: `elapsed_seconds` is cumulative and cannot answer the question a
-    #: cancelled call raises -- whether any one request approached the client
-    #: deadline -- so a 499 was previously undiagnosable from the artefacts.
+    # Longest single provider attempt, retries and their sleeps excluded.
+    # `elapsed_seconds` is cumulative, so it cannot show whether one request
+    # approached the client deadline, which is what a 499 needs.
     max_call_seconds: float = 0.0
 
     def record(
@@ -141,9 +126,8 @@ class TokenLedger:
     def note_attempt(self, attempt_seconds: float) -> None:
         """Record an attempt that is about to be retried.
 
-        Without this the slow attempt that caused a retry is invisible: only
-        the fast one that succeeded afterwards would be measured, which is the
-        opposite of what a deadline investigation needs.
+        Without it only the fast attempt that finally succeeded is measured, and the
+        slow one that caused the retry is invisible.
         """
         self.max_call_seconds = max(self.max_call_seconds, attempt_seconds)
 
@@ -196,13 +180,11 @@ class LLMInterface(ABC):
     Duck-typed stand-ins that define their own ``complete`` keep working.
     """
 
-    # Backoff schedule for transient errors; jittered ±25% per attempt.
+    # Backoff schedule for transient errors; jittered +/-25% per attempt.
     # Override per instance (e.g. in tests) to speed up or disable retries.
-    #: Sized for a quota window rather than a network blip.  A paired pilot on
-    #: 2026-08-11 lost three of eighteen runs to 429 RESOURCE_EXHAUSTED even
-    #: though 429 is retryable and the completed runs used 22 retries between
-    #: them: the previous ladder gave up 62 seconds after the first refusal,
-    #: which is shorter than the window being waited out.
+    # Sized for a quota window, not a network blip: the previous ladder gave up
+    # 62 s after the first 429, shorter than the window being waited out, and a
+    # 2026-08-11 pilot lost three of eighteen runs to RESOURCE_EXHAUSTED.
     RETRY_DELAYS: Tuple[float, ...] = (5.0, 15.0, 60.0, 120.0, 300.0)
 
     _RETRYABLE_MARKERS: Tuple[str, ...] = (
@@ -216,8 +198,9 @@ class LLMInterface(ABC):
 
     @property
     def ledger(self) -> TokenLedger:
-        """Cumulative token/call accounting for this instance (lazy, survives
-        subclasses that never call super().__init__())."""
+        """Cumulative token/call accounting for this instance; lazy, so subclasses that
+        skip super().__init__() still work.
+        """
         led = self.__dict__.get("_ledger")
         if led is None:
             led = TokenLedger()
@@ -227,9 +210,9 @@ class LLMInterface(ABC):
     def add_call_observer(self, observer: Callable[[Dict[str, Any]], None]) -> int:
         """Register an application-owned transcript observer.
 
-        Observers receive completed provider calls and are deliberately local
-        to this LLM instance.  The caller must remove the observer when its
-        bounded Agent task closes so transcripts cannot cross task/role scope.
+        Observers receive completed provider calls and are local to this LLM
+        instance. The caller removes the observer when its bounded Agent task
+        closes, so transcripts stay within one task/role scope.
         """
         observers = self.__dict__.setdefault("_call_observers", {})
         sequence = int(self.__dict__.get("_call_observer_sequence", 0)) + 1
@@ -263,10 +246,9 @@ class LLMInterface(ABC):
             # Which pipeline stage issued this call, when the caller says so.
             # Observers archive by stage; nothing about the request depends on it.
             "label": label,
-            # A multi-turn call resends every earlier turn.  Observers that
-            # archive transcripts must append only what is new, or one bounded
-            # conversation would be recorded O(n^2) times.  Offset 0 (the
-            # default, and every single-turn call) means "all of it is new".
+            # A multi-turn call resends every earlier turn, so observers append only
+            # what is new; otherwise a conversation is archived O(n^2) times. Offset 0
+            # (the default, and every single-turn call) means all of it is new.
             "new_message_offset": int(new_message_offset),
             "conversation_id": conversation_id,
             "response": {
@@ -287,9 +269,9 @@ class LLMInterface(ABC):
             try:
                 observer(event)
             except Exception as exc:
-                # Transcript bookkeeping must not turn a completed provider
-                # call into a provider retry.  The task session records its own
-                # terminal state and the orchestrator rejects it before commit.
+                # Transcript bookkeeping does not turn a completed provider call into a
+                # provider retry. The task session records its own terminal state and the
+                # orchestrator rejects it before commit.
                 errors.append(f"{type(exc).__name__}: {exc}")
 
     def complete(
@@ -341,10 +323,9 @@ class LLMInterface(ABC):
                         time.monotonic() - start, retries,
                         attempt_seconds=attempt_seconds,
                     )
-                    # Printed because the provider exception carries no timing
-                    # and the archived failure context stores only its text: a
-                    # cancelled call is indistinguishable from a rejected one
-                    # without knowing how long it ran.
+                    # Printed because the exception carries no timing and the archived context
+                    # stores only its text; without the duration a cancelled call looks like a
+                    # rejected one.
                     print(
                         f"  [LLM] giving up after {attempt_seconds:.0f}s "
                         f"({type(exc).__name__}: {str(exc)[:120]})"
@@ -367,7 +348,7 @@ class LLMInterface(ABC):
         temperature: float,
         max_tokens: int,
     ) -> LLMResponse:
-        """Provider-specific single API call (no retry/accounting concerns)."""
+        ...
 
     @classmethod
     def _is_retryable(cls, exc: Exception) -> bool:
@@ -376,10 +357,6 @@ class LLMInterface(ABC):
             return True
         text = f"{type(exc).__name__} {exc}".lower()
         return any(marker in text for marker in cls._RETRYABLE_MARKERS)
-
-    # ------------------------------------------------------------------
-    # Convenience helpers
-    # ------------------------------------------------------------------
 
     def chat(
         self,
@@ -411,13 +388,7 @@ class LLMInterface(ABC):
         max_tokens: int = DEFAULT_MAX_TOKENS,
         label: Optional[str] = None,
     ) -> Tuple[LLMResponse, bool]:
-        """Low-temperature-first completion with temperature escalation.
-
-        Calls ``complete`` at each temperature in ``temperatures`` until
-        ``validate(content)`` returns truthy.  Returns ``(response, ok)`` —
-        on exhaustion the last response is returned with ``ok=False`` so the
-        caller can apply its own fallback.
-        """
+        """Low-temperature-first completion with temperature escalation."""
         last: Optional[LLMResponse] = None
         for temp in temperatures:
             last = self.complete(
@@ -427,7 +398,7 @@ class LLMInterface(ABC):
                 if validate(last.content):
                     return last, True
             except Exception:
-                pass  # validation failure at this temperature → escalate
+                pass  # validation failure at this temperature -> escalate
         assert last is not None
         return last, False
 
@@ -460,14 +431,11 @@ class Conversation:
     """A bounded multi-turn conversation over a stateless provider API.
 
     The provider APIs used here (Vertex/Gemini ``generateContent``, the GitHub
-    Models chat endpoint) keep no server-side session: continuity exists only
-    because the caller resends the earlier turns.  This object owns those turns
-    so the exact bytes the model saw stay application-owned, reproducible, and
-    digest-recordable — the property §5.3 requires and a provider conversation
-    id could not give.
-
-    One instance belongs to one Agent role and one bounded task, mirroring the
-    TaskSession rules.  It is deliberately not shared across roles or tasks.
+    Models chat endpoint) keep no server-side session; continuity comes from
+    resending earlier turns. This object owns them, so the exact bytes the model
+    saw stay application-owned, reproducible and digest-recordable (§5.3). One
+    instance belongs to one Agent role and one bounded task, as TaskSession
+    requires; it is not shared across roles or tasks.
     """
 
     def __init__(
@@ -509,13 +477,12 @@ class Conversation:
     ) -> str:
         """Append a user turn, send the whole conversation, keep the reply.
 
-        The assistant reply is retained, so the next ``send`` shows the model
-        its own previous answer rather than a paraphrase of it.
+        Retaining the reply means the next ``send`` shows the model its own previous
+        answer verbatim.
         """
-        # What an observer has already archived is everything the *previous*
-        # call sent.  On the opening turn that is nothing — the system prompt
-        # has not been recorded yet, so the offset must be 0 or it would be
-        # dropped from the transcript entirely.
+        # The observer has already archived everything the previous call sent. On
+        # the opening turn that is nothing, so offset 0 keeps the system prompt in
+        # the transcript.
         offset = len(self._rendered()) if self._turns else 0
         self._turns.append(Message(role="user", content=str(user_message)))
         response = self._llm.complete(
@@ -537,10 +504,9 @@ def _split_gemini_messages(
 ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
     """Split messages into (system_instruction, role-tagged contents).
 
-    google-genai carries the system prompt in ``config.system_instruction``;
-    conversation turns are role-tagged Content dicts ("user" / "model").
-    Flattening everything into anonymous strings (the previous behaviour)
-    demotes the system prompt to ordinary user text.
+    google-genai carries the system prompt in ``config.system_instruction`` and
+    turns as role-tagged Content dicts ("user" / "model"); flattening them into
+    anonymous strings demotes the system prompt to ordinary user text.
     """
     system_parts = [m.content for m in messages if m.role == "system"]
     system_instruction = "\n\n".join(system_parts) if system_parts else None
@@ -581,7 +547,6 @@ class GeminiLLM(LLMInterface):
             timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
         )
 
-        # Load and export runtime env from .env through centralized config.
         Config.setup_langsmith_env(use_test=use_test_key)
 
         selected_api_key = api_key or Config.get_gemini_api_key(use_test=use_test_key)
@@ -597,7 +562,6 @@ class GeminiLLM(LLMInterface):
         self.client = self._maybe_wrap_with_langsmith(base_client, enable_langsmith)
 
     def _maybe_wrap_with_langsmith(self, base_client: Any, enable_langsmith: bool) -> Any:
-        """Wrap Gemini client with LangSmith when tracing is enabled and installed."""
         if not enable_langsmith or not Config.langsmith_enabled():
             return base_client
 
@@ -626,7 +590,6 @@ class GeminiLLM(LLMInterface):
         temperature: float,
         max_tokens: int,
     ) -> LLMResponse:
-        """Call Gemini and normalize structured response fields into LLMResponse."""
         system_instruction, contents = _split_gemini_messages(messages)
         # google-genai expects generation settings in `config`, not top-level kwargs.
         config: Dict[str, Any] = {
@@ -679,7 +642,6 @@ class GeminiLLM(LLMInterface):
 
     @staticmethod
     def _extract_content_and_finish_reason(response: Any) -> tuple[str, str]:
-        """Extract response text and finish reason across SDK response variants."""
         content = getattr(response, "text", None) or ""
         finish_reason = ""
 
@@ -736,7 +698,7 @@ class GitHubCopilotLLM(LLMInterface):
             timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
         )
 
-        # Reuse centralized env setup so GitHub Models calls can be traced like Gemini calls.
+        # Reuse centralized env setup to trace GitHub Models calls like Gemini ones.
         Config.setup_langsmith_env()
 
         token = self.auth_manager.get_token(explicit_token=api_key)
@@ -749,7 +711,6 @@ class GitHubCopilotLLM(LLMInterface):
         self.client = self._build_client(token)
 
     def _build_client(self, token: str) -> Any:
-        """Create an OpenAI-compatible client and wrap with LangSmith when available."""
         client_kwargs: Dict[str, Any] = {"api_key": token, "base_url": self.base_url}
         timeout = getattr(self, "timeout_seconds", None)
         if timeout is not None:
@@ -761,7 +722,6 @@ class GitHubCopilotLLM(LLMInterface):
         )
 
     def _maybe_wrap_with_langsmith(self, base_client: Any, enable_langsmith: bool) -> Any:
-        """Wrap OpenAI-compatible client with LangSmith when tracing is enabled and installed."""
         if not enable_langsmith or not Config.langsmith_enabled():
             return base_client
 
@@ -848,7 +808,6 @@ class GitHubCopilotLLM(LLMInterface):
         temperature: float,
         max_tokens: int,
     ) -> LLMResponse:
-        """Call GitHub Models chat completions using OpenAI-compatible schema."""
         retried_auth = False
         payload_messages = cast(Any, [m.to_dict() for m in messages])
 
@@ -887,8 +846,7 @@ class VertexLLM(LLMInterface):
     ARCHITECTURE_MAX_TOKENS = 65536
 
     # Retry shared-capacity failures at most twice. A client deadline is not a
-    # capacity failure and is deliberately rejected without replaying the same
-    # expensive request.
+    # capacity failure, so it is rejected without replaying the request.
     RETRY_DELAYS = (10.0, 30.0)
 
     def __init__(
@@ -938,7 +896,6 @@ class VertexLLM(LLMInterface):
         self.client = self._maybe_wrap_with_langsmith(base_client, enable_langsmith)
 
     def _maybe_wrap_with_langsmith(self, base_client: Any, enable_langsmith: bool) -> Any:
-        """Wrap Vertex client with LangSmith when tracing is enabled and installed."""
         if not enable_langsmith or not Config.langsmith_enabled():
             return base_client
 
@@ -970,7 +927,7 @@ class VertexLLM(LLMInterface):
         """Call Vertex Gemini and normalize response into LLMResponse.
 
         Transient errors (429/RESOURCE_EXHAUSTED/5xx/timeouts) are retried by
-        the LLMInterface.complete() wrapper — no bespoke retry loop here.
+        the LLMInterface.complete() wrapper - no bespoke retry loop here.
         """
         system_instruction, contents = _split_gemini_messages(messages)
         config: Dict[str, Any] = {
@@ -1059,20 +1016,17 @@ class VertexLLM(LLMInterface):
         text = f"{type(exc).__name__} {exc}".lower()
         if status == 504 or "deadline" in text or "timeout" in text:
             return False
-        # 499 is the provider abandoning the request, not this client reaching
-        # its deadline: across two full pilots the longest single attempt was
-        # 218 s against a 600 s timeout, and raising that timeout from 300 s
-        # changed nothing. Matched on text because the provider error is
-        # re-raised as a plain RuntimeError carrying the status only in its
-        # message -- a _RETRYABLE_STATUS entry would never see it. The hard
-        # wall-clock timeout this class enforces itself raises TimeoutError and
-        # is excluded above, so a deadline we set is still not retried.
+        # 499 is the provider abandoning the request, not this client hitting its
+        # deadline: across two pilots the longest attempt was 218 s against a 600 s
+        # timeout. Matched on text because the error is re-raised as a plain
+        # RuntimeError with the status only in its message, so a _RETRYABLE_STATUS
+        # entry would never see it. Our own wall-clock timeout raises TimeoutError
+        # and is excluded above.
         if "499" in text or "cancelled" in text:
             return True
-        # The request worker is a fresh per-call process; its pipe dying
-        # (bare EOFError from connection.recv) is a transient the memoried
-        # 2026-08-29 launch already hit once and a NO-REFINE roll lost
-        # 149k tokens to. A retry gets a brand-new worker.
+        # The request worker is a fresh per-call process; its pipe dying (bare
+        # EOFError from connection.recv) is transient - one 2026-08-29 run lost
+        # 149k tokens to it. A retry gets a new worker.
         if isinstance(exc, EOFError) or "eoferror" in text:
             return True
         return super()._is_retryable(exc)

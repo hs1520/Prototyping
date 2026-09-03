@@ -47,7 +47,6 @@ def _infrastructure_failure_message(value: str) -> bool:
 
 
 def _terminal_evidence(gazebo: dict, sitl: dict, matrix: dict) -> dict[str, dict]:
-    """Normalize executed evidence for deterministic post-run failure routing."""
     evidence: dict[str, dict] = {}
 
     def item(req_id: str) -> dict:

@@ -1,4 +1,3 @@
-"""The planned-action lifecycle is exercised through its two-entry interface."""
 from __future__ import annotations
 
 import hashlib
@@ -142,7 +141,7 @@ package PayloadChain {{
 """
 
 
-def test_runtime_effects_materialize_while_plan_effects_control_the_audit():
+def test_runtime_effects_materialize():
     plan_effect = _effect(
         requirement_id="REQ_PLAN_ONLY",
         action_def="plannedOnly",
@@ -171,7 +170,7 @@ def test_runtime_effects_materialize_while_plan_effects_control_the_audit():
     assert observed.to_artifact_dict()["status"] == "FAIL"
 
 
-def test_nonempty_body_is_preserved_while_bare_usage_is_still_typed():
+def test_nonempty_body_preserved():
     original_body = "send ExistingSignal() to payloadCommand;"
     prepared = prepare_planned_actions(
         _model(action_body=original_body),
@@ -187,7 +186,7 @@ def test_nonempty_body_is_preserved_while_bare_usage_is_still_typed():
     assert "TYPED_USAGE_APPLIED" in codes
 
 
-def test_preparation_is_byte_idempotent():
+def test_preparation_byte_idempotent():
     first = prepare_planned_actions(
         _model(),
         model_plan=_model_plan(),
@@ -204,7 +203,7 @@ def test_preparation_is_byte_idempotent():
     assert second.syntax_disposition == "NOT_CHECKED"
 
 
-def test_syntax_regression_rolls_back_the_complete_candidate():
+def test_syntax_regression_rollback():
     original = _model()
     prepared = prepare_planned_actions(
         original,
@@ -219,7 +218,7 @@ def test_syntax_regression_rolls_back_the_complete_candidate():
     }
 
 
-def test_observation_reads_the_final_terminal_text_not_the_prepared_candidate():
+def test_observation_reads_final_text():
     prepared = prepare_planned_actions(
         _model(),
         model_plan=_model_plan(),
@@ -243,7 +242,7 @@ def test_observation_reads_the_final_terminal_text_not_the_prepared_candidate():
     assert artifact["status"] == "FAIL"
 
 
-def test_artifact_projection_is_a_fresh_copy():
+def test_artifact_projection_fresh_copy():
     prepared = prepare_planned_actions(
         _model(),
         model_plan=_model_plan(),
@@ -261,20 +260,20 @@ def test_artifact_projection_is_a_fresh_copy():
     assert observed.to_artifact_dict()["status"] == "ADVISORY"
 
 
-def test_namespace_regression_rolls_back_the_complete_candidate(monkeypatch):
+def test_namespace_regression_rollback(monkeypatch):
     """Duplicate members are warning-level for the syntax checker but a hard
-    USER_NAMESPACE_INTEGRITY failure at terminal qualification — and this
-    writer runs AFTER the one bounded namespace repair pass, so a collision
-    injected here would reach qualification with no repair downstream."""
+    USER_NAMESPACE_INTEGRITY failure at terminal qualification, and this writer runs
+    after the one bounded namespace repair pass, so a collision injected here
+    reaches qualification unrepaired.
+    """
     import src.agents.planned_action_lifecycle as lifecycle
 
     original = _model()
 
     def _fake_materialize(source, _effects):
-        # Whatever the materializer would write, the gate must catch a
-        # duplicate-member increase. This shape (action def + attribute
-        # sharing one unreferenced name) is warning-level for the syntax
-        # checker — exactly the s0v7 escape route.
+        # Whatever the materializer writes, the gate catches a duplicate-member
+        # increase. This shape (action def + attribute sharing one unreferenced
+        # name) is warning-level for the syntax checker - the s0v7 escape route.
         import re
         match = re.search(r"(part def \w+ \{)", source)
         assert match

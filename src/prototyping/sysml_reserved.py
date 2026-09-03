@@ -1,11 +1,11 @@
 """Reserved words of the KerML and SysML v2 textual notations.
 
-Verified against the parser: each word is rejected as a declared name in at
-least one of the positions the pipeline renders (attribute, action, item,
-port, part). `nonunique` and `ordered` parse as attribute names but not as
-definition names; the set keeps them because callers do not track which
-position a name will reach. Every module that turns an externally chosen
-name into SysML text checks this set rather than keeping its own list.
+Each word is rejected by the parser as a declared name in at least one
+rendered position (attribute, action, item, port, part). `nonunique` and
+`ordered` parse as attribute names but not definition names; they stay in the
+set because callers do not track which position a name reaches. Modules that
+turn an external name into SysML text check this set instead of keeping their
+own list.
 """
 from __future__ import annotations
 

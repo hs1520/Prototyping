@@ -1,9 +1,8 @@
 """Native-SITL feasibility check for the recommended design.
 
-This verifies flight feasibility and L2 safety behavior only. It does NOT verify
-datasheet endurance; native SITL's hover current model is architecture-
-nondiscriminating, so any current/endurance observations are explicitly
-non-authoritative.
+Covers flight feasibility and L2 safety behaviour only. Native SITL's hover
+current model is architecture-nondiscriminating, so its current/endurance
+observations are not authoritative for datasheet endurance.
 
 Run:
   PYTHONPATH=. .venv/bin/python examples/run_sitl_feasibility.py
@@ -110,9 +109,8 @@ def parm_freshness(primary_lines: list[str], run_json: dict | None,
                    model_sysml: str | None = None) -> tuple[bool, str]:
     """Cross-check recommended.parm against the latest realization run.
 
-    Guards against silently flying a previous run's design: a pipeline run that
-    falls back before Phase 8 leaves no recommendation, and an older
-    recommended.parm on disk would otherwise be picked up as if it were current.
+    A pipeline run that falls back before Phase 8 leaves no recommendation, so an
+    older recommended.parm on disk would be flown as if it were current.
     Returns (fresh, reason).
     """
     if run_json is None:
@@ -353,9 +351,9 @@ def _l2_note(req_id: str, passed: bool, message: str, inject_kind: str = "") -> 
     if not passed and "L2 case timeout" in message:
         return "bounded SITL run timed out; not counted as a safety pass"
     if passed and inject_kind == "mavlink_command":
-        # Parachute/gripper cases command the actuator directly instead of
-        # injecting the fault condition: they verify actuation exists, not the
-        # detect→react chain (that chain is the behavioral-sim tier's job).
+        # Parachute/gripper cases command the actuator directly instead of injecting
+        # the fault: they check that actuation exists, not the detect->react chain,
+        # which the behavioral-sim tier covers.
         return "actuator-existence check; fault-trigger chain covered by behavioral sim tier"
     return ""
 
@@ -443,7 +441,6 @@ def run_safety_l2(model, parm_source: str, allow_stale: bool = False) -> list[di
 
 
 def _model_guard(bridge: SITLBridge, req_id: str) -> str | None:
-    """The model guard a spec traces to — grounds 'behavioral sim covers the trigger'."""
     assigned = bridge.requirement_evidence.guard_assignments.get(req_id)
     if not assigned:
         return None
@@ -476,9 +473,9 @@ def matrix_summary(model, bridge: SITLBridge,
             model, realization, bridge.requirement_evidence, gazebo=gazebo,
             l1_results=l1_results, l2_results=l2_results,
         )
-        # The live SITL run is the last evidence-producing tier, so it owns the
-        # final matrix artifact.  Persist rows with executed L1/L2 results instead
-        # of leaving the earlier strategy-only matrix (all SITL checks "planned").
+        # The live SITL run is the last evidence-producing tier, so it owns the final
+        # matrix artifact: persist rows with executed L1/L2 results instead of the
+        # earlier strategy-only matrix (all SITL checks "planned").
         matrix_payload = to_json(rows)
         if RUN_JSON.exists():
             run_json = json.loads(RUN_JSON.read_text(encoding="utf-8"))
@@ -574,7 +571,6 @@ def build_static_report(model, model_source: str, model_source_note: str,
 
 
 def _coverage_lines(coverage: dict) -> list[str]:
-    """MD lines for the honest-gap bucket, so 'blocked = 0' is not over-read."""
     n = coverage.get("unmapped", 0)
     ids = ", ".join(coverage.get("unmapped_req_ids", [])) or "none"
     return [
@@ -693,7 +689,6 @@ def _requirements_from_sysml(text: str) -> list[str]:
 
 
 def _recompute_realization_summary(data: dict) -> dict:
-    """Best-effort Phase-8 recompute so reports use the current realization code."""
     try:
         design_inputs = data.get("recommended_design_inputs") or {}
         if not design_inputs or not SYSML_PATH.exists():

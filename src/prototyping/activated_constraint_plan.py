@@ -1,10 +1,10 @@
 """Plan-first attributes and activated constraint obligations.
 
-The plan is a generation/audit input.  The committed SysML v2 model remains
-the semantic authority. ``ALWAYS`` obligations are materialised at part scope;
-``STATE_ACTIVE`` obligations are materialised as assert constraints owned by
-the referenced state usage. This uses valid SysML v2 containment semantics
-instead of inventing a temporal expression language.
+The plan is a generation/audit input; the committed SysML v2 model is the
+semantic authority. ``ALWAYS`` obligations are materialised at part scope and
+``STATE_ACTIVE`` obligations as assert constraints owned by the referenced
+state usage, using SysML v2 containment rather than a temporal expression
+language.
 """
 from __future__ import annotations
 
@@ -28,23 +28,18 @@ from ..utils.req_id import (
 from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end, named_def_pattern
 
 
-#: Value types an attribute may be planned with. The plan has no way to declare
-#: a new type, so anything outside this set is emitted as a reference to
-#: something that does not exist.
-#:
-#: Measured: one run planned `lockState : StateEnum = Locked`, the materialiser
-#: wrote it faithfully, and the model failed Syside with "No Type named
-#: 'StateEnum' found." Validation had only checked that the name was a
-#: well-formed identifier, which `StateEnum` is. Failing the plan instead lets
-#: generation retry, which is what the bounded attempt budget is for.
+# Value types an attribute may be planned with. The plan cannot declare a new
+# type, so anything outside this set becomes a reference to something that
+# does not exist: one run planned `lockState : StateEnum = Locked` and syside
+# failed with "No Type named 'StateEnum' found", because validation only
+# checked that the name was a well-formed identifier. Failing the plan instead
+# lets generation retry within the attempt budget.
 RESOLVABLE_VALUE_TYPES = frozenset({
-    # ScalarValues
     "Boolean", "Integer", "Natural", "Rational", "Real", "String",
-    # ISQ / SI quantity values used by the emitters.  Every entry is verified
-    # syside-resolvable (tests/test_stdlib_vocabulary.py) — this set once
-    # contained the phantom "AngleValue", which defeated the very check this
-    # docstring describes.  The standard library's angle type is
-    # AngularMeasureValue (and PlaneAngleValue).
+    # ISQ / SI quantity values used by the emitters. Every entry is verified
+    # syside-resolvable (tests/test_stdlib_vocabulary.py); this set once held
+    # "AngleValue", which does not exist - the angle types are
+    # AngularMeasureValue and PlaneAngleValue.
     "DurationValue", "LengthValue", "MassValue", "TimeValue",
     "SpeedValue", "AccelerationValue", "AngularMeasureValue",
     "TemperatureValue", "DimensionOneValue",
@@ -53,7 +48,6 @@ RESOLVABLE_VALUE_TYPES = frozenset({
 
 
 def _bare_type(value_type: str) -> str:
-    """The last segment of a possibly qualified type name."""
     return str(value_type or "").rsplit("::", 1)[-1].strip()
 
 
@@ -75,13 +69,12 @@ VERIFICATION_TIERS = {
     "EXTERNAL_ANALYSIS",
     "INSPECTION",
 }
-#: Operators whose satisfaction boundary the STATE_EXECUTION executor can probe.
-#: It perturbs the right-hand value by epsilon and requires one side to satisfy
-#: and the other not to. Equality fails that by construction — both perturbed
-#: sides violate it — so `behavioral_sim` reports "boundary == N is not live" for
-#: every `==` constraint regardless of the model. Measured on
-#: pilot_n6_20260802/seed-3, the only seed that planned equality state
-#: constraints and the only one in its arm to lose the qualification gate.
+# Operators whose satisfaction boundary the STATE_EXECUTION executor can probe.
+# It perturbs the right-hand value by epsilon and needs one side to satisfy
+# and the other not to; equality fails that by construction, so
+# `behavioral_sim` reports "boundary == N is not live" for every `==`
+# constraint. Seen on pilot_n6_20260802/seed-3, which planned equality state
+# constraints and lost the qualification gate.
 _LIVE_BOUNDARY_OPERATORS = frozenset({"<=", ">=", "<", ">"})
 _GENERIC_PORT_TYPES = frozenset({"DataPort", "StatusPort", "CommandPort"})
 
@@ -89,31 +82,26 @@ _GENERIC_PORT_TYPES = frozenset({"DataPort", "StatusPort", "CommandPort"})
 def _state_execution_obstacle(constraint, lhs) -> str | None:
     """Why STATE_EXECUTION cannot discharge this constraint, or None.
 
-    Mirrors what `behavioral_sim._run_state_active_constraint_scenario` actually
-    requires. The two were previously allowed to disagree: the plan validator
-    forced every STATE_ACTIVE constraint to claim STATE_EXECUTION, and the
-    executor then rejected the ones it had no machinery for. A plan that commits
-    to evidence the system cannot produce is worse than one that says so.
+    Mirrors what `behavioral_sim._run_state_active_constraint_scenario` requires.
+    The validator used to force every STATE_ACTIVE constraint to claim
+    STATE_EXECUTION, and the executor then rejected the ones it had no machinery
+    for.
     """
     if constraint.operator not in _LIVE_BOUNDARY_OPERATORS:
         return (
             f"`{constraint.operator}` has no live satisfaction boundary to "
             "execute against"
         )
-    # The executor also demands the subject be an attribute bound to a dotted
+    # The executor also needs the subject to be an attribute bound to a dotted
     # input path (behavioral_sim._run_state_active_constraint_scenario: no
-    # binding -> "Runtime subject X is not bound to an input data path"). This
-    # was deliberately left unchecked for a time because it was not established
-    # which side was wrong. Repeated end-to-end probes on LLM-extracted
-    # requirement sets (2026-08-16) settled it: the executor is right. An
-    # unbound subject cannot be swept, the scenario fails, the row lands
-    # behavioral_sim_failed, and the closure repair that would add the binding
-    # is refused by plan conformance as an unplanned element -- a dead lock the
-    # frozen requirement set never hit only because its equivalent constraint
-    # was anchored by the datasheet tier as well. Aligning the two: an unbound
-    # subject is an obstacle to STATE_EXECUTION, and the constraint must claim
-    # INSPECTION instead (still emitted, still inspectable, not counted as
-    # discharged execution evidence), or the plan must bind the subject.
+    # binding -> "Runtime subject X is not bound to an input data path"). An
+    # unbound subject cannot be swept, so the scenario fails, the row lands
+    # behavioral_sim_failed, and the repair that would add the binding is refused
+    # by plan conformance as an unplanned element - a deadlock the frozen
+    # requirement set avoided only because the datasheet tier anchored the
+    # equivalent constraint. So an unbound subject is an obstacle here: the
+    # constraint claims INSPECTION instead (still emitted, not counted as
+    # execution evidence), or the plan binds the subject.
     if lhs is not None and not lhs.input_binding:
         return (
             f"subject {lhs.name} has no input binding, so the state executor "
@@ -129,13 +117,10 @@ def state_execution_advisories(
 ) -> list[str]:
     """Report STATE_EXECUTION constraints the executor cannot discharge.
 
-    Deliberately advisory. ``_state_execution_obstacle`` documents why the
-    plan validator does not reject these: it is not established whether the
-    executor is over-strict or the plan over-permissive, and rejecting them
-    would invalidate plans that are legal today. Until that is decided, the
-    disagreement should at least be visible in the run artefacts instead of
-    passing silently and reappearing as an unanchored requirement six phases
-    later.
+    Advisory only: it is not settled whether the executor is over-strict or the
+    plan over-permissive, and rejecting these would invalidate plans that are
+    legal today (see ``_state_execution_obstacle``). Until then the disagreement
+    is recorded rather than passing silently.
     """
     attributes = {
         (str(component.name), attribute.name): attribute
@@ -175,11 +160,10 @@ _COMPARISON = re.compile(
 _ATTRIBUTE = re.compile(
     r"\battribute\s+(?P<name>[A-Za-z_]\w*)"
     r"(?:\s*:\s*(?P<type>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)"
-    # A bracket suffix after the type — `LengthValue [m]` — is not how this
-    # project writes units (they go on the value: `= 5 [m]`), but generation
-    # produces it, and a pattern that cannot see such a declaration reports the
-    # attribute as absent and appends a second one. Matching it is what lets the
-    # existing replace branch normalise it instead of duplicating it.
+    # Generation writes a bracket suffix after the type - `LengthValue [m]` -
+    # though this project puts units on the value (`= 5 [m]`). A pattern that
+    # misses it reports the attribute as absent and appends a second one;
+    # matching it lets the replace branch normalise it instead.
     r"(?P<type_suffix>\s*\[[^\]{}]*\])?)?"
     r"(?:\s*=\s*(?P<value>[^;{}]+))?\s*;"
 )
@@ -193,17 +177,13 @@ _PLAN_COMMENT = re.compile(
 )
 
 
-
-
 def _normalise_expression(value: str) -> str:
     return " ".join(str(value or "").split())
 
 
-# Requirement text written by people, or extracted by a model, spells a
-# negative bound with the typographic minus U+2212 ("−10 °C") at least as
-# often as with the ASCII hyphen-minus; a plan spells it with the hyphen. Both
-# have to read as the same number, or a bound copied faithfully from the
-# requirement is refused as absent from it.
+# Requirement text often spells a negative bound with the typographic minus
+# U+2212 ("−10 °C") while a plan uses the ASCII hyphen. Both must read as
+# the same number, or a bound copied from the requirement is refused as absent.
 _MINUS_VARIANTS = str.maketrans({"\u2212": "-", "\u2013": "-", "\u2014": "-"})
 
 
@@ -224,20 +204,17 @@ def _numeric(value: str | None) -> float | None:
 
 
 # A unit reaches the model as a SysML name, so it must be one. `%` does not
-# even tokenise — `= 25 [%]` is a parse error that makes syside reparent every
-# declaration after it into the unclosed expression, silently detaching the
-# state machines that follow from their owning part. The long and plural
-# spellings parse but resolve to nothing ("No Feature named 'degree' found").
-# Requirement text still states units in prose; _unit_tokens accepts those.
-# The emission map comes from the single unit registry.  The degree sign,
-# `%`, and slashes are not SysML tokens at all (`[°]` is a parse error,
-# `[°C]`/`[%]` reparent everything after them, `[m/s]` breaks every
-# word-character bracket reader), so the model carries ASCII tokens instead
-# (deg, degC, percent, m_s, km_h) and their resolution is closed by
-# `generation_plan.materialize_standard_library_imports` via the registry's
-# alias/definition constructs.  Measured twice: the archived extraction run
-# failed on `deg`/`degC` reference errors; ablation pilot 2 failed on `m_s`
-# because it was emitted here without a registry entry to resolve it.
+# tokenise: `= 25 [%]` is a parse error that makes syside reparent every
+# later declaration into the unclosed expression, detaching the state
+# machines that follow from their owning part. Long and plural spellings
+# parse but resolve to nothing ("No Feature named 'degree' found"); `[°]`
+# is a parse error and `[m/s]` breaks every word-character bracket reader.
+# So the model carries ASCII tokens (deg, degC, percent, m_s, km_h) whose
+# resolution is closed by
+# `generation_plan.materialize_standard_library_imports` via the unit
+# registry, while _unit_tokens still accepts the prose spellings. Seen
+# twice: an extraction run failed on `deg`/`degC` reference errors, and
+# ablation pilot 2 on `m_s` emitted without a registry entry.
 from .unit_registry import EMISSION_BY_SPELLING as _SYSML_UNIT_NAMES
 
 
@@ -250,8 +227,8 @@ def _unit_tokens(source: str) -> set[str]:
     tokens = {
         item.lower().replace("%", "percent")
         for item in re.findall(
-            # "m/s" must be tried before the bare "m" alternative, or it is
-            # only ever seen as the two separate units "m" and "s".
+            # "m/s" is tried before the bare "m" alternative, or it reads as the two
+            # separate units "m" and "s".
             r"m/s|km/h|"
             r"\b(?:ms|s|m|km|m_s|km_h|N|V|A|W|Hz|kg|g|percent|"
             r"metres?|meters?|seconds?|milliseconds?|kilometres?|kilometers?|"
@@ -261,14 +238,13 @@ def _unit_tokens(source: str) -> set[str]:
         )
     }
     aliases = {
-        # An extracted requirement may spell the unit as the symbol "°"
-        # where a frozen one wrote "degree"; both must resolve to the same
-        # token, or every plan constraint on a symbol-spelled bound is refused.
+        # An extracted requirement may write "°" where a frozen one wrote "degree";
+        # both resolve to one token, or plan constraints on symbol-spelled bounds
+        # are refused.
         "°": "deg",
-        # Temperature. An extracted requirement writes "-10 °C to +45 °C";
-        # a plan may spell it "°C", "degC" or "celsius". All resolve to one
-        # token. Ordered before the bare "°" alternative in the regex above,
-        # or "°C" is only ever seen as an angle followed by a stray letter.
+        # Temperature: "°C", "degC" and "celsius" resolve to one token. Ordered
+        # before the bare "°" alternative above, or "°C" reads as an angle followed
+        # by a stray letter.
         "°c": "degc",
         "celsius": "degc",
         "metre": "m",
@@ -283,9 +259,8 @@ def _unit_tokens(source: str) -> set[str]:
         "kilometres": "km",
         "kilometer": "km",
         "kilometers": "km",
-        # A requirement writes "1.0 degree" / "25 minutes" / "15 m/s"; a plan
-        # may legitimately carry either spelling, so accept both rather than
-        # rejecting every form of a unit the frozen text actually states.
+        # A requirement writes "1.0 degree" / "25 minutes" / "15 m/s" and a plan may
+        # carry either spelling, so accept both.
         "degree": "deg",
         "degrees": "deg",
         "minute": "min",
@@ -529,10 +504,10 @@ def compile_constraint_plan(
 ) -> CompiledConstraintPlan:
     """Compile semantic bindings, attributes, and constraints as one unit.
 
-    This is the sole construction path for requirement-derived constraint
-    knowledge.  It validates the typed data chain against the architecture,
-    reconciles explicit and derived constraint identities, enriches component
-    attributes, and returns all diagnostics through one result.
+    The sole construction path for requirement-derived constraint knowledge: it
+    validates the typed data chain against the architecture, reconciles explicit
+    and derived constraint identities, enriches component attributes, and returns
+    all diagnostics in one result.
     """
     issues: list[str] = []
     components = list(context.components)
@@ -988,14 +963,12 @@ def validate_constraint_plan(
             and lhs.role == "RUNTIME_MEASUREMENT"
             and not lhs.input_binding
         ):
-            # No tier is exempt. STATE_EXECUTION used to be, on the reasoning
-            # that the state executor supplied the value; it does not -- it
-            # reads the bound input like every other tier, and an unbound
-            # runtime measurement under a STATE_ACTIVE constraint fails at
-            # simulation ("runtime subject X is not bound to an input") after
-            # the plan is frozen, when the only repair that would help (a new
-            # binding) is one the plan-conformance gate must refuse. Raising it
-            # here puts the obligation where the LLM can still meet it.
+            # No tier is exempt, STATE_EXECUTION included: the state executor reads the
+            # bound input like every other tier. An unbound runtime measurement under a
+            # STATE_ACTIVE constraint fails at simulation ("runtime subject X is not
+            # bound to an input") after the plan is frozen, when the only repair - a new
+            # binding - is one the plan-conformance gate refuses. Raising it here puts
+            # the obligation where the LLM can still meet it.
             issues.append(
                 f"{prefix} runtime measurement {lhs.name} has no input "
                 "binding; a RUNTIME_MEASUREMENT attribute used in a constraint "
@@ -1141,7 +1114,6 @@ def _activation_state_span(
     text: str,
     constraint: ConstraintPlan,
 ) -> tuple[tuple[int, int] | None, str | None]:
-    """Return the absolute body delimiters for the referenced state usage."""
     if not constraint.activation_ref:
         return None, (
             f"{constraint.owner}.{constraint.constraint_id}: "
@@ -1227,7 +1199,7 @@ def _constraint_is_placed(
             span
             and span[0] < int(assertion["start"]) < span[1]
         )
-    # An ALWAYS invariant must not be weakened by nesting it in any state.
+    # An ALWAYS invariant is not nested in a state, which would weaken it.
     for match in re.finditer(r"\bstate\s+(?!def\b)[A-Za-z_]\w*\s*\{", text):
         opening = text.find("{", match.start(), match.end())
         closing = find_block_end(text, opening)
@@ -1240,7 +1212,6 @@ def _ensure_activation_state_body(
     text: str,
     constraint: ConstraintPlan,
 ) -> tuple[str, bool]:
-    """Expand a declaration-only target state so it can own the constraint."""
     if not constraint.activation_ref or "::" not in constraint.activation_ref:
         return text, False
     behavior_name, state_name = constraint.activation_ref.split("::", 1)
@@ -1463,7 +1434,6 @@ def materialize_planned_constraints(
     removed: list[str] = []
     for item in sorted(unplanned, key=lambda value: value["start"], reverse=True):
         start = item["line_start"]
-        # Remove an immediately preceding stale plan annotation with the block.
         previous_line_start = text.rfind("\n", 0, max(0, start - 1)) + 1
         if _PLAN_COMMENT.fullmatch(text[previous_line_start:start].rstrip("\n")):
             start = previous_line_start
@@ -1557,10 +1527,9 @@ def materialize_planned_constraints(
         text = text[:closing] + block + text[closing:]
         added.append(f"{constraint.owner}.{constraint.constraint_id}")
 
-    # A fabricated min/current pair often exists only to support the fabricated
-    # assertion.  Once that assertion is rejected, remove those now-orphaned
-    # declarations as one compiler-owned cleanup.  Attributes used by a guard,
-    # action, binding, or another constraint are preserved.
+    # A fabricated min/current pair usually exists only for the fabricated
+    # assertion, so remove the orphans once it is rejected. Attributes used by a
+    # guard, action, binding or another constraint are kept.
     removed_orphan_attributes: list[str] = []
     for owner, name in sorted(orphan_candidates):
         owner_span = next(

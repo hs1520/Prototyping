@@ -1,9 +1,9 @@
-"""The generated model owns the decision; the harness only actuates it.
+"""The generated model owns the decision; the harness actuates it.
 
-Every payload/parachute result in the 2026-08-30 authoritative run said so of
-itself: "the coordinate condition was evaluated by the harness, not by generated
-mission logic". These tests hold the boundary that removes that caveat, and pin
-the arbitration failure driving the model straight away exposed.
+Every payload/parachute result in the 2026-08-30 authoritative run carried the
+caveat "the coordinate condition was evaluated by the harness, not by generated
+mission logic". These tests hold that boundary and pin the arbitration failure
+driving the model exposed.
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ package Drone {
 """
 
 
-def test_the_model_fires_its_own_transition_and_action():
+def test_model_fires_transition_and_action():
     mission = ModelDrivenMission(_MODEL)
     assert mission.state_of("PayloadMechanism.PayloadReleaseBehavior") == "Locked"
 
@@ -65,13 +65,15 @@ def test_the_model_fires_its_own_transition_and_action():
     assert mission.state_of("PayloadMechanism.PayloadReleaseBehavior") == "Releasing"
 
 
-def test_a_model_spelled_release_action_is_performed_by_causal_role():
-    """run3 names its action ``releasePayload`` where the adapter constant
-    says ``actuateRelease``. The literal comparison refused to actuate, the
-    payload never separated, and the positional/timed checks starved of
-    evidence — a harness spelling reported as "the model declined". One
-    distinct fired action sharing an actuation term IS the model's response,
-    and the rename goes on the record."""
+def test_renamed_release_matched_by_role():
+    """run3 names its action ``releasePayload`` where the adapter constant says
+    ``actuateRelease``.
+
+    The literal comparison refused to actuate, so the payload never separated and
+    the positional/timed checks had no evidence: a harness spelling reported as
+    "the model declined". One distinct fired action sharing an actuation term is
+    the model's response, and the rename goes on the record.
+    """
     model = _MODEL.replace(
         "entry action onReleasing : actuateRelease;",
         "entry action onReleasing : releasePayload;",
@@ -85,10 +87,11 @@ def test_a_model_spelled_release_action_is_performed_by_causal_role():
     assert mission.action_resolutions == [("actuateRelease", "releasePayload")]
 
 
-def test_two_distinct_fired_actions_are_refused_not_guessed():
-    """The tie discipline of resolve_event, applied to actions: when the
-    event fires two different action definitions, picking one would silently
-    decide which behaviour the run exercised."""
+def test_two_fired_actions_refused():
+    """resolve_event's tie discipline, applied to actions: when the event fires two
+    different action definitions, picking one would decide which behaviour the run
+    exercised.
+    """
     model = _MODEL.replace(
         "entry action onReleasing : actuateRelease;",
         "entry action onReleasing : releasePayload;",
@@ -111,7 +114,7 @@ def test_two_distinct_fired_actions_are_refused_not_guessed():
     assert mission.action_resolutions == []
 
 
-def test_an_unrelated_action_on_the_same_event_does_not_authorize_release():
+def test_unrelated_action_not_release():
     model = _MODEL.replace(
         "entry action onReleasing : actuateRelease;",
         "entry action onReleasing : lockPayload;",
@@ -125,18 +128,15 @@ def test_an_unrelated_action_on_the_same_event_does_not_authorize_release():
     assert not mission.performed(fired, ModelAction.RELEASE_PAYLOAD)
 
 
-def test_an_event_the_model_ignores_fires_nothing():
-    """An empty result must mean the harness does nothing — that is the point of
-    asking the model instead of deciding for it."""
+def test_ignored_event_fires_nothing():
     mission = ModelDrivenMission(_MODEL)
     assert mission.offer("SomeEventTheModelNeverDeclared", time=1.0) == ()
     assert mission.decisions == []
-    # and a second delivery event finds the machine already past Locked
     mission.offer("DeliveryCoordinateSatisfied", time=1.0)
     assert mission.offer("DeliveryCoordinateSatisfied", time=2.0) == ()
 
 
-def test_accepted_events_come_from_the_model_not_a_hardcoded_list():
+def test_accepted_events_from_model():
     mission = ModelDrivenMission(_MODEL)
     assert mission.accepted_events() == (
         "AbortConditionActive", "DeliveryCoordinateSatisfied",
@@ -145,7 +145,7 @@ def test_accepted_events_come_from_the_model_not_a_hardcoded_list():
     assert not mission.handles("CriticalPropulsionFailure")
 
 
-def test_competing_actions_are_discovered_from_the_named_model_machine():
+def test_actions_found_per_machine():
     mission = ModelDrivenMission(_MODEL)
 
     assert mission.action_definitions_for_machine("DeliveryAbortBehavior") == (
@@ -153,7 +153,7 @@ def test_competing_actions_are_discovered_from_the_named_model_machine():
     )
 
 
-def test_provenance_names_what_was_executed():
+def test_provenance_names_machines():
     mission = ModelDrivenMission(_MODEL)
     prov = mission.provenance()
     assert len(prov["model_sha256"]) == 64
@@ -161,12 +161,14 @@ def test_provenance_names_what_was_executed():
     assert prov["decision_owner"] == "generated model state machines"
 
 
-def test_unguarded_release_is_not_inhibited_by_an_active_abort():
-    """REQ-SAFE-006 shape: locked "whenever a delivery-abort condition is
-    active, regardless of proximity". The two behaviours are independent
-    machines and the release transition carries no guard, so the abort cannot
-    inhibit it. Driving the model is what exposes this; structural checks see
-    two well-formed state machines."""
+def test_unguarded_release_not_inhibited():
+    """REQ-SAFE-006 shape: locked "whenever a delivery-abort condition is active,
+    regardless of proximity".
+
+    The two behaviours are independent machines and the release transition carries
+    no guard, so the abort cannot inhibit it. Only driving the model exposes this;
+    structural checks see two well-formed state machines.
+    """
     mission = ModelDrivenMission(_MODEL)
 
     mission.offer("AbortConditionActive", time=1.0)
@@ -180,15 +182,11 @@ def test_unguarded_release_is_not_inhibited_by_an_active_abort():
     )
 
 
-# --------------------------------------------------------------------------
-# the authoritative model itself
-# --------------------------------------------------------------------------
-
 _AUTHORITATIVE = Path("examples/output/latest/final_model.sysml")
 
 
 @pytest.mark.skipif(not _AUTHORITATIVE.exists(), reason="no authoritative run on disk")
-def test_authoritative_model_is_drivable_end_to_end():
+def test_authoritative_model_drivable():
     mission = ModelDrivenMission(_AUTHORITATIVE.read_text(encoding="utf-8"))
 
     for event, machine, action in (
@@ -203,12 +201,14 @@ def test_authoritative_model_is_drivable_end_to_end():
         )
 
 
-def test_guard_only_machines_are_loaded_and_drivable():
-    """A machine whose transitions are all guards is still driven: offer() steps
-    every machine, and a guard fires on the variables it is given. Filtering
-    them out hid SafetyArbiter, which expresses REQ-SAFE-005's precedence
-    entirely in guards — so the precedence check saw nothing to take precedence
-    over and returned inconclusive forever."""
+def test_guard_only_machines_drivable():
+    """A machine whose transitions are all guards is still driven: offer() steps every
+    machine and a guard fires on the variables it is given.
+
+    Filtering them out hid SafetyArbiter, which expresses REQ-SAFE-005's precedence
+    entirely in guards, so the precedence check had nothing to take precedence over
+    and returned inconclusive.
+    """
     model = """
 package Drone {
     part def SafetyMonitor {
@@ -240,7 +240,6 @@ package Drone {
                           variables={"hazard": True, "winning": False})
     assert [d.action_definition for d in fired] == ["competingResponse"]
 
-    # and the winning condition suppresses it — precedence, expressed as a guard
     suppressed = ModelDrivenMission(model).offer(
         "__control__", time=0.0, variables={"hazard": True, "winning": True})
     assert suppressed == ()
@@ -273,20 +272,23 @@ package GuardedRelease {
 """
 
 
-def test_an_unbound_guard_flag_makes_a_guarded_model_behave_as_unguarded():
-    """Measured: with no variables bound, `not deliveryAbortActive` still fired
-    the release. An unset flag reads FALSE, so adding the guard to the model
-    changes nothing the harness can see — the fix would have looked applied and
-    the requirement would still have failed, blaming the model."""
+def test_unbound_guard_flag_listed():
+    """With no variables bound, `not deliveryAbortActive` still fired the release.
+
+    An unset flag reads false, so adding the guard changes nothing the harness can
+    see: the fix would look applied while the requirement kept failing, blaming the
+    model.
+    """
     mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
     assert mission.boolean_guard_attributes() == ("deliveryAbortActive",)
     assert mission.unlatched_boolean_attributes() == ("deliveryAbortActive",)
 
 
-def test_offering_the_abort_raises_the_flag_the_model_itself_declared():
-    """The flag is found by matching the offered event's words against names the
-    MODEL declared, so a model that calls it something else is still checkable
-    and this harness holds no requirement's spellings."""
+def test_abort_event_raises_model_flag():
+    """The flag is found by matching the offered event's words against names the model
+    declared, so a model that names it differently is still checkable and the
+    harness holds no requirement's spellings.
+    """
     mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
     mission.offer("AbortConditionActive", time=0.0)
 
@@ -295,7 +297,7 @@ def test_offering_the_abort_raises_the_flag_the_model_itself_declared():
     assert mission.unlatched_boolean_attributes() == ()
 
 
-def test_an_active_abort_inhibits_the_release_the_model_would_otherwise_fire():
+def test_active_abort_inhibits_release():
     mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
     mission.offer("AbortConditionActive", time=0.0)
     fired = mission.offer("DeliveryCoordinateSatisfied", time=1.0)
@@ -303,10 +305,13 @@ def test_an_active_abort_inhibits_the_release_the_model_would_otherwise_fire():
     assert fired == ()
 
 
-def test_an_ordinary_delivery_still_releases():
-    """The guard must not inhibit the ordinary case. It did, briefly: matching
-    the event against the flag on any shared word raised the abort flag from
-    the DELIVERY event itself, because both names carry "delivery"."""
+def test_ordinary_delivery_releases():
+    """The guard does not inhibit the ordinary case.
+
+    It did briefly: matching the event against the flag on any shared word raised
+    the abort flag from the delivery event itself, because both names carry
+    "delivery".
+    """
     mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
     fired = mission.offer("DeliveryCoordinateSatisfied", time=0.0)
 
@@ -314,8 +319,7 @@ def test_an_ordinary_delivery_still_releases():
     assert mission.conditions == {}
 
 
-def test_a_condition_stays_raised_for_later_events():
-    """"Whenever an abort is active" is a standing state, not an instant."""
+def test_condition_stays_raised():
     mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
     mission.offer("AbortConditionActive", time=0.0)
     mission.offer("SomethingElse", time=1.0)
@@ -324,7 +328,7 @@ def test_a_condition_stays_raised_for_later_events():
     assert mission.offer("DeliveryCoordinateSatisfied", time=2.0) == ()
 
 
-def test_an_explicit_caller_value_overrides_a_latched_one():
+def test_caller_value_overrides_latched():
     mission = ModelDrivenMission(model_text=_GUARDED_RELEASE)
     mission.offer("AbortConditionActive", time=0.0)
     fired = mission.offer("DeliveryCoordinateSatisfied", time=1.0,
@@ -363,11 +367,12 @@ package RenamedEvents {
 """
 
 
-def test_a_model_may_name_its_own_events_and_still_be_driven():
-    """run3's model accepts `DeliveryCoordinateConditionSatisfied` where the
-    harness offered `DeliveryCoordinateSatisfied`. Nothing fired, and the
-    evidence would have read "the generated logic declined to release" — a
-    harness spelling reported as a model defect."""
+def test_renamed_event_resolves_and_fires():
+    """run3's model accepts `DeliveryCoordinateConditionSatisfied` where the harness
+    offered `DeliveryCoordinateSatisfied`. Nothing fired, and the evidence would
+    have read "the generated logic declined to release", a harness spelling
+    reported as a model defect.
+    """
     mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
 
     resolved, how = mission.resolve_event("DeliveryCoordinateSatisfied")
@@ -380,7 +385,7 @@ def test_a_model_may_name_its_own_events_and_still_be_driven():
         "DeliveryCoordinateSatisfied", "DeliveryCoordinateConditionSatisfied")
 
 
-def test_a_declared_name_is_used_verbatim_and_not_renamed():
+def test_declared_name_used_verbatim():
     mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
     resolved, how = mission.resolve_event("DeliveryCoordinateConditionSatisfied")
     assert resolved == "DeliveryCoordinateConditionSatisfied"
@@ -389,10 +394,10 @@ def test_a_declared_name_is_used_verbatim_and_not_renamed():
     assert mission.resolutions == []
 
 
-def test_an_event_the_model_never_declares_is_recorded_not_guessed():
-    """"The model was never asked" and "the model was asked and declined" are
-    different findings. A scenario resting on an unresolved event proves
-    nothing, so it must not look like a refusal."""
+def test_undeclared_event_recorded():
+    """"Never asked" and "asked and declined" are different findings, so a scenario
+    resting on an unresolved event is recorded as unresolved, not as a refusal.
+    """
     mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
     resolved, why = mission.resolve_event("AbortConditionActive")
 
@@ -400,11 +405,14 @@ def test_an_event_the_model_never_declares_is_recorded_not_guessed():
     assert "no declared event covers" in why
 
 
-def test_a_condition_expressed_as_a_flag_is_not_an_unasked_model():
-    """run3 has no abort EVENT at all — the delivery abort is a standing
-    boolean its guards read. "No event matched" would read as "the model was
-    never told", when the latched flag told it. Only an offer that resolves to
-    nothing AND raises nothing established nothing."""
+def test_flag_only_event_not_unresolved():
+    """run3 has no abort event; the delivery abort is a standing boolean its guards
+    read.
+
+    "No event matched" would read as "the model was never told", when the latched
+    flag told it. Only an offer that resolves to nothing and raises nothing
+    established nothing.
+    """
     mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
     mission.offer("AbortConditionActive", time=0.0)
 
@@ -412,11 +420,10 @@ def test_a_condition_expressed_as_a_flag_is_not_an_unasked_model():
     assert mission.condition_only == [
         (0.0, "AbortConditionActive", ("deliveryAbortConditionActive",))]
     assert mission.conditions == {"deliveryAbortConditionActive": True}
-    # and the condition it established really does inhibit the release
     assert mission.offer("DeliveryCoordinateSatisfied", time=1.0) == ()
 
 
-def test_an_offer_that_establishes_nothing_is_the_one_that_is_flagged():
+def test_empty_offer_flagged_unresolved():
     mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
     mission.offer("SomethingNobodyModelled", time=0.0)
 
@@ -425,12 +432,9 @@ def test_an_offer_that_establishes_nothing_is_the_one_that_is_flagged():
     assert mission.conditions == {}
 
 
-def test_an_event_that_says_something_else_does_not_match():
-    """Matching is on the scenario's words being covered, not on overlap: a
-    single motor failure is not a critical subsystem failure."""
+def test_different_event_not_matched():
     mission = ModelDrivenMission(model_text=_RENAMED_EVENTS)
     assert mission.resolve_event("CriticalPropulsionFailure")[0] is None
-    # ...and with the critical event declared, it resolves to that one only
     text = _RENAMED_EVENTS.replace(
         "transition releaseConditionMet",
         "transition criticalFailure\n                first Locked\n"
@@ -443,11 +447,12 @@ def test_an_event_that_says_something_else_does_not_match():
     assert other.resolve_event("SinglePropulsionFailure")[0] is None
 
 
-def test_guards_for_event_identifies_release_by_causal_role():
-    """The inhibition verdict needs no action names: the guards on whatever
-    transitions answer the (resolved) delivery event ARE the release guards.
-    run3's model, previously reported as 'carries no guard' because the
-    harness asked for its own spelling 'actuateRelease'."""
+def test_guards_for_event_by_role():
+    """The inhibition verdict needs no action names: the guards on the transitions
+    answering the resolved delivery event are the release guards. run3's model was
+    reported as 'carries no guard' because the harness asked for its own spelling
+    'actuateRelease'.
+    """
     from pathlib import Path
     text = (
         Path(__file__).parent.parent / "examples" / "output"
@@ -458,12 +463,12 @@ def test_guards_for_event_identifies_release_by_causal_role():
     guards = mission.guards_for_event("DeliveryCoordinateSatisfied")
     assert guards is not None
     assert any("deliveryAbortConditionActive" in g for g in guards)
-    # The old spelling-bound lookup still sees nothing — the contrast that
-    # produced the false 'no inhibition logic' verdict.
+    # The old spelling-bound lookup still sees nothing; that produced the false
+    # 'no inhibition logic' verdict.
     assert mission.guards_reaching_action("actuateRelease") == ()
 
 
-def test_guards_for_event_unresolved_is_none_not_unguarded():
+def test_guards_for_event_none_unresolved():
     from pathlib import Path
     text = (
         Path(__file__).parent.parent / "examples" / "output"

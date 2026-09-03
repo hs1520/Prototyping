@@ -1,17 +1,15 @@
 """Verification strategy matrix: every requirement gets an explicit tier + method.
 
 "SITL unmapped" is not "unverified": endurance closes at the datasheet tier,
-phase sequencing is the behavioral-sim tier's job, and IP54/regulatory items are
-inspection/analysis work outside any simulation toolchain. This module derives —
-from artifacts that already exist (linker specs, Phase 8 per-requirement scopes,
-model state machines, deterministic keyword rules) — a per-requirement assignment,
-so the honest gap ("unassigned") is explicit and small instead of an undifferentiated
-"20/36 unmapped" bucket. Each requirement is also decomposed into an observable
-behaviour obligation and its explicit physical thresholds; requirement-level
-``verified`` is gated on every such obligation being verified.
-
-Method vocabulary follows the systems-engineering IADT convention
-(Inspection / Analysis / Demonstration / Test).
+phase sequencing belongs to the behavioral-sim tier, and IP54/regulatory items
+are inspection/analysis work outside any simulation toolchain. The
+per-requirement assignment is derived from existing artifacts (linker specs,
+Phase 8 per-requirement scopes, model state machines, keyword rules), so the
+remaining gap ("unassigned") is explicit instead of one undifferentiated
+bucket. Each requirement also decomposes into an observable behaviour
+obligation plus its physical thresholds, and requirement-level ``verified``
+requires every obligation verified. Method vocabulary follows the IADT
+convention (Inspection / Analysis / Demonstration / Test).
 """
 from __future__ import annotations
 
@@ -41,8 +39,6 @@ from .verification_obligations import (
     semantic_terms,
 )
 
-# Canonical tiers, ordered from executable test downwards. A requirement may hold
-# several (e.g. max airspeed: L1 param + forward-flight analysis).
 TIER_METHOD: Dict[str, str] = {
     "l2_sitl": "Test (native SITL)",
     "l2_sitl_planned": "Test (native SITL — planned, not executed)",
@@ -75,21 +71,17 @@ _FAILED_TIERS = {
 }
 _PLANNED_TIERS = {"l2_sitl_planned", "l1_param_planned", "gazebo_deferred"}
 
-# Requirements that are inspection/analysis work in any real programme — the
-# simulation toolchain honestly cannot test them.
+# Requirements that are inspection/analysis work in any programme; the
+# simulation toolchain cannot test them.
 _INSPECTION_KWS = INSPECTION_TERMS
 NON_SIMULABLE_REASONS = {n: r for n, _, r in NON_SIMULABLE_RULES}
 
-# Physics/conditions that need the Gazebo tier (S8 boundary): obstacle physics,
-# one-motor-out dynamics, wind conditions, positional release conditions.
 _GAZEBO_KWS = (
     "obstacle", "collision", "avoidance", "motor inoperative", "one motor",
     "propulsion unit", "single propulsion", "headwind", "tailwind", "crosswind",
     "gust",
 )
 
-#: What each L2 verification observes. Obligation closure is decided separately
-#: by the evidence-capability entailment relation.
 _L2_EVIDENCE_CAPABILITIES = {
     "noop": frozenset(),
     "wait_mode": frozenset({EvidenceCapability.MODE_TRANSITION_OBSERVED}),
@@ -181,11 +173,9 @@ def _sim_claim(**kwargs) -> EvidenceClaim:
     """A claim produced by a simulation tier.
 
     No simulator tests an encryption scheme, an ingress rating or a regulatory
-    approval, whatever else the same requirement also asserts. Excluding those
-    clauses here means a wire-level MAVLink v2 test can close the protocol half
-    of a requirement without appearing to have closed the encrypted-channel
-    half — which is exactly what a single whole-sentence obligation used to let
-    it do, in both directions.
+    approval. Excluding those clauses lets a wire-level MAVLink v2 test close the
+    protocol half of a requirement without also closing the encrypted-channel
+    half, which a whole-sentence obligation did in both directions.
     """
     kwargs.setdefault("clause_exclude_terms", frozenset(_INSPECTION_KWS))
     return EvidenceClaim(**kwargs)
@@ -227,13 +217,13 @@ class MatrixRow:
     text: str
     tiers: Tuple[str, ...]
     methods: Tuple[str, ...]
-    status: str  # verified | partial | planned | failed | out-of-sim-scope
+    status: str
     #              | blocked | unassigned | evidence-input-missing
-    #  "unassigned" is the true honest gap — no tier could verify this.
-    #  "evidence-input-missing" is NOT that gap: a tier exists whose input
-    #  artifact (realization.per_requirement) was never supplied to this
-    #  compile, so ontology gap and missing input cannot be told apart. The
-    #  attribution is to the runner/report projection, never to the model.
+    #  "unassigned" is the gap: no tier could verify this.
+    #  "evidence-input-missing" is different: a tier exists but its input
+    #  artifact (realization.per_requirement) never reached this compile, so
+    #  an ontology gap and a missing input cannot be told apart. It is
+    #  attributed to the runner/report projection, not the model.
     evidence: Tuple[str, ...] = field(default_factory=tuple)
     obligations: Tuple[ObligationResult, ...] = field(default_factory=tuple)
 
@@ -260,7 +250,6 @@ def _norm_req_id(req_id: object) -> str:
 
 
 def _result_map(results) -> Dict[str, object]:
-    """Normalise TestResult objects or report dictionaries by requirement id."""
     mapped: Dict[str, bool] = {}
     for result in results or []:
         if isinstance(result, dict):
@@ -298,7 +287,6 @@ def _record_behavioral_outcome(
     description: str,
     capabilities=frozenset({EvidenceCapability.BEHAVIOR_OBSERVED}),
 ) -> bool:
-    """Persist real simulator evidence; return True when an outcome existed."""
     if not outcomes:
         return False
     if all(outcomes):
@@ -345,11 +333,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                  l1_results=None, l2_results=None,
                  planned_intents: Optional[Dict[str, str]] = None,
                  planned_markers: Optional[Dict[str, frozenset]] = None) -> List[MatrixRow]:
-    """Derive the per-requirement verification assignment from existing artifacts.
-
-    ``realization`` is the Phase 8 dict (``realization_run.json``'s "realization"
-    value) or None when the latest run produced no recommendation.
-    """
+    """Derive the per-requirement verification assignment from existing artifacts."""
     from src.simulation.behavioral_sim import (
         run_behavioral_simulation,
         run_initialization_scenario,
@@ -381,12 +365,11 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
     }
     guard_assignment = requirement_evidence.guard_assignments
     universe = sorted(set(req_texts) | set(satisfy_map))
-    # Tier input contract: a realization dict WITHOUT the per_requirement key
-    # means the datasheet/forward_flight tier input was dropped somewhere
-    # upstream (measured on run3: build_run_report projected it away and the
-    # matrix then called three requirements "unassigned" — a runner artefact
-    # reported as a property of the model). An explicit empty list is a
-    # legitimately empty tier and keeps "unassigned" semantics.
+    # Tier input contract: a realization dict without the per_requirement key
+    # means the datasheet/forward_flight tier input was dropped upstream - on run3
+    # build_run_report projected it away and the matrix then called three
+    # requirements "unassigned". An explicit empty list is an empty tier and keeps
+    # "unassigned" semantics.
     realization_input_missing = (
         realization is not None
         and realization.get("per_requirement") is None
@@ -397,10 +380,9 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
     claims: Dict[str, List[EvidenceClaim]] = {r: [] for r in universe}
     blocked: set = set()
 
-    # 1. Linker specs describe verification intent only.  They become verified
-    # only when a matching execution result is supplied; otherwise they remain
-    # explicitly planned.  This prevents dry-run/spec generation from becoming
-    # a false green in the verification matrix.
+    # 1. Linker specs describe verification intent only. They become verified only
+    # when a matching execution result is supplied; otherwise they stay planned,
+    # so spec generation alone cannot turn the matrix green.
     l1_by_req = _result_map(l1_results)
     l2_by_req = _result_map(l2_results)
     for spec in requirement_evidence.test_specs:
@@ -442,15 +424,13 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             )
             tiers[rid].add(tier)
             state = "PASS" if outcome is True else "FAIL" if outcome is False else "planned, not executed"
-            # A spec whose every parameter is a static harness constant (e.g. a
-            # port-matched protocol/config entry: SERIAL0_PROTOCOL, GPS_INJECT_TO)
-            # carries no model-derived number. It is real config-level evidence
-            # for the tier, but it must not close the requirement's obligations —
-            # an encrypted-link requirement is not "verified" by one protocol
-            # param. Model-derived L1 rows (threshold/attr readback) keep the
-            # full-closure claim.
-            # Unknown provenance counts as model-derived (only an affirmative
-            # all-"static" param set downgrades to a config-level claim).
+            # A spec whose parameters are all static harness constants (e.g.
+            # SERIAL0_PROTOCOL, GPS_INJECT_TO) carries no model-derived number. It is
+            # config-level evidence for the tier but does not close the requirement's
+            # obligations: one protocol param does not verify an encrypted link.
+            # Model-derived L1 rows (threshold/attr readback) keep the full-closure claim.
+            # Unknown provenance counts as model-derived; only an all-"static" param set
+            # downgrades to a config-level claim.
             model_derived = any(
                 getattr(p, "source", "") != "static" for p in spec.params
             )
@@ -477,7 +457,6 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             blocked.add(rid)
             evidence[rid].append(f"TRACE blocked: {spec.notes}")
 
-    # 2. Phase 8 per-requirement scopes → datasheet / forward_flight.
     for v in (realization or {}).get("per_requirement", []) or []:
         rid = str(v.get("req_id", "")).replace("-", "_")
         if rid not in tiers:
@@ -548,9 +527,9 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         elif scope == "deferred":
             evidence[rid].append(f"Phase 8 deferred: {v.get('note') or v.get('family')}")
 
-    # 3. Behavioral-sim tier. Presence of a state machine is not evidence: the
-    #    exact simulator scenario must pass. This prevents declaration-only
-    #    anchors from turning an UNASSIGNED row into a false green.
+    # 3. Behavioral-sim tier. A state machine's presence is not evidence; the
+    #    simulator scenario must pass, so a declaration-only anchor cannot turn
+    #    an UNASSIGNED row green.
     try:
         state_machines = extract_state_machines(model_text)
         behavioral = run_behavioral_simulation(model_text)
@@ -588,16 +567,13 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             planned_markers=planned_markers,
         ).items()
     }
-    # A functional requirement the generation plan recorded as obliging no
-    # discrete response is noted as such. This is evidence about the plan's
-    # decision, not about the design; the row's status is unchanged here and
-    # the terminal closure audit decides, together with the extractor's own
-    # "no measurable criterion" flag, whether such a row is a model gap or a
-    # requirement that offers nothing to anchor to. An "unverifiable" record
-    # is the opposite honesty case — a response IS obliged but the gate has
-    # no reachable-action marker that can evidence it — and gets its own
-    # tier, so the uncovered obligation stays visible in the matrix instead
-    # of masquerading as "no response obliged".
+    # A functional requirement the plan recorded as obliging no discrete response
+    # is noted as such: evidence about the plan's decision, not the design. The
+    # row's status is unchanged here; the terminal closure audit, with the
+    # extractor's "no measurable criterion" flag, decides whether it is a model
+    # gap or a requirement with nothing to anchor to. An "unverifiable" record -
+    # a response is obliged but no reachable-action marker can evidence it - gets
+    # its own tier so the uncovered obligation stays visible.
     for rid in universe:
         recorded_intent = planned_intents.get(_norm_req_id(rid))
         if recorded_intent == "none":
@@ -616,13 +592,13 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             )
 
     for rid in universe:
-        # A TRACE-blocked requirement's guard assignment is the WRONG-family guard
-        # the gate rejected — it must not earn a behavioral-sim tier from it.
+        # A TRACE-blocked requirement's guard assignment is the wrong-family guard the
+        # gate rejected, so it does not earn a behavioral-sim tier.
         assigned = None if rid in blocked else guard_assignment.get(rid)
-        # An accept-event pseudo-guard exists to route the SITL L2 spec; it is
-        # NOT a behavioral-sim anchor. Falling through keeps the honest
-        # initialization/functional routing: "default to locked upon power-on"
-        # must be an initial-state invariant, not event reachability.
+        # An accept-event pseudo-guard routes the SITL L2 spec; it is not a
+        # behavioral-sim anchor. Falling through keeps the initialization/functional
+        # routing: "default to locked upon power-on" is an initial-state invariant,
+        # not event reachability.
         if assigned is not None and getattr(assigned, "kind", "") == "accept_event":
             assigned = None
         low = f"{rid} {req_texts.get(rid, '')}".lower()
@@ -690,36 +666,32 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
             )
             continue
 
-        # Default/initial-state requirements need initialization semantics, not
-        # a fabricated fault transition. Select machines whose initial-state
-        # name is actually mentioned by the requirement (e.g. Locked).
+        # Default/initial-state requirements need initialization semantics, not a
+        # fault transition. Select machines whose initial-state name the requirement
+        # mentions (e.g. Locked).
         #
-        # Not, however, when the plan recorded a discrete response intent for
-        # this requirement: "execute a power-on self-check" obliges a self-test
-        # response and is anchored by the state that produces it, not by an
-        # initial-state invariant. Without this guard the substring match below
-        # bound such a requirement to whichever owner machine happened to start
-        # in a state named PowerOn -- the flight-phase manager -- and reported
-        # that machine's initialisation as the requirement's evidence.
+        # Not when the plan recorded a discrete response intent: "execute a power-on
+        # self-check" is anchored by the state that produces the self-test, not by an
+        # initial-state invariant. Without this guard the substring match below bound
+        # such a requirement to whichever owner machine started in a state named
+        # PowerOn - the flight-phase manager - and used its initialisation as evidence.
         planned_intent = planned_intents.get(_norm_req_id(rid))
         obliges_response = bool(planned_intent) and planned_intent != "none"
-        # An inhibition requirement is anchored by the response that is
-        # withheld, never by initial-state semantics; one measured run routed
-        # such a requirement here because its text contains "power-on"
-        # (naming the phase, not a default state) and then failed a model
-        # whose inhibition anchor existed and whose scenarios all passed.
+        # An inhibition requirement is anchored by the response withheld, not by
+        # initial-state semantics; one run routed such a requirement here because its
+        # text contains "power-on" (the phase, not a default state) and failed a model
+        # whose inhibition anchor existed and whose scenarios passed.
         if (
             not obliges_response
             and not is_inhibition_requirement(low)
             and any(k in low for k in _INITIALIZATION_KWS)
         ):
-            # The plan already binds this requirement to its anchoring
-            # behavior (requirement_realizations: owner_component +
-            # behavior_name).  Select by that binding first — the
-            # initial-state-name vocabulary match below excludes exactly the
-            # power-on-shaped machine whose initial state (e.g. PowerOff) the
-            # requirement text never names.  Vocabulary stays as the fallback
-            # for plan-less models (single-shot arm, legacy runs).
+            # The plan binds this requirement to its anchoring behavior
+            # (requirement_realizations: owner_component + behavior_name). Select by that
+            # binding first: the vocabulary match below excludes the power-on-shaped
+            # machine whose initial state (e.g. PowerOff) the requirement never names.
+            # Vocabulary is the fallback for plan-less models (single-shot arm, legacy
+            # runs).
             bound = behavior_bindings.get(_norm_req_id(rid))
             init_candidates = [
                 sm for sm in owner_machines
@@ -755,8 +727,8 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
 
         functional_outcome = functional_status.get(rid)
         if functional_outcome == BEHAVIOR_ABSENT:
-            # A declared action or phase name is not evidence unless a reachable
-            # state actually produces the functional response.
+            # A declared action or phase name is not evidence unless a reachable state
+            # produces the functional response.
             evidence[rid].append(
                 "functional response action is not produced by any reachable state"
             )
@@ -773,8 +745,6 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                 "requirement-linked state-machine scenario exercised at behavioral-sim tier",
             )
 
-    # 4/5. Keyword rules — inspection/analysis and Gazebo-planned. Only applied when
-    #    the requirement has doc text (no text → nothing to judge by).
     for rid in universe:
         text = req_texts.get(rid, "")
         if not text.strip():
@@ -783,10 +753,9 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         if contains_any_term(low, _INSPECTION_KWS):
             tiers[rid].add("inspection_analysis")
             evidence[rid].append("inspection/analysis item (compliance/environment/materials)")
-            # Scoped to the clauses that actually carry the untestable terms.
-            # A blanket claim used to stamp out-of-sim-scope over every clause
-            # of a compound requirement, so a single "encrypted" put MAVLink
-            # protocol conformance — which SITL does test — out of scope too.
+            # Scoped to the clauses carrying the untestable terms. A blanket claim stamped
+            # out-of-sim-scope over every clause of a compound requirement, so one
+            # "encrypted" also excluded MAVLink protocol conformance, which SITL tests.
             claims[rid].append(EvidenceClaim(
                 description=evidence[rid][-1], status="out-of-sim-scope",
                 applies_to_matching_clauses=True,
@@ -801,10 +770,10 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
                 applies_to_matching_clauses=True,
             ))
 
-    # 6. Optional Gazebo high-fidelity results. A PASS upgrades only the exact
+    # 6. Optional Gazebo high-fidelity results. A PASS upgrades only the
     #    requirement the Gazebo runner names; other Gazebo-planned requirements
-    #    remain planned/partial so one high-fidelity result cannot greenwash an
-    #    entire mixed-scope requirement.
+    #    stay planned/partial, so one result cannot close a mixed-scope
+    #    requirement.
     for item in (gazebo or {}).get("req_results", []) or []:
         rid = _norm_req_id(item.get("req_id"))
         if rid not in tiers:
@@ -818,17 +787,14 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
         if status == "PASS":
             if criterion is None and not states_acceptance_threshold(
                     req_texts.get(rid, "")):
-                # The requirement names no measurable bar, and the result does
-                # not declare the one it used — so the verdict rests on a
-                # definition nobody can inspect. REQ-SAFE-007 is the case in
-                # point: "maintain controlled flight" states no threshold, and
-                # repeated flights of one configuration have ranged from a
-                # clean 1.01 deg hover to a 21.08 deg wobble. A bare PASS there
-                # is an interpretation presented as a result.
+                # The requirement names no measurable bar and the result does not declare the
+                # one it used, so the verdict rests on an uninspectable definition.
+                # REQ-SAFE-007: "maintain controlled flight" states no threshold, and repeated
+                # flights of one configuration ranged from a 1.01 deg hover to a 21.08 deg
+                # wobble.
                 #
-                # A requirement that DOES state its bar ("within 0.5 seconds")
-                # is different: the check applied the requirement's own
-                # criterion, and needs no separate declaration.
+                # A requirement that states its bar ("within 0.5 seconds") is different: the
+                # check applied the requirement's own criterion and needs no declaration.
                 tiers[rid].add("gazebo_deferred")
                 tiers[rid].add("gazebo_partial")
                 evidence[rid].append(
@@ -919,11 +885,10 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
     return rows
 
 
-#: A requirement may name its own verification method — "[V: inspection /
-#: ingress test]". That CORROBORATES the rule that excluded it; it is not a
-#: second way to be excluded. Keeping it as a separate class would mean two
-#: standards deciding the same denominator, one of them unfalsifiable: a tag
-#: cannot be checked against the simulation stack, a rule can.
+# A requirement may name its own verification method - "[V: inspection /
+# ingress test]". That corroborates the rule that excluded it; it is not a
+# second way to be excluded, since a tag cannot be checked against the
+# simulation stack while a rule can.
 _DECLARED_METHOD_RE = re.compile(r"\[V:([^\]]*)\]", re.IGNORECASE)
 _NON_SIM_METHOD_KWS = ("inspection", "audit", "conformance test", "ingress test")
 
@@ -953,8 +918,7 @@ def summarize(rows: List[MatrixRow]) -> Dict[str, object]:
     for row, item in out_of_scope:
         rule = classify_non_simulable(item.clause) or classify_non_simulable(row.text)
         if rule is None:
-            # An exclusion no rule accounts for is the dangerous kind: nobody
-            # can check it. Naming it is the point.
+            # An exclusion no rule accounts for cannot be checked, so it is named here.
             unruled.add(row.req_id)
         else:
             by_rule.setdefault(rule[0], set()).add(row.req_id)
@@ -972,17 +936,15 @@ def summarize(rows: List[MatrixRow]) -> Dict[str, object]:
         ],
         "obligations_total": len(obligations),
         "obligations_verified": sum(item.status == "verified" for item in obligations),
-        # Two denominators, both reported. The all-obligations one answers "how
-        # much of what the customer asked for is verified"; the in-scope one
-        # answers "how much of what simulation can reach did this pipeline
-        # close" — which is the claim the method actually makes. Scoring the
-        # simulation stack on an IP54 ingress rating measures nothing about the
-        # stack. Neither number may be published without the exclusion list.
+        # Two denominators, both reported. All-obligations answers how much of what
+        # the customer asked for is verified; in-scope answers how much of what
+        # simulation can reach this pipeline closed, which is the claim the method
+        # makes. Neither number is meaningful without the exclusion list.
         "obligations_out_of_sim_scope": len(out_of_scope),
         "obligations_in_sim_scope": len(obligations) - len(out_of_scope),
-        # One criterion for every exclusion: a named rule saying which
-        # observable the simulation stack does not carry. The requirement's own
-        # [V:] tag is reported as corroboration, never as grounds.
+        # One criterion for every exclusion: a named rule saying which observable the
+        # simulation stack lacks. The requirement's own [V:] tag is corroboration, not
+        # grounds.
         "out_of_sim_scope_by_rule": {
             rule: sorted(ids) for rule, ids in sorted(by_rule.items())
         },

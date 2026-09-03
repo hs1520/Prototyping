@@ -181,4 +181,3 @@ class RefinementAuthoring:
         return " ".join(
             terms or ("SysML v2 refine design improve quality",)
         )
-

@@ -2,14 +2,12 @@
 
 Implements the student-fixed comparison policy (STUDENT_DESIGN_DECISIONS.md §6):
 exact-decimal quantities and unit conversion, frozen timing-origin aliases, a typed
-Boolean-expression AST with canonical normalisation, priority as an explicit
-response-set + precedence edges + trigger, and invariant normalisation. The
-evaluator *computes* derived timing values (`additive_total`, `within_deadline`);
-they are never read from gold. Timing, priority, and invariant agreement are
-reported as **separate** categories and never merged into a composite F1.
-
-This module is evaluator-only and F3-safe: it imports neither ``ag_extractor`` nor
-``ag_contracts``. It uses :class:`decimal.Decimal` (never binary float) as the
+Boolean-expression AST with canonical normalisation, priority as response-set +
+precedence edges + trigger, and invariant normalisation. Derived timing values
+(`additive_total`, `within_deadline`) are computed here, not read from gold, and
+timing, priority and invariant agreement stay separate categories rather than one
+composite F1. Evaluator-only and F3-safe: imports neither ``ag_extractor`` nor
+``ag_contracts``, and uses :class:`decimal.Decimal` rather than binary float as the
 arithmetic authority.
 """
 from __future__ import annotations
@@ -24,8 +22,6 @@ class SemanticsError(ValueError):
     """A gold/prediction artifact violates the fixed comparison policy."""
 
 
-# ── §6.1 exact decimal quantities and unit conversion ───────────────────────
-
 _UNIT_TO_SECONDS: Dict[str, Decimal] = {
     "s": Decimal(1),
     "ms": Decimal("0.001"),
@@ -36,9 +32,9 @@ _UNIT_TO_SECONDS: Dict[str, Decimal] = {
 def quantity_to_seconds(quantity: Mapping[str, Any]) -> Decimal:
     """Exact seconds from an atomic quantity ``{"value": "0.5", "unit": "s"}``.
 
-    Binary floats are rejected as evaluator authority (§6.1): a tool must archive
-    the source decimal literal (a string) or a declared uncertainty. Conversion
-    uses exact decimal powers of ten and the comparison tolerance is exactly zero.
+    Binary floats are rejected as evaluator authority (§6.1); a tool archives the
+    source decimal literal (a string) or a declared uncertainty. Conversion uses
+    decimal powers of ten and the comparison tolerance is zero.
     """
     if not isinstance(quantity, Mapping):
         raise SemanticsError("quantity must be a mapping {value, unit}")
@@ -64,10 +60,8 @@ def quantity_to_seconds(quantity: Mapping[str, Any]) -> Decimal:
     return magnitude * _UNIT_TO_SECONDS[unit]
 
 
-# ── §6.2 frozen timing-origin identity (no fuzzy matching) ───────────────────
-
-# The only accepted historical alias, as an explicit frozen mapping. Anything else
-# must match exactly; name/text similarity is never inferred.
+# The only accepted historical alias, as a frozen mapping. Everything else
+# matches exactly; name/text similarity is not inferred.
 _TIMING_ORIGIN_ALIASES: Dict[str, str] = {
     "criticalfailureevent": "criticalPropulsionFailureDetected",
 }
@@ -77,8 +71,6 @@ def resolve_timing_origin(name: Any) -> str:
     key = str(name if name is not None else "").strip()
     return _TIMING_ORIGIN_ALIASES.get(key.lower(), key)
 
-
-# ── §6.3 typed Boolean expression AST ────────────────────────────────────────
 
 _BOOL_NODES = {"Identifier", "Not", "And", "Or", "Implies"}
 
@@ -103,18 +95,17 @@ def _normalise_ast(
         return {"node": "Identifier", "name": str(name)}
     if kind == "Not":
         inner = _normalise_ast(node.get("expr"), selected_model_elements)
-        if inner.get("node") == "Not":  # double negation removed
+        if inner.get("node") == "Not":
             return inner["expr"]
         return {"node": "Not", "expr": inner}
     if kind in ("And", "Or"):
         flattened: List[Dict[str, Any]] = []
         for operand in node.get("operands", ()):
             child = _normalise_ast(operand, selected_model_elements)
-            if child.get("node") == kind:  # flatten same-kind nesting
+            if child.get("node") == kind:
                 flattened.extend(child["operands"])
             else:
                 flattened.append(child)
-        # deduplicate and sort by canonical serialisation
         unique: Dict[str, Dict[str, Any]] = {}
         for child in flattened:
             unique[_serialise_ast(child)] = child
@@ -124,7 +115,6 @@ def _normalise_ast(
         if len(operands) == 1:
             return operands[0]
         return {"node": kind, "operands": operands}
-    # Implies stays an AST node; it is rendered to SysML as `not a or b` elsewhere.
     return {
         "node": "Implies",
         "antecedent": _normalise_ast(
@@ -165,8 +155,6 @@ def canonical_ast_key(
     return _serialise_ast(_normalise_ast(node, resolved))
 
 
-# ── set-agreement helper (local, to avoid importing the evaluator) ───────────
-
 def _prf(predicted: set, gold: set) -> Dict[str, Any]:
     tp = len(predicted & gold)
     fp = len(predicted - gold)
@@ -181,8 +169,6 @@ def _prf(predicted: set, gold: set) -> Dict[str, Any]:
         "f1": round(f1, 4),
     }
 
-
-# ── §6.1/§6.2 timing agreement (evaluator computes the derived values) ───────
 
 def _timing_facts(block: Mapping[str, Any]) -> Dict[str, Any]:
     if not isinstance(block, Mapping):
@@ -212,13 +198,13 @@ def timing_agreement(
 ) -> Dict[str, Any]:
     """Separate timing category: origin identity, deadline, and per-segment budgets.
 
-    ``additive_total`` / ``within_deadline`` are recomputed for each side here and
-    never taken from the artifact, so a self-contradictory gold cannot slip through.
+    ``additive_total`` / ``within_deadline`` are recomputed per side rather than read
+    from the artifact, so a self-contradictory gold is caught.
     """
     pred = _timing_facts(prediction)
     ref = _timing_facts(gold)
-    # Segments are ordered and additive facts.  Include the ordinal so duplicate
-    # segments cannot collapse into a set and silently change the total.
+    # Segments are ordered, additive facts; the ordinal keeps duplicates from
+    # collapsing into a set and changing the total.
     pred_segments = {
         (index, component, str(budget))
         for index, (component, budget) in enumerate(pred["segments"])
@@ -249,8 +235,6 @@ def timing_agreement(
     }
 
 
-# ── §6.4 priority agreement (explicit set + edges + trigger, never a Boolean) ─
-
 def _edge_set(edges) -> set:
     result = set()
     for index, edge in enumerate(edges or ()):
@@ -263,9 +247,10 @@ def _edge_set(edges) -> set:
 def priority_agreement(
     prediction: Mapping[str, Any], gold: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    """Separate priority category from an explicit response set, precedence edges,
-    trigger, and the separately extracted arbitration topology — never inferred
-    from a bare ``priority=true`` claim (§6.4)."""
+    """Separate priority category from the response set, precedence edges, trigger and
+    the separately extracted arbitration topology, not from a bare ``priority=true``
+    claim (§6.4).
+    """
     if not isinstance(prediction, Mapping) or not isinstance(gold, Mapping):
         raise SemanticsError("priority facts must be objects")
     members = set(map(str, prediction.get("members", ())))
@@ -352,8 +337,6 @@ def priority_agreement(
     }
 
 
-# ── §6.5 invariant agreement (separate stakeholder / student denominators) ───
-
 def _invariant_key(
     inv: Mapping[str, Any], selected_model_elements: Any
 ) -> Tuple[str, str, str, str, str]:
@@ -377,8 +360,9 @@ def _invariant_key(
 def invariant_agreement(
     prediction: Mapping[str, Any], gold: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    """Separate invariant category, reported **per source kind** so stakeholder and
-    student-derived invariants are never pooled into one denominator (§6.5)."""
+    """Separate invariant category, reported per source kind so stakeholder and
+    student-derived invariants keep separate denominators (§6.5).
+    """
     def by_kind(items, kind, selected_model_elements):
         out = set()
         for index, inv in enumerate(items or ()):

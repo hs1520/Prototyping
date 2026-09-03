@@ -1,10 +1,10 @@
 """Bounded, source-derived semantic anchors for whole-model generation.
 
-This is not a temporal proof system.  It extracts only explicit numeric
-bounds stated by the stakeholder (for example, "maintain at least 5 metres of
-separation while avoiding it").  The resulting anchor preserves comparator,
-threshold, unit, subject terms, and a bounded activation qualifier across
-generation and remains digest-bound to its source.
+Extracts only explicit numeric bounds stated by the stakeholder (for example,
+"maintain at least 5 metres of separation while avoiding it"); the anchor
+preserves comparator, threshold, unit, subject terms and a bounded activation
+qualifier across generation, and stays digest-bound to its source. Not a
+temporal proof system.
 """
 from __future__ import annotations
 
@@ -25,27 +25,27 @@ _REQ_ID_RE = re.compile(
     re.IGNORECASE,
 )
 # Bound-declaring verbs, inflected: the flagship requirement set writes
-# "maintaining …" and "shall achieve/sustain …", and a base-form-only verb
-# list compiled ZERO obligations from all 29 drone_v2 requirements — the
-# entire semantic-fidelity layer ran vacuously on the main experiment input
-# (ablation pilot 20260829).  Every extension below stays anchored on an
-# explicit verb + comparator + number + unit; trigger conditions ("when …
-# reaches 25%") and scenario envelopes ("at a closing speed no greater than
-# 1.5 m/s") carry no bound verb and still compile to nothing, by design.
+# "maintaining ..." and "shall achieve/sustain ...", and a base-form-only verb
+# list compiled zero obligations from all 29 drone_v2 requirements, so the
+# semantic-fidelity layer ran vacuously on the main experiment input (ablation
+# pilot 20260829). Every extension below stays anchored on verb + comparator +
+# number + unit; trigger conditions ("when ... reaches 25%") and scenario
+# envelopes ("at a closing speed no greater than 1.5 m/s") carry no bound verb
+# and compile to nothing.
 _BOUND_VERBS = (
     r"\b(?:maintain(?:s|ing)?|keep(?:s|ing)?|ensur(?:e|es|ing)|"
     r"sustain(?:s|ing)?|achiev(?:e|es|ing))"
 )
-#: "m/s" and "minutes|min" must precede the bare "m" alternative or they are
-#: only ever seen as their prefixes (same lesson as activated_constraint_plan).
+# "m/s" and "minutes|min" precede the bare "m" alternative, or they match
+# only as their prefixes (same lesson as activated_constraint_plan).
 _BOUND_UNITS = (
     r"milliseconds?|ms|seconds?|s|minutes?|min|"
     r"m/s|metres?|meters?|m|kilometres?|kilometers?|km|"
     r"kilograms?|kg|degrees?|deg|percent|%|hertz|hz"
 )
-#: Where a bound clause may end.  The alternation lists clause connectives and
-#: common prepositions so trailing context ("… 18 m/s in nil-wind", "… 120
-#: metres above ground level") terminates the match instead of failing it.
+# Where a bound clause may end: clause connectives and common prepositions,
+# so trailing context ("... 18 m/s in nil-wind", "... 120 metres above ground
+# level") terminates the match instead of failing it.
 _CLAUSE_BOUNDARY = (
     r"(?=\s+(?:while|when|during|after|before|unless|and|in|on|at|for|"
     r"with|from|above|below|over|under|per|throughout)\b|[.,;]|$)"
@@ -69,9 +69,9 @@ _MAINTAIN_BOUND_RE = re.compile(
     + _CLAUSE_BOUNDARY,
     re.IGNORECASE,
 )
-#: "maintain a minimum forward ground speed of 2 m/s" — the comparator
-#: precedes the subject, so the maintain rule (comparator directly before the
-#: value) cannot see it.
+# "maintain a minimum forward ground speed of 2 m/s" - the comparator
+# precedes the subject, so the maintain rule (comparator directly before the
+# value) cannot see it.
 _MINMAX_OF_BOUND_RE = re.compile(
     _BOUND_VERBS + r"\s+"
     r"(?:(?:a|an|the)\s+)?(?P<comparator>minimum|maximum)\s+"
@@ -82,9 +82,6 @@ _MINMAX_OF_BOUND_RE = re.compile(
     + _CLAUSE_BOUNDARY,
     re.IGNORECASE,
 )
-#: "shall not exceed a flight altitude of 120 metres" / "the maximum take-off
-#: mass … shall not exceed 8.0 kg" — an explicit upper bound with the subject
-#: on either side of the verb phrase.
 _NOT_EXCEED_BOUND_RE = re.compile(
     r"(?:(?P<subject_before>[A-Za-z][A-Za-z0-9 _,()-]{0,90}?)\s+)?"
     r"(?:shall|must)\s+not\s+exceed\s+"
@@ -105,16 +102,15 @@ _STOPWORDS = {
     "a", "an", "the", "current", "required", "minimum", "maximum",
     "distance", "value", "level",
     # Glue words the broadened bound patterns can sweep into a subject span.
-    # _matches_subject requires EVERY term to appear in the bound identifier,
-    # so one stray connective would make an obligation unbindable.
+    # _matches_subject requires every term in the bound identifier, so one stray
+    # connective makes an obligation unbindable.
     "and", "for", "of", "to", "including", "system",
 }
-# Unit identity comes from the single registry (unit_registry.py) — the
-# ablation pilots showed what fragmenting it costs: `m/s` was planned as
-# "m/s", authored as "[m_s]", never resolved, and compared unequal.  Binding
-# validation refuses any unit without a quantity-type mapping, so every unit
-# the bound patterns can emit carries one there, syside-verified end to end
-# by tests/test_stdlib_vocabulary.py.
+# Unit identity comes from the single registry (unit_registry.py); when it
+# was fragmented, `m/s` was planned as "m/s", authored as "[m_s]", never
+# resolved and compared unequal (ablation pilots). Binding validation refuses a
+# unit without a quantity-type mapping, so every unit the bound patterns emit
+# carries one, syside-verified by tests/test_stdlib_vocabulary.py.
 from .unit_registry import (  # noqa: E402
     CANONICAL_BY_SPELLING as _UNIT_CANONICAL,
     EMISSION_BY_SPELLING as _UNIT_EMISSION,
@@ -123,7 +119,6 @@ from .unit_registry import (  # noqa: E402
 
 
 def _emission_unit(value: str | None) -> str:
-    """The identifier-safe token written inside model brackets for a unit."""
     raw = str(value or "").strip()
     return _UNIT_EMISSION.get(raw.lower(), raw)
 _PART_DEF_RE = re.compile(r"\bpart\s+def\s+(?P<name>[A-Za-z_]\w*)\s*\{")
@@ -159,8 +154,8 @@ _PATH_RE = re.compile(
     r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$"
 )
 # The transition name is optional in SysML v2, so it is captured only when
-# present; an unnamed guarded transition must not escape the late-response
-# check (it used to: the pattern demanded a name).
+# present; the pattern used to demand one, letting an unnamed guarded
+# transition escape the late-response check.
 _TRANSITION_GUARD_RE = re.compile(
     r"\btransition\b(?:\s+(?P<name>(?!first\b)[A-Za-z_]\w*))?"
     r"(?P<body>[^;]*?\bif\s+(?P<guard>.*?)\s+then\s+"
@@ -223,11 +218,10 @@ def _constraint_delegation(text: str, constraint_name: str) -> str | None:
     """The declared higher-fidelity tier for a planned constraint, if any.
 
     Recognises the structured marker the capability normaliser emits when it
-    removes a mission-end invariant, and the exact legacy waiver line the
-    normaliser used to emit (deterministic emitter output, so matching it is
-    recognising an old marker format, not prose sniffing).  The legacy form is
-    accepted only when adjacent to the constraint's own PLAN-CONSTRAINT
-    marker, so an unrelated comment cannot delegate an obligation.
+    removes a mission-end invariant, plus the legacy waiver line it used to emit
+    (both deterministic emitter output). The legacy form is accepted only adjacent
+    to the constraint's own PLAN-CONSTRAINT marker, so an unrelated comment cannot
+    delegate an obligation.
     """
     if not constraint_name:
         return None
@@ -297,15 +291,14 @@ def _source_bound_subject(
     candidate = expression.strip()
 
     def _subject_ok(identifier: str) -> bool:
-        # The plan's semantic binding DECLARES the runtime attribute that
-        # carries this obligation's subject (e.g. currentAltitude for
-        # "flight altitude").  That identity outranks term matching: the
-        # binding-declared name legitimately drops the requirement text's
-        # qualifier words, and demanding every term rejected the very
-        # attributes the plan materialised (s0v16: all four "failing"
-        # obligations had their planned assert in place under the planned
-        # name, invisible to this checker).  Term matching remains the
-        # test for obligations no binding covers.
+        # The plan's semantic binding declares the runtime attribute that
+        # carries this obligation's subject (currentAltitude for "flight
+        # altitude"), and that identity outranks term matching: the declared
+        # name drops the requirement text's qualifier words, so demanding every
+        # term rejected the attributes the plan had materialised (s0v16: all
+        # four "failing" obligations had their planned assert in place under
+        # the planned name). Term matching still covers obligations no binding
+        # covers.
         if bound_subject is not None and identifier == bound_subject:
             return True
         return _matches_subject(identifier, subject_terms)
@@ -387,7 +380,6 @@ def _late_response_guards(
     *,
     attributes: dict[str, str],
 ) -> list[str]:
-    """Find an avoidance/maintenance transition that waits for violation."""
     issues: list[str] = []
     for transition in _TRANSITION_GUARD_RE.finditer(block):
         response_name = (
@@ -664,11 +656,10 @@ def compile_requirement_semantic_obligations(
             continue
         requirement_id = normalise_req_id(req_match.group(0))
         body = source.split(":", 1)[1].strip() if ":" in source else source
-        # (span start, span end, subject text, operator, match) per rule; the
-        # rules partition the phrasings (a comparator directly before the value
-        # vs an embedded min/max subject vs a not-exceed verb phrase), but the
-        # span-overlap drop below keeps a future pattern change from double
-        # compiling one clause.
+        # (span start, span end, subject text, operator, match) per rule. The rules
+        # partition the phrasings (comparator directly before the value, embedded
+        # min/max subject, not-exceed verb phrase), and the span-overlap drop below
+        # keeps a pattern change from compiling one clause twice.
         found: list[tuple[int, int, str, str, "re.Match[str]"]] = []
         for match in _MAINTAIN_BOUND_RE.finditer(body):
             subject = (
@@ -839,7 +830,6 @@ def _named_item_attribute_statements(
     body: str,
     binding: SemanticBindingPlan,
 ) -> list[re.Match[str]]:
-    """Find the feature by identity before interpreting its trailing syntax."""
     return list(re.finditer(
         rf"\battribute\s+{re.escape(binding.item_feature)}\b"
         rf"(?P<tail>[^;{{}}]*)\s*;",
@@ -894,12 +884,11 @@ def _canonicalize_plan_owned_definition_kind(
 ) -> str:
     """Correct the narrow definition-kind drift owned by a semantic binding.
 
-    A semantic binding freezes ``item_type`` and ``port_type`` before textual
-    generation.  LLM fragments still occasionally serialize those names as an
-    ``attribute def``.  That is notation drift, not a new engineering decision,
-    so the compiler may replace exactly one such root declaration.  All other
-    collisions remain fail-closed: in particular, a ``part def`` may carry real
-    structure and must never be silently rewritten into an item or port.
+    A binding freezes ``item_type`` and ``port_type`` before textual generation,
+    and LLM fragments still occasionally serialize those names as an ``attribute
+    def``. That is notation drift, so the compiler replaces exactly one such root
+    declaration; other collisions stay fail-closed, since a ``part def`` may carry
+    real structure and is not rewritten into an item or port.
     """
     conflicts = _conflicting_definition_kinds(
         text, name, expected_kind
@@ -1214,11 +1203,10 @@ def _ensure_owner_binding(
     )
     for name, statement in statements:
         # The type may carry a unit suffix (`: LengthValue [m]`) and the
-        # declaration may have no initializer at all. A pattern that requires
-        # neither form cannot see an existing declaration written that way, and
-        # then this appends a second one — a duplicate the namespace-integrity
-        # check correctly rejects, measured twice on real runs. Matching both
-        # routes the declaration into the rebinding branch below instead.
+        # declaration may have no initializer. A pattern blind to those forms misses
+        # the existing declaration and appends a second one - a duplicate the
+        # namespace-integrity check rejects, measured twice on real runs. Matching
+        # both routes the declaration into the rebinding branch below.
         match = re.search(
             rf"\battribute\s+{re.escape(name)}"
             rf"(?:\s*:\s*[A-Za-z_][\w:]*(?:\s*\[[^\]{{}}]*\])?)?"
@@ -1326,7 +1314,7 @@ def _check_materialized_binding(
         if threshold is not None else None
     )
     # The model carries the emission token (m_s), the obligation the canonical
-    # spelling (m/s) — equality is judged on canonical identity, same as the
+    # spelling (m/s) - equality is judged on canonical identity, same as the
     # assertion check below.
     preserved = (
         numeric is not None
@@ -1348,10 +1336,9 @@ def materialize_semantic_bindings(
 ) -> tuple[str, dict[str, Any]]:
     """Materialize the frozen typed semantic data chain, one transaction per binding.
 
-    ``transaction_committed`` is True only when every binding (and every
-    obligation's coverage) succeeded; a failing binding reverts itself without
-    discarding its healthy siblings, and the returned text is always the text
-    the report describes.
+    ``transaction_committed`` is True only when every binding and every
+    obligation's coverage succeeded; a failing binding reverts itself without
+    discarding its siblings, and the returned text is what the report describes.
     """
     original = str(model_text or "")
     obligations_by_id = {
@@ -1367,12 +1354,11 @@ def materialize_semantic_bindings(
             working, changes, issues
         )
     # Each binding is its own transaction: ensure on a candidate copy, commit
-    # only when the materialized chain checks out, revert only that binding
-    # otherwise.  Pilot 2 measured what all-or-nothing semantics cost here:
-    # two m/s bindings failed on a unit token, the shared rollback discarded
-    # seven healthy bindings with them, and the reported conformance described
-    # a working copy the published model never contained.  The returned text
-    # and this report now always describe each other.
+    # when the materialized chain checks out, revert only that binding otherwise.
+    # Under all-or-nothing semantics (pilot 2), two m/s bindings failed on a unit
+    # token, the shared rollback discarded seven healthy bindings with them, and
+    # the reported conformance described a working copy the published model never
+    # contained. The returned text and this report now describe each other.
     for binding in bindings:
         obligation = obligations_by_id.get(binding.obligation_id)
         if obligation is None:
@@ -1528,12 +1514,11 @@ def validate_requirement_semantic_obligations(
                 block,
             )
         ]
-        # The plan may place the runtime constraint chain in a different
-        # component from the one carrying the satisfy allocation (run
-        # 219eb9bb: the MTOW and endurance asserts live in FlightController
-        # while Airframe/PowerSystem carry the satisfy links). The typed
-        # binding's declared target owner is part of the frozen chain, so it
-        # is a legitimate candidate — every assertion check stays as strict.
+        # The plan may place the runtime constraint chain in a different component
+        # from the one carrying the satisfy allocation (run 219eb9bb: MTOW and
+        # endurance asserts in FlightController, satisfy links on Airframe and
+        # PowerSystem). The typed binding's declared target owner is part of the
+        # frozen chain, so it counts as a candidate; the assertion checks stay strict.
         expected_binding = bindings_by_obligation.get(obligation.obligation_id)
         if expected_binding is not None and not any(
             name == expected_binding.target_component
@@ -1666,10 +1651,10 @@ def validate_requirement_semantic_obligations(
                 passed_owner = owner
                 break
 
-        # A planned constraint the pipeline's own capability normaliser
-        # removed (a mission-end bound is not a runtime invariant) is verified
-        # by a higher-fidelity tier, not by an inline assert; the delegation
-        # marker records that routing so it is auditable instead of prose.
+        # A planned constraint the capability normaliser removed (a mission-end
+        # bound is not a runtime invariant) is verified by a higher-fidelity tier
+        # rather than an inline assert; the delegation marker records that routing so
+        # it is auditable.
         delegation: str | None = None
         if passed_owner is None and expected_binding is not None:
             delegation = _constraint_delegation(

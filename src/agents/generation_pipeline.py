@@ -13,7 +13,6 @@ from .pipeline_records import GenerationContext
 from .refinement import ModelRevision, RefinementClosureRequest
 
 
-
 _ORCH = "Orchestrator"
 _ASSUR = "AssuranceAgent"
 
@@ -32,11 +31,10 @@ class GenerationPipelineMixin:
             topic,
             "PipelineKnowledgeSource",
             {"phase": topic, "status": "COMPLETED"},
-            # A phase-completion record states that a step of the process ran,
-            # not a property of the model it ran against. Committing a model
-            # afterwards does not make it untrue, so it must not expire with the
-            # revision -- otherwise every topic published before a commit would
-            # vanish and the chain would stall halfway.
+            # A phase-completion record states that a step of the process ran, not a
+            # property of the model it ran against, so it does not expire with the
+            # revision. Otherwise every topic published before a commit would vanish
+            # and the chain would stall halfway.
             revision_bound=False,
         )
         return result
@@ -44,12 +42,11 @@ class GenerationPipelineMixin:
     def _generation_sources(self, context: GenerationContext):
         from ..prototyping.controller import KnowledgeSource
 
-        # The agent role is declared per source, not derived from the name. It
-        # used to be `"Orchestrator" if "ag_" not in name else "AssuranceAgent"`,
-        # which happened to be right for these twenty-one and is wrong for any
-        # future name that merely contains those two characters. The role reaches
-        # the run artefacts on every activation record, so a misclassification
-        # would land in the evidence rather than staying in the code.
+        # The agent role is declared per source, not derived from the name: the old
+        # `"Orchestrator" if "ag_" not in name else "AssuranceAgent"` misclassifies
+        # any future name that merely contains those characters. The role reaches
+        # the run artefacts on every activation record, so a misclassification lands
+        # in the evidence.
         phases = (
             ("requirements_input", _ORCH, ("pipeline.request",), "phase.requirements.ready", self._phase_requirements),
             ("collaboration_board", _ORCH, ("phase.requirements.ready",), "phase.board.ready", self._phase_board),
@@ -105,10 +102,10 @@ class GenerationPipelineMixin:
         self.state.requirements = c.requirements
 
     def _phase_board(self, c: GenerationContext) -> None:
-        # Board first: A/G planning makes real LLM decisions, so it is an Agent
-        # task and needs a typed task, an envelope, and an archived session like
-        # every other one. Freezing the plan before the board existed left those
-        # turns unrecorded, which §5.3 does not permit.
+        # Board first: A/G planning makes LLM decisions, so it is an Agent task and
+        # needs a typed task, an envelope and an archived session. Freezing the plan
+        # before the board exists leaves those turns unrecorded, which §5.3 does not
+        # permit.
         self._open_collaboration_board(c.system_name, c.requirements)
 
     def _phase_ag_plan(self, c: GenerationContext) -> None:
@@ -156,20 +153,18 @@ class GenerationPipelineMixin:
     def _attempt_frozen_plan_revision(self, c: GenerationContext) -> None:
         """The one path back from a plan-frozen structural deadlock.
 
-        Refinement's `structural_repair_blocked` verdict names its own remedy
-        — "requires a validated plan revision" — and until this method that
-        remedy had no code path: the plan was authored once, frozen, and
-        every downstream repair was bounded by it, so a wrong plan doomed
-        the run to idle iterations and NOT_QUALIFIED (run 2026-08-31,
-        265k tokens). Bounded sequence, once per run:
+        Refinement's `structural_repair_blocked` verdict asks for a validated plan
+        revision, and until this method that remedy had no code path: the plan was
+        authored once, frozen, and bounded every downstream repair, so a wrong plan
+        left the run idling to NOT_QUALIFIED. Bounded sequence, once per run:
 
         1. `PlanRevision` re-enters the typed-plan LLM protocol with the
            frozen plan as repair base and the blockage as the authorizing
            issues; the revision is validated by the full current plan
            validator set and diff-gated to issue-named changes only.
         2. The revised plan is applied to the committed text and accepted
-           only if the unsatisfied obligation set STRICTLY shrinks and
-           syntax holds — otherwise everything is rolled back.
+           only if the unsatisfied obligation set strictly shrinks and
+           syntax holds - otherwise everything is rolled back.
         3. On acceptance, one further bounded refinement pass runs under
            the revised plan.
         """
@@ -223,10 +218,9 @@ class GenerationPipelineMixin:
         revised_text, conformance = apply_generation_plan(
             text, outcome.plan
         )
-        # A mechanically-fixable doc spelling in the underlying text must
-        # not veto the revision: s0v11's acceptance check read
-        # syntax_ok=False from a doc "..." a late writer left behind, and
-        # the revision was rejected for a defect it never caused.
+        # A mechanically-fixable doc spelling does not veto the revision: on s0v11 a
+        # late writer's doc "..." made the acceptance check read syntax_ok=False and
+        # rejected a revision for a defect it did not cause.
         from ..sysml.text_normalization import fix_doc_syntax
         revised_text, _n = fix_doc_syntax(revised_text)
         after_report = validate_structural_obligations(
@@ -300,10 +294,9 @@ class GenerationPipelineMixin:
 
     def _phase_sitl_refinement(self, c: GenerationContext) -> None:
         # ── Phase 3.5: SITL-L1 refinement (only when targeting a platform) ────
-        # Feed unresolved ArduPilot-parameter mappings (= model genuinely
-        # missing a guard/attribute a requirement needs) back to the design
-        # LLM.  Cheap & deterministic (no SITL process launch); L2 stays
-        # terminal.
+        # Feed unresolved ArduPilot-parameter mappings (model missing a guard or
+        # attribute a requirement needs) back to the design LLM.  Cheap and
+        # deterministic, no SITL process launch; L2 stays terminal.
         if c.refined_revision is None:
             raise RuntimeError("parameter projection requires refined revision")
         c.projected_revision = self.refinement_closure.project_parameters(
@@ -362,11 +355,10 @@ class GenerationPipelineMixin:
         )
 
     def _phase_terminal_commit(self, c: GenerationContext) -> None:
-        # Terminal deterministic normalisation, regardless of which exit
-        # path produced the text: a late writer (surgical merge, AG layer)
-        # can introduce mechanically-fixable spellings AFTER the last
-        # in-loop syntax gate ran. Measured on s0v11: a justification
-        # doc "..." written mid-refinement reached qualification as a
+        # Terminal deterministic normalisation on every exit path: a late
+        # writer (surgical merge, AG layer) can introduce mechanically-fixable
+        # spellings after the last in-loop syntax gate ran. On s0v11 a
+        # mid-refinement justification doc "..." reached qualification as a
         # parser error the assembly-time fixer never saw.
         from ..sysml.text_normalization import fix_doc_syntax
         c.final_sysml, n_doc_fixed = fix_doc_syntax(c.final_sysml)

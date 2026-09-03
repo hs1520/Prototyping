@@ -83,7 +83,7 @@ def _binding():
     })
 
 
-def test_source_bound_sysml_constraint_passes_bounded_fidelity_gate():
+def test_source_bound_constraint_passes():
     report = validate_requirement_semantic_obligations(
         _GOOD_MODEL,
         _obligations(),
@@ -103,7 +103,7 @@ def test_source_bound_sysml_constraint_passes_bounded_fidelity_gate():
     assert assertion["numeric_bound"] == (5.0, "m")
 
 
-def test_literal_placeholder_does_not_count_as_runtime_measurement():
+def test_literal_placeholder_fails():
     model = _GOOD_MODEL.replace(
         "obstacleData.payload.separation",
         "5 [m]",
@@ -122,7 +122,7 @@ def test_literal_placeholder_does_not_count_as_runtime_measurement():
     )
 
 
-def test_typed_binding_is_materialized_from_frozen_plan():
+def test_typed_binding_materialized():
     incomplete = """package P {
         item def ObstacleData;
         port def ObstaclePort;
@@ -176,7 +176,7 @@ def test_typed_binding_is_materialized_from_frozen_plan():
     assert report["status"] == "PASS"
 
 
-def test_semantic_materialization_rolls_back_on_payload_type_conflict():
+def test_rollback_on_payload_conflict():
     conflicting = _GOOD_MODEL.replace(
         "in item payload : ObstacleData;",
         "in item payload : WrongData;",
@@ -194,7 +194,7 @@ def test_semantic_materialization_rolls_back_on_payload_type_conflict():
     assert any("carries WrongData" in issue for issue in conformance["issues"])
 
 
-def test_semantic_materialization_reuses_compatible_initialized_features():
+def test_reuses_compatible_features():
     already_materialized = _GOOD_MODEL.replace(
         "attribute separation : LengthValue;",
         "attribute separation : LengthValue = 0.0 [m];",
@@ -218,7 +218,7 @@ def test_semantic_materialization_reuses_compatible_initialized_features():
     ]
 
 
-def test_semantic_materialization_rejects_duplicate_feature_usages():
+def test_rejects_duplicate_features():
     duplicated = _GOOD_MODEL.replace(
         "attribute separation : LengthValue;",
         (
@@ -249,7 +249,7 @@ def test_semantic_materialization_rejects_duplicate_feature_usages():
     )
 
 
-def test_semantic_materialization_canonicalizes_one_malformed_named_feature():
+def test_canonicalizes_malformed_feature():
     malformed = _GOOD_MODEL.replace(
         "attribute separation : LengthValue;",
         "attribute separation : LengthValue [m];",
@@ -269,7 +269,7 @@ def test_semantic_materialization_canonicalizes_one_malformed_named_feature():
     ]
 
 
-def test_semantic_materialization_rejects_cross_kind_item_definition():
+def test_rejects_cross_kind_item_def():
     conflicting = _GOOD_MODEL.replace(
         "item def ObstacleData",
         "part def ObstacleData",
@@ -289,7 +289,7 @@ def test_semantic_materialization_rejects_cross_kind_item_definition():
     )
 
 
-def test_semantic_materialization_canonicalizes_plan_owned_attribute_defs():
+def test_canonicalizes_attribute_defs():
     llm_serialized = _GOOD_MODEL.replace(
         "item def ObstacleData {\n"
         "        attribute separation : LengthValue;\n"
@@ -329,7 +329,7 @@ def test_semantic_materialization_canonicalizes_plan_owned_attribute_defs():
     ).has_errors
 
 
-def test_avoidance_that_starts_below_frozen_boundary_is_rejected_as_too_late():
+def test_late_avoidance_rejected():
     model = _GOOD_MODEL.replace(
         "avoidanceActivationDistance : LengthValue = 8 [m]",
         "avoidanceActivationDistance : LengthValue = 4 [m]",
@@ -358,7 +358,7 @@ class _Simulation:
         return []
 
 
-def test_semantic_fidelity_failure_is_a_terminal_hard_gate():
+def test_fidelity_failure_terminal():
     failed_report = validate_requirement_semantic_obligations(
         _GOOD_MODEL.replace(
             "obstacleData.payload.separation",
@@ -389,7 +389,7 @@ def test_semantic_fidelity_failure_is_a_terminal_hard_gate():
     ] == "FAIL"
 
 
-def test_no_supported_numeric_clause_is_not_overclaimed_or_failed():
+def test_no_numeric_clause_no_overclaim():
     report = validate_requirement_semantic_obligations(
         _GOOD_MODEL,
         (),
@@ -417,10 +417,9 @@ def test_no_supported_numeric_clause_is_not_overclaimed_or_failed():
 
 
 # ---------------------------------------------------------------------------
-# Per-binding transaction semantics (ablation pilot 2: two m/s bindings failed
-# on a unit token, the shared rollback discarded seven healthy bindings with
-# them, and the reported conformance described a working copy the published
-# model never contained).
+# Per-binding transaction semantics: in pilot 2 two m/s bindings failed on a
+# unit token and the shared rollback discarded seven healthy bindings with
+# them, leaving a conformance report for a model never published.
 # ---------------------------------------------------------------------------
 
 _TWO_REQ = (
@@ -483,7 +482,7 @@ _TWO_BINDING_MODEL = """package P {
 }"""
 
 
-def test_a_failing_binding_reverts_alone_and_healthy_siblings_commit():
+def test_failing_binding_reverts_alone():
     obligations = compile_requirement_semantic_obligations(_TWO_REQ)
     bindings = (_binding(), _speed_binding(target_component="Ghost"))
 
@@ -502,17 +501,14 @@ def test_a_failing_binding_reverts_alone_and_healthy_siblings_commit():
         "SEM_REQ_FUNC_002_001": "PASS",
         "SEM_REQ_PERF_003_001": "FAIL",
     }
-    # The healthy binding's chain landed in the RETURNED text …
     assert "attribute separation : LengthValue;" in materialized
     assert "minimumSeparation" in materialized
-    # … the failing one's owner-side artifacts did not.
     assert "minCruiseAirspeed" not in materialized
-    # And the report describes the returned text, not a discarded copy.
     report = validate_semantic_bindings(materialized, bindings, obligations)
     assert report["materialized_binding_count"] == 1
 
 
-def test_slash_units_materialize_as_registry_tokens_and_validate():
+def test_slash_units_materialize():
     obligations = compile_requirement_semantic_obligations(_TWO_REQ)
     bindings = (_binding(), _speed_binding())
 
@@ -522,8 +518,6 @@ def test_slash_units_materialize_as_registry_tokens_and_validate():
 
     assert conformance["transaction_committed"] is True
     assert conformance["materialized_binding_count"] == 2
-    # The frozen threshold is written with the identifier-safe token, and the
-    # canonical/emission split no longer breaks the preservation check.
     assert "attribute minCruiseAirspeed : SpeedValue = 18 [m_s];" in materialized
     report = validate_semantic_bindings(materialized, bindings, obligations)
     assert report["status"] == "PASS"

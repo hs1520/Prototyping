@@ -1,8 +1,8 @@
-"""Honest requirement-verification coverage classifier.
+"""Requirement-verification coverage classifier.
 
-`satisfy` is allocation/intent, not proof — this classifies each requirement by the evidence
-that ACTUALLY exists (injected assert / quantitative target / allocated-only), so a baseline
-doesn't overclaim verification of functional/safety/interface behaviour it can't prove.
+`satisfy` is allocation/intent, not proof, so each requirement is classified by
+the evidence that exists (injected assert / quantitative target /
+allocated-only).
 """
 from __future__ import annotations
 
@@ -39,12 +39,11 @@ _REQS = [
 
 def test_classifies_by_real_evidence():
     cov = classify_requirement_coverage(_MODEL, _REQS)
-    assert cov["REQ-PERF-002"] == ANALYSIS_VERIFIED      # injected endurance assert
-    assert cov["REQ-CONS-003"] == ANALYSIS_VERIFIED      # injected MTOW assert
-    assert cov["REQ-PERF-003"] == QUANTITATIVE           # numeric target, no inline assert
-    # FUNC-005 mentions "abort" → safety-related, but its part has no state machine → absent
+    assert cov["REQ-PERF-002"] == ANALYSIS_VERIFIED
+    assert cov["REQ-CONS-003"] == ANALYSIS_VERIFIED
+    assert cov["REQ-PERF-003"] == QUANTITATIVE
     assert cov["REQ-FUNC-005"] == BEHAVIOR_ABSENT
-    assert cov["REQ-INTF-003"] == ALLOCATED_ONLY         # protocol: satisfy only, unverified
+    assert cov["REQ-INTF-003"] == ALLOCATED_ONLY
 
 
 def test_summary_counts_and_no_overclaim():
@@ -54,30 +53,25 @@ def test_summary_counts_and_no_overclaim():
     assert "allocated-only (intent, UNVERIFIED)" in s
 
 
-def test_endurance_not_analysis_verified_without_the_assert():
-    # remove the injected assert → endurance is no longer "verified", just allocated/quantitative
+def test_endurance_needs_assert():
     model = _MODEL.replace("assert constraint enduranceMeetsReq { 21.0 >= 20.0 }", "")
     cov = classify_requirement_coverage(model, _REQS)
-    assert cov["REQ-PERF-002"] == QUANTITATIVE           # numeric target remains, but no assert
+    assert cov["REQ-PERF-002"] == QUANTITATIVE
 
 
-def test_gazebo_upgrades_endurance_to_flight_verified():
+def test_gazebo_upgrades_endurance():
     from src.dse.requirement_coverage import classify_requirement_coverage, FLIGHT_VERIFIED
-    # a model where endurance is analysis-verified (assert present)
     model = """package D {
         requirement def REQ_PERF_002 { doc /* endurance */ }
         part def Drone { attribute enduranceMeetsReq : Boolean; satisfy requirement REQ_PERF_002; }
     }"""
     reqs = ["REQ-PERF-002: the system shall sustain flight for a minimum of 20 minutes."]
     base = classify_requirement_coverage(model, reqs)
-    assert base["REQ-PERF-002"] == "analysis-verified"          # without Gazebo
-    # Gazebo flew stably + datasheet endurance 35 ≥ 20 → flight-verified (upgrade)
+    assert base["REQ-PERF-002"] == "analysis-verified"
     gv = {"status": "ok", "datasheet_endurance_min": 35.2}
     up = classify_requirement_coverage(model, reqs, gazebo=gv)
     assert up["REQ-PERF-002"] == FLIGHT_VERIFIED
-    # but NOT if datasheet endurance falls short of the target
     short = classify_requirement_coverage(model, reqs, gazebo={"status": "ok", "datasheet_endurance_min": 12})
     assert short["REQ-PERF-002"] == "analysis-verified"
-    # and NOT if the flight wasn't stable
     unstable = classify_requirement_coverage(model, reqs, gazebo={"status": "infeasible", "datasheet_endurance_min": 35})
     assert unstable["REQ-PERF-002"] == "analysis-verified"

@@ -12,7 +12,7 @@ class _UnprintableError(Exception):
         raise RuntimeError("str failed")
 
 
-def test_suppressed_summary_counts_and_reset():
+def test_summary_counts_reset():
     reset_suppressed()
     record_suppressed("unit.point", ValueError("first"))
     record_suppressed("unit.point", TypeError("second"))
@@ -25,7 +25,7 @@ def test_suppressed_summary_counts_and_reset():
     assert suppressed_summary() == {}
 
 
-def test_record_suppressed_never_raises_for_unprintable_exception():
+def test_unprintable_exception_recorded():
     reset_suppressed()
     record_suppressed("unit.unprintable", _UnprintableError())
     summary = suppressed_summary()
@@ -69,7 +69,7 @@ def _front_with_two_members(self, iterations):
     ])
 
 
-def test_suppressed_variation_dse_callback_failure_reaches_run_report(monkeypatch):
+def test_dse_callback_failure_reported(monkeypatch):
     reset_suppressed()
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",

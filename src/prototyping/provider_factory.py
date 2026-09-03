@@ -1,8 +1,4 @@
-"""
-LLM provider factory module.
-
-Owns provider registration, normalization, and LLM construction logic.
-"""
+"""LLM provider factory module."""
 
 from __future__ import annotations
 
@@ -38,7 +34,6 @@ DEFAULT_LLM_MODELS: Dict[str, str] = {
 
 
 def _normalize_provider_name(provider: Optional[str]) -> str:
-    """Normalize provider names and common aliases to a canonical key."""
     normalized = (provider or "mock").strip().lower().replace("-", "_")
     return LLM_PROVIDER_ALIASES.get(normalized, normalized)
 
@@ -49,7 +44,6 @@ def _build_constructor_kwargs(
     api_key: Optional[str],
     provider_kwargs: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Only pass kwargs accepted by a provider constructor."""
     kwargs = dict(provider_kwargs or {})
     signature = inspect.signature(factory.__init__)
     parameters = signature.parameters
@@ -66,7 +60,6 @@ def _build_constructor_kwargs(
 
 
 def _resolve_model_name(provider_name: str, model: Optional[str]) -> Optional[str]:
-    """Return an explicit model or the provider's default model, if any."""
     if model is not None:
         return model
     return DEFAULT_LLM_MODELS.get(provider_name)
@@ -88,18 +81,7 @@ def create_llm(
     api_key: Optional[str] = None,
     provider_kwargs: Optional[Dict[str, Any]] = None,
 ) -> LLMInterface:
-    """
-    Create an LLM instance.
-
-    Args:
-        provider: Provider name, e.g. "mock", "gemini", "vertex"
-        model: Model name for providers that support it
-        api_key: API key for providers that support it
-        provider_kwargs: Extra provider-specific constructor args
-
-    Returns:
-        An LLM interface instance
-    """
+    """Create an LLM instance."""
     provider_name = _normalize_provider_name(provider)
     factory = LLM_PROVIDER_FACTORIES.get(provider_name)
     if factory is None:
@@ -111,6 +93,4 @@ def create_llm(
     resolved_model = _resolve_model_name(provider_name, model)
 
     kwargs = _build_constructor_kwargs(factory, resolved_model, api_key, provider_kwargs)
-    # noinspection PyArgumentList
     return factory(**kwargs)
-

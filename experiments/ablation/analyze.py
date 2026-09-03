@@ -1,10 +1,9 @@
 """Aggregate an ablation campaign: per-arm stats + per-seed paired deltas.
 
-Statistical honesty boundary (see README.md): with 3 seeds per cell only
-descriptive statistics are reported.  Score deltas are indicative, never
-significance claims; the load-bearing comparisons are categorical (success
-rate, gate rejections, intervention counts, token cost), where effect sizes
-are large enough for n=3 to carry weight.
+With 3 seeds per cell only descriptive statistics are reported (see
+README.md): score deltas are indicative, not significance claims, and the
+load-bearing comparisons are categorical - success rate, gate rejections,
+intervention counts, token cost.
 
 Usage:
     python experiments/ablation/analyze.py <campaign_dir>   # regenerate summary
@@ -30,7 +29,6 @@ HEADLINE_METRICS = (
     "replayed_calls",
     "replayed_tokens",
     "elapsed_s",
-    # mechanism ledger (was the ablated layer exercised, and how much?)
     "mech_refine_iterations",
     "mech_plan_retries",
     "mech_tier0_fixes",
@@ -47,15 +45,14 @@ HEADLINE_METRICS = (
     "mech_plan_conformance_rejections",
 )
 
-#: Categorical gate outcomes counted over ALL runs of an arm (failed runs
-#: stay in the denominator: a rejected model is the arm's result, not noise).
+# Categorical gate outcomes counted over all runs of an arm; failed runs stay
+# in the denominator, since a rejected model is the arm's result.
 GATE_OUTCOMES = {
     "qualified": lambda r: r.get("qualification_status") == "QUALIFIED",
     "closure_closed": lambda r: r.get("functional_closure_status") == "CLOSED",
     "paths_7of7": lambda r: r.get("controlled_pass") == 7,
 }
 
-#: Metrics worth a per-seed paired comparison against FULL.
 PAIRED_METRICS = (
     "final_score",
     "generate_phase_score",
@@ -67,15 +64,14 @@ PAIRED_METRICS = (
 
 
 def aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Per-arm mean/std over successful runs — the anti-lucky-run table."""
+    """Per-arm mean/std over successful runs, not single-run scores."""
     out: Dict[str, Any] = {}
     for arm in sorted({record["arm"] for record in records}):
         ok_runs = [r for r in records if r["arm"] == arm and r.get("ok")]
         failed = [r for r in records if r["arm"] == arm and not r.get("ok")]
-        # An infrastructure failure (rate limit, transport) is the
-        # environment's, not the arm's: it must not masquerade as a quality
-        # failure, especially in a single-seed wave where one 429 would be
-        # an arm's entire failure rate.
+        # An infrastructure failure (rate limit, transport) belongs to the
+        # environment, not the arm: in a single-seed wave one 429 would otherwise
+        # be an arm's entire failure rate.
         infra = [r for r in failed if r.get("infrastructure_failure")]
         genuine = [r for r in failed if not r.get("infrastructure_failure")]
         counted = ok_runs + genuine

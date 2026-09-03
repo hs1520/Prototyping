@@ -1,7 +1,3 @@
-"""Behavioural verification of FUNCTIONAL actuation requirements (roadmap ①): a functional
-response (release/navigate/report/return) is verified only if a REACHABLE state actually
-produces that action; otherwise behavior-absent (honestly flags missing actuation logic).
-"""
 from __future__ import annotations
 
 from src.dse.functional_behavior import functional_behavior_status
@@ -30,17 +26,17 @@ _REQS = [
 ]
 
 
-def test_functional_response_verified_and_absent():
+def test_response_verified_and_absent():
     st = functional_behavior_status(_MODEL, _REQS)
-    assert st["REQ-FUNC-011"] == BEHAVIORALLY_VERIFIED   # 'delivering' produces releasePayload
-    assert st["REQ-FUNC-012"] == BEHAVIOR_ABSENT         # no navigate action produced anywhere
+    assert st["REQ-FUNC-011"] == BEHAVIORALLY_VERIFIED
+    assert st["REQ-FUNC-012"] == BEHAVIOR_ABSENT
 
 
-def test_a_sustained_response_is_credited_like_an_entry_response():
-    """`do action` is the natural spelling of a continuous response.
+def test_sustained_response_credited():
+    """`do action` is the spelling of a continuous response.
 
-    Navigating is an activity, not an instant, so the model that expresses it
-    correctly must not read as having no response at all.
+    Navigating is an activity, not an instant, so a model using `do action` still
+    counts as having a response.
     """
     model = _MODEL.replace(
         "state cruising;",
@@ -50,10 +46,10 @@ def test_a_sustained_response_is_credited_like_an_entry_response():
     st = functional_behavior_status(model, _REQS)
 
     assert st["REQ-FUNC-012"] == BEHAVIORALLY_VERIFIED
-    assert st["REQ-FUNC-011"] == BEHAVIORALLY_VERIFIED   # entry response unaffected
+    assert st["REQ-FUNC-011"] == BEHAVIORALLY_VERIFIED
 
 
-def test_an_unreachable_sustained_response_is_still_absent():
+def test_unreachable_sustained_absent():
     model = _MODEL.replace(
         "state delivering { entry action releasePayload : ReleaseAction; }",
         "state delivering { do action navigateToWaypoint; }",
@@ -64,14 +60,13 @@ def test_an_unreachable_sustained_response_is_still_absent():
     assert st["REQ-FUNC-012"] == BEHAVIOR_ABSENT
 
 
-def test_unreachable_action_is_absent():
-    # make the action-bearing state unreachable (no transition into it) → response not reachable
+def test_unreachable_action_absent():
     model = _MODEL.replace("transition d first cruising if pos > 0.5 then delivering;", "")
     st = functional_behavior_status(model, _REQS)
     assert st["REQ-FUNC-011"] == BEHAVIOR_ABSENT
 
 
-def test_landing_action_does_not_satisfy_postflight_report_response():
+def test_landing_not_report_response():
     model = """package D {
         requirement def REQ_FUNC_008 {
             doc /* Transmit a post-flight health report after landing. */
@@ -97,7 +92,7 @@ def test_landing_action_does_not_satisfy_postflight_report_response():
     assert st["REQ-FUNC-008"] == BEHAVIOR_ABSENT
 
 
-def test_normal_functional_entry_actions_are_not_misclassified_as_emergencies():
+def test_entry_actions_not_emergencies():
     model = """package D {
         action def ValidWaypointModificationCommand { }
         action def AutomatedLandingCompleted { }
@@ -173,7 +168,7 @@ def test_normal_functional_entry_actions_are_not_misclassified_as_emergencies():
     assert statuses["REQ-FUNC-008"] == BEHAVIORALLY_VERIFIED
 
 
-def test_emergency_only_recovery_does_not_require_a_fake_nominal_transition():
+def test_emergency_only_needs_no_nominal():
     model = """package D {
         action def CmdParachuteDeploy;
         part def RecoverySystem {
@@ -207,7 +202,7 @@ def test_emergency_only_recovery_does_not_require_a_fake_nominal_transition():
     assert result.sim_score == 1.0
 
 
-def test_ag_entry_edges_and_reused_transition_names_are_scoped_per_machine():
+def test_transitions_scoped_per_machine():
     model = """package D {
         action def FirstSignal;
         action def SecondSignal;
@@ -252,7 +247,7 @@ def test_ag_entry_edges_and_reused_transition_names_are_scoped_per_machine():
     ]
 
 
-def test_generation_and_surgical_prompts_require_executable_functional_responses():
+def test_prompts_require_reachable_actions():
     from src.simulation.surgical_refiner import SURGICAL_SYSTEM_PROMPT
     from src.llm.chain_of_thought import BEHAVIOR_TEMPLATE
 
@@ -263,7 +258,7 @@ def test_generation_and_surgical_prompts_require_executable_functional_responses
         assert "latency" in prompt.lower()
 
 
-def test_temporal_response_needs_the_real_trigger_and_timing_anchor():
+def test_temporal_needs_trigger_anchor():
     base = """package D {
         action def AutomatedLandingCompleted { }
         requirement def REQ_FUNC_008 {
@@ -305,10 +300,9 @@ def test_temporal_response_needs_the_real_trigger_and_timing_anchor():
     )
     assert functional_behavior_status(no_timing, reqs)["REQ-FUNC-008"] == BEHAVIOR_ABSENT
 
-    # The semantic materialiser types a seconds bound as DurationValue, so the
-    # attribute a constraint actually references is often not spelled `Real`.
-    # Recognising only `Real` reported a real timing anchor as missing and left
-    # the requirement unassigned at every tier.
+    # The semantic materialiser types a seconds bound as DurationValue, so a
+    # constraint's attribute is often not spelled `Real`. Recognising only `Real`
+    # reported the timing anchor as missing and left the requirement unassigned.
     duration_typed = base.replace(
         "attribute maxHealthReportLatency : Real = 5.0 [s];",
         "attribute maxHealthReportLatency : DurationValue = 5.0 [s];",
@@ -317,14 +311,13 @@ def test_temporal_response_needs_the_real_trigger_and_timing_anchor():
         duration_typed, reqs
     )["REQ-FUNC-008"] == BEHAVIORALLY_VERIFIED
 
-    # a bound that is not the requirement's own value still fails
     wrong_bound = base.replace("Real = 5.0 [s]", "Real = 9.0 [s]")
     assert functional_behavior_status(
         wrong_bound, reqs
     )["REQ-FUNC-008"] == BEHAVIOR_ABSENT
 
 
-def test_self_test_requires_reachable_action_from_power_on_context():
+def test_self_test_needs_reachable_action():
     base = """package D {
         action def CmdToSelfTest { }
         requirement def REQ_FUNC_009 {
@@ -357,10 +350,6 @@ def test_self_test_requires_reachable_action_from_power_on_context():
     assert functional_behavior_status(no_action, reqs)["REQ-FUNC-009"] == BEHAVIOR_ABSENT
 
 
-# ---------------------------------------------------------------------------
-# Declared (out-of-vocabulary) intents and the honesty values none/unverifiable
-# ---------------------------------------------------------------------------
-
 _ALERT_MODEL = """package D {
     requirement def REQ_FUNC_020 {
         doc /* Alert the operators within 5 minutes of an equipment fault. */
@@ -382,11 +371,13 @@ _ALERT_REQS = [
 ]
 
 
-def test_declared_markers_verify_an_out_of_vocabulary_response():
-    """A domain response outside the built-in table (alert) is checkable when
-    the plan declared its markers: the same reachable-action check runs
-    against them. Without a declaration the keyword table knows no alert
-    intent, so the requirement is left to the base classifier."""
+def test_declared_markers_verify_response():
+    """A response outside the built-in table (alert) is checkable from declared markers.
+
+    The same reachable-action check runs against them; without a declaration the
+    keyword table knows no alert intent, so the requirement falls back to the base
+    classifier.
+    """
     st = functional_behavior_status(
         _ALERT_MODEL, _ALERT_REQS,
         planned_intents={"REQ_FUNC_020": "alert"},
@@ -401,9 +392,7 @@ def test_declared_markers_verify_an_out_of_vocabulary_response():
     assert "REQ-FUNC-020" not in undeclared
 
 
-def test_declared_markers_hold_the_model_to_the_declared_response():
-    """Declared markers are an obligation, not a pass: a model whose reachable
-    states never produce the declared response is behavior-absent."""
+def test_declared_markers_reject_silence():
     silent = _ALERT_MODEL.replace(
         "state Alerting { entry action alertOperators : raiseFaultAlert; }",
         "state Alerting;",
@@ -416,10 +405,10 @@ def test_declared_markers_hold_the_model_to_the_declared_response():
     assert st["REQ-FUNC-020"] == BEHAVIOR_ABSENT
 
 
-def test_unverifiable_holds_the_model_to_nothing_like_none():
-    """"unverifiable" records a real obligation the gate cannot check; the
-    gate then asks the model for nothing (the matrix reports the row under
-    its own tier instead)."""
+def test_unverifiable_checks_nothing():
+    """"unverifiable" records an obligation the gate cannot check, so the gate asks the
+    model for nothing; the matrix reports the row under its own tier.
+    """
     for recorded in ("none", "unverifiable"):
         st = functional_behavior_status(
             _ALERT_MODEL, _ALERT_REQS,
@@ -428,24 +417,24 @@ def test_unverifiable_holds_the_model_to_nothing_like_none():
         assert "REQ-FUNC-020" not in st, recorded
 
 
-def test_recorded_intents_are_read_in_the_underscore_key_form():
-    """Every producer keys planned_intents REQ_XXX_NNN while the trace ids
-    are hyphenated; the lookup must bridge that or every recorded decision
-    is silently ignored (which is exactly what happened before this test)."""
-    model = _MODEL  # REQ_FUNC_011 release is verified by keyword inference
+def test_intents_read_underscore_keys():
+    """Producers key planned_intents REQ_XXX_NNN while trace ids are hyphenated, so the
+    lookup bridges the two; without it every recorded decision is ignored.
+    """
+    model = _MODEL
     st = functional_behavior_status(
         model, _REQS, planned_intents={"REQ_FUNC_011": "none"}
     )
-    assert "REQ-FUNC-011" not in st  # the recorded "none" must win
+    assert "REQ-FUNC-011" not in st
 
 
-def test_marker_anchoring_is_lexical_and_refuses_convenient_markers():
+def test_marker_anchoring_lexical():
     from src.dse.functional_behavior import marker_anchored_in_effect
 
     effect = "alert the operators within 5 minutes of an equipment fault"
     assert marker_anchored_in_effect("alert", effect)
-    assert marker_anchored_in_effect("notifyOperator", effect)   # shares "operator"
+    assert marker_anchored_in_effect("notifyOperator", effect)
     assert marker_anchored_in_effect("fault-alert", effect)
-    assert not marker_anchored_in_effect("hovering", effect)     # self-grading
-    assert not marker_anchored_in_effect("with", effect)         # stopword/too generic
+    assert not marker_anchored_in_effect("hovering", effect)
+    assert not marker_anchored_in_effect("with", effect)
     assert not marker_anchored_in_effect("", effect)

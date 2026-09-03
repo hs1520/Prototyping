@@ -16,13 +16,12 @@ except ImportError:
 def coerce_static_number(value) -> float | None:
     """A static scalar from a syside evaluation result, or None.
 
-    ``Compiler.evaluate`` returns the referenced node itself (an
-    ``AttributeUsage``) when an initializer is a feature-reference chain — the
-    typed semantic bindings write exactly those (``attribute currentX : T =
-    channel.payload.feature;``).  Such an initializer has no static scalar;
-    that is data, not an error, so callers must not ``float()`` blindly (the
-    ablation pilot recorded 369 suppressed TypeErrors from three sites doing
-    just that).
+    ``Compiler.evaluate`` returns the referenced node (an ``AttributeUsage``) when
+    the initializer is a feature-reference chain, which is what the typed semantic
+    bindings write (``attribute currentX : T = channel.payload.feature;``). Such
+    an initializer has no static scalar, so callers cannot ``float()`` blindly -
+    the ablation pilot recorded 369 suppressed TypeErrors from three sites that
+    did.
     """
     if value is None or isinstance(value, bool):
         return None
@@ -37,12 +36,7 @@ def coerce_static_number(value) -> float | None:
 
 
 def extract_attr_values(text: str) -> Dict[str, float]:
-    """Evaluate every AttributeUsage expression in *text* via the syside Compiler.
-
-    Returns {attribute_name: float_value}.  Used to supplement IR model
-    attribute values that may be unparsed expressions (e.g. ``mass * g``).
-    Falls back to {} when syside is unavailable or parsing fails.
-    """
+    """Evaluate every AttributeUsage expression in *text* via the syside Compiler."""
     if not SYSIDE_OK or not text:
         return {}
     out: Dict[str, float] = {}

@@ -1,13 +1,4 @@
-"""Pipeline entry point (opt-in, heavy): verify the DSE-recommended design in Gazebo.
-
-Gated by RUN_GAZEBO=1 in run_pipeline. Takes the DSE's recommended DesignInputs, flies THAT
-airframe in Gazebo (generate SDF → ArduCopter JSON FDM → hover + forward dash), and cross-checks
-the measured hover RPM against prop theory + the datasheet hover endurance. ~5 min, needs Docker
-+ the arducopter binary. Best-effort: any failure returns a 'skipped'/'failed' verdict, never
-breaks the pipeline.
-
-Only quad (rotor_count==4) is supported by the SDF generator at this stage.
-"""
+"""Pipeline entry point (opt-in, heavy): verify the DSE-recommended design in Gazebo."""
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -17,15 +8,14 @@ from src.dse.physics_estimator import total_mass_kg
 
 import re
 
-# match "maintain controlled flight on SINGLE motor failure" (controllability/redundancy) — NOT a
-# generic "propulsion failure" response like parachute deploy (which is a different requirement).
+# Matches "maintain controlled flight on single motor failure"
+# (controllability/redundancy), not a generic propulsion-failure response.
 _REDUNDANCY_RE = re.compile(
     r"single.{0,25}(motor|propulsion|rotor|unit)|one\s+motor|motor.{0,15}inoperative|redundan",
     re.IGNORECASE)
 
 
 def _redundancy_req(requirements):
-    """req_id of a single-motor-failure / redundancy requirement, if present."""
     for r in requirements or []:
         if _REDUNDANCY_RE.search(r):
             m = re.search(r"REQ[-_][A-Z]+[-_]\d+", r)
@@ -35,9 +25,7 @@ def _redundancy_req(requirements):
 
 
 def verify_recommended_design(design, requirements=None) -> Dict[str, Any]:
-    """Fly the recommended DesignInputs in Gazebo and cross-validate. Returns a result dict with
-    'status' in {ok, infeasible, failed, skipped}. If a single-motor-failure requirement is present,
-    also flies with one motor dead to test redundancy (the unique-to-flight verification)."""
+    """Fly the recommended DesignInputs in Gazebo and cross-validate."""
     if design is None:
         return {"status": "skipped", "reason": "no recommended design from DSE"}
     n = getattr(design, "rotor_count", 4)
@@ -57,7 +45,7 @@ def verify_recommended_design(design, requirements=None) -> Dict[str, Any]:
     try:
         run_flight.main(mass_kg=mass, rotor_radius=design.rotor_radius_m,
                         capacity_mah=design.battery_capacity_mah, rotor_count=n,
-                        calibrate=True)         # all frames: real-motor area+max-speed anchoring
+                        calibrate=True)
     except Exception as e:
         return {"status": "failed", "reason": f"flight: {e!r}", "mass_kg": mass}
 
@@ -85,18 +73,15 @@ def verify_recommended_design(design, requirements=None) -> Dict[str, Any]:
         "cross_validation_consistent": cv.consistent,
     }
 
-    # single-motor-failure controllability (unique-to-flight): only if a redundancy requirement
-    # exists and the nominal flight was stable. Fly again with one motor dead.
     rreq = _redundancy_req(requirements)
     if rreq and r.get("hover_stable"):
         result["redundancy_req"] = rreq
         try:
             run_flight.main(mass_kg=mass, rotor_radius=design.rotor_radius_m,
                             capacity_mah=design.battery_capacity_mah, rotor_count=n,
-                            calibrate=True, fail_rotor=0)   # same calibrated path as nominal
-            # hover_stable is only set when the flight COMPLETES; None = the flight errored
-            # (e.g. SITL connection reset) → INCONCLUSIVE, NOT a controllability failure, so a
-            # transient can't false-fail a redundant design.
+                            calibrate=True, fail_rotor=0)
+            # hover_stable is set only when the flight completes; None means it errored
+            # (e.g. SITL connection reset) -> inconclusive, not a controllability failure.
             hs = run_flight.LAST_RESULT.get("hover_stable")
             result["motor_failure_tolerant"] = hs if hs is None else bool(hs)
         except Exception as e:

@@ -1,9 +1,9 @@
-"""n>1 stability: DSE convergence across random seeds (synthetic variants → isolates
-MCTS randomness from LLM variability, so it's reproducible).
+"""n>1 stability: DSE convergence across random seeds, with synthetic variants
+isolating MCTS randomness from LLM variability.
 
-Under a BINDING endurance requirement the Pareto front spreads to multiple points and
-the MAIN architecture choice is stable across seeds — i.e. the recommendation isn't a
-single-seed fluke. (A secondary near-tied choice may flip between seeds; that's fine.)
+Under a binding endurance requirement the Pareto front spreads to multiple
+points and the main architecture choice holds across seeds; a secondary
+near-tied choice may flip.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ _MODEL = """package Drone {
             variant part p4 : Pow4S; variant part p6 : Pow6S; }
     }
 }"""
-_REQS = ["REQ-PERF-002: endurance at least 25 minutes"]   # binding for these small craft
+_REQS = ["REQ-PERF-002: endurance at least 25 minutes"]
 
 
 def _model():
@@ -40,30 +40,28 @@ def _runs(n_seeds=5):
             for s in range(n_seeds)]
 
 
-def test_front_spreads_under_binding_requirement():
+def test_front_spreads_under_binding():
     runs = _runs()
-    # The exploratory estimator front retains the trade-off spread. The official
-    # front is intentionally narrower because it contains only hard-feasible designs.
+    # The exploratory estimator front keeps the trade-off spread; the official front
+    # is narrower because it holds only hard-feasible designs.
     fronts = [len(r.exploratory_pareto_front) for r in runs]
     assert sum(f >= 2 for f in fronts) >= 4
     assert all(r.pareto_front for r in runs)
 
 
-def test_main_architecture_choice_is_stable_across_seeds():
+def test_choice_stable_across_seeds():
     props = [r.recommended_choices["propulsion"] for r in _runs()]
     _, count = Counter(props).most_common(1)[0]
-    assert count >= 4   # the dominant propulsion choice recurs in ≥4/5 seeds (no seed fluke)
+    assert count >= 4
 
 
-def test_inner_capacity_within_bounds_every_seed():
+def test_capacity_within_bounds():
     caps = [r.recommended_capacity_mah for r in _runs()]
     assert all(c is not None and 3000 <= c <= 22000 for c in caps)
 
 
-# --- feasibility gate: never recommend a design that fails a hard perf requirement ---
 from src.dse.physics_estimator import endurance_min   # noqa: E402
 
-# one infeasible variant (tiny rotors can't reach 25min even maxed) + one feasible (big hex)
 _GATE_MODEL = """package Drone {
     port def Sig;
     part def LiftIface { in port cmd : Sig; out port thrust : Sig; }
@@ -79,11 +77,10 @@ _GATE_MODEL = """package Drone {
 }"""
 
 
-def test_recommendation_is_feasible_when_a_feasible_design_exists():
+def test_recommendation_feasible():
     r = run_variation_dse(SimpleNamespace(metadata={"last_sysml_text": _GATE_MODEL}),
                           requirements=_REQS, iterations=60, random_seed=0)
     assert r.recommended_design is not None
-    # must pick the feasible big-hex (≥25min), not the infeasible tiny quad
     assert endurance_min(r.recommended_design) >= 25.0 - 0.5
     assert not any("INFEASIBLE" in n for n in r.notes)
 
@@ -93,16 +90,16 @@ _ALL_INFEASIBLE = _GATE_MODEL.replace(
     "variant part tiny : TinyQuad; variant part tiny2 : TinyQuad;")
 
 
-def test_flags_infeasibility_when_no_design_meets_requirement():
+def test_flags_infeasibility():
     r = run_variation_dse(SimpleNamespace(metadata={"last_sysml_text": _ALL_INFEASIBLE}),
                           requirements=_REQS, iterations=60, random_seed=0)
-    assert r.recommended_design is None                          # never upgrades best-effort
-    assert r.exploratory_design is not None                      # diagnostic pick is preserved
+    assert r.recommended_design is None
+    assert r.exploratory_design is not None
     assert r.recommendation_status == "NO_RECOMMENDABLE_DESIGN"
     assert any("NO_RECOMMENDABLE_DESIGN" in n for n in r.notes)
 
 
-# two variation points both parametrising rotor → must be deduplicated before search
+# two variation points both parametrising rotor -> deduplicated before search
 _OVERLAP_MODEL = """package Drone {
     port def Sig;
     part def LiftIface { in port cmd : Sig; out port thrust : Sig; }
@@ -119,18 +116,17 @@ _OVERLAP_MODEL = """package Drone {
 }"""
 
 
-def test_overlapping_variation_points_are_deduplicated():
+def test_overlapping_points_deduplicated():
     r = run_variation_dse(SimpleNamespace(metadata={"last_sysml_text": _OVERLAP_MODEL}),
                           requirements=_REQS, iterations=60, random_seed=0)
     assert r is not None and r.recommended_design is not None
-    # rotor ownership deduplicated: kept on propulsion, airframe made physics-inert
     assert any("kept in 'propulsionSystem'" in n for n in r.notes)
     assert any("airframe' is now physics-inert" in n for n in r.notes)
-    # recommended rotor is one the propulsion variants actually offer (coherent, not merged)
+    # recommended rotor is one the propulsion variants offer (coherent, not merged)
     assert r.recommended_design.rotor_count in (6, 8)
 
 
-# component masses (sensor/gimbal massKg) must enter the all-up mass, not just delivery payload
+# component masses (sensor/gimbal massKg) enter the all-up mass, not just payload
 _COMP_MODEL = """package Drone {
     port def Sig;
     part def LiftIface { in port cmd : Sig; out port thrust : Sig; }
@@ -148,12 +144,11 @@ _COMP_REQS = ["REQ-PERF-002: endurance at least 20 minutes at maximum rated payl
               "REQ-FUNC-003: transport payloads of up to 1.0 kg."]
 
 
-def test_component_mass_enters_all_up_mass():
+def test_component_mass_in_all_up_mass():
     r = run_variation_dse(SimpleNamespace(metadata={"last_sysml_text": _COMP_MODEL}),
                           requirements=_COMP_REQS, iterations=40, random_seed=0)
-    # This deliberately heavy synthetic design cannot meet endurance, so it stays
-    # exploratory; the mass accounting must still be correct in the evaluated design.
+    # This heavy synthetic design cannot meet endurance, so it stays exploratory;
+    # the mass accounting is still checked on the evaluated design.
     assert r.recommended_design is None
     assert r.exploratory_design is not None
-    # all-up NON-structural mass = delivery payload (1.0 rated) + gimbal component (1.5) = 2.5
     assert abs(r.exploratory_design.payload_mass_kg - 2.5) < 1e-6

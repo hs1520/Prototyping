@@ -1,12 +1,10 @@
-"""The full planned-binding chain must land on the committed pilot-2 model.
+"""The full planned-binding chain lands on the committed pilot-2 model.
 
-Pilot 2 is the measured failure this pins: nine bindings planned, zero
-materialized — two failed on the ``m_s`` unit token (emitted with no
-resolution, compared unequal to ``m/s``), and the all-or-nothing transaction
-discarded the seven healthy ones with them.  After the unit registry and the
-per-binding transaction, applying the very same archived plan to the very
-same archived model must land all nine, resolve ``m_s``, and leave the
-report describing the returned text.
+Pilot 2: nine bindings planned, zero materialized - two failed on the ``m_s``
+unit token (emitted unresolved, compared unequal to ``m/s``) and the
+all-or-nothing transaction discarded the seven healthy ones. With the unit
+registry and the per-binding transaction, the same archived plan on the same
+model lands all nine, resolves ``m_s``, and reports the returned text.
 """
 from __future__ import annotations
 
@@ -43,7 +41,7 @@ def _pilot2():
     return text, report["whole_model_generation_plan"]
 
 
-def test_archived_pilot2_plan_now_lands_all_nine_bindings():
+def test_pilot2_lands_nine_bindings():
     text, payload = _pilot2()
     plan = ModelGenerationPlan.from_dict(payload)
 
@@ -55,7 +53,6 @@ def test_archived_pilot2_plan_now_lands_all_nine_bindings():
     assert semantic["transaction_committed"] is True
     assert "alias m_s for SI::'m/s';" in planned_text
 
-    # The read-only validator agrees with the text apply returned.
     bindings = [
         SemanticBindingPlan.from_dict(item)
         for item in payload["semantic_bindings"]
@@ -66,15 +63,15 @@ def test_archived_pilot2_plan_now_lands_all_nine_bindings():
     assert replay["materialized_binding_count"] == 9
 
 
-def test_archived_pilot2_output_has_no_unit_reference_errors():
+def test_pilot2_no_unit_errors():
     text, payload = _pilot2()
     planned_text, _conformance = apply_generation_plan(
         text, ModelGenerationPlan.from_dict(payload)
     )
     result = check_syntax(planned_text, filter_stdlib_diagnostics=False)
-    # Pilot 2's model carries one pre-existing LLM-authored parser error (a
-    # stray `;` inside a port doc comment) that is out of this chain's scope;
-    # the unit fix is judged on semantic reference errors, which must be gone.
+    # Pilot 2's model carries one pre-existing parser error (a stray `;` in a port
+    # doc comment) out of this chain's scope; the unit fix is judged on semantic
+    # reference errors.
     assert result.sema_errors == [], [
         error["message"] for error in result.sema_errors
     ]

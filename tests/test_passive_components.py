@@ -1,5 +1,3 @@
-"""A component the plan declares passive plans no ports, is materialised as a
-PLAN-PASSIVE marker, and takes no part in reachability scenarios."""
 from src.prototyping.generation_plan import (
     ModelGenerationPlan, materialize_passive_components, passive_components_in_text,
 )
@@ -26,7 +24,7 @@ def _payload(passive_block):
     }
 
 
-def test_passive_component_may_plan_no_ports_but_needs_a_reason():
+def test_no_ports_needs_rationale():
     ok = ModelGenerationPlan.from_payload(_payload({
         "name": "Airframe", "responsibility": "carries the parts",
         "requirements": [], "ports": [], "passive": True,
@@ -46,7 +44,7 @@ def test_passive_component_may_plan_no_ports_but_needs_a_reason():
     assert any("declared passive but plans" in i for i in with_ports.issues)
 
 
-def test_passive_marker_is_written_once_and_read_back():
+def test_passive_marker_written_once():
     plan = ModelGenerationPlan.from_payload(_payload({
         "name": "Airframe", "responsibility": "carries the parts",
         "requirements": [], "ports": [], "passive": True,
@@ -61,7 +59,7 @@ def test_passive_marker_is_written_once_and_read_back():
     assert passive_components_in_text(once) == {"Airframe"}
 
 
-def test_declared_passive_part_generates_no_scenarios():
+def test_passive_part_no_scenarios():
     def graph(passive):
         bg = BehavioralGraph()
         bg.parts["powerSystem"] = PartNode(id="powerSystem", def_name="PowerSystem")
@@ -94,14 +92,13 @@ _UNCONNECTED_AIRFRAME = """package P {{
 }}"""
 
 
-def test_declared_passive_part_is_not_charged_the_isolation_penalty():
-    """Measured on the s0v5 anchor: a perfect run (19/19 requirement paths,
-    20/20 advisory scenarios) read reachability 0.9 because the plan-passive
-    airframe has no connect statements and the scorer charged it the
-    isolation penalty — while the isolated-parts feedback simultaneously
-    told refinement to wire it in, against the plan's own passivity
-    discipline. Passivity is the model's recorded decision; the scorer must
-    read it. An UNDECLARED unconnected part keeps the penalty."""
+def test_passive_part_no_penalty():
+    """A 19/19 run read reachability 0.9 because the plan-passive airframe has no
+    connect statements and the scorer charged it the isolation penalty, while the
+    isolated-parts feedback told refinement to wire it in. Passivity is the model's
+    recorded decision and the scorer reads it; an undeclared unconnected part keeps
+    the penalty.
+    """
     from src.simulation.validator import SimulationValidator
 
     passive = SimulationValidator().validate(
@@ -122,15 +119,13 @@ def test_declared_passive_part_is_not_charged_the_isolation_penalty():
     assert undeclared.reachability_score < 1.0
 
 
-def test_passive_component_plans_exactly_the_structural_mount():
-    """A passive body plans one structural attachment port -- fixed name and
-    type -- because a mounting interface is a legitimate connection point (the
-    standard's ports are interaction points, mechanical ones included), and
-    leaving it unplanned made every generator that sensibly wrote one
-    non-conformant (measured: two consecutive end-to-end draws added an
-    unplanned airframe mount port). The emitted port definition has no
-    features, so nothing can be exchanged through it and the passive marker
-    stays true."""
+def test_passive_plans_mount_port():
+    """A passive body plans one structural attachment port, fixed name and type,
+    because a mounting interface is a connection point and leaving it unplanned
+    made every generator that wrote one non-conformant (two consecutive end-to-end
+    draws added an unplanned airframe mount port). The emitted port definition has
+    no features, so nothing can be exchanged through it.
+    """
     from src.prototyping.generation_plan import (
         STRUCTURAL_MOUNT_PORT_NAME,
         STRUCTURAL_MOUNT_PORT_TYPE,
@@ -163,7 +158,6 @@ def test_passive_component_plans_exactly_the_structural_mount():
     assert [p.name for p in airframe.ports] == [STRUCTURAL_MOUNT_PORT_NAME]
     assert airframe.ports[0].port_type == STRUCTURAL_MOUNT_PORT_TYPE
     assert airframe.ports[0].direction == "inout"
-    # a passive component planning any OTHER port is an issue
     payload["components"][0]["ports"] = [
         {"name": "power", "direction": "in", "type": "DataPort"}
     ]

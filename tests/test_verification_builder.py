@@ -1,9 +1,3 @@
-"""SysML v2 verification-case generation for DSE-recommended models (layer 0).
-
-Each quantified requirement becomes a standard verification case (requirement def +
-usage + verification def whose objective `verify`s the usage) bound to the model's
-system type. All emitted SysML must be Syside-valid.
-"""
 from __future__ import annotations
 
 from src.dse.verification_builder import build_verification_cases, _find_system_type
@@ -25,15 +19,15 @@ _REQS = [
     "REQ-PERF-001: cruise at least 18 m/s.",
     "REQ-PERF-002: endurance at least 30 min.",
     "REQ-CONS-001: takeoff mass at most 25 kg.",
-    "REQ-FUNC-009: navigate autonomously.",  # no numeric target
+    "REQ-FUNC-009: navigate autonomously.",
 ]
 
 
-def test_finds_assembly_as_system_type():
-    assert _find_system_type(_MODEL) == "Airframe"  # owns the most nested part usages
+def test_finds_assembly_system_type():
+    assert _find_system_type(_MODEL) == "Airframe"
 
 
-def test_one_verification_case_per_quantified_family():
+def test_one_case_per_quantified_family():
     _, names = build_verification_cases(_MODEL, _REQS)
     assert names == [
         "ReqPerf001SpeedVerification",
@@ -42,27 +36,27 @@ def test_one_verification_case_per_quantified_family():
     ]
 
 
-def test_generated_model_is_syside_valid():
+def test_generated_model_syside_valid():
     out, names = build_verification_cases(_MODEL, _REQS)
     assert names
     assert not check_syntax(out).has_errors
 
 
-def test_verify_targets_requirement_usage_and_binds_system_subject():
+def test_verify_targets_usage_and_subject():
     out, _ = build_verification_cases(_MODEL, _REQS)
-    # verify references the usage (lowercase), not the def — Syside requires this
+    # verify references the usage (lowercase), not the def - Syside requires this
     assert "verify reqPerf001SpeedReq;" in out
     assert "subject s : Airframe;" in out
     assert "attribute target : Real = 18.0;" in out
 
 
-def test_direction_is_perf_ge_cost_le():
+def test_direction_perf_ge_cost_le():
     out, _ = build_verification_cases(_MODEL, _REQS)
-    assert "speed >= 18.0" in out      # performance family: at-least
-    assert "mass <= 25.0" in out       # cost family: at-most
+    assert "speed >= 18.0" in out
+    assert "mass <= 25.0" in out
 
 
-def test_no_quantified_targets_is_noop():
+def test_no_quantified_targets_noop():
     out, names = build_verification_cases(_MODEL, ["REQ-FUNC-009: navigate autonomously."])
     assert names == [] and out == _MODEL
 
@@ -80,13 +74,12 @@ _FLAT_MODEL = """package Drone {
 }"""
 
 
-def test_flat_package_assembly_still_finds_a_subject():
-    # no wrapping assembly part def → fall back to the most-connected part's type
+def test_flat_package_finds_subject():
     assert _find_system_type(_FLAT_MODEL) == "FlightController"
 
 
-def test_flat_package_assembly_generates_cases():
+def test_flat_package_generates_cases():
     out, names = build_verification_cases(_FLAT_MODEL, _REQS)
-    assert names                                   # was 0 before the flat-assembly fix
+    assert names
     assert not check_syntax(out).has_errors
     assert "subject s : FlightController;" in out

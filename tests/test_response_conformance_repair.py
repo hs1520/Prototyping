@@ -1,15 +1,12 @@
 """Response-conformance defects reach the author in-loop, with one bounded pass.
 
-Measured on 8 of 24 archived authoritative runs: the response action for the
-parachute requirement emits the wrong payload — either the detected-failure
-event through a correctly typed command port (5af6c666, a decidable type
-inconsistency) or an internally consistent but semantically wrong command
-family (0b320d13's CmdToEmergency), which only the SITL traceability gate
-recognised, at Phase 9, as a blocked evidence row.  Both detectors are
-deterministic (no LLM, no SITL process); their findings now ride along as
-advisory refinement issues, and a clean exit gets exactly one surgical
-response-conformance pass, accepted only when the finding count falls and
-nothing regresses.
+In 8 of 24 archived authoritative runs the parachute response action emitted
+the wrong payload: the detected-failure event through a correctly typed command
+port (5af6c666), or a consistent but wrong command family (0b320d13's
+CmdToEmergency), which only the Phase 9 SITL traceability gate caught. Both
+detectors are deterministic, so their findings ride along as advisory refinement
+issues, and a clean exit gets one surgical response-conformance pass, accepted
+only when the finding count falls.
 """
 from __future__ import annotations
 
@@ -31,8 +28,6 @@ class _NoCallLLM:
     def complete(self, *_args, **_kwargs):  # pragma: no cover
         raise AssertionError("the pass must talk through the intelligence port")
 
-
-# ── Detector 1: send payload vs port payload type ─────────────────────────
 
 _TYPE_DEFECT_MODEL = """package M {
     item def FaultEvent;
@@ -59,7 +54,7 @@ part def Safety {
 ```"""
 
 
-def test_port_payload_detector_flags_the_archived_defect_shape():
+def test_detector_flags_defect_shape():
     issues = port_payload_conformance_issues(_TYPE_DEFECT_MODEL)
     assert len(issues) == 1
     assert issues[0].startswith("[PORT-PAYLOAD]")
@@ -72,7 +67,7 @@ def test_port_payload_detector_flags_the_archived_defect_shape():
     assert finding["port"] == "deployCmd"
 
 
-def test_port_payload_detector_is_silent_when_the_send_conforms():
+def test_detector_silent_on_conforming():
     repaired = _TYPE_DEFECT_MODEL.replace(
         "send FaultEvent() to deployCmd;",
         "send DeployCmdData() to deployCmd;",
@@ -80,15 +75,12 @@ def test_port_payload_detector_is_silent_when_the_send_conforms():
     assert port_payload_conformance_issues(repaired) == []
 
 
-def test_port_payload_detector_stays_conservative_on_unresolved_links():
-    # untyped port def → silence
+def test_detector_skips_unresolved_links():
     untyped = _TYPE_DEFECT_MODEL.replace(
         "        item payload : DeployCmdData;\n", "")
     assert port_payload_conformance_issues(untyped) == []
-    # sent name is not a known item def → silence
     unknown = _TYPE_DEFECT_MODEL.replace("item def FaultEvent;", "")
     assert port_payload_conformance_issues(unknown) == []
-    # target is not a port on the part → silence
     stray = _TYPE_DEFECT_MODEL.replace(
         "send FaultEvent() to deployCmd;",
         "send FaultEvent() to somewhereElse;",
@@ -96,7 +88,7 @@ def test_port_payload_detector_stays_conservative_on_unresolved_links():
     assert port_payload_conformance_issues(stray) == []
 
 
-def test_port_payload_detector_accepts_any_declared_item_and_conjugation():
+def test_detector_accepts_conjugation():
     model = """package M {
         item def A;
         item def B;
@@ -114,8 +106,6 @@ def test_port_payload_detector_accepts_any_declared_item_and_conjugation():
     """
     assert port_payload_conformance_issues(model) == []
 
-
-# ── Detector 2: the linker's own traceability projection ──────────────────
 
 _TRACE_DEFECT_MODEL = """package M {
     requirement def REQ_SAFE_005 { doc /* The system shall deploy the ballistic recovery parachute within 0.5 seconds of detecting a critical propulsion subsystem failure during flight. */ }
@@ -141,7 +131,7 @@ _TRACE_DEFECT_MODEL = """package M {
 """
 
 
-def test_static_trace_projection_matches_the_phase9_gate():
+def test_static_trace_matches_gate():
     issues = RequirementLinker.static_traceability_issues(
         _TRACE_DEFECT_MODEL, "M")
     assert len(issues) == 1
@@ -155,9 +145,9 @@ def test_static_trace_projection_matches_the_phase9_gate():
     assert RequirementLinker.static_traceability_issues(repaired, "M") == []
 
 
-def test_static_trace_projection_never_raises_on_broken_text(monkeypatch):
-    # mid-refinement text can be arbitrarily broken; the projection is
-    # advisory and must degrade to silence, not become a new failure mode
+def test_static_trace_never_raises(monkeypatch):
+    # mid-refinement text can be arbitrarily broken; the projection is advisory
+    # and degrades to silence.
     assert RequirementLinker.static_traceability_issues("part def {", "M") == []
 
     def _boom(*_a, **_k):
@@ -168,8 +158,6 @@ def test_static_trace_projection_never_raises_on_broken_text(monkeypatch):
     assert RequirementLinker.static_traceability_issues(
         _TRACE_DEFECT_MODEL, "M") == []
 
-
-# ── The bounded repair pass ───────────────────────────────────────────────
 
 def _engine(intelligence, use_surgical_refinement: bool = True):
     orchestrator = Orchestrator(
@@ -196,7 +184,7 @@ def _run(engine, model):
     )
 
 
-def test_repair_pass_accepts_a_send_fix_that_clears_the_finding():
+def test_repair_accepts_send_fix():
     intelligence = ScriptedRefinementIntelligence(
         chat=(_TYPE_REPAIRED_BLOCK,),
         evaluate=(SimpleNamespace(
@@ -217,7 +205,7 @@ def test_repair_pass_accepts_a_send_fix_that_clears_the_finding():
     assert any("[PORT-PAYLOAD]" in issue for issue in attempts[0]["issues"])
 
 
-def test_repair_pass_keeps_the_model_when_the_llm_output_fails_the_gates():
+def test_repair_keeps_model_on_reject():
     intelligence = ScriptedRefinementIntelligence(
         chat=("no sysml here",),
     )
@@ -232,7 +220,7 @@ def test_repair_pass_keeps_the_model_when_the_llm_output_fails_the_gates():
     assert [item["status"] for item in attempts] == ["REJECTED"]
 
 
-def test_repair_pass_is_skipped_without_surgical_refinement():
+def test_repair_skipped_without_surgical():
     intelligence = ScriptedRefinementIntelligence()
     orchestrator, engine = _engine(intelligence, use_surgical_refinement=False)
     model = build_lite_model(_TYPE_DEFECT_MODEL, model_name="M")
@@ -244,7 +232,7 @@ def test_repair_pass_is_skipped_without_surgical_refinement():
     assert intelligence.calls["chat"] == []
 
 
-def test_repair_pass_is_a_no_op_on_a_conformant_model():
+def test_repair_no_op_when_conformant():
     intelligence = ScriptedRefinementIntelligence()
     orchestrator, engine = _engine(intelligence)
     clean = _TYPE_DEFECT_MODEL.replace(

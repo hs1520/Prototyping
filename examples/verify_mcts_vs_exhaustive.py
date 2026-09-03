@@ -1,9 +1,9 @@
 """Verify MO-MCTS against exhaustive enumeration on a small variation space.
 
-The important detail: the exhaustive path does NOT duplicate the DSE scoring
-logic. It monkeypatches MultiObjectiveMCTS.search during a call to
-run_variation_dse, so both paths use the exact same objective_fn closure,
-requirement parsing, mass decomposition, and inner battery sizing.
+The exhaustive path does not duplicate the DSE scoring logic: it monkeypatches
+MultiObjectiveMCTS.search inside a run_variation_dse call, so both paths share
+one objective_fn closure, requirement parsing, mass decomposition and inner
+battery sizing.
 
 Run:
   PYTHONPATH=. .venv/bin/python examples/verify_mcts_vs_exhaustive.py

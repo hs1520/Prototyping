@@ -1,21 +1,19 @@
 """Event-driven Blackboard control component (Hayes-Roth control separation).
 
-In a blackboard architecture the *control* is a first-class component, separate
-from the knowledge sources and the shared workspace: it inspects the board and
-opportunistically activates whichever knowledge source can now contribute. This
-module makes that control explicit. Each downstream knowledge source registers the
-typed topics it needs; the Controller activates a source exactly when the board
-satisfies its preconditions and it has not already run, to a fixpoint (activating
-one source may satisfy the next).
+In a blackboard architecture the control is a first-class component, separate from
+the knowledge sources and the shared workspace: it inspects the board and
+opportunistically activates whichever knowledge source can now contribute. Each
+downstream knowledge source registers the typed topics it needs; the Controller
+activates a source when the board satisfies its preconditions and it has not
+already run, to a fixpoint (activating one source may satisfy the next).
 
-The pay-off is that adding a knowledge source becomes *registration*, not new
-bespoke wiring in the orchestrator — control lives in one place and is recorded on
-the board (a ``control.activation`` record per firing) as evidence.
+Adding a knowledge source is then registration rather than new orchestrator wiring,
+and each firing is recorded on the board as a ``control.activation`` record.
 
 Bounded scope (design §15): the Controller drives post-design board-mediated
-knowledge sources, including verification planning and R2 semantic assurance.
-The DesignAgent generation step stays orchestrator-driven because it is
-interleaved with LLM generation and is not a pure board-triggered activation.
+knowledge sources, including verification planning and R2 semantic assurance. The
+DesignAgent generation step stays orchestrator-driven because it interleaves with
+LLM generation rather than being a pure board-triggered activation.
 """
 from __future__ import annotations
 
@@ -29,10 +27,10 @@ from .blackboard import Blackboard, RecordType
 class AgentRole(str, Enum):
     """Who a knowledge source acts as.
 
-    A closed set rather than free text, because the role is written onto every
-    ``control.activation`` record and therefore into the run artefacts. A typo
-    in a free string reaches the evidence and is only discoverable by reading
-    it; a name that is not a member fails here, at registration.
+    A closed set rather than free text: the role is written onto every
+    ``control.activation`` record and so into the run artefacts, where a typo in a free
+    string is discoverable only by reading the evidence. A name that is not a member
+    fails here, at registration.
     """
 
     ORCHESTRATOR = "Orchestrator"
@@ -55,8 +53,8 @@ class KnowledgeSource:
 
     def __post_init__(self) -> None:
         # Accept the string form so existing call sites and archived fixtures
-        # keep working, but reject anything outside the closed set instead of
-        # letting it through to the artefacts.
+        # keep working, but reject anything outside the closed set before it
+        # reaches the artefacts.
         try:
             role = AgentRole(self.agent_role)
         except ValueError:
@@ -88,19 +86,15 @@ class BlackboardController:
     def _published_topics(self) -> set:
         """Topics available as preconditions right now.
 
-        A stale publication must never activate work against a newer model
-        revision -- but only records that assert something *about* a model go
-        stale when the model changes. A process fact such as "the requirements
-        phase finished" is not falsified by a later revision, and expiring it
-        would break any chain that spans a commit: a source needing two topics
-        published under different revisions could never activate, forcing every
-        chain to be either revision-flat or strictly sequential and making
-        opportunistic activation unavailable in exactly the pipelines that
-        revise their model.
+        A stale publication does not activate work against a newer model revision, but only
+        records asserting something about the model go stale. A process fact such as "the
+        requirements phase finished" survives a later revision, and expiring it would break
+        any chain spanning a commit: a source needing two topics published under different
+        revisions could never activate, leaving opportunistic activation unavailable in the
+        pipelines that revise their model.
 
-        The record carries the distinction (``revision_bound``), so it is made
-        by the publisher, which knows what it is asserting, rather than inferred
-        here. Revision-bound records still expire on the revision they were
+        The record carries the distinction (``revision_bound``), so the publisher makes it
+        rather than this method. Revision-bound records expire on the revision they were
         published against; unbound ones persist.
         """
         current_revision = self.board.current_revision
@@ -116,17 +110,15 @@ class BlackboardController:
         }
 
     def _topics_at_any_revision(self) -> set:
-        """Every topic ever published on this board, ignoring model revision."""
         return {record.topic for record in self.board.records()}
 
     def _hidden_topics(self) -> set:
         """Topics that exist on the board but are invisible at the current revision.
 
-        A non-empty result means a model was committed onto this board and the
-        facts published before it were not reaffirmed afterwards. That is the
-        failure mode `_published_topics` creates, and it is detected here from
-        the board's own contents rather than by looking for a `commit_model`
-        call, so it holds however the commit was spelled.
+        A non-empty result means a model was committed onto this board and the facts
+        published before it were not reaffirmed. Detected from the board's own contents
+        rather than from a `commit_model` call, so it holds however the commit was
+        spelled.
         """
         return self._topics_at_any_revision() - self._published_topics()
 
@@ -143,23 +135,18 @@ class BlackboardController:
     def run(self, *, allow_partial: bool = False) -> List[dict]:
         """Activate every activatable source to a fixpoint.
 
-        Deterministic: sources fire in registration order; each fires at most once.
-        A firing publishes a typed ``control.activation`` record so the control
-        decisions are auditable on the board, then the agenda is re-evaluated so a
-        source unblocked by that firing runs on the next pass.
+        Deterministic: sources fire in registration order, each at most once. A firing
+        publishes a typed ``control.activation`` record so the control decisions are
+        auditable on the board, then the agenda is re-evaluated so a source unblocked by
+        that firing runs on the next pass.
 
-        Completeness is the default. The output-topic check catches a source
-        that ran and failed to publish what it declared; it cannot catch one
-        that never became activatable, because reaching a fixpoint early is
-        indistinguishable from finishing. Leaving that to the caller made
-        correctness opt-in, and every caller that forgot got a partial run
-        reported as a success. So ``run`` now raises when a registered source
+        Completeness is the default. The output-topic check catches a source that ran and
+        failed to publish what it declared, but not one that never became activatable,
+        since an early fixpoint is indistinguishable from finishing; leaving that to the
+        caller reported partial runs as successes. ``run`` raises when a registered source
         never fires, naming it and the topics it is still waiting on.
-
-        ``allow_partial=True`` is for callers that deliberately register more
-        sources than the board will satisfy -- a conditional registration whose
-        precondition may legitimately be absent. Those callers state the
-        intention; nobody gets it by omission.
+        ``allow_partial=True`` is for callers that deliberately register more sources than
+        the board will satisfy, and has to be stated rather than got by omission.
         """
         agenda: List[dict] = []
         progressed = True
@@ -252,8 +239,8 @@ class BlackboardController:
                         for topic in source.precondition_topics
                         if topic not in published
                     )
-                    # Distinguish a topic nobody ever produced from one that was
-                    # produced and then hidden by a model commit on this board.
+                    # Distinguish a topic nobody produced from one that was produced
+                    # and then hidden by a model commit on this board.
                     described = ", ".join(
                         f"{topic} (published earlier, hidden by a model "
                         "revision on this board and never reaffirmed)"

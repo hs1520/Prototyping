@@ -52,10 +52,6 @@ class InitializationMixin:
         self.rule_weight = rule_weight
         self.llm_weight = llm_weight
         self.verbose = verbose
-        # "Replace" mode — the LLM declares variation points in the model and the
-        # DSE explores them (run_variation_dse).  Default False = catalog path:
-        # bilevel MO-MCTS + inner BO over the operator space (_explore_bilevel).
-        # The legacy scalar MCTS path was removed.
         self.use_variation_dse = use_variation_dse
         self.realization_inject = realization_inject
         self.last_recommended_design = None
@@ -72,13 +68,7 @@ class InitializationMixin:
         self.last_exploratory_pareto_alternatives = []
         self.last_constraint_counts = {}
         self.last_search_coverage = {}
-        # Where the explored variation space came from: the mandatory deterministic
-        # catalog architecture seed, optional LLM additions, a pre-existing model
-        # space, or None (not run yet). Reported, never hidden.
         self.last_variation_proposal_source = None
-        # Final, model-fixable functional verification closure. Unlike the
-        # advisory general anchor pass, this is recomputed after every final
-        # refinement path and exposed to authoritative publication gates.
         self.last_functional_closure = None
         self.last_verification_anchor_attempts: List[Dict[str, Any]] = []
         self.last_namespace_repair_attempts: List[Dict[str, Any]] = []
@@ -140,28 +130,27 @@ class InitializationMixin:
         self.task_session_max_tokens = int(task_session_max_tokens)
         if self.task_session_max_turns <= 0 or self.task_session_max_tokens <= 0:
             raise ValueError("task-session turn/token budgets must be positive")
-        # F1: catalog-grid estimator calibration, applied ONLY around the search
+        # F1: catalog-grid estimator calibration, applied only around the search
         # (the injected SysML calc defs and Phase 8's estimator_value column keep
-        # the documented textbook constants). Provenance recorded, never hidden.
+        # the documented textbook constants). Provenance is recorded.
         self.use_estimator_calibration = estimator_calibration
         self.last_estimator_calibration = None
-        # Phase 9 is default-OFF.  A published authority requires the dedicated
-        # realization driver, which freezes the Phase 8 result and then executes
-        # Gazebo -> SITL in one locked run bundle.  Explicit modes remain a
-        # best-effort developer seam and NEVER upgrade datasheet CLOSED.
+        # Phase 9 is default-off.  A published authority requires the dedicated
+        # realization driver, which freezes the Phase 8 result and then runs
+        # Gazebo -> SITL in one locked run bundle.  Explicit modes are a
+        # best-effort developer seam and do not upgrade datasheet CLOSED.
         self.phase9_hifi = phase9_hifi
         # Refinement asks the LLM for block-level replacements first (surgical:
-        # untouched blocks cannot lose connects, output ~10× smaller) and only
+        # untouched blocks cannot lose connects, output ~10x smaller) and only
         # falls back to the legacy whole-model rewrite when no valid merge is
         # produced. Disable to force the legacy path (tests / A-B comparison).
         self.use_surgical_refinement = use_surgical_refinement
         # Deterministic, LLM-free fixes (Tier-0 syntax fixes; connectivity
         # direction-widening and missing-connect injection) run before any LLM
-        # repair. Disable to force LLM-only repair — the ablation that measures
+        # repair. Disable to force LLM-only repair - the ablation that measures
         # what the fixer chain saves in calls, failures, and score.
         self.use_deterministic_fixers = use_deterministic_fixers
 
-        # Initialize specialized agents
         self.requirements_agent = RequirementsAgent(llm, rag_retriever)
         self.design_agent = DesignAgent(
             llm,

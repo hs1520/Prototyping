@@ -2,24 +2,16 @@
 
 Computes the Group-A metrics of design §13 from a run's archived collaboration
 artifacts (blackboard snapshot + context envelopes + task sessions) plus the LLM
-ledger. No human gold is needed — these are the R1-BBCTX metrics.
-
-Honesty notes carried in the output:
-- several quantities are **invariants R1 enforces by construction** (a session is
-  revision-pinned, gold cannot enter an envelope, a stale session cannot take a
-  model-dependent turn). Here they read 1.0 / 0; R0-CURRENT has no blackboard and
-  therefore no mechanism to enforce or even measure them — that asymmetry is the
-  point of the comparison, not a claim that R1 "scored higher on a shared scale".
-- handoff-based metrics have a denominator of two migrated handoffs in the MVP
-  (RequirementsAgent→DesignAgent, DesignAgent→VerificationAgent) — a bounded
-  subset, still reported as illustrative rather than a pipeline-wide rate (§13).
-- event ordering is part of every handoff/context verdict: a topic published by
-  another task or after consumer activation cannot satisfy the metric;
-- model-dependent session turns carry revision/digest/event stamps, so use of a
-  superseded revision is measured at the turn rather than inferred from whether
-  the revision still exists in history;
-- ``irrelevant_context_ratio`` uses the explicit record dependency closure:
-  required task topics plus diagnostic/evidence/previous-attempt records.
+ledger; no human gold is needed. Several quantities are invariants R1 enforces by
+construction (revision-pinned sessions, no gold in an envelope, no model-dependent
+turn from a stale session) and read 1.0 / 0 here, while R0-CURRENT has no
+blackboard to enforce or measure them. Handoff metrics have a denominator of two
+migrated handoffs in the MVP (RequirementsAgent->DesignAgent,
+DesignAgent->VerificationAgent), reported as illustrative rather than a
+pipeline-wide rate (§13). Event ordering is part of every handoff/context verdict;
+turn-level revision/digest/event stamps measure use of a superseded revision at
+the turn; ``irrelevant_context_ratio`` uses the explicit record dependency closure
+(required task topics plus diagnostic/evidence/previous-attempt records).
 """
 from __future__ import annotations
 
@@ -37,11 +29,7 @@ def compute_coordination_metrics(
     *,
     llm_usage: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Compute deterministic R1-BBCTX coordination/context metrics.
-
-    ``collaboration`` is the ``collaboration`` block of a revised run result
-    (``blackboard`` / ``contexts`` / ``task_sessions`` snapshots).
-    """
+    """Compute deterministic R1-BBCTX coordination/context metrics."""
     board = dict(collaboration.get("blackboard") or {})
     envelopes: List[dict] = list(
         (collaboration.get("contexts") or {}).get("envelopes") or []
@@ -67,7 +55,7 @@ def compute_coordination_metrics(
     }
 
     # The context must match the board revision at the context.created event, not
-    # merely any historical revision that still exists in the revision log.
+    # any historical revision still in the revision log.
     env_consistent = sum(
         1 for e in envelopes
         if (
@@ -80,13 +68,11 @@ def compute_coordination_metrics(
     )
 
     # required-context coverage, §13: required categories present in the envelope
-    # over the required categories in that ROLE's policy, averaged over tasks. The
-    # denominator used to be "one per envelope, satisfied by carrying anything at
-    # all", which cannot fall below 1.0 for any envelope that carries a single
-    # record — a metric that cannot fail. The policy
-    # (`context_builder.REQUIRED_CONTEXT_BY_ROLE`) is ablation-derived, so each
-    # category in the denominator is one whose removal demonstrably breaks or
-    # silently degrades the task.
+    # over the required categories in that role's policy, averaged over tasks. The
+    # old denominator was one per envelope, so any envelope carrying a single
+    # record scored 1.0. The policy (`context_builder.REQUIRED_CONTEXT_BY_ROLE`)
+    # is ablation-derived: each category is one whose removal breaks or degrades
+    # the task.
     from .context_builder import context_coverage
 
     per_envelope = [context_coverage(item) for item in envelopes]
@@ -103,8 +89,6 @@ def compute_coordination_metrics(
         if coverage is None
     })
 
-    # A handoff is complete only when the SAME task's envelope consumes every
-    # required typed publication from the same revision before activation.
     handoff_tasks = [t for t in tasks if t.get("required_topics")]
     handoff_complete = 0
     handoff_failures: List[dict] = []
@@ -145,7 +129,6 @@ def compute_coordination_metrics(
                 "missing_or_late_topics": missing,
             })
 
-    # session lifecycle.
     stale_session_ids = {
         str(s.get("session_id"))
         for s in sessions if s.get("status") == "STALE"
@@ -156,9 +139,9 @@ def compute_coordination_metrics(
         for s in sessions if s.get("rebased_from_session_id")
     } & stale_session_ids
     commits = max(0, len(revisions) - 1)
-    # A model-dependent turn on a superseded base without rebasing is prevented by
-    # TaskSession.assert_current; a completed session that carries a rebase pointer
-    # rebased correctly. Count any COMPLETED session left on a non-committed base.
+    # TaskSession.assert_current blocks a model-dependent turn on a superseded
+    # base; a completed session with a rebase pointer rebased correctly. Count any
+    # COMPLETED session left on a non-committed base.
     # envelope composition: how many carried items were required typed
     # publications for their task, and how many were supplementary
     tasks_by_id = {str(t.get("task_id")): t for t in (board.get("tasks") or ())}
@@ -203,8 +186,6 @@ def compute_coordination_metrics(
     stale_rejected = int(stale_access.get("rejected") or 0)
     stale_permitted = int(stale_access.get("permitted") or 0)
     stale_attempted = stale_rejected + stale_permitted
-    # Revision current at a message event: revision 0 until the first commit,
-    # then the latest model.committed record whose sequence is not after the turn.
     initial = next(
         (item for item in revisions if int(item.get("revision", -1)) == 0),
         None,
@@ -249,8 +230,8 @@ def compute_coordination_metrics(
                     "observed_revision": observed[0],
                     "expected_revision": expected[0],
                 })
-    # Backward-compatible detection for legacy snapshots that contain no stamped
-    # turns and cite a base that never existed at all.
+    # Backward-compatible detection for legacy snapshots with no stamped turns
+    # that cite a base that never existed.
     invalid_unstamped_sessions = sum(
         1 for s in sessions
         if s.get("status") == "COMPLETED"
@@ -353,10 +334,9 @@ def compute_coordination_metrics(
             "note": "measured from per-turn revision/digest/event stamps",
         },
         # §13: rejected / attempted operations against a superseded revision. A
-        # rejection raises, so it is counted at the guard rather than recovered
-        # from the record log, which only ever holds operations that succeeded.
-        # `value` is None when nothing was attempted: a run that never went stale
-        # reports no rate rather than a vacuous 1.0.
+        # rejection raises, so it is counted at the guard; the record log holds only
+        # operations that succeeded. `value` is None when nothing was attempted, so a
+        # run that never went stale reports no rate.
         "stale_rejection_rate": {
             "rejected": stale_rejected,
             "permitted": stale_permitted,
@@ -367,14 +347,11 @@ def compute_coordination_metrics(
                 "with no stale attempt reports null, not 1.0"
             ),
         },
-        # NOT a measurement under this architecture, and reported as what it is.
-        # A session owns exactly one role and one task (design §5.3 rules 1 and 6),
-        # so contamination cannot occur: the count is 0 because the structure
-        # forbids it, not because a run avoided it. Reporting it as a measured rate
-        # would restate a definition as a finding. It becomes measurable only in
-        # the R1-LONG shared-session condition, which is not implemented (§18-Q2),
+        # Not a measurement here: a session owns one role and one task (design §5.3
+        # rules 1 and 6), so the count is 0 by structure. It becomes measurable only
+        # in the R1-LONG shared-session condition, which is not implemented (§18-Q2),
         # so `measured` stays false and no denominator is claimed. The pillar-2
-        # evidence is the metrics below that CAN fail on a real run:
+        # evidence is the metrics below that can fail on a run:
         # context_revision_consistency, stale_revision_use, required_context_
         # coverage, envelope_truncation, stale_session_detection.
         "cross_role_contamination": {
@@ -400,9 +377,9 @@ def compute_coordination_metrics(
                 "previous-attempt record ids"
             ),
         },
-        # Descriptive companion to the operational ratio above: this preserves the
-        # raw required-topic/supplementary composition without grading every
-        # supplementary record as irrelevant.
+        # Descriptive companion to the ratio above: keeps the raw required-topic /
+        # supplementary composition without grading supplementary records as
+        # irrelevant.
         "envelope_composition": {
             "items": envelope_items,
             "required_topic_items": envelope_required_items,

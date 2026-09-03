@@ -167,7 +167,6 @@ def _resolve_owner_usage(
     owner_usage: str,
     definition_path: str,
 ) -> tuple[str | None, Any | None, tuple[str, ...]]:
-    """Resolve one frozen local usage identity to its exact terminal path."""
     candidates = sorted(
         [
             (path, usage)
@@ -192,8 +191,6 @@ def _resolve_owner_usage(
             f"ambiguous owner usage {expected}; typed candidates: {paths}",
         ),
     )
-
-
 
 
 def _declared_attribute_type(attribute: Any, model_text: str) -> str:
@@ -224,7 +221,6 @@ def _feature_type_bindings(
     *,
     model_text: str,
 ) -> tuple[FeatureTypeBinding, ...]:
-    """Validate actual features used as Boolean A/G behavior operands."""
     attributes = {
         str(getattr(item, "name", "") or ""): item
         for item in getattr(definition, "owned_attributes", ())
@@ -263,9 +259,9 @@ def _feature_type_bindings(
                     f"as {observed_type}, expected Boolean"
                 )
         elif port is not None:
-            # A directed signal feature can carry the truth concept used by the
-            # bounded profile. Its payload semantics remain structural evidence;
-            # a contradictory scalar attribute declaration is never accepted.
+            # A directed signal feature can carry the bounded profile's truth concept.
+            # Its payload semantics count as structural evidence; a contradictory scalar
+            # attribute declaration is not accepted.
             observed_kind = "port"
             observed_type = next(
                 (
@@ -311,10 +307,10 @@ def bind_ag_contracts_to_model(
 ) -> AGBindingResult:
     """Replace planning/shadow packages with contracts bound to real elements.
 
-    Binding is intentionally exact: the expected owner definition, owner usage,
-    and behavior name must all resolve in the requested system package.  The
-    binder does not guess a semantically similar behavior because that would
-    turn a missing realization into fabricated evidence.
+    Binding is exact: the expected owner definition, owner usage and behavior
+    name all resolve in the requested system package. The binder does not
+    substitute a similar behavior, which would turn a missing realization into
+    evidence.
     """
     specs = tuple(specs)
     behavior_plan = behavior_plan or compile_behavior_obligation_plan(specs)

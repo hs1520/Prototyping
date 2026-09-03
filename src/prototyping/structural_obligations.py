@@ -1,10 +1,9 @@
 """Requirement-traceable structural obligations for generated SysML models.
 
-The whole-model plan already fixes typed components, ports, and connections.
+The whole-model plan already fixes typed components, ports and connections.
 This module compiles its requirement-tagged connection graph into stable
-source-to-target obligations before SysML generation.  Later validation can
-therefore evaluate the same paths for every candidate instead of deriving a
-new scenario set from candidate-specific names or ports.
+source-to-target obligations before SysML generation, so validation evaluates
+the same paths for every candidate.
 """
 from __future__ import annotations
 
@@ -19,9 +18,9 @@ from ..utils.sysml_text_utils import find_block_end
 
 _STRUCTURAL_CATEGORIES = ("REQ_FUNC_", "REQ_SAFE_", "REQ_INTF_", "REQ_OPER_")
 
-# The pure-text specialization parser lives in utils so that packages below
+# The pure-text specialization parser lives in utils so packages below
 # `prototyping` in the dependency order (dse.diagnostics) can resolve `:>`
-# without importing this package. Re-exported here for its existing callers.
+# without importing this package. Re-exported here for existing callers.
 from ..utils.sysml_text_utils import part_def_bases  # noqa: F401,E402
 
 
@@ -29,11 +28,10 @@ def specializes(def_name: str, target: str,
                 bases: dict[str, tuple[str, ...]]) -> bool:
     """True when *def_name* is *target* or transitively specialises it.
 
-    A usage retyped to a catalogue implementation (``Impl :> Planned``) is
-    still, by the language's own subtyping, a usage of the planned
-    definition; a reader that matches definition names exactly reports the
-    planned component as missing and the implementation as unplanned on a
-    model that is right. Measured on an archived end-to-end run.
+    A usage retyped to a catalogue implementation (``Impl :> Planned``) is still
+    a usage of the planned definition under SysML subtyping; exact name matching
+    reported the planned component missing and the implementation unplanned on a
+    correct model.
     """
     seen: set[str] = set()
     frontier = [def_name]
@@ -46,7 +44,6 @@ def specializes(def_name: str, target: str,
         seen.add(current)
         frontier.extend(bases.get(current, ()))
     return False
-
 
 
 @dataclass(frozen=True)
@@ -118,23 +115,16 @@ class RequirementRealizationPlan:
     behavior_kind: str = ""
     behavior_name: str = ""
     source_digest: str = ""
-    # The discrete response a functional requirement obliges, decided by the
-    # planner from the requirement text and recorded here so that the plan
-    # validator and the terminal closure gate read the same decision instead
-    # of each inferring it from keywords. One of RESPONSE_INTENTS, a declared
-    # domain intent accompanied by response_markers, or "" when the
-    # requirement is not functional. "none" is a valid decision and means the
-    # requirement obliges no discrete response (a continuous property, a
-    # data-reception duty, a hover); "unverifiable" means a response is
-    # obliged but no reachable-action marker can evidence it. Both must be
-    # accompanied by a non-empty response_intent_rationale.
+    # The discrete response a functional requirement obliges. The planner decides
+    # it from the requirement text and records it here so the plan validator and
+    # the terminal closure gate read one decision instead of each inferring it
+    # from keywords. One of RESPONSE_INTENTS, a declared domain intent with
+    # response_markers, or "" for a non-functional requirement. "none" means no
+    # discrete response is obliged (a continuous property, a data-reception duty,
+    # a hover); "unverifiable" means one is obliged but no reachable-action marker
+    # can evidence it. Both require a non-empty response_intent_rationale.
     response_intent: str = ""
     response_intent_rationale: str = ""
-    # Declared evidence markers for an intent outside the built-in table:
-    # lowercase name fragments by which a reachable state's action shows the
-    # response. Required (and each lexically anchored in effect_concept) when
-    # response_intent is out-of-vocabulary; ignored for built-in intents,
-    # whose markers stay the checker's authority.
     response_markers: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -296,34 +286,32 @@ def _concept_terms(value: str) -> set[str]:
     }
 
 
-#: Prepositional heads that mark an adjunct clause. A phrase headed by one of
-#: these qualifies a behaviour — a tolerance, a deadline, a governing standard —
-#: instead of naming one, so no component, port or state can lexically represent
-#: it. Measured on the failed authoritative attempt of 2026-08-01, where the
-#: planner was obliged to copy `'with a circular error probable (CEP) of less
-#: than 1.0 metre'` and `'in accordance with the ASTM F3411-22 standard'`
-#: verbatim out of the requirement and was then failed for not representing
-#: them. `when`, `if` and `during` are deliberately absent: they introduce a
-#: real trigger clause rather than an adjunct.
+# Prepositional heads that mark an adjunct clause. A phrase headed by one of
+# these qualifies a behaviour - a tolerance, a deadline, a governing standard -
+# instead of naming one, so no component, port or state can represent it
+# lexically; a 2026-08-01 run failed a plan for not representing
+# `'with a circular error probable (CEP) of less than 1.0 metre'`.
+# `when`, `if` and `during` are absent: they introduce a trigger clause, not
+# an adjunct.
 _ADJUNCT_HEADS = frozenset({"with", "within", "in", "per", "under", "by"})
 
-#: Synonym groups bridging requirement prose and model identifiers, seeded from
-#: the same run. `_stem` is morphological only, so it cannot connect a word to
-#: its domain synonym: the port named `obstacleData` is exactly what carries a
-#: `'collision threat'`, and what a requirement calls `'transmit'` a model calls
-#: `telemetry`. Each group is evidence-backed rather than a general thesaurus.
+# Synonym groups bridging requirement prose and model identifiers, seeded from
+# the same run. `_stem` is morphological only, so it cannot connect a word to
+# its domain synonym: `obstacleData` carries a `'collision threat'`, and what a
+# requirement calls `'transmit'` a model calls `telemetry`. Groups come from
+# observed runs, not a general thesaurus.
 _LEXICAL_BRIDGE_GROUPS = (
     frozenset({"collide", "threat", "obstacle"}),
     frozenset({"telemetry", "transmit"}),
 )
 
-#: Shortest stem allowed to stand for a longer one by prefix. Identifiers
-#: abbreviate where requirements spell out — `navState` is the port that
-#: realises `'navigate'` — and three characters is what `nav` needs.
+# Shortest stem allowed to stand for a longer one by prefix. Identifiers
+# abbreviate where requirements spell out (`navState` realises `'navigate'`),
+# and `nav` needs three characters.
 _MIN_ABBREVIATION_STEM = 3
 
-#: Function words that survive `_CONCEPT_STOPWORDS` and must never act as the
-#: abbreviated side of a prefix match, or `not` would stand for `notification`.
+# Function words that survive `_CONCEPT_STOPWORDS` and are excluded from the
+# abbreviated side of a prefix match, or `not` would stand for `notification`.
 _NON_ABBREVIATING = frozenset({
     "as", "at", "is", "it", "less", "no", "not", "of", "than", "to", "with",
 })
@@ -338,10 +326,10 @@ def _bridged(terms: set[str]) -> set[str]:
 
 
 def _represents(phrase_terms: set[str], vocabulary_terms: set[str]) -> bool:
-    """Does the model vocabulary lexically stand for the requirement phrase?
+    """True when the model vocabulary lexically stands for the requirement phrase.
 
-    Exact stem overlap first, then the two ways the two vocabularies are known
-    to diverge: identifiers abbreviate, and identifiers use the domain synonym.
+    Exact stem overlap first, then the two known divergences: identifiers
+    abbreviate, and identifiers use the domain synonym.
     """
     if not phrase_terms:
         return True
@@ -362,7 +350,6 @@ def _represents(phrase_terms: set[str], vocabulary_terms: set[str]) -> bool:
 
 
 def _adjunct_reason(value: str) -> str | None:
-    """Why no owner can represent this phrase, or None if it names a behaviour."""
     words = _normalise_phrase(value).split()
     if words and words[0] in _ADJUNCT_HEADS:
         return f"{words[0]!r} heads an adjunct clause"
@@ -370,7 +357,6 @@ def _adjunct_reason(value: str) -> str | None:
 
 
 def _is_initialization_trigger(value: str) -> bool:
-    """Recognise lifecycle triggers represented by a state-machine initial edge."""
     phrase = _normalise_phrase(value)
     return any(
         marker in phrase
@@ -395,7 +381,6 @@ def _local_behavior_semantic_vocabulary(
     planned_behaviors: Sequence[Any],
     behavior_obligations: Sequence[Any],
 ) -> tuple[set[str], set[str], bool]:
-    """Collect typed trigger/effect evidence for one local realization."""
     trigger_terms: set[str] = set()
     effect_terms: set[str] = set()
     initialization_present = False
@@ -481,9 +466,8 @@ def compile_source_anchored_structural_obligations(
 ) -> tuple[tuple[StructuralObligation, ...], tuple[str, ...]]:
     """Validate source-declared causal paths and freeze them as obligations.
 
-    Unlike graph root/sink inference, this compiler never guesses causality
-    from topology.  The trigger and effect must be copied from the frozen
-    requirement and the ordered path must reuse exact, requirement-traced
+    Causality is not inferred from topology: the trigger and effect are copied
+    from the frozen requirement, and the ordered path reuses requirement-traced
     connections from the typed plan.
     """
     issues: list[str] = []
@@ -597,11 +581,10 @@ def compile_source_anchored_structural_obligations(
                 and behavior.behavior_id == realization.behavior_name
                 for behavior in planned_behaviors
             ):
-                # behaviors[] is the sole writer of this name and always
-                # materialises a `state def`; an obligation compiled with the
-                # contradictory kind would fail the structurally correct
-                # model. from_payload reconciles this before compiling; this
-                # guard covers direct callers.
+                # behaviors[] is the sole writer of this name and always materialises a
+                # `state def`; an obligation compiled with the contradictory kind would fail a
+                # correct model. from_payload reconciles this before compiling; this guard
+                # covers direct callers.
                 issues.append(
                     f"{prefix}.behavior_kind {realization.behavior_kind} "
                     f"contradicts behaviors[] which defines "
@@ -811,9 +794,9 @@ def compile_structural_obligations(
 ) -> tuple[tuple[StructuralObligation, ...], tuple[str, ...]]:
     """Compile stable causal paths from a validated typed model plan.
 
-    Connections are grouped by their requirement provenance.  Every simple
-    root-to-sink path becomes one obligation, preserving parallel safety paths
-    instead of collapsing them into an existential role-level check.
+    Connections are grouped by requirement provenance; every simple root-to-sink
+    path becomes one obligation, so parallel safety paths are not collapsed into
+    a role-level existential check.
     """
     component_ports = {
         component.name: tuple(component.ports)
@@ -889,9 +872,8 @@ def compile_structural_obligations(
         for root in roots:
             visit(root, (), frozenset({root}))
 
-        # A closed directed loop has no root/sink pair.  Preserve its exact
-        # planned edges as bounded one-edge obligations rather than inventing
-        # an arbitrary break point.
+        # A closed directed loop has no root/sink pair. Keep its planned edges as
+        # bounded one-edge obligations rather than inventing a break point.
         if not paths:
             paths = [(connection,) for connection in tagged]
 

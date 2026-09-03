@@ -1,9 +1,8 @@
 """Clause-level obligations used to gate requirement verification status.
 
-The verification matrix combines evidence produced at several fidelities.  A
-PASS at one fidelity is not automatically evidence for every clause of a
-compound requirement.  This module provides the small, deterministic data model
-used to make that boundary explicit.
+The verification matrix combines evidence from several fidelities, and a PASS
+at one fidelity is not evidence for every clause of a compound requirement.
+This module is the data model that makes that boundary explicit.
 """
 from __future__ import annotations
 
@@ -14,11 +13,10 @@ from typing import FrozenSet, Iterable, Optional, Tuple
 
 
 # An inhibition requirement ("shall not transition...", "shall block arming
-# while...") is anchored by the response that is withheld -- a guard or a
-# fault-path transition -- never by initial-state semantics. Every reader
-# that routes requirements by this distinction uses this one predicate; two
-# modules once kept diverging keyword lists, and a phrasing in their
-# difference would have been routed to different evidence standards.
+# while...") is anchored by the response withheld - a guard or a fault-path
+# transition - not by initial-state semantics. Every reader routes on this one
+# predicate; two modules previously kept diverging keyword lists, so a phrasing
+# in their difference reached different evidence standards.
 _INHIBITION_RE = re.compile(
     r"\bshall\s+not\s+(?:transition|initiate|enter|arm|release|deploy|start|unlock|open)\w*\b"
     r"|\binhibit\w*\b|\bprevent\w*\b|\bsuppress\w*\b"
@@ -48,13 +46,12 @@ _BLOCK_TRANSITION_RE = re.compile(
 
 _SAFE_STATE_TERMS = frozenset({"locked", "secured", "disabled", "disarmed", "closed"})
 
-#: What it means, lexically, to LEAVE each held safe state: the verbs a plan
-#: uses to name the departure, with their common inflections (semantic_terms
-#: does not stem). The inhibition gate anchors on these because a plan may
-#: model the held state nowhere — run 2026-08-31 planned "locked" as a
-#: transitionless corner machine while the departure itself (ReleasingPayload)
-#: lived one behaviour over, unguarded — and a held state with no exits passes
-#: every exit check vacuously.
+# Verbs that name leaving each held safe state, with common inflections
+# (semantic_terms does not stem). The inhibition gate anchors on these because
+# a plan may not model the held state at all: run 2026-08-31 planned "locked"
+# as a transitionless corner machine while the departure (ReleasingPayload)
+# lived one behaviour over, and a held state with no exits passes every exit
+# check vacuously.
 _HELD_STATE_EXIT_TERMS = {
     "locked": frozenset({
         "release", "releasing", "released",
@@ -94,9 +91,9 @@ def held_state_exit_terms(required_state_terms: Iterable[str]) -> FrozenSet[str]
 _CONDITION_SIGNAL_TERMS = frozenset({
     "abort", "failure", "fault", "unsafe", "emergency", "sensor", "open", "loss",
 })
-# The semantic-terms tokenizer lives in utils so that packages below
-# `prototyping` in the dependency order (simulation, dse) can resolve
-# identities by meaning. Re-exported here for its existing callers.
+# The semantic-terms tokenizer lives in utils so packages below `prototyping`
+# in the dependency order (simulation, dse) can resolve identities by meaning.
+# Re-exported here for existing callers.
 from ..utils.sysml_text_utils import (  # noqa: F401,E402
     _SEMANTIC_STOP_WORDS,
     semantic_terms,
@@ -206,10 +203,10 @@ class RequirementIntent:
     condition_terms: FrozenSet[str] = field(default_factory=frozenset)
     required_state_terms: FrozenSet[str] = field(default_factory=frozenset)
     forbidden_state_terms: FrozenSet[str] = field(default_factory=frozenset)
-    #: The subject held in the required state — the state phrase's vocabulary
-    #: minus the safe-state terms themselves ("the payload in the mechanically
-    #: locked state" → {payload, mechanically}). Lets a reader locate the
-    #: inhibition's subject in a plan that never names the held state.
+    # The subject held in the required state: the state phrase's vocabulary minus
+    # the safe-state terms ("the payload in the mechanically locked state" ->
+    # {payload, mechanically}). Locates the inhibition's subject in a plan that
+    # never names the held state.
     held_object_terms: FrozenSet[str] = field(default_factory=frozenset)
 
 
@@ -268,15 +265,14 @@ _QUANTITY_RE = re.compile(
 )
 
 
-#: Why a clause is out of simulation scope, as rules rather than a judgement
-#: call. One criterion decides every exclusion: the simulation stack carries no
-#: observable that the clause could be read off. Each rule names the missing
-#: observable, so a reader can check the exclusion instead of taking it on
-#: trust — and can see that the set was not widened wherever it helped a ratio.
-#:
-#: A requirement may also declare its own method ("[V: inspection / ingress
-#: test]"). That corroborates a rule; it is not a separate way in. An exclusion
-#: with a [V:] tag and no matching rule would be an exclusion nobody can check.
+# Why a clause is out of simulation scope, as rules rather than a judgement
+# call. One criterion decides every exclusion: the simulation stack carries no
+# observable the clause could be read off. Each rule names the missing
+# observable, so the exclusion can be checked.
+#
+# A requirement may also declare its own method ("[V: inspection / ingress
+# test]"). That corroborates a rule; it is not a separate way in, since a
+# [V:] tag with no matching rule could not be checked.
 NON_SIMULABLE_RULES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     (
         "regulatory_conformance",
@@ -319,33 +315,30 @@ def classify_non_simulable(text: str) -> tuple[str, str] | None:
                 return name, reason
     return None
 
-#: Connectives that introduce the MEANS or MEDIUM a capability runs over. A
-#: sentence that names an untestable medium for an otherwise testable
-#: capability is asserting two things with different verification means, and a
-#: single obligation over the whole sentence lets either half misrepresent the
-#: other: the untestable half drags the capability out of scope, and a test of
-#: the capability would appear to close the untestable half. Splitting there is
-#: the only way both can be reported truthfully.
-#:
-#: Deliberately NOT included:
-#:
-#: " using " — it introduces the MEANS by which the capability is achieved, not
-#: a medium the capability runs over, and a means is not separable from it.
-#: "authenticate every operator command … using an AES challenge" split into a
-#: testable "authenticate every operator command" and an untestable "AES
-#: challenge", so a protocol-level test could close the authentication clause
-#: while the mechanism that IS the authentication went untested. Contrast
-#: " over an AES-256 encrypted RF channel": the channel is a medium, and
-#: MAVLink v2 conformance over it is a real, separate capability.
-#:
-#: "in accordance with", "compliant with", " across ", " through " — those
-#: qualify HOW or UNDER WHAT CONDITIONS the same capability must behave.
-#: "operate across an ambient temperature range" is one obligation, not two.
+# Connectives that introduce the medium a capability runs over. A sentence
+# naming an untestable medium for a testable capability asserts two things
+# with different verification means; one obligation over the whole sentence
+# lets the untestable half drag the capability out of scope, or a test of the
+# capability appear to close the untestable half.
+#
+# Not included:
+#
+# " using " - introduces the means by which the capability is achieved, which
+# is not separable from it. "authenticate every operator command ... using an
+# AES challenge" split into a testable "authenticate every operator command"
+# and an untestable "AES challenge", so a protocol test could close the
+# authentication clause while the mechanism went untested. Contrast " over an
+# AES-256 encrypted RF channel": the channel is a medium, and MAVLink v2
+# conformance over it is a separate capability.
+#
+# "in accordance with", "compliant with", " across ", " through " - these
+# qualify how or under what conditions the same capability must behave.
+# "operate across an ambient temperature range" is one obligation, not two.
 _MEDIUM_CONNECTIVES = (" over ", " via ")
 
-#: A capability clause has to survive the cut as a requirement in its own
-#: right. "The system shall operate" is what is left when a condition is
-#: mistaken for a medium, and it asserts nothing testable.
+# A capability clause has to survive the cut as a requirement in its own
+# right. "The system shall operate" is what is left when a condition is
+# mistaken for a medium, and it asserts nothing testable.
 _MIN_CAPABILITY_WORDS = 8
 
 
@@ -370,11 +363,7 @@ def contains_any_term(text: str, terms: Iterable[str]) -> bool:
 
 
 def split_capability_and_medium(text: str):
-    """Split "<capability> over <untestable medium>" into its two clauses.
-
-    Returns ``(capability, medium)``, or ``None`` when the sentence does not
-    have that shape — which is the common case, and stays a single obligation.
-    """
+    """Split "<capability> over <untestable medium>" into its two clauses."""
     source = _clean(text)
     low = source.lower()
     positions = _inspection_positions(low)
@@ -403,13 +392,12 @@ def split_capability_and_medium(text: str):
 
 
 def states_acceptance_threshold(text: str) -> bool:
-    """Does the requirement itself name a measurable acceptance threshold?
+    """True when the requirement itself names a measurable acceptance threshold.
 
-    This is what separates a PASS that applied the REQUIREMENT's criterion from
-    one that applied an interpretation of its own. "deploy the parachute within
-    0.5 seconds" states the bar; "maintain controlled flight" states none, so
-    any verdict on it embeds a definition the requirement never gave — and a
-    result that does not declare that definition cannot be read as closing it.
+    Separates a PASS that applied the requirement's criterion from one that
+    applied its own. "deploy the parachute within 0.5 seconds" states the bar;
+    "maintain controlled flight" states none, so any verdict on it embeds a
+    definition the requirement never gave.
     """
     return bool(_QUANTITY_RE.search(_clean(text)))
 
@@ -451,18 +439,18 @@ class EvidenceClaim:
     """A structured claim made by one concrete verification result."""
 
     description: str
-    status: str  # verified | failed | planned | partial | out-of-sim-scope
+    status: str
     capabilities: FrozenSet[EvidenceCapability] = field(default_factory=frozenset)
     applies_to_matching_clauses: bool = False
     criterion: Optional[VerificationCriterion] = None
     sensitivity: Tuple[CriterionEvaluation, ...] = field(default_factory=tuple)
-    #: Restrict the claim to obligations whose CLAUSE mentions one of these
-    #: terms. An inspection finding about encryption must not be stamped over a
-    #: protocol clause that a test does cover.
+    # Restrict the claim to obligations whose clause mentions one of these terms,
+    # so an inspection finding about encryption does not cover a protocol clause a
+    # test already covers.
     clause_terms: FrozenSet[str] = field(default_factory=frozenset)
-    #: The inverse: a claim that must never close a clause carrying one of
-    #: these terms. A wire-level protocol test says nothing about encryption
-    #: even when both live in the same requirement.
+    # The inverse: a claim that does not close a clause carrying one of these
+    # terms. A wire-level protocol test says nothing about encryption, even when
+    # both live in the same requirement.
     clause_exclude_terms: FrozenSet[str] = field(default_factory=frozenset)
 
     def covers(self, obligation: "VerificationObligation") -> bool:
@@ -590,8 +578,8 @@ def compile_verification_obligations(
 ) -> Tuple[VerificationObligation, ...]:
     """Compile the mandatory behaviour plus every explicit physical threshold.
 
-    This is intentionally conservative and source-only.  It does not infer
-    obligations from design documents or generated model structure.
+    Source-only and conservative: obligations are not inferred from design
+    documents or generated model structure.
     """
     source = _clean(text)
     if not source:

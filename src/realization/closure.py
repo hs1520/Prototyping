@@ -24,7 +24,7 @@ class ClosureReport:
     chosen: Optional[RealizedCandidate]
     per_requirement: Tuple[RequirementVerdict, ...]
     failed_checks: Tuple[InterfaceCheck, ...]
-    rank_preservation: Dict[str, object]  # floats + labels/predicted/measured series
+    rank_preservation: Dict[str, object]
     resize_note: str
     notes: Tuple[str, ...]
     forward_flight_ok: Optional[bool] = None
@@ -139,8 +139,8 @@ def _rank_preservation(pareto_designs, requirements, catalog, cost_axis, notes) 
         predicted.append(endurance_min(di))
         measured.append(ms[0].metrics.endurance_min)
     # Persist the raw series either way: a bare correlation number cannot be
-    # diagnosed after the fact (ties from catalog snapping look identical to a
-    # genuine rank inversion — exactly the ambiguity the 2026-07 real run hit).
+    # diagnosed afterwards, since catalog-snap ties look like a rank inversion
+    # (the ambiguity the 2026-07 run hit).
     details = {
         "n": float(len(labels)),
         "labels": list(labels),

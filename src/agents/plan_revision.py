@@ -1,29 +1,14 @@
 """Bounded, issue-authorized revision of a frozen whole-model plan.
 
-The generation pipeline freezes the typed plan after Phase 2 and constrains
-every downstream repair to be plan-authorized. That invariant is what keeps
-refinement from fabricating structure — and it also means no repair inside the
-loop can ever repair the plan itself. Run 2026-08-31 spent 8 idle iterations
-against `structural_repair_blocked` because the blocked message's own remedy
-("requires a validated plan revision") had no code path.
-
-This module is that path, mirrored on the pipeline's existing repair
-discipline one level up:
-
-- **Trigger**: only a `structural_repair_blocked` verdict — never free
-  refinement preference.
-- **Issue-authorized diff**: the revised plan may change only what the handed
-  issues name. `components` and `connections` are frozen outright (a blockage
-  is never license to rewire), and every untouched realization/behaviour must
-  survive byte-identically. The mirror of "plan-authorized repair".
-- **Validated**: the revision re-enters `ModelGenerationPlan.from_payload`
-  under the full current validator set, so it cannot dodge any gate the
-  original plan passed — or any gate added since.
-- **Bounded**: a fixed attempt ceiling, every attempt recorded.
-
-Monotonic acceptance (the revised plan must strictly shrink the unsatisfied
-obligation set on the actual model text) is the caller's step, because it
-needs the model; see ``GenerationPipelineMixin._attempt_frozen_plan_revision``.
+Every repair inside the refinement loop is plan-authorized, so none of them can
+repair the plan itself, and a `structural_repair_blocked` verdict then has no
+code path (run 2026-08-31 spent 8 idle iterations on one). This module is that
+path: triggered only by that verdict, the revised plan may change only what the
+handed issues name (`components` and `connections` frozen, untouched entries
+byte-identical), it re-enters `ModelGenerationPlan.from_payload` under the full
+current validator set, and attempts are capped and recorded. Monotonic
+acceptance is the caller's step because it needs the model; see
+``GenerationPipelineMixin._attempt_frozen_plan_revision``.
 """
 from __future__ import annotations
 
@@ -39,8 +24,8 @@ from ..utils.req_id import normalise_req_id
 if TYPE_CHECKING:
     from ..llm.chain_of_thought import ChainOfThoughtPrompter
 
-#: Revision is a recovery path, not a second planning loop: one correction
-#: retry after the first attempt, then fail closed with the evidence.
+# Revision is a recovery path, not a second planning loop: one correction
+# retry after the first attempt, then fail closed with the evidence.
 MAXIMUM_REVISION_ATTEMPTS = 2
 
 
@@ -48,23 +33,18 @@ MAXIMUM_REVISION_ATTEMPTS = 2
 class PlanRevisionRequest:
     system_name: str
     requirements: Sequence[str]
-    #: The frozen plan's archived payload (``ModelGenerationPlan.to_dict``).
     frozen_plan: Mapping[str, Any]
-    #: The ``structural_repair_blocked`` record that triggered revision.
     blocked: Mapping[str, Any]
     verbose: bool = False
 
 
 @dataclass(frozen=True)
 class PlanRevisionOutcome:
-    #: The accepted revised plan, or None when revision failed closed.
     plan: ModelGenerationPlan | None
-    #: Full audit record for run metadata.
     record: dict[str, Any] = field(default_factory=dict)
 
 
 def _blocked_issue_lines(blocked: Mapping[str, Any]) -> list[str]:
-    """Flatten the blockage into the issue lines that authorize the revision."""
     lines: list[str] = []
     report = blocked.get("structural_obligation_report")
     if isinstance(report, Mapping):
@@ -92,9 +72,8 @@ def _issue_authorized_diff(
     """Reject every change the handed issues do not name.
 
     A change is authorized iff some issue line mentions the changed entry's
-    requirement id, owner, or behaviour name. Everything else must survive
-    byte-identically — the revision gate is the mirror, one level up, of the
-    plan-authorized repair gate it unblocks.
+    requirement id, owner, or behaviour name; everything else must survive
+    byte-identically.
     """
     mention_pool = _normalise_for_mention(" ".join(issue_lines))
 
@@ -164,10 +143,9 @@ def _issue_authorized_diff(
         source_req = (
             frozen_behaviors.get(key) or revised_behaviors.get(key) or {}
         ).get("provenance", {}).get("requirement_id")
-        # The owner alone does not authorize: one part owns many behaviours
-        # (FlightController owns eight in the reference plan), so an issue
-        # naming the owner would license rewriting all of them. The issue
-        # must name the behaviour itself or its source requirement.
+        # One part owns many behaviours (FlightController owns eight in the
+        # reference plan), so an issue naming only the owner would license rewriting
+        # all of them. The issue names the behaviour or its source requirement.
         if not mentioned(behavior_id, source_req):
             violations.append(
                 f"planned behavior {owner}::{behavior_id} changed but no "
@@ -199,10 +177,9 @@ class PlanRevision:
             require_source_anchored_paths=True,
         )
         issue_lines = _blocked_issue_lines(request.blocked)
-        # The frozen payload re-validated under the CURRENT validator set may
-        # carry issues the original freeze predates (a gate added since).
-        # They are equally revision-authorizing: the reviser must satisfy
-        # today's validators, not the freeze date's.
+        # Re-validating the frozen payload under the current validator set can raise
+        # issues the freeze predates (a gate added since). Those authorize revision
+        # too: the reviser satisfies today's validators.
         issue_lines.extend(frozen.issues)
         issue_lines = list(dict.fromkeys(issue_lines))
         if not issue_lines:

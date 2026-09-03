@@ -1,4 +1,3 @@
-"""System simulation must not flatten auxiliary A/G packages into the system."""
 from __future__ import annotations
 
 import pytest
@@ -27,7 +26,7 @@ package REQ_SAFE_001_AG {
     not extractor._SYSIDE_OK,
     reason="Syside is required for namespace-aware extraction",
 )
-def test_root_package_scope_excludes_shadow_parts_and_preserves_real_ports():
+def test_root_scope_excludes_shadow():
     graph = extractor.extract_behavioral_graph(
         _MODEL_WITH_SHADOW_PACKAGE,
         root_package="DeliveryUAV",
@@ -42,7 +41,7 @@ def test_root_package_scope_excludes_shadow_parts_and_preserves_real_ports():
     not extractor._SYSIDE_OK,
     reason="Syside is required for namespace-aware extraction",
 )
-def test_validator_uses_model_name_as_package_scope_when_that_package_exists():
+def test_validator_scopes_by_model_name():
     result = SimulationValidator().validate(
         _MODEL_WITH_SHADOW_PACKAGE,
         model_name="DeliveryUAV",

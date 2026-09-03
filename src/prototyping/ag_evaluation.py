@@ -2,29 +2,28 @@
 
 Separation boundary (design §13 "Claim discipline"/"Dataset and gold boundary",
 §16; source-first review finding F3): this evaluator scores an ARCHIVED run
-prediction — the ``ag_contract_graph.json`` a checker already emitted — against
-EVALUATOR-ONLY human gold. It is a different boundary from the runtime checker:
+prediction - the ``ag_contract_graph.json`` a checker already emitted - against
+evaluator-only human gold, on a different boundary from the runtime checker:
 
-  * it never invokes the runtime extractor/checker (a checker must not score its
-    own output), so this module imports neither ``ag_extractor`` nor
-    ``ag_contracts`` — enforced by a test that greps this file;
-  * it refuses inputs whose ``artifact_role`` is wrong, so evaluator gold can
-    never be mistaken for a pipeline input and a prediction can never be scored
-    against another export of the same checker;
+  * it never invokes the runtime extractor/checker, so it imports neither
+    ``ag_extractor`` nor ``ag_contracts`` - enforced by a test that greps this
+    file;
+  * it refuses inputs whose ``artifact_role`` is wrong, so gold cannot be taken
+    for a pipeline input and a prediction cannot be scored against another export
+    of the same checker;
   * gold is authored blind to the pipeline verdict (a human process); this module
     only computes agreement between that gold and the archived prediction.
 
-The evaluator reports **separate decomposition/extraction agreement** categories
-(allocation, discharge, realization, observation, timing, priority, and
-invariant), **not** a composite F1 or an LLM-accuracy score. Optional categories
-are reported only when independently reviewed gold contains their atomic facts.
-Under deterministic A/G emission the prediction is the selected decomposition
-rendered and read back, so agreement is ~1.0 by construction and measures
-extract/check faithfulness. A future LLM-authored intervention requires its own
+Reported as separate decomposition/extraction agreement categories (allocation,
+discharge, realization, observation, timing, priority, invariant), not a composite
+F1 or an LLM-accuracy score, and optional categories only when reviewed gold carries
+their atomic facts. Under deterministic A/G emission the prediction is the selected
+decomposition rendered and read back, so agreement is ~1.0 by construction and
+measures extract/check faithfulness. An LLM-authored intervention needs its own
 frozen configuration/version and evidence gate.
 Post-hoc R2-BBAG pooling is permitted only when the consumer reproduces a
 ``POSTHOC_EVALUATION_READINESS_MANIFEST`` from the complete frozen source-evidence
-bundle. The global arm enum is deliberately not used as this gate.
+bundle; the global arm enum is not this gate.
 """
 from __future__ import annotations
 
@@ -34,10 +33,10 @@ from typing import Any, Dict, Mapping, Optional
 
 from ..utils.req_id import normalise_req_id
 
-# Frozen literals, not imports: this gate is deliberately decoupled from the
-# live experiment configuration (see module docstring) so a change there can
-# never silently re-gate archived evaluations. Keep the module's import surface
-# at utils-only — tests/test_option2_ag_evaluation.py greps these import lines.
+# Frozen literals, not imports: this gate is decoupled from the live experiment
+# configuration (see module docstring) so a change there cannot re-gate archived
+# evaluations. Import surface stays utils-only -
+# tests/test_option2_ag_evaluation.py greps these import lines.
 PREDICTION_ROLE = "RUNTIME_A_G_PREDICTION"
 GOLD_ROLE = "EVALUATOR_GOLD"
 REVISED_NAMESPACE = "BLACKBOARD_AG_V1"
@@ -112,8 +111,8 @@ def _discharge_set(items, aliases, *, claimed_only: bool):
             raise ValueError(f"discharge edge[{index}] must be an object")
         by = item.get("by")
         if claimed_only and by is None:
-            # An undischarged prediction makes no discharge claim, so it is not a
-            # predicted edge; it surfaces as a false negative against gold.
+            # An undischarged prediction claims no discharge, so it is not a predicted
+            # edge and surfaces as a false negative against gold.
             continue
         out.add((
             _tok(item.get("component"), aliases),
@@ -128,7 +127,6 @@ def _text(value: Any) -> str:
 
 
 def _realization_set(items: Any) -> set[tuple[str, ...]]:
-    """Flatten independently authored component/path links into atomic facts."""
     result: set[tuple[str, ...]] = set()
     for link_index, link in enumerate(items or ()):
         if not isinstance(link, Mapping):
@@ -231,10 +229,10 @@ def evaluate_ag_against_gold(
 ) -> Dict[str, Any]:
     """Score an archived A/G prediction against evaluator-only human gold.
 
-    Returns separate per-category agreement metrics. Per-run failure
-    classification is evaluated only from separately frozen blind labels, never
-    from static reference gold. Raises on a role mismatch so gold and predictions
-    cannot be swapped or self-scored.
+    Returns separate per-category agreement metrics. Per-run failure classification
+    comes only from separately frozen blind labels, not from static reference gold.
+    Raises on a role mismatch, so gold and predictions cannot be swapped or
+    self-scored.
     """
     if not isinstance(prediction, Mapping) or not isinstance(gold, Mapping):
         raise TypeError("prediction and gold must be mappings")
@@ -279,9 +277,8 @@ def evaluate_ag_against_gold(
         raise ValueError(
             "accuracy/F1 requires documented independent blind human review"
         )
-    # The evaluator must not label a merely flag-shaped object as independent
-    # human gold.  Structural validation remains evaluator-only and imports no
-    # runtime extractor/checker.
+    # A flag-shaped object is not labelled independent human gold. Structural
+    # validation stays evaluator-only and imports no runtime extractor/checker.
     from .ag_gold_template import validate_frozen_gold
     gold_problems = validate_frozen_gold(dict(gold))
     if gold_problems:
@@ -351,9 +348,9 @@ def evaluate_ag_against_gold(
         "assumption_discharge": discharge.as_dict(),
     }
 
-    # Separate A2 agreement categories (§6), added only when both the gold and the
-    # prediction carry the atomic facts. Each is reported on its own; they are never
-    # merged with allocation/discharge or with each other into a composite F1.
+    # Separate A2 agreement categories (§6), added only when gold and prediction
+    # both carry the atomic facts. Each is reported on its own, not merged with
+    # allocation/discharge or with each other into a composite F1.
     from .ag_eval_semantics import (
         invariant_agreement,
         priority_agreement,

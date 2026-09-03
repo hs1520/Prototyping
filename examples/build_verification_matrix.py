@@ -1,11 +1,4 @@
-"""Build the per-requirement verification strategy matrix from existing artifacts.
-
-Reads the authoritative published bundle (no LLM, no SITL) and writes to the
-configured open bundle or ``examples/output/scratch``.
-
-Run:
-  PYTHONPATH=. .venv/bin/python examples/build_verification_matrix.py
-"""
+"""Build the per-requirement verification strategy matrix from existing artifacts."""
 from __future__ import annotations
 
 import json

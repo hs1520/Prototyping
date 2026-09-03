@@ -66,17 +66,16 @@ class AssemblyFinalizer:
     ):
         """Post-assembly deterministic repair chain.
 
-        Step 5 is an integration call, not an authority to delete the earlier
-        fragments: restore dropped part/state/item defs programmatically, fix
-        `doc = "...";` syntax, strip invalid requirement attribute lines,
-        normalise `connect a::b` to dot notation, and flag suspicious
-        connects.  Returns the (possibly replaced) step5 result.
+        Step 5 integrates but may not delete the earlier fragments: restore dropped
+        part/state/item defs, fix `doc = "...";` syntax, strip invalid requirement
+        attribute lines, normalise `connect a::b` to dot notation, and flag
+        suspicious connects.  Returns the (possibly replaced) step5 result.
         """
         # --- close blocks an output-budget truncation cut off ---
-        # Runs first: every later injector scans balanced blocks, and the
-        # syntax gate would otherwise buy an LLM window repair whose entire
-        # edit is appending '}' lines. Mid-token truncation is refused by
-        # the helper and stays with the LLM repair path.
+        # Runs first: later injectors scan balanced blocks, and the syntax gate
+        # would otherwise spend an LLM window repair on appending '}' lines.
+        # Mid-token truncation is refused by the helper and stays with the LLM
+        # repair path.
         if step5.extracted_sysml:
             balanced_text, n_closed = close_truncated_blocks(
                 step5.extracted_sysml
@@ -93,7 +92,6 @@ class AssemblyFinalizer:
                     step5, extracted_sysml=balanced_text
                 )
 
-        # --- fix invalid `doc = "string";` → `doc /* string */` ---
         if step5.extracted_sysml:
             fixed_text, n_doc_fixed = fix_doc_syntax(step5.extracted_sysml)
             if n_doc_fixed:
@@ -105,7 +103,6 @@ class AssemblyFinalizer:
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=fixed_text)
 
-        # --- restore structural part defs the LLM dropped ---
         if parts_fragment and step5.extracted_sysml:
             assembled_text, injected_parts = self._inject_missing_part_defs(
                 step5.extracted_sysml, parts_fragment
@@ -120,7 +117,6 @@ class AssemblyFinalizer:
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
 
-        # --- inject any state defs the LLM dropped ---
         if behavior_fragment and step5.extracted_sysml:
             assembled_text, injected_states = self._inject_missing_state_defs(
                 step5.extracted_sysml, behavior_fragment
@@ -135,7 +131,6 @@ class AssemblyFinalizer:
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
 
-        # --- restore interface definition kinds before behavior compilation ---
         if interfaces_fragment and step5.extracted_sysml:
             assembled_text, injected_items = self._inject_missing_item_defs(
                 step5.extracted_sysml, interfaces_fragment
@@ -150,7 +145,6 @@ class AssemblyFinalizer:
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=assembled_text)
 
-        # --- compile exact ordinary plan-owned behavior into its owner ---
         if (
             behavior_fragment
             and step5.extracted_sysml
@@ -181,7 +175,6 @@ class AssemblyFinalizer:
                     + "; ".join(behavior_conformance["issues"])
                 )
 
-        # --- enforce exact owner-qualified A/G state/invariant realizations ---
         if (
             step5.extracted_sysml
             and generation_plan is not None
@@ -231,7 +224,6 @@ class AssemblyFinalizer:
                     + "; ".join(terminal_behavior_gate["issues"])
                 )
 
-        # --- restore one canonical package-level item type per planned event ---
         if step5.extracted_sysml and generation_plan is not None:
             from ..prototyping.event_symbols import (
                 materialize_planned_event_symbols,
@@ -254,7 +246,6 @@ class AssemblyFinalizer:
                     + "; ".join(event_symbol_gate["issues"])
                 )
 
-        # --- strip invalid `requirement <name> : <Type> = "...";` lines ---
         if step5.extracted_sysml:
             cleaned_text, n_stripped = strip_invalid_requirement_attrs(
                 step5.extracted_sysml
@@ -268,11 +259,10 @@ class AssemblyFinalizer:
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=cleaned_text)
 
-        # --- normalise `connect a::b to c::d;` → `connect a.b to c.d;` ---
-        # SysML v2 connect uses dot notation only.  Despite the prompt explicitly
-        # teaching `.`, LLMs occasionally emit `::` (treating it as a generic
-        # member-access operator).  Normalising here keeps every downstream
-        # consumer (evaluator, RAG, refinement prompt) on the canonical form.
+        # --- normalise `connect a::b to c::d;` -> `connect a.b to c.d;` ---
+        # SysML v2 connect uses dot notation only, but LLMs sometimes emit `::` as
+        # a member-access operator. Normalising here keeps downstream consumers
+        # (evaluator, RAG, refinement prompt) on the canonical form.
         if step5.extracted_sysml:
             normalised, n_normalised = normalise_connect_syntax(
                 step5.extracted_sysml
@@ -286,7 +276,6 @@ class AssemblyFinalizer:
                     )
                 step5 = dataclasses.replace(step5, extracted_sysml=normalised)
 
-        # --- materialise the typed connection plan deterministically ---
         if step5.extracted_sysml and generation_plan is not None:
             from ..prototyping.generation_plan import (
                 PLAN_APPLICATION_HISTORY_KEY,
@@ -320,7 +309,6 @@ class AssemblyFinalizer:
                     "connections realized"
                 )
 
-        # --- connect semantic validation ---
         if step5.extracted_sysml:
             suspicious = self._validate_connections(step5.extracted_sysml)
             if suspicious:
@@ -338,10 +326,9 @@ class AssemblyFinalizer:
     ) -> Tuple[str, List[str]]:
         """Restore any Step-2 ``part def`` blocks omitted by Step 5.
 
-        The structural fragment is the authoritative architecture produced by
-        the dedicated part-generation call.  Assembly may enrich those blocks,
-        but it must not silently delete them.  Only entirely missing named part
-        definitions are injected; existing assembled definitions are untouched.
+        The structural fragment is the authoritative architecture from the
+        part-generation call; assembly may enrich those blocks but not delete them.
+        Only entirely missing named part definitions are injected.
         """
         if not assembled or not parts_fragment:
             return assembled, []
@@ -371,9 +358,9 @@ class AssemblyFinalizer:
         if not missing:
             return assembled, []
 
-        # SysML v2 permits both ordinary and quoted package names.  Vertex often
-        # quotes human-readable names (e.g. ``package 'Drone System' {``), so
-        # both forms must be valid deterministic injection points.
+        # SysML v2 permits ordinary and quoted package names; Vertex often quotes
+        # human-readable names (e.g. ``package 'Drone System' {``), so both forms
+        # are valid injection points.
         package_match = re.search(
             r"\bpackage\s+(?:\w+|'[^']+')\s*\{",
             assembled,
@@ -396,47 +383,35 @@ class AssemblyFinalizer:
         )
         return result, [name for name, _ in missing]
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Programmatic state-def injection (Step 4 safety net)
-    # ──────────────────────────────────────────────────────────────────────
-
-    # ──────────────────────────────────────────────────────────────────────
-    # Connect semantic validation (Step 5 safety check)
-    # ──────────────────────────────────────────────────────────────────────
-
     @staticmethod
     def _validate_connections(
         assembled_sysml: str,
     ) -> List[Dict[str, str]]:
         """Check every connect statement for port-name semantic consistency.
 
-        A connection is flagged as *suspicious* when the source port name and
-        target port name share no domain tokens after stripping directional
-        suffixes (``In`` / ``Out`` / ``Inout``).  False positives are possible
-        for valid cross-domain connections (e.g. ``flightDataOut → releaseCmdIn``)
-        so results are treated as warnings, not errors.
+        A connection is flagged *suspicious* when source and target port names
+        share no domain tokens after stripping directional suffixes (``In`` /
+        ``Out`` / ``Inout``).  Valid cross-domain connections (e.g.
+        ``flightDataOut -> releaseCmdIn``) can trip it, so results are warnings,
+        not errors.
 
         Returns a list of dicts with keys: source_port, target_port, warning.
         """
         _DIR_SUFFIX = re.compile(r"(?:In|Out|Inout)$", re.IGNORECASE)
-        # "status" kept intentionally: batteryStatusOut / battStatusIn share "status"
-        # so removing it avoids false positives on batt ≠ battery abbreviation pairs.
+        # "status" is kept: batteryStatusOut / battStatusIn share it, so keeping it
+        # avoids false positives on batt vs battery abbreviation pairs.
         _STOP_TOKENS = {"data", "port", "signal", "link", "bus", "cmd",
                         "out", "in", "inout", "io"}
 
         def _domain_tokens(port_name: str) -> set:
-            """Split camelCase/PascalCase port name → lowercase domain tokens."""
-            # Strip directional suffix first
             stem = _DIR_SUFFIX.sub("", port_name)
-            # Split on camelCase boundaries
             words = re.sub(r"([A-Z])", r" \1", stem).lower().split()
             return {w for w in words if len(w) > 2 and w not in _STOP_TOKENS}
 
-        # Parse all connect statements.  SysML v2 uses dot notation only —
-        # `connect partA.portA to partB.portB;`.  The `::` form is a deviation
-        # (it is the namespace-qualified-name operator, not a connect endpoint
-        # selector), so we do NOT accept it here; downstream syntax sanitisers
-        # should normalise any stray `::` to `.` before this point.
+        # Parse all connect statements. SysML v2 uses dot notation only -
+        # `connect partA.portA to partB.portB;`. `::` is the namespace-qualified-
+        # name operator, not an endpoint selector, so it is not accepted here;
+        # sanitisers normalise stray `::` to `.` before this point.
         connect_re = re.compile(
             r"\bconnect\s+"
             r"(\w+)\.(\w+)\s+to\s+"
@@ -445,8 +420,7 @@ class AssemblyFinalizer:
         )
         suspicious: List[Dict[str, str]] = []
 
-        # Collect all parsed connections for fan-in analysis
-        connections: List[tuple] = []  # (src_part, src_port, tgt_part, tgt_port)
+        connections: List[tuple] = []
         for m in connect_re.finditer(assembled_sysml):
             src_part = m.group(1) or ""
             src_port = m.group(2) or ""
@@ -456,11 +430,9 @@ class AssemblyFinalizer:
                 continue
             connections.append((src_part, src_port, tgt_part, tgt_port))
 
-        # ── Semantic domain-token check ────────────────────────────────────
         for src_part, src_port, tgt_part, tgt_port in connections:
             src_tokens = _domain_tokens(src_port)
             tgt_tokens = _domain_tokens(tgt_port)
-            # Only flag if BOTH ports have meaningful tokens and NO overlap
             if src_tokens and tgt_tokens and not (src_tokens & tgt_tokens):
                 suspicious.append({
                     "source_port": f"{src_part}::{src_port}",
@@ -472,7 +444,6 @@ class AssemblyFinalizer:
                     ),
                 })
 
-        # ── Fan-in check: multiple sources → same (part, port) ────────────
         from collections import defaultdict
         target_map: Dict[str, List[str]] = defaultdict(list)
         for src_part, src_port, tgt_part, tgt_port in connections:
@@ -498,35 +469,18 @@ class AssemblyFinalizer:
         assembled: str,
         behavior_fragment: str,
     ) -> Tuple[str, List[str]]:
-        """Check whether any state defs from the behavioral fragment were dropped by
-        the Step 4 LLM and, if so, inject them into their owning part def.
-
-        The behavioral fragment uses ``// OWNER: <PartName>`` comments to annotate
-        ownership.  For state defs without that annotation we fall back to a
-        heuristic: state defs whose name contains "Safety", "Fault", "Startup",
-        "Batt", "Comm", "Impact", or "Sep" are assigned to the first part whose
-        name contains "Safety" or "Monitor" or "Fault".
-
-        Returns:
-            (possibly_modified_assembled, list_of_injected_state_def_names)
-        """
-        # ── 1. Extract state def blocks from behavior_fragment ──────────────
-        # Pattern: optional "// OWNER: X" line, then "state def Name { ... }"
         owner_re = re.compile(r"//\s*OWNER:\s*(\w+)", re.IGNORECASE)
 
-        # Walk behavior_fragment, collecting (owner, state_def_name, full_block)
         behavior_state_defs: List[Tuple[Optional[str], str, str]] = []
         i = 0
         last_owner: Optional[str] = None
         while i < len(behavior_fragment):
-            # Check for OWNER comment
             m_owner = owner_re.match(behavior_fragment, i)
             if m_owner:
                 last_owner = m_owner.group(1)
                 i = m_owner.end()
                 continue
 
-            # Check for state def
             m_state = STATE_DEF_RE.match(behavior_fragment, i)
             if m_state:
                 name = m_state.group(1)
@@ -536,25 +490,21 @@ class AssemblyFinalizer:
                     block = behavior_fragment[m_state.start(): end + 1]
                     behavior_state_defs.append((last_owner, name, block))
                     i = end + 1
-                    last_owner = None  # consumed
+                    last_owner = None
                     continue
 
-            # Reset owner tracking when a blank line or other content appears
             if behavior_fragment[i] == "\n":
-                # Only reset owner if we've moved past whitespace without hitting a state def
                 pass
             i += 1
 
         if not behavior_state_defs:
             return assembled, []
 
-        # ── 2. Identify which state defs are missing from assembled ─────────
         _SAFETY_HEURISTIC = re.compile(
             r"Safety|Fault|Startup|Batt|Comm|Impact|Sep|Landing|Separation",
             re.IGNORECASE,
         )
 
-        # Find part def name that looks like a safety/monitor part (heuristic fallback)
         _monitor_re = re.compile(
             r"\bpart\s+def\s+(\w*(?:Safety|Monitor|Fault|Health)\w*)\s*\{",
             re.IGNORECASE,
@@ -566,28 +516,25 @@ class AssemblyFinalizer:
         result = assembled
 
         for owner, name, block in behavior_state_defs:
-            # Spelling-robust presence check: the behaviour may already exist
-            # as `state def Name` OR as a part-level bodied usage
-            # (`state Name { ... }`) — injecting a def beside the usage was
-            # the measured double-declaration (draws #1/#4: every shadowing
-            # warning sat beside an injection marker).
+            # Spelling-robust presence check: the behaviour may exist as
+            # `state def Name` or as a part-level bodied usage (`state Name { ... }`);
+            # injecting a def beside the usage produced the measured
+            # double-declaration shadowing warnings.
             if re.search(
                 r"\bstate\s+(?:def\s+)?" + re.escape(name) + r"\b", result
             ):
-                continue  # already present in some spelling — nothing to do
+                continue
 
-            # Determine target part
             target_part = owner
             if target_part is None:
                 if _SAFETY_HEURISTIC.search(name):
                     target_part = default_safety_part
             if target_part is None:
-                continue  # cannot determine owner — skip
+                continue
 
-            # Find the part def block for target_part in assembled
             m_part = named_def_pattern("part", target_part).search(result)
             if not m_part:
-                continue  # part not found — skip
+                continue
 
             brace_open = result.index("{", m_part.start())
             closing = find_block_end(result, brace_open)
@@ -614,9 +561,8 @@ class AssemblyFinalizer:
                 + "\n    "
                 + result[closing:]
             )
-            # Injection must never manufacture a duplicate/shadow the model
-            # did not already have (surgical-pass discipline applied to our
-            # own writers).
+            # Injection does not add a duplicate or shadow the model did not already
+            # have (surgical-pass discipline applied to our own writers).
             from ..prototyping.planned_behavior import _shadow_fingerprint
             if _shadow_fingerprint(candidate) > _shadow_fingerprint(result):
                 print(
@@ -634,13 +580,12 @@ class AssemblyFinalizer:
         assembled: str,
         interfaces_fragment: str,
     ) -> Tuple[str, List[str]]:
-        """Check whether any item defs / typed port defs from the interfaces
-        fragment were dropped by the Step 5 LLM and, if so, inject them at the
-        package level.
+        """Inject any item defs / typed port defs the Step 5 LLM dropped from the
+        interfaces fragment.
 
-        Item defs and port defs are package-level declarations and must appear
-        at the top of the package body, before any ``part def`` blocks.  The
-        injection point is right after the ``package Name {`` opening brace.
+        Item defs and port defs are package-level declarations and belong at the
+        top of the package body, before any ``part def`` blocks, so the injection
+        point is right after the ``package Name {`` opening brace.
 
         Returns:
             (possibly_modified_assembled, list_of_injected_def_labels)
@@ -648,18 +593,15 @@ class AssemblyFinalizer:
         if not interfaces_fragment or not assembled:
             return assembled, []
 
-        # ── 1. Extract item def / port def blocks from interfaces_fragment ─
-        # Handles both `item def Name { ... }` and `port def Name { ... }`.
-        # Semi-colon form (`item def Name;`) is also captured.
         def_start_re = re.compile(r"\b(item|port)\s+def\s+(\w+)\s*([{;])")
 
-        extracted: List[Tuple[str, str, str]] = []  # (kind, name, full_block)
+        extracted: List[Tuple[str, str, str]] = []
         i = 0
         while i < len(interfaces_fragment):
             m = def_start_re.search(interfaces_fragment, i)
             if not m:
                 break
-            kind = m.group(1)   # "item" or "port"
+            kind = m.group(1)
             name = m.group(2)
             sentinel = m.group(3)
 
@@ -667,7 +609,7 @@ class AssemblyFinalizer:
                 block = interfaces_fragment[m.start():m.end()]
                 extracted.append((kind, name, block))
                 i = m.end()
-            else:  # "{"
+            else:
                 brace_pos = interfaces_fragment.index("{", m.start())
                 end = find_block_end(interfaces_fragment, brace_pos)
                 if end != -1:
@@ -680,26 +622,23 @@ class AssemblyFinalizer:
         if not extracted:
             return assembled, []
 
-        # ── 2. Identify which defs are absent from the assembled text ───────
         to_inject: List[str] = []
         injected_labels: List[str] = []
 
         for kind, name, block in extracted:
             pattern = rf"\b{re.escape(kind)}\s+def\s+{re.escape(name)}\b"
             if re.search(pattern, assembled):
-                continue  # already present — nothing to do
+                continue
             to_inject.append(block)
             injected_labels.append(f"{kind} def {name}")
 
         if not to_inject:
             return assembled, []
 
-        # ── 3. Find injection point: right after `package Name {` ───────────
         pkg_open_re = re.compile(r"\bpackage\s+(?:\w+|'[^']+')\s*\{")
         m_pkg = pkg_open_re.search(assembled)
         inject_pos = m_pkg.end() if m_pkg else 0
 
-        # ── 4. Build indented injection block and splice in ──────────────────
         injection = "\n    // (item defs / port defs injected by pipeline)\n"
         for block in to_inject:
             indented = "\n".join(

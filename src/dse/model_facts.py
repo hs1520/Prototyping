@@ -1,9 +1,8 @@
 """One parser-backed view of the model facts used by DSE scoring and diagnosis.
 
-The facts are deliberately policy-free: this module answers what is present in
-the committed model, while ``evaluator`` decides scores and ``diagnostics``
-decides messages.  Keeping those decisions outside makes this the shared seam
-without coupling numerical policy to human-facing recommendations.
+The facts are policy-free: this module reports what is present in the committed
+model, ``evaluator`` decides scores and ``diagnostics`` decides messages, which
+keeps numerical policy out of the shared seam.
 """
 from __future__ import annotations
 
@@ -76,8 +75,8 @@ def _connection_facts(model_text: str) -> Tuple[ConnectStmt, ...]:
     try:
         return tuple(parse_connects(model_text))
     except Exception:
-        # DSE also runs on partially generated models. A parser failure means
-        # there is no trustworthy connection evidence, not that evaluation dies.
+        # DSE also runs on partially generated models: a parser failure means no
+        # trustworthy connection evidence, and evaluation continues.
         return ()
 
 

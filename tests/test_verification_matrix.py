@@ -1,8 +1,8 @@
-"""Verification strategy matrix: SITL-unmapped ≠ unverified.
+"""Verification strategy matrix: SITL-unmapped != unverified.
 
-Pins the tier-assignment rules so "unassigned" stays the true honest gap:
-requirements verified at datasheet/behavioral tiers, inspection-only compliance
-items, and Gazebo-planned physics must not be lumped into one "unmapped" bucket.
+Pins the tier-assignment rules so "unassigned" stays the real gap: requirements
+verified at datasheet/behavioral tiers, inspection-only compliance items, and
+Gazebo-planned physics stay out of one "unmapped" bucket.
 """
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ def _rows():
     )}
 
 
-def test_matrix_assigns_each_requirement_class_to_the_right_tier():
+def test_tiers_assigned_per_class():
     rows = _rows()
 
     gcs = rows["REQ_SAFE_003"]
@@ -79,7 +79,7 @@ def test_matrix_assigns_each_requirement_class_to_the_right_tier():
 
     endurance = rows["REQ_PERF_002"]
     assert endurance.tiers == ("datasheet",)
-    assert endurance.status == "verified"  # SITL-unmapped but datasheet-verified
+    assert endurance.status == "verified"
 
     ip54 = rows["REQ_CONS_002"]
     assert ip54.tiers == ("inspection_analysis",)
@@ -98,7 +98,7 @@ def test_matrix_assigns_each_requirement_class_to_the_right_tier():
     assert mystery.status == "unassigned"
 
 
-def test_matrix_summary_and_markdown_surface_the_honest_gap():
+def test_summary_shows_honest_gap():
     model = build_lite_model(_MODEL, model_name="D")
     linker = RequirementLinker(model)
     rows = build_matrix(model, _REALIZATION, linker.compile_evidence())
@@ -113,7 +113,7 @@ def test_matrix_summary_and_markdown_surface_the_honest_gap():
     assert "REQ_MISC_001" in md
 
 
-def test_matrix_does_not_mark_planned_l2_as_verified_without_execution_result():
+def test_planned_l2_not_verified():
     model = build_lite_model(_MODEL, model_name="D")
     linker = RequirementLinker(model)
 
@@ -121,11 +121,11 @@ def test_matrix_does_not_mark_planned_l2_as_verified_without_execution_result():
 
     assert "l2_sitl_planned" in row.tiers
     assert "l2_sitl" not in row.tiers
-    assert row.status == "partial"  # behavioral model evidence exists; native SITL remains planned
+    assert row.status == "partial"
     assert any("planned, not executed" in e for e in row.evidence)
 
 
-def test_matrix_marks_executed_l2_pass_and_fail_from_results():
+def test_executed_l2_pass_and_fail():
     model = build_lite_model(_MODEL, model_name="D")
     linker = RequirementLinker(model)
 
@@ -142,7 +142,7 @@ def test_matrix_marks_executed_l2_pass_and_fail_from_results():
     assert "l2_sitl_failed" in failed.tiers and failed.status == "failed"
 
 
-def test_matrix_keeps_an_executed_inconclusive_l2_result_partial():
+def test_inconclusive_l2_partial():
     model = build_lite_model(_MODEL, model_name="D")
     linker = RequirementLinker(model)
 
@@ -159,7 +159,7 @@ def test_matrix_keeps_an_executed_inconclusive_l2_result_partial():
     assert row.status == "partial"
 
 
-def test_matrix_never_marks_an_unmet_datasheet_result_verified():
+def test_unmet_datasheet_fails():
     model = build_lite_model(_MODEL, model_name="D")
     linker = RequirementLinker(model)
     realization = {
@@ -176,7 +176,7 @@ def test_matrix_never_marks_an_unmet_datasheet_result_verified():
     assert "datasheet" not in row.tiers
 
 
-def test_matrix_never_marks_an_unmet_forward_flight_result_verified():
+def test_unmet_forward_flight_fails():
     model = build_lite_model(_MODEL, model_name="D")
     linker = RequirementLinker(model)
     realization = {
@@ -193,7 +193,7 @@ def test_matrix_never_marks_an_unmet_forward_flight_result_verified():
     assert "forward_flight" not in row.tiers
 
 
-def test_matrix_requires_an_l1_validation_result_before_marking_l1_verified():
+def test_l1_needs_validation_result():
     model = build_lite_model(
         """package D {
             requirement def REQ_PERF_006 { doc /* Control loop rate shall be at least 10 Hz. */ }
@@ -236,7 +236,7 @@ def test_matrix_requires_an_l1_validation_result_before_marking_l1_verified():
     assert failed.tiers == ("l1_param_failed",) and failed.status == "failed"
 
 
-def test_matrix_does_not_treat_serial_protocol_as_postflight_report_evidence():
+def test_serial_not_report_evidence():
     model = build_lite_model(
         """package D {
             requirement def REQ_FUNC_008 {
@@ -261,7 +261,7 @@ def test_matrix_does_not_treat_serial_protocol_as_postflight_report_evidence():
     assert rows[0].tiers == ()
 
 
-def test_matrix_does_not_treat_unrelated_phase_machine_as_report_evidence():
+def test_phase_machine_not_evidence():
     model = build_lite_model(
         """package D {
             requirement def REQ_FUNC_008 {
@@ -288,7 +288,7 @@ def test_matrix_does_not_treat_unrelated_phase_machine_as_report_evidence():
     assert any("response action is not produced" in item for item in row.evidence)
 
 
-def test_matrix_accepts_reachable_postflight_report_action():
+def test_reachable_report_accepted():
     model = build_lite_model(
         """package D {
             requirement def REQ_FUNC_008 {
@@ -333,7 +333,7 @@ def test_matrix_accepts_reachable_postflight_report_action():
     }
 
 
-def test_compound_payload_requirement_requires_every_mandatory_clause():
+def test_compound_req_needs_clauses():
     model = build_lite_model(
         """package D {
             requirement def REQ_FUNC_003 {
@@ -366,7 +366,7 @@ def test_compound_payload_requirement_requires_every_mandatory_clause():
     assert payload["obligations"][3]["evidence"] == []
 
 
-def test_behavioral_pass_cannot_verify_a_position_accuracy_threshold():
+def test_behavioral_pass_not_accuracy():
     model_text = _MODEL.replace(
         "Operate in sequential phases: STANDBY then CRUISE then LANDING.",
         "Operate in sequential phases: STANDBY then CRUISE then LANDING, "
@@ -385,7 +385,7 @@ def test_behavioral_pass_cannot_verify_a_position_accuracy_threshold():
     }
 
 
-def test_obligation_compiler_keeps_percent_and_temperature_limits():
+def test_percent_and_temp_limits_kept():
     battery = compile_verification_obligations(
         "REQ_SAFE_001",
         "The system shall return when battery state-of-charge reaches 25%.",
@@ -408,7 +408,7 @@ def test_obligation_compiler_keeps_percent_and_temperature_limits():
     assert [item.kind for item in timeout] == ["behavior", "response_time"]
 
 
-def test_matrix_marks_trace_blocked_requirements():
+def test_trace_blocked_marked():
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_003 {
@@ -435,7 +435,7 @@ def test_matrix_marks_trace_blocked_requirements():
     assert any("TRACE blocked" in e for e in rows["REQ_SAFE_003"].evidence)
 
 
-def test_matrix_marks_mixed_verified_and_gazebo_deferred_as_partial():
+def test_gazebo_deferred_mix_partial():
     model = build_lite_model(
         """package D {
             requirement def REQ_PERF_005 {
@@ -462,7 +462,7 @@ def test_matrix_marks_mixed_verified_and_gazebo_deferred_as_partial():
     assert row.status == "partial"
 
 
-def test_matrix_consumes_gazebo_pass_and_fail_results():
+def test_gazebo_pass_and_fail():
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_007 {
@@ -498,7 +498,7 @@ def test_matrix_consumes_gazebo_pass_and_fail_results():
     assert any("Gazebo FAIL" in e for e in rows["REQ_FUNC_002"].evidence)
 
 
-def test_matrix_preserves_partial_gazebo_evidence_without_false_green():
+def test_partial_gazebo_no_false_green():
     model = build_lite_model(
         """package D {
             requirement def REQ_PERF_004 {
@@ -523,7 +523,7 @@ def test_matrix_preserves_partial_gazebo_evidence_without_false_green():
     assert any("Gazebo partial" in e for e in row.evidence)
 
 
-def test_matrix_preserves_motor_out_criterion_source_and_sensitivity():
+def test_motor_out_criterion_kept():
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_007 {
@@ -572,7 +572,7 @@ def test_matrix_preserves_motor_out_criterion_source_and_sensitivity():
     ]
 
 
-def test_parachute_timing_and_precedence_close_separate_obligations():
+def test_parachute_timing_and_precedence():
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_005 {
@@ -605,13 +605,13 @@ def test_parachute_timing_and_precedence_close_separate_obligations():
     }
 
 
-def test_a_pass_may_only_close_a_bar_the_requirement_or_the_result_states():
-    """The discriminator is whether an acceptance bar exists to judge against —
-    not whether the runner happened to attach a criterion object.
+def test_pass_closes_stated_bar():
+    """The discriminator is whether an acceptance bar exists to judge against, not
+    whether the runner attached a criterion object.
 
-    "within 0.5 seconds" is the requirement's own bar, so a PASS applied it.
-    "maintain controlled flight" states none, so a PASS there necessarily used
-    a definition of its own, and one it did not declare cannot be inspected.
+    "within 0.5 seconds" is the requirement's own bar, so a PASS applied it;
+    "maintain controlled flight" states none, so a PASS there used a definition of
+    its own that cannot be inspected.
     """
     from src.prototyping.verification_obligations import states_acceptance_threshold
 
@@ -665,10 +665,12 @@ def _row(req_id, text, statuses):
     )
 
 
-def test_out_of_sim_scope_is_excluded_from_the_in_scope_denominator():
-    """Scoring a simulation stack on an IP54 ingress rating measures nothing
-    about the stack. Both denominators are published so a reader can see which
-    one any given claim rests on."""
+def test_out_of_scope_excluded():
+    """Scoring a simulation stack on an IP54 ingress rating measures nothing about the
+    stack.
+
+    Both denominators are published so a reader can see which one a claim rests on.
+    """
     s = summarize([
         _row("REQ-CONS-002",
              "All enclosures shall meet a minimum IP54 ingress-protection "
@@ -683,17 +685,18 @@ def test_out_of_sim_scope_is_excluded_from_the_in_scope_denominator():
     assert s["obligations_out_of_sim_scope"] == 1
     assert s["obligations_in_sim_scope"] == 2
     assert s["obligations_verified"] == 2
-    # one criterion decides it: a named rule saying which observable is absent
     assert s["out_of_sim_scope_by_rule"] == {"enclosure_ingress": ["REQ-CONS-002"]}
     assert s["out_of_sim_scope_without_a_rule"] == []
     # the [V:] tag corroborates that rule; it is not a second way in
     assert s["out_of_sim_scope_corroborated_by_requirement"] == ["REQ-CONS-002"]
 
 
-def test_an_untagged_requirement_is_excluded_by_the_same_rule_criterion():
-    """A requirement with no [V:] tag is not excluded on anybody's say-so: the
-    same rule table decides it, and names the observable the stack lacks. One
-    criterion, so the denominator cannot be widened by hand."""
+def test_untagged_req_same_rule():
+    """A requirement with no [V:] tag is decided by the same rule table, which names
+    the observable the stack lacks.
+
+    One criterion, so the denominator cannot be widened by hand.
+    """
     s = summarize([
         _row("REQ-INTF-001",
              "The system shall exchange telemetry with the GCS using the "
@@ -703,12 +706,10 @@ def test_an_untagged_requirement_is_excluded_by_the_same_rule_criterion():
 
     assert s["out_of_sim_scope_by_rule"] == {"cryptography": ["REQ-INTF-001"]}
     assert s["out_of_sim_scope_without_a_rule"] == []
-    # no [V:] tag — the rule stands alone, and says why
     assert s["out_of_sim_scope_corroborated_by_requirement"] == []
 
 
-def test_both_denominators_appear_in_the_published_matrix():
-    """A ratio without its exclusion list is not auditable."""
+def test_both_denominators_in_markdown():
     md = to_markdown([
         _row("REQ-CONS-004",
              "The system shall comply with EASA UAS Category C operational "
@@ -725,9 +726,7 @@ def test_both_denominators_appear_in_the_published_matrix():
     assert "corroborated by the requirement's own [V:] method: REQ-CONS-004" in md
 
 
-def test_an_exclusion_no_rule_accounts_for_is_flagged_as_unauditable():
-    """The dangerous exclusion is the one nobody can check. It is named in the
-    published matrix rather than folded quietly into the total."""
+def test_ruleless_exclusion_unauditable():
     s = summarize([
         _row("REQ-MYST-001", "The system shall be good.", ["out-of-sim-scope"]),
     ])
@@ -740,8 +739,7 @@ def test_an_exclusion_no_rule_accounts_for_is_flagged_as_unauditable():
     assert "EXCLUDED WITH NO RULE (unauditable): REQ-MYST-001" in md
 
 
-def test_every_rule_names_a_distinct_missing_observable():
-    """A rule table whose reasons repeat is a single rule wearing four hats."""
+def test_rules_name_distinct_observables():
     from src.prototyping.verification_obligations import NON_SIMULABLE_RULES
 
     names = [n for n, _, _ in NON_SIMULABLE_RULES]
@@ -753,10 +751,10 @@ def test_every_rule_names_a_distinct_missing_observable():
     assert len(set(terms)) == len(terms)
 
 
-# ── A2: tier input contract ──────────────────────────────────────────────
-# run3's archived report carried a realization dict whose per_requirement had
-# been projected away; the matrix then reported three requirements as
-# "unassigned" — a runner artefact blamed on the model.
+# ── A2: tier input contract ────────────────────────────────────────
+# run3's archived report carried a realization dict with per_requirement
+# projected away, and the matrix reported three requirements as "unassigned" -
+# a runner artefact blamed on the model.
 
 
 def _rows_with(realization):
@@ -767,18 +765,19 @@ def _rows_with(realization):
     )}
 
 
-def test_missing_per_requirement_is_a_runner_gap_not_an_unassigned_row():
-    """A realization dict WITHOUT per_requirement (run3's archived shape):
-    tier-less rows read evidence-input-missing — attributable, loud, and
-    distinct from the honest ontology gap."""
+def test_missing_per_requirement_gap():
+    """A realization dict without per_requirement (run3's archived shape): tier-less
+    rows read evidence-input-missing, attributable and distinct from the ontology
+    gap.
+    """
     run3_shaped = {
         "verdict": "CLOSED", "summary": "…", "chosen": None,
         "forward_flight_ok": True, "rank_preservation": {}, "resize_note": "",
     }
     rows = _rows_with(run3_shaped)
     assert rows["REQ_MISC_001"].status == "evidence-input-missing"
-    # The endurance requirement loses its datasheet tier with the input —
-    # exactly the run3 symptom — and must not read as an honest gap either.
+    # The endurance requirement loses its datasheet tier with the input (the run3
+    # symptom) and does not read as a model gap either.
     assert rows["REQ_PERF_002"].status == "evidence-input-missing"
 
     from src.prototyping.verification_matrix import summarize, to_markdown
@@ -790,23 +789,17 @@ def test_missing_per_requirement_is_a_runner_gap_not_an_unassigned_row():
     assert "runner gap — NOT a model finding" in md
 
 
-def test_an_explicit_empty_per_requirement_keeps_the_honest_gap():
-    """[] means the tier ran and produced nothing — unassigned keeps its
-    'true honest gap' meaning."""
+def test_empty_per_requirement_unassigned():
     rows = _rows_with({"per_requirement": []})
     assert rows["REQ_MISC_001"].status == "unassigned"
 
 
-def test_no_realization_at_all_is_unchanged_legacy_behavior():
-    """Pre-DSE compiles pass realization=None everywhere (qualification);
-    their semantics must not move."""
+def test_no_realization_unassigned():
     rows = _rows_with(None)
     assert rows["REQ_MISC_001"].status == "unassigned"
 
 
-def test_run_report_projection_keeps_the_tier_input():
-    """The projection that dropped per_requirement (pipeline.build_run_report)
-    now carries it, so archived reports feed the matrix."""
+def test_run_report_keeps_tier_input():
     import inspect
     from src.app.pipeline import PrototypingPipeline
     source = inspect.getsource(PrototypingPipeline.build_run_report)

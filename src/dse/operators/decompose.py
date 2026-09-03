@@ -1,12 +1,10 @@
-"""#4 DecomposeController — architecture DSE operator (bilevel outer layer).
+"""#4 DecomposeController - architecture DSE operator (bilevel outer layer).
 
-Chooses the control topology: a single centralised controller vs. a distributed
-set of controller nodes coordinated by a coordinator. Replaces the scalar
-``distributed_control`` boolean knob.
-
-Valid-by-construction: each variant is a pre-defined catalog structure that
-Syside parses cleanly; ``resolve`` binds the chosen topology rather than doing
-text surgery. All SysML v2 fragments are Syside 0.8.8 verified (0 errors). See
+Chooses the control topology: one centralised controller vs. a distributed set of
+controller nodes with a coordinator, replacing the scalar ``distributed_control``
+knob. Each variant is a pre-defined catalog structure that Syside parses cleanly
+and ``resolve`` binds the chosen topology instead of doing text surgery; all
+SysML v2 fragments are Syside 0.8.8 verified (0 errors). See
 docs/DSE_OPERATORS.md §#4 (literature: distributed / federated control patterns).
 """
 from __future__ import annotations
@@ -14,8 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
-#: number of controller nodes a distributed topology instantiates
-#: (matches the >= 3 criterion in the legacy distributed_topology evaluator)
+# number of controller nodes a distributed topology instantiates
+# (matches the >= 3 criterion in the legacy distributed_topology evaluator)
 DISTRIBUTED_NODES = 3
 
 _PRELUDE = """    private import ScalarValues::*;
@@ -34,7 +32,6 @@ _PRELUDE = """    private import ScalarValues::*;
         out port toNode3 : CmdSignal;
     }"""
 
-# variant key -> (controller node count, primary catalog part def name)
 CATALOG: Dict[str, Tuple[int, str]] = {
     "centralised": (1, "CentralController"),
     "distributed": (DISTRIBUTED_NODES, "Coordinator"),
@@ -56,10 +53,6 @@ class DecomposeController:
         """Number of controller nodes for a variant (1 or DISTRIBUTED_NODES)."""
         return CATALOG[variant][0]
 
-    # ------------------------------------------------------------------
-    # MO-MCTS contract
-    # ------------------------------------------------------------------
-
     def feasible(self, variant: str, ctx, state=None) -> bool:
         return self.preconditions(
             variant,
@@ -73,17 +66,14 @@ class DecomposeController:
         part_count: int,
         allow_distributed: bool = True,
     ) -> bool:
-        """Centralised is always admissible; distributed needs enough parts to
-        split across and must not be disabled for the platform."""
+        """Centralised is always admissible; distributed needs enough parts to split across
+        and the platform flag enabled.
+        """
         if variant not in CATALOG:
             return False
         if variant == "centralised":
             return True
         return allow_distributed and part_count >= DISTRIBUTED_NODES
-
-    # ------------------------------------------------------------------
-    # Skeleton declaration (LLM generation phase output)
-    # ------------------------------------------------------------------
 
     def declare_skeleton(self) -> str:
         return (
@@ -102,10 +92,6 @@ class DecomposeController:
             "    }\n"
             "}\n"
         )
-
-    # ------------------------------------------------------------------
-    # Resolution (outer MCTS action) — valid-by-construction
-    # ------------------------------------------------------------------
 
     def resolve(self, variant: str, with_wiring: bool = False) -> str:
         if variant not in CATALOG:

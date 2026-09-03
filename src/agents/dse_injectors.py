@@ -1,10 +1,10 @@
-"""DSE best-config → SysML model injection helpers.
+"""DSE best-config -> SysML model injection helpers.
 
-All functions are pure (no Orchestrator state) and are extracted from
-Orchestrator so the main class focuses on coordination rather than
-text-level mutations.  Sensor redundancy is applied by the valid-by-
-construction operators (``dse.operator_applicator``), not regex injection —
-the legacy ``apply_inject_sensor_count_to_sysml_text`` was removed.
+All functions are pure (no Orchestrator state), extracted so the main class
+stays on coordination rather than text-level mutations.  Sensor redundancy
+is applied by the valid-by-construction operators
+(``dse.operator_applicator``); the legacy
+``apply_inject_sensor_count_to_sysml_text`` was removed.
 
 Public API
 ----------
@@ -21,7 +21,6 @@ from ..dse.design_space import DesignConfiguration
 from ..sysml.model import ElementRef, SysMLModel
 from ..utils.sysml_text_utils import named_block_span
 
-# ── Part-classification keyword sets ────────────────────────────────────────
 _CTRL_KWS   = {"controller", "flight", "control", "nav", "autopilot"}
 _CF_KWS     = {"controlfrequency", "controlfreq", "loopfrequency", "samplingfrequency"}
 _SENSOR_KWS = {"sensor", "perception", "detector", "camera", "lidar", "imu", "gps", "radar"}
@@ -36,7 +35,6 @@ def apply_best_config_to_model(
     if not params:
         return
 
-    # 1. Control frequency → add/update ONLY the dedicated controlFrequency attribute
     freq = params.get("control_frequency_hz")
     if freq is not None:
         freq_str = str(round(float(freq), 2))
@@ -72,7 +70,6 @@ def apply_best_config_to_model(
                     }
                 )
 
-    # 2. Redundancy level → doc annotation
     redundancy = str(params.get("redundancy_level", "none"))
     if redundancy != "none":
         tag = f"redundancy={redundancy}"
@@ -81,7 +78,6 @@ def apply_best_config_to_model(
         elif not model.description:
             model.description = f"[{tag}]"
 
-    # 3. Communication protocol → typed ports
     _POWER_PORT_NAMES = {"powerport", "power", "powerout", "powerin"}
     protocol = params.get("communication_protocol")
     if protocol:
@@ -98,7 +94,6 @@ def apply_best_config_to_model(
                 if existing.lower() in generic_types:
                     port.type_ref = ElementRef(name=protocol_type_name)
 
-    # 4. Recommended sensor count → model-level metadata
     num_sensors = params.get("num_sensors")
     if num_sensors is not None:
         if not hasattr(model, "metadata") or model.metadata is None:
@@ -156,11 +151,11 @@ def apply_inject_attrs_to_sysml_text(model: SysMLModel) -> None:
 
 
 def build_dse_design_constraints(best_config: DesignConfiguration) -> str:
-    """Translate DSE best-config parameters into concrete SysML implementation guidance.
+    """Translate DSE best-config parameters into SysML implementation guidance.
 
-    Only the catalog decision keys produce guidance; a config carrying none of
-    them (e.g. a variation-DSE config of variant choices) yields "" — no
-    dangling header is injected into the refinement prompt.
+    Only the catalog decision keys produce guidance; a config with none of them
+    (e.g. a variation-DSE config of variant choices) yields "", so no dangling
+    header reaches the refinement prompt.
     """
     params = best_config.parameters
     if not params:
@@ -237,6 +232,6 @@ def build_dse_design_constraints(best_config: DesignConfiguration) -> str:
             f"{num_sensors} sensor-related part def(s) or part usage(s)"
         )
 
-    if len(lines) == 1:  # header only — no catalog decision matched
+    if len(lines) == 1:
         return ""
     return "\n".join(lines)

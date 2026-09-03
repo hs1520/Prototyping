@@ -1,4 +1,3 @@
-"""Terminal A/G contracts must bind real main-model elements without shadows."""
 from __future__ import annotations
 
 import pytest
@@ -65,7 +64,7 @@ _MAIN = """package DeliveryUAV {
     not extractor._SYSIDE_OK,
     reason="Syside is required for terminal binding",
 )
-def test_terminal_binder_uses_real_owner_and_behavior_without_shadow_defs():
+def test_binds_real_owner_no_shadow():
     result = bind_ag_contracts_to_model(
         _MAIN,
         [_SPEC],
@@ -106,7 +105,7 @@ def test_terminal_binder_uses_real_owner_and_behavior_without_shadow_defs():
     not extractor._SYSIDE_OK,
     reason="Syside is required for terminal binding",
 )
-def test_terminal_binder_resolves_one_typed_owner_inside_an_assembly_usage():
+def test_nested_typed_owner_resolved():
     nested = _MAIN.replace(
         "    part controller : Controller;",
         """    part deliverySystem {
@@ -142,7 +141,7 @@ def test_terminal_binder_resolves_one_typed_owner_inside_an_assembly_usage():
     not extractor._SYSIDE_OK,
     reason="Syside is required for terminal binding",
 )
-def test_terminal_binder_fails_closed_on_ambiguous_typed_owner_usages():
+def test_ambiguous_owner_fails():
     ambiguous = _MAIN.replace(
         "    part controller : Controller;",
         """    part primarySystem {
@@ -170,7 +169,7 @@ def test_terminal_binder_fails_closed_on_ambiguous_typed_owner_usages():
     not extractor._SYSIDE_OK,
     reason="Syside is required for terminal binding",
 )
-def test_terminal_binder_fails_closed_when_real_behavior_is_missing():
+def test_missing_behavior_fails():
     result = bind_ag_contracts_to_model(
         _MAIN.replace("ControllerBehavior", "DifferentBehavior"),
         [_SPEC],
@@ -189,7 +188,7 @@ def test_terminal_binder_fails_closed_when_real_behavior_is_missing():
     not extractor._SYSIDE_OK,
     reason="Syside is required for terminal binding",
 )
-def test_terminal_binder_fails_closed_without_canonical_event_item():
+def test_missing_event_item_fails():
     result = bind_ag_contracts_to_model(
         _MAIN.replace("item def FaultSignal;", "action def FaultSignal {}"),
         [_SPEC],
@@ -209,7 +208,7 @@ def test_terminal_binder_fails_closed_without_canonical_event_item():
     not extractor._SYSIDE_OK,
     reason="Syside is required for terminal binding",
 )
-def test_terminal_binder_removes_a_previous_shadow_package_before_binding():
+def test_shadow_package_removed():
     shadowed = _MAIN + """
 package REQ_SAFE_001_AG {
     part def Controller;

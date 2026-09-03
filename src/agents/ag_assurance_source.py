@@ -15,8 +15,8 @@ from .pipeline_records import AGPlanningHandoffRecord, publish_handoff_transitio
 
 
 def _shared_check_syntax(*args, **kwargs):
-    # Preserve the established orchestrator-module seam used to instrument the
-    # strict shared gate; extraction must not bypass callers replacing it.
+    # Keep the orchestrator-module seam used to instrument the strict shared gate;
+    # extraction does not bypass callers that replace it.
     from . import orchestrator
     return orchestrator.check_syntax(*args, **kwargs)
 
@@ -33,7 +33,6 @@ class AGAssuranceMixin:
 
     @staticmethod
     def _requirement_planning_model(requirements: List[str]) -> str:
-        """Render immutable requirement inputs for pre-generation A/G planning."""
         from ..utils.req_id import normalise_req_id
 
         definitions: List[str] = []
@@ -52,7 +51,6 @@ class AGAssuranceMixin:
             + "\n}\n"
         )
 
-
     @staticmethod
     def _ag_guidance_for_specs(
         specs: List[Any],
@@ -61,7 +59,6 @@ class AGAssuranceMixin:
         authored_mode: bool = False,
         behavior_plan: Optional[Any] = None,
     ) -> Dict[str, str]:
-        """Compile one frozen A/G plan into the five DesignAgent prompt seams."""
         from ..prototyping.ag_extractor import extract_ag_graph
 
         component_lines: List[str] = []
@@ -104,9 +101,9 @@ class AGAssuranceMixin:
                         for path in paths
                     )
             if authored_mode:
-                # The approved boundary above supplies only components/interfaces.
-                # Behavior guidance must come from the package the LLM just
-                # authored, never from the reviewed candidate's realization paths.
+                # The approved boundary above supplies only components/interfaces. Behavior
+                # guidance comes from the package the LLM just authored, not from the reviewed
+                # candidate's realization paths.
                 graph = extract_ag_graph(package_text)
                 for behavior in graph.behaviors:
                     for transition in behavior.transitions:
@@ -148,11 +145,9 @@ class AGAssuranceMixin:
             "assembly": prefix + "\n".join(assembly_lines),
         }
 
-
     def _prepare_ag_guided_generation(
         self, requirements: List[str]
     ) -> Optional[Dict[str, Any]]:
-        """Freeze R2 A/G decisions before any architecture or behavior is generated."""
         from ..prototyping.experiment_arms import RevisedExperimentArm
 
         if self.revised_experiment_arm is not RevisedExperimentArm.SEMANTIC_ASSURANCE:
@@ -171,21 +166,20 @@ class AGAssuranceMixin:
         try:
             plan = self._compile_ag_generation_plan(selected, requirements)
         except BaseException:
-            # Fail closed on the board too: a planning task whose compilation
-            # raised must not be archived as a successful ACCEPTED handoff
-            # (run_metrics counts COMPLETED sessions as successful handoffs).
+            # Fail closed on the board too: a planning task whose compilation raised is not
+            # archived as an ACCEPTED handoff (run_metrics counts COMPLETED sessions as
+            # successful handoffs).
             self._close_ag_planning_session(planning_session, success=False)
             raise
         self._close_ag_planning_session(planning_session, success=True)
         return plan
 
-
     def _open_ag_planning_session(self, requirements: List[str]) -> Optional[Any]:
         """Open the board task/session that archives the A/G decision turns.
 
-        Without this the decision conversation would be the only LLM work in the
-        run whose transcript is not application-owned — and §5.3 requires every
-        result to record what the model actually saw.
+        §5.3 requires every result to record what the model saw; without this the
+        decision conversation is the only LLM work in the run whose transcript is
+        not application-owned.
         """
         if (
             self.blackboard is None
@@ -255,17 +249,15 @@ class AGAssuranceMixin:
         )
         return handoff
 
-
     def _close_ag_planning_session(
         self, handoff: Optional[Any], *, success: bool = True,
     ) -> None:
         """Publish the typed planning result and close the session.
 
-        ``success`` mirrors the design handoff's rule (``collaboration.py``):
-        the archived result/task/session statuses are derived from the actual
-        outcome, never hard-coded — a compilation that failed closed must be
-        archived as REJECTED, or the coordination metrics count it as a
-        successful migrated handoff.
+        ``success`` follows the design handoff's rule (``collaboration.py``): the
+        archived result/task/session statuses come from the outcome, not a
+        constant, so a compilation that failed closed is archived as REJECTED and
+        not counted as a successful migrated handoff.
         """
         if not handoff:
             return
@@ -312,7 +304,6 @@ class AGAssuranceMixin:
             self.blackboard, self.AG_PLANNING_HANDOFF_TOPIC, "Orchestrator",
             handoff, "COMPLETED" if success else "REJECTED",
         )
-
 
     def _compile_ag_generation_plan(
         self, selected: List[Any], requirements: List[str]
@@ -374,7 +365,7 @@ class AGAssuranceMixin:
                         for component in planned_spec.components
                     ),
                 )
-            else:  # constructor validation should make this unreachable
+            else:
                 raise RuntimeError(
                     f"unsupported R2 generation mode {self.r2_generation_mode}"
                 )
@@ -406,9 +397,9 @@ class AGAssuranceMixin:
         authored_mode = (
             self.r2_generation_mode == R2_LLM_AUTHORED_GENERATION_MODE
         )
-        # Free-form authored packages have a separate authority boundary.  They
-        # cannot be losslessly reconstructed from the reviewed candidate spec,
-        # so ModelPlan-v2 attachment is limited to deterministic/decided modes.
+        # Free-form authored packages cannot be reconstructed from the reviewed
+        # candidate spec, so ModelPlan-v2 attachment is limited to
+        # deterministic/decided modes.
         behavior_plan = (
             None if authored_mode
             else compile_behavior_obligation_plan(planned_specs)
@@ -441,18 +432,15 @@ class AGAssuranceMixin:
             ),
         }
 
-
     def _materialize_guided_ag_contracts(
         self, model: SysMLModel, system_name: str
     ) -> SysMLModel:
-        """Attach planning provenance without adding shadow implementation."""
         if self._active_ag_generation_plan is None:
             return model
-        # The planning package may have been echoed by the assembly LLM even
-        # though it is not an implementation artifact.  Remove it before the
-        # first Blackboard commit, otherwise immutable-requirement protection
-        # correctly freezes provisional contract bodies and prevents terminal
-        # binding from replacing them.
+        # The assembly LLM may echo the planning package, which is not an
+        # implementation artifact. Remove it before the first Blackboard commit,
+        # or immutable-requirement protection freezes the provisional contract
+        # bodies and terminal binding cannot replace them.
         original_metadata = dict(getattr(model, "metadata", None) or {})
         original_text = get_sysml_text(model)
         sanitized_text = original_text
@@ -479,11 +467,9 @@ class AGAssuranceMixin:
         })
         return model
 
-
     def _reconcile_guided_ag_contract_layer(
         self, model_text: str, requirements: List[str]
     ) -> str:
-        """Bind frozen contracts to real terminal owners and behaviors."""
         from ..prototyping.experiment_arms import RevisedExperimentArm
 
         self.last_ag_binding_report = None
@@ -512,17 +498,16 @@ class AGAssuranceMixin:
         self.last_ag_binding_report = result.report.to_dict()
         return result.model_text
 
-
     def _apply_ag_contract_layer(
         self, model_text: str, requirements: List[str]
     ) -> str:
         """Merge the reviewed bounded A/G contract layer into the model (R2 only).
 
-        A/G-aware generation (Stage 2-3, §12): under `R2-BBAG`, the reviewed
-        decomposition for each selected requirement chain is emitted as valid SysML
-        and merged so the committed model carries the contracts. R0/R1 models must
-        never carry them (R1 is coordination-only). R2 is fail-closed: a missing
-        selected chain or failed syntax gate aborts rather than silently running R1.
+        A/G-aware generation (Stage 2-3, §12): under `R2-BBAG` the reviewed
+        decomposition for each selected chain is emitted as SysML and merged, so
+        the committed model carries the contracts. R0/R1 models do not carry them
+        (R1 is coordination-only). R2 fails closed: a missing selected chain or a
+        failed syntax gate aborts instead of falling back to R1.
         """
         from ..prototyping.experiment_arms import RevisedExperimentArm
 
@@ -553,10 +538,9 @@ class AGAssuranceMixin:
                         f"{spec.source_requirement}; A/G emission cannot invent it"
                     )
 
-            # The generated base model has already passed the syntax gate.
-            # Re-check it here so a later terminal mutation cannot smuggle a new
-            # parser/reference error into R2.  This gate uses the same narrowly
-            # final source policy. No state-machine spelling is allowlisted.
+            # Re-check the base model here so a later terminal mutation cannot add a
+            # parser/reference error to R2. Same final-source policy; no state-machine
+            # spelling is allowlisted.
             base_gate = _shared_check_syntax(
                 model_text,
                 fail_closed=True,
@@ -568,13 +552,12 @@ class AGAssuranceMixin:
                     f"{base_gate.short_summary()} (score={base_gate.score:.3f})"
                 )
 
-            # Produce one A/G package per selected chain, then gate each raw
-            # package with *no* diagnostic filtering. In DETERMINISTIC_SPEC_EMITTER
-            # mode the reviewed spec is rendered; in LLM_AUTHORED_AG mode the LLM
-            # authors it from the requirement + approved architecture. Either way an
-            # A/G syntax/reference defect must fail closed rather than be attributed
-            # to the base model's known standard-library diagnostics — so an LLM
-            # authoring error is honestly a failed R2 run, not a silent downgrade.
+            # One A/G package per selected chain, each gated with no diagnostic
+            # filtering. DETERMINISTIC_SPEC_EMITTER renders the reviewed spec;
+            # LLM_AUTHORED_AG has the LLM author it from the requirement plus the
+            # approved architecture. Either way an A/G syntax/reference defect fails
+            # closed instead of being attributed to the base model's stdlib
+            # diagnostics, so an authoring error shows up as a failed R2 run.
             llm_authored = (
                 self.r2_generation_mode == R2_LLM_AUTHORED_GENERATION_MODE
             )
@@ -607,15 +590,11 @@ class AGAssuranceMixin:
                         fail_closed=True,
                         filter_stdlib_diagnostics=False,
                     )
-                # Gate on ERRORS. The score is also depressed by warnings, and an
-                # authored package legitimately earns benign ones (naming a state
-                # `done` shadows a stdlib member). Rejecting on score threw away
-                # valid packages and fed back "SYNTAX ERRORS" for a model that had
-                # none. The strict score check survives only for the fully
-                # deterministic path, where every identifier comes from a reviewed
-                # spec: once the emitter renders concepts the MODEL chose, that
-                # assumption no longer holds, and a benign warning would cost the
-                # whole arm.
+                # Gate on errors. Warnings also depress the score, and an authored
+                # package earns benign ones (a state named `done` shadows a stdlib
+                # member), so rejecting on score discarded valid packages. The strict
+                # score check stays only on the fully deterministic path, where every
+                # identifier comes from a reviewed spec.
                 if package_gate.has_errors or (
                     not llm_authored
                     and not llm_decided
@@ -651,14 +630,12 @@ class AGAssuranceMixin:
         except Exception as exc:
             raise RuntimeError(f"R2-BBAG failed closed: {exc}") from exc
 
-
     @staticmethod
     def _syntax_gate_diagnostic_lines(
         gate: SyntaxCheckResult,
         *,
         limit: int = 8,
     ) -> List[str]:
-        """Bounded, actionable raw-gate diagnostics for logs and exceptions."""
         lines: List[str] = []
         for kind, items in (
             ("parser", gate.parser_errors),
@@ -674,7 +651,6 @@ class AGAssuranceMixin:
             lines.append(f"... {omitted} additional diagnostic(s) omitted")
         return lines
 
-
     def _generate_llm_authored_ag_until_quality_valid(
         self,
         spec,
@@ -684,12 +660,11 @@ class AGAssuranceMixin:
     ) -> Tuple[str, SyntaxCheckResult]:
         """Bounded, pre-commit syntax + gold-blind A/G-guided generation.
 
-        The total authoring budget stays fixed. Syntax-invalid candidates receive
-        only parser/reference feedback. Once syntax is valid, the same runtime
-        checker and pattern profile used after commit provide semantic feedback.
-        No evaluator gold is consulted. The first full PASS wins; otherwise the
-        best syntax-valid candidate is returned for normal post-commit routing and
-        surgical repair instead of discarding all generated engineering work.
+        The authoring budget is fixed. Syntax-invalid candidates get parser/
+        reference feedback only; once syntax is valid, the post-commit runtime
+        checker and pattern profile supply semantic feedback, with no evaluator
+        gold consulted. The first PASS wins, otherwise the best syntax-valid
+        candidate goes to normal post-commit routing and surgical repair.
         """
         from ..prototyping.ag_assurance import (
             check_safety_pattern_conformance,
@@ -705,10 +680,10 @@ class AGAssuranceMixin:
             Tuple[Tuple[int, int, int], str, SyntaxCheckResult, int]
         ] = None
         total_attempts = self.r2_authored_syntax_max_attempts
-        # One free-form call preserves the authored-SysML intervention. All
-        # remaining calls are structured decisions rendered by the deterministic
-        # emitter. They are a maximum, not a quota: PASS stops immediately, while
-        # missing architecture facts stop without asking the model to invent them.
+        # One free-form call keeps the authored-SysML intervention; the remaining
+        # calls are structured decisions rendered by the emitter. A maximum, not a
+        # quota: PASS stops immediately, and missing architecture facts stop rather
+        # than ask the model to invent them.
         structured_reserved = total_attempts >= 2
         freeform_attempts = 1
         latest_semantic_diagnostics = ""
@@ -798,7 +773,7 @@ class AGAssuranceMixin:
                 "syntax_summary": gate.short_summary(),
                 "diagnostics": self._syntax_gate_diagnostic_lines(gate),
                 # Rejected candidates otherwise disappear before a model commit.
-                # Retain them as intervention audit, never as model authority.
+                # Retain them as intervention audit, not as model authority.
                 "package_text": package_text,
                 "response_catalog": runtime_response_catalog,
             }
@@ -876,9 +851,9 @@ class AGAssuranceMixin:
                             else "STRUCTURED_FALLBACK"
                         )
                     ),
-                    # No SysML exists until a decision object validates and the
-                    # emitter runs. `None` is deliberate; false would conflate a
-                    # decision rejection with a raw syntax failure.
+                    # No SysML exists until a decision object validates and the emitter
+                    # runs. `None` rather than false, which would conflate a decision
+                    # rejection with a syntax failure.
                     "syntax_ok": None,
                     "ag_verdict": None,
                     "pattern_verdict": None,
@@ -1021,7 +996,6 @@ class AGAssuranceMixin:
             + " | ".join(self._syntax_gate_diagnostic_lines(last_gate))
         )
 
-
     def _generate_llm_authored_ag_package(
         self,
         spec,
@@ -1032,17 +1006,15 @@ class AGAssuranceMixin:
     ) -> str:
         """Author one chain's bounded A/G SysML package with the LLM.
 
-        LLM_AUTHORED_AG mode, setup (C). The LLM is given the stakeholder
-        requirement and the COMPLETE approved architecture from the frozen boundary
-        — components, owners, and each component's interfaces (the concepts it
-        consumes and produces) — plus the bounded SysML v2 convention. It is NOT
-        given the evaluator gold, nor the reviewed discharge wiring / timing /
-        priority / invariant facts: it must DERIVE the discharge edges, the
-        realizing behaviour, and those safety facts itself. So a decomposition the
-        LLM gets wrong yields a real generation accuracy below 1.0, and the A/G
-        assurance then detects and (partly) repairs the residual defects — the
-        robustness enhancement this measures. The output is gated and traced by the
-        same pipeline; a malformed package fails the run closed.
+        LLM_AUTHORED_AG mode, setup (C). The LLM gets the stakeholder requirement,
+        the approved architecture from the frozen boundary (components, owners,
+        each component's interfaces) and the bounded SysML v2 convention. It does
+        not get the evaluator gold or the reviewed discharge wiring / timing /
+        priority / invariant facts, so it derives the discharge edges, realizing
+        behaviour and safety facts itself; a wrong decomposition then shows up as
+        generation accuracy below 1.0 for the A/G assurance to detect and partly
+        repair. Output is gated and traced by the same pipeline; a malformed
+        package fails the run closed.
         """
         span = named_block_span(model_text, "requirement", spec.source_requirement)
         requirement_body = (
@@ -1085,10 +1057,6 @@ class AGAssuranceMixin:
             for item in response_entries
         ) or "  (no provenance-backed competing responses found)"
 
-        # On a feedback iteration the LLM is shown its previous attempt plus the
-        # A/G checker's diagnostics and asked to regenerate a complete, corrected
-        # package — the check gates every round, so the model converges toward a
-        # verified, internally-complete decomposition (robustness enhancement).
         feedback_section = ""
         if feedback:
             diagnostics = str(feedback.get("diagnostics") or "").strip()
@@ -1176,10 +1144,8 @@ class AGAssuranceMixin:
             index = text.find("package ")
         return (text[index:] if index != -1 else text).strip()
 
-
     @staticmethod
     def _format_ag_diagnostics(report) -> str:
-        """Render the A/G checker's diagnostics as an LLM fix-request list."""
         lines = []
         for diagnostic in report.diagnostics:
             where = (
@@ -1188,7 +1154,6 @@ class AGAssuranceMixin:
             )
             lines.append(f"- ({diagnostic.code}) {diagnostic.message}{where}")
         return "\n".join(lines) or "(no diagnostics)"
-
 
     def _generate_llm_decided_ag_spec(
         self,
@@ -1204,17 +1169,13 @@ class AGAssuranceMixin:
     ):
         """Ask the LLM for the engineering decisions and assemble the emitter spec.
 
-        LLM_DECIDED_SPEC mode. The model never writes SysML: it returns which
-        pattern the requirement instantiates, what starts the timing, how the
-        deadline divides, which producer discharges each assumption, and how the
-        responses are ordered. `ag_decision` validates that against the frozen
-        architecture boundary and builds the spec; `ag_emitter` renders it.
-
-        The reviewed answers stay withheld exactly as in the authored mode — the
-        boundary supplies components, ownership and interfaces, nothing more — so
-        agreement with gold remains a real accuracy measure. What changes is that a
-        wrong decision now yields a well-formed model that is wrong, instead of an
-        unparseable one whose engineering cannot be scored at all.
+        LLM_DECIDED_SPEC mode. The model writes no SysML: it returns the pattern,
+        what starts the timing, how the deadline divides, which producer discharges
+        each assumption, and the response order; `ag_decision` validates that
+        against the frozen architecture boundary and `ag_emitter` renders it. The
+        reviewed answers stay withheld as in the authored mode, so agreement with
+        gold is still an accuracy measure - a wrong decision yields a well-formed
+        model that is wrong rather than an unparseable one.
         """
         from ..prototyping.ag_decision import (
             INVARIANT_SOURCE_KINDS as KNOWN_INVARIANT_SOURCE_KINDS,
@@ -1346,17 +1307,15 @@ class AGAssuranceMixin:
             )
             + "Return only the JSON decision object."
         )
-        # Decisions are small and structured, so a validation failure is worth
-        # feeding back rather than discarding the run: the validator says exactly
-        # what is incoherent, and the model only has to repair that field. The
-        # validator still decides — a decision set that never becomes coherent
-        # fails closed, it is never patched here.
+        # Decisions are small and structured, so a validation failure is fed back
+        # instead of discarding the run: the validator names the incoherent field
+        # and the model repairs it. A decision set that never becomes coherent
+        # fails closed; it is not patched here.
         #
-        # The retry is a real multi-turn conversation (§2 reasoning continuity):
-        # the rejected decision object stays in the transcript as the model's own
-        # assistant turn, so "keep everything that was already valid" refers to
-        # something it can actually see. The turns are application-owned, so what
-        # each turn saw remains reproducible and digest-recordable.
+        # The retry is multi-turn (§2 reasoning continuity): the rejected decision
+        # object stays in the transcript as the model's own assistant turn, so
+        # "keep everything that was already valid" refers to something it can see.
+        # Turns are application-owned, so what each turn saw stays reproducible.
         from ..llm.interface import Conversation
 
         conversation = Conversation(self.llm, system_prompt=system_prompt)
@@ -1422,7 +1381,6 @@ class AGAssuranceMixin:
                     raise ArchitectureInputRequired(exc) from exc
                 # The requirement, architecture and schema are already in the
                 # conversation, so the follow-up turn carries only what is new.
-                # Repasting the whole prompt would re-state them as if unsaid.
                 attempt_prompt = (
                     f"Your previous decisions were rejected: {exc}\n"
                     "Return the corrected JSON decision object, keeping everything "
@@ -1433,21 +1391,18 @@ class AGAssuranceMixin:
             f"{max_decision_attempts} attempts: {last}"
         )
 
-
     def _author_llm_ag_with_feedback(
         self, spec, model_text: str, max_iterations: int = 4
     ) -> Dict[str, Any]:
         """Iteratively author a chain's A/G with the LLM under A/G-check feedback.
 
-        The LLM authors the bounded A/G; the committed-convention checker verifies
-        the merged model; on a non-PASS verdict the diagnostics + the previous
-        attempt are fed back and the LLM regenerates. The check gates every round,
-        so the model converges toward a verified, internally-complete decomposition
-        (verdict PASS, guarantees realised, assumptions discharged, patterns
-        conformant) — the robustness enhancement. The check is the oracle, so this
-        is sound; it maximises internal completeness/verifiability, not correctness
-        against a reviewed gold (that remains the gold's job). Bounded by
-        ``max_iterations``; returns the lowest-error attempt with its history.
+        The LLM authors the bounded A/G, the committed-convention checker verifies
+        the merged model, and a non-PASS verdict feeds the diagnostics plus the
+        previous attempt back for regeneration. The check gates every round, so the
+        loop converges on internal completeness (PASS, guarantees realised,
+        assumptions discharged, patterns conformant), not correctness against the
+        reviewed gold. Bounded by ``max_iterations``; returns the lowest-error
+        attempt with its history.
         """
         from ..prototyping.ag_contracts import check_ag_graph
         from ..prototyping.ag_extractor import extract_ag_graph
@@ -1458,9 +1413,9 @@ class AGAssuranceMixin:
         best_verdict: Optional[str] = None
         best_codes: Dict[str, int] = {}
         history: List[Dict[str, Any]] = []
-        # Every attempt is retained: a rejected round is the evidence for *why*
-        # the loop did or did not converge, and a syntax-rejected package is
-        # otherwise unrecoverable (it never reaches the returned model).
+        # Every attempt is retained: a rejected round is the evidence for whether
+        # the loop converged, and a syntax-rejected package never reaches the
+        # returned model.
         attempts: List[str] = []
         for iteration in range(max_iterations):
             attempts.append(authored)
@@ -1468,9 +1423,9 @@ class AGAssuranceMixin:
             gate = _shared_check_syntax(
                 authored, fail_closed=True, filter_stdlib_diagnostics=False
             )
-            # errors only — a warning-depressed score is not a syntax failure, and
-            # rejecting on it discarded valid packages and fed back a defect list
-            # for a model that had none, destabilising the next round
+            # errors only: a warning-depressed score is not a syntax failure, and
+            # rejecting on it discarded valid packages and destabilised the next
+            # round with a defect list for a model that had none
             if gate.has_errors or gate.warnings:
                 history.append({
                     "iteration": iteration, "syntax_ok": False,
@@ -1514,9 +1469,9 @@ class AGAssuranceMixin:
         return {
             "final_package": best_package,
             "final_merged": model_text.rstrip() + "\n\n" + best_package + "\n",
-            # The delivered package is the lowest-error attempt, which is not
-            # necessarily the last one (a later round can regress, even to invalid
-            # syntax). Report the verdict of what is actually returned.
+            # The delivered package is the lowest-error attempt, not necessarily the
+            # last (a later round can regress to invalid syntax). Report the verdict
+            # of what is returned.
             "final_verdict": best_verdict,
             "final_error_count": best_errors,
             "final_error_codes": best_codes,
@@ -1524,16 +1479,15 @@ class AGAssuranceMixin:
             "attempts": attempts,
         }
 
-
     def _build_ag_trace(self, model_text: str) -> Dict[str, Any]:
-        """R2-BBAG A/G intervention: extract and check the bounded A/G graph from
-        the committed model and publish the diagnostics as a typed ANALYSIS record.
+        """R2-BBAG A/G intervention: extract and check the bounded A/G graph from the
+        committed model, publishing the diagnostics as a typed ANALYSIS record.
 
         The committed SysML model is the sole authority (§6.2): the graph is read
-        out of the model, never supplied from JSON, so a model that carries no A/G
-        contracts yields an honest INCOMPLETE trace rather than fabricated content.
-        This is intervention evidence, not gold-scored accuracy — the derived view
-        records ``evaluation_ready=False`` until the independent evaluator lands.
+        out of the model rather than supplied from JSON, so a model with no A/G
+        contracts yields an INCOMPLETE trace. This is intervention evidence, not
+        gold-scored accuracy - the derived view records ``evaluation_ready=False``
+        until the independent evaluator lands.
         """
         from ..prototyping.ag_extractor import (
             extract_ag_graph,
@@ -1657,7 +1611,6 @@ class AGAssuranceMixin:
             "_terminal_model_sysml": self.blackboard.current_model.model_text,
         }
 
-
     def _run_ag_analysis_round(
         self,
         graph,
@@ -1671,13 +1624,11 @@ class AGAssuranceMixin:
 
         Checks the graph, publishes the typed ``analysis.ag_trace`` and
         ``analysis.pattern_conformance`` records, routes every diagnostic to a
-        typed failure, and dispatches repair/blocked tasks. Returns
-        ``(report, pattern, failures, analysis_record, repair_candidate)``.
-
-        ``allow_repair`` gates dependency-closed surgical repair. Every named
-        repairable obligation receives its own candidate. A committed patch may
-        supersede the rest, but a rejected patch cannot silently suppress the
-        next obligation in the fixed run-level budget.
+        typed failure, and dispatches repair/blocked tasks. ``allow_repair`` gates
+        dependency-closed surgical repair; each named repairable obligation gets
+        its own candidate, so a rejected patch does not suppress the next
+        obligation in the fixed run-level budget. Returns ``(report, pattern,
+        failures, analysis_record, repair_candidate)``.
         """
         from ..prototyping.ag_assurance import (
             FailureRoute,
@@ -1713,12 +1664,12 @@ class AGAssuranceMixin:
             "SafetyPatternChecker",
             pattern,
         )
-        # Pattern conformance is already a first-class report. Do not synthesize a
-        # generic PATTERN_NONCONFORMANT repair target: it collapses missing
-        # invariants, contract vocabulary, and behavior topology into one code and
-        # consequently authorizes a behavior-only repair for defects outside that
-        # slice. Itemized checker diagnostics (for example
-        # PATTERN_TOPOLOGY_INCOMPLETE) remain routable.
+        # Pattern conformance has its own report, so no generic
+        # PATTERN_NONCONFORMANT repair target is synthesized: it would collapse
+        # missing invariants, contract vocabulary and behavior topology into one
+        # code and authorize a behavior-only repair for defects outside that
+        # slice. Itemized diagnostics (PATTERN_TOPOLOGY_INCOMPLETE etc.) stay
+        # routable.
         routed_diags = list(report.diagnostics)
         failures = route_failure_diagnostics(
             routed_diags,
@@ -1762,12 +1713,11 @@ class AGAssuranceMixin:
                         {
                             "failure_id": failure["failure_id"],
                             "status": "BLOCKED",
-                            # `multi_chain_auto_repair_out_of_scope` used to be
-                            # reported here whenever several chains coexisted.
-                            # Repair now runs per chain as a fixpoint, so that
-                            # exemption no longer exists and the only honest
-                            # reasons left are budget and an explicitly disabled
-                            # run. Archived artifacts still carry the old string.
+                            # `multi_chain_auto_repair_out_of_scope` was reported
+                            # here whenever several chains coexisted. Repair now runs
+                            # per chain as a fixpoint, so the only reasons left are
+                            # budget and a disabled run. Archived artifacts still
+                            # carry the old string.
                             "reason": (
                                 "automatic_repair_budget_exhausted"
                                 if allow_repair
@@ -1855,13 +1805,11 @@ class AGAssuranceMixin:
                 )
         return report, pattern, failures, analysis_record, repair_candidates
 
-
     def _apply_ag_input_disposition(
         self,
         failures: Dict[str, Any],
         source_requirement: str,
     ) -> None:
-        """Make an upstream input gap dominate dependent local repair routes."""
         from ..prototyping.ag_assurance import FailureRoute
 
         input_gap = self.ag_input_dispositions.get(source_requirement)
@@ -1871,10 +1819,10 @@ class AGAssuranceMixin:
                     "PRIORITY_TOPOLOGY_INCOMPLETE"
                 ):
                     continue
-                # The local wiring symptom is not independently repairable once
-                # this run has established that its response vocabulary is absent.
-                # Carry that upstream disposition forward instead of allowing the
-                # RepairAgent to invent a response Signal in a behavior-only slice.
+                # The local wiring symptom is not independently repairable once this run
+                # has established that the response vocabulary is absent. Carry the
+                # upstream disposition forward so the RepairAgent does not invent a
+                # response Signal in a behavior-only slice.
                 failure.update({
                     "classification": "CONTRACT_INCOMPLETENESS",
                     "route": FailureRoute.CLARIFICATION_OR_BLOCKED.value,
@@ -1885,7 +1833,6 @@ class AGAssuranceMixin:
                     "input_disposition": dict(input_gap),
                 })
 
-
     def _close_unattempted_ag_repair_candidate(
         self,
         candidate,
@@ -1895,10 +1842,9 @@ class AGAssuranceMixin:
     ) -> None:
         """Give an unattempted candidate an explicit terminal disposition.
 
-        Blackboard has no SUPERSEDED/DEFERRED task state, so the task transitions
-        to BLOCKED while the repair decision carries the semantically precise
-        status. This prevents orphan PENDING tasks without misreporting an LLM
-        attempt.
+        Blackboard has no SUPERSEDED/DEFERRED task state, so the task goes to
+        BLOCKED while the repair decision carries the precise status. Avoids orphan
+        PENDING tasks without reporting an LLM attempt that never happened.
         """
         from ..prototyping.blackboard import RecordType, TaskStatus
 
@@ -1933,9 +1879,7 @@ class AGAssuranceMixin:
             result_record_ids=(decision.record_id,),
         )
 
-
     def _build_ag_repair_retry_candidate(self, candidate, *, retry_index: int):
-        """Route one bounded retry with the previous gate's actionable feedback."""
         from ..prototyping.blackboard import RecordType
 
         failure_record_id, analysis_record_id, previous_task_id = candidate
@@ -2009,35 +1953,21 @@ class AGAssuranceMixin:
             repair_task.task_id,
         )
 
-
     def _build_multichain_ag_trace(self, graphs) -> Dict[str, Any]:
         """Aggregate independent per-chain A/G traces (several selected chains).
 
         Each chain is checked on its own graph and publishes its own typed
-        ``analysis.ag_trace`` record — one assurance case per source requirement.
-        The run-level verdict is the conjunction: PASS only when every chain is
-        PASS.
-
-        **Repair runs here too, under one fixed run-level budget, as a fixpoint.**
-        It used to be disabled outright on the grounds that surgical repair is a
-        single-chain capability. The repair itself is — it edits one dependency-
-        closed slice — but disabling it for multi-chain runs had a consequence
-        nobody had stated: every pilot selects three chains, so the Increment 3
-        exit gate ("one authorised model-semantic failure is automatically routed,
-        attempted, and rechecked against the committed revision") was never
-        exercised by any evidence run, and every archived repair decision read
-        `multi_chain_auto_repair_out_of_scope` — not a repair that failed, a repair
-        that never ran.
-
-        What made it more than a flag is staleness: an accepted repair commits a
-        new revision, which invalidates every OTHER chain's graph. So each round
-        re-extracts all chains from the current committed revision, analyses them,
-        attempts authorized repairs in deterministic chain/diagnostic order, and
-        — if one is accepted — starts a new round. A rejected candidate no longer
-        aborts the run or leaves other chains' tasks PENDING. The accumulators are
-        rebuilt per round so returned artifacts describe the terminal revision,
-        while `analysis_history` keeps every round. Once the fixed budget is spent,
-        each remaining candidate receives an explicit DEFERRED disposition.
+        ``analysis.ag_trace`` record, and the run-level verdict is the conjunction.
+        Repair runs here too, under one fixed run-level budget, as a fixpoint: an
+        accepted repair commits a new revision that invalidates every other chain's
+        graph, so each round re-extracts all chains from the current committed
+        revision, analyses them, attempts authorized repairs in deterministic
+        chain/diagnostic order, and starts a new round if one is accepted. A
+        rejected candidate does not abort the run or leave other chains' tasks
+        PENDING. The accumulators are rebuilt per round so returned artifacts
+        describe the terminal revision, while `analysis_history` keeps every round;
+        once the budget is spent, each remaining candidate gets an explicit
+        DEFERRED disposition.
         """
         from ..prototyping.ag_extractor import extract_ag_graphs
         from ..prototyping.ag_repair import attempt_dependency_closed_ag_repair
@@ -2056,8 +1986,8 @@ class AGAssuranceMixin:
         checker_version: Optional[str] = None
 
         while True:
-            # per round: the artifacts must describe ONE revision, so anything
-            # accumulated from a superseded revision is discarded
+            # per round: the artifacts describe one revision, so anything accumulated
+            # from a superseded revision is discarded
             chains = []
             pattern_cases = []
             pattern_per_chain = []
@@ -2105,10 +2035,10 @@ class AGAssuranceMixin:
 
             if not candidate_groups:
                 break
-            # Fair deterministic ordering: attempt the first named obligation
-            # from every failing chain before a second obligation from any one
-            # chain. A candidate's one bounded feedback retry still stays adjacent
-            # to that candidate, so the retry sees an unchanged base revision.
+            # Deterministic ordering: attempt the first named obligation from every
+            # failing chain before a second from any one chain. A candidate's bounded
+            # feedback retry stays adjacent to it, so the retry sees an unchanged
+            # base revision.
             candidates: list[tuple] = []
             for obligation_index in range(
                 max(len(group) for group in candidate_groups)

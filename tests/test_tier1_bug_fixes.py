@@ -1,7 +1,7 @@
 """Regression tests for the 2026-08-26 tier-1 semantic fixes.
 
-Each test pins the CORRECTED behavior of a defect no prior test covered
-(which is how all six survived a 1700-test green suite).
+Each pins the corrected behavior of a defect no prior test covered, which is
+how all six survived a 1700-test green suite.
 """
 from src.dse.domain_objective import mass_limit
 from src.dse.physics_estimator import DesignInputs
@@ -24,7 +24,7 @@ def _scenario(passed: bool, tags):
     )
 
 
-def test_mass_limit_takes_the_tightest_upper_bound():
+def test_mass_limit_tightest_bound():
     reqs = [
         "REQ-CONS-001: maximum take-off mass shall not exceed 25 kg.",
         "REQ-CONS-004: the all-up mass shall be limited to 4 kg.",
@@ -34,15 +34,15 @@ def test_mass_limit_takes_the_tightest_upper_bound():
     assert rid == "REQ-CONS-004"
 
 
-def test_trigger_conflict_is_untestable_not_passed():
+def test_trigger_conflict_untestable():
     conflicted = _scenario(False, ["emergency", "trigger_conflict"])
     real_pass = _scenario(True, [])
     # excluded from the denominator: neither free PASS nor penalised FAIL
     assert _compute_score([conflicted, real_pass]) == 1.0
-    assert _compute_score([conflicted]) == 1.0  # nothing testable -> neutral
+    assert _compute_score([conflicted]) == 1.0
 
 
-def test_constraint_only_failures_reach_the_combined_score():
+def test_constraint_failure_scored():
     br = BehavioralSimResult(
         model_name="m",
         scenario_results=[_scenario(False, ["parametric"])],
@@ -56,7 +56,7 @@ def test_constraint_only_failures_reach_the_combined_score():
     assert sim.combined_score < 1.0
 
 
-def test_verdict_robustness_is_one_when_a_veto_fired():
+def test_veto_gives_full_robustness():
     from src.dse.evaluator import DesignEvaluator, EvaluationResult
 
     ev = DesignEvaluator(quality_threshold=0.75)
@@ -65,12 +65,12 @@ def test_verdict_robustness_is_one_when_a_veto_fired():
         "safety_assurance": 0.20, "requirement_coverage": 0.9,
         "structural_completeness": 0.9, "interface_quality": 0.9,
     }
-    result.weighted_total = 0.70  # veto-capped below threshold
+    result.weighted_total = 0.70
     result.issues = ["[VETO] safety_assurance=0.20 < 0.40 — floor"]
     assert ev.verdict_robustness(result) == 1.0
 
 
-def test_emitter_neither_fabricates_payload_asserts_nor_satisfies_unmet():
+def test_emitter_no_unmet_satisfy():
     d = DesignInputs(1.0, 12000, 6, 4, 18 * 0.0254 / 2, 0.0)
     rep = close_the_loop(d, [], [
         "REQ-PERF-002: endurance at least 15 minutes.",
@@ -81,9 +81,8 @@ def test_emitter_neither_fabricates_payload_asserts_nor_satisfies_unmet():
     sysml, ok = emit_realization_package(rep)
     assert ok
     if payload and payload[0].met is False:
-        # unmet payload verdict: no fabricated endurance assert, no satisfy
         assert "satisfy req_func_003;" not in sysml
-    # payload has no realized attribute — never assert endurance in its name
+    # payload has no realized attribute - no endurance assert in its name
     for line in sysml.splitlines():
         if "realizationCloses" in line and "0.3" in line:
             raise AssertionError(f"fabricated payload assert: {line}")

@@ -1,16 +1,4 @@
-"""
-constraint_checker.py
-
-从 SysML 文本里提取 assert constraint 块并评估。
-
-评估分三类：
-  STATIC    — 两侧都是 initial_values 里的已知常量，直接计算
-  GUARD     — LHS 是状态机 guard 变量（运行时变量），由 behavioral_sim 已验证
-  UNCHECKED — LHS 是运行时变量但无对应 guard，需要外部仿真才能验证
-
-属性值提取：优先使用 syside Compiler 精确求值（支持算术表达式和单位），
-          降级到调用方传入的 initial_values 字典。
-"""
+"""constraint_checker.py"""
 
 from __future__ import annotations
 
@@ -21,17 +9,13 @@ from typing import List, Optional, Tuple
 from ..utils.sysml_text_utils import find_block_end
 
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
 @dataclass
 class ParsedConstraint:
     name: str
     owner_part: str
-    lhs: str          # 变量名
-    operator: str     # <=, >=, <, >, ==
-    rhs: str          # 变量名或字面量
+    lhs: str
+    operator: str
+    rhs: str
     raw_expr: str
     plan_constraint_id: Optional[str] = None
     provenance: str = "UNSPECIFIED"
@@ -41,11 +25,6 @@ class ParsedConstraint:
     containing_behavior: Optional[str] = None
     containing_state: Optional[str] = None
 
-
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Parser
-# ---------------------------------------------------------------------------
 
 _ASSERT_RE = re.compile(
     r'assert\s+constraint\s+(\w+)\s*\{([^}]+)\}',
@@ -65,7 +44,6 @@ _PLAN_RE = re.compile(
 )
 
 def _find_owner(text: str, match_start: int) -> str:
-    """Resolve the innermost enclosing part definition."""
     owners: List[Tuple[str, int]] = []
     for match in _PART_RE.finditer(text):
         opening = text.find("{", match.start(), match.end())
@@ -100,7 +78,6 @@ def _find_state_context(
     text: str,
     match_start: int,
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Resolve enclosing state definition and state usage lexically."""
     behavior: Optional[Tuple[str, int, int]] = None
     for match in re.finditer(
         r"\bstate\s+def\s+([A-Za-z_]\w*)\s*\{", text
@@ -132,10 +109,7 @@ def _find_state_context(
 
 
 def extract_constraints(sysml_text: str) -> List[ParsedConstraint]:
-    """
-    从 SysML 文本里提取所有 assert constraint 块。
-    返回 ParsedConstraint 列表。
-    """
+    """从 SysML 文本里提取所有 assert constraint 块。"""
     results: List[ParsedConstraint] = []
     for m in _ASSERT_RE.finditer(sysml_text):
         name      = m.group(1)
@@ -170,10 +144,6 @@ def extract_constraints(sysml_text: str) -> List[ParsedConstraint]:
     return results
 
 
-# ---------------------------------------------------------------------------
-# Evaluator
-# ---------------------------------------------------------------------------
-
 def eval_op(lhs_val: float, op: str, rhs_val: float) -> bool:
     if op == "<=": return lhs_val <= rhs_val
     if op == ">=": return lhs_val >= rhs_val
@@ -181,9 +151,3 @@ def eval_op(lhs_val: float, op: str, rhs_val: float) -> bool:
     if op == ">":  return lhs_val >  rhs_val
     if op == "==": return lhs_val == rhs_val
     return False
-
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------

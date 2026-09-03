@@ -1,20 +1,20 @@
-"""Forward-flight power → range model for realization-level checks.
+"""Forward-flight power -> range model for realization-level checks.
 
-This is a pure lumped momentum-theory model, moved from ``gazebo_poc`` so the
-realization layer can evaluate forward-flight speed/range without depending on
-Gazebo. Gazebo/SITL can later calibrate its drag-area assumption.
+Lumped momentum theory, moved from ``gazebo_poc`` so the realization layer
+can evaluate forward-flight speed/range without Gazebo. Gazebo/SITL can
+later calibrate its drag-area assumption.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
 
-# Deliberately the uncalibrated defaults: catalog calibration (set_calibration)
-# applies only inside physics_estimator's hover path, never to this lumped tier.
+# The uncalibrated defaults: catalog calibration (set_calibration) applies only
+# inside physics_estimator's hover path, not to this lumped tier.
 from ..dse.physics_estimator import FOM, G, RHO
 
-DEFAULT_DRAG_AREA = 0.05   # m², equivalent flat-plate area f for a small multirotor
-MAX_GRID_SPEED_MPS = 60.0  # wide enough that speed checks are bounded by physics, not array length
+DEFAULT_DRAG_AREA = 0.05
+MAX_GRID_SPEED_MPS = 60.0  # bounds speed checks by physics, not array length
 
 
 def speed_grid(step_mps: float = 0.5, max_mps: float = MAX_GRID_SPEED_MPS) -> list[float]:
@@ -24,7 +24,6 @@ def speed_grid(step_mps: float = 0.5, max_mps: float = MAX_GRID_SPEED_MPS) -> li
 
 
 def _induced_velocity_forward(V: float, v_h: float) -> float:
-    """Glauert forward-flight induced velocity."""
     v_i = v_h
     for _ in range(100):
         new = v_h * v_h / math.sqrt(V * V + v_i * v_i)

@@ -16,7 +16,7 @@ _SENSOR_MODEL = """package P {
 }"""
 
 
-def test_sensor_connections_are_one_shared_fact_for_dse_consumers():
+def test_sensor_connections_shared_fact():
     facts = extract_dse_model_facts(_SENSOR_MODEL, {"num_sensors": 2})
 
     assert facts.sensors is not None
@@ -24,7 +24,7 @@ def test_sensor_connections_are_one_shared_fact_for_dse_consumers():
     assert facts.sensors.connected_instances == frozenset({"gps1", "gps2"})
 
 
-def test_sensor_fidelity_uses_connection_objects_without_old_regex_state():
+def test_fidelity_uses_connections():
     model = SysMLModel(name="P")
     model.metadata["last_sysml_text"] = _SENSOR_MODEL
 

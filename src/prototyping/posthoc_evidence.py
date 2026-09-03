@@ -1,8 +1,8 @@
 """Operator tooling for the human-gated Option 2 post-hoc evidence chain.
 
-This module prepares and validates evidence; it does not make review decisions.
-In particular, it never sets an artifact to ``FROZEN``, never asserts an
-independent/blind-review flag, and never chooses a per-run failure class.
+Prepares and validates evidence without making review decisions: it does not
+set an artifact to ``FROZEN``, assert an independent/blind-review flag, or
+choose a per-run failure class.
 """
 from __future__ import annotations
 
@@ -309,7 +309,7 @@ physical verification.
 
 
 def stamp_human_digest(*, path: str | Path, kind: str) -> str:
-    """Compute only the digest after the human has already made all attestations."""
+    """Compute the digest after the human has made all attestations."""
     artifact_path = Path(path)
     value = _read_json(artifact_path)
     if value.get("status") != "FROZEN":

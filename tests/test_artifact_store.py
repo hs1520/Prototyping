@@ -18,7 +18,7 @@ from src.prototyping.artifact_store import (
 )
 
 
-def test_run_bundles_are_isolated_and_latest_only_accepts_final(tmp_path):
+def test_latest_accepts_only_final(tmp_path):
     staging = create_staging_bundle(tmp_path)
     atomic_write_json(staging / "realization_run.json", {"run": 1})
     run_dir = assign_run_id(staging, "run-1", tmp_path)
@@ -32,7 +32,7 @@ def test_run_bundles_are_isolated_and_latest_only_accepts_final(tmp_path):
     assert json.loads((latest / "realization_run.json").read_text()) == {"run": 1}
 
 
-def test_final_bundle_is_immutable_to_evidence_runners(tmp_path):
+def test_final_bundle_immutable(tmp_path):
     run_dir = tmp_path / "runs" / "r"
     run_dir.mkdir(parents=True)
     write_state(run_dir, "FINAL", run_id="r")
@@ -41,14 +41,14 @@ def test_final_bundle_is_immutable_to_evidence_runners(tmp_path):
         ensure_open_bundle(run_dir)
 
 
-def test_authoritative_lock_rejects_concurrent_writer(tmp_path):
+def test_lock_rejects_second_writer(tmp_path):
     with AuthoritativeRunLock(tmp_path):
         with pytest.raises(RuntimeError, match="another authoritative run"):
             with AuthoritativeRunLock(tmp_path):
                 pass
 
 
-def test_explicit_output_dir_is_the_single_source_for_child_runners(tmp_path, monkeypatch):
+def test_explicit_output_dir_wins(tmp_path, monkeypatch):
     bundle = tmp_path / "runs" / "r"
     bundle.mkdir(parents=True)
     monkeypatch.setenv(OUTPUT_DIR_ENV, str(bundle))
@@ -56,7 +56,7 @@ def test_explicit_output_dir_is_the_single_source_for_child_runners(tmp_path, mo
     assert output_dir() == bundle.resolve()
 
 
-def test_default_writer_uses_scratch_root_not_published_latest(tmp_path, monkeypatch):
+def test_default_writer_uses_scratch(tmp_path, monkeypatch):
     import src.prototyping.artifact_store as store
 
     monkeypatch.delenv(OUTPUT_DIR_ENV, raising=False)
@@ -71,7 +71,7 @@ def test_default_writer_uses_scratch_root_not_published_latest(tmp_path, monkeyp
     assert latest_output_dir() == published.resolve()
 
 
-def test_latest_reader_fails_closed_instead_of_reading_legacy_root(
+def test_reader_fails_closed_no_bundle(
     tmp_path, monkeypatch
 ):
     import src.prototyping.artifact_store as store
@@ -89,7 +89,7 @@ def test_latest_reader_fails_closed_instead_of_reading_legacy_root(
         input_dir()
 
 
-def test_latest_reader_rejects_non_final_target(tmp_path, monkeypatch):
+def test_reader_rejects_non_final(tmp_path, monkeypatch):
     import src.prototyping.artifact_store as store
 
     monkeypatch.delenv(OUTPUT_DIR_ENV, raising=False)
@@ -104,7 +104,7 @@ def test_latest_reader_rejects_non_final_target(tmp_path, monkeypatch):
         latest_output_dir()
 
 
-def test_explicit_input_is_independent_from_scratch_output(tmp_path, monkeypatch):
+def test_explicit_input_independent(tmp_path, monkeypatch):
     source = tmp_path / "source"
     destination = tmp_path / "destination"
     monkeypatch.setenv(INPUT_DIR_ENV, str(source))
@@ -115,7 +115,7 @@ def test_explicit_input_is_independent_from_scratch_output(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("variable", [INPUT_DIR_ENV, OUTPUT_DIR_ENV])
-def test_explicit_configuration_cannot_reactivate_legacy_root(
+def test_legacy_root_rejected(
     tmp_path, monkeypatch, variable
 ):
     import src.prototyping.artifact_store as store
@@ -130,7 +130,7 @@ def test_explicit_configuration_cannot_reactivate_legacy_root(
         resolver()
 
 
-def test_incomplete_new_run_cannot_replace_previous_latest(tmp_path):
+def test_incomplete_run_keeps_latest(tmp_path):
     old = tmp_path / "runs" / "old"
     old.mkdir(parents=True)
     write_state(old, "FINAL", run_id="old")

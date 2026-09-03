@@ -1,5 +1,7 @@
 """Fixed role-level structural scenarios for controlled model comparison.
-Kept deliberately: thesis baseline/evidence code, exercised by its own tests and invoked on demand rather than wired into the runtime pipeline. Do not remove as dead code.
+
+Thesis baseline/evidence code: exercised by its own tests and invoked on
+demand rather than wired into the runtime pipeline, so it is not dead code.
 """
 from __future__ import annotations
 
@@ -25,8 +27,8 @@ class ControlledScenarioSpec:
 
 
 # The set is requirement-derived once and fixed across every experimental arm.
-# Role resolution adapts names to a model, but a missing role produces FAIL;
-# it never removes that scenario from the denominator.
+# Role resolution adapts names to a model; a missing role produces FAIL
+# rather than dropping the scenario from the denominator.
 CONTROLLED_SCENARIOS: tuple[ControlledScenarioSpec, ...] = (
     ControlledScenarioSpec(
         "S01_SENSOR_TO_CONTROLLER", "sensor", "controller",
@@ -66,7 +68,7 @@ CONTROLLED_SCENARIOS: tuple[ControlledScenarioSpec, ...] = (
 def evaluate_controlled_scenarios(
     model_text: str, *, model_name: str = "model"
 ) -> dict[str, Any]:
-    """Evaluate exactly the same seven existential role paths for every model."""
+    """Evaluate the same seven existential role paths for every model."""
     graph = extract_behavioral_graph(model_text)
     execution = build_exec_graph(graph)
     roles = classify_parts_by_role(graph)

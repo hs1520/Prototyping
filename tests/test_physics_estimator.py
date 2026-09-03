@@ -1,8 +1,8 @@
-"""Multirotor physics estimator (DSE→SITL bridge): design inputs → emergent metrics.
+"""Multirotor physics estimator (DSE->SITL bridge): design inputs -> emergent metrics.
 
-All-up mass is EMERGENT (frame base + battery pack + payload), so a bigger battery
-pays a weight penalty — the real battery-vs-endurance-vs-cost trade-off. These tests
-pin physical sanity (realistic magnitude + correct monotonic responses), not exact values.
+All-up mass is emergent (frame base + battery pack + payload), so a bigger
+battery pays a weight penalty. These tests pin magnitude and monotonic
+responses, not exact values.
 """
 from __future__ import annotations
 
@@ -22,12 +22,12 @@ _BASE = DesignInputs(
 )
 
 
-def test_all_up_mass_emerges_from_base_battery_payload():
+def test_mass_emerges():
     m = total_mass_kg(_BASE)
-    assert 1.5 < m < 2.5   # ~1.0 frame + ~0.5 battery(5Ah4S) + 0.5 payload
+    assert 1.5 < m < 2.5
 
 
-def test_typical_quad_endurance_is_realistic():
+def test_quad_endurance_realistic():
     assert 8.0 <= endurance_min(_BASE) <= 30.0
 
 
@@ -36,13 +36,12 @@ def test_heavier_payload_reduces_endurance():
     assert endurance_min(heavy) < endurance_min(_BASE)
 
 
-def test_bigger_battery_increases_endurance_in_normal_range():
+def test_bigger_battery_more_endurance():
     bigger = DesignInputs(0.5, 8000, 4, 4, 0.13)
     assert endurance_min(bigger) > endurance_min(_BASE)
 
 
-def test_bigger_battery_pays_a_weight_penalty():
-    # the key trade-off mechanism: more capacity → heavier all-up mass → costlier
+def test_bigger_battery_weighs_more():
     bigger = DesignInputs(0.5, 12000, 4, 4, 0.13)
     assert total_mass_kg(bigger) > total_mass_kg(_BASE)
 
@@ -67,42 +66,41 @@ def test_zero_area_is_safe():
 
 
 def test_bigger_rotor_is_heavier():
-    # rotor sizing now has a mass cost (motors+props+arms ∝ disk area)
     small = total_mass_kg(DesignInputs(0.5, 5000, 4, 4, 0.13))
     big = total_mass_kg(DesignInputs(0.5, 5000, 4, 4, 0.25))
     assert big > small
 
 
 def test_rotor_sizing_has_internal_optimum():
-    # bigger rotor = more efficient but heavier → endurance peaks at a middle radius,
-    # NOT the largest (so the outer search won't collapse to max rotor)
+    # bigger rotor = more efficient but heavier -> endurance peaks at a middle
+    # radius, so the outer search does not collapse to max rotor
     base = endurance_min(DesignInputs(0.5, 5000, 4, 4, 0.13))
     mid = endurance_min(DesignInputs(0.5, 5000, 4, 4, 0.16))
     huge = endurance_min(DesignInputs(0.5, 5000, 4, 4, 0.30))
     assert mid >= base and mid > huge
 
 
-def test_hover_endurance_in_published_multirotor_range():
-    # vs published specs (AUW + battery + rotor); estimator HOVER vs vendor CRUISE
-    # max-flight-time → realistic hover magnitude (hover < cruise, vendor optimistic)
+def test_hover_matches_published_range():
+    # vs published specs (AUW + battery + rotor); estimator hover vs vendor cruise
+    # max-flight-time, so hover < cruise
     from src.dse.physics_estimator import (
         battery_energy_wh, electrical_power_w, disk_area_m2, USABLE,
     )
     def hover(auw, cap, cells, rot, r):
         return battery_energy_wh(cap, cells) * USABLE / electrical_power_w(auw, disk_area_m2(rot, r)) * 60
-    assert 18 <= hover(0.907, 3850, 4, 4, 0.110) <= 35   # DJI Mavic 2 (rated 31min cruise)
-    assert 18 <= hover(1.388, 5870, 4, 4, 0.120) <= 35   # DJI Phantom 4 Pro (rated 30min)
+    assert 18 <= hover(0.907, 3850, 4, 4, 0.110) <= 35
+    assert 18 <= hover(1.388, 5870, 4, 4, 0.120) <= 35
 
 
 def test_fom_is_runtime_tunable():
-    # regression: hover_power_w must read FOM at CALL time (was bound at import via a
-    # default arg → FOM changes / sensitivity were silently ignored)
+    # regression: hover_power_w reads FOM at call time; bound at import via a
+    # default arg, FOM changes and sensitivity were ignored
     import src.dse.physics_estimator as pe
     d = DesignInputs(0.5, 5000, 4, 4, 0.13)
     base = endurance_min(d)
     orig = pe.FOM
     pe.FOM = orig * 0.8
     try:
-        assert endurance_min(d) != base   # FOM change now takes effect
+        assert endurance_min(d) != base
     finally:
         pe.FOM = orig

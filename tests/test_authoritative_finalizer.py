@@ -117,7 +117,7 @@ def _finalize(path: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_finalizer_closes_a_complete_same_run_bundle(tmp_path):
+def test_closes_complete_bundle(tmp_path):
     bundle = tmp_path / "bundle"
     _bundle(bundle)
 
@@ -137,7 +137,7 @@ def test_finalizer_closes_a_complete_same_run_bundle(tmp_path):
     assert (bundle / "research_conclusion.md").exists()
 
 
-def test_finalizer_rejects_a_changed_requirement_set(tmp_path):
+def test_rejects_changed_requirements(tmp_path):
     bundle = tmp_path / "bundle"
     run = _bundle(bundle)
     run["requirements"][0]["text"] = "A different requirement."

@@ -1,7 +1,7 @@
-"""Semantic-surgery gates: refinement fixes the DESIGN, never the SPEC.
+"""Semantic-surgery gates: refinement fixes the design, not the spec.
 
-The surgical merge must not add or drop requirement definitions, and must not
-shed satisfy links — the same silent-loss failure mode the connect gate guards.
+Invariant: the surgical merge does not add or drop requirement definitions and
+does not shed satisfy links, the loss mode the connect gate also guards.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def test_identical_model_passes_gates():
     assert ok, why
 
 
-def test_dropping_a_requirement_def_is_rejected():
+def test_dropping_requirement_rejected():
     merged = _BASE.replace(
         "    requirement def REQ_B {\n        doc /* Second requirement. */\n    }\n", ""
     ).replace("        satisfy requirement REQ_B;\n", "")
@@ -35,7 +35,7 @@ def test_dropping_a_requirement_def_is_rejected():
     assert not ok and "requirement def" in why
 
 
-def test_adding_a_requirement_def_is_rejected():
+def test_adding_requirement_rejected():
     merged = _BASE.replace(
         "    part def Alpha {",
         "    requirement def REQ_NEW {\n        doc /* Invented by refinement. */\n    }\n"
@@ -45,14 +45,13 @@ def test_adding_a_requirement_def_is_rejected():
     assert not ok and "requirement def" in why
 
 
-def test_shedding_a_satisfy_link_is_rejected():
+def test_shedding_satisfy_rejected():
     merged = _BASE.replace("        satisfy requirement REQ_B;\n", "")
     ok, why = _gates_ok(_BASE, merged)
     assert not ok and "satisfy" in why
 
 
-def test_adding_anchors_and_satisfy_links_is_allowed():
-    # The verification-anchor pass ADDS attributes/guards/satisfies — must pass.
+def test_adding_anchors_allowed():
     merged = _BASE.replace(
         "        satisfy requirement REQ_B;",
         "        satisfy requirement REQ_B;\n"
@@ -62,13 +61,13 @@ def test_adding_anchors_and_satisfy_links_is_allowed():
     assert ok, why
 
 
-def test_rewording_requirement_source_is_rejected():
+def test_rewording_source_rejected():
     merged = _BASE.replace("First requirement.", "Weakened requirement.")
     ok, why = _gates_ok(_BASE, merged)
     assert not ok and "source text" in why
 
 
-def test_replacing_satisfy_identity_at_same_count_is_rejected():
+def test_replacing_satisfy_rejected():
     merged = _BASE.replace(
         "satisfy requirement REQ_B;", "satisfy requirement REQ_A;"
     )
@@ -76,7 +75,7 @@ def test_replacing_satisfy_identity_at_same_count_is_rejected():
     assert not ok and "satisfy" in why
 
 
-def test_replacing_connect_identity_at_same_count_is_rejected():
+def test_replacing_connect_rejected():
     base = """package D {
         port def SignalPort;
         part def Source { out port signalOut : SignalPort; }

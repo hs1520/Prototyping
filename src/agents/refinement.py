@@ -287,10 +287,9 @@ def _structural_block_signature(
 ) -> Optional[tuple[frozenset, str]]:
     """(unsatisfied obligation ids, model text) of a structurally blocked model.
 
-    Two consecutive refinement iterations with the SAME signature are provably
-    futile: every repair in the loop is plan-bounded, so with the text
-    unchanged and the same obligations unsatisfied nothing inside the loop can
-    move. None when the model is not blocked.
+    Two consecutive iterations with the same signature are futile: every repair in
+    the loop is plan-bounded, so unchanged text plus the same unsatisfied
+    obligations cannot move. None when the model is not blocked.
     """
     blocked = (
         getattr(model, "metadata", None) or {}
@@ -307,7 +306,6 @@ def _structural_block_signature(
 
 
 def _freeze_evidence(value: Any) -> Any:
-    """Recursively freeze JSON-like stage evidence before it crosses the seam."""
     if isinstance(value, Mapping):
         return MappingProxyType({
             str(key): _freeze_evidence(item)
@@ -405,8 +403,8 @@ class _RefinementEngine:
 
     @property
     def use_deterministic_fixers(self) -> bool:
-        # getattr default: stub runtimes in older tests predate this flag and
-        # must keep the production behaviour (fixers ON).
+        # getattr default: older test stubs predate this flag and keep the
+        # production behaviour (fixers on).
         return getattr(self._runtime, "use_deterministic_fixers", True)
 
     @property
@@ -460,12 +458,6 @@ class _RefinementEngine:
     def _print_iteration_summary(self, **payload: Any) -> None:
         self._runtime._print_iteration_summary(**payload)
     def _verification_gap_issues(self, sysml_text: str, model_name: str) -> List[str]:
-        """Static verification-readiness audit (best-effort, no LLM).
-
-        Projects the final verification matrix's `unassigned` set from the model
-        text alone (see ``verification_audit``); any failure returns [] so the
-        audit can never break the refinement loop.
-        """
         try:
             if self._verification_gap_audit is not None:
                 return list(self._verification_gap_audit(sysml_text, model_name))
@@ -474,33 +466,28 @@ class _RefinementEngine:
                 self._planned_materialization_shadow(sysml_text),
                 model_name,
                 allowed_req_ids=self._active_requirement_ids(),
-                # The audit rebuilds the model from its text, which carries no
-                # plan metadata; the intents must be handed over or the matrix
-                # treats every planned response as an initialization candidate.
+                # The audit rebuilds the model from text, which carries no plan metadata;
+                # without the intents the matrix treats every planned response as an
+                # initialization candidate.
                 planned_intents=self._planned_response_intents(),
                 planned_markers=self._planned_response_markers(),
             )
         except Exception:
             return []
 
-
     def _planned_materialization_shadow(self, sysml_text: str) -> str:
-        """The text the terminal commit will actually audit, not the raw loop text.
+        """The text the terminal commit will audit, not the raw loop text.
 
-        Planned attributes and semantic bindings materialise only at the
-        terminal enforcement — deliberately after every LLM rewrite, so a
-        rewrite cannot shed them.  Auditing the raw mid-loop text therefore
-        flags gaps the plan is already committed to closing: the ablation
-        pilot burned a surgical anchor pass on REQ_CONS_001 whose 120 m
-        threshold attribute the terminal materialisation injected moments
-        later (audit on the terminal artifact: zero gaps).  The shadow is
-        advisory-only — the working text is never replaced here.
+        Planned attributes and semantic bindings materialise only at terminal
+        enforcement, after every LLM rewrite, so auditing raw mid-loop text flags gaps
+        the plan already closes: the ablation pilot spent a surgical anchor pass on
+        REQ_CONS_001 whose 120 m threshold attribute terminal materialisation then
+        injected. Advisory only; the working text is not replaced here.
         """
         payload = self._active_plan_payload()
         if not isinstance(payload, Mapping) or not payload.get("components"):
-            # A degenerate plan is not a no-op under apply_generation_plan —
-            # it actively prunes unplanned content — so only a plan that
-            # actually declares components may shape the audit shadow.
+            # apply_generation_plan prunes unplanned content, so a degenerate plan is not
+            # a no-op; only a plan that declares components may shape the audit shadow.
             return sysml_text
         try:
             from ..prototyping.generation_plan import (
@@ -513,14 +500,13 @@ class _RefinementEngine:
             )
             return planned_text or sysml_text
         except Exception:
-            # Same best-effort contract as the audit itself.
             return sysml_text
 
     def _planned_response_intents(self) -> Dict[str, str]:
         """{REQ_XXX_NNN: response_intent} from the active generation plan.
 
-        The audit rebuilds the model from its text and so cannot read the
-        intents off model metadata; they are handed over from the plan here.
+        The audit rebuilds the model from its text and cannot read the intents off
+        model metadata, so they are handed over from the plan here.
         """
         plan = getattr(self._runtime, "_active_model_generation_plan", None) or {}
         out: Dict[str, str] = {}
@@ -533,14 +519,7 @@ class _RefinementEngine:
                 out[rid] = intent
         return out
 
-
     def _planned_response_markers(self) -> Dict[str, frozenset]:
-        """{REQ_XXX_NNN: declared response_markers} from the active plan.
-
-        Only declared (out-of-vocabulary) intents carry markers; handed over
-        beside the intents for the same reason — the audit's rebuilt model
-        has no plan metadata to read them from.
-        """
         plan = getattr(self._runtime, "_active_model_generation_plan", None) or {}
         out: Dict[str, frozenset] = {}
         for item in plan.get("requirement_realizations") or ():
@@ -557,21 +536,13 @@ class _RefinementEngine:
                 out[rid] = markers
         return out
 
-
     def _unmeasurable_requirement_ids(self) -> Optional[set[str]]:
-        """IDs the extractor flagged as carrying no measurable criterion.
-
-        Present only on the extraction path; a frozen input records none, so
-        on the frozen path this returns an empty set and changes nothing.
-        """
         ids = (self.last_requirement_input or {}).get("unmeasurable_req_ids")
         if not isinstance(ids, (list, tuple, set)):
             return set()
         return {str(req_id) for req_id in ids}
 
-
     def _active_requirement_ids(self) -> Optional[set[str]]:
-        """IDs admitted by Phase 1/frozen input; None only before input exists."""
         source_digests = (self.last_requirement_input or {}).get(
             "source_digests"
         )
@@ -579,11 +550,9 @@ class _RefinementEngine:
             return None
         return {str(req_id) for req_id in source_digests}
 
-
     def _functional_verification_gap_issues(
         self, sysml_text: str, model_name: str
     ) -> List[str]:
-        """Functional subset of model-fixable verification gaps (fail closed)."""
         try:
             if self._functional_gap_audit is not None:
                 return list(self._functional_gap_audit(sysml_text, model_name))
@@ -600,20 +569,18 @@ class _RefinementEngine:
                 "functional verification audit failed; refusing to mark closure"
             ) from exc
 
-
     @staticmethod
     def _gap_req_ids(issues: List[str]) -> List[str]:
         return sorted(set(re.findall(
             r"\bREQ[_-]FUNC[_-]\d+\b", "\n".join(map(str, issues)), re.IGNORECASE
         )))
 
-
     def _generation_plan_provenance(self) -> Dict[str, Any]:
         """What the frozen plan was, and what it cost to arrive at one.
 
-        A fail-closed run cannot otherwise answer whether a plan obligation
-        fired and the model was corrected, or never fired at all — the
-        attempt record lives in metadata a failed run never publishes.
+        The attempt record lives in metadata a failed run does not publish, so without
+        this a fail-closed run cannot say whether a plan obligation fired and was
+        corrected or never fired at all.
         """
         plan = dict(
             getattr(self._runtime, "_active_model_generation_plan", None) or {}
@@ -635,11 +602,9 @@ class _RefinementEngine:
             "step1_plan_attempts": metadata.get("step1_plan_attempts"),
         }
 
-
     def _verify_terminal_functional_closure(
         self, model_text: str, model_name: str
     ) -> None:
-        """Bind functional-closure evidence to the exact terminal revision."""
         gaps = self._functional_verification_gap_issues(model_text, model_name)
         remaining_ids = self._gap_req_ids(gaps)
         closure = dict(self.last_functional_closure or {})
@@ -660,15 +625,13 @@ class _RefinementEngine:
                 "terminal functional closure is not closed on the published "
                 "model revision: " + ", ".join(remaining_ids)
             )
-            # The audit already knows which revision it judged and why; without
-            # carrying it out, a failed run keeps only the requirement ids and
-            # the exact model that failed is gone.
+            # Carry the judged revision out: otherwise a failed run keeps only the
+            # requirement ids and the model that failed is gone.
             error.functional_closure = closure
             error.terminal_model_text = model_text
             error.model_name = model_name
-            # The run dies here, so the pipeline state never reaches a caller.
-            # Every repair the frozen plan refused is the diagnosis for this
-            # exact failure and has to travel with it.
+            # The run dies here, so pipeline state never reaches a caller; the repairs
+            # the frozen plan refused are the diagnosis and travel with the error.
             error.plan_conformance_rejections = [
                 dict(item)
                 for item in (self.last_plan_conformance_rejections or ())
@@ -677,7 +640,6 @@ class _RefinementEngine:
                 self._generation_plan_provenance()
             )
             raise error
-
 
     def _functional_closure_pass(
         self,
@@ -688,13 +650,12 @@ class _RefinementEngine:
         dse_best_config: Optional[DesignConfiguration],
         max_iters: int = 2,
     ) -> tuple[SysMLModel, float, Any]:
-        """Close model-fixable FUNC gaps with dedicated, validated LLM surgery.
+        """Close model-fixable FUNC gaps with validated LLM surgery.
 
-        This pass always runs after the ordinary refinement path, including when
-        the quality loop exhausted its iteration budget. Each accepted edit must
-        strictly reduce the functional gap ID set and must not regress syntax,
-        simulation, or rule score. Remaining gaps are explicit terminal state,
-        not a silently successful generation.
+        Runs after the ordinary refinement path, including when the quality loop
+        exhausted its budget. An edit is accepted only if it strictly reduces the
+        functional gap ID set without regressing syntax, simulation or rule score;
+        remaining gaps stay in the terminal state.
         """
         current = current_model
         current_sim = sim_result
@@ -752,13 +713,11 @@ class _RefinementEngine:
             )
             full_text = get_sysml_text(current)
             if not self.use_surgical_refinement:
-                # Full-rewrite fallback: ablating the surgical MECHANISM must
-                # not amputate closure repair itself. NO-SURGICAL@seed0
-                # measured "closure repair exists vs not" (this branch used
-                # to print one line and give up) instead of the intended
-                # "surgical vs full-rewrite repair". Same pass budget, same
-                # acceptance gates below; only the candidate generator
-                # differs.
+                # Full-rewrite fallback: ablating the surgical mechanism should not
+                # remove closure repair with it. This branch used to print one line and
+                # give up, so NO-SURGICAL@seed0 measured "closure repair or not" instead
+                # of "surgical vs full-rewrite repair". Same pass budget and acceptance
+                # gates below; only the candidate generator differs.
                 result = self._intelligence.generate({
                     "system_name": model_name,
                     "requirements": list(requirements),
@@ -962,7 +921,6 @@ class _RefinementEngine:
         print(f"  {'─'*62}", flush=True)
         return current, current_score, current_sim
 
-
     def _namespace_repair_pass(
         self,
         current_model: SysMLModel,
@@ -973,11 +931,10 @@ class _RefinementEngine:
     ) -> tuple[SysMLModel, Any, bool]:
         """One bounded surgical pass on clean exit for name collisions.
 
-        Mirrors the verification-anchor discipline: advisory, exactly one
-        LLM attempt, accepted only when the duplicate count actually falls
-        and nothing regresses (simulation, behaviour, rule score).  A
-        deterministic rename is deliberately not attempted — references to
-        the shared name are ambiguous about which declaration they meant.
+        Like the verification-anchor pass: advisory, one LLM attempt, accepted only
+        when the duplicate count falls and simulation, behaviour and rule score do not
+        regress. No deterministic rename, because references to the shared name are
+        ambiguous about which declaration they meant.
         """
         from ..prototyping.namespace_integrity import (
             check_user_namespace_integrity,
@@ -1014,8 +971,8 @@ class _RefinementEngine:
         )
 
         def _finalize_namespace_record() -> None:
-            # The append publishes a snapshot; a later status mutation must be
-            # re-published or the archived record understates what happened.
+            # The append publishes a snapshot; a later status change is re-published
+            # or the archived record understates what happened.
             self._replace_pipeline_state_list_item(
                 "namespace_repair_attempts", attempt_index, attempt_record
             )
@@ -1046,12 +1003,10 @@ class _RefinementEngine:
         after = len(check_user_namespace_integrity(
             repaired.merged_text)["duplicate_members"])
         from .verification_audit import behavioral_result_regressed
-        # Relative, not absolute: "regression" means WORSE THAN BEFORE. The
-        # old `bool(failed_scenarios())` demanded a repaired model with ZERO
-        # failed advisory scenarios, so a baseline carrying any pre-existing
-        # failure auto-rejected every repair — measured on the s0v7 anchor,
-        # whose 16/17 baseline vetoed the namespace repair that its terminal
-        # qualification then failed for want of.
+        # Regression is relative: worse than before, not non-zero. The old
+        # `bool(failed_scenarios())` demanded zero failed advisory scenarios, so any
+        # pre-existing failure auto-rejected every repair - on the s0v7 anchor a 16/17
+        # baseline vetoed the namespace repair its terminal qualification then needed.
         regressed = (
             len(repaired_sim.failed_scenarios())
             > len(sim_result.failed_scenarios())
@@ -1079,9 +1034,10 @@ class _RefinementEngine:
     def _model_rank_key(
         score: float, syntax_result: Any, iteration: int
     ) -> tuple:
-        """Best-model ordering: score, then fewer syntax errors, then the
-        later iteration. A parse-broken model must never win a tie against
-        its own repaired successor."""
+        """Best-model ordering: score, then fewer syntax errors, then the later
+        iteration, so a parse-broken model does not win a tie against its
+        repaired successor.
+        """
         errors = (
             syntax_result.total_errors() if syntax_result is not None else 0
         )
@@ -1090,15 +1046,6 @@ class _RefinementEngine:
     def _response_conformance_issues(
         self, model_text: str, model_name: str = "Model"
     ) -> List[str]:
-        """Deterministic response-conformance findings for the current text.
-
-        Two detectors, both decidable without an LLM: send payloads that
-        contradict their port's declared item type, and response commands
-        whose family the SITL traceability gate would reject against the
-        requirement text (the gate's own projection, same code path as
-        Phase 9). Together they cover the archived shapes of the defect the
-        matrix otherwise reports only as a blocked row.
-        """
         from ..prototyping.port_payload_conformance import (
             port_payload_conformance_issues,
         )
@@ -1120,11 +1067,9 @@ class _RefinementEngine:
     ) -> tuple[SysMLModel, Any, bool]:
         """One bounded surgical pass on clean exit for response conformance.
 
-        Mirrors the namespace discipline: advisory, exactly one LLM attempt,
-        accepted only when the combined finding count actually falls and
-        nothing regresses. A deterministic rewrite is deliberately not
-        attempted — whether the fix is to send the port's declared payload
-        or to retype the port is the author's intent to state.
+        Like the namespace pass: advisory, one LLM attempt, accepted only when the
+        combined finding count falls and nothing regresses. No deterministic rewrite -
+        sending the port's declared payload or retyping the port is the author's call.
         """
         full_text = get_sysml_text(current_model)
         issues = self._response_conformance_issues(
@@ -1157,8 +1102,8 @@ class _RefinementEngine:
         )
 
         def _finalize_record() -> None:
-            # The append publishes a snapshot; a later status mutation must be
-            # re-published or the archived record understates what happened.
+            # The append publishes a snapshot; a later status change is re-published
+            # or the archived record understates what happened.
             self._replace_pipeline_state_list_item(
                 "response_conformance_repair_attempts", attempt_index,
                 attempt_record,
@@ -1189,12 +1134,10 @@ class _RefinementEngine:
         after = len(self._response_conformance_issues(
             repaired.merged_text, current_model.name))
         from .verification_audit import behavioral_result_regressed
-        # Relative, not absolute: "regression" means WORSE THAN BEFORE. The
-        # old `bool(failed_scenarios())` demanded a repaired model with ZERO
-        # failed advisory scenarios, so a baseline carrying any pre-existing
-        # failure auto-rejected every repair — measured on the s0v7 anchor,
-        # whose 16/17 baseline vetoed the namespace repair that its terminal
-        # qualification then failed for want of.
+        # Regression is relative: worse than before, not non-zero. The old
+        # `bool(failed_scenarios())` demanded zero failed advisory scenarios, so any
+        # pre-existing failure auto-rejected every repair - on the s0v7 anchor a 16/17
+        # baseline vetoed the namespace repair its terminal qualification then needed.
         regressed = (
             len(repaired_sim.failed_scenarios())
             > len(sim_result.failed_scenarios())
@@ -1229,11 +1172,10 @@ class _RefinementEngine:
     ) -> tuple[SysMLModel, Any, bool]:
         """Run the one bounded verification-anchor pass on any clean exit path.
 
-        Previously this lived only inside the "quality already clean" branch.
-        When reachability was repaired by ``_sim_refinement_loop``, the method
-        returned immediately and skipped anchoring altogether.  Keeping the pass
-        in one helper makes both paths use identical syntax/simulation/score
-        gates and preserves the one-pass bound.
+        When this lived inside the "quality already clean" branch, a reachability
+        repair in ``_sim_refinement_loop`` returned early and skipped anchoring. One
+        helper gives both paths the same syntax/simulation/score gates and the same
+        one-pass bound.
         """
         if not verify_gaps or not self.use_surgical_refinement:
             return current_model, sim_result, False
@@ -1289,8 +1231,8 @@ class _RefinementEngine:
         )
 
         def _finalize_anchor_record() -> None:
-            # Same record-fidelity rule as the namespace pass: the published
-            # snapshot must reflect the final status, not the append-time one.
+            # Same record rule as the namespace pass: the published snapshot reflects the
+            # final status, not the append-time one.
             self._replace_pipeline_state_list_item(
                 "verification_anchor_attempts",
                 anchor_attempt_index,
@@ -1324,8 +1266,8 @@ class _RefinementEngine:
         remaining = self._verification_gap_issues(
             anchored.merged_text, current_model.name)
         from .verification_audit import behavioral_result_regressed
-        # Relative, not absolute — see the namespace pass: a pre-existing
-        # advisory failure must not veto an anchor that fixes what it fixes.
+        # Relative, as in the namespace pass: a pre-existing advisory failure does not
+        # veto an anchor for what it does fix.
         regressed = (
             len(anchor_sim.failed_scenarios())
             > len(sim_result.failed_scenarios())
@@ -1362,7 +1304,6 @@ class _RefinementEngine:
               "regression) — keeping the original model", flush=True)
         return current_model, sim_result, False
 
-
     def _blended_iteration_score(
         self,
         rule_score: float,
@@ -1372,10 +1313,9 @@ class _RefinementEngine:
     ):
         """Blend rule-based and LLM evaluation scores for one iteration.
 
-        The LLM evaluation is skipped when the rule score already meets the
-        quality threshold or a [VETO] fired — the blended score could not
-        change the outcome in either case.  Returns
-        ``(score, llm_overall, cot_eval, veto_fired)``.
+        The LLM evaluation is skipped when the rule score already meets the quality
+        threshold or a [VETO] fired; the blended score cannot change the outcome
+        either way. Returns ``(score, llm_overall, cot_eval, veto_fired)``.
         """
         veto_fired = any(
             str(iss).startswith("[VETO]") for iss in eval_result.issues
@@ -1398,7 +1338,6 @@ class _RefinementEngine:
             score = rule_score
         return score, llm_overall, cot_eval, veto_fired
 
-
     def _early_exit_gates(
         self,
         sim_result,
@@ -1406,11 +1345,12 @@ class _RefinementEngine:
         requirements: List[str],
         model: Optional[SysMLModel] = None,
     ):
-        """Hard gates that must all pass before the quality-threshold early
-        exit: behavioral state machines, scenario reachability, sema errors.
-        A high rule-score can coexist with state-machine failures or
-        connectivity gaps — those must be resolved first.
-        Returns ``(behavioral_ok, reachability_ok, sema_ok)``."""
+        """Gates that must all pass before the quality-threshold early exit.
+
+        Behavioral state machines, scenario reachability and sema errors: a high rule
+        score can coexist with state-machine failures or connectivity gaps. Returns
+        ``(behavioral_ok, reachability_ok, sema_ok)``.
+        """
         _safe_reqs = [r for r in requirements if "-SAFE-" in r or "SAFE" in r.upper()[:10]]
         _br = sim_result.behavioral_result
         behavioral_ok = (
@@ -1439,7 +1379,6 @@ class _RefinementEngine:
         sema_ok = syntax_result is None or not syntax_result.has_errors
         return behavioral_ok, reachability_ok, sema_ok
 
-
     def _resolve_after_forced_fix(
         self,
         current_model: SysMLModel,
@@ -1448,22 +1387,12 @@ class _RefinementEngine:
         iteration: int,
         score: float,
     ):
-        """Re-check the model after the forced sim fix pass.
-
-        When the fix cleared every failed scenario, the score is re-evaluated
-        with the fixed sim (plus one bounded verification-anchor pass) and
-        ``resolved`` is True — the caller returns immediately.  Otherwise
-        everything is passed back unchanged for the escalation path.
-        Returns ``(resolved, model, score, sim_result)``.
-        """
         _sysml_after = get_sysml_text(current_model)
         sim_result = self._run_simulation(_sysml_after, current_model.name)
         if sim_result.failed_scenarios():
             return False, current_model, score, sim_result
 
         print("  └─ Simulation fully resolved ✓", flush=True)
-        # Re-evaluate with the fixed sim so the returned score
-        # reflects the model's true post-fix quality.
         eval_after = self._intelligence.evaluate(
             config=DesignConfiguration(
                 name=f"iteration_{iteration}_fixed",
@@ -1530,7 +1459,6 @@ class _RefinementEngine:
             ).weighted_total
         return True, current_model, score, sim_result
 
-
     def _iterative_refinement(
         self,
         model: SysMLModel,
@@ -1540,55 +1468,28 @@ class _RefinementEngine:
     ) -> tuple[SysMLModel, float, Any]:
         """Phase 4-5: Evaluate and iteratively refine the design.
 
-        Key improvements over the naive version:
-
-        P0 — Best-model tracking: ``best_model`` is updated whenever the
-             blended score improves; the loop always returns the peak-scoring
-             model, not the last one.
-
-        P0 — Regression guard: a refined candidate is only accepted when its
-             rule-based score does not fall more than 5 pp below the current
-             model's score.  If it does, the current model is kept and a
-             warning is printed.
-
-        P1 — LLM-guided refinement with no explicit issues: when the rule
-             evaluator reports zero issues but the LLM returned non-empty
-             feedback (and the score is still below threshold), refinement is
-             still triggered.  This avoids silent stalls.
-
-        P1 — Persistent issue escalation: issues that recur across iterations
-             are flagged with ``[PERSISTENT]`` in the refinement prompt so the
-             LLM can prioritise them.
-
-        P1 — MCTS grounding: architectural decisions from Phase 3 (redundancy
-             level, frequency, protocol, topology, sensor count) are prepended
-             to every refinement prompt so the LLM implements them rather than
-             guessing.
-
-        P2 — Skip expensive LLM call when rule_score already meets the
-             quality threshold — the blended score would pass anyway.
-
-        P2 — Configurable blend weights via ``self.rule_weight`` /
-             ``self.llm_weight`` (set in ``__init__``).
+        Tracks the peak-scoring model rather than the last one, and rejects a candidate
+        whose rule score falls more than 5 pp below the current model's. Refinement is
+        also triggered when the rule evaluator reports no issues but the LLM returned
+        feedback and the score is below threshold; recurring issues are marked
+        ``[PERSISTENT]``, and the Phase 3 MCTS decisions (redundancy level, frequency,
+        protocol, topology, sensor count) are prepended to every refinement prompt. The
+        LLM call is skipped once ``rule_score`` meets the quality threshold; blend
+        weights come from ``self.rule_weight`` / ``self.llm_weight``.
         """
         current_model = model
         best_score = 0.0
         best_model = model
-        best_sim_result: Any = None          # tracks sim matching best_model
-        # (score, -syntax_errors, iteration): strict score-only `>` kept the
-        # FIRST of four equally-scored iterations on the 2026-08-30 attempt —
-        # the only one still carrying the parser error the later iterations
-        # had repaired — and the broken text then failed the variation
-        # surgery's syntax gate downstream. Ties break to fewer errors, then
-        # to the later (more-repaired) iteration.
+        best_sim_result: Any = None
+        # (score, -syntax_errors, iteration): score-only `>` kept the first of four
+        # equally-scored iterations on 2026-08-30, the one still carrying a parser
+        # error the later ones had repaired, and that text then failed the variation
+        # surgery's syntax gate. Ties break to fewer errors, then the later iteration.
         best_key = (best_score, -(10 ** 9), -1)
-        last_sim_result: Any = None          # most recent sim result
-        seen_issues: Dict[str, int] = {}  # issue text → occurrence count
-        # (unsatisfied obligation ids, model text) of the last iteration that
-        # ended structurally blocked — see the futility guard at loop bottom.
+        last_sim_result: Any = None
+        seen_issues: Dict[str, int] = {}
         previous_blocked_signature: Optional[tuple] = None
 
-        # Pre-compute MCTS constraint text once — same for every iteration
         mcts_constraints = (
             _build_dse_design_constraints(dse_best_config)
             if dse_best_config else ""
@@ -1599,22 +1500,18 @@ class _RefinementEngine:
             print(f"  {'─'*60}")
             print(mcts_constraints)
 
-        # Fatal-advisory continuation guard.  The continuation below spends an
-        # iteration whenever a terminal-fatal advisory survives the bounded
-        # passes.  Without a progress check that is unbounded resampling: run
-        # s0v15 forced six refinements, had all six rejected by the
-        # plan-conformance gate, and finished eight iterations with the score
-        # unmoved (0.9552 / 0.9126 to four places) at 4x the wall clock.  Allow
-        # one resample, then stop: if a forced refinement left both the model
-        # text and the advisory set untouched, the next iteration starts from a
-        # byte-identical state.
+        # Fatal-advisory continuation guard. The continuation below spends an iteration
+        # whenever a terminal-fatal advisory survives the bounded passes; with no
+        # progress check that is unbounded resampling (s0v15: six forced refinements all
+        # rejected by the plan-conformance gate, eight iterations, score unmoved at 4x
+        # wall clock). Allow one resample, then stop - an unchanged model text and
+        # advisory set means the next iteration starts byte-identical.
         fatal_state_before = None
         fatal_stalls = 0
 
         for iteration in range(self.max_iterations):
             self.state.iteration = iteration + 1
 
-            # ── Step 0: Syntax gate — fix errors before evaluation ────────
             current_sysml = get_sysml_text(current_model)
             current_sysml, fixed_model, syntax_result = self._syntax_gate(
                 current_sysml, current_model, requirements, max_attempts=3
@@ -1622,17 +1519,13 @@ class _RefinementEngine:
             if fixed_model is not None:
                 current_model = fixed_model
 
-            # ── Step 0.5: Connect audit — remove type/direction-invalid connects ─
             current_sysml, current_model = self._connect_audit_step(
                 current_sysml, current_model
             )
 
-            # ── Behavioral simulation (runs before eval to feed into score) ─
             sim_result = self._run_simulation(current_sysml, current_model.name)
             sim_issues = self._format_sim_issues(sim_result, requirements=requirements)
 
-            # ── Rule-based evaluation (pass cached syntax + sim results;
-            #    requirements enable requirement-derived dimension weights) ──
             eval_result = self._intelligence.evaluate(
                 config=DesignConfiguration(
                     name=f"iteration_{iteration}",
@@ -1646,62 +1539,52 @@ class _RefinementEngine:
             )
             rule_score = eval_result.weighted_total
             # ── Verification-readiness audit (static matrix projection) ──────
-            # Runs the SAME logic the final verification matrix uses, with no
-            # execution results: requirements that would land `unassigned` (no
-            # tier anchors them at all — execution-independent) become refinement
-            # issues NOW, while the LLM is still in the loop. Advisory: they ride
-            # along in refinement prompts and get ONE bounded surgical anchor
-            # pass at the quality gate; they never block early exit on their own.
+            # Runs the same logic as the final verification matrix with no execution
+            # results, so requirements that would land `unassigned` become refinement
+            # issues while the LLM is still in the loop. Advisory: they ride along in
+            # refinement prompts and get one bounded surgical anchor pass at the quality
+            # gate, and never block early exit by themselves.
             verify_gaps = self._verification_gap_issues(
                 current_sysml, current_model.name)
             if verify_gaps and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(verify_gaps)
-            # Same advisory ride-along for non-distinguishable member names:
-            # the terminal USER_NAMESPACE_INTEGRITY gate rejects them, so the
-            # author sees them while still in session (run 33f87cc6 surfaced
-            # an action-def/state-def name collision only at qualification).
+            # Same ride-along for non-distinguishable member names: the terminal
+            # USER_NAMESPACE_INTEGRITY gate rejects them, so surface them in session
+            # (run 33f87cc6 hit an action-def/state-def collision only at qualification).
             from ..prototyping.namespace_integrity import (
                 namespace_integrity_issues,
             )
             namespace_issues = namespace_integrity_issues(current_sysml)
             if namespace_issues and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(namespace_issues)
-            # And for response-conformance defects the Phase 9 SITL gate would
-            # otherwise surface only as a blocked evidence row (8 of 24
-            # archived runs): a send whose payload type contradicts its port's
-            # declared item type, and a response whose command family
-            # contradicts the requirement text (the linker's own deterministic
-            # traceability projection — no LLM, no SITL process).
+            # And for response-conformance defects the Phase 9 SITL gate would otherwise
+            # show only as a blocked evidence row (8 of 24 archived runs): a send whose
+            # payload type contradicts its port's item type, and a response whose command
+            # family contradicts the requirement text. Deterministic linker projection -
+            # no LLM, no SITL process.
             response_issues = self._response_conformance_issues(
                 current_sysml, current_model.name)
             if response_issues and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(response_issues)
-            # And for user-model syntax WARNINGS: the terminal gate fails
-            # closed on every one (zero-warning policy), but the in-loop
-            # syntax gate returns on has_errors alone — so a warning class
-            # without a bespoke normalizer was invisible to every repair
-            # mechanism until qualification (measured on s0v8: one
-            # usage-typed-by-non-classifier warning, NOT_QUALIFIED).
+            # And for user-model syntax warnings: the terminal gate fails closed on every
+            # one, while the in-loop syntax gate returns on has_errors alone, so a warning
+            # class without its own normalizer stayed invisible until qualification (s0v8:
+            # one usage-typed-by-non-classifier warning, NOT_QUALIFIED).
             warning_issues = _syntax_warning_issues(syntax_result)
             if warning_issues and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(warning_issues)
-            # And for typed-plan conformance residue: the terminal
-            # enforcement deterministically ADDS missing planned elements,
-            # but an UNPLANNED connection/port/usage it cannot remove fails
-            # qualification with nothing upstream ever having shown it
-            # (measured on s0v9: an invented airframe.environment ->
-            # perceptionSystem.environment connect, invisible in-loop,
-            # NOT_QUALIFIED at terminal). The projection below reports
-            # exactly the post-remediation residue.
+            # And for typed-plan conformance residue: terminal enforcement adds missing
+            # planned elements, but an unplanned connection/port/usage it cannot remove
+            # fails qualification with nothing upstream having shown it (s0v9: an invented
+            # airframe.environment -> perceptionSystem.environment connect, NOT_QUALIFIED).
+            # The projection below reports the post-remediation residue.
             conformance_issues = self._plan_conformance_issues(
                 current_sysml, current_model, requirements)
             if conformance_issues and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(conformance_issues)
-            # Fidelity and coverage complete the rider set: with these,
-            # every model-property terminal qualification check has an
-            # in-loop advisory twin, instead of failure classes surfacing
-            # one paid run at a time (s0v6 lost qualification partly to
-            # fidelity rows nothing in the loop had shown).
+            # Fidelity and coverage complete the rider set, so every model-property
+            # terminal check has an in-loop advisory twin instead of surfacing one paid
+            # run at a time (s0v6 lost qualification partly to unshown fidelity rows).
             fidelity_issues = self._semantic_fidelity_issues(
                 current_sysml, current_model)
             if fidelity_issues and isinstance(eval_result.issues, list):
@@ -1710,13 +1593,10 @@ class _RefinementEngine:
                 current_sysml, requirements)
             if coverage_issues and isinstance(eval_result.issues, list):
                 eval_result.issues.extend(coverage_issues)
-            # How much the pass/fail verdict depends on the weighting at all —
-            # sampled over the weight simplex (answers "would another weighting
-            # flip the outcome?").  Defensive: test doubles may not provide it.
+            # How far the pass/fail verdict depends on the weighting, sampled over the
+            # weight simplex. Guarded because test doubles may not provide it.
             verdict_rob = self._intelligence.verdict_robustness(eval_result)
 
-            # ── LLM evaluation (skip when rule score already sufficient OR
-            #    when a [VETO] fired in the rule evaluator) ─────────────────
             score, llm_overall, cot_eval, veto_fired = self._blended_iteration_score(
                 rule_score, eval_result, current_model, requirements
             )
@@ -1757,7 +1637,6 @@ class _RefinementEngine:
                 print(f"  Verdict robustness over the weight simplex: "
                       f"{verdict_rob:.0%} of sampled weightings agree", flush=True)
 
-            # ── Always-visible iteration summary ─────────────────────────
             self._print_iteration_summary(
                 iteration=iteration + 1,
                 score=score,
@@ -1775,7 +1654,6 @@ class _RefinementEngine:
                     print("  [DEBUG] LLM sub-scores: "
                           + ", ".join(f"{k}={v:.2f}" for k, v in cot_scores.items()))
 
-            # ── P0: Best-model tracking ───────────────────────────────────
             last_sim_result = sim_result
             candidate_key = self._model_rank_key(score, syntax_result, iteration)
             if candidate_key > best_key:
@@ -1784,25 +1662,22 @@ class _RefinementEngine:
                 best_model = current_model
                 best_sim_result = sim_result
 
-            # ── Early exit ────────────────────────────────────────────────
-            _force_llm_refinement = False   # set True when surgical fix fails
+            _force_llm_refinement = False
             if score >= self.quality_threshold:
-                # Only exit if behavioral simulation, reachability, and sema
-                # are all clean.  A high rule-score can coexist with state-machine
-                # failures or connectivity gaps — those must be resolved first.
+                # Exit only when behavioral simulation, reachability and sema are clean: a
+                # high rule score can coexist with state-machine failures or connectivity
+                # gaps.
                 behavioral_ok, reachability_ok, sema_ok = self._early_exit_gates(
                     sim_result, syntax_result, requirements, current_model
                 )
 
                 if behavioral_ok and reachability_ok and sema_ok:
                     # ── One bounded verification-anchor pass ──────────────
-                    # Quality is met, but the static audit predicts unassigned
-                    # matrix rows. Exactly ONE surgical pass scoped to those
-                    # issues (gates: syntax, connects preserved, requirement-def
-                    # set frozen, satisfy links may not shrink). Accepted only
-                    # if gaps actually shrink AND nothing regresses (local sim +
-                    # rule score re-checked, no LLM cost). Success or not, we
-                    # return afterwards — anchors are advisory, never a loop.
+                    # Quality is met but the static audit predicts unassigned matrix rows. One
+                    # surgical pass scoped to those issues (gates: syntax, connects preserved,
+                    # requirement-def set frozen, satisfy links may not shrink), accepted only if
+                    # the gaps shrink and nothing regresses (local sim + rule score, no LLM cost).
+                    # Returns either way - anchors are advisory, not a loop.
                     current_model, sim_result, _ = self._verification_anchor_pass(
                         current_model=current_model,
                         sim_result=sim_result,
@@ -1837,14 +1712,11 @@ class _RefinementEngine:
                         )
                     )
                     # ── Terminal-fatal advisories spend the budget ────────
-                    # Nine measured anchor rolls exited here at iteration 1
-                    # with max_iterations=4 never used: the rule score sits
-                    # ~0.9 on the first draw, so the loop never iterated,
-                    # and every advisory the riders surfaced stayed advice
-                    # for iterations that never happened — then failed the
-                    # zero-warning/zero-deviation terminal gates. Quality
-                    # met is not done while a KNOWN terminal-fatal issue
-                    # survives the bounded passes and budget remains.
+                    # Nine anchor rolls exited here at iteration 1 with max_iterations=4 unused:
+                    # the rule score sits ~0.9 on the first draw, so the riders' advisories stayed
+                    # advice and then failed the zero-warning/zero-deviation terminal gates.
+                    # Quality met is not done while a terminal-fatal issue survives the bounded
+                    # passes and budget remains.
                     fatal_advisories = self._terminal_fatal_advisories(
                         current_model, requirements
                     )
@@ -1898,11 +1770,9 @@ class _RefinementEngine:
                                   flush=True)
                         return current_model, score, sim_result
 
-            # The fatal-advisory continue path goes straight to the P1
-            # refinement trigger below; the forced sim-fix block is for
-            # failed hard gates, which is not this case.
+            # The fatal-advisory continue path goes to the P1 refinement trigger below;
+            # the forced sim-fix block handles failed hard gates, not this case.
             if score >= self.quality_threshold and not _force_llm_refinement:
-                # Score met but hard failures remain — one targeted fix pass
                 issues_desc = ", ".join(filter(None, [
                     "behavioral" if not behavioral_ok else "",
                     "reachability" if not reachability_ok else "",
@@ -1917,7 +1787,6 @@ class _RefinementEngine:
                     current_model, requirements, max_iters=2
                 )
 
-                # Re-check after surgical fix
                 resolved, current_model, score, sim_result = (
                     self._resolve_after_forced_fix(
                         current_model, requirements, dse_best_config,
@@ -1928,7 +1797,6 @@ class _RefinementEngine:
                 if resolved:
                     return current_model, score, sim_result
 
-                # Surgical fix insufficient
                 remaining = self.max_iterations - iteration - 1
                 if remaining == 0:
                     print(
@@ -1950,14 +1818,12 @@ class _RefinementEngine:
                     f"— escalating to LLM refinement ({remaining} iteration(s) remaining)",
                     flush=True,
                 )
-                _force_llm_refinement = True   # trigger LLM refinement below
+                _force_llm_refinement = True
 
-            # ── P1: Persistent issue tracking ─────────────────────────────
             for issue in eval_result.issues:
                 seen_issues[issue] = seen_issues.get(issue, 0) + 1
             persistent = [iss for iss, cnt in seen_issues.items() if cnt > 1]
 
-            # ── P1: Refinement trigger ────────────────────────────────────
             has_issues = bool(eval_result.issues) or _force_llm_refinement
             has_llm_feedback = cot_eval is not None and bool(cot_eval.final_answer)
 
@@ -2019,10 +1885,9 @@ class _RefinementEngine:
                     outcome.accepted
                     and isinstance(accepted_score, (int, float))
                 ):
-                    # The last allowed iteration has no next pass in which to
-                    # promote an accepted candidate. Rank it with the same
-                    # (score, -errors, iteration) key as the loop-top tracker
-                    # so an equal-score, cleaner candidate is not dropped.
+                    # The last allowed iteration has no next pass to promote an accepted
+                    # candidate, so rank it with the loop-top (score, -errors, iteration) key and
+                    # keep an equal-score, cleaner candidate.
                     accepted_text = get_sysml_text(current_model)
                     accepted_key = self._model_rank_key(
                         float(accepted_score),
@@ -2040,14 +1905,11 @@ class _RefinementEngine:
                         last_sim_result = candidate_sim
 
             # ── Plan-frozen futility guard ────────────────────────────────
-            # `structural_repair_blocked` means no plan-authorized structural
-            # repair can satisfy the terminal plan. When two consecutive
-            # iterations end blocked on the SAME unsatisfied obligations with
-            # the model text unchanged, nothing inside this loop can move —
-            # every repair here is plan-bounded, so it can never repair the
-            # plan (run 2026-08-31: 8 identical idle iterations). The remedy,
-            # a validated plan revision, lives outside the loop; stop paying
-            # for iterations that cannot progress.
+            # `structural_repair_blocked` means no plan-authorized repair can satisfy the
+            # terminal plan. Two consecutive iterations blocked on the same unsatisfied
+            # obligations with unchanged model text cannot move: every repair here is
+            # plan-bounded, so none repairs the plan (2026-08-31: 8 idle iterations). The
+            # remedy, a validated plan revision, lives outside the loop.
             signature = _structural_block_signature(current_model)
             if signature is not None:
                 unsatisfied = signature[0]
@@ -2076,10 +1938,8 @@ class _RefinementEngine:
 
         return best_model, best_score, best_sim_result or last_sim_result
 
-
     @staticmethod
     def _build_sitl_feedback(items: List[Dict[str, Any]]) -> str:
-        """Format unresolved SITL parameter gaps as a refinement prompt section."""
         lines = [
             "SITL parameter-mapping gaps (ArduPilot L1):",
             "  Each requirement below maps to an ArduPilot parameter that cannot be",
@@ -2091,10 +1951,6 @@ class _RefinementEngine:
             lines.append(f"- {i['message']}")
         return "\n".join(lines)
 
-
-    # ------------------------------------------------------------------
-    # Phase 3.5: SITL-L1 refinement loop
-    # ------------------------------------------------------------------
     def _sitl_refinement_loop(
         self,
         model: SysMLModel,
@@ -2105,12 +1961,11 @@ class _RefinementEngine:
     ) -> Tuple[SysMLModel, float, Any]:
         """Feed unresolved ArduPilot parameter mappings back to the design LLM.
 
-        An unresolved mapping means the model genuinely lacks a guard/attribute
-        a requirement needs (the tooling-side source of 'unresolved' was removed
-        by resolving AST-matched thresholds).  Each pass: run the L1 mapping →
-        if unresolved, build feedback → refine → accept only when there is no
-        syntax/sim/score regression.  Terminates on clean L1, no progress, or
-        regression.  Returns (model, score, sim) for the final accepted model.
+        An unresolved mapping means the model lacks a guard/attribute the requirement
+        needs; the tooling-side source of 'unresolved' was removed by resolving
+        AST-matched thresholds. Each pass runs the L1 mapping, builds feedback,
+        refines, and accepts only without syntax/sim/score regression. Stops on clean
+        L1, no progress, or regression. Returns (model, score, sim).
         """
         from ..sitl.requirement_linker import RequirementLinker
 
@@ -2159,8 +2014,8 @@ class _RefinementEngine:
                 break
 
             candidate = refine_result.output
-            # Same-basis comparison: evaluate the candidate with its own fresh
-            # syntax + sim results (mirrors the regression-check fix elsewhere).
+            # Same-basis comparison: evaluate the candidate on its own fresh syntax and
+            # sim results.
             cand_sysml = get_sysml_text(candidate)
             cand_syntax = check_syntax(cand_sysml)
             cand_sim = self._run_simulation(cand_sysml, candidate.name)
@@ -2184,11 +2039,7 @@ class _RefinementEngine:
         print(f"  {'─'*62}", flush=True)
         return current, cur_score, cur_sim
 
-
     def _finalize_sim_loop(self, current: SysMLModel, max_iters: int) -> SysMLModel:
-        """Exit path of the simulation inner loop: re-simulate once and, when
-        scenarios are still unreachable, attach a [SIM-WARNING] summary to the
-        model metadata so downstream phases (and the run report) surface it."""
         final_sysml = get_sysml_text(current)
         final_sim = self._run_simulation(final_sysml, current.name)
         remaining = final_sim.failed_scenarios()
@@ -2205,7 +2056,6 @@ class _RefinementEngine:
                 )
             warning_text = "\n".join(warning_lines)
 
-            # Attach warning to model metadata
             if not hasattr(current, "metadata") or current.metadata is None:
                 current.metadata = {}
             current.metadata["sim_warnings"] = warning_text
@@ -2219,10 +2069,8 @@ class _RefinementEngine:
         print(f"  {'─'*62}", flush=True)
         return current
 
-
     @staticmethod
     def _simulation_quality_key(sim_result: SimulationResult) -> tuple:
-        """Lexicographic evidence key for transactional connectivity edits."""
         behavioral = getattr(sim_result, "behavioral_result", None)
         behavioral_passed = (
             len(behavioral.passed_scenarios())
@@ -2236,7 +2084,6 @@ class _RefinementEngine:
             -len(getattr(sim_result, "isolated_parts", ()) or ()),
             behavioral_passed,
         )
-
 
     def _record_rejected_connectivity_edit(
         self,
@@ -2265,41 +2112,22 @@ class _RefinementEngine:
             },
         })
 
-
-    # ------------------------------------------------------------------
-    # Simulation inner refinement loop
-    # ------------------------------------------------------------------
     def _sim_refinement_loop(
         self,
         model: SysMLModel,
         requirements: List[str],
         max_iters: int = 3,
     ) -> SysMLModel:
-        """
-        After the main LLM refinement is accepted, run simulation on the
-        candidate and attempt targeted connectivity fixes.
-
-        Loop:
-          1. Run simulation → collect failed scenarios
-          2. If all pass → return immediately
-          3. Build a sim-only feedback prompt → call DesignAgent for a fix
-          4. If fix accepted (no regression) → update candidate and continue
-          5. After max_iters with persistent failures → attach [SIM-WARNING]
-             to model metadata and return with warning printed
-
-        Returns the best candidate (may still have sim warnings attached).
-        """
         current = model
-        persistent_sim_issues: Dict[str, int] = {}   # issue text → occurrence count
+        persistent_sim_issues: Dict[str, int] = {}
 
         print(f"\n  {'─'*62}", flush=True)
         print(f"  ▶  Simulation inner loop  (max {max_iters} pass{'es' if max_iters>1 else ''})")
 
         # ── Behavioral transition fix (run once before connectivity loop) ──
-        # When a state machine got stuck mid-chain (Layer-3 mode machine
-        # incomplete), repair transition source/target via the surgical
-        # transition fixer.  This complements connectivity_fixer which only
-        # handles port-level reachability, not state-machine semantics.
+        # Repair transition source/target with the surgical transition fixer when a
+        # state machine is stuck mid-chain. Complements connectivity_fixer, which
+        # covers port-level reachability only.
         current = self._fix_stuck_transitions(current)
 
         raw_plan = (
@@ -2317,9 +2145,8 @@ class _RefinementEngine:
             )
 
             plan = ModelGenerationPlan.from_dict(raw_plan)
-            # A verdict from a previous pass must not outlive the pass that
-            # measured it: this branch re-measures below and re-sets the flag
-            # if the block still holds.
+            # A verdict does not outlive the pass that measured it: this branch
+            # re-measures below and re-sets the flag if the block still holds.
             current.metadata.pop("structural_repair_blocked", None)
             before_text = get_sysml_text(current)
             before_report = validate_structural_obligations(
@@ -2424,11 +2251,10 @@ class _RefinementEngine:
         for sim_iter in range(max_iters):
             sysml = get_sysml_text(current)
             baseline_sim = self._run_simulation(sysml, current.name)
-            # Deterministic port-DIRECTION fix BEFORE simulating (no LLM): widen direction-blocking
-            # ports so existing connects are traversable as written — resolves 'connected but signal
-            # direction may be wrong' cheaply, so only genuinely-missing connections reach the LLM
-            # step below (avoids escalating direction errors to slow LLM refinement). Idempotent.
-            # Gated by use_deterministic_fixers (ablation: LLM-only repair).
+            # Deterministic port-direction fix before simulating (no LLM): widen
+            # direction-blocking ports so existing connects are traversable as written, so
+            # only missing connections reach the LLM step below. Idempotent. Gated by
+            # use_deterministic_fixers (ablation: LLM-only repair).
             if self.use_deterministic_fixers:
                 from ..simulation.connectivity_fixer import fix_signal_directions
                 direction_candidate, _n_dir, _dir_names = fix_signal_directions(sysml)
@@ -2464,7 +2290,6 @@ class _RefinementEngine:
             sim_result = baseline_sim
             failed = sim_result.failed_scenarios()
 
-            # ── Print this pass's result ───────────────────────────────
             passed  = len(sim_result.passed_scenarios())
             total   = len(sim_result.scenario_results)
             status  = "✓ all pass" if not failed else f"✗ {len(failed)} failing"
@@ -2478,7 +2303,6 @@ class _RefinementEngine:
                 print("  └─ Simulation fully resolved ✓", flush=True)
                 return current
 
-            # ── Persistent tracking ────────────────────────────────────
             sim_issues = self._format_sim_issues(sim_result, requirements=requirements)
             for iss in sim_issues:
                 persistent_sim_issues[iss] = persistent_sim_issues.get(iss, 0) + 1
@@ -2486,13 +2310,11 @@ class _RefinementEngine:
                 iss for iss, cnt in persistent_sim_issues.items() if cnt > 1
             ]
 
-            # ── Print isolated parts (highest priority) ────────────────
             if sim_result.isolated_parts:
                 print(f"  │  ⚠ ISOLATED PARTS ({len(sim_result.isolated_parts)}) — "
                       f"no connect statements: "
                       f"{', '.join(sim_result.isolated_parts)}")
 
-            # ── Print failed scenarios ─────────────────────────────────
             for r in failed:
                 tgts = ", ".join(r.unreachable_targets) or "?"
                 p_tag = "  [PERSISTENT]" if any(
@@ -2503,11 +2325,10 @@ class _RefinementEngine:
                     print(f"  │      ⚠ {w}")
 
             # ── Deterministic missing-connect fix (no LLM) ─────────────
-            # For each failed scenario the design is often just missing a same-name/type out→in
-            # connect (e.g. payloadStatus payload→flightController). Add those deterministically
-            # (validated: type/direction/single-driver) BEFORE spending an LLM call. Resolves the
-            # common churn cheaply; only genuinely-ambiguous gaps reach the LLM below.
-            # Gated by use_deterministic_fixers (ablation: LLM-only repair).
+            # A failed scenario is often just a missing same-name/type out->in connect
+            # (e.g. payloadStatus payload->flightController). Add those with
+            # type/direction/single-driver validation before spending an LLM call; only
+            # ambiguous gaps reach the LLM below. Gated by use_deterministic_fixers.
             if self.use_deterministic_fixers:
                 from ..simulation.connectivity_fixer import fix_missing_connects
                 _fp = [{"src": _scenario_src_instance(r.scenario_name),
@@ -2538,18 +2359,16 @@ class _RefinementEngine:
                             flush=True,
                         )
                     if not failed and not sim_result.isolated_parts:
-                        continue                  # resolved deterministically → skip the LLM step
+                        continue
 
             if sim_iter == max_iters - 1:
-                # Last pass — no more LLM calls, attach warning and exit
                 break
 
             # ── Surgical connectivity fix ──────────────────────────────
-            # Feed ONLY a compact assembly context (port directory + existing
-            # connects + failed scenarios) instead of the whole model.  The
-            # LLM may return only `connect` lines; each is then validated
-            # programmatically (no fabricated ports, correct direction, type
-            # match, single-driver in-ports) before merging.
+            # Feed a compact assembly context (port directory + existing connects + failed
+            # scenarios) instead of the whole model. The LLM may return only `connect`
+            # lines, each validated before merging (no fabricated ports, correct direction,
+            # type match, single-driver in-ports).
             print("  │  ⟳  Fixing connectivity (surgical) …", flush=True)
 
             failed_payload = [
@@ -2612,8 +2431,8 @@ class _RefinementEngine:
                 print("  │  ⚠ no valid connectivity proposal — stopping", flush=True)
                 break
 
-            # Type/direction validity is necessary but not sufficient. Commit the
-            # edit only when it improves actual reachability/behavior evidence.
+            # Type/direction validity is not sufficient: commit only when reachability or
+            # behavior evidence improves.
             candidate_sim = self._run_simulation(
                 reconciliation.model_text,
                 current.name,
@@ -2641,26 +2460,18 @@ class _RefinementEngine:
                     flush=True,
                 )
 
-        # ── Exited loop with persistent sim failures ───────────────────
         return self._finalize_sim_loop(current, max_iters)
 
-
-    # ------------------------------------------------------------------
-    # Connect audit step
-    # ------------------------------------------------------------------
     def _connect_audit_step(
         self,
         sysml_text: str,
         model: SysMLModel,
     ) -> Tuple[str, SysMLModel]:
-        """
-        Programmatically audit every existing ``connect`` statement using
-        the same five rules as connectivity_fixer.  Invalid connects are
-        removed from the text so downstream simulation and
-        connectivity_fixer see a clean model and can propose correct
-        replacements.
+        """Audit every existing ``connect`` with connectivity_fixer's five rules.
 
-        Runs in < 1 ms (pure regex + dict lookups, no LLM call).
+        Invalid connects are removed from the text so simulation and
+        connectivity_fixer see a clean model and can propose replacements. Regex and
+        dict lookups only, no LLM call.
         """
         result = audit_connects(sysml_text)
 
@@ -2673,28 +2484,13 @@ class _RefinementEngine:
             print(f"  │  ✗ {v.summary()}", flush=True)
         print("  └─ cleaned text passed to simulation", flush=True)
 
-        # Persist cleaned text into model metadata
         self._sync_model_text(model, result.cleaned_text)
 
         return result.cleaned_text, model
 
-
     def _fix_stuck_transitions(
         self, model: SysMLModel, max_rounds: int = 3
     ) -> SysMLModel:
-        """
-        Iterative surgical mode-machine repair.
-
-        Each round:
-          1. Run behavioral simulation to find "stuck at X" violations.
-          2. For every stuck state machine, ask the LLM (narrow context only)
-             to correct the wrong transition source(s).
-          3. Validate and merge accepted fixes; re-run simulation.
-          4. Stop when all state machines pass, no more stuck machines are
-             found, no LLM fix was accepted (dead end), or max_rounds reached.
-
-        Supports both guard-based (enum_eq) and accept-triggered mode machines.
-        """
         sysml = get_sysml_text(model)
 
         _STUCK_RE = re.compile(
@@ -2703,7 +2499,6 @@ class _RefinementEngine:
         )
 
         def _collect_stuck(br) -> List[Tuple[str, str, int, int]]:
-            """Return (sm_name, stuck_state, fired, expected) for every stuck SM."""
             out: List[Tuple[str, str, int, int]] = []
             if br is None:
                 return out
@@ -2718,7 +2513,6 @@ class _RefinementEngine:
                         break
             return out
 
-        # Initial simulation
         sim_result = self._run_simulation(sysml, model.name)
         br = sim_result.behavioral_result
         if br is None or br.extracted_sm_count == 0:
@@ -2729,8 +2523,8 @@ class _RefinementEngine:
             return model
 
         for rnd in range(1, max_rounds + 1):
-            # Snapshot total fired count BEFORE this round's repairs so we can
-            # detect genuine progress after re-simulation.
+            # Snapshot the total fired count before this round's repairs to detect
+            # progress after re-simulation.
             prev_fired_total = sum(f for _, _, f, _ in stuck)
 
             print(
@@ -2792,7 +2586,6 @@ class _RefinementEngine:
                       flush=True)
                 break
 
-            # Re-simulate to check progress
             sim_result = self._run_simulation(sysml, model.name)
             br = sim_result.behavioral_result
             stuck = _collect_stuck(br)
@@ -2802,8 +2595,6 @@ class _RefinementEngine:
                       flush=True)
                 break
 
-            # Compare against the snapshot taken before this round's repairs.
-            # If total fired count didn't increase, the fix made no progress.
             new_fired_total = sum(f for _, _, f, _ in stuck)
             if new_fired_total <= prev_fired_total:
                 print(
@@ -2815,17 +2606,13 @@ class _RefinementEngine:
 
         return model
 
-
     @staticmethod
     def _sync_model_text(model: SysMLModel, text: str) -> None:
-        """Write *text* to model.metadata["last_sysml_text"] so downstream
-        phases (evaluation, simulation, artifacts) read the updated source."""
         meta = getattr(model, "metadata", None)
         if meta is None:
             object.__setattr__(model, "metadata", {})
             meta = model.metadata
         meta["last_sysml_text"] = text
-
 
     def _tier0_deterministic_fixes(
         self,
@@ -2833,22 +2620,12 @@ class _RefinementEngine:
         working_model: SysMLModel,
         latest_result: SyntaxCheckResult,
     ) -> Tuple[str, SyntaxCheckResult, List[Dict], bool]:
-        """Tier 0 of the syntax gate: deterministic, LLM-free fixes.
-
-        Applies, in order: `readonly` stripping, reserved-keyword item-name
-        quoting, Levenshtein distance-1 typo correction, and missing guard
-        attribute injection.  Returns ``(sysml, result, lev_hints, resolved)``
-        where ``resolved`` means all errors are gone and the LLM loop can be
-        skipped; ``lev_hints`` carries distance-2 suggestions for the Tier 1
-        LLM prompt.
-        """
-        lev_hints: List[Dict] = []   # distance-2 suggestions for the LLM prompt
+        lev_hints: List[Dict] = []
 
         # ── rewrite quoted `doc` bodies ──────────────────────────────────────
-        # SysML v2 documentation bodies are comments; `doc '...';` is a hard
-        # parser error (measured 2026-08-30: one such line survived all three
-        # LLM fix attempts because the block rewrite tripped the merge-size
-        # gate). Mechanical rewrite — no LLM needed.
+        # SysML v2 doc bodies are comments; `doc '...';` is a parser error that
+        # survived all three LLM fix attempts on 2026-08-30 because the block rewrite
+        # tripped the merge-size gate. Mechanical rewrite - no LLM needed.
         if latest_result.parser_errors:
             from ..sysml.text_normalization import fix_doc_syntax
             rewritten, n_docs = fix_doc_syntax(working_sysml)
@@ -2877,8 +2654,8 @@ class _RefinementEngine:
                     )
 
         # ── strip `readonly` before attribute ────────────────────────────────
-        # syside rejects `readonly attribute X : ...`; idiomatic SysML v2 uses
-        # plain `attribute`.  Strip deterministically — no LLM needed.
+        # syside rejects `readonly attribute X : ...`; SysML v2 uses plain
+        # `attribute`. Strip deterministically - no LLM needed.
         if latest_result.parser_errors:
             stripped = strip_readonly_keyword(working_sysml)
             if stripped != working_sysml:
@@ -2903,9 +2680,8 @@ class _RefinementEngine:
                     )
 
         # ── SysML keyword quoting ────────────────────────────────────────────
-        # `inout/in/out item <keyword> :` where <keyword> is a SysML reserved
-        # word causes a parser error ("Unexpected 'item'").  Fix deterministically
-        # by quoting the offending name — no LLM needed.
+        # `inout/in/out item <keyword> :` with a reserved word gives "Unexpected
+        # 'item'". Quote the offending name - no LLM needed.
         if latest_result.parser_errors:
             candidate = fix_keyword_item_names(working_sysml)
             re_checked = check_syntax(candidate)
@@ -2930,11 +2706,10 @@ class _RefinementEngine:
 
         # ── C-style boolean negation ─────────────────────────────────────────
         # `if !flag` is a parser error ("Unexpected token '!'"); SysML v2 spells
-        # negation `not`.  Found in pilot_n6_20260802/seed-3/R0-CURRENT, where
-        # one such line was the committed model's only error and cost the run its
-        # qualification.  Rewritten deterministically — no LLM needed.  The
-        # rewrite is kept only when it reduces the error count, which is what
-        # bounds the regex's exposure to `!` inside a doc comment or string.
+        # negation `not`. In pilot_n6_20260802/seed-3/R0-CURRENT one such line was the
+        # only error and cost the run its qualification. Kept only when it reduces the
+        # error count, which bounds the regex's exposure to `!` in doc comments and
+        # strings.
         if latest_result.parser_errors:
             negation_fixed = fix_c_style_negation(working_sysml)
             if negation_fixed != working_sysml:
@@ -2958,7 +2733,6 @@ class _RefinementEngine:
                         flush=True,
                     )
 
-        # ── Levenshtein quick-fix ────────────────────────────────────────────
         if latest_result.sema_errors:
             lev = try_fix_sema_errors(working_sysml, latest_result.sema_errors)
 
@@ -2979,8 +2753,8 @@ class _RefinementEngine:
                         flush=True,
                     )
 
-                # Re-check after applying Levenshtein fixes, and adopt only on a
-                # strict improvement so the rule is the same for every rewrite.
+                # Re-check after the Levenshtein fixes and adopt only on a strict
+                # improvement, as with every other rewrite.
                 candidate = lev.fixed_text
                 re_checked = check_syntax(candidate)
                 if re_checked.total_errors() < latest_result.total_errors():
@@ -3009,13 +2783,8 @@ class _RefinementEngine:
                         flush=True,
                     )
 
-            # Collect distance-2 hints for the LLM prompt
             lev_hints = lev.hints
 
-        # ── undeclared guard attribute injection ─────────────────────────────
-        # sema error "No Feature named 'X' found" where X appears in a state
-        # machine guard → inject `attribute X : Real/Boolean = <default>;`
-        # into the owner part def.  No LLM needed — purely programmatic.
         if latest_result.sema_errors:
             candidate, n_injected = _inject_missing_guard_attrs(
                 working_sysml, latest_result.sema_errors
@@ -3050,7 +2819,6 @@ class _RefinementEngine:
 
         return working_sysml, latest_result, lev_hints, False
 
-
     def _tier1_fix_chunk(
         self,
         working_sysml: str,
@@ -3060,14 +2828,6 @@ class _RefinementEngine:
         attempt: int,
         model_total_lines: int,
     ) -> Tuple[str, bool]:
-        """One surgical LLM fix for a single error block (Tier 1).
-
-        Builds the minimal-context prompt (attaching distance-2 Levenshtein
-        hints on the first attempt only), calls the LLM, and merges the
-        returned block.  Returns ``(sysml, merged)``; on LLM error or merge
-        rejection the text is returned unchanged.
-        """
-        # 构建 prompt；首次调用时把 d=2 Lev 建议附到所属块
         prompt = build_fix_prompt(chunk)
         if lev_hints and attempt == 0:
             chunk_hints = [
@@ -3111,7 +2871,6 @@ class _RefinementEngine:
             return working_sysml, False
         elapsed = time.perf_counter() - t0
 
-        # 显示 LLM 返回的前几行（去除围栏后）
         preview_lines = strip_code_fences(raw_fix).splitlines()
         n_resp = len(preview_lines)
         print(
@@ -3134,7 +2893,6 @@ class _RefinementEngine:
         print(f"  ║  └─ ✗  merge rejected — {merge.warning}", flush=True)
         return working_sysml, False
 
-
     def _syntax_gate(
         self,
         sysml_text: str,
@@ -3142,25 +2900,6 @@ class _RefinementEngine:
         requirements: List[str],
         max_attempts: int = 3,
     ) -> Tuple[str, Optional[SysMLModel], SyntaxCheckResult]:
-        """
-        Syntax pre-check gate — two-tier fix strategy.
-
-        Tier 0 (Levenshtein, < 1 ms)
-            Applied first when sema errors exist.  Single-edit (distance=1)
-            typos in feature / type / instance names are corrected directly
-            in the text without calling the LLM.  Distance-2 near-misses are
-            collected as hints and injected into the LLM prompt (Tier 1).
-            If Tier 0 resolves ALL errors, the LLM loop is skipped entirely.
-
-        Tier 1 (LLM, up to max_attempts rounds)
-            Runs only when Tier 0 leaves errors unresolved (parser errors,
-            unresolvable sema errors, etc.).  Each round re-checks with syside
-            and stops as soon as the model is error-free.
-
-        Returns:
-            (final_sysml, fixed_model_or_None, syntax_result)
-            fixed_model_or_None is set only when the text was actually changed.
-        """
         result = check_syntax(sysml_text)
 
         if not result.has_errors:
@@ -3173,7 +2912,6 @@ class _RefinementEngine:
         working_sysml = sysml_text
         working_model = current_model
         latest_result = result
-        # ── Tier 0: deterministic fixes (RO-FIX / KW-FIX / LEV-FIX / ATTR-INJ) ─
         if self.use_deterministic_fixers:
             working_sysml, latest_result, lev_hints, resolved = (
                 self._tier0_deterministic_fixes(working_sysml, working_model, latest_result)
@@ -3217,7 +2955,6 @@ class _RefinementEngine:
                 changed = working_sysml != sysml_text or working_model is not current_model
                 return working_sysml, (working_model if changed else None), latest_result
 
-            # 按语法块分组，提取最小错误上下文
             chunks = extract_error_context(working_sysml, all_errors)
             print(
                 f"  ║\n  ║  ▸ {n} error(s) → {len(chunks)} block(s)"
@@ -3225,7 +2962,6 @@ class _RefinementEngine:
                 flush=True,
             )
 
-            # 逆序遍历，晚出现的块先修，避免行号漂移
             for chunk in sorted(chunks, key=lambda c: c.start_line, reverse=True):
                 working_sysml, merged = self._tier1_fix_chunk(
                     working_sysml, chunk, latest_result, lev_hints,
@@ -3234,9 +2970,8 @@ class _RefinementEngine:
                 if merged:
                     model_total_lines = len(working_sysml.splitlines())
 
-            lev_hints = []   # d=2 建议只在首次 LLM 调用时传递
+            lev_hints = []
 
-            # 更新 model metadata，让后续流程读到最新文本
             self._sync_model_text(working_model, working_sysml)
 
             print("  ║\n  ║  re-checking syntax …", flush=True)
@@ -3257,22 +2992,17 @@ class _RefinementEngine:
                 flush=True,
             )
 
-        # Should not reach here, but safety fallback
         return working_sysml, working_model, latest_result
 
-
-    # ------------------------------------------------------------------
-    # Simulation helpers
-    # ------------------------------------------------------------------
     def _active_plan_payload(self) -> Optional[Mapping]:
         """The typed generation plan, wherever the runtime holds it.
 
-        The plan attribute lives on the orchestrator runtime, not on this
-        engine. Reading it from `self` alone left the requirement-traced
-        reachability score unset on every archived run, so the evaluator's
-        documented trace-first structural term silently fell back to the
-        untraced role heuristic --- whose scenario count scales with component
-        richness and is not comparable across configurations."""
+        The plan attribute lives on the orchestrator runtime, not this engine. Reading
+        it from `self` alone left the requirement-traced reachability score unset on
+        every archived run, so the evaluator fell back to the untraced role heuristic,
+        whose scenario count scales with component richness and is not comparable
+        across configurations.
+        """
         for holder in (self, getattr(self, "_runtime", None)):
             raw = getattr(holder, "_active_model_generation_plan", None)
             if isinstance(raw, Mapping):
@@ -3280,7 +3010,6 @@ class _RefinementEngine:
         return None
 
     def _run_simulation(self, sysml_text: str, model_name: str) -> SimulationResult:
-        """Run simulation and attach fixed requirement-path evidence."""
         try:
             if self._simulation_runner is not None:
                 result = self._simulation_runner(sysml_text, model_name)
@@ -3348,11 +3077,10 @@ class _RefinementEngine:
             r.issues.append(f"Simulation error: {e}")
             return r
 
-
     def _terminal_fatal_advisories(self, model, requirements):
-        """Advisory issues the terminal qualification gates fail closed on,
-        recomputed on the CURRENT text (the bounded passes may have already
-        cleared some)."""
+        """Advisory issues the terminal qualification gates fail closed on, recomputed
+        on the current text, since the bounded passes may have cleared some.
+        """
         from ..prototyping.namespace_integrity import (
             namespace_integrity_issues,
         )
@@ -3374,17 +3102,16 @@ class _RefinementEngine:
     ) -> List[str]:
         """Terminal-unfixable plan-conformance residue as refinement issues.
 
-        Runs the SAME projection the terminal gate applies — materialise
-        the plan onto a text copy, report what still deviates — and rides
-        the result along like the namespace/response/warning advisories, so
-        the author can remove or justify a deviation while still in the
-        loop. Read-only: the materialised copy is discarded."""
+        Runs the projection the terminal gate applies - materialise the plan onto a
+        text copy, report what still deviates - and rides it along with the
+        namespace/response/warning advisories. Read-only: the copy is discarded.
+        """
         try:
             conformance = self._plan_conformance_report(
                 model_text, model, requirements
             )
         except Exception as error:
-            # A rider must not kill the loop, and it must not fail silently.
+            # A rider does not kill the loop and does not fail silently.
             return [
                 "[PLAN-CONFORMANCE] projection failed: "
                 f"{type(error).__name__}: {error}"
@@ -3408,17 +3135,14 @@ class _RefinementEngine:
     ):
         """Deterministically remove connects the plan never sanctioned.
 
-        The plan is the sole writer of connectivity: an unplanned,
-        unjustified connect has no authority behind it, the terminal
-        conformance gate fails closed on it, and the riders can only SHOW
-        it — with quality met and no iterations left nothing removes it
-        (measured twice, s0v9/s0v10: the same invented
-        airframe->perception connect, visible in-loop, fatal at terminal).
-        Zero LLM. Evidence-gated like every repair pass, with RELATIVE
-        gates: accepted only when the conformance residue strictly shrinks,
-        syntax stays clean, and neither simulation nor behavioral execution
-        gets worse — a load-bearing connect regresses the sim and rolls
-        back, restoring fail-loud."""
+        The plan is the sole writer of connectivity, the terminal conformance gate
+        fails closed on an unplanned connect, and the riders can only show it - with
+        quality met and no iterations left nothing removes it (s0v9/s0v10: the same
+        invented airframe->perception connect, fatal at terminal). No LLM. Relative
+        gates: accepted only when the conformance residue shrinks, syntax stays clean,
+        and neither simulation nor behavioral execution gets worse, so a load-bearing
+        connect rolls back.
+        """
         import re as _re
         from ..utils.sysml_text_utils import get_sysml_text, set_sysml_text
         from .verification_audit import behavioral_result_regressed
@@ -3527,7 +3251,6 @@ class _RefinementEngine:
     def _plan_conformance_report(
         self, model_text: str, model, requirements,
     ):
-        """The terminal gate's own conformance projection, read-only."""
         from collections.abc import Mapping as _Mapping
 
         raw_plan = (getattr(model, "metadata", None) or {}).get(
@@ -3550,9 +3273,9 @@ class _RefinementEngine:
     def _semantic_fidelity_issues(self, model_text: str, model) -> List[str]:
         """Non-PASS semantic-fidelity rows as in-loop advisories.
 
-        The terminal REQUIREMENT_MODEL_SEMANTIC_FIDELITY check requires the
-        report's overall PASS; DELEGATED rows are tolerated there and are
-        not repeated here."""
+        The terminal REQUIREMENT_MODEL_SEMANTIC_FIDELITY check needs the report's
+        overall PASS; DELEGATED rows are tolerated there and skipped here.
+        """
         from collections.abc import Mapping as _Mapping
 
         raw_plan = (getattr(model, "metadata", None) or {}).get(
@@ -3596,7 +3319,6 @@ class _RefinementEngine:
 
     def _format_sim_issues(self, sim_result: SimulationResult,
                             requirements: Optional[List[str]] = None) -> List[str]:
-        """Convert failed simulation scenarios into LLM-readable issue strings."""
         issues: List[str] = []
         structural_report = getattr(
             sim_result, "structural_obligation_report", None
@@ -3615,7 +3337,6 @@ class _RefinementEngine:
                     f"[{result.get('requirement_id')}] failed: {detail}"
                 )
         else:
-            # Legacy models without a typed plan retain the role heuristic.
             if sim_result.isolated_parts:
                 issues.append(
                     "ISOLATED PARTS — the following parts have zero connect "
@@ -3637,25 +3358,19 @@ class _RefinementEngine:
                     + (scenario.issues[0] if scenario.issues else "")
                 )
 
-        # ── Behavioral state machine violations ───────────────────────────────
         br = getattr(sim_result, "behavioral_result", None)
         if br is not None and br.extracted_sm_count > 0:
             for sr in br.scenario_results:
                 if not sr.passed:
                     for v in sr.violations:
-                        # The violation text IS the issue. A hardcoded
-                        # "Fix: verify guard thresholds..." used to ride
-                        # along on every violation, guard-related or not —
-                        # run3's SafetyArbiter violations carried a hint
-                        # about thresholds they never mentioned, steering
-                        # the corrector at the wrong member.
+                        # The violation text is the issue. A hardcoded
+                        # "Fix: verify guard thresholds..." used to ride along on every
+                        # violation: run3's SafetyArbiter violations carried a threshold hint
+                        # they never mentioned, steering the corrector at the wrong member.
                         issues.append(
                             f"STATE MACHINE '{sr.state_machine}': {v}"
                         )
 
-        # ── Missing state machines (Solution B) ──────────────────────────────
-        # When SAFE requirements exist but no state def blocks were extracted,
-        # the LLM failed to generate fault-handling behaviour — flag it.
         safe_reqs = [r for r in (requirements or []) if "-SAFE-" in r or "SAFE" in r.upper()[:10]]
         if safe_reqs and (br is None or br.extracted_sm_count == 0):
             sample = "; ".join(safe_reqs[:3])
@@ -3670,11 +3385,10 @@ class _RefinementEngine:
         return issues
 
 
-#: Advisory prefixes whose issues the terminal qualification fails closed on.
-#: How many consecutive no-progress iterations the fatal-advisory continuation
-#: may spend before it stops.  1 = the forced refinement gets exactly one
-#: resample from an unchanged state, then the loop exits instead of burning the
-#: rest of the budget on a wall it has already hit.
+# Advisory prefixes whose issues the terminal qualification fails closed on.
+# How many consecutive no-progress iterations the fatal-advisory continuation
+# may spend. 1 = one resample from an unchanged state, then the loop exits
+# instead of spending the rest of the budget.
 _FATAL_ADVISORY_MAX_STALLS = 1
 
 _FATAL_ADVISORY_PREFIXES = (
@@ -3686,9 +3400,9 @@ _FATAL_ADVISORY_PREFIXES = (
 def _syntax_warning_issues(syntax_result) -> list:
     """User-model syntax warnings as refinement issues.
 
-    The terminal qualification's zero-warning policy makes every warning a
-    hard failure, so each one must be visible in the loop where the author
-    can still fix it."""
+    The terminal zero-warning policy makes every warning a hard failure, so each
+    one is surfaced in the loop where it can still be fixed.
+    """
     issues = []
     for warning in (getattr(syntax_result, "warnings", None) or ()):
         if isinstance(warning, dict):
@@ -3706,8 +3420,6 @@ def _syntax_warning_issues(syntax_result) -> list:
 
 
 def _requirement_coverage_issues(model_text: str, requirements) -> list:
-    """Missing requirement defs / satisfy links, as the terminal
-    REQUIREMENT_REALIZATION_COVERAGE check will count them (same regexes)."""
     from ..prototyping.model_qualification import _declared_requirement_ids
 
     issues = []

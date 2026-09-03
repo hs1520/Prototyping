@@ -1,14 +1,12 @@
 """Gate-protected post-hoc reporting for the revised Option 2 pilot.
 
-This module is the only production consumer that pools independent human gold
-with archived ``RUNTIME_A_G_PREDICTION`` artifacts.  It reproduces the complete
-strong-binding readiness manifest before evaluating anything.  It never imports
-the runtime extractor/checker and never treats a checker PASS as ``NO_FAILURE``.
-
-The report is deliberately descriptive.  It keeps allocation, discharge,
-timing, priority, and invariant agreement separate; records unavailable metrics
-as ``NOT_EVALUABLE``; and carries explicit no-proof/no-physical-validation claim
-flags.
+The only production consumer that pools independent human gold with archived
+``RUNTIME_A_G_PREDICTION`` artifacts; it reproduces the complete strong-binding
+readiness manifest before evaluating anything, imports no runtime
+extractor/checker, and does not treat a checker PASS as ``NO_FAILURE``. The
+report is descriptive: allocation, discharge, timing, priority and invariant
+agreement stay separate, unavailable metrics are ``NOT_EVALUABLE``, and
+no-proof/no-physical-validation claim flags travel with it.
 """
 from __future__ import annotations
 
@@ -104,11 +102,6 @@ def _canonical_fact(category: str, value: Any) -> str:
 
 
 def _graph_fact_set(graph: Mapping[str, Any]) -> set[str]:
-    """Canonical structural facts for cross-seed Jaccard stability.
-
-    Runtime verdicts, diagnostic status, and derived timing totals are excluded;
-    the set contains only the extracted semantic structure.
-    """
     facts: set[str] = set()
     for item in graph.get("allocations") or ():
         facts.add(_canonical_fact("allocation", {

@@ -1,10 +1,9 @@
-"""EOF brace balancing for output-budget truncation — deterministic, not LLM.
+"""Deterministic EOF brace balancing for output-budget truncation.
 
-Measured category (run3): the assembly response hits its output budget and
-stops mid-file with every present statement complete; the syntax gate then
-buys a full LLM window repair whose entire edit is appending ``}`` lines.
-The balancer eats exactly that shape and refuses everything else — a tail
-cut mid-token means content was lost and the LLM repair must decide.
+In run3 the assembly response stopped mid-file with every present statement
+complete, and the syntax gate bought a full LLM window repair that only
+appended ``}`` lines. The balancer takes that shape and refuses the rest: a
+tail cut mid-token lost content, so the LLM repair decides.
 """
 from src.utils.sysml_text_utils import close_truncated_blocks, find_block_end
 
@@ -17,7 +16,7 @@ _TRUNCATED = """package Drone {
             state Locked;"""
 
 
-def test_a_statement_boundary_tail_is_closed_and_counted():
+def test_boundary_tail_closed():
     balanced, closed = close_truncated_blocks(_TRUNCATED)
     assert closed == 3
     assert balanced.endswith("state Locked;\n}\n}\n}\n")
@@ -26,39 +25,39 @@ def test_a_statement_boundary_tail_is_closed_and_counted():
     assert find_block_end(balanced, balanced.index("{")) == len(balanced) - 2
 
 
-def test_a_mid_token_tail_is_refused_for_the_llm_repair_path():
+def test_mid_token_tail_refused():
     text = _TRUNCATED + "\n            state Releas"
     assert close_truncated_blocks(text) == (text, 0)
 
 
-def test_a_tail_inside_a_block_comment_is_refused():
+def test_comment_tail_refused():
     text = _TRUNCATED + "\n            /* releasing means the payload"
     assert close_truncated_blocks(text) == (text, 0)
 
 
-def test_a_tail_inside_a_string_is_refused():
+def test_string_tail_refused():
     text = _TRUNCATED[:-1] + '\n            doc = "held'
     assert close_truncated_blocks(text) == (text, 0)
 
 
-def test_a_trailing_line_comment_is_a_boundary():
+def test_line_comment_is_boundary():
     text = _TRUNCATED + "\n            // remaining states follow"
     balanced, closed = close_truncated_blocks(text)
     assert closed == 3
     assert balanced.endswith("}\n}\n}\n")
 
 
-def test_balanced_text_is_untouched():
+def test_balanced_text_untouched():
     text = _TRUNCATED + "\n}\n}\n}\n"
     assert close_truncated_blocks(text) == (text, 0)
 
 
-def test_over_closed_text_is_never_padded():
+def test_over_closed_not_padded():
     text = "package P {\n}\n}\n"
     assert close_truncated_blocks(text) == (text, 0)
 
 
-def test_braces_inside_comments_and_strings_do_not_count():
+def test_braces_in_comments_ignored():
     text = (
         "package P {\n"
         "    // a } in a comment\n"

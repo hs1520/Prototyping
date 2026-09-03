@@ -12,13 +12,11 @@ from src.prototyping.verification_obligations import (
 )
 
 
-#: REQ-SAFE-007 says "maintain controlled flight" and names no measurement
-#: method, so the requirement's own observable surface judges it: the vehicle
-#: kept flying under control — the commanded hover held to scenario end in
-#: EVERY run (worst case, not average: a redundancy claim that only holds
-#: sometimes does not hold). This is the surface-criterion discipline: where
-#: the requirement states no bound, meeting its stated observable IS the pass,
-#: and any tighter bound we invent is information, not a gate.
+# REQ-SAFE-007 says "maintain controlled flight" and names no measurement method,
+# so it is judged on its own observable: the commanded hover held to scenario end
+# in every run, worst case rather than average. Where the requirement states no
+# bound, meeting its stated observable is the pass; a tighter bound of ours is
+# reported, not gated on.
 CONTROLLED_FLIGHT_SURFACE_CRITERION = VerificationCriterion(
     metric="hover_stable",
     operator="==",
@@ -33,10 +31,9 @@ CONTROLLED_FLIGHT_SURFACE_CRITERION = VerificationCriterion(
     accepted_for_requirement=True,
 )
 
-#: An attitude bound the requirement never stated. It separates attitude
-#: tracking with reduced margin from the recorded large-amplitude wobble, and
-#: is reported so a reviewer can see HOW controlled the surviving flight was —
-#: but it does not gate the verdict.
+# An attitude bound the requirement does not state. It separates tracking with
+# reduced margin from the recorded large-amplitude wobble and is reported, but
+# does not gate the verdict.
 CONTROLLED_FLIGHT_ATTITUDE_CRITERION = VerificationCriterion(
     metric="attitude_rms_deg",
     operator="<=",

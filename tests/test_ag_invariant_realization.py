@@ -60,7 +60,7 @@ package System {
     not extractor._SYSIDE_OK,
     reason="Syside is required for terminal binding",
 )
-def test_terminal_binder_binds_a_continuous_guarantee_to_real_constraint():
+def test_binds_continuous_guarantee():
     result = bind_ag_contracts_to_model(
         _MAIN, [_SPEC], system_package="System"
     )
@@ -105,7 +105,7 @@ def test_terminal_binder_binds_a_continuous_guarantee_to_real_constraint():
     not extractor._SYSIDE_OK,
     reason="Syside is required for terminal binding",
 )
-def test_terminal_binder_rejects_non_boolean_invariant_operand():
+def test_rejects_non_boolean_operand():
     result = bind_ag_contracts_to_model(
         _MAIN.replace(
             "attribute airborne : Boolean = false;",
@@ -132,7 +132,7 @@ def test_terminal_binder_rejects_non_boolean_invariant_operand():
     not extractor._SYSIDE_OK,
     reason="Syside is required for terminal binding",
 )
-def test_terminal_binder_fails_closed_when_invariant_is_missing():
+def test_missing_invariant_fails_closed():
     result = bind_ag_contracts_to_model(
         _MAIN.replace(
             "PowerAvailabilityInvariant",

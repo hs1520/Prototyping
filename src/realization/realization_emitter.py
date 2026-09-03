@@ -58,11 +58,10 @@ def emit_realization_package(report: ClosureReport,
             continue
         attr = realized_attr.get(v.family)
         if attr is None:
-            # payload (hover-throttle margin) has no realized attribute on
-            # RealizedDesign to assert against. The old fallback asserted
-            # realizedEnduranceMin >= <payload target> — vacuously true — and
-            # then `satisfy`d a requirement the closure report judged UNMET.
-            # No assertion is better than a fabricated one.
+            # payload (hover-throttle margin) has no realized attribute on RealizedDesign
+            # to assert against. The old fallback asserted realizedEnduranceMin >=
+            # <payload target>, vacuously true, then `satisfy`d a requirement the closure
+            # report judged UNMET. Emit no assertion instead.
             continue
         req_name = v.req_id.replace("-", "_")
         req_decls.append(
@@ -73,8 +72,8 @@ def emit_realization_package(report: ClosureReport,
         cname = f"realizationCloses{i}"
         asserts.append(f"        assert constraint {cname} {{ {attr} {op} {float(v.target)} }}")
         if v.met:
-            # `satisfy` is a formal satisfaction claim; an UNMET verdict keeps
-            # its (false) assert as the honest record but claims nothing.
+            # `satisfy` is a formal satisfaction claim; an UNMET verdict keeps its false
+            # assert as the record but claims nothing.
             satisfies.append(f"        satisfy {v.req_id.replace('-', '_').lower()};")
     if not asserts:
         asserts.append("        assert constraint realizationCloses { realizedEnduranceMin >= 0.0 }")

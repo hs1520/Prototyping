@@ -1,5 +1,3 @@
-"""Tests for the multi-step DesignAgent generation pipeline (Phase 2-a)."""
-
 from __future__ import annotations
 
 import sys
@@ -56,10 +54,6 @@ from src.sysml.text_normalization import (
     fix_capability_semantics,
 )
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 _SYSML_FRAGMENT = (
     "```sysml\n"
@@ -149,8 +143,6 @@ def _admit_model(text: str, requirements):
 
 
 class QueuedMockLLM:
-    """Mock LLM that returns responses from a queue in order."""
-
     def __init__(self, responses: List[str]):
         self._queue: deque = deque(responses)
         self.call_count = 0
@@ -164,19 +156,14 @@ class QueuedMockLLM:
         max_tokens: int = 20480,
         **kwargs,
     ) -> LLMResponse:
-        # **kwargs absorbs the multi-turn transcript bookkeeping
-        # (conversation_id / new_message_offset), which does not change what a
-        # provider is asked to produce.
+        # **kwargs absorbs the multi-turn transcript bookkeeping (conversation_id /
+        # new_message_offset), which does not change what the provider produces.
         self.call_count += 1
         self.messages.append(list(messages))
         self.temperatures.append(temperature)
         content = self._queue.popleft() if self._queue else "fallback response"
         return LLMResponse(content=content, model="mock-queued")
 
-
-# ---------------------------------------------------------------------------
-# ChainOfThoughtPrompter multi-step method tests
-# ---------------------------------------------------------------------------
 
 class TestDecomposeArchitecture:
     def test_returns_cot_result(self):
@@ -196,7 +183,7 @@ class TestDecomposeArchitecture:
             llm.messages[0][0].content
         )
 
-    def test_typed_plan_uses_stable_temperature_and_full_output_budget(self):
+    def test_typed_plan_temperature_budget(self):
         captured = {}
 
         class CaptureLLM:
@@ -214,7 +201,7 @@ class TestDecomposeArchitecture:
         assert captured["temperature"] == 0.2
         assert captured["max_tokens"] == 65536
 
-    def test_planning_prompt_commits_state_identity_and_local_power_on(self):
+    def test_prompt_commits_state_identity(self):
         llm = QueuedMockLLM(["{}"])
         cot = ChainOfThoughtPrompter(llm)
 
@@ -232,7 +219,7 @@ class TestDecomposeArchitecture:
         assert "power-on initialization" in prompt
         assert "LOCAL_BEHAVIOR" in prompt
 
-    def test_json_parser_accepts_uppercase_fence_crlf_and_spaces(self):
+    def test_json_accepts_messy_fence(self):
         cot = ChainOfThoughtPrompter(QueuedMockLLM([]))
 
         result = cot._parse_cot_response(
@@ -246,7 +233,7 @@ class TestDecomposeArchitecture:
         assert result.metadata["json_parse"]["status"] == "PASS"
         assert result.metadata["json_parse"]["source"] == "FENCED_JSON"
 
-    def test_json_parser_accepts_only_a_complete_raw_json_value(self):
+    def test_json_accepts_raw_value(self):
         cot = ChainOfThoughtPrompter(QueuedMockLLM([]))
 
         result = cot._parse_cot_response(
@@ -257,7 +244,7 @@ class TestDecomposeArchitecture:
         assert result.metadata["json_parse"]["status"] == "PASS"
         assert result.metadata["json_parse"]["source"] == "RAW_JSON"
 
-    def test_json_parser_reports_decode_error_and_non_object_root(self):
+    def test_json_decode_and_non_object(self):
         cot = ChainOfThoughtPrompter(QueuedMockLLM([]))
 
         malformed = cot._parse_cot_response(
@@ -274,13 +261,12 @@ class TestDecomposeArchitecture:
             "JSON_ROOT_NOT_OBJECT"
         )
 
-    def test_json_parser_separates_truncation_from_a_missing_block(self):
-        """A response cut off mid-plan must not look like one that had no JSON.
+    def test_truncation_not_missing_block(self):
+        """A response cut off mid-plan is not one that had no JSON.
 
-        HIGH thinking shares the output budget with the answer, so an
-        over-long plan comes back as an opened-but-never-closed ```json
-        fence.  Reporting that as JSON_BLOCK_ABSENT hid a length failure
-        behind a format failure.
+        HIGH thinking shares the output budget with the answer, so an over-long plan
+        comes back as an opened-but-never-closed ```json fence; reporting that as
+        JSON_BLOCK_ABSENT hid a length failure behind a format failure.
         """
         cot = ChainOfThoughtPrompter(QueuedMockLLM([]))
 
@@ -297,7 +283,7 @@ class TestDecomposeArchitecture:
         )
         assert prose.metadata["json_parse"]["status"] == "JSON_BLOCK_ABSENT"
 
-    def test_context_block_injected_when_provided(self):
+    def test_context_block_injected(self):
         captured = []
 
         class CaptureLLM:
@@ -314,7 +300,7 @@ class TestDecomposeArchitecture:
         prompt_text = " ".join(m.content for m in captured)
         assert "Domain reference material" in prompt_text
 
-    def test_no_context_block_when_empty(self):
+    def test_empty_context_no_block(self):
         captured = []
 
         class CaptureLLM:
@@ -360,9 +346,7 @@ class TestGenerateBehavior:
         assert "navigateToWaypoint" in result.extracted_sysml
         assert "SafetyMonitor" in result.extracted_sysml
 
-    def test_behavior_prompt_contains_guard_rules(self):
-        """The behavior prompt must carry guard-authoring rules so the LLM does
-        not emit dead guards (`== <number>`, `== false`, threshold-vs-self)."""
+    def test_behavior_prompt_guard_rules(self):
         captured = []
 
         class CaptureLLM:
@@ -379,19 +363,13 @@ class TestGenerateBehavior:
         )
         prompt = " ".join(m.content for m in captured)
 
-        # Section header present
         assert "GUARD CONDITION RULES" in prompt
-        # Forbids == / != for numeric guards
         assert "NEVER use `==` or `!=`" in prompt
-        # Left operand must be a dynamic variable; warns against threshold-vs-self
         assert "DYNAMIC measured" in prompt
         assert "comparing a threshold to itself" in prompt
-        # Boolean flag guidance (affirmative naming, no == false)
         assert "affirmative flag" in prompt
-        # Concrete correct example + wrong anti-patterns
         assert "if batteryCharge < 15.0" in prompt
         assert "if someFlag == false" in prompt
-        # Encourages named dynamic thresholds and preserves unit consistency.
         assert "PREFER a dynamic threshold" in prompt
         assert "if batteryCharge <= returnEnergyRequired" in prompt
         assert "UNIT CONSISTENCY RULE" in prompt
@@ -427,7 +405,7 @@ class TestAssembleModel:
         )
         assert "Always think step-by-step" not in llm.messages[0][0].content
 
-    def test_incomplete_code_fence_gets_one_compact_retry(self):
+    def test_incomplete_fence_retries_once(self):
         llm = QueuedMockLLM([
             "```sysml\npackage DroneSystem {",
             _ASSEMBLED_MODEL,
@@ -450,7 +428,7 @@ class TestAssembleModel:
         assert llm.call_count == 2
         assert "ASSEMBLY OUTPUT CORRECTION" in llm.messages[1][1].content
 
-    def test_incomplete_code_fence_remains_fail_closed_after_retry(self):
+    def test_incomplete_fence_fails_closed(self):
         llm = QueuedMockLLM([
             "```sysml\npackage DroneSystem {",
             "```sysml\npackage DroneSystem {",
@@ -485,20 +463,10 @@ class TestAssembleModel:
             requirements=["REQ-FUNC-001: The system shall fly with speed 10 m/s."],
         )
         prompt_text = " ".join(m.content for m in captured_prompts)
-        # Special chars stripped → "MyDroneSystem2"
         assert "MyDroneSystem2" in prompt_text
 
 
-# ---------------------------------------------------------------------------
-# _multistep_generate integration test
-# ---------------------------------------------------------------------------
-
 class TestMultistepGeneratePipeline:
-    """
-    Test _multistep_generate via DesignAgent using stubs.
-    The Syside parser is bypassed by monkeypatching build_lite_model.
-    """
-
     _REQUIREMENTS = [
         "REQ-FUNC-001: The drone shall navigate to waypoints autonomously.",
         "REQ-PERF-001: The drone shall maintain altitude below 400 m.",
@@ -547,7 +515,6 @@ class TestMultistepGeneratePipeline:
         }
 
     def _make_agent(self, responses: List[str], monkeypatch):
-        """Build a DesignAgent with a queued mock LLM and a no-op parser."""
         from src.agents.design_agent import DesignAgent
 
         llm = QueuedMockLLM(responses)
@@ -556,7 +523,6 @@ class TestMultistepGeneratePipeline:
             allow_legacy_architecture_plan=True,
         )
 
-        # Stub out RAG so it returns nothing
         monkeypatch.setattr(agent, "get_augmented_context", lambda *a, **kw: "")
 
         return agent
@@ -572,7 +538,6 @@ class TestMultistepGeneratePipeline:
         behavior_plan=None,
         allow_legacy_plan=None,
     ):
-        """Exercise the public Step 1 protocol without DesignAgent internals."""
         if allow_legacy_plan is None:
             allow_legacy_plan = agent.allow_legacy_architecture_plan
         return TypedPlanGeneration(
@@ -599,7 +564,6 @@ class TestMultistepGeneratePipeline:
         behavior_plan=None,
         platform_profile=None,
     ):
-        """Exercise the public Steps 2–5 authoring interface."""
         return ModelAuthoring(agent.cot, lambda _query: "").generate(
             AuthoringRequest(
                 system_name=system_name,
@@ -613,20 +577,18 @@ class TestMultistepGeneratePipeline:
         )
 
     def test_five_llm_calls_made(self, monkeypatch):
-        """Pipeline now has 5 steps: arch, parts, interfaces, behavior, assembly."""
         import src.agents.design_agent as da_module
         from src.sysml.model import SysMLModel, PartDefinition
 
         responses = [
-            "Architecture plan text with component list",  # step 1
-            _SYSML_FRAGMENT,                               # step 2
-            _INTERFACE_FRAGMENT,                           # step 3 (interfaces)
-            _BEHAVIOR_FRAGMENT,                            # step 4 (behavior)
-            _ASSEMBLED_MODEL,                              # step 5 (assembly)
+            "Architecture plan text with component list",
+            _SYSML_FRAGMENT,
+            _INTERFACE_FRAGMENT,
+            _BEHAVIOR_FRAGMENT,
+            _ASSEMBLED_MODEL,
         ]
         agent = self._make_agent(responses, monkeypatch)
 
-        # Stub build_lite_model to return a minimal model
         dummy_model = SysMLModel(name="DroneSystem", description="test")
         dummy_model.part_definitions.append(
             PartDefinition(name="FlightController", short_description="controls flight")
@@ -645,17 +607,15 @@ class TestMultistepGeneratePipeline:
             for item in result.metadata["degraded_steps"]
         )
 
-    def test_generation_steps_are_independent_calls_not_one_conversation(
+    def test_steps_are_independent_calls(
         self, monkeypatch
     ):
-        """Each step is its own single-turn call. This was measured, not assumed.
+        """Each step is its own single-turn call, measured rather than assumed.
 
-        Sharing one conversation across the steps took paired-seed qualification
-        from 3/3 to 0/3 at 2.1x the prompt cost, failing a different check each
-        seed. Each step is already handed what it needs in curated form, so the
-        history added a second uncurated copy plus stale earlier instructions.
-        A future change that reintroduces a shared conversation here should have
-        to argue with that measurement first.
+        Sharing one conversation across the steps took paired-seed qualification from
+        3/3 to 0/3 at 2.1x the prompt cost, failing a different check each seed: each
+        step is already handed what it needs in curated form, so the history added an
+        uncurated copy plus stale earlier instructions.
         """
         import src.agents.design_agent as da_module
         from src.sysml.model import SysMLModel, PartDefinition
@@ -683,19 +643,15 @@ class TestMultistepGeneratePipeline:
         })
 
         planning, *authoring = agent.llm.messages
-        # every call is [system, user] — no assistant turn is ever resent
         assert all(len(turns) == 2 for turns in agent.llm.messages)
         assert not any(
             message.role == "assistant"
             for turns in agent.llm.messages for message in turns
         )
-        # step 1 keeps its own compiler system prompt
         assert "typed model-planning compiler" in planning[0].content
         assert "expert in Model Based Systems Engineering" not in (
             planning[0].content
         )
-        # design authoring keeps the expert role; mechanical assembly gets a
-        # compact compiler role that does not demand displayed reasoning.
         *design_authoring, assembly = authoring
         assert len({turns[0].content for turns in design_authoring}) == 1
         assert "SysML v2" in design_authoring[0][0].content
@@ -706,10 +662,9 @@ class TestMultistepGeneratePipeline:
             assembly[0].content
         )
         assert "Always think step-by-step" not in assembly[0].content
-        # what each step needs reaches it through the curated prompt, not history
         assert "FlightController" in authoring[1][1].content
 
-    def test_refinement_interface_owns_role_and_source_selection(
+    def test_refinement_owns_role_source(
         self, monkeypatch
     ):
         from src.sysml.model import SysMLModel
@@ -733,7 +688,7 @@ class TestMultistepGeneratePipeline:
         assert "FIX specific reported issues" in agent.llm.messages[0][0].content
         assert "package D { part def A {} }" in agent.llm.messages[0][1].content
 
-    def test_authoring_interface_owns_role_prompt(self, monkeypatch):
+    def test_authoring_owns_role_prompt(self, monkeypatch):
         from src.prototyping.generation_plan import ModelGenerationPlan
 
         plan = ModelGenerationPlan.from_payload(
@@ -758,7 +713,7 @@ class TestMultistepGeneratePipeline:
             for turns in authoring_turns
         )
 
-    def test_invalid_typed_plan_gets_one_bounded_retry(self, monkeypatch):
+    def test_invalid_plan_retries_once(self, monkeypatch):
         invalid = {
             "components": [{
                 "name": "Controller",
@@ -905,7 +860,7 @@ class TestMultistepGeneratePipeline:
         assert metadata["whole_model_generation_plan"]["status"] == "PASS"
         assert "Controller.status -> SafetyMonitor.status" in rendered
 
-    def test_missing_typed_json_gets_one_bounded_retry(self, monkeypatch):
+    def test_missing_json_retries_once(self, monkeypatch):
         payload = self._minimal_typed_payload()
         agent = self._make_agent([
             "I propose Producer and Consumer components.",
@@ -928,7 +883,7 @@ class TestMultistepGeneratePipeline:
             agent.llm.messages[1][-1].content
         )
 
-    def test_format_and_semantic_failures_receive_separate_budgets(
+    def test_format_semantic_separate_budgets(
         self, monkeypatch
     ):
         valid = self._minimal_typed_payload()
@@ -958,7 +913,7 @@ class TestMultistepGeneratePipeline:
             agent.llm.messages[2][-1].content
         )
 
-    def test_two_semantic_corrections_can_use_all_three_attempts(
+    def test_two_corrections_three_attempts(
         self, monkeypatch
     ):
         base = self._minimal_typed_payload()
@@ -1024,10 +979,9 @@ class TestMultistepGeneratePipeline:
             "provenance": {"kind": "DESIGN_DECISION"},
         }]
         valid = json.loads(json.dumps(wrong_tier))
-        # INSPECTION, not STATE_EXECUTION: the subject carries no input binding,
-        # so the state executor cannot sweep it and the validator now requires
-        # the plan to say so. The test still exercises two semantic corrections
-        # across three attempts.
+        # INSPECTION, not STATE_EXECUTION: the subject carries no input binding, so the
+        # state executor cannot sweep it and the validator requires the plan to say so.
+        # The test still exercises two semantic corrections across three attempts.
         valid["constraints"][0]["verification_tier"] = "INSPECTION"
         agent = self._make_agent([
             f"```json\n{json.dumps(unqualified)}\n```",
@@ -1060,7 +1014,7 @@ class TestMultistepGeneratePipeline:
         )
         assert metadata["whole_model_generation_plan"]["status"] == "PASS"
 
-    def test_format_regression_keeps_last_parseable_repair_base(
+    def test_format_regression_keeps_base(
         self, monkeypatch
     ):
         valid = self._minimal_typed_payload()
@@ -1088,15 +1042,14 @@ class TestMultistepGeneratePipeline:
         assert '"connections": []' in third_prompt
         assert "Do not emit SysML" in third_prompt
 
-    def test_truncated_plan_escalates_then_stops_replaying_one_request(
+    def test_truncated_plan_stops_replaying(
         self, monkeypatch
     ):
-        """A truncated Step 1 must not burn the whole attempt budget.
+        """A truncated Step 1 does not burn the whole attempt budget.
 
-        With no payload ever parsed the repair prompt is rebuilt from
-        constants, so every attempt after the first was byte-identical and —
-        against a fixed provider seed — could only reproduce the same
-        truncation, at several minutes per call.
+        With no payload parsed the repair prompt is rebuilt from constants, so every
+        attempt after the first is byte-identical and, against a fixed provider seed,
+        reproduces the same truncation at several minutes per call.
         """
         truncated = '```json\n{"components": [{"name": "FlightCont'
         agent = self._make_agent([truncated] * 6, monkeypatch)
@@ -1107,8 +1060,7 @@ class TestMultistepGeneratePipeline:
 
         prompts = [m[-1].content for m in agent.llm.messages]
         temperatures = agent.llm.temperatures
-        # three genuinely different requests, then an honest stop instead of
-        # three more replays of the third one
+        # three different requests, then a stop instead of three replays of the third
         assert agent.llm.call_count == 3
         assert agent.maximum_plan_attempts == 6
         assert temperatures == [0.2, 0.6, 1.0]
@@ -1117,14 +1069,13 @@ class TestMultistepGeneratePipeline:
             "CORRECTION_CANNOT_VARY_REQUEST"
         )
         assert "CORRECTION_CANNOT_VARY_REQUEST" in str(captured.value)
-        # the length failure must be named as such, and be repairable-looking
         assert all(
             item["json_parse"]["status"] == "JSON_FENCE_UNCLOSED"
             for item in captured.value.plan_attempts
         )
         assert "TYPED MODEL PLAN LENGTH CORRECTION" in prompts[1]
 
-    def test_production_mode_never_silently_uses_legacy_plan(
+    def test_production_rejects_legacy_plan(
         self, monkeypatch
     ):
         agent = self._make_agent([
@@ -1139,9 +1090,9 @@ class TestMultistepGeneratePipeline:
         ) as captured:
             self._generate_typed_plan(agent, "P", [])
 
-        # The attempt budget is the ceiling, not a quota to spend: once the
-        # correction can no longer vary the request, further attempts are
-        # replays and the loop stops short of the bound.
+        # The attempt budget is a ceiling, not a quota: once the correction can no
+        # longer vary the request, further attempts are replays, so the loop stops
+        # short of the bound.
         assert agent.llm.call_count <= agent.maximum_plan_attempts
         assert len(captured.value.plan_attempts) == agent.llm.call_count
         assert all(
@@ -1153,7 +1104,7 @@ class TestMultistepGeneratePipeline:
             for item in captured.value.metadata["degraded_steps"]
         )
 
-    def test_explicit_legacy_compatibility_remains_available(
+    def test_explicit_legacy_available(
         self, monkeypatch
     ):
         agent = self._make_agent([
@@ -1177,7 +1128,7 @@ class TestMultistepGeneratePipeline:
             for item in metadata["degraded_steps"]
         )
 
-    def test_ag_owner_cross_validation_participates_in_step1_retry(
+    def test_ag_owner_check_triggers_retry(
         self, monkeypatch
     ):
         from src.prototyping.ag_behavior_plan import (
@@ -1282,10 +1233,9 @@ class TestMultistepGeneratePipeline:
             ]
         ) == 1
 
-    def test_semantic_requirement_is_bound_in_plan_and_routed_to_interfaces(
+    def test_semantic_req_bound_and_routed(
         self, monkeypatch
     ):
-
         requirement = (
             "REQ-FUNC-002: The system shall maintain at least 5 metres "
             "of separation while avoiding an obstacle."
@@ -1462,9 +1412,9 @@ class TestMultistepGeneratePipeline:
         responses = [
             "Architecture plan",
             _SYSML_FRAGMENT,
-            _INTERFACE_FRAGMENT,   # step 3
-            _BEHAVIOR_FRAGMENT,    # step 4
-            _ASSEMBLED_MODEL,      # step 5
+            _INTERFACE_FRAGMENT,
+            _BEHAVIOR_FRAGMENT,
+            _ASSEMBLED_MODEL,
         ]
         agent = self._make_agent(responses, monkeypatch)
 
@@ -1485,7 +1435,7 @@ class TestMultistepGeneratePipeline:
         assert "interfaces_fragment_length" in result.metadata
         assert "behavior_fragment_length" in result.metadata
 
-    def test_step4_retries_unregistered_accept_once_and_remains_fail_closed(
+    def test_step4_retries_then_fails_closed(
         self, monkeypatch
     ):
         from src.prototyping.generation_plan import (
@@ -1601,7 +1551,7 @@ state def ExtraBehavior {
             assert "UnplannedSignal" not in fragment
             assert "item def RegisteredSignal" in fragment
 
-    def test_step2_retries_once_when_first_response_has_no_part_defs(
+    def test_step2_retries_missing_part_defs(
         self, monkeypatch
     ):
         import src.agents.design_agent as da_module
@@ -1629,7 +1579,7 @@ state def ExtraBehavior {
         assert agent.llm.call_count == 6
         assert result.metadata["step2_part_retries"] == 1
 
-    def test_step2_retries_cross_kind_or_unplanned_part_def(
+    def test_step2_retries_unplanned_part_def(
         self, monkeypatch
     ):
         from src.prototyping.generation_plan import ModelGenerationPlan
@@ -1694,7 +1644,7 @@ state def ExtraBehavior {
             agent.llm.messages[1][-1].content
         )
 
-    def test_step2_fails_after_bounded_empty_structure_retry(self, monkeypatch):
+    def test_step2_fails_after_empty_retry(self, monkeypatch):
         responses = [
             "Architecture plan",
             "no structural model",
@@ -1710,7 +1660,7 @@ state def ExtraBehavior {
 
         assert agent.llm.call_count == 3
 
-    def test_initial_generation_rejects_zero_parseable_parts(self, monkeypatch):
+    def test_zero_parseable_parts_rejected(self, monkeypatch):
         import src.agents.design_agent as da_module
         from src.sysml.model import SysMLModel
 
@@ -1734,10 +1684,9 @@ state def ExtraBehavior {
                 "requirements": self._REQUIREMENTS,
             })
 
-        # Five generation calls plus one bounded common syntax-repair call.
         assert agent.llm.call_count == 6
 
-    def test_initial_parse_failure_gets_one_uniform_syntax_repair(
+    def test_parse_failure_gets_syntax_repair(
         self, monkeypatch
     ):
         import src.agents.design_agent as da_module
@@ -1770,12 +1719,7 @@ state def ExtraBehavior {
         assert result.metadata["initial_parse_repair"]["attempted"] is True
         assert result.metadata["initial_parse_repair"]["successful"] is True
 
-    def test_behavior_step_skipped_without_func_safe_reqs(self, monkeypatch):
-        """Only 4 LLM calls when no FUNC or SAFE requirements exist.
-
-        Pipeline: step1(arch) + step2(parts) + step3(interfaces) + step5(assembly)
-        Step 4 (behavior) is skipped — no FUNC/SAFE reqs.
-        """
+    def test_behavior_skipped_no_func_safe(self, monkeypatch):
         import src.agents.design_agent as da_module
         from src.sysml.model import SysMLModel, PartDefinition
 
@@ -1784,11 +1728,10 @@ state def ExtraBehavior {
             "REQ-INTF-001: The drone shall exchange telemetry with ground station via MAVLink protocol.",
         ]
         responses = [
-            "Architecture plan",  # step 1
-            _SYSML_FRAGMENT,      # step 2
-            _INTERFACE_FRAGMENT,  # step 3 (interfaces — always runs)
-            # step 4 skipped (no FUNC/SAFE)
-            _ASSEMBLED_MODEL,     # step 5
+            "Architecture plan",
+            _SYSML_FRAGMENT,
+            _INTERFACE_FRAGMENT,
+            _ASSEMBLED_MODEL,
         ]
         agent = self._make_agent(responses, monkeypatch)
 
@@ -1807,15 +1750,14 @@ state def ExtraBehavior {
         assert agent.llm.call_count == 4
         assert result.metadata["behavior_fragment_length"] == 0
 
-    def test_refinement_mode_still_uses_single_step(self, monkeypatch):
-        """Refinement mode must not go through the multi-step pipeline."""
+    def test_refinement_uses_single_step(self, monkeypatch):
         import src.agents.design_agent as da_module
         from src.sysml.model import SysMLModel, PartDefinition
 
         existing = SysMLModel(name="DroneSystem", description="existing")
 
         responses = [
-            _ASSEMBLED_MODEL,  # single refine_design call
+            _ASSEMBLED_MODEL,
         ]
         agent = self._make_agent(responses, monkeypatch)
 
@@ -1836,8 +1778,7 @@ state def ExtraBehavior {
         assert agent.llm.call_count == 1
 
 
-def test_range_floor_is_not_emitted_as_opposite_always_on_constraint():
-
+def test_range_floor_not_inverted():
     text = """package D {
         part def Airframe {
             attribute maxOperationalRange : Real = 5.0;
@@ -1859,7 +1800,7 @@ def test_range_floor_is_not_emitted_as_opposite_always_on_constraint():
     assert "forward-flight fidelity" in fixed
 
 
-def test_missing_part_defs_are_restored_from_structural_fragment():
+def test_missing_part_defs_restored():
     assembled = """package DroneSystem {
         requirement def REQ_FUNC_001 { }
     }"""
@@ -1881,7 +1822,7 @@ def test_missing_part_defs_are_restored_from_structural_fragment():
     assert restored.count("part def PayloadManager") == 1
 
 
-def test_missing_defs_are_restored_into_quoted_package_name():
+def test_restore_into_quoted_package():
     assembled = "package 'Autonomous Drone' { requirement def REQ_FUNC_001 { } }"
     parts = "part def FlightController { attribute x : Real = 1.0; }"
     interfaces = "item def TelemetryData;"
@@ -1901,7 +1842,7 @@ def test_missing_defs_are_restored_into_quoted_package_name():
     assert "item def TelemetryData" in restored
 
 
-def test_post_assembly_restores_event_item_before_behavior_compilation():
+def test_event_item_restored_before_behavior():
     from src.prototyping.generation_plan import (
         ComponentPlan,
         ModelGenerationPlan,
@@ -1961,7 +1902,7 @@ def test_post_assembly_restores_event_item_before_behavior_compilation():
     assert metadata["owned_planned_behavior_conformance"]["status"] == "PASS"
 
 
-def test_existing_part_defs_are_not_duplicated_during_restore():
+def test_existing_part_defs_not_duplicated():
     assembled = "package D { part def FlightController { } }"
     parts = "part def FlightController { attribute x : Real = 1.0; }"
 
@@ -1973,7 +1914,7 @@ def test_existing_part_defs_are_not_duplicated_during_restore():
     assert names == []
 
 
-def test_range_floor_cleanup_does_not_remove_sensor_range_constraint():
+def test_sensor_range_constraint_kept():
     text = """package D {
         part def PerceptionSystem {
             attribute maxSensorRange : Real = 15.0;
@@ -2001,13 +1942,15 @@ def test_range_floor_cleanup_does_not_remove_sensor_range_constraint():
     assert "currentRange >= minOperationalRange" not in fixed
 
 
-def test_a_wrong_safety_command_is_no_longer_silently_respelled():
-    """`fix_safety_action_semantics` (removed 2026-08-31) rewrote
-    `send CMD_LAND()` inside parachute actions into `send CMD_PARACHUTE()`
-    and injected the harness's command definition — semantic forgery that
-    laundered a real arbitration defect into a pass. The wrong command must
-    survive normalization untouched and surface at the linker's traceability
-    check (test_parachute_guard_with_land_command_is_traceability_blocked)."""
+def test_wrong_safety_command_not_respelled():
+    """`fix_safety_action_semantics` (removed 2026-08-31) rewrote `send CMD_LAND()` in
+    parachute actions to `send CMD_PARACHUTE()` and injected the harness's command
+    definition, turning an arbitration defect into a pass.
+
+    The wrong command now survives normalization untouched and surfaces at the
+    linker's traceability check
+    (test_parachute_land_command_blocked).
+    """
     from src.sysml import text_normalization
 
     assert not hasattr(text_normalization, "fix_safety_action_semantics")
@@ -2016,7 +1959,7 @@ def test_a_wrong_safety_command_is_no_longer_silently_respelled():
     )
 
 
-def test_self_test_satisfy_is_relocated_to_state_machine_owner():
+def test_satisfy_relocated_to_owner():
     text = """package D {
         requirement def REQ_FUNC_009 { }
         part def FlightController {
@@ -2049,7 +1992,7 @@ def test_self_test_satisfy_is_relocated_to_state_machine_owner():
     assert "satisfy requirement REQ_FUNC_009;" in flight_block
 
 
-def test_bare_self_test_phase_gets_executable_entry_action():
+def test_self_test_phase_gets_entry_action():
     text = """package D {
         part def FlightController {
             action def executeSelfTest { }
@@ -2074,7 +2017,7 @@ def test_bare_self_test_phase_gets_executable_entry_action():
     assert fixed.count("action def executeSelfTest") == 1
 
 
-def test_functional_satisfy_owner_fix_closes_self_check_audit_gap():
+def test_satisfy_owner_fix_closes_gap():
     from src.agents.verification_audit import functional_verification_gap_issues
 
     text = """package D {

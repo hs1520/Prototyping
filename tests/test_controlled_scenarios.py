@@ -42,7 +42,7 @@ CONNECTED = """package D {
 }"""
 
 
-def test_controlled_suite_has_fixed_denominator_and_all_paths_pass():
+def test_fixed_denominator_all_pass():
     report = evaluate_controlled_scenarios(CONNECTED, model_name="D")
 
     assert report["scenario_set_fixed"] is True
@@ -50,7 +50,7 @@ def test_controlled_suite_has_fixed_denominator_and_all_paths_pass():
     assert report["counts"] == {"PASS": 7, "FAIL": 0}
 
 
-def test_missing_role_is_a_failure_not_a_removed_scenario():
+def test_missing_role_fails_not_removed():
     report = evaluate_controlled_scenarios(
         CONNECTED.replace("part actuator : PayloadActuator;", ""),
         model_name="D",

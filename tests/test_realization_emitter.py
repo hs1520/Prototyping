@@ -19,7 +19,7 @@ def _report(req="REQ-PERF-002: endurance at least 15 minutes."):
     return close_the_loop(d, [], [req], catalog())
 
 
-def test_emit_realization_package_syntax_passes():
+def test_emitted_package_syntax_passes():
     sysml, ok = emit_realization_package(_report())
     assert ok and not check_syntax(sysml).has_errors
     assert "package RealizationPackage" in sysml
@@ -27,13 +27,13 @@ def test_emit_realization_package_syntax_passes():
     assert "assert constraint realizationCloses0" in sysml
 
 
-def test_inject_realization_analysis_rolls_back_on_bad_model():
+def test_inject_rolls_back_bad_model():
     bad = "package Drone { part def A { "
     out, ok = inject_realization_analysis(bad, _report())
     assert not ok and out == bad
 
 
-def test_inject_realization_analysis_into_valid_package():
+def test_inject_into_valid_package():
     base = "package Drone { part def A; }"
     out, ok = inject_realization_analysis(base, _report())
     assert ok and out != base
@@ -41,7 +41,7 @@ def test_inject_realization_analysis_into_valid_package():
     assert not check_syntax(out).has_errors
 
 
-def test_emit_realization_package_asserts_only_closure_scope_requirements():
+def test_asserts_only_closure_scope():
     d = DesignInputs(1.0, 12000, 6, 4, 18 * 0.0254 / 2, 0.0)
     rep = close_the_loop(d, [], [
         "REQ-PERF-002: endurance at least 15 minutes.",
@@ -57,7 +57,7 @@ def test_emit_realization_package_asserts_only_closure_scope_requirements():
     assert sysml.count("assert constraint realizationCloses") == 1
 
 
-def test_infeasible_report_still_emits_false_assert():
+def test_infeasible_emits_false_assert():
     d = DesignInputs(1.0, 12000, 6, 4, 18 * 0.0254 / 2, 0.0)
     rep = close_the_loop(d, [], ["REQ-PERF-002: endurance at least 15 minutes."],
                          catalog(frames=[frame(arms=6)]))
@@ -68,7 +68,7 @@ def test_infeasible_report_still_emits_false_assert():
 
 
 @pytest.mark.skipif(not _HAS_SYSIDE, reason="syside not installed")
-def test_automator_realized_endurance_matches_python():
+def test_endurance_matches_python():
     import syside
 
     rep = _report()

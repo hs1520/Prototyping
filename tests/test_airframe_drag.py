@@ -1,9 +1,9 @@
-"""Parasitic-drag area is derived from the airframe that is actually drawn, and
-speed measurements must reach steady state before they may be reported.
+"""Parasitic-drag area comes from the airframe that is drawn, and speed
+measurements reach steady state before being reported.
 
-Both guards exist because of one concrete defect in the 2026-08-30 authoritative
-run: the airframe carried no body drag, so a forward dash never reached terminal
-velocity and its ground speed *rose* from 14.2 to 28.9 m/s after a 15 m/s
+Both guards come from one defect in the 2026-08-30 authoritative run: the
+airframe carried no body drag, so a forward dash never reached terminal
+velocity and its ground speed rose from 14.2 to 28.9 m/s after a 15 m/s
 headwind was injected.
 """
 from __future__ import annotations
@@ -36,15 +36,13 @@ from gazebo_poc.steady_state import steady_state
 _TEMPLATES = Path("gazebo_poc/templates")
 _HAS_TEMPLATES = (_TEMPLATES / "all_models" / "iris_with_gimbal" / "model.sdf").exists()
 
-# The 2026-08-30 authoritative run's recommended design.
 _ROTORS, _RADIUS, _MASS = 6, 0.2032, 5.54
 
 
-def test_flat_plate_area_matches_independent_hand_calculation():
+def test_flat_plate_area_hand_calc():
     arm_len = arm_length_m(_RADIUS)
     arm_w = arm_width_m(_RADIUS)
     hub = 2.0 * hub_radius_m(arm_len) * HUB_HEIGHT_M
-    # HEXA_X arms sit at 90, -90, -30, 150, 30, -150 degrees.
     angles = (90.0, -90.0, -30.0, 150.0, 30.0, -150.0)
     arms = sum(
         ARM_THICKNESS_M
@@ -54,11 +52,10 @@ def test_flat_plate_area_matches_independent_hand_calculation():
     expected = CD_HUB * hub + CD_ARM * arms
 
     assert flat_plate_area_m2(_ROTORS, _RADIUS) == pytest.approx(expected)
-    # Sanity: a bare 0.9 m hexa hub-and-arms frame is a few hundredths of a m^2.
     assert 0.03 < expected < 0.09
 
 
-def test_payload_adds_its_own_frontal_area():
+def test_payload_adds_frontal_area():
     bare = drag_breakdown(_ROTORS, _RADIUS, payload_attached=False)
     laden = drag_breakdown(_ROTORS, _RADIUS, payload_attached=True)
     _, box_y, box_z = PAYLOAD_BOX_SIZE_M
@@ -70,16 +67,14 @@ def test_payload_adds_its_own_frontal_area():
     )
 
 
-def test_drag_area_scales_with_the_design_rather_than_being_a_constant():
-    """The old model hard-coded 0.05 m^2 for every design."""
+def test_drag_area_scales_with_design():
     small = flat_plate_area_m2(4, 0.12)
     large = flat_plate_area_m2(8, 0.28)
     assert large > 2.0 * small
 
 
 @pytest.mark.skipif(not _HAS_TEMPLATES, reason="iris templates absent (regenerate via docker cp)")
-def test_drag_geometry_cannot_diverge_from_the_drawn_sdf(tmp_path):
-    """The hub and arms the drag model sums are the ones the SDF draws."""
+def test_drag_geometry_matches_sdf(tmp_path):
     from gazebo_poc.multirotor_sdf import generate_multirotor_sdf
 
     standoffs, _gimbal, _fc = generate_multirotor_sdf(
@@ -104,23 +99,18 @@ def test_drag_geometry_cannot_diverge_from_the_drawn_sdf(tmp_path):
         assert float(thickness) == pytest.approx(ARM_THICKNESS_M, abs=1e-4)
 
 
-def test_terminal_speed_is_the_drag_thrust_balance():
+def test_terminal_speed_balance():
     f = flat_plate_area_m2(_ROTORS, _RADIUS, payload_attached=True)
-    tilt = math.radians(19.1)                       # RC2=1330 against ANGLE_MAX=45 deg
+    tilt = math.radians(19.1)
     v = terminal_speed_mps(f, _MASS, tilt)
     drag_n = 0.5 * 1.2041 * f * v * v
     assert drag_n == pytest.approx(_MASS * 9.81 * math.tan(tilt))
-    # A dash that accelerates forever has no terminal speed; this one does, and
-    # it is well below the 28.9 m/s the drag-free airframe reached.
+    # The dash reaches a terminal speed, well below the 28.9 m/s the drag-free
+    # airframe reached.
     assert 15.0 < v < 28.0
 
 
-# --------------------------------------------------------------------------
-# steady state
-# --------------------------------------------------------------------------
-
-def test_accelerating_dash_is_not_steady_state():
-    """The shape the 2026-08-30 run actually recorded: still accelerating."""
+def test_accelerating_dash_not_steady():
     samples = [(t * 0.5, 21.2 + 0.36 * (t * 0.5)) for t in range(40)]
     verdict = steady_state(samples)
     assert not verdict.steady
@@ -129,7 +119,7 @@ def test_accelerating_dash_is_not_steady_state():
     assert "NOT steady state" in verdict.describe()
 
 
-def test_plateaued_dash_with_noise_is_steady_state():
+def test_noisy_plateau_steady():
     noise = [0.0, 0.12, -0.09, 0.05, -0.14, 0.08, -0.03, 0.11, -0.07, 0.02]
     samples = [(t * 0.5, 23.8 + noise[t % len(noise)]) for t in range(40)]
     verdict = steady_state(samples)
@@ -138,7 +128,7 @@ def test_plateaued_dash_with_noise_is_steady_state():
     assert "steady-state confirmed" in verdict.describe()
 
 
-def test_short_or_sparse_windows_cannot_claim_steady_state():
+def test_short_window_not_steady():
     assert not steady_state([(0.0, 20.0), (0.5, 20.0)]).steady
     dense_but_brief = [(t * 0.05, 20.0) for t in range(20)]
     verdict = steady_state(dense_but_brief)
@@ -146,15 +136,14 @@ def test_short_or_sparse_windows_cannot_claim_steady_state():
     assert "shorter than" in verdict.reason
 
 
-def test_monotone_ramp_is_caught_even_when_the_slope_fit_is_flattered():
-    """A ramp that stalls at both ends still fails on the half-window means."""
+def test_monotone_ramp_not_steady():
     values = [20.0] * 10 + list(20.0 + 0.4 * i for i in range(1, 11)) + [24.0] * 10
     samples = [(t * 0.5, v) for t, v in enumerate(values)]
     verdict = steady_state(samples)
     assert not verdict.steady
 
 
-def test_slow_linear_change_below_five_percent_is_still_not_a_plateau():
+def test_slow_drift_not_steady():
     samples = [(t * 0.5, 20.0 + 0.02 * (t * 0.5)) for t in range(40)]
 
     verdict = steady_state(samples)
@@ -164,27 +153,24 @@ def test_slow_linear_change_below_five_percent_is_still_not_a_plateau():
     assert verdict.reason == "statistically significant trend"
 
 
-def test_a_real_but_negligible_trend_is_still_a_plateau():
-    """Significance is not magnitude. The t-statistic is |slope| / standard
-    error, so with many samples and little noise ANY nonzero slope becomes
-    "significant" — a measured cruise point that went 15.91 -> 15.91 m/s over
-    9.9 s, a drift of 0.015%, was rejected as a statistically significant
-    trend, and took two of four envelope points with it."""
+def test_negligible_trend_steady():
+    """Significance is not magnitude. The t-statistic is |slope| / standard error,
+    so with many samples and little noise any nonzero slope is "significant" - a
+    measured cruise point that went 15.91 -> 15.91 m/s over 9.9 s, a drift of
+    0.015%, was rejected as a trend and took two of four envelope points with it.
+    """
     n = 98
     flat = [(i * 9.9 / n, 15.91) for i in range(n)]
     verdict = steady_state(flat)
     assert verdict.steady, verdict.reason
 
-    # the same shape with a barely-there slope is still a plateau
     crawling = [(i * 10.0 / n, 10.34 + 0.05 * i / n) for i in range(n)]
     verdict = steady_state(crawling)
     assert verdict.steady
     assert verdict.drift_fraction < 0.01
 
 
-def test_a_significant_trend_that_also_matters_is_still_rejected():
-    """The guard must keep catching what it was added for: a slow, consistent
-    climb whose total drift stays under the 5% gross test."""
+def test_significant_trend_rejected():
     samples = [(t * 0.5, 20.0 + 0.02 * (t * 0.5)) for t in range(40)]
 
     verdict = steady_state(samples)

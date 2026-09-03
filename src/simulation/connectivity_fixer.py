@@ -1,23 +1,16 @@
-"""
-connectivity_fixer.py
+"""connectivity_fixer.py
 
-外科式连接修复:只把"装配上下文"(端口目录 + 现有 connect + 失败场景)喂给
-LLM,而不是整个 SysML 模型;LLM 只准返回新增的 `connect a.x to b.y;` 行,
-再由程序逐条校验、合法的才合并进装配段。
+外科式连接修复:只把装配上下文(端口目录 + 现有 connect + 失败场景)喂给
+LLM,LLM 只返回新增的 `connect a.x to b.y;` 行,程序逐条校验后合并进装配段。
+全模型重生成(旧的 _sim_refinement_loop)会顺手造端口、改结构,产生凭空的
+out 端口和双源驱动的 in 端口;这里改用程序校验拦截。
 
-为什么不喂整个模型(对比旧的 _sim_refinement_loop 全模型重生成)
-──────────────────────────────────────────────────────────────
-旧做法把整个模型交给 LLM 重生成,LLM 会"顺手"造端口、改结构,产生:
-  • 给结构件凭空加 out 端口(如给 airframe 加 telemetryOut)
-  • 同一个 in 端口被多个源驱动(双源驱动)
-本模块用**程序硬校验**杜绝这两类问题(而不是靠 prompt 求 LLM 自觉)。
-
-校验规则(任一不过 → 丢弃该 connect)
-────────────────────────────────────
-  1. 两端实例 + 端口必须在端口目录里已存在     → 禁止凭空造端口
-  2. 源端口方向 out/inout,目标端口方向 in/inout → 方向必须正确
-  3. 端口类型(PortDef)必须一致               → 禁止跨类型乱接
-  4. 纯 in 目标端口尚未被任何源驱动            → 禁止双源 in 端口
+校验规则(任一不过 -> 丢弃该 connect)
+──────────────────────────────────
+  1. 两端实例 + 端口必须在端口目录里已存在     -> 禁止凭空造端口
+  2. 源端口方向 out/inout,目标端口方向 in/inout -> 方向必须正确
+  3. 端口类型(PortDef)必须一致               -> 禁止跨类型乱接
+  4. 纯 in 目标端口尚未被任何源驱动            -> 禁止双源 in 端口
   5. 不与现有 connect 重复
 
 公共 API
@@ -39,23 +32,17 @@ from typing import Dict, List, Optional, Set, Tuple
 from ..utils.sysml_text_utils import find_block_end as _block_end
 
 
-# ---------------------------------------------------------------------------
-# 数据类
-# ---------------------------------------------------------------------------
-
 @dataclass
 class PortInfo:
     name: str
-    direction: str        # 'in' | 'out' | 'inout'
-    port_type: str        # PortDef 名称
+    direction: str
+    port_type: str
 
 
 @dataclass
 class PortDirectory:
-    """实例 → 其端口(方向 + 类型)的目录,从 SysML 文本用正则提取。"""
-    # instance name → {port_name → PortInfo}
+    """实例 -> 其端口(方向 + 类型)的目录,从 SysML 文本用正则提取。"""
     instances: Dict[str, Dict[str, PortInfo]] = field(default_factory=dict)
-    # instance name → part def name
     instance_type: Dict[str, str] = field(default_factory=dict)
 
     def port(self, inst: str, port: str) -> Optional[PortInfo]:
@@ -82,7 +69,7 @@ class ConnectStmt:
 @dataclass
 class ConnValidation:
     accepted: List[ConnectStmt] = field(default_factory=list)
-    rejected: List[Tuple[str, str]] = field(default_factory=list)  # (raw_line, reason)
+    rejected: List[Tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -110,44 +97,25 @@ class ConnectivityAudit:
     cleaned_text: str = ""
 
 
-# ---------------------------------------------------------------------------
-# 块匹配辅助
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# 正则
-# ---------------------------------------------------------------------------
-
-# part def <Name> {
-# part def <Name> [:> Base1, Base2] {   — capture optional specialisation list
 _PART_DEF_RE = re.compile(r'\bpart\s+def\s+(\w+)\s*(?::>\s*([\w\s,]+?))?\s*\{')
-# 端口声明: (in|out|inout) port <name> [: <PortDef>]   (type optional → harvested
-# untyped ports on a specialised interface are recognised too)
 _PORT_RE = re.compile(r'\b(in|out|inout)\s+port\s+(\w+)\s*(?::\s*(\w+))?')
-# 实例用法: part <inst> : <Type> ;   (排除 part def)
 _USAGE_RE = re.compile(r'\bpart\s+(?!def\b)(\w+)\s*:\s*(\w+)\s*;')
-# connect a.x to b.y ;
 _CONNECT_RE = re.compile(
     r'\bconnect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)\s*;'
 )
 
 
-# ---------------------------------------------------------------------------
-# 端口目录构建
-# ---------------------------------------------------------------------------
-
 def build_port_directory(sysml_text: str) -> PortDirectory:
     """
     从 SysML v2 文本构建端口目录:
-      1. 解析每个 `part def` 的端口(方向 + 类型)→ 类型级端口表
+      1. 解析每个 `part def` 的端口(方向 + 类型)-> 类型级端口表
       2. 解析实例用法 `part <inst> : <Type>;`
       3. 把每个实例展开成它的端口表
 
     用正则提取,可在部分非法文本上工作。
     """
-    # ── 类型级端口表: part def name → {port_name → PortInfo} ──────────────
     type_ports: Dict[str, Dict[str, PortInfo]] = {}
-    supertypes: Dict[str, List[str]] = {}  # def → [:> bases]  (for inheritance)
+    supertypes: Dict[str, List[str]] = {}
     for pm in _PART_DEF_RE.finditer(sysml_text):
         def_name = pm.group(1)
         if pm.group(2):
@@ -163,9 +131,8 @@ def build_port_directory(sysml_text: str) -> PortDirectory:
         type_ports[def_name] = ports
 
     # ── 继承展开: `part def V :> Base` 继承 Base 的端口 ────────────────────
-    # A part bound to a variant type (`V :> Base`) must expose Base's ports or
-    # its connects get pruned as "no port".  Merge supertype ports transitively;
-    # own ports win on name clash.
+    # A part bound to `V :> Base` needs Base's ports or its connects get pruned
+    # as "no port". Merge supertype ports transitively; own ports win on clash.
     def _resolve(name: str, seen: Set[str]) -> Dict[str, PortInfo]:
         if name in seen or name not in type_ports:
             return {}
@@ -173,18 +140,16 @@ def build_port_directory(sysml_text: str) -> PortDirectory:
         merged: Dict[str, PortInfo] = {}
         for base in supertypes.get(name, []):
             merged.update(_resolve(base, seen))
-        merged.update(type_ports[name])  # own ports override inherited
+        merged.update(type_ports[name])
         return merged
 
     if supertypes:
         type_ports = {name: _resolve(name, set()) for name in type_ports}
 
-    # ── 实例 → 类型,并展开端口 ───────────────────────────────────────────
     directory = PortDirectory()
     for m in _USAGE_RE.finditer(sysml_text):
         inst, typ = m.group(1), m.group(2)
         directory.instance_type[inst] = typ
-        # 拷贝一份类型的端口表(实例独立,便于按实例追踪)
         directory.instances[inst] = dict(type_ports.get(typ, {}))
 
     return directory
@@ -194,7 +159,6 @@ _COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\r\n]*", re.DOTALL)
 
 
 def _code_without_comments(sysml_text: str) -> str:
-    """Mask comments while preserving offsets and line structure."""
     return _COMMENT_RE.sub(
         lambda match: "".join(
             "\n" if character == "\n" else " " for character in match.group(0)
@@ -206,10 +170,9 @@ def _code_without_comments(sysml_text: str) -> str:
 def parse_connects(sysml_text: str) -> List[ConnectStmt]:
     """Return every declared `connect a.x to b.y;`, excluding comment prose.
 
-    This exact declaration grammar is intentionally parsed lexically. Syside
-    coalesces repeated anonymous ConnectionUsage nodes in some partial models,
-    while the comment mask prevents the false positives that motivated the old
-    parser-first implementation.
+    Parsed lexically because syside coalesces repeated anonymous
+    ConnectionUsage nodes in some partial models; the comment mask prevents
+    the false positives of the old parser-first implementation.
     """
     code = _code_without_comments(sysml_text or "")
     return [
@@ -341,7 +304,6 @@ def validate_connects(
     """
     result = ConnValidation()
 
-    # 已被驱动的纯 in 目标端口 (inst, port)
     driven_in: Set[Tuple[str, str]] = set()
     for c in existing:
         info = directory.port(c.tgt_inst, c.tgt_port)
@@ -369,7 +331,6 @@ def validate_connects(
             ))
             continue
 
-        # 通过 —— 接受,并更新状态防止本轮内部冲突
         tgt_info = directory.port(stmt.tgt_inst, stmt.tgt_port)
         result.accepted.append(stmt)
         existing_keys.add(stmt.key())
@@ -553,25 +514,13 @@ def fix_missing_connects(
     )
 
 
-# ---------------------------------------------------------------------------
-# 合并
-# ---------------------------------------------------------------------------
-
 def merge_connects(sysml_text: str, accepted: List[ConnectStmt]) -> ConnMergeResult:
-    """
-    把已接受的 connect 行插入装配段。
-
-    插入位置:
-      • 若文本已有 connect 语句 → 插在最后一条 connect 之后(沿用其缩进)
-      • 否则 → 插在包含实例用法的 part def 块的闭合 '}' 之前
-      • 再不行 → 插在文本最后一个 '}' 之前
-    """
+    """把已接受的 connect 行插入装配段。"""
     if not accepted:
         return ConnMergeResult(merged_text=sysml_text, n_added=0)
 
     lines = sysml_text.split('\n')
 
-    # 找最后一条 connect 所在行
     last_connect_idx = -1
     indent = "    "
     for i, ln in enumerate(lines):
@@ -589,11 +538,9 @@ def merge_connects(sysml_text: str, accepted: List[ConnectStmt]) -> ConnMergeRes
             added_lines=[c.to_sysml() for c in accepted],
         )
 
-    # 无现有 connect:插在包含实例用法的 part def 闭合 '}' 之前
     insert_pos: Optional[int] = None
     um = _USAGE_RE.search(sysml_text)
     if um:
-        # 找包含该实例用法的 part def 块
         for pm in _PART_DEF_RE.finditer(sysml_text):
             brace = sysml_text.index('{', pm.start())
             end = _block_end(sysml_text, brace)
@@ -605,7 +552,6 @@ def merge_connects(sysml_text: str, accepted: List[ConnectStmt]) -> ConnMergeRes
         insert_pos = sysml_text.rfind('}')
 
     if insert_pos < 0:
-        # 没有任何闭合括号,直接附加
         merged = sysml_text + "\n" + "\n".join(f"{indent}{c.to_sysml()}" for c in accepted)
         return ConnMergeResult(merged_text=merged, n_added=len(accepted),
                                added_lines=[c.to_sysml() for c in accepted])
@@ -616,32 +562,15 @@ def merge_connects(sysml_text: str, accepted: List[ConnectStmt]) -> ConnMergeRes
                            added_lines=[c.to_sysml() for c in accepted])
 
 
-# ---------------------------------------------------------------------------
-# Prompt 构建
-# ---------------------------------------------------------------------------
-
 def build_connectivity_prompt(
     directory: PortDirectory,
     existing: List[ConnectStmt],
     failed_scenarios: List[Dict],
     isolated_parts: Optional[List[str]] = None,
 ) -> str:
-    """
-    构建紧凑的连接修复 prompt。
-
-    Parameters
-    ----------
-    directory        端口目录(build_port_directory 的结果)
-    existing         现有 connect 列表
-    failed_scenarios 失败场景列表,每项形如
-                       {"name": str, "src": str, "tgts": [str, ...]}
-    isolated_parts   零连接的孤立件名(可选,优先修)
-
-    返回的 prompt 只含端口目录 + 现有连接 + 失败场景,体量远小于整个模型。
-    """
+    """构建紧凑的连接修复 prompt。"""
     isolated_parts = isolated_parts or []
 
-    # ── 端口目录(每个实例一行)────────────────────────────────────────────
     dir_lines: List[str] = ["[PORT DIRECTORY] (the ONLY ports you may use — do not invent new ports):"]
     for inst in sorted(directory.instances):
         typ = directory.instance_type.get(inst, "?")
@@ -656,7 +585,6 @@ def build_connectivity_prompt(
         dir_lines.append(f"  {inst} : {typ}  →  {port_str}")
     dir_block = "\n".join(dir_lines)
 
-    # ── 现有连接 ──────────────────────────────────────────────────────────
     if existing:
         exist_block = "[EXISTING CONNECTIONS]:\n" + "\n".join(
             f"  {c.to_sysml()}" for c in existing
@@ -664,7 +592,6 @@ def build_connectivity_prompt(
     else:
         exist_block = "[EXISTING CONNECTIONS]: (none)"
 
-    # ── 失败场景 ──────────────────────────────────────────────────────────
     fail_lines: List[str] = ["[UNREACHABLE SCENARIOS] (add connections so signal can flow):"]
     if isolated_parts:
         fail_lines.append(
@@ -705,16 +632,11 @@ def build_connectivity_prompt(
     )
 
 
-# ---------------------------------------------------------------------------
-# LLM 返回解析
-# ---------------------------------------------------------------------------
-
 def extract_connect_lines(llm_response: str) -> List[str]:
     """从 LLM 返回里抽出所有 `connect ... ;` 行(忽略围栏 / 散文)。"""
     lines: List[str] = []
     for raw in llm_response.split('\n'):
         if _CONNECT_RE.search(raw):
-            # 只保留 connect ... ; 本身
             m = _CONNECT_RE.search(raw)
             if m:
                 lines.append(m.group(0))

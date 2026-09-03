@@ -1,9 +1,9 @@
 """Typed behavior obligations compiled losslessly from bounded A/G plans.
 
-The A/G component spec already carries the owner, guarantee, trigger, response
-state, and response action.  Generation must consume those facts even when the
-optional ``realization_paths`` tuple is empty.  This module is the lifecycle
-boundary between A/G planning and ordinary SysML behavior generation.
+The A/G component spec carries the owner, guarantee, trigger, response state
+and response action; generation consumes those facts even when the optional
+``realization_paths`` tuple is empty. This module is the boundary between A/G
+planning and ordinary SysML behavior generation.
 """
 from __future__ import annotations
 
@@ -443,12 +443,10 @@ _BOOLEAN_WORDS = {"and", "or", "not", "true", "false"}
 
 
 def behavior_boolean_concepts(obligation: Any) -> Tuple[str, ...]:
-    """Concepts an obligation actually uses as Boolean behavior operands.
+    """Concepts an obligation uses as Boolean behavior operands.
 
-    Single definition on purpose. The typed plan declares these as Boolean so
-    generation cannot type them otherwise, and the terminal binder checks the
-    same set; two copies could drift and then the plan would enforce concepts
-    the gate does not check, or vice versa.
+    One definition: the typed plan declares these as Boolean and the terminal
+    binder checks the same set, so two copies could drift apart.
     """
     if obligation is None:
         return ()
@@ -649,10 +647,10 @@ def _transition_is_present(
     return bool(
         target_state
         and re.search(
-            # The obligation names an action definition, so accept both the bare
-            # usage and the typed `entry action <label> : <ActionDef>;` form.
-            # This matches check_planned_behavior_conformance, and without it a
-            # model written the way the prompts teach fails every obligation.
+            # The obligation names an action definition, so accept the bare usage and the
+            # typed `entry action <label> : <ActionDef>;` form. Matches
+            # check_planned_behavior_conformance; without it a model written as the
+            # prompts teach fails every obligation.
             rf"\bentry\s+action\s+(?:\w+\s*:\s*)?"
             rf"{re.escape(transition.action)}\s*;",
             target_state.group("body"),
@@ -805,9 +803,8 @@ def materialize_behavior_obligations(
 ) -> tuple[str, dict[str, Any]]:
     """Materialize the frozen obligations, then enforce a deterministic gate.
 
-    The LLM remains free to author additional behavior.  The exact stable IDs in
-    this plan are compiler-owned, however: an inconsistent same-name definition
-    is replaced in place instead of accepted or duplicated.
+    The LLM may author additional behavior, but the stable IDs in this plan are
+    compiler-owned: an inconsistent same-name definition is replaced in place.
     """
     text, canonicalization = canonicalize_reserved_identity_conflicts(
         str(fragment).rstrip(), plan, owned=False

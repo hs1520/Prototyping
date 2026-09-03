@@ -76,12 +76,4 @@ gazebo_poc/generated/
 *.tlog
 *.tlog.raw
 
-# local tooling state (not part of the submission)
-.agents/
-.codegraph/
-CONTEXT.md
-skills-lock.json
-
-# session scratch / local preview tooling
 tmp/
-.claude/launch.json

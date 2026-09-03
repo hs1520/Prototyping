@@ -29,9 +29,9 @@ from ..simulation.connectivity_fixer import parse_connects
 from ..sysml.model import DiagnosticSeverity, SysMLModel
 
 
-#: A stakeholder requirement id, as distinct from an A/G contract definition.
-#: Both are `requirement def`; only the first is what the model is judged to
-#: cover. Single source; dse.evaluator imports this pattern.
+# A stakeholder requirement id, as distinct from an A/G contract definition.
+# Both are `requirement def`; only the first is what the model is judged to
+# cover. Single source; dse.evaluator imports this pattern.
 _STAKEHOLDER_REQ = re.compile(r"^REQ[_-][A-Za-z]+[_-]\d+$", re.IGNORECASE)
 
 
@@ -51,13 +51,11 @@ def diagnose(
     if syside_attr_map is None:
         syside_attr_map = {}
 
-    # ── Untraced requirements ────────────────────────────────────────────
-    # Stakeholder requirements only. A model carrying the bounded A/G layer also
-    # declares its contracts as `requirement def`, because the profile requires
-    # legal SysML requirement constructs — so counting every definition reported
-    # the assurance layer's own contracts as untraced requirements. Their trace
-    # is the A/G graph, measured by ag_traceability, not a `satisfy` link.
-    # Same denominator confusion the evaluator's coverage dimension had.
+    # ── Untraced requirements ────────────────────────────────
+    # Stakeholder requirements only. The bounded A/G layer also declares its
+    # contracts as `requirement def` (the profile needs legal SysML constructs),
+    # so counting every definition reported those contracts as untraced. Their
+    # trace is the A/G graph, measured by ag_traceability, not a `satisfy` link.
     req_ids = {
         r.name for r in model.requirement_definitions
         if _STAKEHOLDER_REQ.match(r.name)
@@ -71,14 +69,12 @@ def diagnose(
             "for each untraced requirement."
         )
 
-    # ── Parts without ports ──────────────────────────────────────────────
-    # Resolve `:>` specialization before reporting: a retyped catalogue
-    # implementation (`Catalog_X :> PropulsionSystem`) declares no ports of
-    # its own and inherits all of its base's. Reporting those asked the
-    # surgical editor to damage parts the DSE machinery itself generated
-    # (measured: 10 catalogue variants plus the DseDesignAnalysis closure,
-    # all false positives). The analysis closure and plan-declared passive
-    # parts have no ports by design and are likewise excluded.
+    # ── Parts without ports ──────────────────────────────────
+    # Resolve `:>` specialization first: a retyped catalogue implementation
+    # (`Catalog_X :> PropulsionSystem`) declares no ports of its own but
+    # inherits its base's, so reporting it sent the surgical editor after
+    # DSE-generated parts (10 variants plus the closure, all false positives).
+    # The analysis closure and plan-declared passive parts are excluded too.
     from ..utils.sysml_text_utils import (
         part_def_bases,
         passive_components_in_text,
@@ -112,7 +108,6 @@ def diagnose(
         issues.append(f"Parts with no ports: {', '.join(no_ports)}")
         recs.append("Add at least one directed port (in/out/inout) to each part def.")
 
-    # ── PERF/CONS parts without numeric+unit attributes ──────────────────
     no_attrs = [
         p.name for p in model.part_definitions
         if any(
@@ -129,7 +124,6 @@ def diagnose(
             "Add `attribute <name> : Real = <value> [<unit>];` to each PERF/CONS part def."
         )
 
-    # ── Dangling part usages ─────────────────────────────────────────────
     declared = {m.group(1) for m in re.finditer(r"\bpart\s+(\w+)\s*:\s*\w+\s*;", text)}
     in_connects = {
         g
@@ -144,7 +138,6 @@ def diagnose(
             "participates in at least one data flow."
         )
 
-    # ── Residual DataPort / RfPort on INTF-boundary parts ───────────────
     intf_boundary: Set[str] = set()
     for part in model.part_definitions:
         for rel in getattr(part, "satisfy_relationships", []):
@@ -173,7 +166,6 @@ def diagnose(
             "Internal ports on non-INTF parts are exempt."
         )
 
-    # ── Fan-in violations ────────────────────────────────────────────────
     target_map: Dict[str, List[str]] = {}
     for stmt in parse_connects(text):
         src, sp, tgt, tp = (
@@ -192,12 +184,11 @@ def diagnose(
             "Introduce an aggregator or voter part for many-to-one flows."
         )
 
-    # ── Syside diagnostic errors ─────────────────────────────────────────
-    # Prefer the fresh syntax-gate result for the current model text.  The
-    # model object may still carry parse diagnostics from a superseded build
-    # (for example from before deterministic guard-attribute injection), and
-    # reporting those alongside a clean syntax gate injects a contradictory
-    # "fix compilation errors" instruction into refinement prompts.
+    # ── Syside diagnostic errors ─────────────────────────────
+    # Prefer the fresh syntax-gate result for the current text: the model
+    # object can still carry parse diagnostics from a superseded build, and
+    # reporting those next to a clean gate puts a contradictory "fix
+    # compilation errors" instruction into refinement prompts.
     if syntax_result is not None:
         fresh_errors = (
             list(getattr(syntax_result, "parser_errors", ()) or ())
@@ -232,7 +223,6 @@ def diagnose(
                 "will be silently ignored by downstream tooling."
             )
 
-    # ── Connect type mismatches ──────────────────────────────────────────
     port_type_map = _build_port_type_map(model)
     for stmt in parse_connects(text):
         src_inst, src_port, tgt_inst, tgt_port = (
@@ -261,7 +251,6 @@ def diagnose(
             "protocol signal ports must only connect to matching signal ports."
         )
 
-    # ── Isolated sub-graphs ──────────────────────────────────────────────
     graph = _build_connection_graph(text)
     graph_nodes = graph.nodes() if callable(graph.nodes) else set(graph.nodes())
     if graph_nodes:
@@ -288,18 +277,14 @@ def diagnose(
                 "it has requirement or explicit design-decision provenance."
             )
 
-        # NOTE: feedback cycles are intentionally NOT reported.  A closed loop
-        # in the connection graph (command down + status up, or
-        # sensor→controller→actuator→plant→sensor) is the normal, required
-        # topology of a control system — not a defect.  The graph already
-        # excludes self-loops, and bidirectional 2-cycles are legitimate, so
-        # there is no structurally "bad" cycle class to flag.  Reporting them
-        # only produced a non-actionable "verify" note that polluted the issue
-        # list and could trigger unnecessary refinement rounds.  Genuine
-        # connectivity defects are caught by the disconnected-component check
-        # above and by the reachability simulation.
+        # Feedback cycles are not reported. A closed loop (command down + status
+        # up, or sensor->controller->actuator->plant->sensor) is the normal
+        # topology of a control system; self-loops are already excluded and
+        # bidirectional 2-cycles are valid, so there is no bad cycle class to
+        # flag. Reporting them added a non-actionable "verify" note and could
+        # trigger extra refinement rounds. Connectivity defects are caught by the
+        # disconnected-component check above and by the reachability simulation.
 
-    # ── SAFE requirements without state machines ─────────────────────────
     safe_reqs = [r for r in model.requirement_definitions if "_SAFE_" in r.name]
     state_defs = n_state_defs if n_state_defs is not None else \
         len(re.findall(r"\bstate\s+def\s+\w+", text))
@@ -313,7 +298,6 @@ def diagnose(
             "entry state, a fault transition, and an `action def emergencyXxx {{ }}`."
         )
 
-    # ── MCTS decision gaps ───────────────────────────────────────────────
     if dse_config:
         params = dse_config.parameters
         facts = extract_dse_model_facts(

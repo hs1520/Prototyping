@@ -94,20 +94,17 @@ class PatternCase:
         ))
         if not core:
             return "FAIL"
-        # A triggered timed failsafe additionally requires a timing criterion.
         if self.pattern == _TIMED_FAILSAFE:
             return "PASS" if self.timing_criterion_present else "FAIL"
-        # A threshold-triggered response is the same trigger→response shape with
-        # no deadline, so the core is the whole obligation: requiring a timing
-        # criterion here would re-impose the deadline the pattern does without,
-        # and it carries none of the invariant patterns' extra duties.
+        # A threshold-triggered response is the trigger->response shape without a
+        # deadline, so the core is the whole obligation; requiring a timing criterion
+        # would re-impose the deadline, and it carries no invariant-pattern duties.
         if self.pattern == _THRESHOLD_TRIGGERED:
             return "PASS"
-        # A locked-until-authorised-release chain is a Boolean invariant with an
-        # extra obligation the others do not carry: the power-on default state
-        # must be the safe (locked) state, distinct from the guarded release
-        # state — a model that powers on already released fails here even though
-        # it satisfies the untimed core.
+        # A locked-until-authorised-release chain is a Boolean invariant with one
+        # extra obligation: the power-on default is the locked state, distinct from
+        # the guarded release state. A model that powers on already released fails
+        # here despite satisfying the untimed core.
         if self.pattern == _LOCKED_UNTIL_RELEASE:
             return "PASS" if self.default_safe_present else "FAIL"
         # STARTUP_INHIBIT (and any other untimed Boolean invariant): the failed
@@ -120,11 +117,10 @@ def check_safety_pattern_conformance(
 ) -> Dict[str, Any]:
     """Check the bounded safety-pattern topology for the selected chain.
 
-    The chain declares its student-selected safety pattern in the committed model (the
-    ``safety_pattern=`` annotation on the system contract, the sole authority);
-    that declaration is used because three patterns — one timed, two untimed —
-    cannot be told apart by topology alone. For models that predate the
-    declaration the pattern falls back to structural inference (a timing budget ⇒
+    The pattern comes from the ``safety_pattern=`` annotation on the system
+    contract, because three patterns - one timed, two untimed - cannot be told
+    apart by topology alone. Models predating the annotation fall back to
+    structural inference (a timing budget ⇒
     ``TRIGGERED_TIMED_FAILSAFE_RESPONSE``; otherwise ``STARTUP_INHIBIT``).
     """
     declared = None
@@ -150,9 +146,9 @@ def check_safety_pattern_conformance(
             and realization.get("status") == "PASS"
             and realization.get("continuous_guarantee") is True
         )
-        # Default-safe: the power-on (initial) state is present and is not one of
-        # the guarded response states — the locked default is genuinely distinct
-        # from the released state it guards.
+        # Default-safe: the power-on (initial) state is present and is not one of the
+        # guarded response states, so the locked default is distinct from the released
+        # state it guards.
         if pattern == _LOCKED_UNTIL_RELEASE and (
             "PayloadLockMechanism" in component.name
         ):
@@ -264,9 +260,9 @@ def check_safety_pattern_conformance(
                 continuous_invariant
                 or bool(realization.get("trigger_ok"))
             ),
-            # A non-timed availability invariant is established in its initial
-            # state and deliberately has no activation transition or additive
-            # timing segment. Other components still need a genuine path.
+            # A non-timed availability invariant is established in its initial state and
+            # has no activation transition or additive timing segment. Other components
+            # still need a path.
             reachable_response=(
                 True
                 if continuous_invariant
@@ -278,8 +274,8 @@ def check_safety_pattern_conformance(
             timing_criterion_present=(
                 timed or component.timing_segment_required is False
             ),
-            # In the bounded profile the invariant is that no response PASS is
-            # possible without a reachable trigger and response entry action.
+            # Invariant: in the bounded profile a response PASS requires a reachable
+            # trigger and a response entry action.
             invariant_preserved=pattern_invariant,
             default_safe_present=default_safe_present,
         )
@@ -353,9 +349,8 @@ def _classification(
                 FailureRoute.DEPENDENCY_CLOSED_SURGICAL_REPAIR,
                 True,
             )
-        # Unknown and input/contract-valued obligations fail closed. In
-        # particular, response vocabulary and precedence facts may not be guessed
-        # by a local behavior repair.
+        # Unknown and input/contract-valued obligations fail closed: a local behavior
+        # repair does not guess response vocabulary or precedence facts.
         return (
             FailureClass.CONTRACT_INCOMPLETENESS,
             FailureRoute.CLARIFICATION_OR_BLOCKED,
@@ -395,9 +390,8 @@ def _classification(
 def _priority_obligation_ids(diagnostic: AGDiagnostic) -> Tuple[str, ...]:
     """Return the named priority failures, structured first, text as fallback.
 
-    Current checker output carries a typed provenance list. The message fallback
-    keeps routing fail-closed and useful for an archived/hand-authored diagnostic
-    produced before that field existed.
+    Current checker output carries a typed provenance list; the message fallback
+    covers archived or hand-authored diagnostics from before that field existed.
     """
     values = diagnostic.provenance.get("unsatisfied_obligations", ())
     if isinstance(values, (list, tuple)):
@@ -447,11 +441,10 @@ def route_failure_diagnostics(
             if diagnostic.code == _PRIORITY_INCOMPLETE
             else ()
         )
-        # One aggregate checker diagnostic may contain both unrepairable
-        # response vocabulary and repairable behavior wiring. Routing it as one
-        # unit necessarily gives one side the wrong treatment, so publish one
-        # typed failure per named obligation. An old aggregate with no names
-        # remains one fail-closed contract failure.
+        # One aggregate diagnostic may hold both unrepairable response vocabulary and
+        # repairable behavior wiring, so publish one typed failure per named
+        # obligation. An old aggregate with no names stays one fail-closed contract
+        # failure.
         units: Tuple[str | None, ...] = priority_ids or (None,)
         for priority_id in units:
             failure_class, route, authorised = _classification(
@@ -498,10 +491,9 @@ def route_failure_diagnostics(
                 or (specific_affected[0] if specific_affected else None)
             )
             if authorised and priority_id is not None and not specific_affected:
-                # A behavior-wiring obligation is repairable only when the
-                # checker can bind it to an existing state definition. Otherwise
-                # a "surgical" task would have to invent a behavior, rewrite a
-                # contract, or guess which component owns the missing topology.
+                # A behavior-wiring obligation is repairable only when the checker binds it to
+                # an existing state definition; otherwise the surgical task would invent a
+                # behavior, rewrite a contract, or guess the owner of the missing topology.
                 failure_class = FailureClass.CONTRACT_INCOMPLETENESS
                 route = FailureRoute.CLARIFICATION_OR_BLOCKED
                 authorised = False
@@ -513,11 +505,9 @@ def route_failure_diagnostics(
                 and priority_id is None
                 and not behavior_target
             ):
-                # A route called "surgical behavior repair" needs an existing
-                # state definition to replace. REALIZATION_MISSING and aggregate
-                # pattern failures may have none; authorizing them would require
-                # adding a definition, which the merge policy deliberately
-                # forbids.
+                # Surgical behavior repair needs an existing state definition to replace.
+                # REALIZATION_MISSING and aggregate pattern failures may have none, and
+                # adding one is outside the merge policy.
                 failure_class = FailureClass.CONTRACT_INCOMPLETENESS
                 route = FailureRoute.CLARIFICATION_OR_BLOCKED
                 authorised = False
@@ -536,11 +526,10 @@ def route_failure_diagnostics(
                     or not compatible_signals
                 )
             ):
-                # The scoped merge may replace an existing state definition but
-                # may not invent a package-level attribute definition. A missing
-                # compatible signal therefore crosses the bounded edit boundary:
-                # attempting it only spends the one repair budget on a patch the
-                # merge gate is guaranteed to reject.
+                # The scoped merge replaces an existing state definition but does not add a
+                # package-level attribute definition, so a missing compatible signal is
+                # outside the bounded edit: attempting it spends the one repair budget on a
+                # patch the merge gate rejects.
                 failure_class = FailureClass.CONTRACT_INCOMPLETENESS
                 route = FailureRoute.CLARIFICATION_OR_BLOCKED
                 authorised = False

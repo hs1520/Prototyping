@@ -1,4 +1,3 @@
-"""Pre-generation A/G checks must not fabricate terminal implementation."""
 from __future__ import annotations
 
 import hashlib
@@ -41,7 +40,7 @@ _PLANNING_BYTES = {
 
 
 @pytest.mark.parametrize("spec", select_ag_chains(_REQUIREMENTS))
-def test_direct_planning_emission_is_byte_pinned(spec):
+def test_planning_emission_byte_pinned(spec):
     payload = emit_ag_planning_package(spec).encode("utf-8")
     assert (len(payload), hashlib.sha256(payload).hexdigest()) == (
         _PLANNING_BYTES[spec.source_requirement]
@@ -49,7 +48,7 @@ def test_direct_planning_emission_is_byte_pinned(spec):
 
 
 @pytest.mark.parametrize("spec", select_ag_chains(_REQUIREMENTS))
-def test_planning_package_has_contracts_but_no_shadow_implementation(spec):
+def test_contracts_no_implementation(spec):
     package = emit_ag_planning_package(spec)
 
     assert f"requirement def {spec.system_contract}" in package
@@ -60,7 +59,7 @@ def test_planning_package_has_contracts_but_no_shadow_implementation(spec):
 
 
 @pytest.mark.parametrize("spec", select_ag_chains(_REQUIREMENTS))
-def test_planning_profile_passes_without_claiming_terminal_realization(spec):
+def test_planning_profile_not_terminal(spec):
     inputs = Orchestrator._requirement_planning_model(_REQUIREMENTS)
     candidate = inputs + "\n" + emit_ag_planning_package(spec)
     graph = extract_ag_graph(candidate)
@@ -81,7 +80,7 @@ def test_planning_profile_passes_without_claiming_terminal_realization(spec):
     assert terminal.verdict != "PASS"
 
 
-def test_planning_profile_still_rejects_missing_decomposition():
+def test_missing_decomposition_rejected():
     spec = select_ag_chains(_REQUIREMENTS)[0]
     inputs = Orchestrator._requirement_planning_model(_REQUIREMENTS)
     package = emit_ag_planning_package(spec)

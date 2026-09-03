@@ -1,8 +1,8 @@
 """Independently frozen architecture boundary (freeze-review P1).
 
-Owner allocation is a design decision, not derivable from the stakeholder
-requirement text, so the component decomposition is frozen as its own provenanced
-artifact that the evaluator gold cites by digest.
+Owner allocation is a design decision, not derivable from the requirement text,
+so the component decomposition is frozen as its own provenanced artifact, cited
+by digest from the evaluator gold.
 """
 from __future__ import annotations
 
@@ -54,13 +54,12 @@ def _freeze(draft: dict) -> dict:
     return boundary
 
 
-def test_draft_carries_full_provenance_and_allocations_from_the_spec():
+def test_draft_carries_provenance():
     draft = _draft()
     assert draft["artifact_role"] == "ARCHITECTURE_BOUNDARY"
     assert draft["schema_version"] == "1.0"
     assert draft["chain_id"] == "REQ_SAFE_008"
     assert draft["requirement_set_digest"] == "a" * 64
-    # component ids + interfaces + owner->guarantee allocations are pre-filled
     assert {c["component_id"] for c in draft["components"]} == {
         "ReleaseCommandGatewayContract", "PayloadLockMechanismContract",
     }
@@ -96,7 +95,7 @@ def test_draft_carries_full_provenance_and_allocations_from_the_spec():
         ),
     ],
 )
-def test_committed_boundary_drafts_match_the_student_candidate(spec, path):
+def test_committed_drafts_match_gold(spec, path):
     committed = json.loads(Path(path).read_text(encoding="utf-8"))
     assert committed == build_architecture_boundary_draft(spec)
     assert committed["status"] == "DRAFT_FOR_SUPERVISOR_REVIEW"
@@ -104,7 +103,7 @@ def test_committed_boundary_drafts_match_the_student_candidate(spec, path):
     assert committed["artifact_digest"] is None
 
 
-def test_safe005_power_availability_is_continuous_not_event_triggered():
+def test_safe005_power_continuous():
     draft = build_architecture_boundary_draft(REQ_SAFE_005_CHAIN)
     power = next(
         component for component in draft["components"]
@@ -122,8 +121,7 @@ def test_safe005_power_availability_is_continuous_not_event_triggered():
     "spec",
     [REQ_SAFE_004_CHAIN, REQ_SAFE_005_CHAIN, REQ_SAFE_008_CHAIN],
 )
-def test_gold_candidate_binds_the_reviewed_boundary_and_exact_allocations(spec):
-    """In-memory freeze shape only; no repository artifact is frozen here."""
+def test_gold_binds_boundary_digest(spec):
     boundary = _freeze(
         build_architecture_boundary_draft(
             spec, requirement_set_digest="a" * 64
@@ -148,26 +146,25 @@ def test_gold_candidate_binds_the_reviewed_boundary_and_exact_allocations(spec):
     assert gold_allocations == boundary_allocations
 
 
-def test_validator_flags_an_unfrozen_draft():
+def test_validator_flags_unfrozen_draft():
     problems = validate_frozen_boundary(_draft())
     assert any("FROZEN" in p for p in problems)
     assert any("responsibility" in p for p in problems)
     assert any("artifact_digest" in p for p in problems)
 
 
-def test_validator_accepts_a_completely_frozen_boundary():
+def test_validator_accepts_frozen():
     assert validate_frozen_boundary(_freeze(_draft())) == []
 
 
-def test_digest_binding_detects_tampering_after_freeze():
+def test_digest_detects_tampering():
     frozen = _freeze(_draft())
-    # someone edits an allocation but keeps the old digest
     frozen["allocations"][0]["owner"] = "someoneElse"
     problems = validate_frozen_boundary(frozen)
     assert any("does not match the content" in p for p in problems)
 
 
-def test_validator_requires_complete_schema_provenance_and_interface_binding():
+def test_validator_requires_provenance():
     frozen = _freeze(_draft())
     frozen["schema_version"] = "unknown"
     frozen["requirement_set_digest"] = None
@@ -183,7 +180,7 @@ def test_validator_requires_complete_schema_provenance_and_interface_binding():
     assert any("exactly match" in p for p in problems)
 
 
-def test_validator_rejects_duplicate_components_and_allocations():
+def test_validator_rejects_duplicates():
     frozen = _freeze(_draft())
     frozen["components"].append(copy.deepcopy(frozen["components"][0]))
     frozen["allocations"].append(copy.deepcopy(frozen["allocations"][0]))
@@ -194,7 +191,7 @@ def test_validator_rejects_duplicate_components_and_allocations():
     assert any("duplicate allocation" in p for p in problems)
 
 
-def test_module_never_imports_the_runtime_checker():
+def test_no_runtime_checker_import():
     src = Path("src/prototyping/architecture_boundary.py").read_text(encoding="utf-8")
     imports = "\n".join(
         l for l in src.splitlines() if l.strip().startswith(("import ", "from "))

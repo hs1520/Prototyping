@@ -25,7 +25,7 @@ MODEL = """package D {
 }"""
 
 
-def test_evidence_is_compiled_once_for_one_model_digest():
+def test_evidence_compiled_once():
     model = build_lite_model(MODEL, model_name="D")
     linker = RequirementLinker(model)
 
@@ -38,7 +38,7 @@ def test_evidence_is_compiled_once_for_one_model_digest():
     assert first.satisfying_parts["REQ_SAFE_003"] == ("Controller",)
 
 
-def test_evidence_maps_are_read_only_snapshots():
+def test_evidence_maps_read_only():
     evidence = RequirementLinker(
         build_lite_model(MODEL, model_name="D")
     ).compile_evidence()
@@ -51,7 +51,7 @@ def test_evidence_maps_are_read_only_snapshots():
         evidence.coverage["unmapped_req_ids"].append("REQ_FAKE")
 
 
-def test_bridge_cleanup_is_safe_before_gazebo_was_started(tmp_path):
+def test_bridge_cleanup_before_start(tmp_path):
     bridge = SITLBridge(
         build_lite_model(MODEL, model_name="D"),
         output_dir=str(tmp_path),

@@ -1,4 +1,3 @@
-"""Tests for DSE over LLM-declared variation points (the replace path)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -36,19 +35,17 @@ def _model(text=_MODEL):
     return SimpleNamespace(metadata={"last_sysml_text": text})
 
 
-def test_explores_admitted_points_and_recommends_concrete_model():
+def test_admitted_points_concrete_model():
     res = run_variation_dse(_model(), iterations=40, random_seed=1)
     assert res is not None
     assert set(res.admitted_points) == {"propulsion", "battery"}
     assert res.rejected_points == ["unjustified"]
-    # a choice is made for every admitted point
     assert set(res.recommended_choices) == {"propulsion", "battery"}
-    # the recommended concrete model is valid and has the variations resolved
     assert not check_syntax(res.concrete_model).has_errors
     assert "variation part propulsion" not in res.concrete_model
 
 
-def test_pareto_front_non_empty_and_real_quality_attached():
+def test_pareto_front_real_quality():
     res = run_variation_dse(_model(), iterations=40, random_seed=1)
     assert len(res.pareto_front) >= 1
     assert "safety_assurance" in res.real_quality
@@ -60,8 +57,7 @@ def test_rejected_point_flagged_in_notes():
     assert any("unjustified" in n for n in res.notes)
 
 
-def test_no_admissible_variation_points_returns_none():
-    # variation point without rationale/requirement → not admissible → None
+def test_no_admissible_points_none():
     bare = """package P {
     part def A; part def B;
     part def Sub { variation part x { variant part a : A; variant part b : B; } }
@@ -69,14 +65,12 @@ def test_no_admissible_variation_points_returns_none():
     assert run_variation_dse(_model(bare), iterations=10) is None
 
 
-def test_model_without_variation_returns_none():
+def test_no_variation_returns_none():
     plain = "package P { part def A; part a : A; }"
     assert run_variation_dse(_model(plain), iterations=10) is None
 
 
-def test_bilevel_inner_bo_sizes_battery_capacity():
-    """Bilevel: outer search picks the discrete architecture; the INNER BO sizes the
-    battery capacity (not variant-declared) to meet endurance, and writes it back."""
+def test_inner_bo_sizes_capacity():
     m = """package Drone {
     port def Sig;
     part def LiftIface { in port cmd : Sig; out port thrust : Sig; }
@@ -93,16 +87,15 @@ def test_bilevel_inner_bo_sizes_battery_capacity():
     reqs = ["REQ-PERF-001: cruise speed at least 20 m/s", "REQ-PERF-002: endurance at least 20 minutes"]
     res = run_variation_dse(_model(m), requirements=reqs, iterations=30, random_seed=1)
     assert res.recommended_capacity_mah is not None
-    assert 3000 <= res.recommended_capacity_mah <= 22000   # inner BO chose within bounds
-    assert "batteryCapacityMah" in res.concrete_model      # inner-optimized value written back
+    assert 3000 <= res.recommended_capacity_mah <= 22000
+    assert "batteryCapacityMah" in res.concrete_model
 
 
-def test_capacity_write_back_targets_the_bound_variant():
+def test_write_back_bound_variant():
     from src.dse.variation_dse import _write_back_capacity
-    # Two retained alternatives; only Chosen is bound. The capacity must land in
-    # Chosen even though Loser declares batteryCells and is declared FIRST — the
-    # old flat heuristic wrote it into Loser, so the archived model asserted a
-    # capacity for a design that was never selected.
+    # Two retained alternatives, only Chosen is bound. The capacity lands in Chosen
+    # even though Loser declares batteryCells first; the old flat heuristic wrote it
+    # into Loser, so the archived model asserted a capacity for an unselected design.
     m = (
         "package P {\n"
         "  part def Loser :> B { attribute batteryCells : Real = 4.0; }\n"
@@ -115,7 +108,6 @@ def test_capacity_write_back_targets_the_bound_variant():
     loser_body = out.split("part def Loser")[1].split("}")[0]
     assert "batteryCapacityMah : Real = 12000.0" in chosen_body
     assert "batteryCapacityMah" not in loser_body
-    # bound type without batteryCells → still the bound def, never a flat fallback
     m2 = (
         "package P {\n"
         "  part def OtherLoser :> B { attribute batteryCells : Real = 4.0; }\n"
@@ -125,14 +117,14 @@ def test_capacity_write_back_targets_the_bound_variant():
     )
     out2 = _write_back_capacity(m2, 9000.0, ["Frame"])
     assert "batteryCapacityMah : Real = 9000.0" in out2.split("part def Frame")[1].split("}")[0]
-    # no bindings (degenerate untyped-variant space) → text unchanged
     assert _write_back_capacity(m, 9000.0, []) == m
 
 
-def test_resolved_model_reads_as_the_committed_design():
-    """Regression for the archived-model authority defect (run 33e359ca shape):
-    retained Pareto alternatives and trade-study alt bindings must not leak into
-    the committed design a reader resolves from the final model text."""
+def test_resolved_model_is_committed():
+    """Regression for the archived-model authority defect (run 33e359ca): retained
+    Pareto alternatives and trade-study alt bindings do not leak into the committed
+    design a reader resolves from the final model text.
+    """
     from src.dse.domain_objective import committed_bindings, resolve_design_attributes
 
     m = (
@@ -162,15 +154,15 @@ def test_resolved_model_reads_as_the_committed_design():
     assert r.field_values["battery_capacity_mah"] == 16000.0
 
 
-def test_recommendation_weights_track_requirement_emphasis():
+def test_weights_track_requirements():
     from src.dse.variation_dse import _recommendation_weights
     names = ["speed_sat", "time_sat", "cost_efficiency"]
     reqs = ["REQ-PERF-001: cruise speed at least 18 m/s",
             "REQ-PERF-002: endurance at least 30 minutes",
-            "REQ-PERF-003: endurance at least 25 minutes"]  # time: 2 targets, speed: 1
+            "REQ-PERF-003: endurance at least 25 minutes"]
     w = _recommendation_weights(names, reqs)
-    assert abs(sum(w.values()) - 1.0) < 1e-9        # normalised
-    assert w["time_sat"] > w["speed_sat"]           # more endurance targets → more weight
+    assert abs(sum(w.values()) - 1.0) < 1e-9
+    assert w["time_sat"] > w["speed_sat"]
 
 
 _REALIZABILITY_MODEL = """package Drone {
@@ -212,7 +204,7 @@ def _front_with_only_infeasible_realizable(self, iterations):
     ])
 
 
-def test_realizability_recommendation_prefers_realizable_subset(monkeypatch):
+def test_prefers_realizable_subset(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
         _front_for_realizability,
@@ -234,7 +226,7 @@ def test_realizability_recommendation_prefers_realizable_subset(monkeypatch):
                for n in res.notes)
 
 
-def test_datasheet_rank_reorders_realizable_subset(monkeypatch):
+def test_rank_reorders_realizable(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
         _front_for_realizability,
@@ -257,7 +249,7 @@ def test_datasheet_rank_reorders_realizable_subset(monkeypatch):
     assert any("datasheet rank inside constrained Pareto" in n for n in res.notes)
 
 
-def test_datasheet_rank_tie_uses_estimator_recommendation_not_lexicographic(monkeypatch):
+def test_rank_tie_uses_estimator(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
         _front_for_realizability,
@@ -275,7 +267,7 @@ def test_datasheet_rank_tie_uses_estimator_recommendation_not_lexicographic(monk
     assert any("rank tie broken by estimator" in n for n in res.notes)
 
 
-def test_realizable_but_estimator_infeasible_member_does_not_bypass_gate(monkeypatch):
+def test_infeasible_member_no_bypass(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
         _front_with_only_infeasible_realizable,
@@ -291,7 +283,6 @@ def test_realizable_but_estimator_infeasible_member_does_not_bypass_gate(monkeyp
     assert res.recommended_choices == {}
     assert res.recommended_design is None
     assert res.recommended_realizable is False
-    # Mapping is deliberately not evaluated for estimator-infeasible designs.
     assert res.realizable_front_count == 0
     assert res.recommendation_status == "NO_RECOMMENDABLE_DESIGN"
     assert res.recommended_by == "none"
@@ -300,7 +291,7 @@ def test_realizable_but_estimator_infeasible_member_does_not_bypass_gate(monkeyp
     assert any("none is catalog mapping-compliant" in n for n in res.notes)
 
 
-def test_realizability_recommendation_emits_no_recommendation_when_none_match(monkeypatch):
+def test_no_realizable_no_recommendation(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
         _front_for_realizability,
@@ -327,7 +318,7 @@ def test_realizability_recommendation_emits_no_recommendation_when_none_match(mo
     assert any("none is catalog mapping-compliant" in n for n in res.notes)
 
 
-def test_datasheet_rank_does_not_restore_unrealizable_fallback(monkeypatch):
+def test_rank_no_unrealizable_fallback(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
         _front_for_realizability,
@@ -353,7 +344,7 @@ def test_datasheet_rank_does_not_restore_unrealizable_fallback(monkeypatch):
     assert res.recommended_estimator_feasible is None
 
 
-def test_phase8_closure_gate_can_narrow_mapping_compliant_front(monkeypatch):
+def test_phase8_gate_narrows_front(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
         _front_for_realizability,
@@ -372,7 +363,7 @@ def test_phase8_closure_gate_can_narrow_mapping_compliant_front(monkeypatch):
     assert res.recommendation_status == "RECOMMENDED"
 
 
-def test_mapping_without_phase8_closure_is_not_recommendable(monkeypatch):
+def test_no_phase8_not_recommendable(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
         _front_for_realizability,
@@ -392,10 +383,10 @@ def test_mapping_without_phase8_closure_is_not_recommendable(monkeypatch):
     assert any("none closes Phase 8" in n for n in res.notes)
 
 
-def test_constraints_are_applied_before_rebuilding_official_pareto(monkeypatch):
-    """Regression for the authoritative failure: a catalog/Phase8-feasible design
-    dominated by an *infeasible* estimator winner must reappear after constraints
-    are applied to the complete evaluated set."""
+def test_constraints_before_pareto(monkeypatch):
+    """A catalog/Phase8-feasible design dominated by an infeasible estimator winner
+    reappears once constraints are applied to the complete evaluated set.
+    """
     monkeypatch.setattr(
         "src.dse.variation_dse.objectives_from_design",
         lambda di, *_args, **_kwargs: (
@@ -428,7 +419,7 @@ def test_constraints_are_applied_before_rebuilding_official_pareto(monkeypatch):
                for n in res.notes)
 
 
-def test_estimator_gate_includes_mtow_before_mapping():
+def test_gate_includes_mtow():
     mapping_calls = []
     res = run_variation_dse(
         _model(_REALIZABILITY_MODEL),
@@ -449,7 +440,7 @@ def test_estimator_gate_includes_mtow_before_mapping():
     assert any("performance + MTOW gate" in n for n in res.notes)
 
 
-def test_catalog_capacity_callback_keeps_inner_sizing_on_discrete_packs():
+def test_capacity_options_discrete_packs():
     capacities = [8000.0, 12000.0]
     res = run_variation_dse(
         _model(_REALIZABILITY_MODEL),
@@ -465,7 +456,7 @@ def test_catalog_capacity_callback_keeps_inner_sizing_on_discrete_packs():
     assert any("used real catalog pack capacities" in n for n in res.notes)
 
 
-def test_realizability_none_keeps_legacy_recommendation_metadata(monkeypatch):
+def test_realizability_none_legacy(monkeypatch):
     monkeypatch.setattr(
         "src.dse.variation_dse.MultiObjectiveMCTS.search",
         _front_for_realizability,
@@ -486,7 +477,7 @@ def test_realizability_none_keeps_legacy_recommendation_metadata(monkeypatch):
                    for n in res.notes)
 
 
-def test_dse_layer_does_not_import_realization():
+def test_no_realization_import():
     dse_dir = Path(__file__).resolve().parents[1] / "src" / "dse"
     offenders = []
     for path in dse_dir.glob("*.py"):
@@ -496,14 +487,14 @@ def test_dse_layer_does_not_import_realization():
     assert offenders == []
 
 
-def test_capacity_write_back_materialises_bodiless_bound_def():
+def test_write_back_bodiless_def():
     from src.dse.variation_dse import _write_back_capacity
     m = "package P {\n  part def Frame_light :> Airframe;\n  part frame : Frame_light;\n}"
     out = _write_back_capacity(m, 12000.0, ["Frame_light"])
     assert "part def Frame_light :> Airframe { attribute batteryCapacityMah : Real = 12000.0; }" in out
 
 
-def test_committed_bindings_accepts_multiplicity():
+def test_bindings_accept_multiplicity():
     from src.dse.domain_objective import committed_bindings
     m = "package P { part def R6 :> Base { attribute rotorCount : Real = 6.0; } part rotors : R6[1]; }"
     assert ("rotors", "R6") in committed_bindings(m)

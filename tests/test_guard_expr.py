@@ -1,19 +1,3 @@
-"""
-tests/test_guard_expr.py
-
-Layer 1 tests: guard expression trees (variable / arithmetic RHS).
-
-  • Expr nodes (Const / VarRef / BinOp) evaluate + report vars
-  • _extract_guard builds lhs/rhs for variable-RHS and arithmetic-RHS guards
-  • resolve_threshold partial-evaluates RHS against initial_values
-  • end-to-end: a state machine with `batteryCharge <= returnEnergyRequired`
-    now extracts a fault transition and FIRES (regression that previously
-    failed with "No fault transitions found")
-
-Run with:
-    python tests/test_guard_expr.py
-"""
-
 from __future__ import annotations
 
 import sys
@@ -41,10 +25,6 @@ def ok(name: str, cond: bool, msg: str = "") -> None:
     assert cond, f"{name}: {msg}"
 
 
-# ---------------------------------------------------------------------------
-# T1 — Expr nodes
-# ---------------------------------------------------------------------------
-
 def test_expr_nodes():
     print("T1  Expr nodes")
     ok("const_eval",  Const(5.0).eval({}) == 5.0)
@@ -57,10 +37,6 @@ def test_expr_nodes():
        BinOp("+", VarRef("a"), VarRef("b")).vars() == ["a", "b"])
 
 
-# ---------------------------------------------------------------------------
-# T2 — GuardCondition.eval with expression trees
-# ---------------------------------------------------------------------------
-
 def test_guard_eval():
     print("T2  GuardCondition.eval (var vs var)")
     g = GuardCondition(
@@ -71,7 +47,6 @@ def test_guard_eval():
        g.eval({"batteryCharge": 10.0, "returnEnergyRequired": 20.0}) is True)
     ok("no_fire_when_gt",
        g.eval({"batteryCharge": 30.0, "returnEnergyRequired": 20.0}) is False)
-    # arithmetic RHS
     g2 = GuardCondition(
         kind="comparison", operator=">",
         lhs=VarRef("commLossTime"), rhs=BinOp("+", VarRef("timeToHub"), Const(300.0)),
@@ -84,10 +59,6 @@ def test_guard_eval():
        set(g2.involved_attributes()) == {"commLossTime", "timeToHub"})
 
 
-# ---------------------------------------------------------------------------
-# T3 — resolve_threshold
-# ---------------------------------------------------------------------------
-
 def test_resolve_threshold():
     print("T3  resolve_threshold")
     g = GuardCondition(kind="comparison", operator="<=",
@@ -98,10 +69,6 @@ def test_resolve_threshold():
                         lhs=VarRef("t"), rhs=BinOp("+", VarRef("timeToHub"), Const(300.0)))
     ok("resolves_arith", g2.resolve_threshold({"timeToHub": 50.0}) == 350.0)
 
-
-# ---------------------------------------------------------------------------
-# T4 — end-to-end extraction + execution (needs syside)
-# ---------------------------------------------------------------------------
 
 _SYSML = """\
 package T {
@@ -135,19 +102,17 @@ def test_end_to_end_variable_rhs():
     ok("one_sm", len(sms) == 1, f"got {len(sms)}")
     sm = sms[0]
 
-    # The guard must now be extracted (previously dropped → no fault transition)
+    # The guard is extracted (previously dropped -> no fault transition)
     ft = sm.fault_transitions()
     ok("fault_transition_present", len(ft) == 1, f"ft={len(ft)}")
     if ft:
         g = ft[0].guards[0]
         ok("is_comparison", g.kind == "comparison")
         ok("has_expr_trees", g.lhs is not None and g.rhs is not None)
-        # threshold resolved from returnEnergyRequired's default (30.0)
         ok("threshold_resolved", abs(g.threshold - 30.0) < 1e-9, f"th={g.threshold}")
         ok("involved_vars",
            set(g.involved_attributes()) == {"batteryCharge", "returnEnergyRequired"})
 
-    # Behavioral simulation should now PASS this state machine
     sim = run_behavioral_simulation(_SYSML, model_name="T")
     rtb = [r for r in sim.scenario_results if "Rtb" in r.name]
     ok("rtb_scenario_exists", len(rtb) == 1, f"results={[r.name for r in sim.scenario_results]}")
@@ -156,7 +121,7 @@ def test_end_to_end_variable_rhs():
            f"violations={rtb[0].violations}")
 
 
-def test_compound_guard_preserves_unary_not_semantics():
+def test_compound_guard_unary_not():
     text = """package T {
         part def PayloadManager {
             attribute waypointDistance : Real = 10.0;
@@ -185,7 +150,7 @@ def test_compound_guard_preserves_unary_not_semantics():
     }) is False
 
 
-def test_boolean_equality_false_is_extracted_as_bool_false():
+def test_boolean_eq_false_extracted():
     text = """package T {
         part def Controller {
             attribute sensorSelfTestFailed : Boolean = true;
@@ -212,10 +177,6 @@ if __name__ == "__main__":
     print(f"\n{_PASS} passed, {_FAIL} failed")
     sys.exit(0 if _FAIL == 0 else 1)
 
-
-# ---------------------------------------------------------------------------
-# Layer 2: enum_eq guard tests
-# ---------------------------------------------------------------------------
 
 _ENUM_SYSML = """
 package EnumTest {
@@ -297,12 +258,12 @@ class TestEnumEqSimulation:
         sm_result = next(r for r in result.scenario_results if "ModeMachine" in r.name)
         assert sm_result.passed, f"Expected DroneModeMachine to pass, violations: {sm_result.violations}"
 
-    def test_mode_machine_sim_score_is_1(self):
+    def test_mode_machine_sim_score_1(self):
         from src.simulation.behavioral_sim import run_behavioral_simulation
         result = run_behavioral_simulation(_ENUM_SYSML)
         assert result.sim_score == 1.0
 
-    def test_mode_machine_timeline_shows_transition(self):
+    def test_mode_machine_timeline(self):
         from src.simulation.behavioral_sim import run_behavioral_simulation
         result = run_behavioral_simulation(_ENUM_SYSML)
         sm_result = next(r for r in result.scenario_results if "ModeMachine" in r.name)

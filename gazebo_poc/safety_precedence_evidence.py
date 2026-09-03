@@ -22,20 +22,15 @@ def evaluate_safety_precedence(
     competing_action_definitions: Iterable[str],
     control_fired_action_definitions: Iterable[str] | None = None,
 ) -> SafetyPrecedenceEvidence:
-    """Precedence needs a control, or silence proves nothing.
+    """Precedence needs a control run; silence alone proves nothing.
 
-    "No competing response fired" is only evidence of precedence if those
-    responses WOULD have fired. Without the control run — the same hazard
-    variables with the winning condition withheld — an inert arbiter and a
-    correctly arbitrating one look identical.
-
-    ``control_fired_action_definitions`` is what fired in that control run.
-
-    The winner is not its own competitor: the competing set is discovered
-    from the generated arbiter's full action table, which naturally contains
-    the winning action too, and leaving it in judged the first run where the
-    parachute actually fired as "a competing response fired alongside the
-    winner" — a precedence failure manufactured out of the win itself.
+    "No competing response fired" is evidence only if those responses would have
+    fired, so the control run - the same hazard variables with the winning condition
+    withheld - is what separates an inert arbiter from a correctly arbitrating one;
+    ``control_fired_action_definitions`` is what fired in it. The competing set comes
+    from the arbiter's full action table, which also contains the winning action, so
+    the winner is excluded: leaving it in scored a successful parachute deployment
+    as a competing response.
     """
     fired = tuple(fired_action_definitions)
     competitors = tuple(
@@ -48,9 +43,9 @@ def evaluate_safety_precedence(
     control_competitors = tuple(action for action in competitors if action in control)
 
     if competing_fired or (competitors and not winner_fired):
-        # A competitor that actually fired violates precedence whether or not a
-        # control was run; so does a winner that never fired. Only the NEGATIVE
-        # conclusion — "nothing competed" — needs the control.
+        # A competitor that fired violates precedence with or without a control, and so
+        # does a winner that never fired. Only the negative conclusion, "nothing
+        # competed", needs the control.
         status = "failed"
         why = (
             f"competing responses {list(competing_fired)} fired alongside the "

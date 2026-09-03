@@ -1,15 +1,12 @@
-"""Bilevel DSE → live-pipeline adapter (Item F, step 1 — non-invasive).
+"""Bilevel DSE -> live-pipeline adapter (Item F, step 1 - non-invasive).
 
-Runs the new bilevel / multi-objective / operator / grounded-evaluation /
-severity-driven stack on the SAME inputs the orchestrator already has
-(``model`` + ``requirements``) and returns a drop-in ``DesignConfiguration`` whose
-parameter names match what the existing downstream (injection / refinement)
-consumes. So wiring it into the orchestrator later is a low-risk swap: replace the
-scalar ``_explore_design_space`` call with ``run_bilevel_dse`` and keep everything
-downstream unchanged at first.
-
-This module imports nothing from the orchestrator, so it cannot destabilise the
-live pipeline; it is validated in isolation before any control-flow change.
+Runs the bilevel / multi-objective / operator / grounded-evaluation /
+severity-driven stack on the same inputs the orchestrator already has (``model``
++ ``requirements``) and returns a drop-in ``DesignConfiguration`` whose parameter
+names match what injection / refinement consume, so wiring it in later is a swap
+of the scalar ``_explore_design_space`` call for ``run_bilevel_dse``. It imports
+nothing from the orchestrator and is validated in isolation before any
+control-flow change.
 """
 from __future__ import annotations
 
@@ -34,7 +31,6 @@ from .weighting import derive_weights_from_profile, recommend, sensitivity
 
 _SENSOR_KWS = {"sensor", "detector", "monitor", "camera", "lidar", "imu", "gps", "radar"}
 
-# new operator variant -> existing pipeline parameter value
 _REDUNDANCY_TO_PARAM = {"single": "none", "dual": "dual", "triple": "triple"}
 _SENSING_TO_COUNT = {"single": 1, "dual": 2, "triple": 3}
 _PROTO_TO_PARAM = {"mavlink": "MAVLink", "can": "CAN", "ethernet": "Ethernet"}
@@ -52,15 +48,14 @@ class Ctx:
     allow_distributed: bool = True
     allowed_protocols: Optional[List[str]] = None
     requirement_profile: Optional[RequirementProfile] = None
-    target_hz: float = 100.0   # PERF-derived control-loop target (inner BO)
-    freq_max: float = 200.0    # inner search upper bound
+    target_hz: float = 100.0
+    freq_max: float = 200.0
 
 
 _HZ_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[kK]?[hH][zZ]")
 
 
 def _target_hz(requirements: List[str]) -> float:
-    """Control-loop target frequency derived from the PERF requirements."""
     vals: List[float] = []
     for r in requirements or []:
         if "-PERF-" in r or "_PERF_" in r:
@@ -72,8 +67,8 @@ def _inner_objective(state: State, f: float, ctx: Ctx) -> float:
     """Inner BO objective: requirement-grounded control performance minus cost.
 
     perf saturates once f meets the PERF target (distributed control sustains a
-    faster loop — parallel compute, an engineering heuristic); cost rises with f
-    (power/compute). Honest placeholder to be calibrated by SITL, like the rest.
+    faster loop - an engineering heuristic); cost rises with f (power/compute).
+    Placeholder until SITL calibration, like the rest.
     """
     target = ctx.target_hz * (1.2 if state.get("topology") == "distributed" else 1.0)
     perf = min(1.0, f / target)
@@ -82,7 +77,6 @@ def _inner_objective(state: State, f: float, ctx: Ctx) -> float:
 
 
 def _bilevel_outer_map(state: State, best_f: float, best_perf: float, ctx: Ctx) -> Objectives:
-    """Outer objectives; the inner-tuned control performance modulates capability."""
     g = grounded_objectives(
         _RED.resolve(state["arbitration"], with_fanin=True), ctx.channel_reliability
     )
@@ -105,7 +99,6 @@ class BilevelDSEResult:
     recommendation_robustness: float
     selection_frequency: Dict[str, float]
     notes: List[str] = field(default_factory=list)
-    # high-fidelity real DesignEvaluator dimensions for the recommendation (step 5)
     real_quality: Optional[Dict[str, float]] = None
 
 
@@ -126,17 +119,13 @@ def run_bilevel_dse(
     objective_fn: Optional[Callable[[State, Ctx], Objectives]] = None,
     score_quality: bool = False,
 ) -> BilevelDSEResult:
-    """Run the bilevel DSE and return a drop-in best_config + provenance.
-
-    ``score_quality`` (multi-fidelity, step 5): also score the recommendation's
-    *merged* model with the real DesignEvaluator and attach ``real_quality``.
-    """
+    """Run the bilevel DSE and return a drop-in best_config + provenance."""
     requirements = requirements or []
     profile = RequirementProfile.from_requirements(requirements)
     n_sensors = _count_sensors(model)
     target = _target_hz(requirements)
     ctx = Ctx(
-        num_sensors=max(3, n_sensors),          # allow exploring up to triple
+        num_sensors=max(3, n_sensors),
         max_sensors=max(3, n_sensors),
         part_count=len(getattr(model, "part_definitions", []) or []),
         requirement_profile=profile,
@@ -145,9 +134,9 @@ def run_bilevel_dse(
     )
     names = ["capability", "cost_efficiency"]
 
-    # True bilevel: outer MO-MCTS over architectures, inner Bayesian optimization
-    # tuning control_frequency_hz per architecture (cached). An override objective_fn
-    # disables the inner BO (used by tests with custom objectives).
+    # Bilevel: outer MO-MCTS over architectures, inner Bayesian optimization tuning
+    # control_frequency_hz per architecture (cached). An override objective_fn
+    # disables the inner BO (tests with custom objectives).
     evaluator = None
     if objective_fn is None:
         evaluator = BilevelEvaluator(
@@ -169,16 +158,14 @@ def run_bilevel_dse(
     )
     front = mcts.search(iterations=iterations)
 
-    # requirement-traceable, severity-weighted objective weights → recommendation
     weights = derive_weights_from_profile(profile, _OBJ_CATEGORIES)
-    # collapse the requirement weights onto the two search objectives
     obj_weights = {
         "capability": weights.get("capability", 0.5) + weights.get("reliability", 0.0),
         "cost_efficiency": weights.get("cost_efficiency", 0.5),
     }
     rec_state, rec_obj = recommend(front.members, obj_weights)
-    # control_frequency_hz comes from the INNER BO's tuning of the recommended
-    # architecture (not borrowed from the scalar path).
+    # control_frequency_hz comes from the inner BO's tuning of the recommended
+    # architecture.
     tuned_freq = evaluator.best_param(rec_state) if evaluator is not None else None
 
     label = lambda s: f"{s['arbitration']}+{s['topology']}+{s['sensing']}+{s['protocol']}"
@@ -194,8 +181,8 @@ def run_bilevel_dse(
 
     best_config = _to_design_configuration(rec_state, control_frequency_hz=tuned_freq)
 
-    # multi-fidelity (step 5): score the recommendation's merged model with the
-    # real DesignEvaluator — cheap objectives drove the search, real quality on the pick.
+    # multi-fidelity (step 5): cheap objectives drive the search; the recommendation's
+    # merged model is then scored with the full DesignEvaluator.
     real_quality: Optional[Dict[str, float]] = None
     if score_quality:
         try:
@@ -233,10 +220,10 @@ def _to_design_configuration(
 ) -> DesignConfiguration:
     """Map the recommended architecture to the pipeline's parameter names.
 
-    Enforces the #1↔#2 coupling: a triple/dual redundant arbiter must vote on at
-    least that many independent sensor channels, so num_sensors is coerced up to
-    the redundancy depth (mirrors the legacy ``triple_redundancy_needs_sensors``).
-    ``control_frequency_hz`` is the INNER BO's tuned value for this architecture.
+    Enforces the #1↔#2 coupling: a triple/dual redundant arbiter votes on at least
+    that many independent sensor channels, so num_sensors is coerced up to the
+    redundancy depth (mirrors the legacy ``triple_redundancy_needs_sensors``).
+    ``control_frequency_hz`` is the inner BO's tuned value for this architecture.
     """
     redundancy_channels = _REDUNDANCY_CHANNELS[state["arbitration"]]
     num_sensors = max(_SENSING_TO_COUNT[state["sensing"]], redundancy_channels)

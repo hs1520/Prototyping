@@ -1,9 +1,9 @@
 """Non-degradation evidence for terminal A/G binding.
 
-The A/G layer is allowed to add assurance relationships, but it must not
-change the executable architecture or make an already-passing frozen causal
-obligation fail. Role-derived scenarios remain diagnostic. This comparison is
-deliberately set-based so a regression cannot be hidden by an aggregate score.
+The A/G layer may add assurance relationships; it does not change the executable
+architecture or turn a passing frozen causal obligation into a failure.
+Role-derived scenarios stay diagnostic, and the comparison is set-based so an
+aggregate score cannot hide a regression.
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def _requirement_structural_passes(result: Any) -> tuple[set[str], bool]:
 
 
 def build_ag_non_degradation_report(before: Any, after: Any) -> dict[str, Any]:
-    """Compare the exact pre-binding and post-binding simulation evidence."""
+    """Compare the pre-binding and post-binding simulation evidence."""
     before_structural = _structural_passes(before)
     after_structural = _structural_passes(after)
     before_requirement, before_fixed = _requirement_structural_passes(before)

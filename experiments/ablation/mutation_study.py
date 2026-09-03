@@ -1,11 +1,11 @@
 """Fault-injection (mutation) ablation of the repair layers.
 
 Takes an archived, admitted generation-stage model (default: the NO-DSE arm's
-terminal model, i.e. the committed model before exploration) together with its
-typed plan, injects a fixed set of defects drawn from fault classes observed in
-archived LLM output, and feeds the SAME mutated candidate to every arm from the
-initial-design boundary onward.  Every arm therefore repairs the same defects
-with a different subset of the repair stack.
+terminal model, i.e. the committed model before exploration) with its typed
+plan, injects a fixed set of defects drawn from fault classes observed in
+archived LLM output, and feeds the same mutated candidate to every arm from
+the initial-design boundary onward, so each arm repairs the same defects with
+a different subset of the repair stack.
 
 Defect classes (all observed in archived runs, see summary of 2026-09-02):
     DOC-FIX   quoted `doc '...'` bodies          (Tier-0 rewrite)
@@ -19,11 +19,7 @@ Defect classes (all observed in archived runs, see summary of 2026-09-02):
     ENTRY     deleted response entry action       (functional closure)
 
 Usage:
-    python experiments/ablation/mutation_study.py --provider vertex \
-        --source-campaign experiments/ablation/results/<campaign> \
-        --source-arm NO-DSE --source-seed 0 \
-        --arms FULL NO-REFINE NO-SURGICAL NO-DETFIX NO-REPAIR \
-        --sets CONTROL SYNTAX CONNECT BEHAVIOUR --label mut_s0
+    python experiments/ablation/mutation_study.py --provider vertex         --source-campaign experiments/ablation/results/<campaign>         --source-arm NO-DSE --source-seed 0         --arms FULL NO-REFINE NO-SURGICAL NO-DETFIX NO-REPAIR         --sets CONTROL SYNTAX CONNECT BEHAVIOUR --label mut_s0
 """
 from __future__ import annotations
 
@@ -52,17 +48,12 @@ from run_ablation import (  # noqa: E402
 SYSTEM_NAME = "AutonomousDrone"
 
 
-# ---------------------------------------------------------------------------
-# Mutation operators: each returns (new_text, [edit records]) and is a no-op
-# (with an empty record list) when the pattern does not occur.
-# ---------------------------------------------------------------------------
-
 def _first_n(pattern: str, text: str, n: int, flags: int = 0) -> List[re.Match]:
     return list(re.finditer(pattern, text, flags))[:n]
 
 
 def mut_doc_quote(text: str, n: int = 3) -> Tuple[str, List[Dict]]:
-    """`doc /* body */` -> `doc 'body';`  (parser error; DOC-FIX class)."""
+    """`doc /* body */` -> `doc 'body';` (parser error; DOC-FIX class)."""
     edits, out, offset = [], text, 0
     for m in _first_n(r"doc /\* (.*?) \*/", text, n, re.S):
         body = " ".join(m.group(1).split())[:160].replace("'", "")
@@ -129,8 +120,8 @@ def mut_type_typo(text: str, n: int = 1) -> Tuple[str, List[Dict]]:
         if done >= n:
             break
         tname = m.group(3)
-        typo = tname[:-4] + "Prot"  # Port -> Prot (distance 2 as a swap? keep to 1 edit)
-        typo = tname[:-1]           # drop last char: distance 1
+        typo = tname[:-4] + "Prot"
+        typo = tname[:-1]
         seg = f"{m.group(1)} port {m.group(2)} : {typo};"
         out = out.replace(m.group(0), seg, 1)
         edits.append({"op": "TYPE-TYPO", "line": text[:m.start()].count("\n") + 1,
@@ -189,9 +180,10 @@ def _enclosing_state_def(text: str, pos: int) -> Optional[str]:
 def mut_drop_entry_action(text: str, n: int = 1) -> Tuple[str, List[Dict]]:
     """Delete the entry action of a response state (functional-closure class).
 
-    Prefers a state machine other than one already mutated by DROP-TRANSITION
-    (marked by the ``MUT-TRANSITION-DROPPED`` comment) so that the two
-    behavioural defects exercise two different machines."""
+    Prefers a machine not already mutated by DROP-TRANSITION (marked by the
+    ``MUT-TRANSITION-DROPPED`` comment), so the two behavioural defects hit
+    different machines.
+    """
     edits, out = [], text
     touched = set(re.findall(r"// MUT-TRANSITION-DROPPED in (\w+)", text))
     for m in re.finditer(r"(?m)^\s*entry action \w+ : (\w+);\n", text):
@@ -225,10 +217,6 @@ def apply_set(name: str, text: str) -> Tuple[str, List[Dict]]:
     return out, edits
 
 
-# ---------------------------------------------------------------------------
-# Residual-defect probes: is each injected defect still present in the terminal text?
-# ---------------------------------------------------------------------------
-
 def residual_probes(edits: List[Dict], terminal_text: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for e in edits:
@@ -247,11 +235,10 @@ def residual_probes(edits: List[Dict], terminal_text: str) -> Dict[str, Any]:
         elif op == "DROP-CONNECT":
             present = e["target"] not in terminal_text
         elif op == "PORT-DIRECTION":
-            # The flipped declaration was the (only) `in port <name>`; the
-            # producer side legitimately keeps an `out port <name>`, so test
-            # for the consumer-side in-port being absent, not for any out-port
-            # being present (first study run reported 1/1 residual in every
-            # cell, including the ones whose terminal model had restored it).
+            # The flipped declaration was the only `in port <name>` and the producer side
+            # keeps an `out port <name>`, so test for the consumer-side in-port being
+            # absent rather than any out-port being present; otherwise the first study run
+            # reported 1/1 residual in every cell, including restored ones.
             present = not re.search(rf"\bin port {e['target']} :", terminal_text)
         elif op == "DROP-TRANSITION":
             present = e["target"] not in terminal_text
@@ -263,21 +250,15 @@ def residual_probes(edits: List[Dict], terminal_text: str) -> Dict[str, Any]:
     return {op: {"injected": len(v), "residual": sum(v)} for op, v in out.items()}
 
 
-# ---------------------------------------------------------------------------
-# Injected design agent: returns the mutated candidate instead of calling the LLM.
-# ---------------------------------------------------------------------------
-
 class MutatedDesignAgent:
-    """Serve the mutated archived candidate for the INITIAL generation request only.
+    """Serve the mutated archived candidate for the initial generation request only.
 
-    Every later request that carries an ``existing_model`` — whole-rewrite
-    refinement (refinement_transaction), closure full-rewrite fallback and
-    SITL linking (refinement.py) — is delegated to the real design agent, so
-    those paths cost real LLM calls exactly as in production. The first study
-    run (20260902_175355_mut_s0) answered *every* request with the mutated
-    text: NO-SURGICAL's "full rewrite" silently returned the defective model
-    and the FULL/NO-DETFIX BEHAVIOUR fallbacks were free — those cells were
-    re-run with this delegation in place.
+    Later requests carrying an ``existing_model`` - whole-rewrite refinement
+    (refinement_transaction), closure full-rewrite fallback, SITL linking
+    (refinement.py) - go to the real design agent, so those paths cost LLM calls
+    as in production. The first study run answered every request with the mutated
+    text, which made NO-SURGICAL's full rewrite return the defective model and the
+    FULL/NO-DETFIX BEHAVIOUR fallbacks free; those cells were re-run.
     """
 
     def __init__(self, sysml_text: str, plan: Dict[str, Any], model_name: str,

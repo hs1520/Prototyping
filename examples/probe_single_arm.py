@@ -1,25 +1,17 @@
-"""Run ONE arm, ONE seed, of the full pipeline — to watch it, not to measure it.
+"""Run one arm, one seed, of the full pipeline - to watch it, not to measure it.
 
-DIAGNOSTIC ONLY. It writes no pilot manifest and makes no protocol claim, because
-a descriptive pilot is three paired seeds across three arms by definition and
-nothing less can stand in for one: `run_revised_experiment.py` remains the only
-way to produce evidence.
+Diagnostic only: no pilot manifest and no protocol claim, since a descriptive
+pilot is three paired seeds across three arms and `run_revised_experiment.py`
+is the only way to produce evidence. This shows one complete run at a ninth of
+the cost: requirements -> design generation -> refinement (syntax gate, repair
+rounds) -> board-mediated handoffs -> A/G layer -> verification -> artifacts. It
+executes the same path a pilot arm does, including `_validate_run_result`.
 
-What it is for is the other need — seeing a complete run go by once, at a ninth of
-the cost: requirements → design generation → refinement (syntax gate, repair
-rounds) → the board-mediated handoffs → the A/G layer → verification → artifacts.
-Watching that is how a defect nobody predicted gets spotted, and paying for nine
-runs to read the first one is waste.
+    .venv/bin/python examples/probe_single_arm.py --out /tmp/one_arm         --provider vertex --model gemini-3.1-pro-preview --confirm-external-call
 
-It executes the SAME path the pilot executes, including the pilot's own
-`_validate_run_result`, so what you watch is what a pilot arm would do.
-
-    .venv/bin/python examples/probe_single_arm.py --out /tmp/one_arm \
-        --provider vertex --model gemini-3.1-pro-preview --confirm-external-call
-
-`--provider mock` checks the wiring for free — config, arm binding, provider
-construction — but cannot complete a run, because the mock provider does not
-produce a model and the design phase fails closed on that, correctly.
+`--provider mock` checks config, arm binding and provider construction for
+free, but cannot complete a run: it produces no model and the design phase
+fails closed.
 """
 from __future__ import annotations
 
@@ -43,14 +35,12 @@ from src.prototyping.run_artifacts import (
 )
 
 
-#: Diagnostic-only extra chains. The pilot's frozen requirement set is its
-#: identity — it is digest-checked and the gold drafts cite its exact texts — so a
-#: new pattern is exercised by EXTENDING the probe here, never by editing
-#: `run_revised_experiment.FROZEN_REQUIREMENTS`. A run using these is diagnostic
-#: by construction: its requirement digest differs from the pilot's, so it can
-#: never be pooled with pilot arms even by accident.
-#:
-#: Text copied verbatim from `examples/drone_system_v2.py`.
+# Diagnostic-only extra chains. The pilot's frozen requirement set is
+# digest-checked and cited verbatim by the gold drafts, so a new pattern is added
+# here rather than in `run_revised_experiment.FROZEN_REQUIREMENTS`. A run using
+# them carries a different requirement digest, so it cannot pool with pilot arms.
+#
+# Text copied verbatim from `examples/drone_system_v2.py`.
 PROBE_ONLY_CHAINS = {
     "REQ_SAFE_002": (
         "REQ-SAFE-002: The system shall perform a controlled descent to the "
@@ -94,9 +84,9 @@ def main() -> int:
     if out.exists():
         parser.error(f"output directory already exists: {out}")
 
-    # The config supplies the frozen requirement set, the chain selection and the
-    # version bindings, so the arm runs exactly as it would inside a pilot. Its
-    # seed tuple is the protocol's three; the one actually executed is --seed.
+    # The config supplies the frozen requirement set, chain selection and version
+    # bindings, so the arm runs as it would inside a pilot. The seed tuple is the
+    # protocol's three; --seed picks the one executed.
     extra_chains = tuple(dict.fromkeys(args.include_chain))
     requirements = FROZEN_REQUIREMENTS + tuple(
         PROBE_ONLY_CHAINS[chain_id] for chain_id in extra_chains
@@ -104,14 +94,11 @@ def main() -> int:
     revision = subprocess.run(
         ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
     ).stdout.strip() or "unknown"
-    # A diagnostic probe does not demand a clean worktree — but recording a
-    # revision that does not contain the code under test is a provenance defect,
-    # so an uncommitted tree is marked rather than silently reported as its HEAD.
-    # Fail towards marking: a `git status` that did not run cleanly says nothing
-    # about the tree, and reporting a bare HEAD on no evidence is the defect this
-    # guards. The first run of this probe hit exactly that — status raced a
-    # concurrent commit, returned empty, and the run recorded a revision that did
-    # not contain the code under test.
+    # A probe does not need a clean worktree, but a recorded revision that lacks
+    # the code under test is a provenance defect, so an uncommitted tree is marked
+    # rather than reported as its HEAD. Fail towards marking: a `git status` that
+    # did not run cleanly says nothing about the tree - one run raced a concurrent
+    # commit, got empty output, and recorded a revision without the code under test.
     status = subprocess.run(
         ["git", "status", "--porcelain"], capture_output=True, text=True,
     )
@@ -140,9 +127,8 @@ def main() -> int:
 
     print(f"DIAGNOSTIC single-arm run: {args.arm}, seed {args.seed}, "
           f"rev {config.code_revision[:7]}", flush=True)
-    # the pilot's own provider kwargs, so seeding and timeouts match. The mock
-    # provider takes none of them; it exists here only to dry-run the wiring for
-    # free before spending anything.
+    # the pilot's provider kwargs, so seeding and timeouts match. The mock
+    # provider takes none of them; it only dry-runs the wiring for free.
     provider_kwargs = (
         {}
         if args.provider.strip().lower() == "mock"

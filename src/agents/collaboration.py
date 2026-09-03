@@ -13,10 +13,10 @@ from .pipeline_records import DesignHandoffRecord, publish_handoff_transition
 
 
 class CollaborationMixin:
-    #: Topic carrying per-step generation drafts. Deliberately its own topic so
-    #: it is easy to see — and easy to refuse. `ContextBuilder` accepts only
-    #: `requirements.authoritative` and `design.ag_generation_plan` as design
-    #: sources, so a draft can never become the input a later stage builds from.
+    # Topic carrying per-step generation drafts, kept separate so it can be
+    # refused. `ContextBuilder` accepts only `requirements.authoritative` and
+    # `design.ag_generation_plan` as design sources, so a draft does not become
+    # the input a later stage builds from.
     GENERATION_FRAGMENT_TOPIC = "generation.fragment"
 
     DESIGN_HANDOFF_TOPIC = "handoff.design.runtime"
@@ -71,7 +71,6 @@ class CollaborationMixin:
 
     @property
     def _active_design_handoff(self):
-        """Legacy read seam; live ownership remains the typed board record."""
         handoff = self._design_handoff()
         if handoff is None:
             return None
@@ -90,10 +89,9 @@ class CollaborationMixin:
     ) -> bool:
         """Open the board and publish the authoritative source, before any task.
 
-        A/G planning makes real LLM decisions, so under §5.3 it is an Agent task
-        and needs a board, a typed task, and an archived session like any other.
-        That is only possible if the board exists before the plan is frozen —
-        hence this step is separate from, and earlier than, the design handoff.
+        A/G planning makes LLM decisions, so under §5.3 it is an Agent task needing
+        a board, a typed task and an archived session; the board must exist before
+        the plan is frozen, so this step runs before the design handoff.
 
         Returns False for an arm that does not use the blackboard at all.
         """
@@ -128,7 +126,6 @@ class CollaborationMixin:
             },
         )
         return True
-
 
     def _prepare_design_handoff(
         self, system_name: str, requirements: List[str]
@@ -242,7 +239,6 @@ class CollaborationMixin:
             session_id=session.session_id,
         )
 
-
     def _finalize_design_handoff(self, result: Any, model: SysMLModel) -> None:
         handoff = self._design_handoff()
         if handoff is None:
@@ -335,7 +331,6 @@ class CollaborationMixin:
             handoff, "COMPLETED" if success else "REJECTED",
         )
 
-
     def _reject_design_handoff(self, reason: str, *, producer: str) -> None:
         handoff = self._design_handoff()
         if handoff is None:
@@ -371,20 +366,15 @@ class CollaborationMixin:
             handoff, "REJECTED",
         )
 
-
     def _run_verification_handoff(self) -> Optional[Dict[str, Any]]:
         """Second board-mediated handoff: DesignAgent -> VerificationAgent (§15).
 
-        The VerificationAgent knowledge source consumes the committed model the
-        DesignAgent produced (as the relevant requirement-def context) plus the
-        authoritative requirements, and publishes a typed per-requirement
-        verification plan. Deterministic (no LLM, no gold); its purpose is to make
-        the §13 coordination metrics' handoff/role denominators greater than one —
-        two migrated handoffs instead of the illustrative single one.
-
-        The authoritative requirements are re-affirmed at the terminal revision so
-        the envelope references a current-revision SOURCE record (the design-time
-        source record is pinned to an earlier revision and would read as stale).
+        The VerificationAgent knowledge source consumes the committed model plus
+        the authoritative requirements and publishes a typed per-requirement
+        verification plan. Deterministic (no LLM, no gold); it gives the §13
+        coordination metrics two migrated handoffs instead of one. The
+        authoritative requirements are re-affirmed at the terminal revision so the
+        envelope references a current-revision SOURCE record.
         """
         if (
             self.blackboard is None
@@ -480,7 +470,6 @@ class CollaborationMixin:
         )
         return plan
 
-
     def _commit_terminal_model(self, model_text: str, *, producer: str) -> None:
         if self.blackboard is None:
             return
@@ -498,7 +487,6 @@ class CollaborationMixin:
             committed.revision, committed.model_digest
         )
 
-
     def _synchronize_terminal_snapshot(
         self,
         model: SysMLModel,
@@ -510,13 +498,11 @@ class CollaborationMixin:
     ) -> tuple[SysMLModel, float, SimulationResult, Dict[str, Any]]:
         """Recompute every terminal verdict from the exact returned SysML text.
 
-        Refinement helpers may accept a partially improving deterministic edit
-        after the last scored iteration, and the A/G assurance layer may make a
-        final bounded repair after ordinary refinement.  Consequently, reusing
-        an earlier score or simulation can pair evidence from revision N with
-        model text from revision N+1.  This gate makes the returned model text
-        the single source of truth and records its digest on all derived
-        evidence.
+        Refinement can accept a partially improving deterministic edit after the
+        last scored iteration, and A/G assurance can make a final bounded repair,
+        so reusing an earlier score or simulation would pair revision N evidence
+        with revision N+1 model text. The returned text is the single source of
+        truth here, and its digest is recorded on all derived evidence.
         """
         from ..prototyping.blackboard import text_digest
 
@@ -580,13 +566,11 @@ class CollaborationMixin:
         terminal_model.metadata["terminal_consistency"] = consistency
         return terminal_model, final_score, sim_result, consistency
 
-
     def _enforce_terminal_generation_plan(
         self,
         model: SysMLModel,
         model_text: str,
     ) -> tuple[str, Optional[Dict[str, Any]]]:
-        """Re-materialise and check the typed plan before the terminal commit."""
         metadata = dict(getattr(model, "metadata", None) or {})
         raw_plan = metadata.get("whole_model_generation_plan")
         if (
@@ -675,14 +659,12 @@ class CollaborationMixin:
         model.metadata["generation_plan_conformance"] = conformance
         return planned_text, conformance
 
-
     def _validate_terminal_structural_obligations(
         self,
         model: SysMLModel,
         model_text: str,
         model_name: str,
     ) -> Optional[Dict[str, Any]]:
-        """Check the terminal model against its frozen requirement paths."""
         metadata = dict(getattr(model, "metadata", None) or {})
         raw_plan = metadata.get("whole_model_generation_plan")
         if not isinstance(raw_plan, Mapping):
@@ -705,14 +687,12 @@ class CollaborationMixin:
             model_name=model_name,
         )
 
-
     def _validate_terminal_semantic_obligations(
         self,
         model: SysMLModel,
         model_text: str,
         model_name: str,
     ) -> Optional[Dict[str, Any]]:
-        """Check source-derived numeric semantics on the terminal revision."""
         metadata = dict(getattr(model, "metadata", None) or {})
         raw_plan = metadata.get("whole_model_generation_plan")
         if not isinstance(raw_plan, Mapping):
@@ -738,9 +718,7 @@ class CollaborationMixin:
         model.metadata["semantic_fidelity_report"] = report
         return report
 
-
     def _restore_generation_plan_metadata(self, model: SysMLModel) -> None:
-        """Keep the frozen typed plan across reparsing/refinement objects."""
         if not isinstance(self._active_model_generation_plan, Mapping):
             return
         if getattr(model, "metadata", None) is None:
@@ -750,23 +728,17 @@ class CollaborationMixin:
             dict(self._active_model_generation_plan),
         )
 
-
     def _publish_generation_fragment(
         self, handoff: Mapping[str, Any], event: Mapping[str, Any]
     ) -> None:
-        """Record one generation step's draft on the board — ARCHIVAL ONLY.
+        """Record one generation step's draft on the board - archival only.
 
-        Before this, the board saw nothing between the DesignAgent task opening
-        and the finished model being committed: the five intermediate drafts
-        existed only as session-transcript turns, with no topic, so no knowledge
-        source could subscribe to them and no coordination metric covered them.
-
-        It is emphatically not a second authority. Element identity is carried
-        by the validated, digest-bound `ModelGenerationPlan` and enforced at
-        terminal compilation; reading names out of a raw draft would be the
-        external-JSON-authority design §1 deliberately removed. Hence
-        `authority: NONE_ARCHIVAL_ONLY`, and a ContextBuilder that refuses this
-        topic as a source.
+        Without this the five intermediate drafts exist only as session-transcript
+        turns with no topic, so no knowledge source can subscribe to them and no
+        coordination metric covers them. It is not a second authority: element
+        identity comes from the validated, digest-bound `ModelGenerationPlan` and
+        is enforced at terminal compilation, hence `authority: NONE_ARCHIVAL_ONLY`
+        and a ContextBuilder that refuses this topic as a source.
         """
         if self.blackboard is None:
             return
@@ -806,18 +778,15 @@ class CollaborationMixin:
             session_id=getattr(session, "session_id", None),
         )
 
-
     def _archive_provider_call(self, session: Any, event: Mapping[str, Any]) -> None:
         """Archive one provider call into a task session, each turn charged once.
 
-        A multi-turn call resends its earlier turns, so the provider's
-        ``prompt_tokens`` covers content this session has already recorded.
-        Charging that figure per call makes the session budget grow
-        quadratically while the transcript grows linearly — the budget would
-        then measure resends rather than accumulated context, and §13 defines
-        session growth as what the session accumulates.  Each turn is therefore
-        charged for its own content once; the real (cumulative, billed) provider
-        cost stays in the TokenLedger, where cost belongs.
+        A multi-turn call resends its earlier turns, so per-call ``prompt_tokens``
+        covers content already recorded and would make the session budget grow
+        quadratically against a linear transcript - measuring resends rather than
+        accumulated context, which is what §13 defines as session growth. Each turn
+        is charged for its own content once; the billed cumulative provider cost
+        stays in the TokenLedger.
         """
         offset = int(event.get("new_message_offset", 0) or 0)
         for message in list(event.get("messages", ()))[offset:]:
@@ -838,7 +807,6 @@ class CollaborationMixin:
             token_count=completion_tokens or estimate_tokens(reply),
         )
 
-
     def _append_session_message(
         self,
         session: Any,
@@ -847,7 +815,6 @@ class CollaborationMixin:
         *,
         token_count: int = 0,
     ) -> None:
-        """Archive a turn with the model/event position at which it was used."""
         stamp: Dict[str, Any] = {}
         if self.blackboard is not None:
             stamp = {
@@ -862,7 +829,6 @@ class CollaborationMixin:
             **stamp,
         )
 
-
     def _build_collaboration_artifacts(
         self, model_text: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -874,7 +840,7 @@ class CollaborationMixin:
         )
 
         result: Dict[str, Any] = {
-            # report the mode this orchestrator actually ran, not a fixed default
+            # report the mode this orchestrator ran, not a fixed default
             "revised_experiment": revised_arm_metadata(
                 self.revised_experiment_arm, self.r2_generation_mode
             )
@@ -938,15 +904,14 @@ class CollaborationMixin:
                     "collaboration artifact input does not match the committed "
                     "Blackboard model revision/digest"
                 )
-            # Explicit current-revision activation fact. Controller preconditions
-            # never use stale topics from an earlier model revision.
+            # Explicit current-revision activation fact, so controller preconditions
+            # do not use topics from an earlier model revision.
             self._ensure_terminal_ready()
-            # Event-driven control: the Blackboard Controller opportunistically
-            # activates each registered downstream knowledge source once the board
-            # satisfies current-revision typed preconditions. Verification
-            # planning consumes the terminal-model fact and publishes its result;
-            # R2 assurance then consumes both. Runs before the snapshot so the
-            # complete agenda and typed outputs are captured.
+            # Event-driven control: the Blackboard Controller activates each registered
+            # downstream knowledge source once the board satisfies its current-revision
+            # typed preconditions. Verification planning consumes the terminal-model
+            # fact and publishes its result; R2 assurance consumes both. Runs before the
+            # snapshot so the agenda and typed outputs are captured.
             from ..prototyping.controller import (
                 BlackboardController,
                 KnowledgeSource,
@@ -992,10 +957,10 @@ class CollaborationMixin:
                     activate=lambda: self._build_ag_trace(model_text),
                     output_topics=("analysis.ag_trace",),
                 ))
-            # Registration here is conditional on what the board already holds,
-            # and `ag_semantic_assurance` may additionally wait on a
-            # verification result that this arm does not produce. A source that
-            # does not fire is a legitimate outcome, not a stalled chain.
+            # Registration is conditional on what the board already holds, and
+            # `ag_semantic_assurance` may also wait on a verification result this arm
+            # does not produce, so a source that does not fire is an expected outcome
+            # rather than a stalled chain.
             for activation in controller.run(allow_partial=True):
                 if (
                     activation["knowledge_source"] == "verification_planning"

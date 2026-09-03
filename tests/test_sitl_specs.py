@@ -30,7 +30,7 @@ def _ctx(messages):
     return SitlTestContext(mav=_FakeMav(messages), mavutil=SimpleNamespace(mavlink=mavlink))
 
 
-def test_assert_servo_pwm_accepts_target_with_tolerance():
+def test_servo_pwm_within_tolerance():
     ok, msg = run_verify(
         _ctx([SimpleNamespace(servo8_raw=1990)]),
         VerifySpec(kind="assert_servo_pwm", args={"channel": 8, "target_pwm": 2000, "tol": 50}, timeout=0.1),
@@ -39,7 +39,7 @@ def test_assert_servo_pwm_accepts_target_with_tolerance():
     assert "servo8_raw=1990" in msg
 
 
-def test_assert_servo_pwm_rejects_wrong_channel_value():
+def test_servo_pwm_wrong_channel():
     ok, msg = run_verify(
         _ctx([SimpleNamespace(servo7_raw=1500)]),
         VerifySpec(kind="assert_servo_pwm", args={"channel": 7, "target_pwm": 2000, "tol": 50}, timeout=0.1),
@@ -48,7 +48,7 @@ def test_assert_servo_pwm_rejects_wrong_channel_value():
     assert "servo7_raw" in msg
 
 
-def test_assert_sensor_unhealthy_uses_sys_status_health_bit():
+def test_sensor_unhealthy_health_bit():
     gps_bit = 32
     ok, msg = run_verify(
         _ctx([SimpleNamespace(onboard_control_sensors_health=0xFFFF & ~gps_bit)]),
@@ -58,7 +58,7 @@ def test_assert_sensor_unhealthy_uses_sys_status_health_bit():
     assert "GPS health bit cleared" in msg
 
 
-def test_assert_sensor_unhealthy_accepts_gps_raw_no_fix():
+def test_sensor_unhealthy_gps_no_fix():
     ok, msg = run_verify(
         _ctx([SimpleNamespace(get_type=lambda: "GPS_RAW_INT", fix_type=1)]),
         VerifySpec(kind="assert_sensor_unhealthy", args={"sensor": "gps"}, timeout=0.1),
@@ -67,7 +67,7 @@ def test_assert_sensor_unhealthy_accepts_gps_raw_no_fix():
     assert "fix_type=1" in msg
 
 
-def test_s4_catalogue_cases_use_standard_mavlink_state_not_statustext():
+def test_s4_cases_use_mavlink_state():
     assert _TAG_TO_ENTRY["SENSOR_GROUND_ALERT"].verify.kind == "assert_sensor_unhealthy"
     assert _TAG_TO_ENTRY["SENSOR_GROUND_ALERT"].verify.args == {"sensor": "gps"}
     assert _TAG_TO_ENTRY["SENSOR_ARMING_INHIBIT"].inject.params["SIM_GPS1_ENABLE"] == 0.0
@@ -82,11 +82,10 @@ def test_s4_catalogue_cases_use_standard_mavlink_state_not_statustext():
     assert gripper.inject.params["SERVO7_FUNCTION"] == 28
     assert gripper.inject.params["GRIP_GRAB"] == 1000
     assert gripper.verify.kind == "assert_servo_pwm"
-    # abort → LOCK = GRAB → GRIP_GRAB=1000 (not release 2000); see catalogue note.
     assert gripper.verify.args == {"channel": 7, "target_pwm": 1000, "tol": 50}
 
 
-def test_new_verify_handlers_are_registered_and_renderable():
+def test_verify_handlers_registered():
     assert "assert_servo_pwm" in VERIFY_HANDLERS
     assert "assert_sensor_unhealthy" in VERIFY_HANDLERS
     assert "assert_servo_pwm" in RENDER_VERIFY
@@ -102,7 +101,7 @@ def test_new_verify_handlers_are_registered_and_renderable():
     assert "MAV_SYS_STATUS_SENSOR_GPS" in sensor_code
 
 
-def test_ast_fallback_does_not_reintroduce_statustext_for_payload_lock():
+def test_ast_fallback_no_statustext():
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_005 { doc /* lock payload */ }
@@ -134,7 +133,7 @@ def test_ast_fallback_does_not_reintroduce_statustext_for_payload_lock():
     assert all(s.verify.args["channel"] == 7 for s in specs.values())
 
 
-def test_safe_requirement_text_tag_mismatch_is_reported_not_flown():
+def test_tag_mismatch_reported():
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_003 {
@@ -171,7 +170,7 @@ def test_safe_requirement_text_tag_mismatch_is_reported_not_flown():
     assert "SERVO8_FUNCTION" not in linker.generate_parm_file()
 
 
-def test_geofence_requirement_is_not_verified_as_parachute():
+def test_geofence_not_parachute():
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_009 {
@@ -205,7 +204,7 @@ def test_geofence_requirement_is_not_verified_as_parachute():
     assert "SERVO8_FUNCTION" not in linker.generate_parm_file()
 
 
-def test_safe_requirement_text_tag_match_still_generates_l2():
+def test_tag_match_generates_l2():
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_003 {
@@ -235,7 +234,7 @@ def test_safe_requirement_text_tag_match_still_generates_l2():
     assert linker.traceability_mismatches() == []
 
 
-def test_parachute_requirement_text_tag_match_stays_executable_l2():
+def test_parachute_tag_match_l2():
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_005 {
@@ -274,7 +273,7 @@ def test_parachute_requirement_text_tag_match_stays_executable_l2():
     assert linker.traceability_mismatches() == []
 
 
-def test_parachute_guard_with_land_command_is_traceability_blocked():
+def test_parachute_land_command_blocked():
     model = build_lite_model(
         """package D {
             action def CMD_LAND { }
@@ -304,7 +303,7 @@ def test_parachute_guard_with_land_command_is_traceability_blocked():
     assert "SERVO8_FUNCTION" not in linker.generate_parm_file()
 
 
-def test_bridge_report_surfaces_traceability_mismatch(tmp_path):
+def test_bridge_report_shows_mismatch(tmp_path):
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_003 {
@@ -335,7 +334,7 @@ def test_bridge_report_surfaces_traceability_mismatch(tmp_path):
     assert "L1/L2 passed:" in report.summary()
 
 
-def test_bridge_report_safety_status_distinguishes_blocked_partial_and_fail():
+def test_bridge_report_safety_status():
     blocked = SITLTestResult("REQ_SAFE_003", "TRACE", False, "traceability mismatch")
     failed_l2 = SITLTestResult("REQ_SAFE_005", "L2", False, "servo8_raw last=1000")
     passed_l2 = SITLTestResult("REQ_SAFE_005", "L2", True, "servo8_raw=2000")
@@ -347,7 +346,7 @@ def test_bridge_report_safety_status_distinguishes_blocked_partial_and_fail():
     assert BridgeReport("D", "D.parm").safety_status() == "NOT_RUN"
 
 
-def test_family_aware_guard_assignment_keeps_shared_safety_monitor_traceable():
+def test_family_guards_stay_traceable():
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_002 { doc /* Battery below 15% shall perform controlled landing. */ }
@@ -419,10 +418,10 @@ def _model_with_req(req_id: str, doc: str, part_body: str, part_name: str = "Fli
     )
 
 
-def test_attr_match_requires_requirement_text_relevance():
-    # MTOW requirement satisfied by a part that happens to declare maxAirspeed:
-    # the attr exists, but the requirement is not about speed → no mapping
-    # (honest unmapped beats a wrong "L1 PASS WPNAV_SPEED").
+def test_attr_match_needs_text_match():
+    # MTOW requirement satisfied by a part that declares maxAirspeed: the attr
+    # exists but the requirement is not about speed -> no mapping, rather than a
+    # wrong "L1 PASS WPNAV_SPEED".
     model = _model_with_req(
         "REQ_CONS_003",
         "The system maximum takeoff weight, including payload and battery, shall not exceed 25.0 kg.",
@@ -434,7 +433,7 @@ def test_attr_match_requires_requirement_text_relevance():
     assert "WPNAV_SPEED" not in linker.generate_parm_file()
 
 
-def test_verification_method_annotation_does_not_trigger_control_loop_mapping():
+def test_verify_annotation_no_mapping():
     model = _model_with_req(
         "REQ_FUNC_001",
         "The system shall navigate to GPS waypoints with CEP below 1.0 metre. "
@@ -446,7 +445,7 @@ def test_verification_method_annotation_does_not_trigger_control_loop_mapping():
     assert "SCHED_LOOP_RATE" not in linker.generate_parm_file()
 
 
-def test_headwind_groundspeed_is_not_verified_by_navigation_speed_setpoint():
+def test_headwind_not_wpnav_speed():
     model = _model_with_req(
         "REQ_PERF_004",
         "The system shall maintain a minimum forward ground speed of 2 m/s "
@@ -459,7 +458,7 @@ def test_headwind_groundspeed_is_not_verified_by_navigation_speed_setpoint():
     assert "WPNAV_SPEED" not in linker.generate_parm_file()
 
 
-def test_postflight_report_to_gcs_does_not_claim_gcs_loss_guard():
+def test_postflight_not_gcs_loss():
     model = build_lite_model(
         """package D {
             requirement def REQ_FUNC_008 {
@@ -484,7 +483,7 @@ def test_postflight_report_to_gcs_does_not_claim_gcs_loss_guard():
     assert all(s.req_id != "REQ_FUNC_008" for s in linker.generate_test_specs())
 
 
-def test_postflight_report_on_communication_part_does_not_claim_serial_protocol():
+def test_postflight_not_serial_protocol():
     model = _model_with_req(
         "REQ_FUNC_008",
         "The system shall transmit a post-flight health report to the GCS "
@@ -502,7 +501,7 @@ def test_postflight_report_on_communication_part_does_not_claim_serial_protocol(
     assert all(s.req_id != "REQ_FUNC_008" for s in linker.generate_test_specs())
 
 
-def test_compound_contingency_is_not_proven_by_one_fault_guard():
+def test_compound_contingency_unproven():
     model = build_lite_model(
         """package D {
             requirement def REQ_FUNC_007 {
@@ -529,7 +528,7 @@ def test_compound_contingency_is_not_proven_by_one_fault_guard():
     assert linker._lookup_catalogue("REQ_FUNC_007") is None  # noqa: SLF001
 
 
-def test_gcs_no_response_boundary_is_not_proven_by_positive_failsafe():
+def test_gcs_boundary_unproven():
     model = build_lite_model(
         """package D {
             requirement def REQ_SAFE_009 {
@@ -558,7 +557,7 @@ def test_gcs_no_response_boundary_is_not_proven_by_positive_failsafe():
     assert mismatch["expected_family"] == "GCS_NO_RESPONSE_BOUNDARY"
 
 
-def test_nil_wind_airspeed_still_maps_to_navigation_speed_setpoint():
+def test_nil_wind_maps_to_wpnav_speed():
     model = _model_with_req(
         "REQ_PERF_003",
         "The system shall achieve a maximum airspeed of at least 18 m/s "
@@ -578,10 +577,10 @@ def test_nil_wind_airspeed_still_maps_to_navigation_speed_setpoint():
     assert wpnav_line.split()[1] == "1800"
 
 
-def test_attr_match_text_gate_unlocks_the_right_entry():
-    # A loop-rate requirement on a part with BOTH maxAltitude and controlFrequency
-    # previously matched ALTITUDE_FENCE (first catalogue hit). With the text gate
-    # the altitude entry is skipped and the loop-rate entry resolves.
+def test_attr_match_unlocks_entry():
+    # A loop-rate requirement on a part with both maxAltitude and controlFrequency
+    # matched ALTITUDE_FENCE (first catalogue hit). The text gate skips the altitude
+    # entry so the loop-rate entry resolves.
     model = _model_with_req(
         "REQ_PERF_006",
         "The AutonomousDrone shall execute the primary flight control loop at a frequency of no less than 100 Hz.",
@@ -594,7 +593,7 @@ def test_attr_match_text_gate_unlocks_the_right_entry():
     assert "FENCE_ALT_MAX" not in linker.generate_parm_file()
 
 
-def test_attr_match_altitude_requirement_still_maps_to_fence():
+def test_altitude_maps_to_fence():
     model = _model_with_req(
         "REQ_CONS_001",
         "The system shall not exceed a flight altitude of 120 metres above ground level.",
@@ -626,7 +625,7 @@ def _gcs_model(doc: str):
     )
 
 
-def test_gcs_loss_land_only_text_requires_land_action():
+def test_gcs_loss_land_only():
     linker = RequirementLinker(_gcs_model(
         "The system shall perform an autonomous safe landing at the current "
         "position when the GCS uplink has been absent for more than 10 seconds."
@@ -634,14 +633,14 @@ def test_gcs_loss_land_only_text_requires_land_action():
     spec = {s.req_id: s for s in linker.generate_test_specs()}["REQ_SAFE_003"]
 
     assert spec.verify.kind == "wait_mode"
-    assert spec.verify.args == {"mode": "LAND"}  # no RTL fallback: wrong action ≠ pass
+    assert spec.verify.args == {"mode": "LAND"}  # no RTL fallback: wrong action != pass
     assert spec.inject.params.get("FS_GCS_ENABLE") == 5
     params = {p.param_name: p.value for p in spec.params}
     assert params.get("FS_GCS_ENABLE") == 5
     assert linker.traceability_mismatches() == []
 
 
-def test_gcs_loss_return_only_text_requires_rtl_action():
+def test_gcs_loss_return_only():
     linker = RequirementLinker(_gcs_model(
         "The system shall autonomously return to base when the GCS uplink has "
         "been absent for more than 10 seconds."
@@ -653,19 +652,19 @@ def test_gcs_loss_return_only_text_requires_rtl_action():
     assert linker.traceability_mismatches() == []
 
 
-def test_gcs_loss_ambiguous_text_keeps_lenient_entry():
+def test_gcs_loss_ambiguous_lenient():
     linker = RequirementLinker(_gcs_model(
         "The system shall enter RTL or LAND when the GCS link is lost for more "
         "than 10 seconds."
     ))
     spec = {s.req_id: s for s in linker.generate_test_specs()}["REQ_SAFE_003"]
 
-    # either failsafe reaction satisfies this requirement → fallback stays
+    # either failsafe reaction satisfies this requirement -> fallback stays
     assert spec.verify.args.get("mode") == "LAND"
     assert spec.verify.args.get("fallback") == "RTL"
 
 
-def test_disconnect_gcs_inject_and_render_honor_action_param():
+def test_disconnect_gcs_honors_param():
     from src.sitl.sitl_specs import InjectSpec, render_inject
 
     rendered = render_inject(InjectSpec(kind="disconnect_gcs",
@@ -675,14 +674,14 @@ def test_disconnect_gcs_inject_and_render_honor_action_param():
     assert 'set_param(mav, "FS_GCS_ENABLE", 1.0)' in default
 
 
-def test_mavlink_command_inject_sends_pre_command_before_main_command():
+def test_inject_sends_pre_command():
     from src.sitl.sitl_specs import InjectSpec, run_inject
 
     sent = []
 
     class _CmdMav:
-        # Commands are ACK-confirmed since the SAFE_005 vanishing-command
-        # fix: the fake acknowledges each send so the inject proceeds.
+        # Commands are ACK-confirmed since the SAFE_005 fix, so the fake acknowledges
+        # each send and the inject proceeds.
         target_system = 1
         target_component = 1
 
@@ -716,12 +715,12 @@ def test_mavlink_command_inject_sends_pre_command_before_main_command():
     )
     run_inject(ctx, spec)
 
-    # RELEASE (param2=0) must precede the abort-GRAB (param2=1): asserting only
-    # the final PWM has no discriminating power when boot neutral == GRAB.
+    # RELEASE (param2=0) precedes the abort-GRAB (param2=1); asserting only the
+    # final PWM discriminates nothing when boot neutral == GRAB.
     assert sent == [(211, (0.0, 0.0)), (211, (0.0, 1.0))]
 
 
-def test_mavlink_command_render_includes_pre_command_block_in_order():
+def test_render_pre_command_order():
     from src.sitl.sitl_specs import InjectSpec
 
     gripper = _TAG_TO_ENTRY["PAYLOAD_ABORT_LOCK"]
@@ -729,7 +728,6 @@ def test_mavlink_command_render_includes_pre_command_block_in_order():
     assert "前置 MAVLink command 211" in code
     assert code.index("前置 MAVLink command") < code.index("发送 MAVLink command 211")
 
-    # entries without pre_command render unchanged
     plain = render_inject(InjectSpec(kind="mavlink_command",
                                      params={"command": 208, "param1": 2}))
     assert "前置" not in plain

@@ -1,12 +1,11 @@
 """T13 guard: mandatory catalog architecture seed in the outer variation space.
 
-Two consecutive real runs (2026-07-08) had the proposal LLM judge every component
-"not relevant" → zero variation points → the whole objective-DSE + realization
-path silently fell back to catalog bilevel. A later run showed the dual failure:
-accepted LLM variants suppressed the catalog space and therefore never explored a
-mapping-compliant architecture. These tests pin the invariant:
-quantified emergent targets + a concern-matching connected component must always
-yield a complete catalog-seeded variation space, whether the LLM declines or accepts.
+Two runs on 2026-07-08 had the proposal LLM judge every component "not
+relevant", giving zero variation points and a silent fallback to catalog
+bilevel; a later run showed the opposite, with accepted LLM variants suppressing
+the catalog space. Invariant: quantified emergent targets plus a
+concern-matching connected component yield a complete catalog-seeded variation
+space whether the LLM declines or accepts.
 """
 from __future__ import annotations
 
@@ -39,7 +38,7 @@ def _decline_all(self, usage, type_name, requirements):  # noqa: ARG001
     return None
 
 
-def test_catalog_seed_injects_admissible_variation_when_llm_declines(monkeypatch):
+def test_seed_injected_on_llm_decline(monkeypatch):
     monkeypatch.setattr(Orchestrator, "_propose_variants", _decline_all)
     orch = Orchestrator(llm=object(), use_variation_dse=True)
     model = _model()
@@ -48,20 +47,18 @@ def test_catalog_seed_injects_admissible_variation_when_llm_declines(monkeypatch
 
     text = out.metadata["last_sysml_text"]
     ok, bad = admitted(parse_variation_points(text))
-    assert [p.point_id for p in ok] == ["airframe"]  # concern preference over powerSystem
+    assert [p.point_id for p in ok] == ["airframe"]
     assert bad == []
     assert orch.last_variation_proposal_source == "catalog-seed"
-    # the seed declares complete evidence-backed architecture inputs
     assert "rotorCount" in text and "rotorRadiusM" in text and "batteryCells" in text
     assert "mandatory deterministic catalog architecture seed" in text
-    # and the injected space actually drives the variation DSE end to end
     res = run_variation_dse(out, requirements=_REQS, iterations=15, random_seed=0)
     assert res is not None
     assert res.recommended_design is not None
     assert set(res.recommended_choices) == {"airframe"}
 
 
-def test_catalog_seed_skipped_without_quantified_emergent_targets(monkeypatch):
+def test_seed_skipped_without_targets(monkeypatch):
     monkeypatch.setattr(Orchestrator, "_propose_variants", _decline_all)
     orch = Orchestrator(llm=object(), use_variation_dse=True)
     model = _model()
@@ -72,7 +69,7 @@ def test_catalog_seed_skipped_without_quantified_emergent_targets(monkeypatch):
     assert orch.last_variation_proposal_source == "catalog-seed-not-required"
 
 
-def test_catalog_seed_unavailable_when_no_component_matches_a_concern(monkeypatch):
+def test_seed_unavailable_no_match(monkeypatch):
     monkeypatch.setattr(Orchestrator, "_propose_variants", _decline_all)
     orch = Orchestrator(llm=object(), use_variation_dse=True)
     text = """package P {
@@ -89,7 +86,7 @@ def test_catalog_seed_unavailable_when_no_component_matches_a_concern(monkeypatc
     assert orch.last_variation_proposal_source == "catalog-seed-unavailable"
 
 
-def test_catalog_seed_is_injected_even_when_llm_proposes_variants(monkeypatch):
+def test_seed_injected_beside_llm_variants(monkeypatch):
     from src.dse.variation_introducer import VariantSpec
 
     def propose(self, usage, type_name, requirements):  # noqa: ARG001
@@ -118,8 +115,6 @@ def test_catalog_seed_is_injected_even_when_llm_proposes_variants(monkeypatch):
     assert "AlphaPowerImpl" in text
     assert "mandatory deterministic catalog architecture seed" in text
 
-    # Coverage is exact: every compatible architecture exposed by the evidence
-    # catalog is present as one coupled outer variant (not independently mixed axes).
     from src.dse.domain_objective import variant_design_inputs
     from src.realization.matcher import catalog_design_domain
 
@@ -138,9 +133,9 @@ def test_catalog_seed_is_injected_even_when_llm_proposes_variants(monkeypatch):
     }
     assert actual == expected
 
-    # Ownership normalization must keep the architecture tuple coupled.  The
-    # overlapping LLM battery-cell field is stripped rather than taking ownership
-    # and producing unsupported rotor/prop/voltage cross-products.
+    # Ownership normalization keeps the architecture tuple coupled: the overlapping
+    # LLM battery-cell field is stripped rather than taking ownership and producing
+    # unsupported rotor/prop/voltage cross-products.
     res = run_variation_dse(out, requirements=_REQS, iterations=80, random_seed=0)
     assert res is not None
     assert any("mandatory coupled catalog architecture seed" in note
@@ -152,7 +147,7 @@ def test_catalog_seed_is_injected_even_when_llm_proposes_variants(monkeypatch):
     assert actual_designs <= expected
 
 
-def test_existing_variation_resets_stale_source_and_records_model_origin(monkeypatch):
+def test_existing_variation_resets_source(monkeypatch):
     monkeypatch.setattr(Orchestrator, "_propose_variants", _decline_all)
     orch = Orchestrator(llm=object(), use_variation_dse=True)
     model = orch._introduce_variations(_model(), _REQS)
@@ -163,7 +158,7 @@ def test_existing_variation_resets_stale_source_and_records_model_origin(monkeyp
     assert orch.last_variation_proposal_source == "model-existing"
 
 
-def test_preexisting_non_catalog_variation_still_receives_catalog_seed(monkeypatch):
+def test_non_catalog_variation_gets_seed(monkeypatch):
     monkeypatch.setattr(Orchestrator, "_propose_variants", _decline_all)
     text = _MODEL_TEXT.replace(
         "part gcs : GroundStation;",
@@ -185,7 +180,7 @@ def test_preexisting_non_catalog_variation_still_receives_catalog_seed(monkeypat
     assert orch.last_variation_proposal_source == "model-existing+catalog-seed"
 
 
-def test_bounds_that_leave_only_one_seed_variant_are_reported_not_silenced(monkeypatch):
+def test_single_variant_bounds_reported(monkeypatch):
     import src.dse.domain_objective as objective
 
     monkeypatch.setattr(Orchestrator, "_propose_variants", _decline_all)
@@ -204,12 +199,7 @@ def test_bounds_that_leave_only_one_seed_variant_are_reported_not_silenced(monke
     assert orch.last_variation_proposal_source == "catalog-seed-unavailable"
 
 
-def test_catalog_seed_rebuilds_real_constrained_pareto_end_to_end(monkeypatch):
-    """Real catalog regression for the authoritative failure, without an LLM.
-
-    Every seeded architecture is scored; estimator/MTOW, mapping and Phase 8 are
-    applied in order; the official Pareto is rebuilt from the surviving designs.
-    """
+def test_seed_rebuilds_constrained_pareto(monkeypatch):
     from src.dse.physics_estimator import calibrated
     from src.realization.closure import close_the_loop
     from src.realization.estimator_calibration import fit_from_catalog

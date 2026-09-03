@@ -1,4 +1,3 @@
-"""Tests for the LLM variation-point parser + objectivity admission + resolution."""
 from __future__ import annotations
 
 from src.dse.variation_parser import (
@@ -31,7 +30,7 @@ _MODEL = """package Drone {
 }"""
 
 
-def test_parses_points_variants_rationale_requirements():
+def test_parses_points_and_variants():
     pts = {p.point_id: p for p in parse_variation_points(_MODEL)}
     assert set(pts) == {"propulsion", "battery", "unjustified"}
     assert pts["propulsion"].variant_names == ["quad", "hexa"]
@@ -40,19 +39,19 @@ def test_parses_points_variants_rationale_requirements():
     assert "lift vs endurance" in pts["propulsion"].rationale
 
 
-def test_objectivity_admission_rejects_unjustified():
+def test_admission_rejects_unjustified():
     ok, bad = admitted(parse_variation_points(_MODEL))
     assert {p.point_id for p in ok} == {"propulsion", "battery"}
-    assert {p.point_id for p in bad} == {"unjustified"}  # no rationale/requirement
+    assert {p.point_id for p in bad} == {"unjustified"}
 
 
-def test_resolve_binds_chosen_variants_and_parses():
+def test_resolve_binds_variants():
     ok, _ = admitted(parse_variation_points(_MODEL))
     concrete = resolve_model(_MODEL, ok, {"propulsion": "hexa", "battery": "dual"})
     assert "part propulsion : HexaRotor;" in concrete
     assert "part battery : DualBattery;" in concrete
-    assert "variation part propulsion" not in concrete   # resolved away
-    assert "variation part unjustified" in concrete        # untouched (not admitted)
+    assert "variation part propulsion" not in concrete
+    assert "variation part unjustified" in concrete
     assert not check_syntax(concrete).has_errors
 
 
@@ -63,8 +62,6 @@ def test_is_objective_rule():
 
 
 def test_port_safe_requires_shared_interface():
-    """Resolve-safety: all variants must specialise a common port interface, so
-    binding any variant keeps the host's connects valid."""
     safe = """package P {
         port def Sig;
         part def Iface { in port c : Sig; }
@@ -74,7 +71,6 @@ def test_port_safe_requires_shared_interface():
     }"""
     p = parse_variation_points(safe)[0]
     assert port_safe(p, safe)
-    # remove the shared base → variants no longer share a port interface
     unsafe = safe.replace(":> Iface", "")
     pu = parse_variation_points(unsafe)[0]
     assert not port_safe(pu, unsafe)

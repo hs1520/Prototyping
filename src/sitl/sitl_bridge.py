@@ -1,19 +1,4 @@
-"""
-sitl_bridge.py
-
-Translates a SysMLLiteModel + platform_profile into:
-  L1 — ArduPilot .parm parameter file  (static, no SITL needed)
-  L2 — pymavlink test scripts           (requires running SITL)
-
-Usage
------
-    from src.sitl.sitl_bridge import SITLBridge
-
-    bridge = SITLBridge(model, output_dir="sitl_output")
-    bridge.generate_l1()          # writes AutonomousDrone.parm
-    bridge.generate_l2_scripts()  # writes test_*.py scripts
-    bridge.run_l2(host="127.0.0.1", port=5760)  # execute against live SITL
-"""
+"""sitl_bridge.py"""
 
 from __future__ import annotations
 
@@ -34,19 +19,15 @@ from src.utils.ardupilot import default_arducopter_binary
 
 _DEFAULT_ARDUCOPTER = default_arducopter_binary()
 
-# Gazebo (headless_gazebo 镜像) — fdm_backend="gazebo" 时使用
-# home 坐标必须匹配 worlds/iris_runway.sdf 里的 <spherical_coordinates>（CMAC），
-# 否则 NavSat 插件算出来的 GPS 位置和 ArduPilot 的 home 假设不一致。
+# Gazebo (headless_gazebo 镜像) - fdm_backend="gazebo" 时使用
+# home 坐标要匹配 worlds/iris_runway.sdf 里的 <spherical_coordinates>（CMAC），
+# 否则 NavSat 插件算出的 GPS 位置和 ArduPilot 的 home 假设不一致。
 _GAZEBO_IMAGE = "headless_gazebo"
 _GAZEBO_CONTAINER = "ai_prototyping_gazebo"
 _GAZEBO_UDP_PORT = 9002
 _GAZEBO_HOME = "-35.363262,149.165237,584,0"
 _NATIVE_HOME = "51.4,-2.35,0,0"
 
-
-# ---------------------------------------------------------------------------
-# Test result
-# ---------------------------------------------------------------------------
 
 @dataclass
 class TestResult:
@@ -100,11 +81,6 @@ class BridgeReport:
         return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# SITLBridge
-# ---------------------------------------------------------------------------
-
-# ArduPilot Copter 预置 Platform Profile（可直接使用）
 ARDUPILOT_COPTER_PROFILE: dict = {
     "platform": "ArduPilot Copter",
     "mode_vocabulary": [
@@ -113,26 +89,24 @@ ARDUPILOT_COPTER_PROFILE: dict = {
         "CMD_LOITER",    "CMD_POSHOLD",
     ],
     "emergency_mode": "CMD_LAND",
-    # 需要解锁+起飞后才能有意义测试的模式
     "requires_airborne": {"CMD_RTL", "CMD_LAND", "CMD_AUTO",
                           "CMD_LOITER", "CMD_POSHOLD"},
     # 基础 SITL 参数：--wipe 后需要显式设置，否则 motor matrix 无效
     "base_sitl_params": {
-        "FRAME_CLASS":    1,  # QUAD
-        "FRAME_TYPE":     1,  # X-frame
-        "ARMING_CHECK":   0,  # SITL 测试：跳过全部 PreArm 检查
-        "DISARM_DELAY":   0,  # 禁止自动解除解锁（防止 EKF 健康检查触发自动缴械）
-        # 注意：EK3_CHECK_SCALE 必须保持默认 100。曾误设为 0，本意是"放宽
-        # EKF 健康检查"，实则把 GPS 精度阈值收成 0 → GPS 永远过不了检查 →
-        # EKF 拒绝融合 GPS → 无位置估计/home → "Arm: Need Position Estimate"
-        # → 无法解锁 → 起飞链路彻底失效（所有需飞行的 L2 全部假绿）。
+        "FRAME_CLASS":    1,
+        "FRAME_TYPE":     1,
+        "ARMING_CHECK":   0,
+        "DISARM_DELAY":   0,
+        # EK3_CHECK_SCALE 保持默认 100。设为 0 本意是放宽 EKF 健康检查，实则把
+        # GPS 精度阈值收成 0 -> GPS 永远过不了检查 -> EKF 拒绝融合 GPS -> 无位置
+        # 估计/home -> "Arm: Need Position Estimate" -> 无法解锁，需飞行的 L2 全部
+        # 假绿。
         "EK3_CHECK_SCALE": 100,
     },
 }
 
 
 class SITLBridge:
-
     def __init__(
         self,
         model: SysMLLiteModel,
@@ -145,23 +119,21 @@ class SITLBridge:
         fdm_backend: str = "native",
         speedup: float = 1.0,
     ) -> None:
-        """
-        llm             : 可选 LLMInterface，启用语义标签分类。
-        platform_profile: 可选 Platform Profile dict。
-                          传入后 generate_l2_scripts() 额外生成 accept
-                          模式切换测试（CMD_RTL → SET_MODE RTL 等）。
-                          为 None 时跳过 accept 测试（S11 选项C）。
-        fdm_backend     : "native"（默认）使用 ArduPilot 内置简化物理模型
-                          （--model +）；"gazebo" 切到外部 FDM
-                          （--model JSON），并在 launch_sitl() 时自动拉起
-                          headless_gazebo 容器（需要的需求验证，如夹爪/
-                          降落伞/真实姿态动力学，才需要这个）。
+        """llm             : 可选 LLMInterface，启用语义标签分类。
+        platform_profile: 可选 Platform Profile dict。传入后
+                          generate_l2_scripts() 额外生成 accept 模式切换
+                          测试（CMD_RTL -> SET_MODE RTL 等）；None 时跳过
+                          accept 测试（S11 选项C）。
+        fdm_backend     : "native"（默认）用 ArduPilot 内置简化物理模型
+                          （--model +）；"gazebo" 切到外部 FDM（--model
+                          JSON），并在 launch_sitl() 时自动拉起
+                          headless_gazebo 容器（夹爪/降落伞/真实姿态动力学
+                          一类的需求验证才需要）。
         speedup         : SITL 仿真时钟相对墙钟的倍率（--speedup N）。仅
-                          native FDM 支持；gazebo 后端与外部物理引擎锁步，
-                          单方面加速要么无效要么破坏时序，强制钉回 1。
-                          L2 的测量与判定窗口读仿真时钟（sitl_specs 的
-                          TestContext 纪律），因此判定严格度不随倍率漂移；
-                          渲染出的独立 test_*.py 脚本仍按 1x 编写。
+                          native FDM 支持；gazebo 与外部物理引擎锁步，单方面
+                          加速无效或破坏时序，强制钉回 1。L2 的测量与判定
+                          窗口读仿真时钟，判定严格度不随倍率漂移；渲染出的
+                          独立 test_*.py 脚本仍按 1x 编写。
         """
         self._model = model
         self._output_dir = Path(output_dir)
@@ -196,10 +168,6 @@ class SITLBridge:
     def requirement_evidence(self) -> RequirementEvidenceBundle:
         return self._requirement_evidence
 
-    # ------------------------------------------------------------------
-    # SITL 进程管理
-    # ------------------------------------------------------------------
-
     def _gazebo_container_running(self) -> bool:
         try:
             out = subprocess.run(
@@ -212,10 +180,6 @@ class SITLBridge:
             return False
 
     def _ensure_gazebo_running(self, wait_s: float = 6.0) -> bool:
-        """
-        若 headless_gazebo 容器未运行，自动 docker run 拉起一个。
-        已经在跑的容器（不管是不是我们启动的）直接复用，不重复启动。
-        """
         if self._gazebo_container_running():
             print(f"  ✓ Gazebo 容器 [{_GAZEBO_CONTAINER}] 已在运行，复用")
             return True
@@ -242,7 +206,6 @@ class SITLBridge:
         return True
 
     def _stop_gazebo(self) -> None:
-        """仅停止本实例自己拉起的 Gazebo 容器，不影响用户手动起的容器。"""
         if not self._gazebo_started_by_us:
             return
         try:
@@ -260,13 +223,12 @@ class SITLBridge:
         home: Optional[str] = None,
         wait_s: float = 8.0,
     ) -> bool:
-        """
-        在后台启动 arducopter SITL。
-        fdm_backend="native" 时用 ArduPilot 内置简化物理模型（--model +）；
-        fdm_backend="gazebo" 时自动拉起 headless_gazebo 容器，
-        并切到外部 FDM（--model JSON），home 默认对齐 Gazebo world 的
-        spherical_coordinates（CMAC），避免 GPS 原点和物理引擎不一致。
-        返回 True 表示进程已启动并监听 5760 端口。
+        """在后台启动 arducopter SITL。
+
+        fdm_backend="native" 用 ArduPilot 内置简化物理模型（--model +）；
+        "gazebo" 自动拉起 headless_gazebo 容器并切到外部 FDM（--model JSON），
+        home 默认对齐 Gazebo world 的 spherical_coordinates（CMAC），避免 GPS
+        原点和物理引擎不一致。返回 True 表示进程已启动并监听 5760 端口。
         """
         if not Path(self._arducopter_bin).exists():
             print(f"  ✗ arducopter 二进制不存在: {self._arducopter_bin}")
@@ -301,7 +263,6 @@ class SITLBridge:
         print(f"  ▶ ArduCopter SITL 启动中 (PID {self._sitl_proc.pid}) ...")
         time.sleep(wait_s)
 
-        # 简单探测：尝试 TCP 连接
         import socket
         try:
             s = socket.create_connection(("127.0.0.1", 5760), timeout=3)
@@ -311,11 +272,10 @@ class SITLBridge:
             self.stop_sitl()
             return False
 
-        # 等待飞机真正"可解锁/可起飞"再返回，否则顺序套件里后面的测试会偶发
-        # 起飞失败。判据用 EKF_STATUS_REPORT 的 EKF_POS_HORIZ_ABS 标志位——它
-        # 直接表示"EKF 已有绝对水平位置"，即 home 已设、armable。比数 STATUSTEXT
-        # ("origin set" 只播一次，连接晚了就永远抓不到）确定得多。在 Gazebo JSON
-        # FDM 下，没有 Gazebo 喂数据该位永远不会置位，所以它也顺带确认了 FDM 握手。
+        # 等飞机可解锁/可起飞再返回，否则顺序套件里后面的测试会偶发起飞失败。
+        # 判据是 EKF_STATUS_REPORT 的 EKF_POS_HORIZ_ABS 位（EKF 已有绝对水平位置，
+        # 即 home 已设、armable）；STATUSTEXT "origin set" 只播一次，连接晚了抓不到。
+        # Gazebo JSON FDM 下没有 Gazebo 喂数据该位不会置位，因此也确认了 FDM 握手。
         ready = False
         try:
             from pymavlink import mavutil as _mu
@@ -360,29 +320,23 @@ class SITLBridge:
             print(f"  ■ ArduCopter SITL 已停止 (PID {pid})")
             self._sitl_proc = None
 
-        # 等端口 5760 真正释放，再允许下一个 SITL 启动
         import socket
         deadline = time.time() + 10
         while time.time() < deadline:
             try:
                 s = socket.create_connection(("127.0.0.1", 5760), timeout=0.5)
                 s.close()
-                time.sleep(0.5)   # 端口还在占用，继续等
+                time.sleep(0.5)
             except OSError:
-                break             # 端口已释放
+                break
 
         self._stop_gazebo()
-
-    # ------------------------------------------------------------------
-    # L1 — 参数文件生成
-    # ------------------------------------------------------------------
 
     def generate_l1(self) -> Path:
         """生成 .parm 文件，返回文件路径。"""
         parm_content = self._requirement_evidence.parm_file
         parm_path = self._output_dir / f"{self._model.name}.parm"
 
-        # Append platform defaults through the authoritative projection policy.
         base_params = self._platform_profile.get("base_sitl_params", {})
         if base_params:
             from .parameter_projection import merge_base_parameters
@@ -426,21 +380,10 @@ class SITLBridge:
             for m in self._requirement_evidence.traceability_mismatches
         ]
 
-    # ------------------------------------------------------------------
-    # L2 — pymavlink 测试脚本生成
-    # ------------------------------------------------------------------
-
     def generate_l2_scripts(self) -> List[Path]:
-        """
-        为每个 L2 测试规格生成独立的 pymavlink 测试脚本。
-
-        safety guard 测试：来自 RequirementLinker（电池/GCS/传感器等）。
-        accept 模式切换测试：来自 platform_profile（CMD_RTL → SET_MODE RTL 等）。
-        无 platform_profile 时跳过 accept 测试（S11 选项C）。
-        """
+        """为每个 L2 测试规格生成独立的 pymavlink 测试脚本。"""
         paths: List[Path] = []
 
-        # ── Safety guard 测试（原有）────────────────────────────────────
         specs = [s for s in self._requirement_evidence.test_specs if s.tier == "L2"]
         for spec in specs:
             code = self._render_test_script(spec)
@@ -449,7 +392,6 @@ class SITLBridge:
             paths.append(script_path)
             print(f"[L2] 脚本已生成: {script_path}")
 
-        # ── Accept 模式切换测试（需要 platform_profile）────────────────
         if self._platform_profile:
             accept_paths = self._generate_accept_mode_scripts()
             paths.extend(accept_paths)
@@ -457,22 +399,12 @@ class SITLBridge:
         return paths
 
     def _cmd_to_mavlink_mode(self, cmd_name: str) -> Optional[str]:
-        """
-        CMD_RTL → "RTL"，CMD_LAND → "LAND" 等。
-        去掉 CMD_ 前缀；不在词汇表里的命令返回 None。
-        """
         vocab = self._platform_profile.get("mode_vocabulary", [])
         if cmd_name not in vocab:
             return None
         return cmd_name[4:] if cmd_name.startswith("CMD_") else None
 
     def _generate_accept_mode_scripts(self) -> List[Path]:
-        """
-        扫描模型里 accept-triggered 状态机的 nominal 转移，
-        对每个能映射到 MAVLink 模式的命令生成 L2 模式切换测试脚本。
-
-        CMD_X → SET_MODE X → wait_mode(X)
-        """
         try:
             from src.simulation.state_extractor import extract_state_machines
             from src.simulation.behavioral_sim import _classify_accept_transitions
@@ -484,7 +416,7 @@ class SITLBridge:
         requires_airborne = self._platform_profile.get("requires_airborne", set())
 
         paths: List[Path] = []
-        seen_modes: set = set()  # 每个 MAVLink 模式只生成一个测试
+        seen_modes: set = set()
 
         for sm in state_machines:
             if not sm.has_accept_transitions():
@@ -508,7 +440,6 @@ class SITLBridge:
     def _render_accept_mode_script(
         self, cmd_name: str, mavlink_mode: str, requires_airborne: bool
     ) -> str:
-        """渲染一个 MAVLink 模式切换测试脚本。"""
         from .script_runtime import render_pymavlink_runtime
 
         conn = self._connection_string
@@ -551,7 +482,6 @@ class SITLBridge:
         return header + render_pymavlink_runtime(conn) + main
 
     def _render_test_script(self, spec: SITLTestSpec) -> str:
-        """根据 SITLTestSpec 渲染一个独立可执行的 pymavlink 测试脚本。"""
         from .script_runtime import render_pymavlink_runtime
 
         inject_body = textwrap.indent(self._render_inject(spec), "    ")
@@ -601,10 +531,6 @@ class SITLBridge:
         from src.sitl.sitl_specs import render_verify
         return render_verify(spec.verify)
 
-    # ------------------------------------------------------------------
-    # L2 — 直接执行测试（连接 SITL）
-    # ------------------------------------------------------------------
-
     def run_l2(
         self,
         host: Optional[str] = None,
@@ -612,18 +538,7 @@ class SITLBridge:
         per_test_sitl: bool = True,
         sitl_home: Optional[str] = None,
     ) -> List[TestResult]:
-        """
-        执行所有 L2 测试，返回结果列表。
-
-        host / port
-          当 None（默认）时使用构造时传入的 connection_string。
-          显式指定时覆盖连接目标（优先级高于 connection_string）。
-
-        per_test_sitl=True (默认)
-          每个测试启动一个独立 SITL 进程，跑完即停。彻底隔离测试间状态。
-        per_test_sitl=False
-          假设 SITL 已在外部启动并运行，所有测试共享同一进程。
-        """
+        """执行所有 L2 测试，返回结果列表。"""
         try:
             from pymavlink import mavutil
         except ImportError:
@@ -664,10 +579,10 @@ class SITLBridge:
                     continue
 
             try:
-                # 本测试若是新拉起的 SITL（--wipe 全新启动），机体已是干净初始态，
-                # 无需 reset_drone_state；而且在 Gazebo 下 reset 里的 SIM_*/EKF
-                # 参数会扰乱 FDM 喂入的传感器估计，导致起飞失败。仅共享 SITL
-                # （per_test_sitl=False，测试间状态会残留）时才需要 reset。
+                # 新拉起的 SITL（--wipe 全新启动）机体已是干净初始态，无需
+                # reset_drone_state；Gazebo 下 reset 里的 SIM_*/EKF 参数还会扰乱 FDM 喂入的
+                # 传感器估计，导致起飞失败。只有共享 SITL（per_test_sitl=False，状态跨测试
+                # 残留）才需要 reset。
                 result = self._run_single_test(
                     spec, conn_str, mavutil, fresh_sitl=launched_here)
                 dt = time.time() - t0
@@ -688,19 +603,18 @@ class SITLBridge:
         mavutil,
         fresh_sitl: bool = False,
     ):
-        """执行单个 L2 测试，返回 (passed, message)。所有 inject/verify 调度
-        都通过 sitl_specs 注册表完成，无 if/elif 解释器。
+        """执行单个 L2 测试，返回 (passed, message)。inject/verify 调度全走
+        sitl_specs 注册表，无 if/elif 解释器。
 
-        fresh_sitl=True 表示本测试是独立新拉起的 SITL（--wipe），机体已是
-        干净初始态，跳过 reset_drone_state（在 Gazebo 下 reset 会扰乱 FDM
-        传感器估计，导致起飞失败）。
+        fresh_sitl=True 表示本测试独立拉起了 SITL（--wipe），机体已是干净初始态，
+        跳过 reset_drone_state（Gazebo 下 reset 会扰乱 FDM 传感器估计，导致起飞
+        失败）。
         """
         from src.sitl.sitl_specs import TestContext, run_inject, run_verify
 
         mav = mavutil.mavlink_connection(conn_str)
         mav.wait_heartbeat(timeout=10)
 
-        # 请求所有遥测数据流（否则 GLOBAL_POSITION_INT 等消息不会被发送）
         mav.mav.request_data_stream_send(
             mav.target_system, mav.target_component,
             mavutil.mavlink.MAV_DATA_STREAM_ALL, 10, 1,
@@ -714,13 +628,13 @@ class SITLBridge:
             ctx.reset_drone_state()
 
         # ── Apply this test's resolved ArduPilot params to the running SITL ──
-        # These carry the actuator wiring the verify depends on (e.g. parachute
+        # These carry the actuator wiring the verify depends on (parachute
         # SERVO8_FUNCTION=27 / CHUTE_SERVO_ON=2000, gripper SERVO7_FUNCTION=28 /
-        # GRIP_RELEASE=2000). They live in the catalogue but are NOT in the boot
-        # .parm, so without this the release drives an unassigned servo channel and
-        # SERVO_OUTPUT_RAW-based verifies read 0 (deterministic false negative).
-        # Applied BEFORE inject (hence before takeoff), so the servo latches at the
-        # release PWM when the fault fires. Non-numeric (unresolved) values skipped.
+        # GRIP_RELEASE=2000). They live in the catalogue but not in the boot .parm,
+        # so without them the release drives an unassigned servo channel and
+        # SERVO_OUTPUT_RAW-based verifies read 0. Applied before inject (hence before
+        # takeoff) so the servo latches at the release PWM when the fault fires;
+        # non-numeric (unresolved) values are skipped.
         for rp in getattr(spec, "params", None) or []:
             val = getattr(rp, "value", None)
             if isinstance(val, bool):
@@ -734,21 +648,15 @@ class SITLBridge:
                     pass
         time.sleep(0.5)  # let SERVOx_FUNCTION re-evaluate before the fault
 
-        # ── Inject ──────────────────────────────────────────────────────
         try:
             run_inject(ctx, spec.inject)
         except Exception as e:
             return False, f"inject 异常: {e}"
 
-        # ── Verify ──────────────────────────────────────────────────────
         try:
             return run_verify(ctx, spec.verify)
         except Exception as e:
             return False, f"verify 异常: {e}"
-
-    # ------------------------------------------------------------------
-    # 生成完整报告
-    # ------------------------------------------------------------------
 
     def generate_full_report(
         self,
@@ -756,13 +664,7 @@ class SITLBridge:
         auto_launch_sitl: bool = False,
         sitl_home: Optional[str] = None,
     ) -> BridgeReport:
-        """
-        生成完整报告。
-
-        run_l2=False  — 只做 L1 静态验证 + 生成 L2 脚本（不连 SITL）
-        run_l2=True   — 额外执行 L2 测试（需要 SITL 运行中）
-        auto_launch_sitl=True — run_l2=True 时自动启动/停止 arducopter
-        """
+        """生成完整报告。"""
         parm_path = self.generate_l1()
         l1_results = self.validate_l1()
         trace_results = self.validate_traceability()
@@ -770,12 +672,9 @@ class SITLBridge:
 
         l2_results: List[TestResult] = []
         if run_l2:
-            # 每个测试独立启停 SITL（per_test_sitl=True 是 run_l2 默认）
-            # auto_launch_sitl 仅决定是否启用 L2，实际启停由 run_l2 内部完成
             if auto_launch_sitl:
                 l2_results = self.run_l2(sitl_home=sitl_home, per_test_sitl=True)
             else:
-                # 调用方自行管理 SITL 进程，所有测试共享
                 l2_results = self.run_l2(per_test_sitl=False)
 
         return BridgeReport(

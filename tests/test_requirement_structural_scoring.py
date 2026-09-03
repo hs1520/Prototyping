@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from src.dse.evaluator import DesignEvaluator
 
 
-def test_behavioral_verification_scores_frozen_paths_not_role_cross_product():
+def test_scores_frozen_paths():
     evaluator = DesignEvaluator()
     evaluator._sim_result = SimpleNamespace(
         reachability_score=1.0,
@@ -20,7 +20,7 @@ def test_behavioral_verification_scores_frozen_paths_not_role_cross_product():
     assert score == 0.6
 
 
-def test_legacy_simulation_falls_back_to_role_scenario_score():
+def test_legacy_falls_back_to_role_score():
     evaluator = DesignEvaluator()
     evaluator._sim_result = SimpleNamespace(
         reachability_score=0.5,

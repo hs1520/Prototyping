@@ -1,5 +1,4 @@
-"""
-测试 sitl_bridge.py：L1 静态验证 + 生成 L2 测试脚本。
+"""测试 sitl_bridge.py：L1 静态验证 + 生成 L2 测试脚本。
 不需要 SITL 运行。
 """
 
@@ -14,7 +13,6 @@ SYSML_TEXT = open(
     os.path.join(os.path.dirname(__file__), "_drone_sysml.py")
 ) else None
 
-# 内嵌 SysML（与 test_linker_direct.py 相同）
 SYSML_INLINE = """
 package AutonomousDrone {
     item def InternalData { attribute payload : String; }

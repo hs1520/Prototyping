@@ -1,13 +1,4 @@
-"""Merge per-seed records from several campaigns into one analysable campaign.
-
-Used when one seed had to be re-run after an instrument fix: the merged
-directory keeps every source record's provenance (campaign, commit) and the
-usual summary.json / summary.md are regenerated with analyze.py.
-
-Usage:
-    python experiments/ablation/merge_campaigns.py --label s3_merged \
-        <campaign_dir>:0,2  <campaign_dir_A>:1  <campaign_dir_B>:1
-"""
+"""Merge per-seed records from several campaigns into one analysable campaign."""
 from __future__ import annotations
 
 import argparse
@@ -48,7 +39,6 @@ def main() -> int:
                            "seeds": sorted(wanted), "records": taken})
         print(f"{manifest['campaign']}: took {taken} record(s) for seeds {sorted(wanted)}")
 
-    # keep only the latest record per (arm, seed) in source order
     latest = {}
     for rec in records:
         latest[(rec["arm"], rec["seed"])] = rec

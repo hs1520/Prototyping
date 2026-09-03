@@ -54,14 +54,14 @@ def _claims(result):
     return {claim["claim_id"]: claim for claim in result["claims"]}
 
 
-def test_all_supported_requires_every_requirement_verified():
+def test_all_supported_needs_all_verified():
     result = derive_research_conclusion(*_evidence())
 
     assert result["overall"] == "SUPPORTED"
     assert all(c["status"] == "SUPPORTED" for c in result["claims"])
 
 
-def test_local_passes_do_not_hide_a_gazebo_requirement_failure():
+def test_gazebo_failure_not_hidden():
     run, gazebo, sitl, matrix = _evidence()
     gazebo["status"] = "FAIL"
     gazebo["req_results"][0]["status"] = "FAIL"
@@ -78,7 +78,7 @@ def test_local_passes_do_not_hide_a_gazebo_requirement_failure():
     assert claims["complete_requirement_verification"]["status"] == "REFUTED"
 
 
-def test_uncalibrated_gazebo_health_does_not_hide_an_exact_requirement_failure():
+def test_uncalibrated_gazebo_still_refutes():
     run, gazebo, sitl, matrix = _evidence()
     gazebo["status"] = "GAZEBO_MODEL_UNCALIBRATED"
     gazebo["req_results"][0]["status"] = "FAIL"
@@ -91,7 +91,7 @@ def test_uncalibrated_gazebo_health_does_not_hide_an_exact_requirement_failure()
     assert _claims(result)["gazebo_dynamics_requirements"]["status"] == "REFUTED"
 
 
-def test_gaps_force_incomplete_even_when_executed_checks_pass():
+def test_gaps_force_incomplete():
     run, gazebo, sitl, matrix = _evidence()
     matrix["summary"]["by_status"] = {"unassigned": 1, "verified": 1}
     matrix["rows"].append({"req_id": "REQ-2", "status": "unassigned"})
@@ -102,7 +102,7 @@ def test_gaps_force_incomplete_even_when_executed_checks_pass():
     assert _claims(result)["complete_requirement_verification"]["status"] == "INCOMPLETE"
 
 
-def test_closed_cannot_contradict_its_own_closure_rows():
+def test_closed_contradiction_raises():
     run, gazebo, sitl, matrix = _evidence()
     run["realization"]["per_requirement"][0]["met"] = False
 
@@ -110,7 +110,7 @@ def test_closed_cannot_contradict_its_own_closure_rows():
         derive_research_conclusion(run, gazebo, sitl, matrix)
 
 
-def test_closed_cannot_exceed_mapping_drift_policy():
+def test_drift_policy_exceeded_raises():
     run, gazebo, sitl, matrix = _evidence()
     run["realization"]["chosen"]["rotor_radius_m"] = 0.24
     row = run["realization"]["chosen"]["design_drift"][0]
@@ -120,7 +120,7 @@ def test_closed_cannot_exceed_mapping_drift_policy():
         derive_research_conclusion(run, gazebo, sitl, matrix)
 
 
-def test_closed_cannot_forge_a_within_limit_flag():
+def test_forged_within_limit_raises():
     run, gazebo, sitl, matrix = _evidence()
     run["realization"]["chosen"]["design_drift"][0]["relative_delta"] = 0.5
 
@@ -128,7 +128,7 @@ def test_closed_cannot_forge_a_within_limit_flag():
         derive_research_conclusion(run, gazebo, sitl, matrix)
 
 
-def test_closed_cannot_change_architecture_identity():
+def test_architecture_change_raises():
     run, gazebo, sitl, matrix = _evidence()
     run["realization"]["chosen"]["battery_cells"] = 4
 
@@ -136,7 +136,7 @@ def test_closed_cannot_change_architecture_identity():
         derive_research_conclusion(run, gazebo, sitl, matrix)
 
 
-def test_declared_matrix_summary_must_equal_rows():
+def test_summary_must_match_rows():
     run, gazebo, sitl, matrix = _evidence()
     matrix["summary"]["by_status"] = {"verified": 99}
 
@@ -144,7 +144,7 @@ def test_declared_matrix_summary_must_equal_rows():
         derive_research_conclusion(run, gazebo, sitl, matrix)
 
 
-def test_sitl_pass_cannot_hide_failed_executable_case():
+def test_sitl_failed_case_raises():
     run, gazebo, sitl, matrix = _evidence()
     sitl["safety_l2"][0]["passed"] = False
 

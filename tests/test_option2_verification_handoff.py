@@ -1,11 +1,10 @@
 """Second board-mediated handoff: DesignAgent -> VerificationAgent (design §15).
 
-The VerificationAgent knowledge source consumes the committed model (the relevant
-requirement defs) and the authoritative requirements from the Blackboard and
-publishes a typed per-requirement verification plan. Its purpose is to give the
-§13 coordination metrics a handoff/role denominator greater than one — two
-migrated handoffs instead of the illustrative single one — while every coordination
-invariant (revision-pinned, gold-free, one role per session) still holds.
+The VerificationAgent source consumes the committed model's requirement defs and
+the authoritative requirements from the Blackboard, and publishes a typed
+per-requirement verification plan. It gives the §13 coordination metrics a
+handoff/role denominator of two while the coordination invariants
+(revision-pinned, gold-free, one role per session) still hold.
 """
 from __future__ import annotations
 
@@ -42,20 +41,16 @@ _REQS = [
 ]
 
 
-# ── the planning knowledge source ───────────────────────────────────────────
-
-def test_plan_verification_classifies_each_requirement_by_its_text():
+def test_plan_classifies_by_text():
     plan = plan_verification(_MODEL)
     by_req = {e["requirement"]: e for e in plan["entries"]}
     assert plan["planned"] == 2
-    # a Boolean invariant vs a quantified threshold get different planned tiers
     assert by_req["REQ_SAFE_004"]["planned_tier"] == "behavioral_or_inspection"
     assert by_req["REQ_SAFE_005"]["planned_tier"] == "analysis_or_sitl"
     assert all(e["traceable_in_model"] for e in plan["entries"])
 
 
-def test_plan_verification_skips_ag_contract_defs():
-    # an A/G system contract def is not a stakeholder requirement and is not planned
+def test_plan_skips_ag_contract_defs():
     model = _MODEL + (
         " package AG { requirement def SystemParachuteContract { doc /* bounded "
         "A/G system contract for REQ_SAFE_005; safety_pattern=X */ } }"
@@ -64,13 +59,13 @@ def test_plan_verification_skips_ag_contract_defs():
     assert reqs == {"REQ_SAFE_004", "REQ_SAFE_005"}
 
 
-def test_requirement_def_slice_keeps_every_requirement_def():
+def test_slice_keeps_requirement_defs():
     sliced = requirement_def_slice(_MODEL)
     assert "REQ_SAFE_004" in sliced and "REQ_SAFE_005" in sliced
-    assert "part def SafetyMonitor" not in sliced  # only requirement defs kept
+    assert "part def SafetyMonitor" not in sliced
 
 
-def test_planning_module_never_imports_gold_or_the_runtime_checker():
+def test_no_gold_or_checker_imports():
     src = Path("src/prototyping/verification_planning.py").read_text(encoding="utf-8")
     imports = "\n".join(
         l for l in src.splitlines() if l.strip().startswith(("import ", "from "))
@@ -78,8 +73,6 @@ def test_planning_module_never_imports_gold_or_the_runtime_checker():
     assert "gold" not in imports.lower()
     assert "ag_contracts" not in imports and "ag_extractor" not in imports
 
-
-# ── the board-mediated handoff ──────────────────────────────────────────────
 
 def _run(arm: str):
     orch = Orchestrator(_NoCallLLM(), revised_experiment_arm=arm)
@@ -95,11 +88,10 @@ def _run(arm: str):
     return orch, artifacts
 
 
-def test_second_handoff_makes_the_metric_denominator_two_in_r2():
+def test_r2_second_handoff_counted():
     orch, artifacts = _run("R2-BBAG")
     assert artifacts["verification_plan"]["planned"] == 2
 
-    # a typed VerificationAgent result is on the board, in its own session/task
     results = orch.blackboard.records(topic="agent.verification.result")
     assert len(results) == 1 and results[0].payload["success"] is True
     sessions = artifacts["collaboration"]["task_sessions"]["sessions"]
@@ -110,7 +102,6 @@ def test_second_handoff_makes_the_metric_denominator_two_in_r2():
     assert m["counts"]["migrated_handoffs"] == 2
     assert m["cross_agent_handoff_completeness"]["value"] == 1.0
     assert m["cross_agent_handoff_completeness"]["illustrative_single_handoff"] is False
-    # both roles still obey the invariants
     assert m["cross_role_contamination"]["count"] == 0
     assert m["stale_revision_use"]["count"] == 0
     assert m["context_revision_consistency"]["value"] == 1.0
@@ -129,16 +120,16 @@ def test_second_handoff_makes_the_metric_denominator_two_in_r2():
     ]
 
 
-def test_second_handoff_also_runs_in_r1_without_the_ag_layer():
+def test_r1_second_handoff_runs():
     orch, artifacts = _run("R1-BBCTX")
-    assert "ag_contract_graph" not in artifacts  # R1 has no A/G trace
+    assert "ag_contract_graph" not in artifacts
     assert artifacts["verification_plan"]["planned"] == 2
     m = compute_coordination_metrics(artifacts["collaboration"])
     assert m["counts"]["migrated_handoffs"] == 2
     assert m["cross_role_contamination"]["count"] == 0
 
 
-def test_verification_envelope_is_revision_pinned_and_gold_free():
+def test_envelope_pinned_and_gold_free():
     orch, artifacts = _run("R2-BBAG")
     envelopes = artifacts["collaboration"]["contexts"]["envelopes"]
     verif = [e for e in envelopes if e["agent_role"] == "VerificationAgent"]
@@ -147,5 +138,4 @@ def test_verification_envelope_is_revision_pinned_and_gold_free():
         (r["revision"], r["model_digest"])
         for r in artifacts["collaboration"]["blackboard"]["model_revisions"]
     }
-    # the envelope pins a real committed revision (the terminal one)
     assert (verif[0]["model_revision"], verif[0]["model_digest"]) in committed

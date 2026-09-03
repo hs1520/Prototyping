@@ -1,17 +1,11 @@
-"""Typed, checkable effects a planned response action is required to have.
+"""Typed, checkable effects a planned response action must have.
 
-The generation prompts define a behavioural implementation as a reachable state
-whose entry action names a response, plus the transition that triggers it; the
-action definition itself is allowed to stay empty, and 152 of the 155 archived
-pilot definitions are.  Nothing downstream reads an action body except
-``state_extractor.all_sends``, so an action that does nothing is indistinguishable
-from one that does the right thing.
-
-``ACTION_EFFECTS_V1`` is the bounded profile that closes that gap without
-pretending to interpret arbitrary behaviour: a planned response action must send
-one declared event out of one declared port, and that event must reach a
-consumer that accepts it.  Numeric computation, continuous control and physical
-effect stay with constraints, SITL and Gazebo; this profile does not claim them.
+The prompts define a behavioural implementation as a reachable state whose
+entry action names a response; the action body may stay empty, and 152 of 155
+archived pilot definitions are. ``ACTION_EFFECTS_V1`` closes that gap: a
+planned response action sends one declared event out of one declared port,
+and that event reaches a consumer that accepts it. Numeric computation,
+continuous control and physical effect stay with constraints, SITL and Gazebo.
 """
 from __future__ import annotations
 
@@ -19,18 +13,14 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence, Tuple
 
 
-#: The only effect kind V1 can check end to end.
 SEND_EVENT = "SEND_EVENT"
 
-#: A response the plan deliberately does not claim: an external actuator, a
-#: physical effect, or anything whose realisation is not a discrete send.
+# A response the plan does not claim: an external actuator, a physical
+# effect, or anything whose realisation is not a discrete send.
 EXTERNAL_OR_UNSUPPORTED = "EXTERNAL_OR_UNSUPPORTED"
 
-#: Audit only: record what the model does, change no verdict.
 LEGACY_AUDIT = "LEGACY_AUDIT"
-#: Require the full chain for every planned response action.
 ENFORCE_V1 = "ENFORCE_V1"
-#: Do not analyse at all.
 OFF = "OFF"
 
 PROFILES = (OFF, LEGACY_AUDIT, ENFORCE_V1)
@@ -40,11 +30,10 @@ PROFILE_VERSION = "1.0"
 
 @dataclass(frozen=True)
 class PlannedActionEffect:
-    """One requirement's response action, bound to identities rather than names.
+    """One requirement's response action, bound to element identities.
 
-    Every field is an exact element identity. The audit resolves each one against
-    the committed model; nothing is matched by substring, and a response owned by
-    another part never satisfies this requirement.
+    Each field is resolved against the committed model, not matched by substring,
+    so a response owned by another part does not satisfy this requirement.
     """
     requirement_id: str
     owner_def: str
@@ -57,9 +46,8 @@ class PlannedActionEffect:
     consumer_behavior: str
     accept_transition: str
     target_state: str
-    #: The producing side's own identity. Without it the check can only ask
-    #: whether *some* state invokes the action, which an unrelated state in an
-    #: unrelated machine would satisfy.
+    # The producing side's own identity. Without it the check only asks whether
+    # some state invokes the action, which an unrelated machine satisfies.
     owner_behavior: str = ""
     response_state: str = ""
 
@@ -105,10 +93,10 @@ class PlannedActionEffect:
         )
 
     def is_complete_identity(self) -> bool:
-        """Whether every identity the audit needs is actually named.
+        """Whether every identity the audit needs is named.
 
-        A plan entry missing any of these cannot fail closed usefully: the audit
-        would report a chain broken at a step the plan never specified.
+        A plan entry missing one cannot fail closed usefully: the audit would report
+        a chain broken at a step the plan never specified.
         """
         if self.effect_kind == EXTERNAL_OR_UNSUPPORTED:
             return bool(

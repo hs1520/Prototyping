@@ -18,9 +18,9 @@ except ModuleNotFoundError:
     _HAS_NX = False
 
 
-#: LEXICAL heuristic: identifies a sensor by the wording of its type name.
-#: No parser can answer "is this a sensor" — a sensor typed `ForwardUnit` is
-#: invisible here, and that is a property of the check, not of the model.
+# Lexical heuristic: identifies a sensor by the wording of its type name.
+# A sensor typed `ForwardUnit` is invisible here - a limit of the check,
+# not of the model.
 _SENSOR_USAGE_RE = re.compile(
     r"\bpart\s+(\w+)\s*:\s*\w*"
     r"(?:Sensor|Perception|Detector|Camera|Lidar|IMU|GPS|Radar)\w*\s*;",
@@ -29,18 +29,10 @@ _SENSOR_USAGE_RE = re.compile(
 
 
 def _sysml_text(model: SysMLModel) -> str:
-    """Return the stored SysML text from model metadata (reliable source)."""
     return (getattr(model, "metadata", None) or {}).get("last_sysml_text", "")
 
 
 def _build_connection_graph(text: str):
-    """
-    Build a directed graph of part-instance connections from SysML text.
-
-    Nodes are part instance names; edges represent connect statements.
-    Self-loops are skipped.  Returns a networkx DiGraph when available,
-    otherwise a pure-Python shim with the same interface.
-    """
     from src.simulation.connectivity_fixer import parse_connects
 
     edge_list: List[Tuple[str, str]] = []
@@ -100,7 +92,6 @@ def _build_connection_graph(text: str):
 
 
 def _build_port_type_map(model: SysMLModel) -> Dict[str, str]:
-    """Returns {port_name: type_ref_name} built from all PartDefinition.ports."""
     mapping: Dict[str, str] = {}
     for part in model.part_definitions:
         for port in part.ports:
@@ -121,11 +112,10 @@ def _satisfied_req_ids(model: SysMLModel) -> set:
 def _has_numeric_unit_attr(part, syside_attr_map) -> bool:  # noqa: ANN001
     """True when a part carries at least one numeric attribute with a unit.
 
-    Shared by the evaluator's attribute-coverage dimension and the diagnostics'
-    PERF/CONS check.  It was duplicated in both, which meant a fix to one reader
-    did not reach the other while both fed the same score — the class of defect
-    that moved requirement_coverage by 0.1172 when only one denominator was
-    corrected.
+    Shared by the evaluator's attribute-coverage dimension and the diagnostics' PERF/CONS
+    check; it was duplicated in both, so a fix to one reader did not reach the other while
+    both fed the same score (moving requirement_coverage by 0.1172 when only one
+    denominator was corrected).
     """
     for a in part.attributes:
         val  = getattr(a, "default_value", None)

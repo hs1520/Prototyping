@@ -1,34 +1,22 @@
 """Film the realised design flying in Gazebo, intact and with a rotor failed.
 
-Purpose. The closed-loop physics tier reports its outcome as numbers -- a
-hover altitude, a throttle percentage, a stability verdict. This probe records
-what those numbers look like, by adding fixed cameras to the Gazebo world and
-capturing frames while the ordinary `run_flight` flight executes. It produces
-the stills used in the verification chapter and an HTML player for the two
-flights side by side. It measures nothing new: every flight number it reports
-comes from `run_flight.LAST_RESULT`, the same source the feasibility harness
-reads.
+Adds fixed cameras to the Gazebo world and captures frames while the ordinary
+`run_flight` flight runs, producing the verification-chapter stills and an HTML
+player for the two flights. It measures nothing new: every number comes from
+`run_flight.LAST_RESULT`, the same source the feasibility harness reads.
 
-Why it is arranged this way. There is no GUI path: the image is headless
-(`gz sim -s --headless-rendering`, ogre2 software rendering on aarch64), and
-neither the host nor the image has PIL or ffmpeg. So frames are pulled off a
-camera topic with the gz-transport Python bindings that live inside the
-container (see gazebo_capture_grab.py), and PNG encoding is done here with
-zlib alone. Nothing in gazebo_poc/ is modified: the camera world reaches the
-flight through a monkeypatch on `run_flight._sh`, which adds bind-mounts to
-the `docker run` that function issues.
-
-Three cameras, because one framing cannot hold both outcomes. `camtele` is
-aimed at the 5.6-9.4 m hover band and shows the intact vehicle; `camlow`
-covers 0-3.3 m and shows the rotor-out vehicle, which never leaves that band;
-`camwide` keeps the whole runway for context.
-
-The realised-design arguments matter. `max_thrust_g` and `hover_throttle` come
-from the catalogue realisation record, and `run_gazebo_feasibility.py` passes
-them for the same reason. Omitting them was measured during development: SITL
-then flies a generic thrust model, the intact vehicle hovers at 7.65 m on 22%
-throttle instead of 8.6 m on 43%, and the rotor-out case wrongly reports a
-stable hover. The defaults below are the values the archived run recorded.
+No GUI path exists: the image is headless (`gz sim -s --headless-rendering`,
+ogre2 software rendering on aarch64) and neither host nor image has PIL or
+ffmpeg, so frames come off a camera topic through the in-container gz-transport
+bindings (see gazebo_capture_grab.py) and are PNG-encoded here with zlib.
+Nothing in gazebo_poc/ is modified; the camera world reaches the flight through
+a monkeypatch on `run_flight._sh` that adds bind-mounts to its `docker run`.
+Three cameras: `camtele` on the 5.6-9.4 m hover band (intact vehicle), `camlow`
+on 0-3.3 m (rotor-out vehicle, which never leaves that band), `camwide` for
+context. `max_thrust_g` and `hover_throttle` come from the catalogue
+realisation record, as in `run_gazebo_feasibility.py`; without them SITL flies
+a generic thrust model, the intact vehicle hovers at 7.65 m on 22% instead of
+8.6 m on 43%, and the rotor-out case reports a stable hover.
 
 Archived result (2026-08-29) in
 examples/output/probe_gazebo_flight_capture_20260829/:
@@ -37,13 +25,12 @@ examples/output/probe_gazebo_flight_capture_20260829/:
   - gazebo-hover-rotorout.png : one rotor disabled, climb peak 1.32 m, hover
     altitude 0.07 m, return code 8; no stable hover.
   - flight_results.json       : LAST_RESULT for both flights.
-The rotor-out outcome reproduces the archived verdict independently: runs
-f99ac140 and 00e4d333 both recorded motor_failure_tolerant=false with return
-code 8, and REQ-SAFE-007 FAIL.
+Runs f99ac140 and 00e4d333 both recorded motor_failure_tolerant=false with
+return code 8 and REQ-SAFE-007 FAIL.
 
 Run: PYTHONPATH=. python examples/probe_gazebo_flight_capture.py
-Requires Docker with the `headless_gazebo` image and a free port 5760 -- an
-authoritative run in its SITL stage holds that port, so wait for it to finish.
+Requires Docker with the `headless_gazebo` image and a free port 5760; an
+authoritative run holds that port during its SITL stage.
 """
 from __future__ import annotations
 
@@ -65,14 +52,13 @@ import gazebo_poc.run_flight as rf  # noqa: E402
 
 GRABBER = pathlib.Path(__file__).with_name("gazebo_capture_grab.py")
 
-# The realised design of the archived authoritative run.
 DESIGN = dict(
     mass_kg=5.54,
     rotor_radius=0.2032,
     capacity_mah=16000,
     rotor_count=6,
     calibrate=True,
-    max_thrust_g=1975.6381250000006,     # per motor, derated for the 22.2 V pack
+    max_thrust_g=1975.6381250000006,
     hover_throttle=0.5405405405405405,
 )
 
@@ -102,12 +88,8 @@ CAMERAS = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# World, capture, flight
-# ---------------------------------------------------------------------------
-
 def build_camera_world(out: pathlib.Path) -> pathlib.Path:
-    """The stock runway world with our cameras appended."""
+    """Stock runway world with the cameras appended."""
     stock = subprocess.run(
         ["docker", "run", "--rm", "--entrypoint", "cat", rf._IMG, rf._WORLD_PATH],
         capture_output=True, text=True,
@@ -171,10 +153,6 @@ def fly(world: pathlib.Path, frames_dir: pathlib.Path, fail_rotor=None) -> dict:
     result["return_code"] = code
     return result
 
-
-# ---------------------------------------------------------------------------
-# Frames -> PNG (no PIL anywhere in this toolchain)
-# ---------------------------------------------------------------------------
 
 def encode_png(rgb: bytes, w: int, h: int) -> bytes:
     raw = b"".join(b"\x00" + rgb[y*w*3:(y+1)*w*3] for y in range(h))
@@ -243,9 +221,8 @@ def main() -> int:
         json.dumps(results, indent=2, default=str)
     )
 
-    # Stills: the intact vehicle in the hover band, the rotor-out vehicle on
-    # the runway. Frame indices are the visually confirmed ones from the
-    # archived capture; a fresh run may need different ones.
+    # Stills: intact vehicle in the hover band, rotor-out vehicle on the runway.
+    # Frame indices come from the archived capture; a fresh run may need others.
     (out_dir / "gazebo-hover-nominal.png").write_bytes(
         crop_still(work / "nominal", "camtele", 265, 296, 90))
     (out_dir / "gazebo-hover-rotorout.png").write_bytes(

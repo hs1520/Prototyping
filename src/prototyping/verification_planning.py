@@ -1,14 +1,12 @@
 """Deterministic verification-planning knowledge source (design §15, 2nd handoff).
 
-The VerificationAgent is the second board-mediated knowledge source. It consumes
-the committed SysML model (the sole authority) that the DesignAgent produced and
-the authoritative requirements, and produces a per-requirement verification
-*plan*: each stakeholder ``requirement def`` in the committed model is traced and
-assigned a planned IADT method (Inspection / Analysis / Demonstration / Test) from
-its own text. This is planning, not execution — the SITL / Gazebo / analysis tiers
-that actually run are downstream (``verification_matrix``). It reads only the
-committed model; it never loads evaluator gold and it makes no LLM call, so the
-handoff is reproducible.
+The VerificationAgent consumes the committed SysML model and the authoritative
+requirements and produces a per-requirement plan: each stakeholder
+``requirement def`` is traced and assigned a planned IADT method (Inspection /
+Analysis / Demonstration / Test) from its own text. Planning only - the SITL /
+Gazebo / analysis tiers run downstream in ``verification_matrix``. It reads the
+committed model, loads no evaluator gold and makes no LLM call, so the handoff
+is reproducible.
 """
 from __future__ import annotations
 
@@ -22,8 +20,8 @@ VERIFICATION_PLAN_ROLE = "VERIFICATION_PLAN"
 
 _REQ_DEF_RE = re.compile(r"\brequirement\s+def\s+(REQ[_-][A-Za-z0-9]+[_-]\d+)\s*\{")
 _DOC_RE = re.compile(r"\bdoc\s*/\*(.*?)\*/", re.DOTALL)
-# A physical quantity: a number followed by an engineering unit. Deliberately
-# unit-anchored so a bare id number (REQ-SAFE-005) never reads as a threshold.
+# A physical quantity: a number followed by an engineering unit. Unit-anchored
+# so a bare id number (REQ-SAFE-005) does not read as a threshold.
 _QUANTITY_RE = re.compile(
     r"\b\d+(?:\.\d+)?\s*"
     r"(?:s|sec|secs|second|seconds|ms|m|metre|metres|meter|meters|km|"
@@ -41,9 +39,8 @@ _INVARIANT_RE = re.compile(
 def requirement_def_slice(model_text: str) -> str:
     """Return only the stakeholder ``requirement def REQ_*`` blocks of the model.
 
-    This is the relevant, complete context for verification planning: it carries
-    every requirement to plan without the rest of the model, so the envelope stays
-    small and no requirement is lost to token-budget truncation.
+    Carries every requirement to plan without the rest of the model, so the
+    envelope stays small and no requirement is lost to token-budget truncation.
     """
     text = model_text or ""
     blocks: List[str] = []
@@ -56,7 +53,6 @@ def requirement_def_slice(model_text: str) -> str:
 
 
 def _plan_method(text: str) -> Dict[str, str]:
-    """Assign one planned IADT method + tier from the requirement text."""
     body = " ".join((text or "").split())
     if _QUANTITY_RE.search(body):
         return {
@@ -80,10 +76,9 @@ def _plan_method(text: str) -> Dict[str, str]:
 def plan_verification(model_text: str) -> Dict[str, Any]:
     """Build a per-requirement verification plan from the committed model.
 
-    Every stakeholder ``requirement def REQ_*`` is traced (it is present in the
-    committed model by construction) and assigned a planned method. A/G contract
-    defs (``System*Contract`` etc.) are not stakeholder requirements and are
-    skipped — only ``REQ_``-prefixed definitions are planned.
+    Every stakeholder ``requirement def REQ_*`` is traced and assigned a planned
+    method. A/G contract defs (``System*Contract`` etc.) are not stakeholder
+    requirements, so only ``REQ_``-prefixed definitions are planned.
     """
     text = model_text or ""
     entries: List[Dict[str, Any]] = []

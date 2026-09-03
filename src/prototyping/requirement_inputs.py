@@ -1,7 +1,7 @@
 """Immutable stakeholder requirement-input boundary.
 
-Controlled experiments must vary generation, not the stakeholder requirement set.
-This module creates and verifies digest-checked frozen requirement artifacts.
+Controlled experiments vary generation, not the requirement set, so this module
+creates and verifies digest-checked frozen requirement artifacts.
 """
 from __future__ import annotations
 

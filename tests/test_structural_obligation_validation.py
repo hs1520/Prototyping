@@ -63,7 +63,7 @@ def _plan():
     )
 
 
-def test_terminal_validation_uses_frozen_requirement_path():
+def test_terminal_uses_frozen_path():
     report = validate_structural_obligations(
         _CONNECTED,
         _plan().structural_obligations,
@@ -82,7 +82,7 @@ def test_terminal_validation_uses_frozen_requirement_path():
     ]
 
 
-def test_missing_planned_edge_fails_the_named_obligation():
+def test_missing_edge_fails_obligation():
     report = validate_structural_obligations(
         _CONNECTED.replace(
             "    connect source.signal to sink.signal;\n",
@@ -99,7 +99,7 @@ def test_missing_planned_edge_fails_the_named_obligation():
     assert report["results"][0]["missing_connections"]
 
 
-def test_heuristic_scenarios_are_advisory_not_a_qualification_gate():
+def test_heuristic_scenarios_advisory():
     structural = validate_structural_obligations(
         _CONNECTED,
         _plan().structural_obligations,
@@ -139,7 +139,7 @@ def test_heuristic_scenarios_are_advisory_not_a_qualification_gate():
     assert "STRUCTURAL_REACHABILITY" not in checks
 
 
-def test_local_behavior_realization_requires_the_named_sysml_behavior():
+def test_local_behavior_needs_behavior():
     obligation = StructuralObligation(
         obligation_id="STRUCT_REQ_OPER_001_001",
         requirement_id="REQ_OPER_001",

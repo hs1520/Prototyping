@@ -1,11 +1,10 @@
 """Third candidate: current-source REQ_SAFE_008 plus derived lock constraints.
 
-Exercises a third bounded safety pattern, LOCKED_UNTIL_AUTHORISED_RELEASE, whose
-defining obligation is *default-safe*: the power-on (initial) state must be the
-locked state, distinct from the guarded release state. The chain declares its
-pattern in the committed model (``safety_pattern=`` on the system contract), which
-is the authority the conformance checker dispatches on — three patterns (one
-timed, two untimed) cannot be told apart by topology alone.
+Exercises LOCKED_UNTIL_AUTHORISED_RELEASE, whose defining obligation is
+default-safe: the power-on state is the locked state, distinct from the guarded
+release state. The chain declares its pattern in the committed model
+(``safety_pattern=`` on the system contract), which the checker dispatches on -
+three patterns cannot be told apart by topology alone.
 """
 from __future__ import annotations
 
@@ -42,7 +41,7 @@ def _model() -> str:
     )
 
 
-def test_safe008_gold_uses_the_exact_current_repository_source():
+def test_gold_uses_current_source():
     from examples.drone_system_v2 import DRONE_REQUIREMENTS
 
     current = next(
@@ -52,7 +51,7 @@ def test_safe008_gold_uses_the_exact_current_repository_source():
     assert _GOLD_SRC == current
 
 
-def test_locked_release_chain_is_valid_sysml_and_passes_the_ag_trace():
+def test_chain_valid_and_passes_trace():
     model = _model()
     syntax = check_syntax(model)
     assert syntax.has_errors is False
@@ -68,9 +67,8 @@ def test_locked_release_chain_is_valid_sysml_and_passes_the_ag_trace():
     assert len(report.discharge_edges) == 2
 
 
-def test_pattern_is_taken_from_the_declared_model_annotation():
+def test_pattern_from_declared_annotation():
     graph = extract_ag_graph(_model(), revision=1)
-    # the committed model is the authority for which pattern applies
     assert graph.system.declared_pattern == "LOCKED_UNTIL_AUTHORISED_RELEASE"
     report = check_ag_graph(graph)
     pattern = check_safety_pattern_conformance(graph, report)
@@ -78,15 +76,15 @@ def test_pattern_is_taken_from_the_declared_model_annotation():
     assert {c["pattern"] for c in pattern["cases"]} == {
         "LOCKED_UNTIL_AUTHORISED_RELEASE"
     }
-    # the locked default is present and distinct from the release state
     assert all(c["default_safe_present"] is True for c in pattern["cases"])
     assert all(c["timing_criterion_present"] is False for c in pattern["cases"])
 
 
-def test_default_safe_obligation_is_specific_to_the_locked_release_pattern():
-    """A power-on-released model fails LOCKED_UNTIL_AUTHORISED_RELEASE even though
-    the same topology satisfies the untimed STARTUP_INHIBIT core — proof the third
-    pattern is a genuine obligation, not a relabel of the second."""
+def test_default_safe_pattern_specific():
+    """A power-on-released model fails LOCKED_UNTIL_AUTHORISED_RELEASE while the same
+    topology satisfies the untimed STARTUP_INHIBIT core, so the third pattern adds
+    an obligation rather than relabelling the second.
+    """
     core = dict(
         trigger_present=True,
         reachable_response=True,
@@ -106,14 +104,13 @@ def test_default_safe_obligation_is_specific_to_the_locked_release_pattern():
     )
     assert locked.status == "FAIL"
     assert inhibit.status == "PASS"
-    # and with a genuine locked default the locked pattern passes
     assert PatternCase(
         contract="c", pattern="LOCKED_UNTIL_AUTHORISED_RELEASE",
         default_safe_present=True, **core,
     ).status == "PASS"
 
 
-def test_three_chains_use_three_distinct_patterns():
+def test_three_distinct_patterns():
     patterns = {
         REQ_SAFE_005_CHAIN.pattern,
         REQ_SAFE_004_CHAIN.pattern,
@@ -134,7 +131,7 @@ def test_three_chains_use_three_distinct_patterns():
     }
 
 
-def test_locked_release_pattern_needs_real_topology_not_a_label():
+def test_pattern_needs_real_topology():
     model = _model()
     broken = "\n".join(
         line for line in model.splitlines() if "dependency realize" not in line
@@ -151,7 +148,7 @@ def test_locked_release_pattern_needs_real_topology_not_a_label():
     assert len(routes["failures"]) >= 1
 
 
-def test_locked_release_checks_actions_authorisation_and_power_loss_relock():
+def test_actions_authorisation_relock():
     mutations = (
         (
             "state lockedUnpowered "
@@ -187,7 +184,7 @@ def test_locked_release_checks_actions_authorisation_and_power_loss_relock():
         assert mechanism["default_safe_present"] is False
 
 
-def test_authorisation_history_is_guarded_and_cleared_per_transaction():
+def test_authorisation_guarded_and_cleared():
     mutations = (
         (
             "if authorisationDataValid then authorisationGranted;",
@@ -218,7 +215,7 @@ def test_authorisation_history_is_guarded_and_cleared_per_transaction():
         assert pattern["verdict"] == "FAIL"
 
 
-def test_locked_release_checker_rejects_extra_unauthorised_unlock_transition():
+def test_rejects_unauthorised_unlock():
     approved = (
         "transition authorisedUnlock first lockedPowered "
         "accept AuthorisedReleaseCommandReceivedSignal then unlockedPowered;"
@@ -236,16 +233,15 @@ def test_locked_release_checker_rejects_extra_unauthorised_unlock_transition():
     }
 
 
-def test_locked_release_checker_requires_states_and_deenergise_invariant():
-    # Renaming a state is NOT a defect. The obligation is judged against the
-    # chain's own invariants rather than REQ_SAFE_008's spellings, so a model that
-    # names its states differently and behaves correctly conforms — which is what
-    # lets a generated model be checked without the checker holding the answer.
+def test_requires_states_and_relock():
+    # Renaming a state is not a defect: the obligation is judged against the
+    # chain's own invariants rather than REQ_SAFE_008's spellings, so a correct
+    # model that names its states differently conforms and the checker need not
+    # hold the answer.
     renamed_state = _model().replace("lockedPowered", "poweredAndStillLocked")
     report = check_ag_graph(extract_ag_graph(renamed_state, revision=1))
     assert report.verdict == "PASS", [d.code for d in report.errors()]
 
-    # What must still fail is losing the way back to the default-safe state.
     no_relock = _model().replace(
         "transition powerLostLocks first unlockedPowered "
         "accept PowerLostSignal then lockedUnpowered;",
@@ -280,7 +276,7 @@ def test_locked_release_checker_requires_states_and_deenergise_invariant():
     }
 
 
-def test_locked_release_runtime_checker_requires_invariant_semantics_and_pattern():
+def test_requires_invariant_semantics():
     model = _model()
     without_invariants = "\n".join(
         line for line in model.splitlines()
@@ -297,11 +293,10 @@ def test_locked_release_runtime_checker_requires_invariant_semantics_and_pattern
         "safety_pattern=STARTUP_INHIBIT",
     )
     report = check_ag_graph(extract_ag_graph(wrong_pattern, revision=1))
-    # Still rejected, but now for a reason derived from the model itself: the
-    # declared pattern's required topology is not what this model contains. The
-    # checker no longer holds a requirement-to-pattern table — "is this the right
-    # pattern for REQ_SAFE_008?" is an accuracy question the evaluator answers
-    # against frozen gold (see AG_CHECKER_VERSION ag-bounded-5).
+    # Rejected for a reason derived from the model: the declared pattern's required
+    # topology is not what this model contains. The checker holds no
+    # requirement-to-pattern table; pattern choice is an accuracy question the
+    # evaluator answers against frozen gold (AG_CHECKER_VERSION ag-bounded-5).
     assert report.verdict == "FAIL"
     assert "PATTERN_TOPOLOGY_INCOMPLETE" in {
         diagnostic.code for diagnostic in report.diagnostics
@@ -316,26 +311,22 @@ _GOLD_SRC = (
 _DRAFT_FILE = Path("docs/gold/REQ_SAFE_008_ag_gold.draft.json")
 
 
-def test_committed_gold_draft_is_regenerable_and_unfrozen():
+def test_committed_draft_regenerable():
     on_disk = json.loads(_DRAFT_FILE.read_text(encoding="utf-8"))
     assert on_disk["status"] == GOLD_STATUS_DRAFT
     assert on_disk["artifact_role"] == "EVALUATOR_GOLD"
     assert on_disk["chain_id"] == "REQ_SAFE_008"
-    # the fully-specified chain leaves the reviewer no UNRESOLVED discharge edges
     assert all(e["by"] is not None for e in on_disk["discharge_edges"])
-    # regenerable: the committed draft equals a fresh generation from the spec
     assert on_disk == build_gold_draft(REQ_SAFE_008_CHAIN, source_text=_GOLD_SRC)
 
 
-def test_conformance_follows_behaviour_not_this_chain_s_spellings():
-    """The obligation is derived from the model's own invariants, so the checker no
-    longer holds REQ_SAFE_008's state names, signals and contract names.
+def test_conformance_follows_behaviour():
+    """The obligation is derived from the model's own invariants, so the checker holds
+    none of REQ_SAFE_008's state, signal or contract names.
 
-    Both halves matter. A correct model that names things differently must pass, or
-    a generated model can only conform by reproducing the reviewed answer — which is
-    what made a PASS here partly recall. And a model wearing the reviewed names
-    while wiring the unlock to an unauthorised event must still fail, or the
-    generalisation has simply stopped checking.
+    Both halves are checked: a correct model that names things differently passes,
+    otherwise conformance means reproducing the reviewed answer; and a model wearing
+    the reviewed names but wiring unlock to an unauthorised event still fails.
     """
     from src.prototyping import ag_contracts
 
@@ -356,14 +347,13 @@ def test_conformance_follows_behaviour_not_this_chain_s_spellings():
     assert report.verdict == "FAIL"
     assert "PATTERN_TOPOLOGY_INCOMPLETE" in {d.code for d in report.diagnostics}
 
-    # and the chain's own names are gone from the checker
     source = open(ag_contracts.__file__).read()
     for literal in ("PayloadLockMechanismContract", "ReleaseCommandGatewayContract",
                     "lockedUnpowered", "unlockedPowered"):
         assert literal not in source, literal
 
 
-def test_the_roles_come_from_the_declared_invariants():
+def test_roles_from_declared_invariants():
     from src.prototyping.ag_contracts import _invariant_roles
 
     roles = _invariant_roles(extract_ag_graph(_model(), revision=1))

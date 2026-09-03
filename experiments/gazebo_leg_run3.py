@@ -1,12 +1,12 @@
 """Gazebo flight verification for run3's recommended design (bundle leg).
 
 Reconstructs the DSE-recommended DesignInputs from the archived
-``DseDesignAnalysis.recommendedDesign`` block in the final model — the run's
-own committed record — flies it in Gazebo (hover + single-motor-out when the
-redundancy requirement is present), and writes the verdict plus the resulting
-requirement-coverage upgrade next to the run's other artifacts.
+``DseDesignAnalysis.recommendedDesign`` block in the final model, flies it in
+Gazebo (hover, plus single-motor-out when the redundancy requirement is
+present), and writes the verdict and the coverage upgrade beside the run's
+other artifacts.
 
-Run (NOT concurrently with native SITL work — both bind tcp:5760):
+Run (not concurrently with native SITL work - both bind tcp:5760):
     .venv/bin/python experiments/gazebo_leg_run3.py
 """
 from __future__ import annotations

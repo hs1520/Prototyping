@@ -1,12 +1,3 @@
-"""A usage retyped to `Impl :> Planned` is, by the language's subtyping, still
-a usage of the planned definition, and its ports may live anywhere up the
-specialisation chain. Three readers matched definition names exactly and
-reported a right model wrong (measured on an archived end-to-end run: planned
-component missing + unplanned implementation, two planned ports missing, and
-three structural obligations failed, all on the retyped component). The
-analysis emitter's `verification def` spelling additionally drew a
-subsetting-accessibility warning per check; the verification USAGE form is
-warning-free."""
 from __future__ import annotations
 
 from src.prototyping.generation_plan import (
@@ -62,7 +53,7 @@ def test_specializes_walks_the_chain():
     assert not specializes("Controller", "Propulsion", bases)
 
 
-def test_conformance_resolves_a_subtyped_usage():
+def test_resolves_subtyped_usage():
     plan = ModelGenerationPlan.from_payload(_PAYLOAD)
     updated, conformance = apply_generation_plan(_MODEL, plan)
     issues = conformance.get("issues") or []
@@ -71,12 +62,11 @@ def test_conformance_resolves_a_subtyped_usage():
         "missing_components")
     assert conformance.get("missing_ports") in (None, []), conformance.get(
         "missing_ports")
-    # inherited ports must not be re-added onto the implementation
     assert "in port cmd : CmdPort;" not in updated.split(
         "CatalogPropulsionImpl :> Propulsion")[1].split("}")[0]
 
 
-def test_verification_emission_is_warning_free():
+def test_verification_warning_free():
     from src.dse import analysis_emitter
     import inspect
     src = inspect.getsource(analysis_emitter)
@@ -94,11 +84,12 @@ def test_verification_emission_is_warning_free():
     assert not r.has_errors and not r.warnings
 
 
-def test_untyped_planned_port_is_retyped_not_reported_twice():
-    """`in port environmentExposure;` is legal grammar (the type is
-    optional). A planned port declared untyped is retyped to the planned
-    type, not reported as a missing/unplanned pair (observed on an archived
-    run's terminal audit)."""
+def test_untyped_port_retyped():
+    """`in port environmentExposure;` is legal grammar (the type is optional).
+
+    An untyped planned port is retyped rather than reported as a missing/unplanned
+    pair, the shape seen in an archived run's terminal audit.
+    """
     from src.prototyping.generation_plan import normalise_planned_port_types
 
     model = """package P {

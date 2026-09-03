@@ -1,16 +1,11 @@
 """Baseline DSE methods for the shadow comparison (paper experiment).
 
-Compared against the new Pareto MO-MCTS on the SAME architecture design space and
-objectives, without touching the live scalar pipeline:
-
-  * ``random_search``       — naive baseline: sample feasible architectures.
-  * ``weighted_sum_search`` — the OLD approach: collapse the objective vector to a
-    single scalar via a (requirement-derived) weight vector and return the single
-    best. Demonstrates the structural limitation pain point C names — it hands the
-    engineer ONE design and hides the trade-off front.
-
-Both respect operator feasibility (so requirement-driven constraints apply equally).
-Kept deliberately: thesis baseline/evidence code, exercised by its own tests and invoked on demand rather than wired into the runtime pipeline. Do not remove as dead code.
+Run against the Pareto MO-MCTS on the same architecture design space and objectives,
+without touching the live scalar pipeline: ``random_search`` samples feasible
+architectures; ``weighted_sum_search`` collapses the objective vector with a
+requirement-derived weight vector and returns one design, hiding the trade-off front
+(pain point C). Both respect operator feasibility. Thesis evidence code, covered by its
+own tests and invoked on demand rather than from the runtime pipeline; not dead code.
 """
 from __future__ import annotations
 
@@ -21,9 +16,9 @@ from .mo_mcts import Objectives, Operator, ParetoArchive, State, dominates
 
 
 def _sample_feasible(operators: Sequence[Operator], ctx: object, rng: random.Random) -> State:
-    """Sample a feasible architecture, building it incrementally so cross-operator
-    constraints (state-aware feasibility) apply — same coherent space all methods
-    search, for a fair comparison."""
+    """Sample a feasible architecture incrementally so cross-operator (state-aware)
+    feasibility applies, giving every method the same search space.
+    """
     state: State = {}
     for op in operators:
         feasible = [v for v in op.variants if op.feasible(v, ctx, state)]
@@ -58,7 +53,7 @@ def weighted_sum_search(
     n_evals: int,
     random_seed: Optional[int] = None,
 ) -> Tuple[State, Objectives]:
-    """The old scalar approach: maximise a weighted sum, return the single best."""
+    """Scalar baseline: maximise a weighted sum, return the single best."""
     rng = random.Random(random_seed)
     best: Optional[Tuple[State, Objectives]] = None
     best_score = float("-inf")
@@ -70,11 +65,6 @@ def weighted_sum_search(
             best_score, best = score, (s, o)
     assert best is not None
     return best
-
-
-# ---------------------------------------------------------------------------
-# NSGA-II — the classic multi-objective baseline
-# ---------------------------------------------------------------------------
 
 
 def _fast_nondominated_sort(vecs: List[Tuple[float, ...]]) -> List[List[int]]:
@@ -133,7 +123,7 @@ def nsga2(
 ) -> ParetoArchive:
     """NSGA-II over the discrete operator-variant chromosome (per-gene feasibility
     is independent of other genes, so crossover/mutation preserve feasibility).
-    Budget ≈ pop_size × (generations + 1) evaluations. Returns the final front."""
+    Budget ~ pop_size x (generations + 1) evaluations. Returns the final front."""
     rng = random.Random(random_seed)
     names = list(objective_names)
     m = len(names)

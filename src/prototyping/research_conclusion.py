@@ -1,8 +1,8 @@
 """Derive one conservative research conclusion from same-run evidence.
 
-The conclusion is deliberately not a roll-up of green labels.  Every claim has
-an explicit scope and fidelity; a Phase 8 datasheet closure can support only the
-bottom-up realization claim, while SITL and Gazebo decide different claims.
+Every claim carries an explicit scope and fidelity rather than rolling up green
+labels: a Phase 8 datasheet closure supports only the bottom-up realization
+claim, while SITL and Gazebo decide different claims.
 """
 from __future__ import annotations
 
@@ -132,10 +132,10 @@ def _validate_safety(sitl: Mapping[str, Any]) -> tuple[str, dict[str, int]]:
 def _validate_gazebo(gazebo: Mapping[str, Any]) -> str:
     overall = str(gazebo.get("status") or "UNKNOWN").upper()
     statuses = {str(x.get("status") or "").upper() for x in (gazebo.get("req_results") or [])}
-    # ``overall`` is runner/model health; per-requirement statuses are scientific
-    # outcomes.  They are orthogonal: an uncalibrated model can still produce an
-    # exact actuator-observer FAIL.  Never discard that failure merely because
-    # the runner health label is more specific than generic FAIL.
+    # ``overall`` is runner/model health; per-requirement statuses are
+    # outcomes. They are orthogonal - an uncalibrated model can still produce an
+    # exact actuator-observer FAIL - so that failure is kept even when the runner
+    # health label is more specific than FAIL.
     if "FAIL" in statuses:
         return REFUTED
     if overall == "PASS" and (not statuses or statuses != {"PASS"}):

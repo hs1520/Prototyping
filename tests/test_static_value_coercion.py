@@ -1,11 +1,10 @@
-"""Reference-chain initializers yield None, not a suppressed TypeError.
+"""Reference-chain initializers yield None rather than a suppressed TypeError.
 
-The typed semantic bindings write ``attribute currentX : T =
-channel.payload.feature;`` — syside's Compiler evaluates that initializer to
-the referenced AttributeUsage node, not a scalar.  Three evaluation sites
-called ``float()`` on it blindly; pilot 2 recorded 369 suppressed TypeErrors
-across them (lite_model, syside_utils, requirement_linker).  A reference
-initializer has no static scalar: that is data, not an error.
+Typed semantic bindings write ``attribute currentX : T =
+channel.payload.feature;`` and syside's Compiler evaluates that to the
+referenced AttributeUsage node. Three sites called ``float()`` on it
+(lite_model, syside_utils, requirement_linker); pilot 2 recorded 369
+suppressed TypeErrors. A reference initializer has no static scalar.
 """
 from __future__ import annotations
 
@@ -27,7 +26,7 @@ _EVAL_CHANNELS = (
 )
 
 
-def test_coercion_accepts_scalars_and_refuses_nodes():
+def test_scalars_accepted_nodes_refused():
     assert coerce_static_number(120) == 120.0
     assert coerce_static_number(0.5) == 0.5
     assert coerce_static_number("18.0") == 18.0
@@ -54,12 +53,12 @@ _REFERENCE_CHAIN_MODEL = """package P {
 }"""
 
 
-def test_reference_initializers_are_skipped_silently_literals_still_evaluate():
+def test_references_skipped_literals_kept():
     reset_suppressed()
     values = extract_attr_values(_REFERENCE_CHAIN_MODEL)
 
-    # The literal proves the sweep actually ran; the reference chain is
-    # legitimately absent (no static scalar) instead of a suppressed error.
+    # The literal shows the sweep ran; the reference chain is absent (no static
+    # scalar) rather than a suppressed error.
     assert values.get("plainLiteral") == 42.0
     assert "currentCruiseAirspeed" not in values
     noise = {
@@ -72,12 +71,11 @@ def test_reference_initializers_are_skipped_silently_literals_still_evaluate():
     )
 
 
-def test_pilot2_sweep_keeps_the_eval_channels_silent():
-    # The archived pilot-2 model carries the real binding attributes that
-    # produced 369 suppressed TypeErrors; a full sweep must stay silent.
-    # (Unit-bearing initializers are Compiler-FATAL by long-standing
-    # behaviour, so an empty result is acceptable here — the literal case
-    # above proves non-vacuity.)
+def test_pilot2_sweep_stays_silent():
+    # The archived pilot-2 model carries the binding attributes that produced 369
+    # suppressed TypeErrors; a full sweep stays silent. Unit-bearing initializers
+    # are Compiler-FATAL, so an empty result is fine here - the literal case above
+    # covers non-vacuity.
     reset_suppressed()
     extract_attr_values(_PILOT2_MODEL.read_text().replace("*/; }", "*/ }"))
     noise = {

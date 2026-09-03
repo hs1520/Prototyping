@@ -1,12 +1,4 @@
-"""
-Smart Building Management System Prototyping Example.
-
-Demonstrates the use of the AI-assisted MBSE prototyping framework
-to rapidly design a smart building management system (BMS).
-
-Usage:
-    python examples/smart_building.py
-"""
+"""Smart Building Management System Prototyping Example."""
 
 import itertools
 
@@ -56,7 +48,6 @@ def demonstrate_design_space_exploration():
     print("Standalone Design Space Exploration for BMS")
     print("=" * 60)
 
-    # Define BMS-specific design space
     space = DesignSpace(name="BMS_DesignSpace")
     space.add_parameter(DesignParameter(
         name="hvac_control_strategy",
@@ -75,7 +66,7 @@ def demonstrate_design_space_exploration():
     space.add_parameter(DesignParameter(
         name="update_frequency_hz",
         param_type=ParameterType.CONTINUOUS,
-        default_value=0.033,  # ~30s updates
+        default_value=0.033,
         min_value=0.016,
         max_value=1.0,
         unit="Hz",
@@ -95,17 +86,14 @@ def demonstrate_design_space_exploration():
     ))
 
     def bms_evaluate(config):
-        """Evaluate a BMS configuration across multiple quality attributes."""
         params = config.parameters
         scores = {}
 
-        # Energy efficiency based on control strategy and sensor density
         strategy_score = {"reactive": 0.5, "predictive": 0.8, "adaptive_ml": 0.95}
         scores["energy_efficiency"] = strategy_score.get(
             params.get("hvac_control_strategy", "reactive"), 0.5
         ) * min(1.0, params.get("sensor_density", 2) / 4.0 * 0.5 + 0.5)
 
-        # Reliability based on redundancy and edge computing
         redundancy_score = {"none": 0.6, "backup_server": 0.8, "full_redundancy": 0.95}
         scores["reliability"] = redundancy_score.get(
             params.get("redundancy", "none"), 0.6
@@ -113,11 +101,9 @@ def demonstrate_design_space_exploration():
         if params.get("edge_computing", False):
             scores["reliability"] = min(1.0, scores["reliability"] + 0.05)
 
-        # Responsiveness based on update frequency
         freq = params.get("update_frequency_hz", 0.033)
         scores["responsiveness"] = min(1.0, freq / 0.1)
 
-        # Cost (inverse: higher cost = lower score)
         base_cost = 0.8
         if params.get("hvac_control_strategy") == "adaptive_ml":
             base_cost -= 0.1
@@ -129,10 +115,9 @@ def demonstrate_design_space_exploration():
 
         return scores
 
-    # The discrete space is small, so enumerate it exhaustively (the continuous
-    # update frequency is sampled at three representative settings) and let the
-    # Pareto machinery surface the multi-objective trade-offs.  Larger spaces
-    # are searched with the MO-MCTS engine (src/dse/mo_mcts.py).
+    # The discrete space is small, so enumerate it exhaustively (update frequency
+    # sampled at three settings) and let the Pareto machinery surface the
+    # trade-offs. Larger spaces use the MO-MCTS engine (src/dse/mo_mcts.py).
     print("Enumerating the design space...")
     best_config = None
     for i, (strategy, density, freq, edge, redundancy) in enumerate(itertools.product(
@@ -168,7 +153,6 @@ def demonstrate_design_space_exploration():
         print(f"  {k}: {v:.3f}")
     print(f"Overall score: {best_config.overall_score:.3f}")
 
-    # Show Pareto front
     pareto = space.get_pareto_front()
     print(f"\nPareto-optimal front: {len(pareto)} configurations")
     for cfg in pareto[:3]:
@@ -209,13 +193,11 @@ def main():
     print("GENERATED SysML v2 MODEL (excerpt)")
     print("=" * 70)
     sysml = result['model_sysml']
-    # Show first 50 lines
     lines = sysml.splitlines()
     print("\n".join(lines[:50]))
     if len(lines) > 50:
         print(f"... ({len(lines) - 50} more lines)")
 
-    # Demonstrate standalone MCTS
     demonstrate_design_space_exploration()
 
     print("\n✓ Smart Building BMS prototyping complete!")

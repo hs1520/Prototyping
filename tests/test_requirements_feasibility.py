@@ -1,4 +1,3 @@
-"""Tests for requirement-driven feasibility — severity-driven, not count-driven."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -22,8 +21,6 @@ def _req(cat, n, sev=None):
     return f"REQ-{cat}-{n:03d}: The system shall do thing {n}.{tag}"
 
 
-# ── severity parsing & profile extraction ──────────────────────────────────
-
 def test_parse_severity_tag():
     assert parse_severity("... [SEV:Catastrophic]") == Severity.CATASTROPHIC
     assert parse_severity("... [SEV:minor]") == Severity.MINOR
@@ -31,11 +28,11 @@ def test_parse_severity_tag():
     assert parse_severity("no tag here") is None
 
 
-def test_profile_extracts_counts_and_severities():
+def test_profile_counts_severities():
     reqs = [
         _req("SAFE", 1, "Catastrophic"),
         _req("SAFE", 2, "Minor"),
-        _req("SAFE", 3),          # unclassified
+        _req("SAFE", 3),
         _req("PERF", 1),
     ]
     prof = RequirementProfile.from_requirements(reqs)
@@ -45,16 +42,13 @@ def test_profile_extracts_counts_and_severities():
     assert prof.unclassified_safe == 1
 
 
-# ── the core fix: WORST-CASE severity drives redundancy, not count ──────────
-
-def test_redundancy_driven_by_worst_case_not_count():
-    # 30 MINOR safety requirements → single (count would have forced triple!)
+def test_redundancy_from_worst_case():
+    # 30 Minor safety requirements -> single (count would have forced triple)
     many_minor = RequirementProfile.from_requirements(
         [_req("SAFE", i, "Minor") for i in range(1, 31)]
     )
     assert min_redundancy(many_minor) == "single"
 
-    # a SINGLE catastrophic requirement amid many minor → triple
     one_catastrophic = RequirementProfile.from_requirements(
         [_req("SAFE", 1, "Catastrophic")] + [_req("SAFE", i, "Minor") for i in range(2, 31)]
     )
@@ -76,18 +70,16 @@ def test_no_safe_requirements_means_single():
     assert min_redundancy(prof) == "single"
 
 
-def test_unclassified_safe_uses_flagged_default_not_silent_triple():
-    prof = RequirementProfile.from_requirements([_req("SAFE", 1)])  # no SEV tag
-    assert prof.unclassified_safe == 1            # surfaced for flagging
-    assert min_redundancy(prof) == "dual"          # default MAJOR → dual, NOT triple
+def test_unclassified_safe_defaults_dual():
+    prof = RequirementProfile.from_requirements([_req("SAFE", 1)])
+    assert prof.unclassified_safe == 1
+    assert min_redundancy(prof) == "dual"
 
 
 def test_redundancy_depth():
     assert redundancy_depth("single") == 1
     assert redundancy_depth("triple") == 3
 
-
-# ── operator feasibility integration ───────────────────────────────────────
 
 @pytest.fixture
 def op() -> RedundantizeComponent:
@@ -101,14 +93,14 @@ def _ctx(reqs, num_sensors=3):
     )
 
 
-def test_catastrophic_makes_single_and_dual_infeasible(op):
+def test_catastrophic_needs_triple(op):
     ctx = _ctx([_req("SAFE", 1, "Catastrophic")])
     assert not op.feasible("single", ctx)
     assert not op.feasible("dual", ctx)
     assert op.feasible("triple", ctx)
 
 
-def test_only_minor_safe_allows_single(op):
+def test_minor_safe_allows_single(op):
     ctx = _ctx([_req("SAFE", i, "Minor") for i in range(1, 31)])
     assert op.feasible("single", ctx)
 
@@ -119,7 +111,7 @@ def test_legacy_fallback_without_profile(op):
     assert op.feasible("triple", legacy)
 
 
-def test_front_excludes_single_under_catastrophic_hazard(op):
+def test_front_excludes_single(op):
     ctx = _ctx([_req("SAFE", 1, "Catastrophic")])
     ctx.channel_reliability = 0.85
 

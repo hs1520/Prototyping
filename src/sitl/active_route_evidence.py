@@ -6,23 +6,21 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Optional
 
-#: How far the navigation controller's reported target may sit from the
-#: commanded coordinate and still be that coordinate.
-#:
-#: POSITION_TARGET_GLOBAL_INT does not echo the mission item. ArduPilot converts
-#: the item to a NEU offset from the EKF origin and converts back for the
-#: report, so the round trip carries rounding and origin error: the 2026-08-31
-#: run held the revised waypoint at 0.58 m from the commanded coordinate.
-#: Integer equality — what this module demanded before — is therefore satisfiable
-#: only by mission storage, which returns what was written. That made the
-#: criterion unsatisfiable by the very observable it declares authoritative, and
-#: it failed a run in which the navigator had plainly adopted the revision.
+# How far the navigation controller's reported target may sit from the
+# commanded coordinate and still be that coordinate.
+#
+# POSITION_TARGET_GLOBAL_INT does not echo the mission item: ArduPilot converts
+# it to a NEU offset from the EKF origin and back for the report, so the round
+# trip carries rounding and origin error - the 2026-08-31 run held the revised
+# waypoint at 0.58 m from the commanded coordinate. Integer equality, demanded
+# here before, is satisfiable only by mission storage, which returns what was
+# written.
 ADOPTION_TOLERANCE_M = 2.0
 
-#: An approximate match only means "adopted" if the revision was far enough away
-#: to tell adoption from standing still. Below this multiple of the tolerance,
-#: no observation could discriminate, so the scenario — not the vehicle — is
-#: what failed, and the verdict says so.
+# An approximate match means "adopted" only if the revision was far enough
+# away to tell adoption from standing still. Below this multiple of the
+# tolerance no observation can discriminate, so the verdict blames the
+# scenario rather than the vehicle.
 DISCRIMINATION_FACTOR = 4.0
 
 _M_PER_DEG = 111_320.0
@@ -76,7 +74,7 @@ def evaluate_active_route_update(
     pre_revision_lat_e7: Optional[int] = None,
     pre_revision_lon_e7: Optional[int] = None,
 ) -> ActiveRouteUpdateEvidence:
-    """Judge adoption from the controller target, never mission read-back."""
+    """Judge adoption from the controller target, not mission read-back."""
     observed = tuple(observations)
 
     def gap(observation: RouteObservation) -> float:
@@ -97,11 +95,10 @@ def evaluate_active_route_update(
     after = tuple(
         item for item in controller_samples if item.observed_at_s >= accepted_at_s
     )
-    # What the controller was steering to BEFORE the revision, measured through
-    # the same transform as the samples after it. This is the honest baseline:
-    # comparing against the commanded pre-revision item would mix a commanded
-    # coordinate with a reported one and attribute the transform error to the
-    # vehicle.
+    # What the controller was steering to before the revision, measured through
+    # the same transform as the samples after it. Comparing against the commanded
+    # pre-revision item would mix a commanded coordinate with a reported one and
+    # charge the transform error to the vehicle.
     before = tuple(
         item for item in controller_samples if item.observed_at_s < accepted_at_s
     )
@@ -112,9 +109,9 @@ def evaluate_active_route_update(
         baseline_gap = separation_m(
             pre_revision_lat_e7, pre_revision_lon_e7, target_lat_e7, target_lon_e7)
 
-    # An exact hit needs no discrimination: it cannot be a near-miss of some
-    # other coordinate. An approximate one does, or "the target never moved"
-    # and "the target arrived" are the same measurement.
+    # An exact hit needs no discrimination: it cannot be a near-miss of another
+    # coordinate. An approximate one does, or "the target never moved" and "the
+    # target arrived" are the same measurement.
     adopted = [item for item in after if gap(item) <= ADOPTION_TOLERANCE_M]
     exact_adopted = [
         item for item in after
@@ -151,9 +148,9 @@ def evaluate_active_route_update(
         )
 
     if not adopted:
-        # "the navigator had no target" and "the navigator held the OLD target"
-        # are different failures, and only the second says the revision was
-        # ignored. Naming the coordinate it held says which one happened.
+        # "no target" and "held the old target" are different failures, and only the
+        # second says the revision was ignored; naming the coordinate it held says
+        # which one happened.
         held = ""
         if controller_samples:
             last = controller_samples[-1]

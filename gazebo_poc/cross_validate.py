@@ -1,17 +1,11 @@
-"""Cross-validate the two independent fidelity sources (Gazebo dynamics vs datasheet power)
-on the one quantity where they genuinely meet: HOVER THRUST PER ROTOR (stage 4).
+"""Cross-validate Gazebo dynamics against datasheet power on hover thrust per rotor (stage 4).
 
-Physical axes: with our airframe actually loaded (see AUDIT in README — a 3-bug mount issue had
-us flying the stock iris through stages 2-4), both hover throttle (29%) and rotor RPM (4204) DO
-respond to the model. RPM is now observable (we inject a joint-state publisher into
-iris_with_standoffs); Gazebo hover RPM 4204 vs real 18in-prop theory ~2900 RPM quantifies the
-uncalibrated iris-aero gap (stage 5 = real Ct/Cp). The simplest model-independent anchor remains
-hover thrust per rotor (below).
-
-What DOES cross-validate: at hover, thrust per rotor = m·g/N by force balance — both sources must
-honour this. Gazebo confirms the airframe reaches that thrust in STABLE controlled flight
-(dynamics feasibility); the datasheet says the chosen motor produces that thrust within its
-envelope and reports the current → endurance (power feasibility). Consistency = both feasible.
+At hover, thrust per rotor = m*g/N by force balance, so both sources must honour it: Gazebo shows
+the airframe reaches that thrust in stable controlled flight (dynamics feasibility), the datasheet
+shows the motor produces it within its envelope and gives the current -> endurance (power
+feasibility). Hover throttle (29%) and rotor RPM (4204) both respond to the model; RPM is
+observable via a joint-state publisher injected into iris_with_standoffs, and the gap to
+18in-prop theory (~2900 RPM) measures the uncalibrated iris aero (stage 5 = real Ct/Cp).
 """
 from __future__ import annotations
 
@@ -32,7 +26,7 @@ class CrossValidation:
     twr_margin: float
     hover_current_per_motor_a: float
     endurance_min: float
-    datasheet_hover_throttle_pct: float    # reported for context only — NOT compared to sim
+    datasheet_hover_throttle_pct: float    # reported for context only; not compared to sim
     consistent: bool
     note: str
 
@@ -43,7 +37,7 @@ def cross_validate(mass_kg: float, rotor_count: int, capacity_mah: float,
     thrust_n = mass_kg * G / rotor_count
     thrust_g = thrust_n / G * 1000.0
     within = thrust_g <= motor.max_thrust_g()
-    if not within:                                  # motor can't hover it → no power figures
+    if not within:
         return CrossValidation(
             hover_thrust_per_rotor_n=thrust_n, hover_thrust_per_rotor_g=thrust_g,
             gazebo_stable=gazebo_stable, datasheet_within_envelope=False,

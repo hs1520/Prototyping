@@ -1,26 +1,24 @@
 """Incremental Step-1 plan corrections: identity-keyed merge + authorization.
 
-The Step-1 correction protocol used to ask for "one complete replacement JSON
-object" on every retry — 15-25k output tokens to change a handful of fields —
-and its only defence against unimplicated fields drifting was an instruction
-("preserve every field not implicated"). This module makes the retry
-incremental and the non-drift guarantee structural:
+The correction protocol used to ask for one complete replacement JSON object on
+every retry - 15-25k output tokens to change a handful of fields - guarded only
+by an instruction to preserve unimplicated fields. The retry is now incremental
+and the non-drift guarantee structural:
 
-- the correction returns ONLY the entries the issues implicate, marked with
+- the correction returns only the entries the issues implicate, marked with
   ``"plan_patch": true``;
 - :func:`merge_plan_patch` upserts them into the previous parseable payload
-  (the repair base) by identity key — everything unpatched is carried over
-  byte-identically, so unimplicated drift is impossible by construction;
-- :func:`unauthorized_plan_changes` is the diff gate for whatever the LLM
-  actually changed (patch or full replacement): every changed, added, or
-  removed entry must be named by an issue line, mirroring the frozen-plan
-  revision gate (``src/agents/plan_revision.py``) one level down.
+  (the repair base) by identity key; everything unpatched carries over
+  byte-identically;
+- :func:`unauthorized_plan_changes` gates the diff (patch or full replacement):
+  every changed, added or removed entry must be named by an issue line,
+  mirroring the frozen-plan revision gate (``src/agents/plan_revision.py``).
 
 The merged payload then re-enters ``ModelGenerationPlan.from_payload`` under
-the full validator set — the merge buys nothing past validation.
+the full validator set.
 
-Identity keys: ``components`` by name; ``connections`` by their four
-endpoints; ``requirement_realizations`` by requirement id; ``behaviors`` by
+Identity keys: ``components`` by name; ``connections`` by their four endpoints;
+``requirement_realizations`` by requirement id; ``behaviors`` by
 ``(owner, behavior_id)``; ``constraints`` by constraint id.
 """
 from __future__ import annotations
@@ -31,24 +29,20 @@ from typing import Any, Mapping, Sequence
 
 from ..utils.req_id import normalise_req_id
 
-#: Marker key a correction response sets to request incremental merging.
 PATCH_MARKER = "plan_patch"
 
-#: Key carrying deletions: ``{"<list>": [<identity spec>, ...]}``.
 REMOVE_KEY = "remove"
 
-#: The identity-keyed lists a patch may address. Everything else in a patch
-#: is a wholesale top-level replacement (and still passes the diff gate).
 PATCHABLE_LISTS = (
     "components",
     "connections",
     "requirement_realizations",
     "behaviors",
     "constraints",
-    # Measured omission (s0v4 anchor, 6 attempts / 170k tokens): with no
-    # identity channel for bindings, "SEM_* has no typed semantic binding"
-    # was unfixable by an instruction-obedient patch, and a full list resent
-    # under the wholesale top-level rule would nuke every other binding.
+    # s0v4 anchor, 6 attempts / 170k tokens: with no identity channel for
+    # bindings, "SEM_* has no typed semantic binding" was unfixable by an
+    # instruction-obedient patch, and a full list resent under the wholesale
+    # top-level rule would drop every other binding.
     "semantic_bindings",
 )
 
@@ -62,7 +56,6 @@ def build_mention_pool(issue_lines: Sequence[str]) -> str:
 
 
 def _identity(list_name: str, entry: Mapping[str, Any]):
-    """The entry's identity key, or None when it carries none."""
     if not isinstance(entry, Mapping):
         return None
     if list_name == "components":
@@ -99,7 +92,6 @@ def _identity(list_name: str, entry: Mapping[str, Any]):
 
 
 def _identity_from_spec(list_name: str, spec: Any):
-    """Parse a ``remove`` entry: the canonical string form or the raw key."""
     if isinstance(spec, Mapping):
         return _identity(list_name, spec)
     if isinstance(spec, (list, tuple)):
@@ -131,10 +123,10 @@ def _entry_mention_names(
 ) -> tuple[str, ...]:
     """Every name whose appearance in an issue line authorizes this entry.
 
-    Index forms (``behaviors[3]``) are how the validators spell most issues,
-    and they index the repair base — so they exist only for entries the base
-    already holds. Owner alone never authorizes a behaviour (one part owns
-    many; the frozen-plan revision gate documents the measured case)."""
+    Index forms (``behaviors[3]``) are how the validators spell most issues and
+    they index the repair base, so they exist only for entries the base already
+    holds. Owner alone does not authorize a behaviour, since one part owns many.
+    """
     names: list[str] = []
     identity = _identity(list_name, entry)
     if list_name == "components" and identity:
@@ -175,10 +167,9 @@ def merge_plan_patch(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Upsert the patch into the base by identity key; return (merged, audit).
 
-    Entries are replaced in place (index stability keeps the validators'
-    index-spelled issues addressable), new entries append, and the ``remove``
-    map deletes by identity. A patch entry with no parseable identity is
-    ignored and audited — an unidentifiable entry cannot be merged honestly.
+    Entries are replaced in place so the validators' index-spelled issues stay
+    addressable, new entries append, and the ``remove`` map deletes by identity. A
+    patch entry with no parseable identity is ignored and audited.
     """
     merged: dict[str, Any] = copy.deepcopy(dict(base))
     audit: dict[str, Any] = {
@@ -255,16 +246,14 @@ def unauthorized_plan_changes(
 ) -> list[str]:
     """Every change between base and revised that no issue line names.
 
-    Works on raw payloads (before ``from_payload`` normalisations) so the
-    gate judges exactly what the LLM changed. Applies to patches and to full
-    replacements alike — the instruction "preserve every field not
-    implicated" finally has a gate instead of a hope.
+    Works on raw payloads (before ``from_payload`` normalisations) so the gate
+    judges exactly what the LLM changed, for patches and full replacements alike.
     """
     pool = build_mention_pool(issue_lines)
 
     def mentioned(names: Sequence[str]) -> bool:
         # Token-boundary match, not bare substring: a short identity like
-        # "A" must not be "mentioned" by the A inside UNRELATED.
+        # "A" is not mentioned by the A inside UNRELATED.
         return any(
             name and re.search(
                 r"(?<![A-Za-z0-9_])"

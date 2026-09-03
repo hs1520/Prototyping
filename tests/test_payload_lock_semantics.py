@@ -27,7 +27,7 @@ def _model(part_body: str):
     return text, build_lite_model(text, model_name="D")
 
 
-def test_single_state_default_invariant_is_a_valid_initialization_scenario():
+def test_single_state_default_passes():
     text, _ = _model("""
         attribute isLocked : Boolean = true;
         state def PayloadLockMachine {
@@ -45,7 +45,7 @@ def test_single_state_default_invariant_is_a_valid_initialization_scenario():
     assert any("isLocked=True" in line for line in scenario.timeline)
 
 
-def test_bare_single_state_declaration_has_no_initialization_evidence():
+def test_bare_single_state_no_evidence():
     text, model = _model("""
         state def PayloadLockMachine {
             state Locked;
@@ -65,7 +65,7 @@ def test_bare_single_state_declaration_has_no_initialization_evidence():
     assert "behavioral_sim_failed" in row.tiers
 
 
-def test_initial_entry_action_is_valid_initialization_evidence():
+def test_entry_action_counts():
     text, _ = _model("""
         action def defaultToLockedState { }
         state def PayloadLockMachine {
@@ -82,7 +82,7 @@ def test_initial_entry_action_is_valid_initialization_evidence():
     assert "lock" in scenario.fired_actions
 
 
-def test_declaration_only_locked_unlocked_shell_fails_as_unreachable():
+def test_empty_shell_unreachable():
     text, model = _model("""
         attribute isLocked : Boolean = true;
         action def defaultToLockedState { }
@@ -105,7 +105,7 @@ def test_declaration_only_locked_unlocked_shell_fails_as_unreachable():
     assert "behavioral_sim" not in row.tiers
 
 
-def test_complete_lock_lifecycle_produces_real_behavioral_evidence():
+def test_full_lifecycle_evidence():
     text, model = _model("""
         attribute isLocked : Boolean = true;
         attribute releaseAuthorized : Boolean = false;
@@ -127,12 +127,12 @@ def test_complete_lock_lifecycle_produces_real_behavioral_evidence():
     row = build_matrix(model, None, RequirementLinker(model).compile_evidence())[0]
 
     assert scenario.passed, scenario.violations
-    assert row.status == "partial"  # behavioral PASS; generated L2 check still planned
+    assert row.status == "partial"
     assert "behavioral_sim" in row.tiers
     assert "behavioral_sim_failed" not in row.tiers
 
 
-def test_failed_behavioral_anchor_remains_a_refinement_issue():
+def test_failed_anchor_refinement_issue():
     text, _ = _model("""
         attribute isLocked : Boolean = true;
         state def PayloadLockMachine {
@@ -149,17 +149,16 @@ def test_failed_behavioral_anchor_remains_a_refinement_issue():
     assert any("declaration-only" in issue for issue in issues)
 
 
-def test_surgical_contract_forbids_empty_multi_state_shells():
+def test_prompt_forbids_empty_shells():
     assert "every state MUST be reachable" in SURGICAL_SYSTEM_PROMPT
     assert "empty Locked/Unlocked shell" in SURGICAL_SYSTEM_PROMPT
 
 
-def test_unnamed_attribute_redefinition_does_not_break_the_linker():
+def test_redefinition_keeps_linker():
     """A redefinition is legal SysML and reports no name of its own.
 
-    Keying the linker's attribute map on that name put a None into every
-    later keyword scan, so one such line anywhere in the model crashed the
-    verification audit — which fails closed — and blocked the whole run.
+    Keying the linker's attribute map on that name put a None into every later
+    keyword scan, crashing the fail-closed verification audit.
     """
     text, model = _model("""
         attribute maxMass : Real = 5.0;
@@ -174,14 +173,10 @@ def test_unnamed_attribute_redefinition_does_not_break_the_linker():
         for attrs in linker._attr_map.values()
         for name in attrs
     )
-    # the audit must reach a verdict rather than raise
+    # the audit reaches a verdict rather than raising
     verification_gap_issues(text, "D", strict=True)
     build_matrix(model, None, linker.compile_evidence())
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Power-on shape: initial phase state, every exit driven onto the default
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_machine(text, name="PayloadLockMachine"):
     from src.simulation.state_extractor import extract_state_machines
@@ -204,9 +199,7 @@ _POWER_ON_BODY = """
 """
 
 
-def test_power_on_shaped_machine_drives_the_event_and_passes():
-    """s0v15's shape: initial PowerOn --accept PowerOnEvent--> Locked{entry}.
-    The check drives the power event instead of failing the phase state."""
+def test_power_on_shape_passes():
     from src.simulation.behavioral_sim import run_initialization_scenario
 
     text, _ = _model(_POWER_ON_BODY)
@@ -217,16 +210,13 @@ def test_power_on_shaped_machine_drives_the_event_and_passes():
     assert scenario.passed, scenario.violations
     assert any("Drove power event" in line for line in scenario.timeline)
     assert "onLocked" in scenario.fired_actions
-    # And the in-loop audit that spent s0v15's whole iteration budget:
     assert not [
         i for i in verification_gap_issues(text, model_name="D")
         if "REQ_SAFE_008" in i
     ]
 
 
-def test_power_on_shape_with_escape_edge_still_fails():
-    """An exit from the initial state to a non-default state means the machine
-    can leave power-on without passing the default — "before any arming"."""
+def test_escape_edge_fails():
     from src.simulation.behavioral_sim import run_initialization_scenario
 
     text, _ = _model("""
@@ -264,8 +254,7 @@ def test_power_on_shape_with_escape_edge_still_fails():
                for v in scenario.violations)
 
 
-def test_power_on_shape_with_only_guarded_exits_still_fails():
-    """A default reached only through a guard is conditional, not a default."""
+def test_guarded_exits_fail():
     from src.simulation.behavioral_sim import run_initialization_scenario
 
     text, _ = _model("""
@@ -291,8 +280,7 @@ def test_power_on_shape_with_only_guarded_exits_still_fails():
     assert any("guarded" in v for v in scenario.violations)
 
 
-def test_power_on_shape_needs_semantics_on_the_landed_state():
-    """Driving the event onto a bare state name is still an empty shell."""
+def test_bare_landed_state_fails():
     from src.simulation.behavioral_sim import run_initialization_scenario
 
     text, _ = _model("""
@@ -314,10 +302,11 @@ def test_power_on_shape_needs_semantics_on_the_landed_state():
     assert any("no observable semantics" in v for v in scenario.violations)
 
 
-def test_plan_binding_selects_the_machine_vocabulary_excludes():
-    """Initial state 'BootPhase' appears nowhere in the requirement text, so
-    the vocabulary fallback cannot select the machine; the plan's recorded
-    requirement->behavior binding must."""
+def test_plan_binding_selects_machine():
+    """Initial state 'BootPhase' appears nowhere in the requirement text, so the
+    vocabulary fallback cannot select the machine; the plan's recorded
+    requirement->behavior binding does.
+    """
     text, model = _model("""
         action def lockPayload {}
         state def PayloadLockMachine {
@@ -336,14 +325,14 @@ def test_plan_binding_selects_the_machine_vocabulary_excludes():
     _INIT_DETAIL = "initial/default-state invariant exercised at behavioral-sim tier"
 
     unbound = build_matrix(model, None, RequirementLinker(model).compile_evidence())[0]
-    # Without the binding the row may still earn behavioral_sim from the
-    # generic requirement-linked scenario route; what it cannot earn is the
-    # initialization-invariant evidence — no machine was selected for it.
+    # Without the binding the row can still earn behavioral_sim from the generic
+    # requirement-linked scenario route, but not the initialization-invariant
+    # evidence: no machine was selected for it.
     assert not any(_INIT_DETAIL in e for e in unbound.evidence)
 
-    # NB: assign the plan as a key on the existing metadata dict — the lite
-    # model's metadata already carries last_sysml_text, which to_sysml_text()
-    # serialises from; replacing the dict silently empties the model.
+    # Assign the plan as a key on the existing metadata dict: the lite model's
+    # metadata carries last_sysml_text, which to_sysml_text() serialises from,
+    # so replacing the dict empties the model.
     model.metadata["whole_model_generation_plan"] = {
         "requirement_realizations": [{
             "requirement_id": "REQ_SAFE_008",

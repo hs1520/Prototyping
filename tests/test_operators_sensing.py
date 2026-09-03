@@ -1,4 +1,3 @@
-"""Tests for the #1 AddRedundantSensor + InsertFusionNode operator."""
 from __future__ import annotations
 
 import pytest
@@ -35,13 +34,12 @@ def test_resolve_parses(op: AddRedundantSensor, variant: str) -> None:
 
 @pytest.mark.parametrize("variant", ["dual", "triple"])
 def test_no_dangling_sensors(op: AddRedundantSensor, variant: str) -> None:
-    """Every redundant sensor is wired into the fusion node (the legacy bug fix)."""
     text = op.resolve(variant)
     assert "FusionNode" in text
     assert text.count("connect s") == op.sensors(variant)
 
 
-def test_single_has_no_fusion(op: AddRedundantSensor) -> None:
+def test_single_no_fusion(op: AddRedundantSensor) -> None:
     text = op.resolve("single")
     assert "FusionNode" not in text
     assert text.count("connect s") == 0

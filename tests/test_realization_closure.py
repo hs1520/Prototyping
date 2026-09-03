@@ -29,7 +29,7 @@ def test_closed_after_resize_verdict():
     assert "small" in rep.resize_note and "nearby" in rep.resize_note
 
 
-def test_closure_rejects_a_component_set_with_excessive_mapping_drift():
+def test_rejects_mapping_drift():
     cat = catalog(
         combos=[combo(diameter=15.0)],
         packs=[pack("wrong-voltage", capacity=16000, cells=4)],
@@ -44,20 +44,20 @@ def test_closure_rejects_a_component_set_with_excessive_mapping_drift():
     }
 
 
-def test_infeasible_verdict_has_failed_checks_or_gap():
+def test_infeasible_has_failed_checks():
     rep = close_the_loop(_design(), [], ["REQ-PERF-002: endurance at least 80 minutes."], catalog())
     assert rep.verdict == "INFEASIBLE_REALIZATION"
     assert rep.failed_checks
 
 
-def test_no_feasible_candidate_reports_interface_failures():
+def test_no_candidate_reports_failures():
     rep = close_the_loop(_design(), [], ["REQ-PERF-002: endurance at least 15 minutes."],
                          catalog(frames=[frame(arms=6)]))
     assert rep.verdict == "INFEASIBLE_REALIZATION"
     assert any(ch.name == "arms_match" for ch in rep.failed_checks)
 
 
-def test_speed_and_range_are_forward_flight_and_do_not_block_closure():
+def test_forward_flight_not_blocking():
     reqs = [
         "REQ-PERF-002: endurance at least 15 minutes.",
         "REQ-CONS-003: maximum takeoff weight shall be below 25 kg.",
@@ -78,7 +78,7 @@ def test_speed_and_range_are_forward_flight_and_do_not_block_closure():
     assert "drag area" in scoped[("range", "forward_flight")].note
 
 
-def test_altitude_cep_and_wind_are_not_false_forward_flight_green():
+def test_altitude_cep_wind_deferred():
     reqs = [
         "REQ-PERF-002: endurance at least 15 minutes.",
         "REQ-CONS-001: shall not exceed a flight altitude of 120 metres AGL.",
@@ -97,7 +97,7 @@ def test_altitude_cep_and_wind_are_not_false_forward_flight_green():
     assert all(v.req_id != "REQ-PERF-004" for v in rep.per_requirement)
 
 
-def test_forward_flight_range_failure_does_not_flip_datasheet_verdict():
+def test_range_failure_keeps_verdict():
     reqs = [
         "REQ-PERF-002: endurance at least 15 minutes.",
         "REQ-FUNC-001: operational range of at least 1000000 metres.",
@@ -112,7 +112,7 @@ def test_forward_flight_range_failure_does_not_flip_datasheet_verdict():
     assert range_req.met is False
 
 
-def test_forward_flight_failures_do_not_appear_in_failed_checks_when_closure_fails():
+def test_forward_failures_not_in_checks():
     reqs = [
         "REQ-PERF-002: endurance at least 80 minutes.",
         "REQ-PERF-003: cruise speed at least 15 m/s.",
@@ -126,7 +126,7 @@ def test_forward_flight_failures_do_not_appear_in_failed_checks_when_closure_fai
     assert {v.family for v in rep.per_requirement if v.scope == "forward_flight"} == {"speed", "range"}
 
 
-def test_forward_flight_speed_is_capped_by_datasheet_power_not_only_thrust():
+def test_speed_capped_by_power():
     design = _design()
     chosen = match(design, ["REQ-PERF-002: endurance at least 15 minutes."], catalog())[0]
 
@@ -150,7 +150,7 @@ def test_forward_flight_speed_is_capped_by_datasheet_power_not_only_thrust():
     assert required_power > power_limit
 
 
-def test_rank_skipped_when_fewer_than_three_candidates():
+def test_rank_skipped_below_three():
     rep = close_the_loop(_design(), [(_design(), {})], ["REQ-PERF-002: endurance at least 15 minutes."],
                          catalog())
     assert rep.rank_preservation["n"] == 1.0

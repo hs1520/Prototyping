@@ -1,16 +1,12 @@
-"""Warnings must never impersonate a failed compile.
+"""Warnings do not score as a failed compile.
 
-Measured on an authoritative run: a model with 1 parser error and 46 warnings
-had its parser error repaired in the first refinement iteration, yet every
-subsequent iteration still scored syntactic_validity 0.000 — the 46 warnings
-alone saturated the old linear formula to the same score as a hard parse
-failure — and the "fails compilation" veto pinned the run at the cap while
-its repair prompts demanded fixes for errors that did not exist.
-
-The cure keeps warnings priced (the terminal qualification still demands zero
-warnings) but separates the regimes: an error-free result is floored at 0.5,
-above the 0.40 veto line, and the compilation veto itself now requires actual
-errors regardless of the score's numeric value.
+On one authoritative run a parser error was repaired in the first refinement
+iteration, yet every later iteration still scored syntactic_validity 0.000: 46
+warnings alone saturated the old linear formula, the "fails compilation" veto
+pinned the run at the cap, and repair prompts demanded fixes for errors that no
+longer existed. Warnings stay priced (terminal qualification still demands
+zero), but an error-free result is floored at 0.5, above the 0.40 veto line,
+and the veto now requires actual errors.
 """
 from __future__ import annotations
 
@@ -38,19 +34,18 @@ def _warning(n: int) -> list[dict]:
     ]
 
 
-def test_warnings_only_scores_floor_at_half_and_stay_monotonic():
+def test_warning_score_floors_at_half():
     assert _compute_score(0, 0, 0) == 1.0
     assert _compute_score(0, 0, 3) == 0.85
     assert _compute_score(0, 0, 10) == 0.5
-    # the archived shape: 46 warnings, zero errors — must NOT reach 0.0
+    # the archived shape: 46 warnings, zero errors - does not reach 0.0
     assert _compute_score(0, 0, 46) == 0.5
-    # errors keep the compounding regime, including saturation
     assert _compute_score(1, 0, 46) == 0.0
     assert _compute_score(0, 1, 0) == 0.88
     assert _compute_score(4, 0, 0) == 0.0
 
 
-def test_error_free_result_never_triggers_the_compilation_veto():
+def test_error_free_no_veto():
     heavy = SyntaxCheckResult(
         has_errors=False,
         warnings=_warning(46),
@@ -84,9 +79,7 @@ def test_real_errors_still_veto():
     )
 
 
-def test_veto_keys_on_errors_not_on_the_numeric_score():
-    """Belt independent of the score formula: even a below-floor score must
-    not assert failed compilation when no error exists."""
+def test_veto_keys_on_errors_not_score():
     weird = SyntaxCheckResult(
         has_errors=False, warnings=_warning(2), score=0.1,
     )
@@ -99,9 +92,9 @@ def test_veto_keys_on_errors_not_on_the_numeric_score():
     )
 
 
-def test_diagnostics_fallback_floors_warning_only_models():
+def test_diagnostics_fallback_score():
     evaluator = DesignEvaluator()
     evaluator._cached_syntax_result = None
     score = evaluator._score_syntactic_validity(
         DesignConfiguration(name="t", parameters={}), _MODEL, None)
-    assert score == 1.0  # fixture has no diagnostics at all
+    assert score == 1.0

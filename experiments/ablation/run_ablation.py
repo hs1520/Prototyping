@@ -1,34 +1,4 @@
-"""Component-ablation campaign driver (drone_v2 frozen requirements).
-
-Runs the paid ablation arms (see arms.py) over a shared seed list, one fresh
-seeded provider instance per run, and archives every artifact needed to make a
-claim traceable: the effective pipeline configuration, the canonical run
-report, the final model text, per-run stdout, and — on failure — the rejected
-model plus the gate evidence that rejected it.
-
-Usage
------
-    # plumbing smoke (MockLLM cannot produce a real design; the run is
-    # recorded as failed, which exercises capture/archive/aggregate end to end):
-    /Users/huangsongyi/miniforge3/envs/AI-Prototyping/bin/python \
-        experiments/ablation/run_ablation.py --provider mock --arms FULL --seeds 1
-
-    # single real pilot run to calibrate cost before committing to a campaign:
-    ... run_ablation.py --provider vertex --arms FULL --seeds 1
-
-    # the full campaign (7 paid arms × 3 seeds):
-    ... run_ablation.py --provider vertex --seeds 3
-
-Outputs one campaign directory under experiments/ablation/results/:
-    campaign.json     frozen manifest (git commit, arm digests, requirement digest)
-    records.jsonl     one flat record per run, appended crash-safe
-    summary.json/.md  aggregates + paired deltas vs FULL (via analyze.py)
-    runs/             per-run report JSON, final .sysml, stdout log
-    failed_runs/      rejected models + gate evidence for failed runs
-
-W-UNIFORM is post-hoc: after the campaign, run posthoc_weights.py on this
-campaign directory (no LLM cost).
-"""
+"""Component-ablation campaign driver (drone_v2 frozen requirements)."""
 from __future__ import annotations
 
 import argparse
@@ -54,17 +24,16 @@ from analyze import aggregate, paired_deltas, render_markdown  # noqa: E402
 
 SYSTEM_NAME = "AutonomousDrone"
 
-#: Provider/transport exhaustion is the harness's environment failing, not the
-#: ablated configuration failing. A 429-aborted run polluted runs_failed on
-#: 2026-08-30 (renamed *_ABORTED_429 by hand); this classifier makes the
-#: separation mechanical, mirroring the authoritative path's infrastructure
-#: routing (examples/finalize_authoritative_run.py).
+# Provider/transport exhaustion is the environment failing, not the ablated
+# configuration. A 429-aborted run polluted runs_failed on 2026-08-30, so this
+# classifier makes the separation mechanical, mirroring the authoritative
+# path's infrastructure routing (examples/finalize_authoritative_run.py).
 _INFRA_MARKERS = (
-    # "provider error" is the wrapper every transport/quota failure funnels
-    # through (LLMInterface raises "<Provider> provider error (...): ...");
-    # gate/validation errors never contain it. Bare words are dangerous:
+    # Every transport/quota failure funnels through "provider error"
+    # (LLMInterface raises "<Provider> provider error (...): ..."), which
+    # gate/validation errors do not contain. Bare words misclassify:
     # "connection" matched "connections entry" and "unavailable" matched
-    # TYPED_MODEL_PLAN_UNAVAILABLE — both measured misclassifications.
+    # TYPED_MODEL_PLAN_UNAVAILABLE.
     "provider error", "rate limit", "resource_exhausted",
     "resource exhausted", "quota", "service unavailable", "overloaded",
     "timed out", "wall-clock timeout", "deadline exceeded",
@@ -75,10 +44,10 @@ _INFRA_MARKERS = (
 
 
 def _infrastructure_failure(message: str) -> bool:
-    # Bare substrings are dangerous here: the first live failure was
-    # misclassified as infrastructure because the marker "connection"
-    # matched the word "connections" inside plan-validation issue text.
-    # Markers are specific phrases; 429 is matched as a standalone token.
+    # Bare substrings misclassify: the first live failure was read as
+    # infrastructure because the marker "connection" matched "connections" in
+    # plan-validation issue text. Markers are specific phrases; 429 is matched
+    # as a standalone token.
     low = str(message or "").lower()
     if re.search(r"(?<![0-9a-z])429(?![0-9a-z])", low):
         return True
@@ -88,7 +57,6 @@ def _infrastructure_failure(message: str) -> bool:
 def _request_digest(
     message_dicts: List[Dict[str, str]], temperature: float, max_tokens: int,
 ) -> str:
-    """Byte-stable identity of one provider request (provider-agnostic)."""
     return sha256_text(json.dumps(
         {
             "messages": message_dicts,
@@ -102,10 +70,10 @@ def _request_digest(
 def _capture_observer(calls_path: Path):
     """Append every completed provider call to a crash-safe JSONL.
 
-    This is what makes a dead run resumable: s0v12 hung on one provider
-    request 34 minutes in and 187k tokens of identical prefix work had to
-    be re-bought. The record is pure observation — prompts, pipeline, and
-    arm digests are untouched."""
+    Makes a dead run resumable: s0v12 hung on one provider request 34 minutes in
+    and 187k tokens of identical prefix work had to be re-bought. Observation
+    only - prompts, pipeline and arm digests are untouched.
+    """
     def _observer(event: Dict[str, Any]) -> None:
         line = json.dumps({
             "request_digest": _request_digest(
@@ -122,11 +90,10 @@ def _capture_observer(calls_path: Path):
 class PrefixReplayLLM:
     """Serve archived responses while requests match the recorded prefix.
 
-    Replay is free and instant; the FIRST divergence (or exhaustion) flips
-    permanently to the live provider — which is exactly resume-from-where-
-    it-broke semantics, with the caveat that any divergence point starts
-    paying from there. The inner ledger counts live calls only, so the
-    run's cost accounting stays honest."""
+    Replay is free and instant; the first divergence or exhaustion flips
+    permanently to the live provider, so the run resumes where it broke and pays
+    from there. The inner ledger counts live calls only.
+    """
 
     def __init__(self, inner, recorded: List[Dict[str, Any]]) -> None:
         self._inner = inner
@@ -169,9 +136,9 @@ class PrefixReplayLLM:
                 )
                 self.replayed_prompt_tokens += response.prompt_tokens or 0
                 self.replayed_completion_tokens += response.completion_tokens or 0
-                # Archive the replayed call too, so this run's calls.jsonl is
-                # its complete trajectory (prefix + live) and can itself seed
-                # a later replay. The inner ledger still counts live calls only.
+                # Archive the replayed call too, so calls.jsonl holds the complete
+                # trajectory (prefix + live) and can seed a later replay. The inner
+                # ledger still counts live calls only.
                 notify = getattr(self._inner, "_notify_call_observers", None)
                 if callable(notify):
                     try:
@@ -195,22 +162,17 @@ class PrefixReplayLLM:
         )
 
 
-#: Narration markers of the repair mechanisms, counted from the archived
-#: per-run stdout. They exist so the ablation can state whether the
-#: component an arm removes was exercised at all on that trajectory — a
-#: "no difference" cell is uninformative when FULL never invoked the layer.
+# Narration markers of the repair mechanisms, counted from the archived
+# per-run stdout, so the ablation can say whether the removed component was
+# exercised at all: a "no difference" cell says little when FULL never
+# invoked the layer.
 _LOG_MARKERS = {
-    # Tier 0 deterministic syntax rewrites (syntax gate, before any LLM call)
     "tier0_fixes": ("┌─ [DOC-FIX]", "┌─ [RO-FIX]", "┌─ [KW-FIX]",
                     "┌─ [LEV-FIX]", "┌─ [ATTR-INJ]"),
-    # Tier 1 localized LLM syntax repair attempts
     "syntax_gate_llm_attempts": ("[SYNTAX-GATE] attempt",),
-    # deterministic connectivity repairs accepted by the simulation guard
     "det_connectivity_fixes": ("direction fix (deterministic)",
                                "connect fix (deterministic)"),
-    # block-level surgical refinement candidates accepted in the main loop
     "surgical_refinement_accepted": ("✓ Surgical refinement:",),
-    # terminal functional-closure targeted passes
     "closure_passes_narrated": ("│  Pass ",),
 }
 
@@ -223,7 +185,6 @@ def _log_counts(log_text: str) -> Dict[str, int]:
 
 
 def _calls_by_label(calls_path: Path) -> Dict[str, Dict[str, int]]:
-    """Per-stage call/token attribution from the archived call log."""
     out: Dict[str, Dict[str, int]] = {}
     if not calls_path.exists():
         return out
@@ -250,10 +211,10 @@ def _mechanism_ledger(
     log_path: Path,
     calls_path: Optional[Path],
 ) -> Dict[str, Any]:
-    """Was each ablatable mechanism exercised, and how much did it do?
+    """Whether each ablatable mechanism ran, and how much it did.
 
-    Structured sources first (closure record, plan conformance, pipeline
-    state lists); narration counts fill the layers that leave no record.
+    Structured sources first (closure record, plan conformance, pipeline state
+    lists); narration counts fill the layers that leave no record.
     """
     ledger: Dict[str, Any] = {}
     closure = result.get("functional_closure") or {}
@@ -368,7 +329,7 @@ def run_one(
     campaign_dir: Path,
     resume_calls: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """One ablation run → flat record (never raises; failures are recorded)."""
+    """One ablation run -> flat record; failures are recorded, not raised."""
     from src.app.pipeline import PrototypingPipeline
     from src.prototyping.provider_factory import create_llm
     from src.simulation.controlled_scenarios import evaluate_controlled_scenarios
@@ -459,13 +420,11 @@ def run_one(
         closure = result.get("functional_closure") or {}
         qualification = result.get("model_qualification") or {}
         usage = report.get("llm_usage") or {}
-        # final_score is measured at different pipeline stages per arm: DSE
-        # arms re-score the terminal snapshot (A/G layer + DSE closure
-        # injections on the text), non-DSE arms keep the generate-phase
-        # score. Measured on the seed-0 wave: every arm's generate-phase
-        # score was byte-identical (0.9608) while final_score ranged
-        # 0.9181-0.9608 purely by measurement point. generate_phase_score
-        # is the cross-arm comparable number.
+        # final_score is measured at different stages per arm: DSE arms re-score the
+        # terminal snapshot (A/G layer + DSE closure injections on the text), non-DSE
+        # arms keep the generate-phase score. On the seed-0 wave every arm's
+        # generate-phase score was 0.9608 while final_score ranged 0.9181-0.9608 by
+        # measurement point alone, so generate_phase_score is the comparable number.
         history_scores = [
             h.get("score") for h in (report.get("evaluation_history") or ())
             if isinstance(h, dict) and h.get("score") is not None
@@ -501,9 +460,9 @@ def run_one(
             "report_path": str(runs_dir / f"{stem}.report.json"),
             "log_path": str(log_path),
         })
-        # Effort accounting under prefix replay: the ledger counts live
-        # calls only, so add the replayed prefix back to make the arm's
-        # total comparable with an unreplayed FULL. Wall time stays live.
+        # Effort accounting under prefix replay: the ledger counts live calls only,
+        # so add the replayed prefix back for comparability with an unreplayed FULL.
+        # Wall time stays live.
         replayed_calls = int(getattr(llm, "replayed_calls", 0) or 0)
         if replayed_calls:
             replayed_tokens = int(getattr(llm, "replayed_tokens", 0) or 0)
@@ -517,7 +476,7 @@ def run_one(
                     int(usage.get("total_tokens") or 0) + replayed_tokens
                 ),
             })
-        # Mechanism ledger: observational, must never taint the run record.
+        # Mechanism ledger: observational; does not affect the run record.
         try:
             calls_archive = (
                 Path(record["calls_capture_path"])
@@ -542,11 +501,10 @@ def run_one(
             "log_path": str(log_path),
             "infrastructure_failure": _infrastructure_failure(error_text),
         })
-        # Spend up to the point of failure.  Deliberately NOT the llm_* names
-        # the analysis consumes: a failed run stopped at an arbitrary point, so
-        # its cost is not comparable to a completed run's and must never reach
-        # aggregate()/paired_deltas().  This is campaign accounting — the run
-        # report (and the usage line it prints) is never built on this path, so
+        # Spend up to the point of failure, under names other than the llm_* ones the
+        # analysis consumes: a failed run stopped at an arbitrary point, so its cost is
+        # not comparable to a completed run's and does not reach
+        # aggregate()/paired_deltas(). The run report is not built on this path, so
         # without this the tokens a failed run burned are unrecoverable.
         ledger = getattr(llm, "ledger", None)
         if ledger is not None:
@@ -618,7 +576,7 @@ def main() -> int:
     )
     commit = _git("rev-parse", "HEAD")
     # Tracked modifications make a campaign non-reproducible; pre-existing
-    # untracked scratch dirs do not — they are recorded, not refused.
+    # untracked scratch dirs do not - they are recorded, not refused.
     dirty = bool(_git("status", "--porcelain", "-uno"))
     untracked = [
         line[3:] for line in _git("status", "--porcelain").splitlines()

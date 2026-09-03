@@ -1,9 +1,4 @@
-"""
-直接加载上次生成的 SysML v2 模型，跑 Gazebo SITL 验证（跳过 LLM 生成阶段）。
-
-Usage:
-    .venv/bin/python examples/run_sitl_only.py
-"""
+"""直接加载上次生成的 SysML v2 模型，跑 Gazebo SITL 验证（跳过 LLM 生成阶段）。"""
 
 import os
 

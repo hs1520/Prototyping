@@ -1,14 +1,11 @@
 """Properties of the dimension-weights-v3 evaluator.
 
-The v2 safety dimension carried two lexical sub-metrics (a port literally
-named overrideCmd; action names containing emergency/failsafe/...) and a
-transition COUNT. Measured on one pilot batch: the keyword sub-metric scored
-zero for two of three configurations because responses were not named with
-the template vocabulary, and the count saturated for the configuration whose
-emitter renders one guarded transition per contract chain. v3 is structural
-and requirement-anchored: name-blind, quantity-blind, and shape-neutral
-(an invariant latch anchors a start-up inhibit as legitimately as a guarded
-transition anchors a triggered fail-safe)."""
+v2's safety dimension used two lexical sub-metrics (a port named overrideCmd;
+action names containing emergency/failsafe/...) and a transition count. On one
+pilot batch the keyword metric scored zero for two of three configurations and
+the count saturated for the third. v3 is structural and requirement-anchored:
+name-blind, quantity-blind, shape-neutral.
+"""
 from __future__ import annotations
 
 
@@ -84,18 +81,17 @@ _BASE = """package DeliveryUAV {{
 }}"""
 
 
-def test_version_is_v3():
+def test_version_v3():
     assert EVALUATOR_VERSION == "dimension-weights-v3"
 
 
-def test_name_blind_same_behaviour_same_score():
-    """v2's keyword sub-metric scored these differently; v3 must not."""
+def test_name_blind_same_score():
     template_named = _safety(_BASE.format(deploy_name="emergencyDeploy"))
     own_vocab = _safety(_BASE.format(deploy_name="releaseCanopy"))
     assert template_named == own_vocab
 
 
-def test_quantity_blind_duplicate_transitions_do_not_raise_score():
+def test_duplicate_transitions_no_gain():
     base = _BASE.format(deploy_name="releaseCanopy")
     padded = base.replace(
         "transition onFailure",
@@ -106,21 +102,19 @@ def test_quantity_blind_duplicate_transitions_do_not_raise_score():
     assert _safety(padded) <= _safety(base)
 
 
-def test_shape_neutral_invariant_latch_counts_as_anchor():
-    """REQ_SAFE_002's part anchors via a default-locked machine with no
-    guard; the requirement must count as covered."""
+def test_invariant_latch_is_anchor():
     score = _safety(_BASE.format(deploy_name="releaseCanopy"))
     assert score == 1.0
 
 
-def test_unwired_safety_part_is_penalised():
+def test_unwired_safety_penalised():
     base = _BASE.format(deploy_name="releaseCanopy")
     unwired = base.replace(
         "    connect safetyMonitor.cmd to lockActuator.cmd;\n", "")
     assert _safety(unwired) < _safety(base)
 
 
-def test_behavioural_term_prefers_requirement_tagged_scenarios():
+def test_prefers_tagged_scenarios():
     from types import SimpleNamespace
     ev = DesignEvaluator()
     fail_tagged = SimpleNamespace(tags=["requirement_behavior"], passed=False)
@@ -137,5 +131,4 @@ def test_behavioural_term_prefers_requirement_tagged_scenarios():
     ev._sim_result = sim
     score = ev._score_behavioral_verification(
         DesignConfiguration(name="x", parameters={}), None, None)
-    # structural 1.0 * 0.4 + traced pass rate 0.0 * 0.6
     assert abs(score - 0.40) < 1e-9

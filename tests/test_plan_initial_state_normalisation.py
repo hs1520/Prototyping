@@ -1,12 +1,10 @@
-"""Deterministic initial_state normalisation — the first mechanical issue
-category eaten by the parser instead of a paid correction round.
+"""Deterministic initial_state normalisation, handled by the parser instead of a
+paid correction round.
 
-Measured on run3's first draw: 12 of 12 planned machines wrote
-``initial_state`` in the qualified form ``Behavior::State`` and the validator
-fanned it into ~40 chained issues, buying a 15-25k output-token full rewrite
-for a decision a parser can make alone. The rule follows the behavior_kind
-reconciliation: derive, don't re-ask — and refuse anything that is not the
-machine's own identity.
+On run3's first draw 12 of 12 planned machines wrote ``initial_state`` as
+``Behavior::State`` and the validator fanned it into ~40 chained issues, costing
+a 15-25k output-token rewrite. Follows the behavior_kind rule: derive rather
+than re-ask, and refuse anything that is not the machine's own identity.
 """
 from src.prototyping.generation_plan import ModelGenerationPlan
 from src.prototyping.planned_behavior import (
@@ -34,14 +32,13 @@ def _behavior(initial_state, states=None, owner="Mechanism"):
     })
 
 
-def test_a_self_qualified_initial_state_is_stripped_and_audited():
+def test_self_qualified_stripped():
     behaviors, audit = normalise_planned_behavior_identities(
         [_behavior("ReleaseBehavior::Locked")]
     )
     assert behaviors[0].initial_state == "Locked"
     assert len(audit) == 1
     assert "'ReleaseBehavior::Locked' -> 'Locked'" in audit[0]
-    # the normalised behaviour validates clean — no chained issues remain
     issues = validate_planned_behaviors(
         behaviors, component_names={"Mechanism"},
         component_port_names={"Mechanism": set()},
@@ -50,7 +47,7 @@ def test_a_self_qualified_initial_state_is_stripped_and_audited():
     assert [i for i in issues if "initial_state" in i or "INITIAL" in i] == []
 
 
-def test_the_owner_qualified_triple_is_the_same_self_reference():
+def test_owner_qualified_triple_stripped():
     behaviors, audit = normalise_planned_behavior_identities(
         [_behavior("Mechanism::ReleaseBehavior::Locked")]
     )
@@ -58,9 +55,7 @@ def test_the_owner_qualified_triple_is_the_same_self_reference():
     assert len(audit) == 1
 
 
-def test_a_foreign_prefix_is_left_for_the_validator_to_refuse():
-    """Another machine's name is not a spelling of THIS machine's state —
-    stripping it would silently decide which behaviour the plan meant."""
+def test_foreign_prefix_kept():
     behaviors, audit = normalise_planned_behavior_identities(
         [_behavior("SomeOtherBehavior::Locked")]
     )
@@ -74,7 +69,7 @@ def test_a_foreign_prefix_is_left_for_the_validator_to_refuse():
     assert any("initial_state" in i for i in issues)
 
 
-def test_an_undeclared_suffix_is_left_for_the_validator_to_refuse():
+def test_undeclared_suffix_kept():
     behaviors, audit = normalise_planned_behavior_identities(
         [_behavior("ReleaseBehavior::Unlatched")]
     )
@@ -82,8 +77,7 @@ def test_an_undeclared_suffix_is_left_for_the_validator_to_refuse():
     assert audit == ()
 
 
-def test_role_initial_is_derived_when_no_state_claims_it():
-    """initial_state owns the fact; the role is its duplicate."""
+def test_initial_role_derived():
     behaviors, audit = normalise_planned_behavior_identities([
         _behavior("ReleaseBehavior::Locked", states=[
             {"state_id": "Locked", "role": "NORMAL"},
@@ -98,9 +92,7 @@ def test_role_initial_is_derived_when_no_state_claims_it():
     assert "role INITIAL derived" in audit[1]
 
 
-def test_a_contradicting_initial_claim_is_not_reconciled():
-    """A DIFFERENT state marked INITIAL is a real contradiction, not a
-    spelling — deciding it here would launder a plan defect."""
+def test_contradicting_claim_not_fixed():
     behaviors, audit = normalise_planned_behavior_identities([
         _behavior("ReleaseBehavior::Locked", states=[
             {"state_id": "Locked", "role": "NORMAL"},
@@ -117,7 +109,7 @@ def test_a_contradicting_initial_claim_is_not_reconciled():
     assert any("role INITIAL" in i for i in issues)
 
 
-def test_from_payload_normalises_and_records_the_reconciliation():
+def test_from_payload_records_audit():
     payload = {
         "components": [{
             "name": "Mechanism",
@@ -195,12 +187,12 @@ def _realization_payload(behavior_name, behavior_kind="STATE_DEF"):
     }
 
 
-def test_a_state_named_as_behavior_name_reconciles_to_its_machine():
-    """s0v6 anchor: REQ_SAFE_006 recorded behavior_name 'Locked' — a STATE
-    of PayloadMechanism's one planned machine — and with no cross-check the
-    plan froze the unsatisfiable obligation STATE_DEF PayloadMechanism.Locked
-    and lost terminal qualification. behaviors[] is the sole writer: a name
-    that is exactly one machine's state derives to that machine, audited."""
+def test_state_name_reconciles_to_machine():
+    """s0v6: REQ_SAFE_006 recorded behavior_name 'Locked', a state of
+    PayloadMechanism's one planned machine, so the plan froze the unsatisfiable
+    obligation STATE_DEF PayloadMechanism.Locked and lost terminal qualification. A
+    name that is exactly one machine's state now derives to that machine, audited.
+    """
     plan = ModelGenerationPlan.from_payload(
         _realization_payload("Locked"),
         requirements=["REQ_SAFE_006: maintain the payload in the "
@@ -216,11 +208,11 @@ def test_a_state_named_as_behavior_name_reconciles_to_its_machine():
     assert not any("is not a planned behavior" in i for i in plan.issues)
 
 
-def test_a_novel_behavior_name_is_left_for_step_4_to_author():
-    """behaviors[] is the sole writer of the behaviours it NAMES, not of
-    all behaviours: run2's archived plan carries three STATE_DEF
-    realizations whose machines Step 4 authors beyond the planned ones.
-    Only a collision with a planned machine's own state reconciles."""
+def test_novel_behavior_name_kept():
+    """behaviors[] writes only the behaviours it names: run2's plan carries three
+    STATE_DEF realizations whose machines Step 4 authors. Only a collision with a
+    planned machine's own state reconciles.
+    """
     plan = ModelGenerationPlan.from_payload(
         _realization_payload("SomethingNeverPlanned"),
         requirements=["REQ_SAFE_006: maintain the locked state"],
@@ -231,10 +223,10 @@ def test_a_novel_behavior_name_is_left_for_step_4_to_author():
     assert not any("is not a planned behavior" in i for i in plan.issues)
 
 
-def test_an_action_def_realization_is_not_cross_checked_against_behaviors():
-    """behaviors[] writes state machines and nothing else; an ACTION_DEF
-    realization legitimately names an action def it never declares
-    (measured: REQ_SAFE_005 deployBallisticRecoveryParachute)."""
+def test_action_def_not_cross_checked():
+    """behaviors[] writes state machines only; an ACTION_DEF realization may name an
+    action def it never declares (REQ_SAFE_005 deployBallisticRecoveryParachute).
+    """
     plan = ModelGenerationPlan.from_payload(
         _realization_payload(
             "deployBallisticRecoveryParachute", behavior_kind="ACTION_DEF",
@@ -244,11 +236,11 @@ def test_an_action_def_realization_is_not_cross_checked_against_behaviors():
     assert not any("is not a planned behavior" in i for i in plan.issues)
 
 
-def test_self_qualified_transition_endpoints_are_stripped_and_audited():
-    """Same mechanical category as initial_state, on the transition surface:
-    a source/target spelled Behavior::State (or Owner::Behavior::State) with
+def test_transition_endpoints_stripped():
+    """Same category as initial_state, on the transition surface: Behavior::State with
     the machine's own identity as prefix and a declared state as suffix is a
-    spelling, not a different state. Foreign prefixes stay for the validator."""
+    spelling, not another state. Foreign prefixes stay for the validator.
+    """
     behaviors, audit = normalise_planned_behavior_identities([
         PlannedBehavior.from_dict({
             "owner": "Mechanism",
@@ -277,17 +269,16 @@ def test_self_qualified_transition_endpoints_are_stripped_and_audited():
     transitions = {t.transition_id: t for t in behaviors[0].transitions}
     assert transitions["toReleasing"].source == "Locked"
     assert transitions["toReleasing"].target == "Releasing"
-    # foreign prefix untouched — the validator refuses it
     assert transitions["foreign"].source == "OtherBehavior::Locked"
     assert sum("transition toReleasing" in line for line in audit) == 2
 
 
-def test_a_transition_named_after_an_action_is_renamed_out_of_shadow():
-    """s0v15: the plan declared transition_id armSystem beside entry_action
-    armSystem in one machine; materialised, the transition shadows the
-    action def in scope, `entry action x : armSystem` resolves to a usage,
-    and the zero-warning terminal gate fails on usage-feature-typing.
-    The transition id is the junior, unreferenced artifact — renamed."""
+def test_shadowing_transition_renamed():
+    """s0v15: transition_id armSystem sat beside entry_action armSystem in one
+    machine, so the transition shadows the action def, `entry action x : armSystem`
+    resolves to a usage and the zero-warning gate fails on usage-feature-typing.
+    The transition id is unreferenced, so it is renamed.
+    """
     behaviors, audit = normalise_planned_behavior_identities([
         PlannedBehavior.from_dict({
             "owner": "FlightController",
@@ -311,7 +302,6 @@ def test_a_transition_named_after_an_action_is_renamed_out_of_shadow():
     assert any(
         "'armSystem' -> 'armSystemTransition'" in line for line in audit
     )
-    # a transition NOT colliding is untouched
     behaviors2, audit2 = normalise_planned_behavior_identities([
         PlannedBehavior.from_dict({
             "owner": "FlightController",

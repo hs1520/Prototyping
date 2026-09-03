@@ -1,10 +1,9 @@
 """Fail-closed evidence gate for post-hoc R2-BBAG evaluation.
 
-This module is evaluator-only. It binds a frozen experiment configuration to the
-complete selected chain/run set, immutable requirement digests, independently
-frozen architecture boundaries, frozen human gold, and per-run blind labels.
-It never selects chains from live code and never changes the global experiment
-arm metadata.
+Evaluator-only: it binds a frozen experiment configuration to the complete selected
+chain/run set, immutable requirement digests, independently frozen architecture
+boundaries, frozen human gold and per-run blind labels. It selects no chains from
+live code and does not change the global experiment arm metadata.
 """
 from __future__ import annotations
 
@@ -86,9 +85,9 @@ def _forbidden_keys(value: Any, *, path: str = "packet") -> list[str]:
     found: list[str] = []
     if isinstance(value, Mapping):
         for key, item in value.items():
-            # Key spelling is not a security boundary.  Fold snake_case,
-            # kebab-case, camelCase and punctuation variants to one token before
-            # checking so ``runtimeVerdict`` cannot evade ``runtime_verdict``.
+            # Fold snake_case, kebab-case, camelCase and punctuation variants
+            # to one token before checking, so ``runtimeVerdict`` does not evade
+            # ``runtime_verdict``.
             token = re.sub(r"[^a-z0-9]", "", str(key).strip().lower())
             child = f"{path}.{key}"
             if token in _FORBIDDEN_BLIND_KEY_TOKENS:
@@ -299,11 +298,11 @@ def build_blind_review_packet(
     expected_requirement_digest: str | None = None,
     expected_model_digest: str | None = None,
 ) -> dict[str, Any]:
-    """Package the exact human-visible source/model bytes without runtime leakage.
+    """Package the human-visible source/model bytes without runtime leakage.
 
-    The optional expected digests are the bindings from the frozen requirement
-    set and archived prediction.  Supplying them makes packet production
-    fail-closed before a reviewer sees material from the wrong run or chain.
+    The optional expected digests bind the frozen requirement set and archived
+    prediction, so supplying them fails the packet closed before a reviewer sees
+    the wrong run or chain.
     """
     run = str(run_id).strip()
     chain = normalise_requirement_id(str(chain_id))
@@ -333,8 +332,8 @@ def build_blind_review_packet(
         raise ValueError("candidate_model bytes do not match expected_model_digest")
     if architecture_boundary is None:
         raise ValueError("architecture_boundary is required for blind review")
-    # Detach packet evidence from mutable caller-owned nested objects. Any later
-    # change to the source boundary must require a newly built packet and digest.
+    # Detach packet evidence from mutable caller-owned nested objects, so a later
+    # change to the source boundary needs a newly built packet and digest.
     boundary = copy.deepcopy(dict(architecture_boundary))
     boundary_problems = validate_frozen_boundary(boundary)
     if boundary_problems:
@@ -365,7 +364,7 @@ def build_blind_review_packet(
     }
     packet["artifact_digest"] = artifact_digest(packet)
     problems = validate_blind_packet(packet)
-    if problems:  # Defensive: builder output must satisfy its own public validator.
+    if problems:
         raise ValueError("invalid blind review packet: " + "; ".join(problems))
     return packet
 
@@ -438,10 +437,10 @@ def _configuration_problems(config: Mapping[str, Any]) -> list[str]:
         problems.append("experiment config must use BLACKBOARD_AG_V1")
     if config.get("arms") != ["R0-CURRENT", "R1-BBCTX", "R2-BBAG"]:
         problems.append("experiment config arms must be exact R0/R1/R2 ordering")
-    # One frozen intervention per config: either the deterministic emitter or the
-    # LLM-authored intervention, with its exact matching version. The mode->version
-    # binding plus the per-run mode/version checks below keep the two interventions
-    # in separate frozen configurations that can never be pooled together.
+    # One frozen intervention per config: the deterministic emitter or the
+    # LLM-authored one, with its matching version. The mode->version binding and the
+    # per-run mode/version checks below keep the two in separate frozen configurations
+    # that cannot be pooled.
     mode = config.get("r2_generation_mode")
     if mode not in R2_INTERVENTION_VERSION_BY_MODE:
         problems.append(
@@ -760,11 +759,10 @@ def require_evaluation_ready(
     *,
     evidence_bundle: Mapping[str, Any] | None = None,
 ) -> None:
-    """Reject any attempt to pool without a complete, self-consistent manifest.
+    """Reject pooling without a complete, self-consistent manifest.
 
-    This is the durable-consumer validation boundary.  It deliberately validates
-    the evidence index again instead of trusting the two readiness booleans or a
-    caller-recomputed digest.
+    The durable-consumer validation boundary: it re-validates the evidence index
+    rather than trusting the two readiness booleans or a caller-recomputed digest.
     """
     if manifest.get("schema_version") != READINESS_SCHEMA_VERSION:
         raise ValueError(

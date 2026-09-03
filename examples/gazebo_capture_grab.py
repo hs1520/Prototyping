@@ -1,8 +1,8 @@
-"""Frame subscriber that runs INSIDE the Gazebo container.
+"""Frame subscriber that runs inside the Gazebo container.
 
-Bind-mounted into the container by probe_gazebo_flight_capture.py and executed
-with `docker exec`, because the gz-transport Python bindings live in the image
-rather than on the host. Writes raw RGB frames, one directory per camera topic.
+Bind-mounted by probe_gazebo_flight_capture.py and run with `docker exec`,
+because the gz-transport Python bindings live in the image, not on the host.
+Writes raw RGB frames, one directory per camera topic.
 
 argv: <topics-csv> <max_frames_each> <deadline_seconds>
 """

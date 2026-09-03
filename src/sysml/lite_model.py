@@ -1,21 +1,4 @@
-"""
-lite_model.py
-
-SysMLLiteModel: lightweight SysMLModel replacement backed by the syside
-native API.  Replaces the deprecated Syside_AST_Parser (3 000-line
-mapping layer) with direct syside queries.
-
-Drop-in interface for evaluator.py, orchestrator.py, design_agent.py:
-  model.name
-  model.metadata                      # dict, mutable
-  model.part_definitions              # List[LitePartDef]
-  model.requirement_definitions       # List[LiteReqDef]
-  model.diagnostics                   # List[LiteDiagnostic]
-  model.to_sysml_text()               # raw LLM text, no round-trip loss
-  model.get_summary()                 # dict
-
-All structured properties are computed lazily on first access.
-"""
+"""lite_model.py"""
 
 from __future__ import annotations
 
@@ -32,10 +15,6 @@ except ImportError:
 from ..utils.suppressed import record_suppressed
 from .model import DiagnosticSeverity, FeatureDirection
 
-
-# ---------------------------------------------------------------------------
-# Lightweight data classes
-# ---------------------------------------------------------------------------
 
 @dataclass
 class LiteTypeRef:
@@ -96,12 +75,7 @@ class LiteDiagnostic:
     message: str
 
 
-# ---------------------------------------------------------------------------
-# Extraction helpers
-# ---------------------------------------------------------------------------
-
 def _map_direction(d) -> FeatureDirection:
-    """Map syside FeatureDirectionKind → FeatureDirection enum."""
     s = str(getattr(d, "name", d) or "").lower()
     if "inout" in s:
         return FeatureDirection.INOUT
@@ -113,11 +87,6 @@ def _map_direction(d) -> FeatureDirection:
 
 
 def _port_type_name(port) -> Optional[str]:
-    """
-    Return the declared type name for a PortUsage node via its FeatureTyping
-    relationships.  Mirrors _extract_feature_typing_ref from the old parser
-    but only needs the name string, not a full ElementRef.
-    """
     if not _SYSIDE_OK:
         return None
     ft_cls = getattr(_syside, "FeatureTyping", None)
@@ -143,17 +112,16 @@ def _port_type_name(port) -> Optional[str]:
 
 
 def _resolve_port_direction(port, syside_model) -> FeatureDirection:
-    """
-    Return the effective direction for a PortUsage.
+    """Return the effective direction for a PortUsage.
 
     Syside returns NONE when the direction is declared inside a PortDefinition
-    body rather than inline at the PortUsage site, e.g.:
+    body rather than inline at the usage site, e.g.:
 
         port def DataOutPort { out port data : DataFlow; }
         part def Sensor { port sensorOut : DataOutPort; }  // direction=NONE here
 
-    In that case we follow the FeatureTyping reference to the PortDefinition
-    and inherit the first non-NONE direction found among its owned members.
+    Then follow the FeatureTyping reference and inherit the first non-NONE
+    direction among the definition's owned members.
     """
     d = _map_direction(getattr(port, "direction", None))
     if d != FeatureDirection.NONE or not _SYSIDE_OK or syside_model is None:
@@ -171,13 +139,12 @@ def _resolve_port_direction(port, syside_model) -> FeatureDirection:
         for pdef in syside_model.elements(pdef_cls):
             if getattr(pdef, "name", None) != type_name:
                 continue
-            # Check all owned members of the PortDefinition for a direction
             for src in ("owned_ports", "owned_features", "owned_attributes"):
                 for feat in getattr(pdef, src, []) or []:
                     inherited = _map_direction(getattr(feat, "direction", None))
                     if inherited != FeatureDirection.NONE:
                         return inherited
-            break  # found the right PortDefinition, no direction → give up
+            break
     except Exception as exc:
         record_suppressed("sysml.lite_model.port_direction_inherit", exc)
 
@@ -189,7 +156,6 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
         return []
 
     sat_cls = getattr(_syside, "SatisfyRequirementUsage", None)
-    # One Compiler instance for all attribute evaluations in this call.
     compiler = _syside.Compiler()
     parts: List[LitePartDef] = []
 
@@ -198,7 +164,6 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
             if not pd.name:
                 continue
 
-            # ── Ports ──────────────────────────────────────────────────────
             ports: List[LitePortUsage] = []
             try:
                 for port in pd.owned_ports:
@@ -213,7 +178,6 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
             except Exception as exc:
                 record_suppressed("sysml.lite_model.parts_ports", exc)
 
-            # ── Attributes ─────────────────────────────────────────────────
             attrs: List[LiteAttributeUsage] = []
             try:
                 for attr in pd.owned_attributes:
@@ -227,15 +191,13 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                             # Compiler handles numeric expressions; keep boolean separate.
                             default_val = bool(getattr(fve, "value", False))
                         else:
-                            # Primary: Compiler handles plain literals, arithmetic
-                            # expressions (capacity * 0.15), and symbolic references.
                             compiler_ok = False
                             try:
                                 val, report = compiler.evaluate(fve)
                                 if not report.fatal:
                                     # Reference-chain initializers evaluate to
-                                    # the referenced node, not a scalar — no
-                                    # static value, not an error.
+                                    # the referenced node: no static value,
+                                    # not an error.
                                     from ..utils.syside_utils import (
                                         coerce_static_number,
                                     )
@@ -270,7 +232,6 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
             except Exception as exc:
                 record_suppressed("sysml.lite_model.parts_attributes", exc)
 
-            # ── Satisfy relationships ───────────────────────────────────────
             sats: List[LiteSatisfyRel] = []
             if sat_cls is not None:
                 seen_req: set = set()
@@ -286,7 +247,6 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
                     except Exception as exc:
                         record_suppressed("sysml.lite_model.parts_satisfy", exc)
 
-            # ── Actions ────────────────────────────────────────────────────
             actions: List[LiteActionUsage] = []
             try:
                 for act in getattr(pd, "owned_actions", []) or []:
@@ -296,9 +256,6 @@ def _extract_parts(syside_model) -> List[LitePartDef]:
             except Exception as exc:
                 record_suppressed("sysml.lite_model.parts_actions", exc)
 
-            # ── Short description (doc comment) ────────────────────────────
-            # pd.documentation is a collection of Documentation nodes;
-            # each node has a .body string — mirrors _extract_doc in old parser.
             short_desc = ""
             try:
                 for doc_node in getattr(pd, "documentation", None) or []:
@@ -337,11 +294,10 @@ def _extract_requirements(syside_model) -> List[LiteReqDef]:
 
 
 def _extract_diagnostics(raw_diags) -> List[LiteDiagnostic]:
-    """
-    Convert syside Diagnostics object → List[LiteDiagnostic].
+    """Convert syside Diagnostics object -> List[LiteDiagnostic].
 
-    Diagnostics has three sub-collections (.parser / .sema / .warnings),
-    it is NOT directly iterable — mirrors syntax_checker.py's access pattern.
+    Diagnostics is not iterable; read its three sub-collections
+    (.parser / .sema / .warnings) as syntax_checker.py does.
     """
     result: List[LiteDiagnostic] = []
     if raw_diags is None:
@@ -357,8 +313,6 @@ def _extract_diagnostics(raw_diags) -> List[LiteDiagnostic]:
 
     _collect(getattr(raw_diags, "parser",   []), DiagnosticSeverity.ERROR)
 
-    # Filter stdlib false positives from sema errors (Real, Integer, SI, etc.)
-    # before storing — mirrors the shared is_stdlib_sema_error logic.
     try:
         from .diagnostics import is_stdlib_sema_error
         _stdlib_filter = is_stdlib_sema_error
@@ -378,18 +332,12 @@ def _extract_diagnostics(raw_diags) -> List[LiteDiagnostic]:
     return result
 
 
-# ---------------------------------------------------------------------------
-# SysMLLiteModel
-# ---------------------------------------------------------------------------
-
 class SysMLLiteModel:
-    """
-    Lightweight replacement for SysMLModel.
+    """Lightweight replacement for SysMLModel.
 
-    Backed by the syside native API instead of the deprecated parser.
-    Structured properties are computed lazily from the syside model on
-    first access.  Raw text is always preserved in metadata["last_sysml_text"]
-    so text-based evaluation paths (regex) continue to work unchanged.
+    Backed by the syside native API; structured properties are computed lazily on
+    first access. Raw text stays in metadata["last_sysml_text"] so regex
+    evaluation paths keep working.
     """
 
     def __init__(
@@ -415,12 +363,9 @@ class SysMLLiteModel:
         self._syside_model = syside_model
         self._raw_diagnostics = raw_diagnostics
 
-        # Lazy caches — invalidated by invalidate_cache()
         self._part_defs: Optional[List[LitePartDef]] = None
         self._req_defs: Optional[List[LiteReqDef]] = None
         self._diag_list: Optional[List[LiteDiagnostic]] = None
-
-    # ── Lazy structural properties ───────────────────────────────────────────
 
     @property
     def part_definitions(self) -> List[LitePartDef]:
@@ -440,8 +385,6 @@ class SysMLLiteModel:
             self._diag_list = _extract_diagnostics(self._raw_diagnostics)
         return self._diag_list
 
-    # ── Interface ────────────────────────────────────────────────────────────
-
     def to_sysml_text(self) -> str:
         """Return the original SysML source text (no round-trip reconstruction)."""
         return self.metadata.get("last_sysml_text", "")
@@ -450,7 +393,6 @@ class SysMLLiteModel:
         """Append a RequirementDefinition to the in-memory list (mirrors SysMLModel API)."""
         if self._req_defs is None:
             self._req_defs = _extract_requirements(self._syside_model)
-        # Avoid duplicate IDs
         existing = {r.name for r in self._req_defs}
         req_name = getattr(req, "name", None)
         if req_name and req_name not in existing:
@@ -468,17 +410,10 @@ class SysMLLiteModel:
         }
 
     def invalidate_cache(self) -> None:
-        """Re-parse syside model on next property access.
-
-        Call after the raw text in metadata["last_sysml_text"] has been
-        surgically updated (e.g. MCTS injection) and a fresh parse is needed.
-        Note: this re-runs syside extraction; prefer raw-text regex paths for
-        hot-path operations.
-        """
+        """Re-parse syside model on next property access."""
         self._part_defs = None
         self._req_defs = None
         self._diag_list = None
-        # Re-run syside parse from updated text
         raw_text = self.metadata.get("last_sysml_text", "")
         if _SYSIDE_OK and raw_text:
             try:
@@ -488,20 +423,11 @@ class SysMLLiteModel:
                 record_suppressed("sysml.lite_model.invalidate_reparse", exc)
 
 
-# ---------------------------------------------------------------------------
-# Factory
-# ---------------------------------------------------------------------------
-
 def build_lite_model(
     raw_text: str,
     model_name: str = "GeneratedModel",
 ) -> SysMLLiteModel:
-    """
-    Parse *raw_text* with syside and return a SysMLLiteModel.
-
-    Falls back gracefully when syside is unavailable — the model still
-    carries the raw text so all text-based evaluation paths work normally.
-    """
+    """Parse *raw_text* with syside and return a SysMLLiteModel."""
     syside_model = None
     raw_diagnostics: list = []
     parse_error: Optional[str] = None

@@ -1,4 +1,3 @@
-"""Strong-binding post-hoc R2 evaluation evidence gate."""
 from __future__ import annotations
 
 import copy
@@ -222,7 +221,7 @@ def _fixtures():
     }
 
 
-def test_complete_evidence_chain_opens_only_the_posthoc_manifest_gate():
+def test_complete_chain_opens_gate():
     fixtures = _fixtures()
     manifest = build_evaluation_readiness_manifest(**fixtures)
     assert manifest["evaluation_ready"] is True
@@ -234,7 +233,7 @@ def test_complete_evidence_chain_opens_only_the_posthoc_manifest_gate():
     require_evaluation_ready(manifest, evidence_bundle=fixtures)
 
 
-def test_gate_fails_closed_when_any_selected_run_label_is_missing():
+def test_missing_run_label_fails():
     fixtures = _fixtures()
     fixtures["blind_labels"].pop()
     manifest = build_evaluation_readiness_manifest(**fixtures)
@@ -244,7 +243,7 @@ def test_gate_fails_closed_when_any_selected_run_label_is_missing():
         require_evaluation_ready(manifest)
 
 
-def test_gate_binds_gold_to_requirement_and_architecture_digests():
+def test_gold_bound_to_digests():
     fixtures = _fixtures()
     fixtures["gold_by_chain"]["REQ_SAFE_005"]["source_digest"] = "c" * 64
     fixtures["gold_by_chain"]["REQ_SAFE_005"]["architecture_boundary_digest"] = "d" * 64
@@ -256,7 +255,7 @@ def test_gate_binds_gold_to_requirement_and_architecture_digests():
     )
 
 
-def test_gate_binds_blind_packet_to_the_archived_prediction_model():
+def test_packet_bound_to_model():
     fixtures = _fixtures()
     run_id = fixtures["frozen_experiment_config"]["selected_r2_run_ids"][0]
     fixtures["archived_runs"][run_id]["predictions"]["REQ_SAFE_005"][
@@ -266,7 +265,7 @@ def test_gate_binds_blind_packet_to_the_archived_prediction_model():
     assert any("packet model digest mismatch" in item for item in manifest["problems"])
 
 
-def test_blind_packet_binds_the_exact_reviewed_source_and_model_bytes():
+def test_packet_binds_exact_bytes():
     fixtures = _fixtures()
     packet = fixtures["blind_packets"][0]
     packet["review_material"]["candidate_model"] += "\n// altered"
@@ -283,7 +282,7 @@ def test_blind_packet_binds_the_exact_reviewed_source_and_model_bytes():
     )
 
 
-def test_blind_packet_exposes_and_binds_the_frozen_architecture_boundary():
+def test_packet_binds_frozen_boundary():
     fixtures = _fixtures()
     packet = fixtures["blind_packets"][0]
     boundary = packet["review_material"]["architecture_boundary"]
@@ -306,7 +305,7 @@ def test_blind_packet_exposes_and_binds_the_frozen_architecture_boundary():
     )
 
 
-def test_blind_packet_detaches_embedded_boundary_from_caller_mutation():
+def test_embedded_boundary_detached():
     fixtures = _fixtures()
     packet = fixtures["blind_packets"][0]
     embedded = packet["review_material"]["architecture_boundary"]
@@ -317,7 +316,7 @@ def test_blind_packet_detaches_embedded_boundary_from_caller_mutation():
     )
 
 
-def test_blind_packet_builder_rejects_wrong_chain_or_archived_digest():
+def test_builder_rejects_wrong_chain():
     with pytest.raises(ValueError, match="does not match chain_id"):
         build_blind_review_packet(
             run_id="seed-0:R2-BBAG",
@@ -335,7 +334,7 @@ def test_blind_packet_builder_rejects_wrong_chain_or_archived_digest():
         )
 
 
-def test_taxonomy_requires_operational_definitions_and_adjudication():
+def test_taxonomy_needs_definitions():
     taxonomy = _fixtures()["failure_taxonomy"]
     taxonomy.pop("class_definitions")
     taxonomy.pop("adjudication")
@@ -345,7 +344,7 @@ def test_taxonomy_requires_operational_definitions_and_adjudication():
     assert any("adjudication" in item for item in problems)
 
 
-def test_taxonomy_requires_the_reviewed_fail_closed_decision_sequence():
+def test_taxonomy_needs_decision_sequence():
     taxonomy = _fixtures()["failure_taxonomy"]
     taxonomy["adjudication"]["decision_sequence"] = [
         "CONTRACT_INCOMPLETENESS",
@@ -362,7 +361,7 @@ def test_taxonomy_requires_the_reviewed_fail_closed_decision_sequence():
     assert any("inconclusive_class" in item for item in problems)
 
 
-def test_invalid_packet_cannot_receive_a_taxonomy_run_label():
+def test_invalid_packet_no_label():
     fixtures = _fixtures()
     packet = fixtures["blind_packets"][0]
     label = fixtures["blind_labels"][0]
@@ -376,7 +375,7 @@ def test_invalid_packet_cannot_receive_a_taxonomy_run_label():
     assert any("no taxonomy run label" in item for item in problems)
 
 
-def test_taxonomy_cannot_freeze_with_unresolved_review_markers():
+def test_review_markers_block_freeze():
     taxonomy = _fixtures()["failure_taxonomy"]
     taxonomy["class_definitions"]["NO_FAILURE"]["_review"] = "confirm"
     taxonomy["artifact_digest"] = artifact_digest(taxonomy)
@@ -384,7 +383,7 @@ def test_taxonomy_cannot_freeze_with_unresolved_review_markers():
     assert any("leftover _review markers" in item for item in problems)
 
 
-def test_committed_taxonomy_candidate_remains_unfrozen_and_non_independent():
+def test_draft_taxonomy_unfrozen():
     taxonomy = json.loads(
         Path("docs/gold/AG_FAILURE_TAXONOMY.draft.json").read_text(
             encoding="utf-8"
@@ -398,7 +397,7 @@ def test_committed_taxonomy_candidate_remains_unfrozen_and_non_independent():
     assert any("leftover _review markers" in item for item in problems)
 
 
-def test_taxonomy_and_frozen_execution_permissions_fail_closed():
+def test_bad_permissions_fail_closed():
     fixtures = _fixtures()
     fixtures["failure_taxonomy"]["review_protocol"][
         "independent_human_review"
@@ -419,7 +418,7 @@ def test_taxonomy_and_frozen_execution_permissions_fail_closed():
     assert any("gold_input_permitted must be false" in item for item in manifest["problems"])
 
 
-def test_static_failure_class_in_reference_gold_is_rejected():
+def test_gold_failure_class_rejected():
     fixtures = _fixtures()
     fixtures["gold_by_chain"]["REQ_SAFE_005"]["failure_class"] = "NO_FAILURE"
     manifest = build_evaluation_readiness_manifest(**fixtures)
@@ -428,7 +427,7 @@ def test_static_failure_class_in_reference_gold_is_rejected():
     )
 
 
-def test_blind_packet_rejects_runtime_diagnostics_even_with_a_fresh_digest():
+def test_runtime_diagnostics_rejected():
     fixtures = _fixtures()
     packet = fixtures["blind_packets"][0]
     packet["review_material"]["diagnostics"] = [{"code": "AG_X"}]
@@ -444,7 +443,7 @@ def test_blind_packet_rejects_runtime_diagnostics_even_with_a_fresh_digest():
     )
 
 
-def test_gate_does_not_accept_live_or_tampered_configuration_selection():
+def test_tampered_config_rejected():
     fixtures = _fixtures()
     config = copy.deepcopy(fixtures["frozen_experiment_config"])
     config["selected_ag_chain_ids"].append("REQ_SAFE_008")
@@ -454,7 +453,7 @@ def test_gate_does_not_accept_live_or_tampered_configuration_selection():
     assert any("REQ_SAFE_008" in item for item in manifest["problems"])
 
 
-def test_gate_rejects_generation_mode_or_intervention_version_mixing():
+def test_mode_version_mixing_rejected():
     for field, replacement, expected in (
         ("r2_generation_mode", "LLM_AUTHORED", "generation mode"),
         ("r2_intervention_version", "llm-authored-v1", "intervention version"),
@@ -472,14 +471,14 @@ def test_gate_rejects_generation_mode_or_intervention_version_mixing():
         assert any(expected in item for item in manifest["problems"])
 
 
-def test_ready_manifest_digest_detects_posthoc_tampering():
+def test_manifest_digest_detects_tampering():
     manifest = build_evaluation_readiness_manifest(**_fixtures())
     manifest["selected_run_ids"].append("invented:R2-BBAG")
     with pytest.raises(ValueError, match="artifact_digest"):
         require_evaluation_ready(manifest)
 
 
-def test_consumer_rejects_self_digested_manifest_without_bound_evidence():
+def test_self_digested_manifest_rejected():
     manifest = {
         "schema_version": "1.0",
         "artifact_role": "POSTHOC_EVALUATION_READINESS_MANIFEST",
@@ -494,7 +493,7 @@ def test_consumer_rejects_self_digested_manifest_without_bound_evidence():
         require_evaluation_ready(manifest)
 
 
-def test_complete_shaped_manifest_still_requires_reproducible_source_evidence():
+def test_source_evidence_required():
     manifest = build_evaluation_readiness_manifest(**_fixtures())
     with pytest.raises(ValueError, match="source evidence bundle is required"):
         require_evaluation_ready(manifest)
@@ -513,7 +512,7 @@ def test_complete_shaped_manifest_still_requires_reproducible_source_evidence():
         require_evaluation_ready(forged)
 
 
-def test_gate_rejects_extra_chain_evidence_and_embedded_runtime_artifact():
+def test_extra_chain_evidence_rejected():
     fixtures = _fixtures()
     fixtures["architecture_boundaries"]["REQ_SAFE_008"] = copy.deepcopy(
         fixtures["architecture_boundaries"]["REQ_SAFE_005"]
@@ -534,7 +533,7 @@ def test_gate_rejects_extra_chain_evidence_and_embedded_runtime_artifact():
     )
 
 
-def test_blind_packet_rejects_case_and_separator_variants():
+def test_case_variant_fields_rejected():
     fixtures = _fixtures()
     packet = fixtures["blind_packets"][0]
     packet["review_material"].update({

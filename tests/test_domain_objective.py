@@ -1,9 +1,3 @@
-"""Tests for the requirement-target-driven domain objective (design-input edition).
-
-Variants now declare SITL-settable DESIGN INPUTS (battery / mass / rotor / cruise
-speed); the objective derives emergent metrics via the physics estimator and scores
-them against requirement targets. This mirrors what SITL measures, enabling calibration.
-"""
 from __future__ import annotations
 
 from src.dse.domain_objective import (
@@ -32,53 +26,48 @@ _INCONSISTENT_POWER = """package D {
 }"""
 
 
-def test_strip_inner_loop_attrs_uniform_interface():
+def test_strip_inner_loop_uniform():
     from src.dse.variation_parser import admitted, parse_variation_points
     pts = admitted(parse_variation_points(_INCONSISTENT_POWER))[0]
     out, notes = strip_inner_loop_attrs(_INCONSISTENT_POWER, pts)
-    # every power variant now exposes the SAME interface: batteryCells only, no capacity
     for t in ("Power_4s", "Power_8s", "Power_12s"):
         assert variant_design_inputs(out, t) == {"battery_cells": float(t.split("_")[1][:-1])}
     assert any("batteryCapacityMah" in n for n in notes)
 
 
-def test_design_ontology_is_single_source_of_truth():
+def test_ontology_single_source():
     from src.dse.domain_objective import (
         DESIGN_ONTOLOGY, DESIGN_INPUTS, DESIGN_FIELD_ATTR, DESIGN_DEFAULTS,
         _FIELD_CONCERN, _INNER_LOOP_FIELDS,
     )
-    # derived views must match the ontology exactly
     assert DESIGN_INPUTS == tuple((d.field, d.attr) for d in DESIGN_ONTOLOGY)
     assert DESIGN_FIELD_ATTR == {d.field: d.attr for d in DESIGN_ONTOLOGY}
     assert DESIGN_DEFAULTS == {d.field: d.default for d in DESIGN_ONTOLOGY}
     assert _INNER_LOOP_FIELDS == tuple(d.field for d in DESIGN_ONTOLOGY if d.layer == "inner")
     assert _FIELD_CONCERN == {d.field: d.concern for d in DESIGN_ONTOLOGY if d.concern}
-    # every field is classified into exactly one layer
     assert all(d.layer in ("outer", "inner") for d in DESIGN_ONTOLOGY)
-    assert "battery_capacity_mah" in _INNER_LOOP_FIELDS   # the BO-sized variable
+    assert "battery_capacity_mah" in _INNER_LOOP_FIELDS
 
 
-def test_range_requirement_rejects_altitude_and_separation():
+def test_range_rejects_altitude():
     from src.dse.domain_objective import range_requirement
-    # altitude ≤120m AGL must NOT be read as an operational-range target (the metre-unit trap)
+    # altitude <=120m AGL is not an operational-range target (metre-unit trap)
     assert range_requirement(["REQ-CONS-001: shall not exceed a flight altitude of 120 metres AGL."]) == (None, 0.0)
     assert range_requirement(["REQ-FUNC-002: avoid before separation below 5 metres."]) == (None, 0.0)
-    # a genuine operational-range requirement is still picked up (km → metres)
     assert range_requirement(["REQ-PERF-004: operational range of at least 10000 metres."]) == ("REQ-PERF-004", 10000.0)
     assert range_requirement(["REQ-PERF-004: maximum range of 8 km."]) == ("REQ-PERF-004", 8000.0)
 
 
-def test_evaluation_overrides_payload_from_requirement():
+def test_evaluation_overrides_payload():
     from src.dse.domain_objective import evaluation_overrides
     ov = evaluation_overrides(["REQ-PERF-002: endurance at max rated payload.",
                                "REQ-FUNC-003: transport payloads up to 2.5 kg.",
                                "REQ-CONS-003: takeoff weight including payload <= 25 kg."])
-    assert ov == {"payload_mass_kg": 2.5}     # rated payload (not MTOW 25), ontology-driven
+    assert ov == {"payload_mass_kg": 2.5}
     assert evaluation_overrides(["REQ-PERF-002: endurance >= 25 minutes."]) == {}
 
 
-def test_normalize_variation_space_runs_both_passes():
-    # overlapping rotor (dedup) + inner-loop capacity on a variant (strip), one entry point
+def test_normalize_runs_both_passes():
     from src.dse.domain_objective import normalize_variation_space
     from src.dse.variation_parser import admitted, parse_variation_points
     model = _OVERLAP.replace(
@@ -86,12 +75,12 @@ def test_normalize_variation_space_runs_both_passes():
         "part def Hexa_Prop :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.2; attribute batteryCapacityMah : Real = 9000.0; }")
     pts = admitted(parse_variation_points(model))[0]
     out, notes = normalize_variation_space(model, pts)
-    assert variant_design_inputs(out, "Frame_Octo") == {}            # dedup stripped airframe rotor
-    assert "battery_capacity_mah" not in variant_design_inputs(out, "Hexa_Prop")  # inner-loop stripped
+    assert variant_design_inputs(out, "Frame_Octo") == {}
+    assert "battery_capacity_mah" not in variant_design_inputs(out, "Hexa_Prop")
     assert any("kept in" in n for n in notes) and any("inner-loop" in n for n in notes)
 
 
-def test_strip_inner_loop_attrs_noop_when_already_uniform():
+def test_strip_inner_loop_noop():
     model = _INCONSISTENT_POWER.replace(" attribute batteryCapacityMah : Real = 3000.0;", "") \
                                .replace(" attribute batteryCapacityMah : Real = 11170.0;", "")
     from src.dse.variation_parser import admitted, parse_variation_points
@@ -122,9 +111,8 @@ def _pts(model):
     return _admitted(_parse(model))[0]
 
 
-def test_normalize_strips_duplicate_field_from_non_owner():
+def test_normalize_strips_duplicate():
     out, notes = normalize_variation_ownership(_OVERLAP, _pts(_OVERLAP))
-    # rotor stays on propulsion (concern match), stripped from airframe variants
     assert variant_design_inputs(out, "Hexa_Prop") == {"rotor_count": 6.0, "rotor_radius_m": 0.2}
     assert variant_design_inputs(out, "Frame_Octo") == {}
     assert any("kept in 'propulsionSystem'" in n for n in notes)
@@ -136,8 +124,8 @@ def test_normalize_noop_without_overlap():
     assert out == _MODEL and notes == []
 
 
-def test_normalize_first_declarer_fallback_without_concern_match():
-    # neutral names so NO concern keyword matches either point → keep the first declarer
+def test_normalize_first_declarer_fallback():
+    # neutral names, so no concern keyword matches either point -> keep first declarer
     model = """package Drone {
     port def Sig;
     part def Iface { in port cmd : Sig; out port thrust : Sig; }
@@ -154,13 +142,13 @@ def test_normalize_first_declarer_fallback_without_concern_match():
 }"""
     out, notes = normalize_variation_ownership(model, _pts(model))
     assert any("first declarer" in n for n in notes)
-    assert variant_design_inputs(out, "OptA1") == {"rotor_count": 6.0}   # first declarer keeps it
-    assert variant_design_inputs(out, "OptB2") == {}                     # second stripped
+    assert variant_design_inputs(out, "OptA1") == {"rotor_count": 6.0}
+    assert variant_design_inputs(out, "OptB2") == {}
 
 
-def test_endurance_target_ignores_latency_seconds():
-    # a response-time req in SECONDS must not be mistaken for flight endurance (minutes):
-    # the inner BO would otherwise size for ~1 unit. Regression for the >=1.0 constraint bug.
+def test_endurance_ignores_seconds():
+    # a response-time req in seconds is not flight endurance (minutes); the inner BO
+    # would otherwise size for ~1 unit. Regression for the >=1.0 constraint bug.
     reqs = [
         "REQ-FUNC-006: incorporate a waypoint within 1.0 second of command.",
         "REQ-PERF-002: sustain flight for a minimum of 25 minutes.",
@@ -168,7 +156,7 @@ def test_endurance_target_ignores_latency_seconds():
     assert endurance_target(reqs) == 25.0
 
 
-def test_endurance_target_zero_without_minutes_or_hours():
+def test_endurance_zero_without_units():
     assert endurance_target(["REQ-FUNC-006: respond within 1.0 second."]) == 0.0
 from src.dse.variation_parser import admitted, parse_variation_points
 
@@ -186,14 +174,14 @@ _MODEL = """package Drone {
 _REQS = ["REQ-PERF-001: cruise speed at least 20 m/s", "REQ-PERF-002: endurance at least 30 minutes"]
 
 
-def test_requirement_targets_strips_id_and_uses_unit():
+def test_requirement_targets_strip_id():
     t = requirement_targets(_REQS)
     assert ("speed", 20.0) in t["REQ-PERF-001"]
     assert all(v != 1.0 for _, v in t["REQ-PERF-001"])  # the "001" not parsed as a target
     assert ("time", 30.0) in t["REQ-PERF-002"]
 
 
-def test_variant_design_inputs_extracted_by_field():
+def test_variant_inputs_by_field():
     d = variant_design_inputs(_MODEL, "QuadRotor")
     assert d["battery_capacity_mah"] == 12000.0
     assert d["payload_mass_kg"] == 0.3
@@ -201,43 +189,40 @@ def test_variant_design_inputs_extracted_by_field():
     assert d["cruise_speed_mps"] == 16.0
 
 
-def test_architecture_design_merges_with_defaults():
+def test_design_merges_defaults():
     vps, _ = admitted(parse_variation_points(_MODEL))
     di = architecture_design(vps, {"liftArch": "quad"}, _MODEL)
     assert di.payload_mass_kg == 0.3 and di.battery_capacity_mah == 12000.0
-    assert di.battery_cells == 4  # not declared → DESIGN_DEFAULTS
+    assert di.battery_cells == 4
 
 
-def test_objective_names_are_emergent_family_plus_cost():
+def test_objective_names_family_and_cost():
     # speed is settable (L1), not a variant objective; only emergent endurance remains
     assert objective_families(_REQS) == ["time"]
     assert objective_names(_REQS) == ["time_sat", "cost_efficiency"]
 
 
-def test_objectives_make_quad_and_vtol_nondominated():
+def test_quad_and_vtol_nondominated():
     vps, _ = admitted(parse_variation_points(_MODEL))
     quad = architecture_objectives(vps, {"liftArch": "quad"}, _MODEL, _REQS)
     vtol = architecture_objectives(vps, {"liftArch": "vtol"}, _MODEL, _REQS)
-    # estimator-derived trade-off: quad (big battery, heavy) wins endurance;
-    # vtol (light) wins cost → neither dominates.
     assert quad["time_sat"] > vtol["time_sat"]
     assert vtol["cost_efficiency"] > quad["cost_efficiency"]
 
 
-def test_within_requirement_bounds_rejects_over_spec_payload():
+def test_bounds_reject_over_spec_payload():
     from src.dse.domain_objective import within_requirement_bounds
     reqs = ["REQ-FUNC-003: transport payloads with a gross mass of up to 2.5 kg"]
     assert within_requirement_bounds({"payload_mass_kg": 2.5}, ["REQ-FUNC-003"], reqs)
     assert not within_requirement_bounds({"payload_mass_kg": 10.0}, ["REQ-FUNC-003"], reqs)
-    # unrelated requirement (not in satisfies) → no bound applied
     assert within_requirement_bounds({"payload_mass_kg": 10.0}, [], reqs)
 
 
-def test_design_field_family_is_exact_not_substring():
-    # variant-attribute classification now comes from the ontology (exact), not _family_of
-    # substring matching — which mis-read "rotorRadiusM" as the 'count' family ("rotor").
+def test_field_family_exact_not_substring():
+    # variant-attribute classification comes from the ontology (exact); _family_of
+    # substring matching mis-read "rotorRadiusM" as the 'count' family.
     from src.dse.domain_objective import DESIGN_FIELD_FAMILY
     assert DESIGN_FIELD_FAMILY == {"payload_mass_kg": "mass", "battery_cells": "count",
                                    "rotor_count": "count", "cruise_speed_mps": "speed"}
-    assert "rotor_radius_m" not in DESIGN_FIELD_FAMILY        # a dimension, not a count
-    assert "battery_capacity_mah" not in DESIGN_FIELD_FAMILY  # inner-loop, no cost family
+    assert "rotor_radius_m" not in DESIGN_FIELD_FAMILY
+    assert "battery_capacity_mah" not in DESIGN_FIELD_FAMILY

@@ -1,20 +1,18 @@
-"""Every check that reads a declaration must see all its legal spellings.
+"""Every check that reads a declaration has to see all its legal spellings.
 
-Five separate modules were found blind to a legal way of writing the same
-declaration, each in a different check, each discovered only when a real run
+Five modules were each blind to one legal spelling, each found only when a run
 failed:
 
   activated_constraint_plan  `: LengthValue [m]`      -> duplicate attribute
   requirement_semantics      same, plus no initializer -> duplicate attribute
   generation_plan            planned name, other type  -> port reported missing
-                                                          AND unplanned at once
+                                                          and unplanned at once
   dse/evaluator              `first X accept S if g`   -> every A/G chain 0
   dse/domain_objective       `: ISQ::LengthValue`      -> attribute skipped
 
-They share one shape: the model is legal, the check is a pattern, and the
-pattern encodes one way of writing the thing. This file states the spellings
-that must all be recognised, so the next such pattern fails here rather than in
-a paid run.
+The shape is the same: the model is legal and the check's pattern encodes one
+way of writing the thing. This file lists the spellings to recognise, so the
+next such pattern fails here rather than in a paid run.
 """
 from __future__ import annotations
 
@@ -32,7 +30,7 @@ ATTRIBUTE_SPELLINGS = [
 
 
 @pytest.mark.parametrize("declaration", ATTRIBUTE_SPELLINGS)
-def test_the_planned_attribute_materialiser_sees_every_spelling(declaration):
+def test_materialiser_sees_spellings(declaration):
     from src.prototyping.activated_constraint_plan import _ATTRIBUTE
 
     match = _ATTRIBUTE.search(declaration)
@@ -44,10 +42,9 @@ def test_the_planned_attribute_materialiser_sees_every_spelling(declaration):
 
 
 @pytest.mark.parametrize("declaration", ATTRIBUTE_SPELLINGS)
-def test_the_semantic_binder_sees_every_spelling(declaration):
+def test_binder_sees_spellings(declaration):
     import re
 
-    # the pattern requirement_semantics builds per attribute name
     pattern = re.compile(
         r"\battribute\s+currentSeparation"
         r"(?:\s*:\s*[A-Za-z_][\w:]*(?:\s*\[[^\]{}]*\])?)?"
@@ -59,7 +56,7 @@ def test_the_semantic_binder_sees_every_spelling(declaration):
 @pytest.mark.parametrize("declaration", [
     d for d in ATTRIBUTE_SPELLINGS if "=" in d and "Boolean" not in d
 ])
-def test_the_design_ontology_sees_every_numeric_spelling(declaration):
+def test_ontology_sees_numeric_spellings(declaration):
     from src.dse.domain_objective import resolve_design_attributes
 
     resolved = resolve_design_attributes(declaration)
@@ -72,7 +69,7 @@ def test_the_design_ontology_sees_every_numeric_spelling(declaration):
     "transition t1 first Nominal if faultDetected then Stopped;",
     "transition t1 first Nominal accept FaultSignal if faultDetected then Stopped;",
 ])
-def test_the_guarded_transition_pattern_sees_every_spelling(transition):
+def test_guarded_transition_spellings(transition):
     from src.dse.evaluator import _GUARDED_TRANSITION
 
     assert _GUARDED_TRANSITION.search(transition) is not None, (
@@ -81,10 +78,9 @@ def test_the_guarded_transition_pattern_sees_every_spelling(transition):
     )
 
 
-# A state entry action has two legal spellings, and the generators disagree on
-# which to use: ag_emitter writes the bare usage, the chain_of_thought prompts
-# teach the typed one. Both name the same action definition, so every consumer
-# must read the definition name out of either.
+# A state entry action has two legal spellings: ag_emitter writes the bare
+# usage, the chain_of_thought prompts teach the typed one. Both name the same
+# action definition, so consumers read the definition name out of either.
 ENTRY_ACTION_SPELLINGS = [
     "entry action deployParachute;",
     "entry action onParachute : deployParachute;",
@@ -92,7 +88,7 @@ ENTRY_ACTION_SPELLINGS = [
 
 
 @pytest.mark.parametrize("entry_action", ENTRY_ACTION_SPELLINGS)
-def test_the_ag_extractor_reads_the_definition_from_every_spelling(entry_action):
+def test_ag_extractor_reads_definition(entry_action):
     from src.prototyping.ag_extractor import _ENTRY_ACTION_RE
 
     match = _ENTRY_ACTION_RE.search(entry_action)
@@ -104,7 +100,7 @@ def test_the_ag_extractor_reads_the_definition_from_every_spelling(entry_action)
 
 
 @pytest.mark.parametrize("entry_action", ENTRY_ACTION_SPELLINGS)
-def test_the_repair_token_set_reads_the_definition_from_every_spelling(
+def test_repair_tokens_read_definition(
     entry_action,
 ):
     from src.prototyping.ag_repair import _behavior_tokens
@@ -119,7 +115,7 @@ def test_the_repair_token_set_reads_the_definition_from_every_spelling(
 
 
 @pytest.mark.parametrize("entry_action", ENTRY_ACTION_SPELLINGS)
-def test_the_behaviour_obligation_gate_accepts_every_spelling(entry_action):
+def test_obligation_gate_accepts_spellings(entry_action):
     from src.prototyping.ag_behavior_plan import (
         TransitionObligation,
         _transition_is_present,
@@ -144,10 +140,10 @@ def test_the_behaviour_obligation_gate_accepts_every_spelling(entry_action):
     )
 
 
-def test_the_runtime_response_catalog_needs_the_typed_form_to_find_anything():
-    """`ag_decision` only ever matched the typed spelling, and the emitter only
-    ever wrote the bare one, so this path produced nothing in R2 — the
-    inconsistency is between two halves of the same system, not a style choice.
+def test_response_catalog_needs_typed_form():
+    """`ag_decision` matched only the typed spelling while the emitter wrote only
+    the bare one, so this path produced nothing in R2 - an inconsistency between
+    two halves of the same system.
     """
     from src.prototyping.ag_decision import extract_runtime_response_catalog
 

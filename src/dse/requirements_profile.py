@@ -1,16 +1,13 @@
 """Requirement-driven feasibility (pain point A sibling / Problem-5 fix).
 
-Mandated redundancy is driven by **hazard severity**, not by how many SAFE
-requirements happen to exist. Counting is wrong: 30 minor safety requirements do
-not justify more fault tolerance than one catastrophic-failure requirement, and a
-count threshold (>=3 -> triple) collapses on any real system.
-
-Instead each SAFE requirement carries a failure-condition severity (assigned at
-extraction, DO-178C / ARP4754A style). The mandated minimum redundancy is the
-**worst-case** severity's required Hardware Fault Tolerance (HFT, IEC 61508
-architectural-constraint principle): higher severity -> higher HFT -> more
-redundancy. Designs below it are infeasible (Problem-5 fix). Traceable to the
-hazard analysis, anchored in functional-safety standards — not a magic threshold.
+Mandated redundancy follows hazard severity, not the number of SAFE requirements:
+30 minor safety requirements do not justify more fault tolerance than one
+catastrophic-failure requirement, and a count threshold (>=3 -> triple) collapses
+on any real system. Each SAFE requirement carries a failure-condition severity
+(assigned at extraction, DO-178C / ARP4754A style), and the mandated minimum
+redundancy is the worst-case severity's required Hardware Fault Tolerance (HFT,
+IEC 61508 architectural-constraint principle). Designs below it are infeasible,
+traceable to the hazard analysis.
 """
 from __future__ import annotations
 
@@ -19,7 +16,6 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Dict, List
 
-# ordered redundancy ladder (variant name -> channel depth)
 _REDUNDANCY_DEPTH: Dict[str, int] = {"single": 1, "dual": 2, "triple": 3}
 
 
@@ -34,8 +30,8 @@ class Severity(IntEnum):
 
 # severity -> mandated minimum redundancy, via required Hardware Fault Tolerance:
 #   Catastrophic -> HFT 2 -> triple (e.g. 2oo3) ; Hazardous/Major -> HFT 1 -> dual ;
-#   Minor / No-effect -> HFT 0 -> single. A documented, adjustable policy anchored
-#   in the severity->HFT principle (the exact band cut can itself be a sensitivity axis).
+#   Minor / No-effect -> HFT 0 -> single. Adjustable policy; the band cut is
+#   itself a candidate sensitivity axis.
 _SEVERITY_REDUNDANCY: Dict[Severity, str] = {
     Severity.CATASTROPHIC: "triple",
     Severity.HAZARDOUS: "dual",
@@ -71,7 +67,7 @@ class RequirementProfile:
     """Requirement category counts + per-SAFE-requirement hazard severities."""
     category_counts: Dict[str, int] = field(default_factory=dict)
     safe_severities: List[Severity] = field(default_factory=list)
-    unclassified_safe: int = 0  # SAFE requirements with no parseable severity tag
+    unclassified_safe: int = 0
 
     def count(self, category: str) -> int:
         return self.category_counts.get(category, 0)
@@ -103,13 +99,12 @@ def min_redundancy(
     profile: RequirementProfile,
     default_severity: Severity = Severity.MAJOR,
 ) -> str:
-    """Mandated minimum redundancy from the WORST-CASE SAFE hazard severity.
+    """Mandated minimum redundancy from the worst-case SAFE hazard severity.
 
     No SAFE requirements -> single (redundancy optional). Otherwise the highest
     severity present drives it (one Catastrophic -> triple even amid many Minor).
-    Unclassified SAFE requirements are conservatively treated as ``default_severity``
-    and surfaced via ``profile.unclassified_safe`` so the gap can be flagged — never
-    silently upgraded to triple.
+    Unclassified SAFE requirements are treated as ``default_severity`` and surfaced
+    via ``profile.unclassified_safe`` rather than silently upgraded to triple.
     """
     sevs: List[Severity] = list(profile.safe_severities)
     sevs += [default_severity] * profile.unclassified_safe

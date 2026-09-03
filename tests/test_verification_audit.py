@@ -1,8 +1,7 @@
 """Static verification-readiness audit: matrix `unassigned` rows become refinement issues.
 
-The audit reuses build_matrix() itself (no reimplementation), so its unassigned
-prediction is exact: execution results only upgrade planned tiers, they never
-create a first anchor.
+The audit reuses build_matrix(), so its unassigned prediction is exact:
+execution results only upgrade planned tiers, they do not create a first anchor.
 """
 from __future__ import annotations
 
@@ -14,9 +13,6 @@ from src.agents.verification_audit import (
     verification_gap_issues,
 )
 
-# One anchorless requirement (REQ_MISC_001 — nothing links it to any tier) among
-# anchored ones: a guard-linked safety requirement, a closure-family endurance
-# requirement, an inspection-tagged constraint, and a phased-behaviour requirement.
 _MODEL = """package D {
     requirement def REQ_SAFE_003 {
         doc /* GCS link loss for more than 10 seconds shall trigger safe landing. */
@@ -50,22 +46,21 @@ _MODEL = """package D {
 }"""
 
 
-def test_audit_flags_only_the_anchorless_requirement():
+def test_flags_only_anchorless():
     issues = verification_gap_issues(_MODEL, model_name="D")
     assert issues, "the anchorless requirement must be flagged"
     joined = "\n".join(issues)
     assert "REQ_MISC_001" in joined
     assert "UNASSIGNED" in joined
-    # Anchored requirements must NOT be flagged; neither must Phase 8 families
-    # (endurance closes at the datasheet tier AFTER refinement — flagging it at
-    # refinement time would be a false gap).
+    # Anchored requirements are not flagged, nor are Phase 8 families: endurance
+    # closes at the datasheet tier after refinement, so flagging it at refinement
+    # time would be a false gap.
     for anchored in ("REQ_SAFE_003", "REQ_CONS_002", "REQ_OPER_001", "REQ_PERF_002"):
         assert anchored not in joined
-    # The issue text must carry the honesty boundary — no fabricated evidence.
     assert "external evidence" in joined
 
 
-def test_audit_excludes_external_measurement_gaps_from_surgical_llm():
+def test_excludes_external_measurement_gaps():
     model = """package D {
         requirement def REQ_FUNC_001 {
             doc /* Navigate to GPS waypoints with CEP below 1.0 metre. */
@@ -96,7 +91,7 @@ def test_audit_excludes_external_measurement_gaps_from_surgical_llm():
     assert "REQ_PERF_001" not in joined
 
 
-def test_audit_excludes_model_requirements_outside_admitted_input_scope():
+def test_excludes_out_of_scope_requirements():
     model = """package D {
         requirement def REQ_FUNC_006 {
             doc /* Update a valid waypoint command within 1 second. */
@@ -121,17 +116,17 @@ def test_audit_excludes_model_requirements_outside_admitted_input_scope():
     assert "REQ_FUNC_008" not in joined
 
 
-def test_audit_issue_prefix_is_recognisable():
+def test_issue_prefix_recognisable():
     issues = verification_gap_issues(_MODEL, model_name="D")
     assert all(is_verify_gap_issue(i) for i in issues)
     assert not is_verify_gap_issue("some other issue")
 
 
-def test_audit_respects_the_limit():
+def test_audit_respects_limit():
     assert len(verification_gap_issues(_MODEL, model_name="D", limit=0)) == 0
 
 
-def test_positive_inhibition_failure_requests_a_guard_repair():
+def test_inhibition_requests_guard_repair():
     model = """package D {
         item def DeliveryCoordinateSatisfied;
         requirement def REQ_SAFE_006 {
@@ -162,13 +157,13 @@ def test_positive_inhibition_failure_requests_a_guard_repair():
     assert "Do not add a new response action" in issue
 
 
-def test_audit_is_best_effort_on_garbage_input():
-    # Must never raise — the refinement loop depends on that contract.
+def test_garbage_input_best_effort():
+    # Invariant: does not raise; the refinement loop depends on it.
     assert verification_gap_issues("", model_name="X") == []
     assert isinstance(verification_gap_issues("not sysml at all {{{", model_name="X"), list)
 
 
-def test_anchor_gate_rejects_a_new_behavioral_failure():
+def test_anchor_gate_rejects_new_failure():
     before_behavior = SimpleNamespace(
         sim_score=1.0,
         scenario_results=[SimpleNamespace(passed=True)],
@@ -185,10 +180,6 @@ def test_anchor_gate_rejects_a_new_behavioral_failure():
 
     assert behavioral_result_regressed(before, after)
 
-
-# ---------------------------------------------------------------------------
-# Declared (out-of-vocabulary) response intents and the unverifiable record
-# ---------------------------------------------------------------------------
 
 _UNLOCK_MODEL = """package D {
     requirement def REQ_FUNC_030 {
@@ -207,10 +198,11 @@ _UNLOCK_MODEL = """package D {
 }"""
 
 
-def test_declared_markers_close_a_gap_the_builtin_table_cannot_see():
-    """"unlock" is outside the built-in intent table, so without the plan's
-    declaration the reachable unlock action anchors nothing and the row is
-    flagged; with the declared intent and marker the same model closes."""
+def test_declared_markers_close_gap():
+    """"unlock" is outside the built-in intent table: without the plan's declaration
+    the reachable unlock action anchors nothing and the row is flagged; with the
+    declared intent and marker the same model closes.
+    """
     assert any(
         "REQ_FUNC_030" in issue
         for issue in verification_gap_issues(_UNLOCK_MODEL, model_name="D")
@@ -222,11 +214,13 @@ def test_declared_markers_close_a_gap_the_builtin_table_cannot_see():
     ) == []
 
 
-def test_unverifiable_record_is_a_gate_capability_gap_not_a_model_gap():
-    """A recorded "unverifiable" keeps the row out of the surgical queue (no
-    repair can make the gate check what its vocabulary cannot express), but
-    only the explicit record buys that — the same model without it is still
-    flagged, so the exclusion cannot fail open."""
+def test_unverifiable_not_model_gap():
+    """A recorded "unverifiable" keeps the row out of the surgical queue, since no
+    repair makes the gate check what its vocabulary cannot express.
+
+    Only the explicit record does that: the same model without it is still flagged,
+    so the exclusion cannot fail open.
+    """
     no_response = _UNLOCK_MODEL.replace("{ entry action unlockDoor; }", ";")
 
     assert verification_gap_issues(

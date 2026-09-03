@@ -1,10 +1,9 @@
-"""Every Tier 0 rewrite is adopted only on a strict fall in the error count.
+"""A Tier 0 rewrite is adopted only on a strict fall in the error count.
 
-Two of the five fixers were written that way from the start; three adopted their
-edit unconditionally and were brought into line. These cases pin the resulting
-contract and, equally, that bringing them into line did not change what Tier 0
-produces -- each fixer still resolves the error class it targets, and a chain of
-two still converges.
+Two of the five fixers were written that way; three adopted their edit
+unconditionally and were brought into line. These pin the contract and that
+Tier 0 output is unchanged: each fixer still resolves its error class, and a
+chain of two still converges.
 """
 from __future__ import annotations
 
@@ -28,7 +27,6 @@ class _NoCallLLM:
         raise AssertionError("Tier 0 must not call the LLM")
 
 
-# A guard names an attribute nothing declares -> one sema error -> ATTR-INJ.
 _GUARD_ATTR_MISSING = """package M {
     part def Ctl {
         state def Modes {
@@ -44,7 +42,6 @@ _GUARD_ATTR_MISSING = """package M {
 }
 """
 
-# An item named with a reserved word -> one parser error -> KW-FIX.
 _RESERVED_ITEM_NAME = """package M {
     port def P { in item state : ScalarValues::Real; }
     part def C { port p : P; }
@@ -106,7 +103,7 @@ def _tier0(text: str):
         ("both", _BOTH, 1, 1),
     ],
 )
-def test_tier0_resolves_each_error_class_without_the_llm(
+def test_tier0_resolves_error_classes(
     name, text, parser_errors, sema_errors
 ):
     before = check_syntax(text)
@@ -121,23 +118,22 @@ def test_tier0_resolves_each_error_class_without_the_llm(
     assert result.total_errors() == 0, name
 
 
-def test_a_chain_of_two_fixers_still_converges_under_the_strict_rule():
-    """The case a strict-improvement rule could plausibly break.
+def test_fixer_chain_converges():
+    """A chain of two fixers still converges under the strict rule.
 
-    KW-FIX runs before ATTR-INJ. If the first fixer's edit were discarded for
-    failing to reduce the count on its own, the pair could no longer reach zero
-    together. It does.
+    KW-FIX runs before ATTR-INJ; if its edit were discarded for not reducing the
+    count on its own, the pair could not reach zero together.
     """
     fixed, result, _hints, resolved = _tier0(_BOTH)
     assert resolved is True
     assert result.total_errors() == 0
-    assert "attribute lowBattery" in fixed  # ATTR-INJ contributed
+    assert "attribute lowBattery" in fixed
     assert check_syntax(fixed).total_errors() == 0
 
 
-# A guard names `y`, which nothing declares; `x` is declared but in a different
-# part definition, so it is not visible from the guard. `x` is one edit away
-# from `y`, which is enough for the Levenshtein fixer to propose it.
+# A guard names `y`, which nothing declares; `x` is declared in a different part
+# definition, so it is not visible from the guard. `x` is one edit from `y`,
+# enough for the Levenshtein fixer to propose it.
 _TYPO_WHOSE_NEAREST_NAME_IS_OUT_OF_SCOPE = (
     "package M { part def A { attribute x : Real = 1.0; } "
     "part def B { state def S { entry; then a; state a; "
@@ -145,32 +141,26 @@ _TYPO_WHOSE_NEAREST_NAME_IS_OUT_OF_SCOPE = (
 )
 
 
-def test_a_rewrite_that_fixes_nothing_is_rejected_even_though_it_looks_right():
-    """The case the strict rule exists for, and the reason it is not cosmetic.
+def test_no_op_rewrite_rejected():
+    """A rewrite that resolves nothing is refused even though it looks right.
 
-    Substituting `x` for `y` resolves nothing: the error merely moves from "no
-    feature named y" to "no feature named x", because `x` is declared in another
-    part. The error count is identical before and after, so the edit is refused.
-    Without the rule it would be adopted, and a guard would silently come to
-    reference a different variable in a different part -- a model that passes
-    every syntactic check while meaning something else.
+    Substituting `x` for `y` moves the error from "no feature named y" to "no
+    feature named x", because `x` is declared in another part; the count is
+    unchanged, so the edit is refused. Otherwise the guard would reference a
+    different variable in a different part and still pass every syntactic check.
     """
     text = _TYPO_WHOSE_NEAREST_NAME_IS_OUT_OF_SCOPE
     before = check_syntax(text)
     assert len(before.sema_errors) == 1
     assert "No Feature named 'y' found" in before.sema_errors[0]["message"]
 
-    # The fixer does propose the substitution ...
     import src.agents.refinement as refinement
 
     proposed = refinement.try_fix_sema_errors(text, before.sema_errors)
     assert proposed.fixed_text != text
     assert "if x >" in proposed.fixed_text
-    # ... and it resolves nothing.
     assert check_syntax(proposed.fixed_text).total_errors() == before.total_errors()
 
-    # Tier 0 therefore keeps the original identifier, and reaches zero errors by
-    # declaring the attribute the guard actually names.
     fixed, result, _hints, resolved = _tier0(text)
     assert "if y >" in fixed
     assert "if x >" not in fixed

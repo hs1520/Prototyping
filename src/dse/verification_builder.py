@@ -1,9 +1,9 @@
 """Generate SysML v2 verification cases for a DSE-recommended model.
 
-This is layer 0 of the DSE→SITL plan: make the *verification intent* explicit and
-traceable inside the SysML v2 model, per the standard's verification-case framework.
-For every quantified requirement (one with a numeric target — speed/endurance/mass…)
-it emits, against the model's system type:
+Layer 0 of the DSE->SITL plan: make the verification intent explicit and
+traceable inside the SysML v2 model, per the standard's verification-case
+framework. For every quantified requirement (one with a numeric target -
+speed/endurance/mass...) it emits, against the model's system type:
 
     requirement def <Rid><Fam>Req { doc /* req + direction */ attribute target : Real = <v>; }
     requirement <rid><fam>Req : <Rid><Fam>Req;                       // usage
@@ -12,10 +12,10 @@ it emits, against the model's system type:
         objective { verify <rid><fam>Req; }                          // verify the usage
     }
 
-The numeric VERDICT is left to the execution layer (SITL .parm + L2 test compares the
-measured value against `target`): the same verification case can be executed at
-multiple fidelities (static reachability sim vs SITL). Syntax is Syside-verified; any
-emission that would not parse is discarded (model returned unchanged).
+The numeric verdict is left to the execution layer (SITL .parm + L2 test compares
+the measured value against `target`), so one case can run at several fidelities.
+Syntax is Syside-verified; any emission that would not parse is discarded (model
+returned unchanged).
 """
 from __future__ import annotations
 
@@ -27,9 +27,6 @@ from .domain_objective import _PERF_FAMILIES, requirement_targets
 
 
 def _find_system_type(model_text: str) -> str:
-    """The part def that owns the most nested part usages = the assembly/system.
-
-    verification subjects bind to this type (the thing being verified)."""
     best, best_n = "", -1
     for m in re.finditer(r"\bpart\s+def\s+(\w+)\s*(?::>[^{]*)?\{", model_text):
         name = m.group(1)
@@ -44,9 +41,9 @@ def _find_system_type(model_text: str) -> str:
             best, best_n = name, n
     if best_n >= 1:
         return best
-    # Flat package assembly (parts declared at package scope, no wrapping part def —
+    # Flat package assembly (parts declared at package scope, no wrapping part def -
     # how the LLM often emits models): use the most-connected part's type as the
-    # verification subject's representative (the system's integration hub).
+    # verification subject's representative.
     usage_type = dict(re.findall(r"\bpart\s+(\w+)\s*:\s*(\w+)\s*;", model_text))
     deg: dict = {}
     for a, b in re.findall(r"\bconnect\s+(\w+)\.\w+\s+to\s+(\w+)\.\w+", model_text, re.IGNORECASE):
@@ -59,7 +56,6 @@ def _find_system_type(model_text: str) -> str:
 
 
 def _ident(rid: str, fam: str) -> str:
-    """A unique CamelCase identifier base from a requirement id + family."""
     core = "".join(p.capitalize() for p in re.split(r"[^A-Za-z0-9]", rid) if p)
     return f"{core}{fam.capitalize()}"
 
@@ -67,11 +63,7 @@ def _ident(rid: str, fam: str) -> str:
 def build_verification_cases(
     model_text: str, requirements: List[str]
 ) -> Tuple[str, List[str]]:
-    """Insert a verification case per (quantified requirement × family) into the model.
-
-    Returns (new_text, [verification_def_names]). If there are no quantified targets,
-    no system type, or the result would not parse, returns (model_text, []) unchanged.
-    """
+    """Insert a verification case per (quantified requirement x family) into the model."""
     targets = requirement_targets(requirements)
     if not targets:
         return model_text, []

@@ -1,8 +1,9 @@
 """Ingest UC3M SysML CSV data into a Pinecone integrated-embedding index.
 
-This script intentionally ignores the CSV `embeddings` column and sends plain text
-through `chunk_text`, so Pinecone computes vectors with its configured model.
-Kept deliberately: thesis baseline/evidence code, exercised by its own tests and invoked on demand rather than wired into the runtime pipeline. Do not remove as dead code.
+Ignores the CSV `embeddings` column and sends plain text through `chunk_text`,
+so Pinecone computes vectors with its configured model. Thesis
+baseline/evidence code: covered by its own tests and invoked on demand rather
+than wired into the runtime pipeline, so it is not dead code.
 """
 
 from __future__ import annotations
@@ -84,7 +85,6 @@ def _slugify_identifier(value: str) -> str:
 
 
 def choose_chunk_text(row: Dict[str, Any]) -> str:
-    # Prefer curated description text; fallback to raw content when missing.
     description = _safe_text(row.get("descriptions", ""))
     if description:
         return description
@@ -152,11 +152,6 @@ def batched(records: Iterable[Dict[str, Any]], batch_size: int) -> Iterator[List
 
 
 def _extract_verify_summary(response: Any) -> tuple[int, str]:
-    """Extract a compact summary from a Pinecone verify/search response.
-
-    Supports both plain dictionaries and SDK response objects exposing ``to_dict()``.
-    Returns the hit count and the first file path if present.
-    """
     if hasattr(response, "to_dict") and callable(response.to_dict):
         payload = response.to_dict()
     else:
@@ -229,8 +224,5 @@ def main() -> None:
 
     print(f"ingestion_done: total_upserted={total_upserted}")
 
-# python src/rag/ingest_uc3m_to_pinecone.py --csv-files training.csv validation.csv
 if __name__ == "__main__":
     main()
-
-

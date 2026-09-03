@@ -1,9 +1,3 @@
-"""PrototypingPipeline.dse_mode selects which DSE path the entry point enables.
-
-Default is "variation" (the production-ready LLM-variation path); "bilevel"
-selects the catalog operator path.  The legacy scalar DSE ("off") was removed
-and now raises.
-"""
 from __future__ import annotations
 
 import inspect
@@ -13,7 +7,7 @@ import pytest
 from src.app.pipeline import PrototypingPipeline
 
 
-def test_default_mode_is_variation():
+def test_default_mode_variation():
     assert inspect.signature(PrototypingPipeline.__init__).parameters["dse_mode"].default == "variation"
     assert PrototypingPipeline._dse_flags("variation") is True
 
@@ -27,6 +21,6 @@ def test_off_mode_raises_scalar_removed():
         PrototypingPipeline._dse_flags("off")
 
 
-def test_unknown_mode_falls_back_to_variation():
+def test_unknown_mode_falls_back():
     assert PrototypingPipeline._dse_flags("nonsense") is True
     assert PrototypingPipeline._dse_flags("") is True

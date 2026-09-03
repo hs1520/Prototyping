@@ -1,10 +1,4 @@
-"""Deep module for deterministic Connectivity Reconciliation.
-
-The caller supplies failed reachability facts and a proposal callable.  This
-module owns the protocol that callers previously had to reproduce: index the
-model, validate proposed connections, add validated ports only when necessary,
-re-index, and validate the second connection proposal against the new model.
-"""
+"""Deterministic connectivity reconciliation."""
 from __future__ import annotations
 
 from dataclasses import dataclass

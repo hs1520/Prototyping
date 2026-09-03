@@ -1,23 +1,20 @@
-"""Per-requirement implementation traceability — gold-free (design §13, §9).
+"""Per-requirement implementation traceability - gold-free (design §13, §9).
 
-Answers the question the project actually asks: *for each requirement, is it
-implemented, and how completely?* Every link in the chain is a property of the
-committed model itself, so none of it needs human gold or blind review:
+For each requirement, is it implemented and how completely? Every link in the chain
+is a property of the committed model itself, so none of it needs human gold or
+blind review:
 
   requirement -> contract -> decomposition -> ownership -> discharge
              -> realizing behaviour -> verification observation
 
-This is deliberately not an accuracy measure. It never compares against a reviewed
-answer, so it cannot tell you the decomposition is *right*; it tells you whether the
-implementation chain is *there*. That is what "more robust" means here — fewer
-missing links, more of the requirement actually carried into the model — and it is
-measurable on every arm, including the ones that carry no A/G contracts at all and
-therefore trace nothing.
+This is not an accuracy measure: it never compares against a reviewed answer, so it
+cannot say the decomposition is right, only whether the implementation chain is
+there. That is what "more robust" means here, and it is measurable on every arm,
+including those that carry no A/G contracts and therefore trace nothing.
 
-The reason this exists as its own measure: allocation and discharge agreement
-against frozen gold turned out to be largely determined by the architecture
-boundary (see `docs/R2_GENERATION_FINDINGS.md` §2), so more human freezing buys
-little. Traceability is the part of the claim that is both load-bearing and free.
+It exists as its own measure because allocation and discharge agreement against
+frozen gold turned out to be largely determined by the architecture boundary (see
+`docs/R2_GENERATION_FINDINGS.md` §2), so more human freezing buys little.
 """
 from __future__ import annotations
 
@@ -26,8 +23,6 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 TRACEABILITY_SCHEMA_VERSION = "1.1"
 
-#: The links checked for every requirement, in dependency order. A requirement is
-#: fully traced only when all of them hold.
 TRACE_LINKS = (
     "contract_present",
     "decomposed_to_components",
@@ -45,9 +40,8 @@ def _fraction(numerator: int, denominator: int) -> Optional[float]:
 def _link_ok(value: Any) -> bool:
     """A link holds when it is True, or a fraction that reached 1.0.
 
-    A link with nothing to measure (denominator 0) does not hold: a requirement
-    whose contract owns no guarantee at all has not been traced to an
-    implementation, it has simply been left empty.
+    A link with nothing to measure (denominator 0) does not hold: a requirement whose
+    contract owns no guarantee has been left empty, not traced to an implementation.
     """
     if isinstance(value, bool):
         return value
@@ -129,10 +123,9 @@ def trace_requirement(graph: Any, realization_links: Sequence[Mapping[str, Any]]
         )
     }
     realized = sum(1 for item in components if item.name in realized_names)
-    # The link is the observe EDGE, not the presence of a verification element:
+    # The link is the observe edge, not the presence of a verification element:
     # a `verification def` nobody points at observes nothing, and checking only
-    # for its existence made this link true for a model with the dependency
-    # deleted.
+    # for existence held true with the dependency deleted.
     verification_targets = dict(getattr(graph, "verification_targets", None) or {})
     observation_linked = any(
         getattr(edge, "kind", "") == "observed_by"
@@ -163,27 +156,26 @@ def trace_requirement(graph: Any, realization_links: Sequence[Mapping[str, Any]]
     }
 
 
-#: A requirement is in scope for the bounded A/G layer when it instantiates one of
-#: the encoded safety patterns: an event-triggered timed response, or a state
-#: invariant (startup inhibit, locked-until-authorised release). A continuous
-#: control envelope — "maintain at least 5 metres of separation while avoiding it" —
-#: has no trigger, no deadline and no invariant state, and is not something this
-#: layer is built to decompose.
-#:
-#: Scope is a DECLARED design decision, never inferred from the text here. An
-#: undeclared requirement counts as in scope, so excluding one always requires an
-#: explicit recorded decision and the denominator cannot be quietly shrunk.
+# A requirement is in scope for the bounded A/G layer when it instantiates one of
+# the encoded safety patterns: an event-triggered timed response, or a state
+# invariant (startup inhibit, locked-until-authorised release). A continuous
+# control envelope - "maintain at least 5 metres of separation while avoiding
+# it" - has no trigger, deadline or invariant state, so this layer does not
+# decompose it.
+#
+# Scope is a declared design decision, not inferred from the text here. An
+# undeclared requirement counts as in scope, so excluding one takes an explicit
+# recorded decision and the denominator cannot shrink quietly.
 IN_SCOPE = "IN_SCOPE"
 OUT_OF_SCOPE = "OUT_OF_SCOPE"
 
-#: The declarations themselves, for the frozen requirement set this project runs.
-#: Kept here as DATA with its reason attached, so a shrunk denominator is always
-#: reviewable: the reason is what a reader checks, not the number.
-#:
-#: Recorded 2026-07-26. Until then the runner passed no declaration at all, so a
-#: requirement the layer is not built to decompose was reported as an
-#: implementation gap (3/4 = 0.75) — the mirror image of scoring an arm 0.00 for
-#: carrying no A/G layer, and wrong for the same reason.
+# The declarations for the frozen requirement set this project runs, kept as
+# data with the reason attached so a shrunk denominator stays reviewable: the
+# reason is what a reader checks, not the number.
+#
+# Recorded 2026-07-26. Before that the runner passed no declaration, so a
+# requirement this layer does not decompose was reported as an implementation
+# gap (3/4 = 0.75).
 DECLARED_OUT_OF_SCOPE: Mapping[str, str] = {
     "REQ_FUNC_002": (
         "continuous control envelope (maintain separation while avoiding an "
@@ -202,26 +194,23 @@ def compute_traceability(
 ) -> Dict[str, Any]:
     """Traceability across every selected chain, plus the requirements with none.
 
-    ``declared_requirements`` is the set the run was asked to implement. A
-    requirement that produced no A/G chain at all is the most important case and
-    the easiest to hide, so it is reported explicitly as untraced rather than
-    silently excluded from the denominator — which is exactly how an arm that
-    carries no contracts would otherwise appear to score perfectly.
+    ``declared_requirements`` is the set the run was asked to implement. A requirement
+    that produced no A/G chain is reported as untraced rather than dropped from the
+    denominator, which would let an arm carrying no contracts appear to score
+    perfectly.
     """
     traced = [trace_requirement(graph, realization_links) for graph in graphs]
-    # A chain whose provenance line is missing cannot be attributed to any
-    # requirement. It must not occupy a row of its own *and* leave the requirement
-    # it belongs to counted as untraced, or the denominator inflates and every
-    # score drops for a single defect. Report it separately; the requirement it
-    # should have cited is reported untraced below, which is the honest reading.
+    # A chain with no provenance line cannot be attributed to a requirement.
+    # Giving it its own row while also counting its requirement as untraced
+    # inflates the denominator, so it is reported separately and the requirement it
+    # should have cited is reported untraced below.
     unattributed = [item for item in traced if not item["source_requirement"]]
     per_requirement: List[Dict[str, Any]] = [
         item for item in traced if item["source_requirement"]
     ]
     traced_ids = {item["source_requirement"] for item in per_requirement}
-    # An out-of-scope requirement is not an implementation gap: counting it would
-    # penalise a requirement for lacking a mechanism it was never eligible for —
-    # the same error as scoring R0/R1 at 0.0 for carrying no A/G layer.
+    # An out-of-scope requirement is not an implementation gap: counting it
+    # penalises a requirement for lacking a mechanism it was never eligible for.
     excluded = [
         str(item) for item in declared_requirements if str(item) in out_of_scope
     ]
@@ -264,15 +253,15 @@ def compute_traceability(
             round(sum(scores) / len(scores), 4) if scores else None
         ),
         "untraced_requirements": untraced,
-        # reported, never silently dropped: an excluded requirement must be visible
-        # with the reason it was excluded, or the denominator is unauditable
+        # reported rather than dropped: an excluded requirement is visible with the
+        # reason it was excluded, otherwise the denominator is unauditable
         "out_of_scope_requirements": [
             {"requirement": item, "reason": out_of_scope[item]} for item in excluded
         ],
         # Kept in full, not just counted: a chain can carry most of its links and
-        # still be untraceable because it never cites a requirement. Losing that
-        # detail would make "0.0" look like nothing was built, when what actually
-        # failed was provenance — which is a different defect with a different fix.
+        # still be untraceable for citing no requirement, and "0.0" alone would read
+        # as nothing built rather than as a provenance defect, which has a different
+        # fix.
         "unattributed_chains": unattributed,
         "per_requirement": per_requirement,
     }

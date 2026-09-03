@@ -14,7 +14,7 @@ def test_synthetic_e2e_can_close():
     assert rep.per_requirement and all(v.met for v in rep.per_requirement)
 
 
-def test_honesty_regression_25min_at_2_5kg_is_not_false_green():
+def test_25min_at_2_5kg_not_green():
     d = DesignInputs(2.5, 12000, 6, 4, 18 * 0.0254 / 2, 0.0)
     reqs = [
         "REQ-PERF-002: flight endurance of at least 25 minutes at maximum rated payload.",
@@ -26,10 +26,10 @@ def test_honesty_regression_25min_at_2_5kg_is_not_false_green():
     assert any(v.family == "time" and not v.met for v in rep.per_requirement)
 
 
-def test_default_real_catalog_closes_feasible_hexa_recommendation():
-    # DSE-style hexa recommendation (18in rotors, 6S, modest payload) must realize on
-    # the collected real catalog: Tarot X6 (hexa, 18in) + MN5008 (6S, 18in) + a 6S Tattu
-    # pack — the meet-in-the-middle CLOSED demo on real manufacturer data.
+def test_catalog_closes_hexa():
+    # DSE-style hexa recommendation (18in rotors, 6S, modest payload) realizes on the
+    # collected real catalog: Tarot X6 (hexa, 18in) + MN5008 + a 6S Tattu pack, the
+    # meet-in-the-middle CLOSED case.
     d = DesignInputs(1.5, 16000, 6, 6, 18 * 0.0254 / 2, 0.0)
     rep = close_the_loop(d, [], ["REQ-PERF-002: flight endurance of at least 25 minutes."],
                          DEFAULT_CATALOG)
@@ -38,9 +38,7 @@ def test_default_real_catalog_closes_feasible_hexa_recommendation():
     assert rep.per_requirement and all(v.met for v in rep.per_requirement)
 
 
-def test_default_real_catalog_closes_4s_quad_after_catalog_extension():
-    # The 4S extension gives the matcher a structurally consistent quad path:
-    # Tarot 650 Sport + MN3508/P15x5 4S + Tattu 4S pack.
+def test_catalog_closes_4s_quad():
     d = DesignInputs(0.2, 1300, 4, 4, 15 * 0.0254 / 2, 0.0)
     rep = close_the_loop(d, [], ["REQ-PERF-002: flight endurance of at least 5 minutes."],
                          DEFAULT_CATALOG)
@@ -51,10 +49,10 @@ def test_default_real_catalog_closes_4s_quad_after_catalog_extension():
     assert rep.chosen.rd.frame.arms == 4
 
 
-def test_default_real_catalog_4s_quad_snaps_to_endurance_pack_for_realistic_need():
-    # A1 regression: the 4S catalog must overlap the inner BO capacity axis, not only
-    # the small R-Line racing packs. This realistic 18min request now snaps to the
-    # traced 5200mAh 4S pack and closes on datasheet hover metrics.
+def test_4s_quad_snaps_endurance_pack():
+    # A1 regression: the 4S catalog overlaps the inner BO capacity axis, not only the
+    # small R-Line racing packs, so an 18min request snaps to the traced 5200mAh 4S
+    # pack.
     d = DesignInputs(0.2, 5200, 4, 4, 15 * 0.0254 / 2, 0.0)
     rep = close_the_loop(d, [], ["REQ-PERF-002: flight endurance of at least 18 minutes."],
                          DEFAULT_CATALOG)
@@ -65,9 +63,9 @@ def test_default_real_catalog_4s_quad_snaps_to_endurance_pack_for_realistic_need
     assert rep.chosen.metrics.endurance_min >= 18.0
 
 
-def test_default_real_catalog_4s_hexa_has_heavy_payload_mapping_but_honest_gap():
-    # A 10Ah recommendation must not silently jump to the new 24/30Ah packs:
-    # the 10% identity boundary remains binding even though the catalog grew.
+def test_4s_hexa_heavy_payload_gap():
+    # A 10Ah recommendation does not jump to the new 24/30Ah packs: the 10%
+    # identity boundary still binds after the catalog grew.
     d = DesignInputs(1.5, 10000, 4, 6, 17 * 0.0254 / 2, 0.0)
     reqs = [
         "REQ-PERF-002: minimum endurance of 25 minutes with maximum rated payload",
@@ -82,7 +80,7 @@ def test_default_real_catalog_4s_hexa_has_heavy_payload_mapping_but_honest_gap()
     assert rep.chosen.metrics.endurance_min < 25.0
 
 
-def test_default_real_catalog_closes_4s_hexa_with_integration_and_voltage_derating():
+def test_catalog_closes_4s_hexa_derated():
     d = DesignInputs(1.5, 30000, 4, 6, 17 * 0.0254 / 2, 0.0)
     reqs = [
         "REQ-PERF-002: minimum endurance of 25 minutes with maximum rated payload",
@@ -102,7 +100,7 @@ def test_default_real_catalog_closes_4s_hexa_with_integration_and_voltage_derati
     assert rep.chosen.metrics.endurance_min >= 25.0
 
 
-def test_default_real_catalog_octo_no_longer_ignores_integration_mass():
+def test_octo_counts_integration_mass():
     # The X8 still maps structurally, but adding its explicit 600g octo
     # integration allowance reveals that the old 25min closure was optimistic.
     d = DesignInputs(1.5, 16000, 6, 8, 15 * 0.0254 / 2, 0.0)

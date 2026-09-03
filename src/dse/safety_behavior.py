@@ -1,19 +1,19 @@
-"""Behavioural verification of SAFETY requirements — upgrades safety `satisfy` from mere
-allocation to real (three-state) behavioural evidence, reusing the state-machine extractor.
+"""Behavioural verification of SAFETY requirements - upgrades safety `satisfy` from
+allocation to three-state behavioural evidence, reusing the state-machine extractor.
 
-For each SAFE requirement we find the part(s) that satisfy it, take their state machines, and
-check whether a FAIL-SAFE state is actually REACHABLE from the initial state (the safety
-response can really be entered). Outcomes:
-  behaviorally-verified : owner part has a state machine and a fail-safe state is reachable.
-  behaviorally-violated : a state machine exists but NO fail-safe state is reachable (the
-                          safety behaviour is named/allocated but the SM can't get there —
-                          "fake safety", a real finding a keyword/structural scorer misses).
-  behavior-absent       : the satisfying part has no state machine → nothing to verify
-                          (the behaviour was never generated → flags a generation gap).
+For each SAFE requirement, find the part(s) that satisfy it, take their state
+machines and check whether a fail-safe state is reachable from the initial state.
+Outcomes:
+  behaviorally-verified : owner part has a state machine and a fail-safe state is
+                          reachable.
+  behaviorally-violated : a state machine exists but no fail-safe state is
+                          reachable - the behaviour is named/allocated but the SM
+                          cannot get there.
+  behavior-absent       : the satisfying part has no state machine, so nothing to
+                          verify (flags a generation gap).
 
-Scope (honest): this verifies fail-safe *reachability* of the safety state machine. Full
-per-requirement scenario semantics + timing are richer (behavioral_sim / grounded_eval for
-the redundancy-failsafe subclass) and remain roadmap items.
+Scope: fail-safe reachability only. Per-requirement scenario semantics and timing
+live in behavioral_sim / grounded_eval and remain roadmap items.
 """
 from __future__ import annotations
 
@@ -28,27 +28,27 @@ BEHAVIORALLY_VIOLATED = "behaviorally-violated"
 BEHAVIOR_ABSENT = "behavior-absent"
 RESPONSE_COLLAPSED = "response-collapsed"
 
-# distinct mandated safety RESPONSES → keywords (in requirement text AND in action names).
-# If two DIFFERENT response categories emit the SAME command, the arbitration is lost at the
-# behaviour interface (e.g. battery-low LAND, comm-loss LAND, propulsion PARACHUTE all collapse
-# to one CmdToEmergency → the flight controller can't do the right thing per cause).
+# distinct mandated safety responses -> keywords (in requirement text and in
+# action names). If two response categories emit the same command the
+# arbitration is lost at the behaviour interface (battery-low LAND, comm-loss
+# LAND, propulsion PARACHUTE all collapsing to one CmdToEmergency).
 _RESPONSE_CATEGORIES = {
     "parachute": ("parachute", "ballistic recovery", "chute"),
     "rtb":       ("return-to-base", "return to base", "return-to-home", "rtb", "return trajectory"),
     "land":      ("controlled descent", "safe landing", "land", "landing", "touchdown", "descend"),
     "lock":      ("lock", "locked", "inhibit release", "mechanically locked"),
-    # Degraded-continue: the mandated response is to KEEP FLYING under a
-    # fault (one motor inoperative), not to enter a land/rtb/lock state.
+    # Degraded-continue: the mandated response to a fault (one motor
+    # inoperative) is to keep flying, not enter a land/rtb/lock state.
     "continue":  ("controlled flight", "controlledflight", "maintain controlled"),
 }
 
 
 def _response_category(text: str):
-    """The distinct safety RESPONSE a requirement mandates
-    (parachute/rtb/land/lock/continue), or None. Order matters: parachute &
-    rtb are checked before land (a parachute/RTB req may also say 'land'),
-    and 'continue' last ('controlled descent' is a landing, not a
-    continuation)."""
+    """The safety response a requirement mandates (parachute/rtb/land/lock/continue), or None.
+
+    Order matters: parachute and rtb are checked before land (such a requirement may
+    also say 'land'), and 'continue' last ('controlled descent' is a landing).
+    """
     t = text.lower()
     for cat in ("parachute", "rtb", "land", "lock", "continue"):
         if any(k in t for k in _RESPONSE_CATEGORIES[cat]):
@@ -61,8 +61,9 @@ def _name_category(name: str):
 
 
 def collapsed_response_categories(model_text: str) -> Set[str]:
-    """Response categories that COLLAPSE — i.e. a single emitted command is sent by actions of
-    ≥2 distinct response categories (the arbitration distinction is lost at the interface)."""
+    """Response categories that collapse: one emitted command is sent by actions of >=2
+    distinct response categories, so the arbitration distinction is lost at the interface.
+    """
     cats_by_cmd: Dict[str, Set[str]] = {}
     for m in re.finditer(r"action\s+def\s+(\w+)\s*\{(.*?)\}", model_text, re.DOTALL):
         cat = _name_category(m.group(1))
@@ -72,7 +73,7 @@ def collapsed_response_categories(model_text: str) -> Set[str]:
             cats_by_cmd.setdefault(cmd, set()).add(cat)
     collapsed: Set[str] = set()
     for cmd, cats in cats_by_cmd.items():
-        if len(cats) >= 2:                  # one command serves ≥2 distinct responses → collapse
+        if len(cats) >= 2:
             collapsed |= cats
     return collapsed
 
@@ -85,9 +86,9 @@ def is_safety_req(rid: str, text: str) -> bool:
 
 
 def reachable_states(sm) -> Set[str]:
-    """State names reachable from the initial state via transitions. If the initial state
-    can't be determined (extractor limitation), treat all states as reachable (lenient — so
-    we never falsely claim a behaviour is unreachable)."""
+    """State names reachable from the initial state via transitions. Unknown initial
+    state: treat every state as reachable rather than report a false unreachable.
+    """
     starts: Set[str] = set()
     if sm.initial_state:
         starts.add(sm.initial_state)
@@ -109,17 +110,14 @@ def reachable_states(sm) -> Set[str]:
     return seen
 
 
-#: Word-prefix vocabulary for the RESPONSE a state EXECUTES. A fail-safe
-#: state is usually named for the safety condition it represents, but
-#: REQ-SAFE-007's mandated response is to keep flying: the state is named for
-#: the fault (SingleMotorFailure) and the whole response lives in its
-#: do-action (maintainControlledFlight). Grading state NAMES only produced
-#: the literally-false verdict "no reachable fail-safe state" on run
-#: 2026-08-31 — nothing was unreachable; the ontology had no word for a
-#: degraded-continue response. What a state does is evidence of the same
-#: rank as what it is called. Matching is on camelCase-split word PREFIXES,
-#: not substrings, so `checkThresholds` does not smuggle in "hold" and
-#: `unlockPayload` does not smuggle in "lock".
+# Word-prefix vocabulary for the response a state executes. A fail-safe state
+# is usually named for the safety condition it represents, but REQ-SAFE-007's
+# mandated response is to keep flying: the state is named for the fault
+# (SingleMotorFailure) and the response lives in its do-action
+# (maintainControlledFlight), so grading state names alone reported "no
+# reachable fail-safe state". What a state does is evidence too. Matching is
+# on camelCase-split word prefixes, not substrings, so `checkThresholds` does
+# not match "hold" and `unlockPayload` does not match "lock".
 _SAFE_ACTION_WORD_PREFIXES = (
     "failsafe", "safe", "abort", "lock", "disarm", "rtb", "return", "land",
     "hold", "emergency", "parachute", "contingency", "controlled",
@@ -145,7 +143,6 @@ def _executes_safe_response(state) -> bool:
 
 
 def _failsafe_reachable(sm) -> str:
-    """'reachable' | 'unreachable' | 'no_safe_state' for one state machine."""
     safe = {
         s.name for s in sm.states
         if any(k in s.name.lower() for k in _SAFE_STATE_KW)
@@ -160,17 +157,18 @@ def safety_behavior_status(model_text: str, requirements: List[str],
                            dynamic_fire: Dict[str, str] = None) -> Dict[str, str]:
     """{safety req_id: behavioural status} for every SAFE requirement satisfied in the model.
 
-    If ``dynamic_fire`` ({owner_part: 'fired'|'failed'}, from dynamic_behavior) is given, the
-    DYNAMIC verdict takes precedence over structural reachability: a part whose guarded
-    transition actually fires → verified; one whose scenario fails (guard present but never
-    fires) → violated (caught dynamically, not by structural reachability)."""
+    If ``dynamic_fire`` ({owner_part: 'fired'|'failed'}, from dynamic_behavior) is
+    given, the dynamic verdict takes precedence over structural reachability: a part
+    whose guarded transition fires -> verified; one whose scenario fails (guard
+    present but never fires) -> violated.
+    """
     dynamic_fire = dynamic_fire or {}
     by_part: Dict[str, list] = {}
     for sm in extract_state_machines(model_text):
         by_part.setdefault(sm.owner_part, []).append(sm)
     trace = extract_requirement_trace(model_text, requirements)
     text = trace.source_by_id
-    collapsed = collapsed_response_categories(model_text)   # categories sharing one command
+    collapsed = collapsed_response_categories(model_text)
 
     out: Dict[str, str] = {}
     for rid, parts in trace.owners.items():
@@ -178,21 +176,18 @@ def safety_behavior_status(model_text: str, requirements: List[str],
             continue
         sms = [sm for p in parts for sm in by_part.get(p, [])]
         verdicts = {dynamic_fire[p] for p in parts if p in dynamic_fire}
-        # structural: is a FAIL-SAFE state reachable? (dynamic firing of a non-safe transition
-        # must NOT count as a safety response — so the safe-state requirement gates everything.)
+        # structural check: a fail-safe state must be reachable; firing a non-safe
+        # transition is not a safety response, so the safe-state check gates the rest.
         structural_ok = any(_failsafe_reachable(sm) == "reachable" for sm in sms)
         cat = _response_category(text.get(rid, rid))
         if not sms:
             out[rid] = BEHAVIOR_ABSENT
         elif not structural_ok:
-            out[rid] = BEHAVIORALLY_VIOLATED        # no reachable fail-safe state
+            out[rid] = BEHAVIORALLY_VIOLATED
         elif cat in collapsed:
-            out[rid] = RESPONSE_COLLAPSED           # this response shares one command with a
-            #   DIFFERENT mandated response → arbitration lost at the interface (e.g. LAND, RTB
-            #   and PARACHUTE all emit the same CmdToEmergency → flight ctrl can't act per cause)
+            out[rid] = RESPONSE_COLLAPSED
         elif "failed" in verdicts:
-            out[rid] = BEHAVIORALLY_VIOLATED        # safe state reachable but dynamically NEVER
-            #                                         fires → "fake safety" (dynamic-only catch)
+            out[rid] = BEHAVIORALLY_VIOLATED
         else:
-            out[rid] = BEHAVIORALLY_VERIFIED        # fail-safe reachable (+ fires if dynamic ran)
+            out[rid] = BEHAVIORALLY_VERIFIED
     return out

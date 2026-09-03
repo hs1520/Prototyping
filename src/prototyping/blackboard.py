@@ -1,8 +1,8 @@
 """Typed, revisioned shared workspace for the revised Option 2 MVP.
 
-The committed SysML text is the semantic authority.  Other records are
-revision-bound coordination, analysis, or evidence state and cannot mutate the
-model except through :meth:`Blackboard.commit_model`.
+The committed SysML text is the semantic authority; other records are
+revision-bound coordination, analysis or evidence state and change the model only
+through :meth:`Blackboard.commit_model`.
 """
 from __future__ import annotations
 
@@ -100,13 +100,12 @@ class BlackboardRecord:
     model_digest: str
     task_id: Optional[str] = None
     session_id: Optional[str] = None
-    # Whether this record asserts something *about* the model it was published
-    # against. An analysis result is: revise the model and the analysis is stale.
-    # A process fact -- "the requirements phase finished" -- is not: revising the
-    # model later does not make it untrue. Consumers that expire stale facts must
-    # expire only the first kind, so the distinction is carried on the record
-    # rather than inferred by whoever reads it. Defaults to True because assuming
-    # a fact expires is the safe error.
+    # Whether this record asserts something about the model it was published
+    # against. An analysis result does: revise the model and the analysis is
+    # stale. A process fact -- "the requirements phase finished" -- does not.
+    # Consumers that expire stale facts expire only the first kind, so the record
+    # carries the distinction rather than the reader inferring it. Defaults to
+    # True, since assuming a fact expires is the safe error.
     revision_bound: bool = True
 
     def to_dict(self) -> dict[str, Any]:
@@ -154,18 +153,16 @@ class Blackboard:
         self._tasks: dict[str, BlackboardTask] = {}
         self._typed_values: dict[str, Any] = {}
         self._protected_requirement_defs: dict[str, str] = {}
-        # Stale-access accounting (§13 Group A). A rejection raises, so without
-        # counting it here neither the numerator nor the denominator survives into
-        # the archived artifacts and the metric cannot be computed at all.
-        # `permitted` counts accesses to a superseded revision that were allowed
-        # (an explicit `allow_stale` read), so the rate has a denominator that can
-        # in principle be less than 1.0 rather than being true by construction.
+        # Stale-access accounting (§13 Group A). A rejection raises, so counting here
+        # is what carries numerator and denominator into the archived artifacts.
+        # `permitted` counts allowed accesses to a superseded revision (an explicit
+        # `allow_stale` read), giving the rate a denominator that can be below 1.0
+        # rather than true by construction.
         self._stale_access: dict[str, int] = {"rejected": 0, "permitted": 0}
         self._check_and_extend_protection(initial_text)
 
     @staticmethod
     def _requirement_identities(model_text: str) -> dict[str, str]:
-        """Exact requirement-definition bodies, including thresholds and units."""
         from ..utils.sysml_text_utils import find_block_end
 
         result: dict[str, str] = {}
@@ -181,7 +178,6 @@ class Blackboard:
 
     @staticmethod
     def _element_index(model_text: str) -> list[dict[str, Any]]:
-        """Deterministic current-revision definition index for scoped queries."""
         from ..utils.sysml_text_utils import find_block_end
 
         index: list[dict[str, Any]] = []
@@ -221,10 +217,10 @@ class Blackboard:
                 "commit would change or remove protected requirement/contract "
                 "definitions: " + ", ".join(sorted(changed))
             )
-        # Once a stakeholder requirement or approved A/G requirement definition
-        # appears in a committed revision it becomes immutable. Exact block
-        # identity protects source text, comparators, thresholds, units, assume/
-        # require constraints, and acceptance criteria together.
+        # invariant: a stakeholder or approved A/G requirement definition is
+        # immutable once it appears in a committed revision. Exact block identity
+        # protects source text, comparators, thresholds, units, assume/require
+        # constraints and acceptance criteria together.
         for name, body in identities.items():
             self._protected_requirement_defs.setdefault(name, body)
 
@@ -233,7 +229,6 @@ class Blackboard:
         return " ".join(str(value).split())
 
     def _validate_authoritative_sources(self, model_text: str) -> None:
-        """Require exact stakeholder text inside the committed requirement def."""
         identities = self._requirement_identities(model_text)
         for record in self._records:
             if (
@@ -332,11 +327,11 @@ class Blackboard:
         value: Any,
         **kwargs: Any,
     ) -> BlackboardRecord:
-        """Publish an auditable payload with an exact in-memory typed value.
+        """Publish an auditable payload with an in-memory typed value.
 
-        The payload remains the serializable evidence boundary.  The value is
-        runtime coordination state associated with that record and is never
-        stringified into an artifact merely to move it between knowledge sources.
+        The payload is the serializable evidence boundary; the value is runtime
+        coordination state for that record and is not stringified into an artifact to move
+        it between knowledge sources.
         """
         record = self.publish(
             record_type, topic, producer, payload, **kwargs

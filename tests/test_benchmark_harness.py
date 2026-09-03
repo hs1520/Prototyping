@@ -1,4 +1,3 @@
-"""Smoke tests for the multi-system × multi-seed benchmark harness."""
 from __future__ import annotations
 
 import hashlib
@@ -15,17 +14,15 @@ sys.modules.setdefault("benchmark", benchmark)
 _SPEC.loader.exec_module(benchmark)
 
 
-def test_suite_specs_are_complete():
-    assert len(benchmark.SYSTEMS) >= 3  # multi-system by construction (n>1)
+def test_suite_specs_complete():
+    assert len(benchmark.SYSTEMS) >= 3
     for spec in benchmark.SYSTEMS.values():
         assert spec["system_name"] and spec["description"]
         assert len(spec["requirements"]) >= 5
-        # every suite system carries at least one severity-tagged SAFE requirement
         assert any("[SEV:" in r for r in spec["requirements"])
 
 
-def test_fail_closed_run_archives_the_model_that_was_rejected(tmp_path):
-    """A fail-closed verdict must leave the exact revision it judged on disk."""
+def test_fail_closed_archives_model(tmp_path):
     error = RuntimeError("terminal functional closure is not closed: REQ_FUNC_001")
     error.terminal_model_text = "package Demo { part def X { } }"
     error.functional_closure = {
@@ -56,17 +53,15 @@ def test_fail_closed_run_archives_the_model_that_was_rejected(tmp_path):
     evidence = json.loads(
         (tmp_path / "failed_runs" / "DeliveryDrone_seed1.evidence.json").read_text()
     )
-    # the reason the repair was refused survives, not just how many reasons
     assert evidence["plan_conformance_rejections"][0]["issues"] == [
         "CommunicationSystem.tlmData is missing"
     ]
     assert record["remaining_functional_gaps"] == ["REQ_FUNC_001"]
-    # whether a plan obligation fired and was corrected is answerable
     assert evidence["generation_plan_provenance"]["step1_plan_retries"] == 2
     assert record["step1_plan_retries"] == 2 and record["plan_status"] == "PASS"
 
 
-def test_failure_without_attached_evidence_writes_nothing(tmp_path):
+def test_failure_no_evidence_writes_nothing(tmp_path):
     record = {}
 
     benchmark._archive_failure(
@@ -77,7 +72,7 @@ def test_failure_without_attached_evidence_writes_nothing(tmp_path):
     assert record == {}
 
 
-def test_aggregate_reports_mean_std_per_system():
+def test_aggregate_mean_std_per_system():
     records = [
         {"system": "A", "ok": True, "final_score": 0.8, "reachability": 1.0,
          "iterations": 2, "llm_calls": 10, "llm_total_tokens": 1000},
@@ -92,7 +87,6 @@ def test_aggregate_reports_mean_std_per_system():
     assert abs(agg["A"]["final_score"]["mean"] - 0.85) < 1e-9
     assert agg["A"]["final_score"]["n"] == 2
     assert agg["A"]["final_score"]["std"] > 0
-    # None metrics are skipped, not crashed on
     assert agg["B"]["runs_ok"] == 1
     assert "llm_calls" not in agg["B"]
-    assert agg["B"]["final_score"]["std"] == 0.0  # single run → no variance claim
+    assert agg["B"]["final_score"]["std"] == 0.0

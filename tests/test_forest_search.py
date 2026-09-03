@@ -1,9 +1,8 @@
-"""Tests for multi-seed forest search (Item E) + the honest ablation finding.
+"""Tests for multi-seed forest search (Item E) plus the ablation finding.
 
-Forest correctness is asserted; superiority is NOT — on this small enumerable
-architecture space a single tree matches or beats a forest at equal budget
-(forest's anti-premature-convergence value needs a large/rugged space). The
-ablation result is recorded in docs/DSE_REDESIGN.md.
+Forest correctness is asserted, superiority is not: on this small enumerable
+architecture space a single tree matches or beats a forest at equal budget.
+Ablation result recorded in docs/DSE_REDESIGN.md.
 """
 from __future__ import annotations
 
@@ -48,7 +47,7 @@ def _obj(s, c):
             "cost_efficiency": 1.0 - (units - 3) / 9.0}
 
 
-def test_forest_returns_valid_nondominated_front():
+def test_forest_front_nondominated():
     front = forest_search(_OPS, _obj, Ctx(), _NAMES, _REF, n_trees=4, iterations=10)
     assert front.hypervolume() > 0.0
     vecs = [(o["capability"], o["cost_efficiency"]) for _, o in front.members]
@@ -58,8 +57,7 @@ def test_forest_returns_valid_nondominated_front():
                 assert not dominates(b, a)
 
 
-def test_forest_covers_at_least_a_single_constituent_tree():
-    """The merged forest archive dominates-or-equals any one of its trees."""
+def test_forest_beats_one_tree():
     iters = 10
     forest = forest_search(_OPS, _obj, Ctx(), _NAMES, _REF, n_trees=3, iterations=iters,
                            seeds=[0, 1, 2])
@@ -67,7 +65,7 @@ def test_forest_covers_at_least_a_single_constituent_tree():
     assert forest.hypervolume() >= one_tree.hypervolume() - 1e-9
 
 
-def test_forest_seeds_control_determinism():
+def test_forest_seeds_deterministic():
     a = forest_search(_OPS, _obj, Ctx(), _NAMES, _REF, n_trees=3, iterations=8, seeds=[1, 2, 3])
     b = forest_search(_OPS, _obj, Ctx(), _NAMES, _REF, n_trees=3, iterations=8, seeds=[1, 2, 3])
     assert abs(a.hypervolume() - b.hypervolume()) < 1e-12

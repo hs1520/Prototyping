@@ -1,14 +1,9 @@
+def test_guard_counted_from_parse():
+    """The safety sub-metric counts guarded transitions from the parse, not the spelling.
 
-
-def test_a_guarded_transition_is_counted_from_the_parse_not_the_spelling():
-    """The safety sub-metric counts guarded transitions, and it used to do that
-    with a pattern that required `if` immediately after the source state.
-
-    `first X accept Sig if guard then Y` is legal SysML v2 and is exactly the
-    shape the metric wants, but the intervening accept clause hid it, so every
-    A/G chain scored 0 on this sub-metric. Both spellings now agree, because the
-    count comes from the parser's own notion of a guard rather than from one
-    way of writing one.
+    The old pattern required `if` right after the source state, so the legal
+    `first X accept Sig if guard then Y` scored 0 on every A/G chain. The count now
+    comes from the parser's own notion of a guard.
     """
     from src.dse.evaluator import DesignEvaluator, _GUARDED_TRANSITION
     from src.dse.design_space import DesignConfiguration
@@ -35,11 +30,9 @@ def test_a_guarded_transition_is_counted_from_the_parse_not_the_spelling():
 
     plain, accepting = model_text(False), model_text(True)
 
-    # the pattern alone: both spellings are one guarded transition
     assert len(_GUARDED_TRANSITION.findall(plain)) == 1
     assert len(_GUARDED_TRANSITION.findall(accepting)) == 1
 
-    # and the scored result does not depend on which spelling was used
     scores = [
         DesignEvaluator().evaluate(
             DesignConfiguration({}),

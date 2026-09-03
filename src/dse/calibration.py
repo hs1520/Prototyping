@@ -1,17 +1,11 @@
-"""Surrogate-vs-oracle calibration — the contribution-#3 artifact.
+"""Surrogate-vs-oracle calibration - the contribution-#3 artifact.
 
-The bilevel search drives on a cheap *surrogate* (grounded model-level fault
-injection, ``grounded_eval``). The claim that this surrogate is meaningful must
-be earned, not asserted: this module quantifies how well the surrogate predicts a
-high-fidelity *oracle* (ArduPilot SITL closed-loop fault injection) across a set
-of architectures, via rank correlation and ranking agreement.
-
-Rank-based (Spearman / Kendall) rather than absolute-value metrics, because the
-search only needs the oracle *ordering* to be preserved — the surrogate may be
-biased in scale as long as it ranks architectures the same way.
-
-Pure-Python (no scipy). The oracle is pluggable (see ``sitl_oracle``): a live
-SITL run on the Pareto front, or a reference model for offline calibration.
+Quantifies how well the search surrogate (``grounded_eval`` model-level fault
+injection) predicts a high-fidelity oracle (ArduPilot SITL closed-loop fault
+injection) across a set of architectures. Rank-based (Spearman / Kendall) rather
+than absolute, because the search only needs the oracle ordering preserved; scale
+bias does not matter. Pure Python, no scipy; the oracle is pluggable (see
+``sitl_oracle``): a live SITL run on the Pareto front, or a reference model offline.
 """
 from __future__ import annotations
 
@@ -20,7 +14,6 @@ from typing import List, Sequence, Tuple
 
 
 def _ranks(xs: Sequence[float]) -> List[float]:
-    """Fractional ranks with ties averaged."""
     order = sorted(range(len(xs)), key=lambda i: xs[i])
     ranks = [0.0] * len(xs)
     i = 0
@@ -28,7 +21,7 @@ def _ranks(xs: Sequence[float]) -> List[float]:
         j = i
         while j + 1 < len(order) and xs[order[j + 1]] == xs[order[i]]:
             j += 1
-        avg = (i + j) / 2.0 + 1.0  # 1-based average rank over the tie block
+        avg = (i + j) / 2.0 + 1.0
         for k in range(i, j + 1):
             ranks[order[k]] = avg
         i = j + 1
@@ -78,12 +71,12 @@ class CalibrationResult:
     spearman: float
     kendall: float
     top1_match: bool
-    deltas: List[float]          # predicted − measured, per design
+    deltas: List[float]
     max_abs_deviation: float
 
     @property
     def rank_trustworthy(self) -> bool:
-        """The estimator's DESIGN RANKING is validated by SITL."""
+        """SITL validates the estimator's design ranking."""
         return self.spearman >= 0.9
 
     def summary(self) -> str:
@@ -96,9 +89,7 @@ class CalibrationResult:
 def calibrate_ranking(
     labels: List[str], predicted: List[float], measured: List[float]
 ) -> CalibrationResult:
-    """Rank-calibrate estimator-predicted vs oracle-measured values over design
-    points.  Metric-agnostic: endurance vs SITL (capacity axis) and hover power
-    vs Gazebo (architecture axis) both go through here."""
+    """Rank-calibrate estimator-predicted vs oracle-measured values over design points."""
     if not (len(labels) == len(predicted) == len(measured)) or len(labels) < 2:
         raise ValueError("need ≥2 aligned (label, predicted, measured) points")
     deltas = [p - m for p, m in zip(predicted, measured)]
@@ -117,7 +108,7 @@ def calibrate_ranking(
 
 
 def top1_agreement(xs: Sequence[float], ys: Sequence[float]) -> bool:
-    """Do surrogate and oracle pick the same best architecture?"""
+    """Same best architecture under surrogate and oracle."""
     if not xs:
         return False
     return max(range(len(xs)), key=lambda i: xs[i]) == max(

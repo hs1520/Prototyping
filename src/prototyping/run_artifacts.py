@@ -1,12 +1,4 @@
-"""Write the revised-run derived artifacts to disk (design §14, Increment 4).
-
-A revised run keeps its collaboration/A-G evidence as in-memory snapshots inside
-the result dict; this serialises the producible subset of the §14 audit views to
-a directory. The SysML model stays authoritative — these are read-only views.
-
-Increment-3 pattern, failure-routing, and repair-decision reports remain
-separate from the post-hoc evaluator boundary.
-"""
+"""Write the revised-run derived artifacts to disk (design §14, Increment 4)."""
 from __future__ import annotations
 
 import json
@@ -19,7 +11,6 @@ from ..utils.digest import sha256_text
 from .run_metrics import compute_coordination_metrics
 
 
-
 def _write_jsonl(path: Path, rows: List[Mapping[str, Any]]) -> None:
     lines = [json.dumps(row, ensure_ascii=False) for row in rows]
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
@@ -29,9 +20,8 @@ def _declared_requirement_ids(requirements: Any) -> List[str]:
     """Requirement ids from the run's requirement strings.
 
     A run carries entries like ``"REQ-SAFE-005: The system shall ..."`` while a
-    committed contract cites ``REQ_SAFE_005``. Passing the raw strings through
-    would match nothing and silently report every requirement as untraced — a
-    false negative that looks exactly like a real finding.
+    committed contract cites ``REQ_SAFE_005``. Raw strings match nothing and
+    report every requirement as untraced.
     """
     ids: List[str] = []
     for item in requirements or ():
@@ -49,15 +39,11 @@ def write_revised_run_artifacts(
 ) -> Dict[str, str]:
     """Serialise the derived audit views of one revised run; returns {name: path}.
 
-    Requires a `revised_experiment` result (a `BLACKBOARD_AG_V1` arm).
-
-    A run without a collaboration block is not an error: R0-CURRENT has no
-    blackboard by construction, and refusing to write anything for it meant the
-    baseline archived no model at all. A defect that appeared only in R0 could
-    then not be diagnosed after the fact — one measured run failed on an
-    undeclared type and the evidence was a single line number. Board-derived
-    views are still skipped, because they genuinely do not exist; everything
-    derived from the committed model text is written for every arm.
+    Requires a `revised_experiment` result (a `BLACKBOARD_AG_V1` arm). A run
+    without a collaboration block is not an error: R0-CURRENT has no blackboard,
+    and writing nothing for it left the baseline with no archived model to
+    diagnose. Board-derived views are skipped; everything derived from the
+    committed model text is written for every arm.
     """
     experiment = run_result.get("revised_experiment") or {}
     if (
@@ -101,8 +87,8 @@ def write_revised_run_artifacts(
 
     # Board-derived views only where a board exists. R0-CURRENT has none, and
     # writing empty ones for it puts a file labelled R1_COORDINATION_METRICS in
-    # the baseline's directory — a reader would have to check every value is
-    # null to learn it means "no board" rather than "no coordination".
+    # the baseline's directory, where null values read as "no coordination"
+    # rather than "no board".
     if collaboration:
         p = out / "context_envelopes.jsonl"
         _write_jsonl(p, envelopes)
@@ -112,7 +98,6 @@ def write_revised_run_artifacts(
         _write_jsonl(p, sessions)
         record("task_sessions", p)
 
-        # Transcripts are present only when the session snapshot included messages.
         transcripts = [
             {
                 "session_id": s.get("session_id"),
@@ -136,9 +121,9 @@ def write_revised_run_artifacts(
         p = out / "ag_contract_graph.json"
         atomic_write_json(p, ag_graph)
         record("ag_contract_graph", p)
-        # A multi-chain run aggregates several independent A/G decompositions;
-        # also emit each chain's own graph so the post-hoc evaluator can score it
-        # against that requirement's gold (one assurance case per requirement).
+        # Multi-chain runs aggregate several A/G decompositions; emit each chain's
+        # own graph too, so the evaluator can score it against that requirement's
+        # gold (one assurance case per requirement).
         for chain in ag_graph.get("chains", ()) or ():
             req = chain.get("source_requirement") or "UNKNOWN"
             cp = out / f"ag_contract_graph.{req}.json"
@@ -156,10 +141,9 @@ def write_revised_run_artifacts(
                     r"[^A-Za-z0-9_]+", "_", requirement
                 )
                 bundle_path = out / f"ag_replay_bundle.{safe_requirement}.sysml"
-                # A replay bundle is a complete immutable terminal snapshot,
-                # rather than an under-specified package fragment. This keeps
-                # canonical DeliveryUAV event types, owner definitions and the
-                # selected A/G package in one independently parseable source.
+                # The replay bundle is a complete terminal snapshot: canonical DeliveryUAV
+                # event types, owner definitions and the selected A/G package in one
+                # independently parseable source.
                 bundle_path.write_text(terminal_text, encoding="utf-8")
                 key = f"ag_replay_bundle.{safe_requirement}"
                 record(key, bundle_path)
@@ -188,9 +172,9 @@ def write_revised_run_artifacts(
         ("ag_authoring_attempts", "ag_authoring_attempts.json"),
         ("verification_plan", "verification_plan.json"),
         ("control_agenda", "control_agenda.json"),
-        # Written as its own file as well as into the run report: a conformance
-        # payload nested under a stage key has twice been overwritten wholesale
-        # by a later stage before reaching an artefact.
+        # Written as its own file as well as into the run report: a payload nested
+        # under a stage key has been overwritten by a later stage before reaching an
+        # artefact.
         ("action_semantics_audit", "action_semantics_audit.json"),
     ):
         payload = run_result.get(key)
@@ -207,18 +191,18 @@ def write_revised_run_artifacts(
         atomic_write_json(p, metrics)
         record("coordination_metrics", p)
 
-    # Requirement traceability, carried natively rather than reconstructed
-    # post-hoc. It is derived from the committed model alone and needs no gold, so
-    # it is safe to write beside the run; the older archived pilot predates this
-    # and is measured after the fact by `robustness_report` instead.
+    # Requirement traceability, carried natively. Derived from the committed
+    # model alone and needs no gold, so it is safe to write beside the run; the
+    # older archived pilot predates it and is measured after the fact by
+    # `robustness_report`.
     if model_sysml is not None:
         from .ag_traceability import DECLARED_OUT_OF_SCOPE
         from .robustness_report import measure_model
 
         declared = _declared_requirement_ids(run_result.get("requirements"))
-        # The scope declaration travels WITH the artifact, reason included: a
-        # requirement the A/G layer is not built to decompose is not an
-        # implementation gap, and passing no declaration reported it as one.
+        # The scope declaration travels with the artifact, reason included: a
+        # requirement the A/G layer does not decompose is not an implementation gap,
+        # but without a declaration it was reported as one.
         out_of_scope = {
             requirement: reason
             for requirement, reason in DECLARED_OUT_OF_SCOPE.items()

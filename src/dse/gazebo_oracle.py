@@ -1,25 +1,24 @@
-"""Gazebo FDM oracle — the architecture-axis level of the multi-fidelity ladder.
+"""Gazebo FDM oracle - the architecture-axis level of the multi-fidelity ladder.
 
-Ladder:  physics estimator (ms)  →  SITL-default (s)  →  Gazebo FDM (min).
+Ladder:  physics estimator (ms)  ->  SITL-default (s)  ->  Gazebo FDM (min).
 
-The SITL-default level is architecture-blind: its frame mass is fixed, so the
-hover current is identical for quad and octa (27.3 A measured — see
-docs/DSE_REDESIGN.md §9.3/9.4).  The capacity axis therefore has a calibrated
-anchor (Spearman ρ=1.0) while the architecture axis (rotor count / radius /
-emergent mass) had only a declared scope limitation.  This module closes that
-gap by flying the DESIGNED airframe in Gazebo (gazebo_poc: real mass, rotor
-count, and radius in the generated SDF) and rank-correlating the estimator's
-prediction against the measured value.
+SITL-default has a fixed frame mass, so hover current is identical for quad and
+octa (27.3 A measured - see docs/DSE_REDESIGN.md §9.3/9.4): the capacity axis has
+a calibrated anchor (Spearman ρ=1.0) while the architecture axis (rotor count /
+radius / emergent mass) had only a declared scope limitation. This module flies
+the designed airframe in Gazebo (gazebo_poc puts mass, rotor count and radius in
+the generated SDF) and rank-correlates the estimator's prediction against the
+measurement.
 
-Compared quantity (apples-to-apples, both MECHANICAL hover power):
+Both compared quantities are mechanical hover power:
   predicted  = momentum-theory hover power for the design's emergent total
                mass and disk area (``physics_estimator.hover_power_w``);
-  measured   = Gazebo rotor-telemetry hover power (Σ Cp·ρ·n³·D⁵, captured by
+  measured   = Gazebo rotor-telemetry hover power (Σ Cp*ρ*n³*D⁵, captured by
                ``gazebo_poc.run_flight`` as ``hover_power_w``).
 
-Live flights are heavy (~5 min each, Docker + ArduPilot binary) and gated by
-``RUN_GAZEBO=1`` — the calibration plumbing is fully testable offline by
-injecting ``measure_fn``.
+Live flights take ~5 min each (Docker + ArduPilot binary) and are gated by
+``RUN_GAZEBO=1``; the calibration plumbing is testable offline by injecting
+``measure_fn``.
 """
 from __future__ import annotations
 
@@ -30,7 +29,6 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from .calibration import CalibrationResult, calibrate_ranking
 from .physics_estimator import DesignInputs, disk_area_m2, hover_power_w, total_mass_kg
 
-# Frames the gazebo_poc SDF generator supports (ArduCopter motor tables).
 SUPPORTED_ROTOR_COUNTS: Tuple[int, ...] = (4, 6, 8)
 
 
@@ -46,9 +44,9 @@ def architecture_sweep(
 ) -> List[DesignInputs]:
     """Architecture-axis design points: same payload/battery, frame swept.
 
-    Only the frame varies; total mass still EMERGES per point (propulsion mass
-    scales with disk area), so the points differ the way real architectures do
-    — exactly the dimension SITL-default cannot discriminate.
+    Only the frame varies, but total mass still emerges per point (propulsion mass
+    scales with disk area), so the points differ the way architectures do - the
+    dimension SITL-default cannot discriminate.
     """
     return [
         replace(base, rotor_count=n)
@@ -63,7 +61,7 @@ class ArchMeasurement:
     label: str
     design: DesignInputs
     predicted_power_w: float
-    measured_power_w: Optional[float] = None   # None = flight failed / no telemetry
+    measured_power_w: Optional[float] = None
     hover_stable: Optional[bool] = None
     note: str = ""
 
@@ -72,7 +70,7 @@ class ArchMeasurement:
 class ArchCalibration:
     """Architecture-axis calibration outcome (points + ranking verdict)."""
     points: List[ArchMeasurement]
-    result: Optional[CalibrationResult]        # None when <2 measured points
+    result: Optional[CalibrationResult]
     notes: List[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -86,9 +84,9 @@ class ArchCalibration:
 class GazeboArchitectureOracle:
     """Live oracle: fly one design in Gazebo, return the measured hover power.
 
-    Gated like the SITL oracle: flights only run with ``RUN_GAZEBO=1`` (each
-    ~5 min, needs Docker + the ArduPilot binary).  ``measure`` raises when
-    gated so callers fail fast instead of silently skipping.
+    Gated like the SITL oracle: flights run only with ``RUN_GAZEBO=1`` (~5 min each,
+    needs Docker + the ArduPilot binary). ``measure`` raises when gated so callers
+    fail fast rather than skip.
     """
 
     ENV_GATE = "RUN_GAZEBO"
@@ -109,7 +107,7 @@ class GazeboArchitectureOracle:
             rotor_radius=design.rotor_radius_m,
             capacity_mah=design.battery_capacity_mah,
             rotor_count=design.rotor_count,
-            calibrate=True,   # real-motor anchoring (area + max speed), all frames
+            calibrate=True,
         )
         return dict(run_flight.LAST_RESULT)
 
@@ -122,10 +120,9 @@ def calibrate_architecture_axis(
     """Sweep architectures, measure each in Gazebo, rank-correlate vs estimator.
 
     ``measure_fn(design) -> {"hover_power_w": float, "hover_stable": bool}`` is
-    injectable for offline tests; the default is the live (RUN_GAZEBO-gated)
-    :class:`GazeboArchitectureOracle`.  Failed flights become unmeasured points
-    (recorded, excluded from the correlation) — one transient cannot sink the
-    whole calibration.
+    injectable for offline tests; the default is the live RUN_GAZEBO-gated
+    :class:`GazeboArchitectureOracle`. Failed flights become unmeasured points -
+    recorded, excluded from the correlation - so one transient does not sink the run.
     """
     measure = measure_fn or GazeboArchitectureOracle().measure
     points: List[ArchMeasurement] = []

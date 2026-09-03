@@ -1,24 +1,21 @@
-"""The provider-text normalization seam preserves its historical rule order."""
-
 from src.sysml.text_normalization import NORMALIZATION_RULE_ORDER
 
 
-def test_normalization_rule_order_is_explicit():
+def test_rule_order_explicit():
     assert NORMALIZATION_RULE_ORDER == {
-        # `fix_c_style_negation` is appended, not interleaved: the two rules
-        # after `fix_doc_syntax` are historical and their relative order is
-        # load-bearing. `fix_doc_syntax` leads (2026-08-30): a quoted doc body
-        # is a hard parser error that survived all three LLM fix attempts, and
-        # rewriting it first gives every later rule a parseable text.
+        # `fix_c_style_negation` is appended, not interleaved: the relative order of the
+        # two rules after `fix_doc_syntax` is load-bearing. `fix_doc_syntax` leads
+        # (2026-08-30) because a quoted doc body is a parser error that survived all
+        # three LLM fix attempts, and rewriting it first gives later rules clean text.
         "syntax_gate": (
             "fix_doc_syntax",
             "strip_readonly_keyword",
             "fix_keyword_item_names",
             "fix_c_style_negation",
         ),
-        # 2026-08-31: fix_safety_action_semantics removed — rewriting a
-        # wrong safety command toward the harness vocabulary was semantic
-        # forgery; the defect now surfaces at the linker traceability check.
+        # 2026-08-31: fix_safety_action_semantics removed - rewriting a wrong safety
+        # command toward the harness vocabulary hid the defect, which now surfaces at
+        # the linker traceability check.
         "design_semantics": (
             "fix_capability_semantics",
         ),
@@ -29,16 +26,14 @@ def test_normalization_rule_order_is_explicit():
         ),
         "surgical_repair": ("strip_code_fences",),
         "ag_authored_planning": ("strip_ag_implementation",),
-        # Terminal-commit normalisation added 2026-08-29: inherited-port
-        # redeclarations are inert but fail the zero-warning qualification
-        # (run 00e4d333, ten of them).
+        # Terminal-commit normalisation added 2026-08-29: inherited-port redeclarations
+        # are inert but fail the zero-warning qualification (run 00e4d333, ten of them).
         "terminal_commit": ("strip_redundant_inherited_ports",),
         "ag_terminal_binding": ("strip_named_item_definitions",),
     }
 
 
-def test_c_style_negation_becomes_not_without_touching_inequality():
-    """`!=` is legal SysML and the A/G emitter produces it; only negation moves."""
+def test_c_style_negation_keeps_inequality():
     from src.sysml.text_normalization import fix_c_style_negation
 
     assert fix_c_style_negation("if !sensorFailure") == "if not sensorFailure"
@@ -52,11 +47,11 @@ def test_c_style_negation_becomes_not_without_touching_inequality():
     assert fix_c_style_negation(unchanged) == unchanged
 
 
-def test_the_archived_run_that_lost_its_qualification_now_parses():
+def test_archived_run_now_parses():
     """pilot_n6_20260802/seed-3/R0-CURRENT failed the hard gate on one `!`.
 
-    Pinned against the archived model rather than a fixture, so the rule is
-    tested on the text that actually defeated it.
+    Pinned against the archived model rather than a fixture, so the rule is tested
+    on the text that defeated it.
     """
     import pathlib
 
@@ -75,9 +70,7 @@ def test_the_archived_run_that_lost_its_qualification_now_parses():
     ).total_errors() == 0
 
 
-def test_fix_doc_syntax_rewrites_quoted_bodies_without_equals():
-    """Measured 2026-08-30: `doc '...';` inside a port body was a parser error
-    the three-attempt LLM syntax gate could not clear."""
+def test_doc_syntax_rewrites_quoted_body():
     from src.sysml.text_normalization import fix_doc_syntax
 
     text = (
@@ -94,7 +87,7 @@ def test_fix_doc_syntax_rewrites_quoted_bodies_without_equals():
     assert count2 == 1 and 'doc /* plain double */' in double
 
 
-def test_fix_doc_syntax_keeps_legacy_equals_form_and_inner_apostrophes():
+def test_doc_syntax_legacy_and_apostrophes():
     from src.sysml.text_normalization import fix_doc_syntax
 
     fixed, count = fix_doc_syntax('doc = "legacy form";')
@@ -104,14 +97,13 @@ def test_fix_doc_syntax_keeps_legacy_equals_form_and_inner_apostrophes():
     assert count2 == 1
     assert "doc /* the vehicle's remote ID */" in fixed2
 
-    # comment-form docs and comment closers inside bodies stay safe
     valid = "doc /* already valid */"
     assert fix_doc_syntax(valid) == (valid, 0)
     defused, _ = fix_doc_syntax('doc "sneaky */ closer";')
     assert "*/ closer" not in defused.split("doc /*", 1)[1].rsplit("*/", 1)[0]
 
 
-def test_fix_doc_syntax_repairs_the_archived_defect_to_parseable_sysml():
+def test_doc_syntax_repair_parses():
     from src.simulation.syntax_checker import check_syntax
     from src.sysml.text_normalization import fix_doc_syntax
 

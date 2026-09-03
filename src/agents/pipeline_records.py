@@ -76,8 +76,6 @@ class PipelineRuntimeState:
     estimator_calibration: Any = None
     ag_generation_plan: Optional[AGGenerationPlanRecord] = None
     model_generation_plan: Optional[ModelGenerationPlanRecord] = None
-    #: Audit record of the bounded frozen-plan revision (plan_revision.py),
-    #: published whether the revision was accepted, rejected, or rolled back.
     plan_revision: Any = None
 
 
@@ -121,15 +119,14 @@ def publish_handoff_transition(
     handoff: Any,
     status: str,
 ) -> None:
-    """Terminate a handoff AUDITABLY: mutate the live typed record and publish
+    """Terminate a handoff auditably: mutate the live typed record and publish
     the transition on the same topic.
 
     The opening ``publish_typed`` snapshots its payload while the handoff is
     ACTIVE and payloads are immutable (digest-bound), so mutating only the
     typed object left every archived event log showing both handoffs as
-    permanently ACTIVE — a rejected handoff was indistinguishable from a
-    completed one post-hoc. The follow-up record is the blackboard-idiomatic
-    fix: history is appended, never edited.
+    ACTIVE, with rejected and completed indistinguishable post-hoc. History is
+    appended, not edited.
     """
     from ..prototyping.blackboard import RecordType
 

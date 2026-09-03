@@ -1,14 +1,11 @@
 """Inner-layer continuous sizing for variation DSE (the BO half of the bilevel).
 
-Given a FIXED outer architecture (frame / rotor / payload, chosen by the outer
-MO-MCTS), Bayesian-optimize the continuous BATTERY CAPACITY to the most economical
-size that still meets the endurance requirement.
-
-Non-degenerate by construction: endurance satisfaction SATURATES at the target
-(capped), while all-up mass GROWS with capacity (emergent battery self-weight). So
-the inner objective `satisfaction − mass_weight·mass` has an INTERNAL optimum — the
-smallest battery that meets endurance — not a boundary one. This is the inner axis
-that SITL actually calibrates (endurance-vs-capacity, Spearman=1.0).
+For a fixed outer architecture (frame / rotor / payload), Bayesian-optimize
+battery capacity to the cheapest size that still meets the endurance requirement.
+Endurance satisfaction saturates at the target while all-up mass grows with
+capacity (battery self-weight), so `satisfaction − mass_weight*mass` has an
+interior optimum - the smallest battery that meets endurance. This is the inner
+axis SITL calibrates (endurance-vs-capacity, Spearman=1.0).
 """
 from __future__ import annotations
 
@@ -17,10 +14,10 @@ from typing import Dict, Iterable
 from .inner_bo import BayesianOptimizer
 from .physics_estimator import DesignInputs, endurance_min, total_mass_kg
 
-# The evidence-backed realization catalog now contains 24Ah and 30Ah 4S UAV
-# packs.  Keeping the continuous fallback capped at 22Ah would make that real
-# domain unreachable whenever discrete catalog sizing is unavailable.
-CAPACITY_BOUNDS = (3000.0, 30000.0)  # mAh, evidence-backed multirotor range
+# The realization catalog contains 24Ah and 30Ah 4S UAV packs; a 22Ah cap on the
+# continuous fallback would put that domain out of reach whenever discrete catalog
+# sizing is unavailable.
+CAPACITY_BOUNDS = (3000.0, 30000.0)
 
 
 def optimize_capacity(
@@ -32,16 +29,11 @@ def optimize_capacity(
     n_iter: int = 16,
     seed: int = 0,
 ) -> Dict[str, float]:
-    """Inner BO over battery capacity for a fixed architecture.
-
-    arch: the non-capacity design inputs (payload_mass_kg, battery_cells, rotor_count,
-    rotor_radius_m, cruise_speed_mps). Returns the chosen capacity + its emergent metrics.
-    """
+    """Inner BO over battery capacity for a fixed architecture."""
     def objective(cap: float) -> float:
         di = DesignInputs(battery_capacity_mah=cap, **arch)
         e = endurance_min(di)
         sat = min(1.0, e / target_endurance_min) if target_endurance_min > 0 else 1.0
-        # maximize: meet endurance, then prefer the lightest (cheapest) pack
         return sat - mass_weight * total_mass_kg(di)
 
     res = BayesianOptimizer(

@@ -1,27 +1,18 @@
 """Geometry-derived parasitic drag for the generated airframe.
 
-Why this exists
----------------
 The generated SDF gives every rotor a ``LiftDrag`` plugin, but those produce
-*rotor thrust*; the airframe body itself carried no aerodynamic drag at all.
-A forward dash therefore had no terminal velocity — it simply accelerated for
-as long as the dash window lasted, and the recorded "cruise speed" was a
-function of how long we flew, not of the vehicle. The 2026-08-30 authoritative
-run shows the consequence directly: ground speed *rose* from 14.2 m/s to
-28.9 m/s after a 15 m/s headwind was injected, which no real headwind can do.
+rotor thrust only; the airframe body carried no drag, so a forward dash had no
+terminal velocity and the recorded cruise speed tracked the dash window rather
+than the vehicle - in the 2026-08-30 authoritative run ground speed rose from
+14.2 m/s to 28.9 m/s after a 15 m/s headwind was injected. This module computes
+the equivalent flat-plate area ``f = sum(Cd_i * A_i)`` from the same geometry
+constants ``multirotor_sdf`` draws from, so the drawn airframe and the one the
+drag model sees cannot diverge.
 
-This module computes the equivalent flat-plate area ``f = sum(Cd_i * A_i)`` of
-the airframe from the same geometry constants ``multirotor_sdf`` draws it
-from, so the airframe that is drawn and the airframe the drag model sees
-cannot diverge.
-
-Honesty boundary
-----------------
-This is a bluff-body sum over the drawn primitives (hub cylinder, arm boxes,
-payload box) with textbook drag coefficients. It is NOT CFD, it does not model
-rotor-wake or body interference, and it assumes the frontal projection along
-the body x-axis. It is a defensible parasitic-drag estimate for a multirotor
-of this shape, and it is reported alongside every speed it influences.
+Scope: a bluff-body sum over the drawn primitives (hub cylinder, arm boxes,
+payload box) with textbook drag coefficients. Not CFD; no rotor-wake or body
+interference, and frontal projection along the body x-axis is assumed. It is
+reported alongside every speed it influences.
 """
 from __future__ import annotations
 
@@ -39,16 +30,14 @@ from .multirotor_sdf import (
 )
 
 # Textbook bluff-body drag coefficients (Re ~1e5, incompressible).
-#: Circular cylinder, axis normal to the flow.
+# Circular cylinder, axis normal to the flow.
 CD_HUB = 1.0
-#: Rectangular-section arm, sharp edges.
 CD_ARM = 1.2
-#: Rectangular box (the slung payload).
 CD_PAYLOAD = 1.05
 
-#: The payload box drawn by ``templates/all_models/payload_box/model.sdf``.
-#: ``run_flight._prepare_payload_model`` re-derives the box inertia from these
-#: same numbers, so the drawn box and the box the drag model sees are one box.
+# The payload box drawn by ``templates/all_models/payload_box/model.sdf``.
+# ``run_flight._prepare_payload_model`` re-derives its inertia from these same
+# numbers, so the drawn box and the drag model's box are one box.
 PAYLOAD_BOX_SIZE_M: Tuple[float, float, float] = (0.12, 0.08, 0.06)
 
 AIR_DENSITY = 1.2041
@@ -126,8 +115,8 @@ def terminal_speed_mps(flat_plate_m2: float, mass_kg: float,
                        tilt_rad: float) -> float:
     """Steady forward airspeed where parasitic drag balances the tilted thrust.
 
-    ``m g tan(theta) = 0.5 rho f V^2``. This is the prediction the measured
-    dash is checked against; a dash that never reaches it has not cruised.
+    ``m g tan(theta) = 0.5 rho f V^2``. The measured dash is checked against
+    this prediction.
     """
     if flat_plate_m2 <= 0 or mass_kg <= 0 or tilt_rad <= 0:
         return 0.0

@@ -1,7 +1,7 @@
-"""Structured requirement extraction: free-text → controlled-vocabulary specs.
+"""Structured requirement extraction: free-text -> controlled-vocabulary specs.
 
-Replaces the scattered keyword heuristics with one auditable parse (LLM when available,
-deterministic rule extractor as fallback). These lock the disambiguations that were bugs.
+One parse replaces the scattered keyword heuristics (LLM when available, rule
+extractor as fallback). These lock the disambiguations that were bugs.
 """
 from __future__ import annotations
 
@@ -25,32 +25,30 @@ def _q(specs, quantity):
     return [s for s in specs if s.quantity == quantity]
 
 
-def test_rule_extract_classifies_each_quantity_correctly():
+def test_rule_extract_quantities():
     specs = _rule_extract(_REQS)
-    # endurance: minutes, >=, 25 (the 1.0-second latency is NOT endurance)
     assert _q(specs, ENDURANCE) == [ReqSpec("REQ-PERF-002", ENDURANCE, ">=", 25.0, "minutes")]
-    # payload (carry) vs MTOW (take-off) split, both kg <=
     assert _q(specs, PAYLOAD) == [ReqSpec("REQ-FUNC-003", PAYLOAD, "<=", 2.5, "kg")]
     assert _q(specs, MASS_MTOW) == [ReqSpec("REQ-CONS-003", MASS_MTOW, "<=", 25.0, "kg")]
-    # altitude is altitude (<=), NOT range — the metre-unit trap
+    # altitude is altitude (<=), not range - the metre-unit trap
     assert _q(specs, ALTITUDE) == [ReqSpec("REQ-CONS-001", ALTITUDE, "<=", 120.0, "metres")]
     assert _q(specs, RANGE) == []
 
 
-def test_rule_extract_operational_range_and_km():
+def test_rule_extract_range_km():
     assert max_spec(_rule_extract(["REQ-PERF-004: operational range of at least 10 km."]), RANGE).value == 10000.0
     # a sensor "detection range" is not operational flight range
     assert _q(_rule_extract(["REQ-FUNC-002: detection range of 15 metres."]), RANGE) == []
 
 
-def test_rule_extract_speed_skips_wind_condition():
+def test_rule_extract_skips_wind():
     cruise = _rule_extract(["REQ-PERF-003: cruise speed at least 15 m/s."])
     assert _q(cruise, SPEED) == [ReqSpec("REQ-PERF-003", SPEED, ">=", 15.0, "m/s")]
     wind = _rule_extract(["REQ-PERF-004: operate in wind conditions up to 15 m/s."])
     assert _q(wind, SPEED) == []
 
 
-def test_rule_extract_maximum_airspeed_capability_is_lower_bound():
+def test_max_airspeed_lower_bound():
     capability = _rule_extract([
         "REQ-PERF-003: The system shall achieve a maximum airspeed of 15 m/s in nil-wind level flight."
     ])
@@ -71,7 +69,6 @@ def test_query_helpers():
 
 
 class _FakeLLM:
-    """Returns a hand-authored JSON extraction (+ one invalid row to exercise validation)."""
     def __init__(self, payload):
         self.payload = payload
         self.calls = 0
@@ -81,52 +78,50 @@ class _FakeLLM:
         return "```json\n" + json.dumps(self.payload) + "\n```"
 
 
-def test_extract_uses_llm_when_available_and_validates():
-    reqs = ["REQ-XLLM-001: fly for half an hour carrying the parcel."]   # unique → no cache hit
+def test_extract_uses_llm():
+    reqs = ["REQ-XLLM-001: fly for half an hour carrying the parcel."]   # unique -> no cache hit
     llm = _FakeLLM([
         {"req_id": "REQ-XLLM-001", "quantity": "endurance", "operator": ">=", "value": 30, "unit": "min"},
-        {"req_id": "REQ-XLLM-001", "quantity": "bogus", "operator": ">=", "value": 1, "unit": "x"},  # dropped
+        {"req_id": "REQ-XLLM-001", "quantity": "bogus", "operator": ">=", "value": 1, "unit": "x"},
     ])
     specs = extract_requirements(reqs, llm=llm)
     assert llm.calls == 1
-    assert specs == [ReqSpec("REQ-XLLM-001", ENDURANCE, ">=", 30.0, "min")]   # invalid row filtered
+    assert specs == [ReqSpec("REQ-XLLM-001", ENDURANCE, ">=", 30.0, "min")]
 
 
-def test_operator_filter_excludes_geofence_range_from_capability():
-    # a "<=" operational-radius limit must NOT be claimed as a ">=" range capability
+def test_operator_filter_excludes_geofence():
     specs = [
-        ReqSpec("REQ-CONS-005", RANGE, "<=", 10000.0, "km"),   # geofence (max radius)
-        ReqSpec("REQ-PERF-004", RANGE, ">=", 8000.0, "metres"),  # capability target
+        ReqSpec("REQ-CONS-005", RANGE, "<=", 10000.0, "km"),
+        ReqSpec("REQ-PERF-004", RANGE, ">=", 8000.0, "metres"),
     ]
-    assert max_spec(specs, RANGE, ">=").req_id == "REQ-PERF-004"   # capability only
+    assert max_spec(specs, RANGE, ">=").req_id == "REQ-PERF-004"
     assert max_value(specs, ENDURANCE, ">=") == 0.0
 
 
-def test_range_requirement_skips_geofence_via_llm(monkeypatch=None):
-    # end-to-end: LLM extracts REQ-CONS-005 as range "<=" (max radius) → range_requirement
-    # (capability, ">=") returns None, so no false "RangeM >= 10000 satisfy req_cons_005".
+def test_range_skips_geofence_llm(monkeypatch=None):
+    # LLM extracts REQ-CONS-005 as range "<=" (max radius) -> range_requirement
+    # (capability, ">=") returns None, so no false satisfy link is emitted.
     from src.dse.domain_objective import range_requirement
-    reqs = ["REQ-CONS-005Z: restrict operational flight radius to a maximum of 10.0 km."]  # unique
+    reqs = ["REQ-CONS-005Z: restrict operational flight radius to a maximum of 10.0 km."]
     llm = _FakeLLM([{"req_id": "REQ-CONS-005Z", "quantity": "range",
                      "operator": "<=", "value": 10000, "unit": "km"}])
-    extract_requirements(reqs, llm=llm)              # prime cache with the LLM spec
-    assert range_requirement(reqs) == (None, 0.0)    # geofence not a range capability
+    extract_requirements(reqs, llm=llm)
+    assert range_requirement(reqs) == (None, 0.0)
 
 
-def test_extract_falls_back_to_rules_when_llm_raises():
-    reqs = ["REQ-XFB-002: sustain flight for 25 minutes."]   # unique → no cache hit
+def test_extract_falls_back_to_rules():
+    reqs = ["REQ-XFB-002: sustain flight for 25 minutes."]   # unique -> no cache hit
 
     class _Boom:
         def chat(self, *a, **k):
             raise RuntimeError("llm down")
 
     specs = extract_requirements(reqs, llm=_Boom())
-    assert max_value(specs, ENDURANCE) == 25.0   # deterministic fallback
+    assert max_value(specs, ENDURANCE) == 25.0
 
 
-def test_enforce_requirement_text_restores_verbatim():
+def test_enforce_text_verbatim():
     from src.dse.requirement_spec import enforce_requirement_text
-    # LLM-corrupted doc ("all calculations") gets overwritten with the canonical input text
     model = ("package D {\n"
              "  requirement def REQ_SAFE_005 { doc /* deploy parachute, taking precedence over "
              "all calculations. */ }\n"
@@ -136,18 +131,17 @@ def test_enforce_requirement_text_restores_verbatim():
             "REQ-FUNC-003: transport payloads with a gross mass of up to 1.5 kg."]
     out = enforce_requirement_text(model, reqs)
     assert "all other safety responses" in out and "all calculations" not in out
-    assert "up to 1.5 kg" in out and "up to 9 kg" not in out          # corrupted value restored
-    assert "unknown, leave as-is" in out                              # unknown req untouched
+    assert "up to 1.5 kg" in out and "up to 9 kg" not in out
+    assert "unknown, leave as-is" in out
 
 
-def test_bind_current_payload_unvacuums_bound():
+def test_bind_current_payload():
     from src.dse.requirement_spec import bind_current_payload
     m = ("part def P {\n  attribute maxPayloadMass_kg : Real = 1.5 [kg];\n"
          "  attribute currentPayloadMass_kg : Real = 0.0 [kg];\n"
          "  assert constraint payloadMassBound { currentPayloadMass_kg <= maxPayloadMass_kg }\n}")
     reqs = ["REQ-FUNC-003: transport payloads with a gross mass of up to 1.5 kg."]
     out = bind_current_payload(m, reqs)
-    assert "currentPayloadMass_kg : Real = 1.5" in out          # bound to rated delivery payload
-    assert "currentPayloadMass_kg : Real = 0.0" not in out      # vacuous placeholder gone
-    # no payload requirement → untouched
+    assert "currentPayloadMass_kg : Real = 1.5" in out
+    assert "currentPayloadMass_kg : Real = 0.0" not in out
     assert bind_current_payload(m, ["REQ-PERF-001: cruise at 15 m/s."]) == m

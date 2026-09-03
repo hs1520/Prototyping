@@ -1,19 +1,18 @@
 """Phase 9 seam: connect the Phase 8 recommendation to the high-fidelity runners.
 
-This bridge connects an explicitly requested recommendation to native SITL
-feasibility and/or Gazebo dynamics.  It is default-OFF: authoritative runs are
-owned by ``examples/run_realization_report.py``, which first freezes one base
-bundle and then collects every evidence layer into that same bundle.  This module
-is deliberately kept out of
-``orchestrator`` so the launch mechanics (artifact persistence + subprocess to the
-mature standalone runners) are isolated and easy to monkeypatch in tests.
+Default-off: authoritative runs are owned by
+``examples/run_realization_report.py``, which first freezes one base bundle
+and then collects every evidence layer into that same bundle.  This module
+is kept out of ``orchestrator`` so the launch mechanics (artifact
+persistence + subprocess to the standalone runners) are isolated and easy
+to monkeypatch in tests.
 
-Honesty invariants preserved here:
-  * native SITL verifies arm/takeoff/hover + L2 safety, NOT endurance;
-  * Gazebo verifies high-fidelity dynamics, NOT endurance;
-  * datasheet CLOSED (Phase 8) is never upgraded by these runs;
-  * environment absence (no Docker / no arducopter) is reported as an honest
-    "skipped", never faked into a pass.
+Invariants:
+  * native SITL verifies arm/takeoff/hover + L2 safety, not endurance;
+  * Gazebo verifies high-fidelity dynamics, not endurance;
+  * these runs do not upgrade datasheet CLOSED (Phase 8);
+  * environment absence (no Docker / no arducopter) is reported as
+    "skipped", not a pass.
 """
 from __future__ import annotations
 
@@ -30,8 +29,7 @@ from ..prototyping.artifact_store import (
     OUTPUT_DIR_ENV, atomic_write_json, atomic_write_text, output_dir,
 )
 
-# Runners are invoked as subprocesses (src must not import examples/), so the
-# module dependency direction stays clean.
+# Runners are invoked as subprocesses, since src does not import examples/.
 _ROOT = Path(__file__).resolve().parents[2]
 _OUTPUT_DIR = output_dir()
 _SITL_RUNNER = _ROOT / "examples" / "run_sitl_feasibility.py"
@@ -53,13 +51,14 @@ def _layers_for(mode: str) -> List[str]:
 
 
 def _persist_recommendation(design, model_text: str, output_dir: Path) -> None:
-    """Write the artifacts the standalone runners read, CONSISTENT with the design
-    being flown: final model, recommended design inputs, and recommended.parm.
+    """Write the artifacts the standalone runners read, matching the design being
+    flown: final model, recommended design inputs, and recommended.parm.
 
-    Writing recommended.parm here (not just the design inputs) is required: the
-    SITL runner's stale-guard refuses to fly a .parm that does not match the
-    latest recommended design, so a fresh run whose recommendation differs from a
-    previous run's leftover .parm would otherwise be rejected."""
+    recommended.parm is written here, not just the design inputs: the SITL
+    runner's stale-guard refuses to fly a .parm that does not match the latest
+    recommended design, so a leftover .parm from a previous run would be
+    rejected.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     run_json = output_dir / "realization_run.json"
     existing: Dict[str, Any] = {}
@@ -76,7 +75,7 @@ def _persist_recommendation(design, model_text: str, output_dir: Path) -> None:
         actual = dict(vars(design)) if design is not None else None
         if sha256_json(expected) != sha256_json(actual):
             raise RuntimeError("refusing Phase 9 design that differs from authoritative run")
-        return  # authoritative base artifacts are immutable during evidence collection
+        return  # base artifacts are immutable during collection
     atomic_write_text(output_dir / "final_model.sysml", model_text or "")
     existing["recommended_design_inputs"] = dict(vars(design)) if design is not None else None
     atomic_write_json(run_json, existing)
@@ -102,7 +101,6 @@ def _persist_recommendation(design, model_text: str, output_dir: Path) -> None:
 
 
 def _env_available(layer: str) -> Optional[str]:
-    """Return a human reason when the layer's environment is unavailable, else None."""
     if layer == "sitl":
         from ..utils.ardupilot import find_arducopter_binary
 
@@ -140,7 +138,7 @@ def _read_report(path: Path) -> Optional[Dict[str, Any]]:
 
 def run_layer(layer: str, design, model_text: str,
               output_dir: Path = _OUTPUT_DIR, timeout_s: int = 1800) -> Dict[str, Any]:
-    """Run one high-fidelity layer. Honest about environment absence; never fakes."""
+    """Run one high-fidelity layer."""
     reason = _env_available(layer)
     if reason is not None:
         return {"layer": layer, "status": "skipped", "reason": reason}
@@ -152,8 +150,8 @@ def run_layer(layer: str, design, model_text: str,
         flight = (report or {}).get("flight") or {}
         safety = (report or {}).get("safety_verification") or {}
         # "ran" iff the runner produced a parseable report (a nonzero exit code
-        # just signals flight-not-passed, NOT a crash); "error" only when no
-        # report came back (crash / environment failure) — never faked.
+        # signals flight-not-passed, not a crash); "error" only when no report
+        # came back (crash / environment failure).
         return {
             "layer": "sitl",
             "status": "ran" if report is not None else "error",
@@ -163,7 +161,7 @@ def run_layer(layer: str, design, model_text: str,
             "report": str(output_dir / "sitl_feasibility_report.md"),
             "redline": "native SITL verifies flight feasibility + L2 safety, not endurance",
         }
-    # gazebo: exit 2 = a requirement FAILED (ran fine); "error" only when no report.
+    # gazebo: exit 2 = a requirement failed (ran fine); "error" only when no report.
     run = _run_subprocess(_GAZEBO_RUNNER, [], timeout_s, output_dir)
     report = _read_report(output_dir / "gazebo_feasibility_report.json")
     return {

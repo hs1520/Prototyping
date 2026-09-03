@@ -1,9 +1,4 @@
-"""Authoritative projection from DSE design facts to ArduPilot parameters.
-
-This module owns the parameter registry, unit conversion, range validation,
-frame mapping, and platform-base merge policy.  Callers select the projection
-they need without duplicating those rules.
-"""
+"""Authoritative projection from DSE design facts to ArduPilot parameters."""
 from __future__ import annotations
 
 from dataclasses import dataclass

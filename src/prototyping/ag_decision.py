@@ -1,23 +1,18 @@
 """LLM-decided A/G specs, rendered deterministically (R2 generation mode C).
 
-Measurement drove this. Across nine seeds the LLM-authored-SysML mode got the
-*engineering* right — guarantee allocation agreed with frozen gold 6/6 times and
-assumption discharge 4/6 — while losing round after round to the *notation*:
-unparseable output, invented keywords, guards on undeclared concepts, missing
-realization links. No seed ever reached PASS.
+Across nine seeds the LLM-authored-SysML mode got the engineering right -
+guarantee allocation agreed with frozen gold 6/6, assumption discharge 4/6 - but
+lost on notation: unparseable output, invented keywords, guards on undeclared
+concepts, missing realization links. No seed reached PASS.
 
-So the notation is taken away from the model. It emits the decisions only — which
-pattern the requirement instantiates, what starts the timing, how the deadline is
-apportioned, which producer discharges each assumption, how responses are ordered —
-and `ag_emitter` renders the SysML from them. Convention conformance is then true
-by construction rather than by luck, and what the model is judged on is exactly
-what it is good at.
-
-This does not make the output *correct*: a decision can be wrong, and the evaluator
-still scores it against frozen human gold. It makes the output *well formed*.
+So the model emits decisions only - which pattern the requirement instantiates,
+what starts the timing, how the deadline is apportioned, which producer discharges
+each assumption, how responses are ordered - and `ag_emitter` renders the SysML.
+Convention conformance is then true by construction; correctness is not, since a
+decision can be wrong and the evaluator still scores it against frozen human gold.
 
 The component set, ownership and interfaces come from the frozen architecture
-boundary, never from the model — the same split the LLM-authored mode uses.
+boundary, as in the LLM-authored mode.
 """
 from __future__ import annotations
 
@@ -51,7 +46,7 @@ class DecisionError(ValueError):
 
 
 class DecisionFailureDisposition(str, Enum):
-    """What the bounded generator may scientifically do after validation fails."""
+    """What the bounded generator may do after validation fails."""
 
     RETRYABLE_VALIDATION_ERROR = "RETRYABLE_VALIDATION_ERROR"
     NEEDS_ARCHITECTURE_INPUT = "NEEDS_ARCHITECTURE_INPUT"
@@ -70,15 +65,11 @@ def classify_decision_failure(
 ) -> DecisionFailureDisposition:
     """Classify a validator failure without weakening validation.
 
-    Most failures are repairs of the model's own JSON or consistency choices and
-    can be retried using the already-published boundary. A singleton timed
-    response set is different: the stakeholder requirement and architecture
-    boundary do not enumerate the competing safety responses. Asking the model to
-    add a second member would therefore reward invention (the measured
-    ``OTHER_RESPONSE`` failure), not repair.
-
-    Keep this intentionally narrow. New errors remain retryable until evidence
-    establishes that they require a fact absent from the supplied inputs.
+    Most failures are the model's own JSON or consistency choices and can be retried
+    against the published boundary. A singleton timed response set cannot: neither the
+    requirement nor the boundary enumerates the competing safety responses, so asking
+    for a second member rewards invention (the measured ``OTHER_RESPONSE`` failure).
+    New errors stay retryable until evidence shows they need a fact the inputs lack.
     """
     if str(error) in {
         "priority.members needs at least two responses",
@@ -91,11 +82,10 @@ def classify_decision_failure(
 def extract_runtime_response_catalog(model_text: str) -> Dict[str, Any]:
     """Extract selectable safety responses from committed arbiter behavior.
 
-    The catalog is gold-blind: entries are calls made by state entry actions in an
-    existing state definition whose role is arbitration. A port, Boolean
-    guarantee, or invented enum member is not a response merely because its name
-    sounds plausible. This keeps the response vocabulary tied to executable
-    design elements already present in the generated model.
+    Gold-blind: entries are calls made by state entry actions in an existing
+    arbitration state definition, so the response vocabulary stays tied to executable
+    elements already in the model. A port, Boolean guarantee, or enum member with a
+    plausible name is not a response.
     """
     entries: List[Dict[str, str]] = []
     for definition in re.finditer(
@@ -140,8 +130,8 @@ def extract_runtime_response_catalog(model_text: str) -> Dict[str, Any]:
 def extract_decisions(raw: str) -> Dict[str, Any]:
     """Pull the decision object out of a model response.
 
-    Fails closed: a response that does not contain one well-formed JSON object is
-    an error, never a partially-guessed decision set.
+    Fails closed: a response without one well-formed JSON object is an error, not a
+    partially guessed decision set.
     """
     text = str(raw or "")
     for fence in ("```json", "```"):
@@ -187,8 +177,8 @@ def _identifier(value: Any, field: str) -> str:
     text = str(value or "").strip()
     if not IDENTIFIER_RE.fullmatch(text):
         raise DecisionError(f"{field} must be a bare identifier, got {value!r}")
-    # A decided name is rendered into SysML text; a reserved word there is a
-    # parser error after every gate that could have refused it cheaply.
+    # A decided name goes into SysML text, where a reserved word is a parser
+    # error; cheaper to refuse it here.
     from .sysml_reserved import SYSML_RESERVED_WORDS
     if text in SYSML_RESERVED_WORDS:
         raise DecisionError(
@@ -198,15 +188,12 @@ def _identifier(value: Any, field: str) -> str:
     return text
 
 
-
-
 def _bounded_expression(value: Any, field: str) -> str:
     """A bare concept, or a bounded Boolean expression over concepts.
 
-    An invariant pattern's system guarantee is an expression rather than a single
-    concept — REQ_SAFE_008 observes ``not powerOnInitialisation or payloadLocked``
-    — so the observation accepts the same bounded subset the constraints use, and
-    nothing richer.
+    An invariant pattern's system guarantee is an expression, not one concept
+    (REQ_SAFE_008 observes ``not powerOnInitialisation or payloadLocked``), so the
+    observation accepts the same bounded subset the constraints use.
     """
     text = str(value or "").strip()
     if not text:
@@ -227,11 +214,10 @@ def _bounded_expression(value: Any, field: str) -> str:
 def _expression_concepts(expression: str) -> Tuple[str, ...]:
     """The concepts a bounded Boolean expression names, in order, deduplicated.
 
-    The emitter declares one `attribute <concept> : Boolean;` per observation
-    concept, so an observation that is an *expression* must be handed over as its
-    concepts, never as the expression itself: `attribute a and b : Boolean;` does
-    not parse. The hand-encoded chains carry the split explicitly; decisions did
-    not, and a measured seed died on the raw syntax gate for it.
+    The emitter declares one `attribute <concept> : Boolean;` per observation concept,
+    so an expression observation is handed over as its concepts: `attribute a and b :
+    Boolean;` does not parse. The hand-encoded chains split it explicitly, decisions
+    did not, and a measured seed failed the raw syntax gate for it.
     """
     return tuple(dict.fromkeys(
         token
@@ -241,7 +227,6 @@ def _expression_concepts(expression: str) -> Tuple[str, ...]:
 
 
 def _ast_concepts(node: Any) -> List[str]:
-    """Every concept name a bounded Boolean AST references."""
     if not isinstance(node, Mapping):
         return []
     if node.get("node") == "Identifier":
@@ -257,10 +242,9 @@ def _ast_concepts(node: Any) -> List[str]:
 def _conjunction_ast(terms: Any, field: str) -> Dict[str, Any]:
     """Build the bounded Boolean AST from a list of possibly-negated concepts.
 
-    The profile's invariants are conjunctions of literals — every invariant across
-    the three encoded chains has this shape — so the decision format is a list of
-    ``{"concept": ..., "negated": ...}`` rather than a nested AST the model would
-    have to assemble correctly.
+    Every invariant across the three encoded chains is a conjunction of literals, so
+    the decision format is a list of ``{"concept": ..., "negated": ...}`` rather than a
+    nested AST the model has to assemble.
     """
     if not isinstance(terms, Sequence) or isinstance(terms, str) or not terms:
         raise DecisionError(f"{field} must be a non-empty list of terms")
@@ -287,12 +271,10 @@ def _locked_release_lifecycle(
     """The lock lifecycle, synthesised from the declared invariants.
 
     A locked-until-authorised-release mechanism needs more than the single
-    trigger-response transition the other patterns use: it must start locked, admit
-    exactly one authorised way out, and return on a *distinct* event. Those three
-    facts are already in the decisions — the invariants name the locked concept and
-    the authorisation concept, and the boundary names the events the component
-    consumes — so the lifecycle is derived rather than asked for, and the model is
-    never required to write a state machine.
+    trigger-response transition: it starts locked, admits one authorised way out, and
+    returns on a distinct event. The invariants name the locked and authorisation
+    concepts and the boundary names the consumed events, so the lifecycle is derived
+    rather than asked for and the model writes no state machine.
     """
     if decisions.get("safety_pattern") != LOCKED_UNTIL_RELEASE_PATTERN:
         return ()
@@ -315,16 +297,16 @@ def _locked_release_lifecycle(
         if len(consequent) != 1:
             continue
         if negated:
-            locked = consequent[0]          # not <power> => <locked>
+            locked = consequent[0]
         elif len(antecedent) == 1 and "lock" in consequent[0].lower():
             locked = locked or consequent[0]
         elif len(antecedent) == 1:
-            authorisation = consequent[0]   # <unlocked> => <authorisation>
+            authorisation = consequent[0]
     if not locked or not authorisation:
         return ()
-    # only the component that actually guarantees the lock has a lock lifecycle;
-    # applying it to every component gave the authorisation gateway a nonsensical
-    # machine built from whatever inputs it happened to consume
+    # only the component guaranteeing the lock gets a lock lifecycle; applied to
+    # every component it built the authorisation gateway a machine out of
+    # whatever inputs it consumed
     if locked not in [str(item) for item in produces]:
         return ()
 
@@ -332,8 +314,8 @@ def _locked_release_lifecycle(
         str(concept)
         for concept in boundary_component.get("interfaces", {}).get("consumes", ())
     ]
-    # the events that are not the authorisation itself power the component up and
-    # down; their order in the interface is the boundary's, not ours to invent
+    # events other than the authorisation power the component up and down; their
+    # order comes from the boundary interface
     events = [concept for concept in consumed if concept != authorisation]
     if len(events) < 2:
         return ()
@@ -362,11 +344,10 @@ def _locked_release_lifecycle(
 def component_aliases(boundary: Mapping[str, Any]) -> Dict[str, str]:
     """Map every name a boundary component answers to onto its component_id.
 
-    The boundary shows a component as ``Contract (part usage : Def)``, and a model
-    asked to name one legitimately reaches for the part instead. Referring to the
-    same component by its own part or definition is not an attempt to extend the
-    architecture, so it is resolved rather than refused; a name belonging to no
-    component still fails closed.
+    The boundary shows a component as ``Contract (part usage : Def)``, so a model may
+    name the part instead. Naming the same component by its part or definition does not
+    extend the architecture and is resolved; a name belonging to no component still
+    fails closed.
     """
     aliases: Dict[str, str] = {}
     for item in boundary.get("components", ()):
@@ -398,8 +379,8 @@ def validate_decisions(
 ) -> None:
     """Reject decisions the emitter could not render into a coherent model.
 
-    Checked against the *boundary*, never against gold: an author may allocate
-    wrongly and still be well formed. Only incoherence is refused.
+    Checked against the boundary, not gold: a wrong allocation can still be well
+    formed, so only incoherence is refused.
     """
     pattern = str(decisions.get("safety_pattern") or "")
     if pattern not in KNOWN_PATTERNS:
@@ -450,8 +431,8 @@ def validate_decisions(
         )
 
     if pattern in INVARIANT_PATTERNS:
-        # an invariant pattern states its obligation as invariants and must carry
-        # no timing budget — the two are mutually exclusive in the profile
+        # an invariant pattern states its obligation as invariants; timing budgets
+        # are mutually exclusive with it in the profile
         invariants = decisions.get("invariants")
         if not isinstance(invariants, Sequence) or not invariants:
             raise DecisionError(
@@ -480,10 +461,9 @@ def validate_decisions(
             if decisions.get("deadline_seconds") in (None, ""):
                 raise DecisionError("a timed pattern needs deadline_seconds")
         else:
-            # An untimed triggered pattern apportions nothing: a stated deadline
-            # would make it a timed chain declared under the wrong name, and the
-            # composition check would then compose budgets against a deadline the
-            # requirement never set.
+            # An untimed triggered pattern apportions nothing: a deadline would make it
+            # a timed chain under the wrong name, and composition would then check
+            # budgets against a deadline the requirement never set.
             if decisions.get("deadline_seconds") not in (None, ""):
                 raise DecisionError(
                     f"{pattern} is untimed and must not carry deadline_seconds"
@@ -538,10 +518,9 @@ def build_spec_from_decisions(
 ) -> AGChainSpec:
     """Assemble the emitter's spec from frozen boundary facts + model decisions.
 
-    Everything structural (component identity, ownership, interfaces) comes from
-    the boundary. Everything judged (pattern, timing, discharge wiring, ordering)
-    comes from the decisions. Element naming is mechanical, so the model never has
-    to guess a convention.
+    Structure (component identity, ownership, interfaces) comes from the boundary;
+    judgement (pattern, timing, discharge wiring, ordering) from the decisions.
+    Element naming is mechanical, so the model guesses no convention.
     """
     validate_decisions(decisions, boundary)
 
@@ -556,10 +535,9 @@ def build_spec_from_decisions(
     }
     observation = _bounded_expression(decisions.get("observation"), "observation")
 
-    # The arbiter is the component feeding the one that produces the system
-    # observation. Under a timed pattern the profile realizes it with the fixed
-    # arbitration behaviour, so it is identified structurally here rather than
-    # left to the model to name.
+    # The arbiter is the component feeding the producer of the system observation.
+    # Under a timed pattern the profile realizes it with the fixed arbitration
+    # behaviour, so it is identified structurally rather than named by the model.
     observer = produced_by.get(observation)
     observer_consumes = set()
     if observer and observer in by_id:
@@ -593,15 +571,13 @@ def build_spec_from_decisions(
         ]
         if not produces:
             raise DecisionError(f"{name} produces nothing in the boundary")
-        # The emitter derives the discharge edge from the matching upstream
-        # guarantee, so the decision only has to say whether the assumption is an
-        # environment input or is discharged internally.
-        # Concepts the author declared as typed lifecycle events are consumed but
-        # not *assumed*: a mechanism that assumes its power-on event is not locked
-        # by default, it is locked once that event happens to have occurred. The
-        # boundary merges both into one `consumes` list, so which is which is the
-        # author's judgement, and without it a default-safe component cannot be
-        # assembled at all.
+        # The emitter derives the discharge edge from the matching upstream guarantee,
+        # so the decision only says whether an assumption is an environment input or is
+        # discharged internally.
+        # Concepts declared as typed lifecycle events are consumed but not assumed: a
+        # mechanism that assumes its power-on event is locked only once that event has
+        # occurred. The boundary merges both into one `consumes` list, so the split is
+        # the author's, and a default-safe component cannot be assembled without it.
         events = {
             str(item) for item in entry.get("lifecycle_events", ())
             if isinstance(item, str)
@@ -611,8 +587,7 @@ def build_spec_from_decisions(
                 concept=_identifier(item.get("concept"), "assumption.concept"),
                 environment=(
                     item.get("discharged_by") in (None, "", "environment")
-                    # a concept nothing in the boundary produces is environmental
-                    # however the decision labelled it
+                    # a concept nothing in the boundary produces is environmental, however labelled
                     or produced_by.get(str(item.get("concept"))) is None
                 ),
             )
@@ -636,21 +611,20 @@ def build_spec_from_decisions(
         )
         origin = str(decisions.get("timing_origin") or "")
         if not origin:
-            # An untimed triggered pattern declares no interval, so it has no
-            # timing origin — but the arbitration still fires on something. That
-            # concept is the trigger the priority contract already names, and it
-            # is stated once rather than twice.
+            # An untimed triggered pattern declares no interval and so no timing
+            # origin, but the arbitration still fires on something: the trigger the
+            # priority contract already names, stated once rather than twice.
             priority_decision = decisions.get("priority")
             if isinstance(priority_decision, Mapping):
                 origin = str(priority_decision.get("trigger") or "")
         is_arbiter = name == arbiter
         if is_arbiter and origin:
-            # the arbitration is triggered by the timing origin even though that
-            # concept is an environment input, not an upstream guarantee
+            # the timing origin triggers the arbitration even though it is an
+            # environment input rather than an upstream guarantee
             trigger_concept = origin
         behavior = "SafetyResponseArbitration" if is_arbiter else f"{stem}Behavior"
-        # the responding action must establish every guarantee the state settles,
-        # which for the arbiter is both the selection and the command it issues
+        # the responding action establishes every guarantee the state settles - for
+        # the arbiter, the selection and the command it issues
         action_concepts = [primary, *produces[1:]] if is_arbiter else [primary]
         response_action = "set" + "And".join(
             _capitalise(concept) for concept in action_concepts
@@ -719,8 +693,8 @@ def build_spec_from_decisions(
             edges=tuple(
                 (selected, item) for item in members if item != selected
             ),
-            # A timed chain states the trigger as its interval origin; an untimed
-            # one has no interval and states it on the priority decision instead.
+            # A timed chain states the trigger as its interval origin; an untimed one
+            # states it on the priority decision instead.
             trigger=_identifier(
                 decisions.get("timing_origin")
                 or decided_priority.get("trigger"),
@@ -768,7 +742,6 @@ def build_spec_from_decisions(
         ),
         observation=observation,
         deadline=float(deadline) if deadline not in (None, "") else None,
-        # reserve the author chose to keep unapportioned, if any
         timing_margin=(
             float(margin) if margin not in (None, "") else None
         ),
@@ -788,8 +761,7 @@ def build_spec_from_decisions(
             *(component.guarantee for component in components),
             *(concept for component in components
               for concept in component.additional_guarantees),
-            # an invariant binds the concepts it constrains, so they must be
-            # selected too or the binding is incomplete
+            # an invariant binds the concepts it constrains, so select them too
             *(name for item in invariants
               for name in _ast_concepts(item.trigger_or_antecedent_ast)),
             *(name for item in invariants

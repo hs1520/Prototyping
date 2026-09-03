@@ -1,9 +1,4 @@
-"""
-Base agent class for the MBSE multi-agent system.
-
-Provides common functionality for all specialized agents in the
-rapid prototyping framework.
-"""
+"""Base agent class for the MBSE multi-agent system."""
 
 from __future__ import annotations
 
@@ -26,12 +21,7 @@ class AgentResult:
 
 
 class BaseAgent(ABC):
-    """
-    Abstract base class for all MBSE agents.
-
-    Each agent has a specific role in the design process and can
-    communicate with other agents through the orchestrator.
-    """
+    """Abstract base class for all MBSE agents."""
 
     def __init__(
         self,
@@ -70,4 +60,3 @@ class BaseAgent(ABC):
     def record_result(self, result: AgentResult) -> None:
         """Record a result produced by this agent."""
         self._results_history.append(result)
-

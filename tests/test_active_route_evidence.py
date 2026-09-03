@@ -5,7 +5,7 @@ from src.sitl.active_route_evidence import (
 )
 
 
-def test_mission_storage_readback_does_not_prove_active_route_incorporation():
+def test_storage_readback_not_proof():
     evidence = evaluate_active_route_update(
         accepted_at_s=10.0,
         target_lat_e7=-353626220,
@@ -25,7 +25,7 @@ def test_mission_storage_readback_does_not_prove_active_route_incorporation():
     assert evidence.latency_s is None
 
 
-def test_other_controller_targets_without_revision_are_a_failure():
+def test_wrong_target_fails():
     evidence = evaluate_active_route_update(
         accepted_at_s=10.0,
         target_lat_e7=-353626220,
@@ -43,7 +43,7 @@ def test_other_controller_targets_without_revision_are_a_failure():
     assert evidence.active_target_seen is False
 
 
-def test_controller_target_proves_when_the_active_route_adopted_revision():
+def test_controller_target_proves_adoption():
     evidence = evaluate_active_route_update(
         accepted_at_s=10.0,
         target_lat_e7=-353626220,
@@ -71,7 +71,7 @@ def test_controller_target_proves_when_the_active_route_adopted_revision():
     assert evidence.latency_s == 0.083
 
 
-def test_controller_target_after_deadline_is_a_requirement_failure():
+def test_target_after_deadline_fails():
     evidence = evaluate_active_route_update(
         accepted_at_s=10.0,
         target_lat_e7=-353626220,
@@ -89,11 +89,12 @@ def test_controller_target_after_deadline_is_a_requirement_failure():
     assert evidence.latency_s == 1.2
 
 
-def test_a_navigator_that_held_the_old_target_is_named_as_such():
-    """Measured on the authoritative model: the revision reached mission storage
-    in 12 ms and the navigation controller kept the old destination for the whole
+def test_held_old_target_named():
+    """Measured on the authoritative model: the revision reached mission storage in
+    12 ms while the navigation controller kept the old destination for the whole
     observation window. "No target at all" and "held the old one" are different
-    failures, and only the second says the revision was ignored."""
+    failures; only the second says the revision was ignored.
+    """
     old_coord = (-353617620, 1491652370)
     revised = (-353617620, 1491662370)
     observations = [
@@ -119,16 +120,17 @@ def test_a_navigator_that_held_the_old_target_is_named_as_such():
     assert str(revised[1]) in evidence.description
 
 
-def test_the_reported_target_is_never_bit_identical_to_the_commanded_one():
+def test_reported_target_not_bit_exact():
     """The 2026-08-31 false negative. POSITION_TARGET_GLOBAL_INT reports the
-    controller's own target, converted to a NEU offset from the EKF origin and
-    back; the run held the revised waypoint 0.58 m from the commanded integers
-    while sitting 90 m from the one it replaced. Integer equality called that
-    "never adopted" — a criterion only mission storage could ever satisfy, and
-    storage is the observable this module exists to reject."""
+    controller's own target through a NEU round-trip via the EKF origin; the run
+    held the revised waypoint 0.58 m from the commanded integers and 90 m from the
+    one it replaced. Integer equality called that "never adopted" - a criterion
+    only mission storage could satisfy, and storage is the observable this module
+    rejects.
+    """
     old = (-353617620, 1491652370)
     revised = (-353617620, 1491662370)
-    reported = (-353617590, 1491662318)          # measured, not constructed
+    reported = (-353617590, 1491662318)
 
     observations = [
         RouteObservation(observed_at_s=0.5 + i * 0.1,
@@ -149,18 +151,18 @@ def test_the_reported_target_is_never_bit_identical_to_the_commanded_one():
 
     assert evidence.status == "verified"
     assert evidence.active_target_seen is True
-    assert evidence.separation_m < 1.0            # 0.58 m from the revision
-    assert evidence.baseline_separation_m > 80.0  # 90 m from what it replaced
+    assert evidence.separation_m < 1.0
+    assert evidence.baseline_separation_m > 80.0
     assert "unambiguous" in evidence.description
 
 
-def test_a_revision_too_small_to_discriminate_is_inconclusive_not_verified():
-    """Within tolerance of the new coordinate AND within tolerance of the old
-    one is not evidence of anything: a navigator that ignored the revision
-    reads identically. The scenario failed, not the vehicle, and the verdict
-    must not launder that into a pass."""
+def test_tiny_revision_inconclusive():
+    """Within tolerance of both the new and the old coordinate is not evidence: a
+    navigator that ignored the revision reads identically. The scenario failed,
+    not the vehicle, so the verdict is not a pass.
+    """
     old = (-353617620, 1491652370)
-    revised = (-353617620, 1491652380)            # 0.09 m away
+    revised = (-353617620, 1491652380)
     reported = (-353617620, 1491652374)
 
     evidence = evaluate_active_route_update(
@@ -180,9 +182,7 @@ def test_a_revision_too_small_to_discriminate_is_inconclusive_not_verified():
     assert "cannot tell adoption from standing still" in evidence.description
 
 
-def test_an_exact_hit_needs_no_baseline_to_discriminate():
-    """Approximate matching is what needs a baseline. An exact hit cannot be a
-    near-miss of some other coordinate, so it stands on its own."""
+def test_exact_hit_needs_no_baseline():
     revised = (-353617620, 1491662370)
     evidence = evaluate_active_route_update(
         accepted_at_s=1.0, target_lat_e7=revised[0], target_lon_e7=revised[1],
@@ -196,8 +196,7 @@ def test_an_exact_hit_needs_no_baseline_to_discriminate():
     assert evidence.baseline_separation_m is None
 
 
-def test_a_target_near_the_revision_but_far_past_the_deadline_still_fails():
-    """Loosening the coordinate test must not loosen the timing one."""
+def test_late_near_target_fails():
     old = (-353617620, 1491652370)
     revised = (-353617620, 1491662370)
     evidence = evaluate_active_route_update(
@@ -216,10 +215,11 @@ def test_a_target_near_the_revision_but_far_past_the_deadline_still_fails():
     assert evidence.latency_s == 2.4
 
 
-def test_sampling_that_starts_at_acceptance_reports_an_upper_bound():
-    """With no pre-revision sample, an adoption that had already happened is
-    indistinguishable from one that happened at the first sample. Reporting
-    that number as a measurement would overstate what was observed."""
+def test_latency_upper_bound():
+    """With no pre-revision sample, an adoption that already happened is
+    indistinguishable from one at the first sample; reporting that number as a
+    measurement would overstate the observation.
+    """
     revised = (-353617620, 1491662370)
     evidence = evaluate_active_route_update(
         accepted_at_s=1.0, target_lat_e7=revised[0], target_lon_e7=revised[1],
@@ -234,10 +234,11 @@ def test_sampling_that_starts_at_acceptance_reports_an_upper_bound():
     assert "upper bound" in evidence.description
 
 
-def test_a_commanded_pre_revision_coordinate_can_stand_in_for_a_baseline():
-    """When the run did not sample before the revision, the commanded old
-    coordinate still establishes that the two are far enough apart to tell
-    apart — a weaker basis than an observed baseline, and enough for this."""
+def test_commanded_baseline_accepted():
+    """Without a pre-revision sample, the commanded old coordinate still shows the
+    two are far enough apart to distinguish - a weaker basis than an observed
+    baseline, and enough here.
+    """
     evidence = evaluate_active_route_update(
         accepted_at_s=1.0,
         target_lat_e7=-353617620, target_lon_e7=1491662370,

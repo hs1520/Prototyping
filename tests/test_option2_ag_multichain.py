@@ -1,11 +1,9 @@
 """Multi-chain R2-BBAG: a run that co-selects two student-approved chains.
 
-The drone requirement set carries both REQ_SAFE_004 (startup inhibit) and
-REQ_SAFE_005 (timed failsafe). Each is an independent A/G decomposition emitted
-as its own package, so the committed model holds two system contracts. The A/G
-trace must check each chain on its own graph and aggregate — pooling both system
-contracts into one graph makes the decomposition root ambiguous (``system=None``)
-and was a real regression once the second chain was added.
+REQ_SAFE_004 (startup inhibit) and REQ_SAFE_005 (timed failsafe) each emit their
+own A/G package, so the committed model holds two system contracts. The trace
+checks each chain on its own graph and aggregates; pooling both into one graph
+makes the decomposition root ambiguous (``system=None``).
 """
 from __future__ import annotations
 
@@ -34,7 +32,7 @@ _REQS = [
     "failure.",
 ]
 
-# The committed requirement-def doc must reproduce the authoritative stakeholder
+# The committed requirement-def doc reproduces the authoritative stakeholder
 # text verbatim (Blackboard protects source text), so each doc mirrors _REQS.
 _BASE_MODEL = (
     "package DeliveryUAV { "
@@ -54,13 +52,12 @@ def _two_chain_model() -> str:
     )
 
 
-def test_two_system_contracts_are_extracted_and_checked_per_chain():
+def test_two_contracts_checked_per_chain():
     model = _two_chain_model()
     # The pooled single-graph extraction cannot disambiguate two roots.
     pooled = check_ag_graph(extract_ag_graph(model))
-    assert pooled.verdict != "PASS"  # ambiguous system contract, honest failure
+    assert pooled.verdict != "PASS"
 
-    # Per-chain extraction resolves each system independently and both PASS.
     graphs = extract_ag_graphs(model, revision=1)
     assert len(graphs) == 2
     by_source = {}
@@ -88,14 +85,13 @@ def _r2_two_chain_run():
     }
 
 
-def test_orchestrator_aggregates_two_chains_into_one_passing_run():
+def test_orchestrator_aggregates_two_chains():
     orch, artifacts, _ = _r2_two_chain_run()
     graph = artifacts["ag_contract_graph"]
     assert graph["multi_chain"] is True
     assert graph["chain_count"] == 2
-    assert graph["verdict"] == "PASS"  # conjunction of both chains
+    assert graph["verdict"] == "PASS"
     assert set(graph["source_requirements"]) == {"REQ_SAFE_005", "REQ_SAFE_004"}
-    # each chain keeps its own full A/G graph for post-hoc evaluation
     assert {c["source_requirement"] for c in graph["chains"]} == {
         "REQ_SAFE_005", "REQ_SAFE_004",
     }
@@ -103,17 +99,16 @@ def test_orchestrator_aggregates_two_chains_into_one_passing_run():
     assert artifacts["revised_experiment"]["runtime_assurance_status"] == "PASS"
 
 
-def test_each_chain_publishes_its_own_analysis_record():
+def test_each_chain_publishes_record():
     orch, _artifacts, _ = _r2_two_chain_run()
     traces = [
         r for r in orch.blackboard.records(topic="analysis.ag_trace")
     ]
-    # one independent assurance case per source requirement
     assert len(traces) == 2
     assert all(t.payload["verdict"] == "PASS" for t in traces)
 
 
-def test_multichain_run_writes_per_chain_graph_artifacts(tmp_path):
+def test_per_chain_graph_artifacts(tmp_path):
     _orch, _artifacts, result = _r2_two_chain_run()
     written = write_revised_run_artifacts(result, tmp_path)
     names = set(written)
@@ -145,8 +140,6 @@ def test_multichain_run_writes_per_chain_graph_artifacts(tmp_path):
 
 
 class _FixingLLM:
-    """Returns one corrected state def, the way a repair agent would."""
-
     def __init__(self, replacement: str):
         self._replacement = replacement
         self.calls = 0
@@ -175,7 +168,6 @@ class _SequenceLLM:
 
 
 def _injured_two_chain_model() -> tuple[str, str]:
-    """Two chains, one carrying an authorised model-semantic fault."""
     import re
 
     model = _two_chain_model()
@@ -187,18 +179,13 @@ def _injured_two_chain_model() -> tuple[str, str]:
     return model.replace(healthy, f"state {match.group(1)};"), healthy
 
 
-def test_repair_now_runs_inside_a_multi_chain_run():
+def test_repair_runs_in_multichain():
     """§15 Increment 3's exit gate, previously unreachable in every pilot.
 
-    Repair was disabled whenever several chains co-existed, so with three chains
-    selected the gate was never exercised and every archived repair decision read
-    `multi_chain_auto_repair_out_of_scope` — a repair that never ran, not one that
-    failed.
-
-    Repair is per chain now, as a fixpoint, because an accepted repair commits a
-    revision that invalidates every OTHER chain's graph: each round re-extracts
-    all chains from the current revision and re-checks them. That is what the two
-    analysis rounds below show.
+    Repair was disabled whenever several chains co-existed, so every archived repair
+    decision read `multi_chain_auto_repair_out_of_scope`. Repair is now per chain as
+    a fixpoint: an accepted repair commits a revision that invalidates every other
+    chain's graph, so each round re-extracts and re-checks all chains.
     """
     from src.simulation.surgical_refiner import _find_def_span
 
@@ -226,7 +213,6 @@ def test_repair_now_runs_inside_a_multi_chain_run():
     assert accepted, f"the repair must be attempted and accepted: {decisions}"
     assert llm.calls >= 1
 
-    # the commit advanced the revision, and every chain was re-checked against it
     assert accepted[0]["committed_model_revision"] == orch.blackboard.current_revision
     history = artifacts["failure_diagnostics"]["analysis_history"]
     assert {item["analysis_round"] for item in history} == {0, 1}
@@ -242,7 +228,7 @@ def test_repair_now_runs_inside_a_multi_chain_run():
     assert graph["verdict"] == "PASS", "the repaired chain now passes"
 
 
-def test_repair_gate_extracts_only_the_routed_chain_from_a_multichain_model():
+def test_repair_extracts_routed_chain():
     from src.prototyping.ag_repair import _extract_routed_ag_graph
 
     model = _two_chain_model()
@@ -254,9 +240,8 @@ def test_repair_gate_extracts_only_the_routed_chain_from_a_multichain_model():
     assert safe_004.system.name != safe_005.system.name
 
 
-def test_the_repair_budget_is_fixed_and_audited_across_all_chains():
+def test_repair_budget_fixed_and_audited():
     injured, _healthy = _injured_two_chain_model()
-    # a patch that changes nothing is refused, spending the single attempt
     llm = _FixingLLM("state def ArmingAuthorityBehavior { entry; then idle; }")
 
     orch = Orchestrator(llm, revised_experiment_arm="R2-BBAG")
@@ -276,8 +261,7 @@ def test_the_repair_budget_is_fixed_and_audited_across_all_chains():
     ) <= orch.maximum_ag_repair_attempts
 
 
-def test_rejected_chain_does_not_orphan_or_suppress_the_next_chain():
-    """A rejected candidate is local: the next independent chain is attempted."""
+def test_rejected_chain_no_suppression():
     from src.simulation.surgical_refiner import _find_def_span
 
     healthy = _two_chain_model()
@@ -293,8 +277,6 @@ def test_rejected_chain_does_not_orphan_or_suppress_the_next_chain():
         healthy, "state", "ArmingAuthorityBehavior"
     )
     assert recovery_span is not None and arming_span is not None
-    # First answer repeats the broken slice and is rejected. The second repairs
-    # the other chain and must still be attempted.
     llm = _SequenceLLM([
         injured[recovery_span[0]:recovery_span[1]],
         injured[recovery_span[0]:recovery_span[1]],

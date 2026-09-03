@@ -1,9 +1,4 @@
-"""Run the frozen revised Option 2 descriptive pilot.
-
-This command performs external paid generation only when the caller passes the
-explicit authorization flag. It creates a new output directory and refuses to
-overwrite previous evidence.
-"""
+"""Run the frozen revised Option 2 descriptive pilot."""
 from __future__ import annotations
 
 import argparse
@@ -21,11 +16,10 @@ from src.prototyping.run_artifacts import write_revised_run_artifacts
 
 
 # Three encoded chains covering the three bounded safety patterns, plus one
-# requirement that instantiates none of them. REQ-FUNC-002 is a continuous control
-# envelope — no trigger, no deadline, no invariant state — and is kept deliberately:
-# a declared out-of-scope case is stronger evidence that the method's boundary is
-# real than a set containing only requirements it can handle. The texts are the
-# authoritative ones the gold drafts cite.
+# requirement that instantiates none. REQ-FUNC-002 is a continuous control
+# envelope - no trigger, no deadline, no invariant state - and is kept as a
+# declared out-of-scope case, so the method's boundary is exercised. The texts
+# are the authoritative ones the gold drafts cite.
 FROZEN_REQUIREMENTS = (
     "REQ-SAFE-004: The system shall not transition to the armed or airborne state "
     "if any onboard sensor reports a failure during the power-on self-test "
@@ -40,11 +34,10 @@ FROZEN_REQUIREMENTS = (
     "separation while avoiding it.",
 )
 
-#: The scope declaration lives in `ag_traceability.DECLARED_OUT_OF_SCOPE`, because
-#: the runner writes it into every traceability artifact and a second copy here
-#: would be a second table to drift. It was declared in this file first and never
-#: read by anything; two statements of one design decision is how the reason and
-#: the number stop matching.
+# The scope declaration lives in `ag_traceability.DECLARED_OUT_OF_SCOPE`: the
+# runner writes it into every traceability artifact, and a second copy here
+# would be a second table to drift. The earlier declaration in this file was
+# never read by anything.
 
 
 def _git_revision() -> str:
@@ -98,12 +91,11 @@ def main() -> None:
         max_iterations=args.max_iterations,
         code_revision=_git_revision(),
         requirements=FROZEN_REQUIREMENTS,
-        # must be explicit: the default selects REQ_SAFE_005 alone, so adding
-        # requirements to the frozen set would otherwise leave the extra chains
-        # unselected and silently unexercised
+        # explicit: the default selects REQ_SAFE_005 alone, so requirements added
+        # to the frozen set would otherwise stay unselected and unexercised
         selected_ag_chain_ids=("REQ_SAFE_004", "REQ_SAFE_005", "REQ_SAFE_008"),
         r2_generation_mode=args.r2_generation_mode,
-        # bound, never chosen independently: a mode running under another
+        # bound, not chosen independently: a mode running under another
         # intervention's version would pool with it
         r2_intervention_version=R2_INTERVENTION_VERSION_BY_MODE[
             args.r2_generation_mode

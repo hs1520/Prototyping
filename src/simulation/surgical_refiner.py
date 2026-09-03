@@ -1,21 +1,12 @@
-"""Surgical (block-level) refinement — replaces the whole-model rewrite.
+"""Surgical (block-level) refinement - replaces the whole-model rewrite.
 
-The legacy refinement asked the LLM to re-emit the ENTIRE model each
-iteration; its known failure mode is dropping ``connect`` statements on
-components it wasn't even asked to touch (reachability collapse), caught only
-after the fact by the connectivity floor — wasting the whole LLM call.
-
-This module inverts the contract: the LLM returns ONLY the top-level blocks it
-changes (complete ``part def`` / ``requirement def`` / … elements) plus bare
-package-level statements to add; the code merges them into the original text
-by exact block replacement.  Everything the LLM does not mention is untouched
-by construction, and the output is an order of magnitude smaller than a
-full-model rewrite.
-
-Gates (all local, no LLM): the merged model must pass ``check_syntax`` and
-must not shed ``connect`` statements. Generic refinement may fall back to the
-legacy whole-model rewrite; scoped Option 2 semantic repair fails closed and
-never uses that fallback.
+The LLM returns only the top-level blocks it changes (complete ``part def`` /
+``requirement def`` elements) plus bare package-level statements to add, and
+the code merges them by exact block replacement, so the legacy whole-model
+rewrite can no longer drop ``connect`` statements on untouched components.
+Gates are local: the merged model must pass ``check_syntax`` and shed no
+``connect``. Generic refinement may fall back to the whole-model rewrite;
+scoped Option 2 semantic repair fails closed instead.
 """
 from __future__ import annotations
 
@@ -28,7 +19,6 @@ from ..simulation.syntax_checker import check_syntax
 from ..utils.digest import sha256_text
 from ..utils.sysml_text_utils import find_block_end
 
-# Top-level definition keywords we can identify for replace-by-name merging.
 _DEF_KEYWORDS = (
     "part", "requirement", "port", "item", "action", "enum",
     "state", "calc", "attribute", "analysis", "verification", "constraint",
@@ -206,9 +196,9 @@ def build_surgical_prompt(
     numbered = "\n".join(f"{i}. {iss}" for i, iss in enumerate(issues, 1))
     hint = ", ".join(_affected_names(model_text, issues)) or "(infer from the issues)"
     display_text = context_text if context_text is not None else model_text
-    # Materialization leaves runs of blank lines behind; the model text is
-    # read-only context here, so compressing them shrinks the prompt without
-    # touching the model itself.
+    # Materialization leaves runs of blank lines; the model text is read-only
+    # context here, so compressing them shrinks the prompt without touching the
+    # model.
     display_text = re.sub(r"\n[ \t]*\n([ \t]*\n)+", "\n\n", display_text)
     context_label = (
         "CURRENT MODEL DEPENDENCY SLICE (read-only; this is intentionally not "
@@ -230,9 +220,9 @@ def build_surgical_prompt(
             f"must not be changed):\n```json\n{packet_json}\n```"
         )
     if feedback.strip():
-        # Callers assemble guidance from the same issue records, so on run3
-        # every ADDITIONAL GUIDANCE line verbatim repeated an ISSUES TO FIX
-        # line (long ones). Keep only lines that add something.
+        # Callers assemble guidance from the same issue records, so ADDITIONAL
+        # GUIDANCE lines can repeat ISSUES TO FIX lines verbatim. Keep only lines
+        # that add something.
         normalised_issues = {
             " ".join(issue.split()) for issue in issues
         }
@@ -254,29 +244,23 @@ def build_surgical_prompt(
 
 
 def _affected_names(model_text: str, issues: List[str]) -> List[str]:
-    """Definition names mentioned by the issues (a hint, not a restriction)."""
     names = [m.group(2) for m in _DEF_HEADER_RE.finditer(model_text)]
     blob = " ".join(issues)
     return [n for n in dict.fromkeys(names) if re.search(rf"\b{re.escape(n)}\b", blob)]
 
-
-# ---------------------------------------------------------------------------
-# LLM-output parsing
-# ---------------------------------------------------------------------------
 
 def extract_sysml_blocks(raw: str) -> List[str]:
     """Top-level SysML elements from the LLM output (fenced or bare)."""
     raw = raw or ""
     chunks = _FENCE_RE.findall(raw)
     if not chunks:
-        # tolerate fence-less output that starts straight with SysML
         stripped = raw.strip()
         if _DEF_HEADER_RE.match(stripped) or stripped.startswith(("connect", "package")):
             chunks = [stripped]
     elements: List[str] = []
     for chunk in chunks:
         elements.extend(_split_top_level(chunk))
-    # defensive: unwrap a whole-package wrapper the LLM shouldn't have produced
+    # defensive: unwrap a whole-package wrapper the LLM should not produce
     unwrapped: List[str] = []
     for el in elements:
         if re.match(r"^\s*package\s+\w+", el):
@@ -290,7 +274,6 @@ def extract_sysml_blocks(raw: str) -> List[str]:
 
 
 def _split_top_level(text: str) -> List[str]:
-    """Split text into top-level elements (brace blocks or `;` statements)."""
     items: List[str] = []
     i, n = 0, len(text)
     while i < n:
@@ -298,7 +281,7 @@ def _split_top_level(text: str) -> List[str]:
             i += 1
         if i >= n:
             break
-        if text.startswith("//", i):  # standalone comment line → skip
+        if text.startswith("//", i):
             nl = text.find("\n", i)
             i = nl + 1 if nl != -1 else n
             continue
@@ -323,17 +306,12 @@ def _split_top_level(text: str) -> List[str]:
     return items
 
 
-# ---------------------------------------------------------------------------
-# Merge
-# ---------------------------------------------------------------------------
-
 def _def_key(element: str) -> Optional[Tuple[str, str]]:
     m = _DEF_HEADER_RE.match(element)
     return (m.group(1), m.group(2)) if m else None
 
 
 def _find_def_span(base: str, kw: str, name: str) -> Optional[Tuple[int, int]]:
-    """(start, end) span of the `<kw> def <name>` element in *base*, or None."""
     pat = re.compile(
         rf"^[ \t]*(?:abstract\s+)?(?:variation\s+)?{kw}\s+def\s+{re.escape(name)}\b",
         re.MULTILINE,
@@ -364,11 +342,7 @@ def merge_blocks(
     allow_statements: bool = True,
     rejection_notes: Optional[List[str]] = None,
 ) -> Optional[SurgicalOutcome]:
-    """Merge LLM elements into *base* by exact block replacement / append.
-
-    Returns None when nothing merges (caller falls back).  No validation here —
-    gates run in :func:`attempt_surgical_refinement`.
-    """
+    """Merge LLM elements into *base* by exact block replacement / append."""
     out = SurgicalOutcome(merged_text=base)
     text = base
     new_blocks: List[str] = []
@@ -425,7 +399,7 @@ def merge_blocks(
     if text == base:
         if rejection_notes is not None:
             rejection_notes.append("merge_noop")
-        return None  # nothing changed — not a usable refinement
+        return None
     out.merged_text = text
     return out
 
@@ -454,9 +428,9 @@ def _package_body_elements(model_text: str) -> List[str]:
     elements: List[str] = []
     occupied_until = -1
     for package in packages:
-        # Ignore nested package matches: their content is already part of the
-        # enclosing package element. Revised Option 2 appends a second top-level
-        # A/G package, which must not be silently excluded from repair slicing.
+        # Ignore nested package matches: their content is already inside the
+        # enclosing package element. Option 2 appends a second top-level A/G
+        # package, which stays included in repair slicing.
         if package.start() < occupied_until:
             continue
         brace = model_text.find("{", package.start())
@@ -498,9 +472,8 @@ def _repair_scope_policy(
 ) -> Optional[Tuple[set[Tuple[str, str]], set[Tuple[str, str]]]]:
     """Resolve packet evidence to concrete top-level AST-like definition keys.
 
-    This is the local enforcement boundary: prompt compliance is insufficient.
-    If no existing owner block can be derived, repair is denied rather than
-    allowing the LLM to choose an arbitrary owner.
+    The local enforcement boundary: if no existing owner block can be derived,
+    repair is denied rather than letting the LLM pick an arbitrary owner.
     """
     if not _packet_digest_valid(packet):
         return None
@@ -564,9 +537,9 @@ def build_dependency_closed_context(
 ) -> Optional[RepairContextSlice]:
     """Build the minimum deterministic model slice needed for one repair.
 
-    The slice contains target requirement definitions, complete owning blocks,
-    definitions referenced by those owners (two-hop closure), and only related
-    package usages/connects. It is prompt context, never the merge target.
+    The slice holds target requirement definitions, complete owning blocks,
+    definitions referenced by those owners (two-hop closure), and related package
+    usages/connects. It is prompt context, not the merge target.
     """
     target_req_ids = _issue_req_ids(issues)
     packet_req_ids: set[str] = set()
@@ -580,9 +553,9 @@ def build_dependency_closed_context(
         normalized_allowed = {
             str(item).upper().replace("-", "_") for item in allowed_req_ids
         }
-        # A signed/scoped packet is one atomic authorization unit.  Silently
-        # trimming a contaminated packet would leave its digest and local edit
-        # policy authorizing more than the prompt slice shows, so fail closed.
+        # A signed/scoped packet is one atomic authorization unit: trimming a
+        # contaminated packet would leave its digest and edit policy authorizing
+        # more than the prompt slice shows, so fail closed.
         if packet_req_ids - normalized_allowed:
             return None
         target_req_ids &= normalized_allowed
@@ -609,10 +582,10 @@ def build_dependency_closed_context(
         if match.group(1).lower() != "requirement"
         and re.search(rf"\b{re.escape(match.group(2))}\b", issue_blob)
     )
-    # Requirement identifiers select owners only through their explicit
-    # ``satisfy`` relation above.  Treating every requirement name mentioned in
-    # the raw issue list as an affected element would re-admit an out-of-scope
-    # model requirement after the frozen-ID filter had removed it.
+    # Requirement identifiers select owners only through the explicit ``satisfy``
+    # relation above. Treating every requirement name in the raw issue list as
+    # affected would re-admit an out-of-scope requirement that the frozen-ID
+    # filter removed.
     affected_tokens = {
         token
         for token in affected_tokens
@@ -676,7 +649,7 @@ def build_dependency_closed_context(
             if key in included:
                 continue
             if key[0] == "requirement":
-                # Never leak model-invented/unselected requirements into repair.
+                # Model-invented/unselected requirements do not enter repair.
                 continue
             included[key] = element
             new_frontier.append(element)
@@ -705,10 +678,9 @@ def build_dependency_closed_context(
         endpoint_usages = set(
             re.findall(r"\b([A-Za-z_]\w*)\.[A-Za-z_]\w*\b", statement)
         )
-        # A dangling peer would make the prompt slice misleading and pulling
-        # that peer's whole definition would quickly recreate the full model.
-        # Keep a connect only when every endpoint is already in the selected
-        # owner scope.
+        # A dangling peer makes the prompt slice misleading, and pulling that peer's
+        # definition recreates the full model. Keep a connect only when every
+        # endpoint is already in the selected owner scope.
         if endpoint_usages and endpoint_usages <= usage_names:
             included_statements.append(statement)
 
@@ -743,15 +715,10 @@ def build_dependency_closed_context(
     )
 
 
-# ---------------------------------------------------------------------------
-# Gated attempt (the orchestrator entry point)
-# ---------------------------------------------------------------------------
-
 _REQ_DEF_RE = re.compile(r"\brequirement\s+def\s+([A-Za-z_]\w*)")
 
 
 def _requirement_identities(text: str) -> Dict[str, str]:
-    """Exact requirement-definition bodies keyed by definition name."""
     result: Dict[str, str] = {}
     for match in _REQ_DEF_RE.finditer(text):
         brace = text.find("{", match.end())
@@ -771,7 +738,6 @@ def _connect_identities(text: str) -> set[str]:
 
 
 def _satisfy_identities(text: str) -> set[tuple[str, str]]:
-    """Canonical ``(owning definition, requirement)`` satisfy identities."""
     identities: set[tuple[str, str]] = set()
     for match in _DEF_HEADER_RE.finditer(text):
         brace = text.find("{", match.end())
@@ -796,10 +762,9 @@ def _gates_ok(base: str, merged: str) -> Tuple[bool, str]:
     missing_connects = _connect_identities(base) - _connect_identities(merged)
     if missing_connects:
         return False, "merge would change or shed existing connect identities"
-    # Semantic-surgery gates: refinement fixes the DESIGN, never the SPEC.
-    # A surgical answer must not add or drop requirement definitions (that would
-    # rewrite the problem statement), and must not shed satisfy links (the same
-    # silent-loss failure mode the connect gate exists for).
+    # Semantic-surgery gates: refinement fixes the design, not the spec.
+    # Invariant: a surgical answer adds or drops no requirement definition and
+    # sheds no satisfy link, the same silent-loss mode the connect gate covers.
     if _requirement_identities(merged) != _requirement_identities(base):
         return False, "merge would change requirement definitions/source text"
     missing_satisfies = _satisfy_identities(base) - _satisfy_identities(merged)
@@ -818,11 +783,7 @@ def attempt_surgical_refinement(
     audit: Optional[SurgicalAudit] = None,
     context_slice: Optional[RepairContextSlice] = None,
 ) -> Optional[SurgicalOutcome]:
-    """One surgical refinement attempt; None means "fall back to full rewrite".
-
-    Uses temperature escalation when the provider supports it: a low-temperature
-    answer that fails to parse/merge/validate is retried warmer before giving up.
-    """
+    """One surgical refinement attempt; None means "fall back to full rewrite"."""
     audit = audit if audit is not None else SurgicalAudit()
     audit.packet_provided = repair_packet is not None
     audit.full_model_line_count = len(model_text.splitlines())

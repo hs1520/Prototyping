@@ -1,12 +1,11 @@
-"""
-Design evaluator module — v3 redesign.
+"""Design evaluator module - v3 redesign.
 
-Seven dimensions; MCTS fidelity is dropped from the denominator when no
-MCTS config is supplied so its 10 % weight is redistributed proportionally
-among the remaining six rather than being awarded as a free 1.0.
+Seven dimensions; MCTS fidelity leaves the denominator when no MCTS config is
+supplied, and its 10 % weight is redistributed proportionally among the
+remaining six rather than awarded as a free 1.0.
 
   Dim 1  syntactic_validity        10 %
-         Syside parse/sema error count.  Gate: below 0.5 → veto.
+         Syside parse/sema error count.  Gate: below 0.5 -> veto.
 
   Dim 2  requirement_coverage      18 %
          satisfy-link coverage (60 %) + binary per-category impl check (40 %).
@@ -15,19 +14,19 @@ among the remaining six rather than being awarded as a free 1.0.
   Dim 3  structural_completeness   12 %
          Port coverage + numeric attribute coverage + no dangling part usages.
 
-  Dim 4  behavioral_verification   30 %   ★ primary quality signal
-         0.4 × structural reachability score  (scenario pass rate)
-         0.6 × behavioral sim score           (state-machine execution pass rate)
-         Both signals come from SimulationResult passed into evaluate().
-         Falls back to 1.0 (N/A) when no sim result is provided.
+  Dim 4  behavioral_verification   30 %   primary quality signal
+         0.4 x structural reachability score  (scenario pass rate)
+         0.6 x behavioral sim score           (state-machine execution pass rate)
+         Both come from the SimulationResult passed into evaluate();
+         falls back to 1.0 (N/A) when none is provided.
 
   Dim 5  safety_assurance          15 %
          State-def coverage + fault-transition coverage (SysML v2 first/then
          syntax) + override-command path + emergency action defs.
 
   Dim 6  interface_quality          5 %
-         Only penalises DataPort on INTF-external ports; internal DataPort is
-         legitimate and no longer counted against the score.
+         Penalises DataPort only on INTF-external ports; internal DataPort is
+         not counted against the score.
 
   Dim 7  dse_fidelity             10 %
          MCTS architectural decisions present in the SysML text.
@@ -58,9 +57,6 @@ from ..utils.syside_utils import (
     SYSIDE_OK as _SYSIDE_EVAL_OK,
 )
 
-# ---------------------------------------------------------------------------
-# Data classes (unchanged public API)
-# ---------------------------------------------------------------------------
 
 @dataclass
 class EvaluationCriteria:
@@ -81,8 +77,8 @@ class EvaluationResult:
     weighted_total: float = 0.0
     issues: List[str] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
-    # normalised weights actually applied (prior or requirement-derived) —
-    # recorded so every verdict is traceable to its weighting
+    # normalised weights applied (prior or requirement-derived), recorded so
+    # each verdict traces to its weighting
     weights_used: Dict[str, float] = field(default_factory=dict)
 
     def is_acceptable(self, threshold: float = 0.6) -> bool:
@@ -90,37 +86,32 @@ class EvaluationResult:
 
 
 # ---------------------------------------------------------------------------
-# Dimension weights (must sum to 1.0)
+# Dimension weights (sum to 1.0)
 # ---------------------------------------------------------------------------
-# DIMENSION_WEIGHTS is the *prior*, used only when no requirements are supplied.
-# With requirements available, derive_dimension_weights() re-allocates the mass
-# of the requirement-sensitive dimensions in proportion to the severity-weighted
-# requirement mass behind each dimension (traceable to the input requirements);
-# the model-integrity dimensions (syntax / structure / dse_fidelity) keep their
-# prior share — they are invariants of a well-formed model, not a function of
-# which requirement categories dominate.
+# DIMENSION_WEIGHTS is the prior, used when no requirements are supplied. With
+# requirements, derive_dimension_weights() re-allocates the requirement-sensitive
+# dimensions in proportion to the severity-weighted requirement mass behind each.
+# The model-integrity dimensions (syntax / structure / dse_fidelity) keep their
+# prior share: they are invariants of a well-formed model, independent of which
+# requirement categories dominate.
 
-#: Bump when a dimension's meaning changes, not when its code moves. Scores from
-#: different versions are not comparable, and until now nothing in a run report
-#: said which evaluator produced its final_score.
-#:
-#: v2 — requirement_coverage no longer counts A/G contract definitions in its
-#: denominator (they are `requirement def` by profile requirement, and were
-#: diluting the metric that judges the layer declaring them), and
-#: safety_assurance counts guarded transitions from the parse rather than from a
-#: pattern that could not see an `accept` clause. Measured effect on 29 archived
-#: models: R1-BBCTX unchanged to the last digit, R2-BBAG +0.16.
-#: v3 -- safety_assurance is structural and requirement-anchored: the two
-#: lexical sub-metrics are removed (a 15 % sub-metric scored zero for two of
-#: three configurations because responses were not named with the template
-#: vocabulary), transition counting becomes per-requirement fault coverage
-#: (the count saturated for the configuration whose emitter renders one
-#: guarded transition per contract chain, regardless of which requirements
-#: were covered), and SAFE-part connectivity replaces the name-matched
-#: override path. behavioral_verification becomes trace-first like the
-#: structural term: requirement-tagged scenario pass rate preferred, so
-#: machine-rendered contract scenarios no longer dilute the denominator
-#: asymmetrically across configurations.
+# Bump when a dimension's meaning changes, not when its code moves. Scores from
+# different versions are not comparable, so the run report records the version.
+#
+# v2 - requirement_coverage drops A/G contract definitions from its denominator
+# (they are `requirement def` by profile and diluted the metric that judges the
+# layer declaring them); safety_assurance counts guarded transitions from the
+# parse instead of a pattern blind to `accept`. On 29 archived models: R1-BBCTX
+# unchanged to the last digit, R2-BBAG +0.16.
+# v3 - safety_assurance is structural and requirement-anchored: the two lexical
+# sub-metrics are removed (a 15 % sub-metric scored zero for two of three
+# configurations whose responses were named outside the template vocabulary),
+# transition counting becomes per-requirement fault coverage (the raw count
+# saturated for the emitter rendering one guarded transition per contract chain),
+# and SAFE-part connectivity replaces the name-matched override path.
+# behavioral_verification becomes trace-first like the structural term:
+# requirement-tagged scenario pass rate preferred, so machine-rendered contract
+# scenarios no longer dilute the denominator asymmetrically across configurations.
 EVALUATOR_VERSION = "dimension-weights-v3"
 
 
@@ -136,7 +127,6 @@ DIMENSION_WEIGHTS: Dict[str, float] = {
 
 assert abs(sum(DIMENSION_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
 
-# Which requirement categories feed each requirement-sensitive dimension.
 _DIMENSION_CATEGORIES: Dict[str, List[str]] = {
     "requirement_coverage":    ["FUNC", "PERF", "SAFE", "INTF", "CONS", "OPER"],
     "behavioral_verification": ["FUNC", "OPER", "SAFE"],
@@ -146,14 +136,7 @@ _DIMENSION_CATEGORIES: Dict[str, List[str]] = {
 
 
 def derive_dimension_weights(requirements: Optional[List[str]]) -> Dict[str, float]:
-    """Requirement-traceable evaluator dimension weights.
-
-    The requirement-sensitive dimensions share their combined prior mass in
-    proportion to the severity-weighted requirement mass behind them
-    (``weighting.derive_weights_from_profile`` — SAFE counts by hazard-severity
-    importance, other categories by count).  Invariant dimensions keep their
-    prior.  No requirements (or none classifiable) → the prior unchanged.
-    """
+    """Requirement-traceable evaluator dimension weights."""
     if not requirements:
         return dict(DIMENSION_WEIGHTS)
     from .requirements_profile import RequirementProfile
@@ -172,13 +155,12 @@ def derive_dimension_weights(requirements: Optional[List[str]]) -> Dict[str, flo
 
 
 # ---------------------------------------------------------------------------
-# Veto floors (Strategy D — conjunction constraint)
+# Veto floors (Strategy D - conjunction constraint)
 # ---------------------------------------------------------------------------
 # A weighted average lets a strong dimension compensate a weak one, so a model
-# can pass the threshold while having a critical sub-system effectively unimplemented.
-# These floors enforce a minimum on individual dimensions: when violated, the
-# overall score is capped just below the quality threshold so refinement is
-# always triggered, and a [VETO] issue is added to the report.
+# can pass the threshold with a critical sub-system unimplemented. These floors
+# set a per-dimension minimum: on violation the overall score is capped just
+# below the quality threshold to force refinement, and a [VETO] issue is added.
 
 DIMENSION_VETO_FLOORS: Dict[str, Tuple[float, str]] = {
     "requirement_coverage": (
@@ -208,28 +190,16 @@ DIMENSION_VETO_FLOORS: Dict[str, Tuple[float, str]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# A stakeholder requirement identifier (`REQ_SAFE_005`, `REQ-FUNC-002`).
+# Separates the frozen requirement set from A/G contract definitions, which
+# are also `requirement def` but are assurance structure.
 
 
-
-# ---------------------------------------------------------------------------
-# Main evaluator
-# ---------------------------------------------------------------------------
-
-#: A stakeholder requirement identifier (`REQ_SAFE_005`, `REQ-FUNC-002`).
-#: Distinguishes the frozen requirement set from A/G contract definitions, which
-#: are also `requirement def` but are assurance structure rather than the thing
-#: being assured.
-
-
-#: A guard-based transition, the structural stand-in for a fault transition.
-#: The `accept` clause is optional because the bounded A/G profile emits
-#: `first X accept Sig if guard then Y`, which is legal SysML v2; a pattern
-#: requiring `if` immediately after the source state cannot see it.
-#: The transition name is optional in SysML v2, so the pattern does not
-#: require one -- the accept lesson above applies to the name as well.
+# A guard-based transition, the structural stand-in for a fault transition.
+# `accept` is optional because the bounded A/G profile emits
+# `first X accept Sig if guard then Y`, which a pattern requiring `if` right
+# after the source state cannot see. The transition name is optional in
+# SysML v2, so the pattern does not require one either.
 _GUARDED_TRANSITION = re.compile(
     r"\btransition\b(?:\s+(?!first\b)\w+)?\s+first\s+\w+"
     r"(?:\s+accept\s+[^;]+?)?"
@@ -238,15 +208,14 @@ _GUARDED_TRANSITION = re.compile(
 )
 
 
-
-
 def _scoreable_parts(parts: List[Any]) -> List[Any]:
     """Model parts minus the injected DSE analysis closure wrapper.
 
-    The reachability extractor already exempts ``DseDesignAnalysis`` by its
-    codified name (simulation/extractor.py; dse/analysis_emitter.py declares
-    the constant): the closure holds the recommendedDesign binding, not a
-    system component. The quality denominators follow the same decision."""
+    The reachability extractor exempts ``DseDesignAnalysis`` by name
+    (simulation/extractor.py; the constant lives in dse/analysis_emitter.py)
+    because the closure holds the recommendedDesign binding rather than a system
+    component. The quality denominators follow the same rule.
+    """
     from .analysis_emitter import ANALYSIS_CLOSURE_DEF_NAME
 
     return [
@@ -258,14 +227,13 @@ def _scoreable_parts(parts: List[Any]) -> List[Any]:
 def _specialization_bases(text: str, part_name: str) -> List[str]:
     """Model-local base def names a part def specialises (``:>`` chain heads).
 
-    A catalogue implementation (``Impl :> Planned``) declares no ports of
-    its own BY DESIGN — the variant emitter's contract is that variants
-    "specialise the host type (so they share its ports)"
-    (dse/variation_introducer.py). Scorers that ask "does this part have
-    directed ports" must follow the specialisation, or every emitted
-    variant is charged as an unported component (measured on the seed-0
-    ablation wave: 10 catalogue variants cost FULL's terminal artifact
-    0.043 against NO-DSE on the same ruler)."""
+    A catalogue implementation (``Impl :> Planned``) declares no ports of its own;
+    the variant emitter's contract is that variants specialise the host type and so
+    share its ports (dse/variation_introducer.py). Port scorers follow the
+    specialisation, or every emitted variant is charged as an unported component:
+    on the seed-0 ablation wave 10 catalogue variants cost FULL's terminal artifact
+    0.043 against NO-DSE on the same ruler.
+    """
     match = re.search(
         rf"\bpart\s+def\s+{re.escape(part_name)}\b([^{{;\n]*)", text
     )
@@ -281,7 +249,6 @@ def _directed_via_specialization(
     parts_by_name: Dict[str, Any],
     _seen: Optional[Set[str]] = None,
 ) -> bool:
-    """Whether a part def inherits directed ports through its ``:>`` chain."""
     seen = _seen or set()
     if part_name in seen:
         return False
@@ -300,13 +267,7 @@ def _directed_via_specialization(
 
 
 class DesignEvaluator:
-    """
-    Evaluates SysML v2 design configurations against five quality dimensions.
-
-    Usage
-    -----
-    result = evaluator.evaluate(config, model, dse_config=best_config)
-    """
+    """Evaluates SysML v2 design configurations against five quality dimensions."""
 
     def __init__(self, quality_threshold: float = 0.75) -> None:
         # Expose criteria list for backward compatibility with tests/tooling
@@ -318,18 +279,14 @@ class DesignEvaluator:
         # without making the cap an arbitrary absolute value.
         self.quality_threshold = quality_threshold
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def evaluate(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
         dse_config: Optional[DesignConfiguration] = None,
-        syntax_result=None,    # Optional[SyntaxCheckResult] — cached from syntax gate
-        sim_result=None,       # Optional[SimulationResult] — structural + behavioral sim
-        requirements: Optional[List[str]] = None,  # enables requirement-derived weights
+        syntax_result=None,
+        sim_result=None,
+        requirements: Optional[List[str]] = None,
     ) -> EvaluationResult:
         """Evaluate model quality across all seven dimensions."""
         self._cached_syntax_result = syntax_result
@@ -350,7 +307,7 @@ class DesignEvaluator:
 
     # The dse_fidelity checks key off these catalog decision parameters; a config
     # without any of them (e.g. a variation-DSE config of variant choices) has
-    # nothing this dimension can measure → treated as N/A, weight redistributed.
+    # nothing this dimension can measure -> treated as N/A, weight redistributed.
     _DSE_SCALAR_KEYS = frozenset({
         "redundancy_level", "communication_protocol", "num_sensors",
         "control_frequency_hz", "distributed_control",
@@ -376,16 +333,15 @@ class DesignEvaluator:
             "dse_fidelity":           self._score_dse_fidelity,
         }
 
-        # dse_fidelity only participates when the config carries catalog decision
-        # keys it can actually check; otherwise (no config, or a variation config
-        # of variant choices) it is dropped and its weight redistributed so the
-        # free 1.0 doesn't inflate the total.
-        # Scalar keys are the legacy parametric-MCTS shape. The flagship
-        # variation mode selects catalogue variants ({"propulsionSystem":
-        # "catalog_r6_p16_c6"}); the dimension's own semantics ("how well
-        # the committed model realises the selected DSE decisions") applies
-        # to those decisions identically, but the gate predated the mode —
-        # so the one arm doing MORE verifiable work was scored on less.
+        # dse_fidelity participates only when the config carries catalog decision keys
+        # it can check; otherwise (no config, or a variation config of variant choices)
+        # it is dropped and its weight redistributed, so a free 1.0 does not inflate
+        # the total.
+        # Scalar keys are the legacy parametric-MCTS shape. The variation mode selects
+        # catalogue variants ({"propulsionSystem": "catalog_r6_p16_c6"}), and the
+        # dimension's semantics ("how well the committed model realises the selected
+        # DSE decisions") apply to those decisions too, but the gate predated the mode
+        # and scored that arm on less.
         has_dse = dse_config is not None and (
             any(
                 k in (dse_config.parameters or {})
@@ -414,7 +370,6 @@ class DesignEvaluator:
 
         result.weighted_total = round(weighted_sum, 4)
 
-        # ── Veto floors (Strategy D) ─────────────────────────────────────
         veto_triggered = False
         has_safe = any(
             "_SAFE_" in r.name for r in model.requirement_definitions
@@ -430,9 +385,9 @@ class DesignEvaluator:
             if dim == "syntactic_validity" and not self._has_syntax_errors(
                 syntax_result, model
             ):
-                # The veto reason asserts failed compilation; warnings alone
-                # must never trigger it (measured: 46 warnings, 0 errors —
-                # the veto text then misdirected every repair prompt).
+                # The veto reason asserts failed compilation, so warnings alone
+                # do not trigger it (46 warnings and 0 errors misdirected every
+                # repair prompt).
                 continue
             score = result.criteria_scores.get(dim, 1.0)
             if score < floor:
@@ -464,26 +419,17 @@ class DesignEvaluator:
         n_samples: int = 300,
         random_seed: int = 1,
     ) -> float:
-        """How robust the pass/fail verdict is to the dimension weighting.
-
-        Samples weight vectors uniformly on the simplex over the scored
-        dimensions (Dirichlet(1,…,1)) and returns the fraction whose weighted
-        total lands on the same side of ``threshold`` as the nominal verdict.
-        1.0 = the verdict does not depend on the weights at all; low values
-        mean the weighting (not the model) decides — the honest answer to
-        "would a different weighting change the outcome?".
-        """
+        """How robust the pass/fail verdict is to the dimension weighting."""
         import random as _random
 
         thr = self.quality_threshold if threshold is None else threshold
         dims = sorted(result.criteria_scores)
         if not dims:
             return 1.0
-        # A fired veto caps weighted_total below the threshold regardless of
-        # weighting, so the verdict is weight-independent BY CONSTRUCTION and
-        # the honest robustness is 1.0. Sampling raw criteria_scores (which the
-        # veto does not cap) against the capped nominal would instead report
-        # "the weighting decides" for a verdict the weighting cannot change.
+        # A fired veto caps weighted_total below the threshold whatever the
+        # weighting, so the verdict is weight-independent and robustness is 1.0.
+        # Sampling raw criteria_scores (uncapped) against the capped nominal would
+        # report "the weighting decides" for a verdict the weighting cannot change.
         if any(issue.startswith("[VETO]") for issue in result.issues):
             return 1.0
         nominal_pass = result.weighted_total >= thr
@@ -500,16 +446,7 @@ class DesignEvaluator:
                 agree += 1
         return agree / n_samples
 
-    # ------------------------------------------------------------------
-    # Syside AST query helpers
-    # ------------------------------------------------------------------
-
     def _syside_count(self, cls_name: str) -> Optional[int]:
-        """
-        Count syside AST nodes of *cls_name* in the cached syside model.
-        Returns None when syside is unavailable or the type doesn't exist,
-        so callers can fall back to regex.
-        """
         sm = getattr(self, "_syside_model", None)
         if sm is None or not _SYSIDE_EVAL_OK:
             return None
@@ -522,7 +459,6 @@ class DesignEvaluator:
             return None
 
     def _syside_guarded_transitions(self) -> Optional[int]:
-        """Guarded transitions from the parsed model; None when unavailable."""
         sm = getattr(self, "_syside_model", None)
         if sm is None or not _SYSIDE_EVAL_OK:
             return None
@@ -540,10 +476,6 @@ class DesignEvaluator:
             return None
 
     def _syside_any(self, cls_name: str, predicate=None) -> Optional[bool]:
-        """
-        Return True/False if any syside node of *cls_name* satisfies
-        *predicate* (default: just existence).  Returns None on fallback.
-        """
         sm = getattr(self, "_syside_model", None)
         if sm is None or not _SYSIDE_EVAL_OK:
             return None
@@ -558,13 +490,8 @@ class DesignEvaluator:
         except Exception:
             return None
 
-    # ------------------------------------------------------------------
-    # Dimension 0: Syntactic Validity (8 %) — Syside diagnostics
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _has_syntax_errors(syntax_result, model: SysMLModel) -> bool:
-        """True when actual parse/sema ERRORS exist (warnings do not count)."""
         if syntax_result is not None:
             return bool(getattr(syntax_result, "has_errors", False))
         return any(
@@ -577,22 +504,17 @@ class DesignEvaluator:
         model: SysMLModel,
         dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Scores syntactic/semantic correctness.
+        """Scores syntactic/semantic correctness.
 
-        Priority 1: use the SyntaxCheckResult cached from the syntax gate
-                    (syside try_load_model — most accurate).
-        Priority 2: fall back to model.diagnostics (legacy path).
-
-        Warnings-only results are floored at 0.5 in both paths so an
-        error-free model can never score identically to a failed compile.
+        Prefers the SyntaxCheckResult cached from the syntax gate (syside
+        try_load_model), falling back to model.diagnostics (legacy path).
+        Warnings-only results are floored at 0.5 in both paths, so an error-free
+        model does not score the same as a failed compile.
         """
-        # Priority 1: cached syside result from syntax gate
         cached = getattr(self, "_cached_syntax_result", None)
         if cached is not None:
             return cached.score
 
-        # Priority 2: legacy model.diagnostics fallback
         diags = model.diagnostics
         if not diags:
             return 1.0
@@ -602,52 +524,33 @@ class DesignEvaluator:
             return max(0.5, 1.0 - 0.05 * n_warnings)
         return max(0.0, 1.0 - 0.20 * n_errors - 0.05 * n_warnings)
 
-    # ------------------------------------------------------------------
-    # Dimension 1: Requirement Coverage (18 %)
-    # ------------------------------------------------------------------
-
     def _score_requirement_coverage(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
         dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Two sub-metrics:
-          satisfy_cov  (60 %) — fraction of REQ IDs that have a satisfy link
-          category_impl(40 %) — binary presence check per active category:
-            FUNC  → ≥1 action def present
-            PERF  → ≥1 numeric+unit attribute present
-            SAFE  → ≥1 state def present
-            INTF  → ≥1 non-empty port def + ≥1 connect present
-            CONS  → ≥1 doc comment present
-            OPER  → enum def + mode-machine state def present
-        """
         req_defs = model.requirement_definitions
         if not req_defs:
             return 0.0
 
         text = _sysml_text(model)
 
-        # ── satisfy-link coverage ─────────────────────────────────────────
-        # Denominator is the STAKEHOLDER requirements only. A model carrying a
-        # bounded A/G layer also declares its contracts as `requirement def`,
-        # because the profile requires legal SysML requirement constructs — so
-        # counting every requirement def put the intervention's own contracts
-        # into the denominator of the metric that judges it. Measured: the same
-        # seed scored 1.00 without the layer and 0.55 with it, while every other
-        # dimension was identical. Contract coverage is measured separately, by
-        # ag_traceability, against the declared requirement set.
+        # ── satisfy-link coverage ─────────────────────────────
+        # Denominator is the stakeholder requirements only. A bounded A/G layer
+        # also declares its contracts as `requirement def` (the profile needs
+        # legal SysML constructs), so counting every requirement def put those
+        # contracts into the denominator of the metric judging them: the same
+        # seed scored 1.00 without the layer and 0.55 with it, every other
+        # dimension identical. Contract coverage is measured separately by
+        # ag_traceability against the declared requirement set.
         #
-        # A model that declares no stakeholder-shaped ids keeps the old
-        # denominator, so models that do not follow the REQ convention are
-        # scored exactly as before.
+        # A model declaring no stakeholder-shaped ids keeps the old denominator.
         stakeholder = {r.name for r in req_defs if _STAKEHOLDER_REQ.match(r.name)}
         req_ids = stakeholder or {r.name for r in req_defs}
         sat_ids = _satisfied_req_ids(model)
         satisfy_cov = len(sat_ids & req_ids) / len(req_ids)
 
-        # ── per-category binary implementation check ──────────────────────
         cat_checks: List[float] = []
 
         if any("_FUNC_" in r.name for r in req_defs):
@@ -669,7 +572,6 @@ class DesignEvaluator:
             cat_checks.append(1.0 if has_state else 0.0)
 
         if any("_INTF_" in r.name for r in req_defs):
-            # Port def with a non-empty body (typed interface port)
             has_typed_port_ast = self._syside_any(
                 "PortDefinition",
                 lambda pd: any(True for _ in (getattr(pd, "owned_ports", None) or [])),
@@ -709,15 +611,10 @@ class DesignEvaluator:
 
         return 0.60 * satisfy_cov + 0.40 * category_impl
 
-    # ------------------------------------------------------------------
-    # Dimension 2: MCTS Fidelity (25 %)
-    # ------------------------------------------------------------------
-
     @classmethod
     def _variant_choices(
         cls, dse_config: Optional[DesignConfiguration],
     ) -> Dict[str, str]:
-        """Variation-mode selections: string params outside the scalar set."""
         if dse_config is None:
             return {}
         return {
@@ -743,11 +640,10 @@ class DesignEvaluator:
             return 1.0
 
         params = dse_config.parameters
-        # ── Variation-mode fidelity: chosen variant materialised? ────────
+        # ── Variation-mode fidelity: chosen variant materialised ────────
         # The variant emitter's naming contract (agents/exploration.py):
         # type name = f"{variant.capitalize()}{usage.capitalize()}Impl".
-        # Full credit needs the def to exist AND the usage retyped to it —
-        # the selected design actually realised, not merely catalogued.
+        # Full credit needs the def to exist and the usage retyped to it.
         variant_choices = self._variant_choices(dse_config)
         if variant_choices:
             text = _sysml_text(model)
@@ -850,20 +746,12 @@ class DesignEvaluator:
         model: SysMLModel,
         dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Three sub-metrics focused on static structural quality:
-          port_coverage   (40 %) — fraction of parts with ≥1 directed port
-          attr_coverage   (40 %) — fraction of parts with ≥1 numeric attribute
-          no_dangling     (20 %) — fraction of part usages appearing in ≥1 connect
-        Connectivity quality (reachability) is measured in behavioral_verification.
-        """
         parts = _scoreable_parts(model.part_definitions)
         if not parts:
             return 0.0
         n = len(parts)
         text = _sysml_text(model)
 
-        # ── Port coverage (text-level fallback for AST direction=NONE) ───
         def _has_directed_port(part) -> bool:  # noqa: ANN001
             if any(
                 getattr(p, "direction", FeatureDirection.NONE) not in
@@ -892,11 +780,10 @@ class DesignEvaluator:
             1 for p in parts if _has_directed_port_or_inherits(p)
         ) / n
 
-        # ── Attribute coverage (PERF/CONS parts only) ───────────────────
-        # Only parts that satisfy PERF or CONS requirements are expected to
-        # carry numeric+unit attributes — those requirements are quantitative
-        # by definition.  Parts satisfying only FUNC/SAFE/INTF/OPER are
-        # excluded from the denominator to avoid false penalties.
+        # ── Attribute coverage (PERF/CONS parts only) ───────────────
+        # PERF and CONS requirements are quantitative, so only the parts that
+        # satisfy them are expected to carry numeric+unit attributes. Parts
+        # satisfying only FUNC/SAFE/INTF/OPER stay out of the denominator.
         syside_attr_map = getattr(self, "_syside_attr_map", {})
 
         quantitative_parts = [
@@ -912,16 +799,15 @@ class DesignEvaluator:
                 if _has_numeric_unit_attr(p, syside_attr_map)
             ) / len(quantitative_parts)
         else:
-            attr_cov = 1.0  # no PERF/CONS requirements → N/A
+            attr_cov = 1.0
 
-        # ── Instance connectivity ────────────────────────────────────────
-        # Structural/passive parts (airframe, chassis, frame, …) represent
-        # physical housing and may legitimately have no data-flow connections.
-        # Exclude them from the dangling check to avoid false penalties.
+        # ── Instance connectivity ───────────────────────────────
+        # Structural/passive parts (airframe, chassis, frame, ...) are physical
+        # housing and may have no data-flow connections, so they are excluded
+        # from the dangling check.
         _STRUCTURAL_KW = {"airframe", "chassis", "frame", "fuselage", "housing",
                           "enclosure", "structure", "hull"}
         part_usage_re = re.compile(r"\bpart\s+(\w+)\s*:\s*(\w+)\s*;")
-        # Build instance→type map, exclude structural parts from denominator
         inst_type: Dict[str, str] = {}
         for m in part_usage_re.finditer(text):
             inst_type[m.group(1)] = m.group(2)
@@ -939,19 +825,14 @@ class DesignEvaluator:
             if functional else 0.0
         )
 
-        # Architectural fragmentation (disconnected sub-graphs) is already
-        # covered by instance_conn (connect coverage), the reachability
-        # simulation, and the diagnostics disconnected-component check, so it
-        # is not scored again here to avoid double-penalising.
+        # Architectural fragmentation is already covered by instance_conn, the
+        # reachability simulation and the diagnostics disconnected-component
+        # check, so it is not scored again here.
         return (
             0.40 * port_cov
             + 0.40 * attr_cov
             + 0.20 * instance_conn
         )
-
-    # ------------------------------------------------------------------
-    # Dimension 3b: Behavioral Verification (30 %) — new
-    # ------------------------------------------------------------------
 
     def _score_behavioral_verification(
         self,
@@ -959,15 +840,6 @@ class DesignEvaluator:
         model: SysMLModel,
         dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Primary quality signal: combines structural reachability and state-machine
-        execution results from the SimulationResult passed into evaluate().
-
-          0.4 × structural_reachability  — scenario pass rate
-          0.6 × behavioral_sim_score     — state-machine execution pass rate
-
-        Returns 1.0 (N/A) when no sim_result is available.
-        """
         sim = getattr(self, "_sim_result", None)
         if sim is None:
             return 1.0
@@ -983,13 +855,11 @@ class DesignEvaluator:
 
         br = getattr(sim, "behavioral_result", None)
         if br is not None and getattr(br, "extracted_sm_count", 0) > 0:
-            # Trace-first, mirroring the structural term: score the scenarios
-            # that trace to the requirement set, and fall back to the overall
-            # pass rate only when none carry the tag. Without this, scenarios
-            # a deterministic emitter renders from contract chains -- passing
-            # by construction -- dilute the denominator, and the dilution is
-            # asymmetric across configurations (measured: 13.0 scenarios per
-            # contract-arm cell against 5.3 for the baseline's).
+            # Trace-first, like the structural term: score the scenarios that trace
+            # to the requirement set, falling back to the overall pass rate only
+            # when none carry the tag. Otherwise scenarios rendered from contract
+            # chains (passing by construction) dilute the denominator asymmetrically
+            # across configurations: 13.0 scenarios per contract-arm cell against 5.3.
             scenarios = list(getattr(br, "scenario_results", ()) or ())
             traced = [
                 item for item in scenarios
@@ -1002,13 +872,9 @@ class DesignEvaluator:
             else:
                 behavioral = float(getattr(br, "sim_score", 1.0))
         else:
-            behavioral = 1.0  # no state machines → N/A
+            behavioral = 1.0
 
         return 0.40 * structural + 0.60 * behavioral
-
-    # ------------------------------------------------------------------
-    # Dimension 4: Safety Assurance (15 %)
-    # ------------------------------------------------------------------
 
     def _score_safety_assurance(
         self,
@@ -1016,9 +882,8 @@ class DesignEvaluator:
         model: SysMLModel,
         dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Three structural, requirement-anchored sub-metrics (applied only when
-        SAFE requirements exist):
+        """Three structural, requirement-anchored sub-metrics (only when SAFE
+        requirements exist):
 
           state_machine_coverage (40 %) -- state defs per SAFE requirement
           fault_coverage         (35 %) -- fraction of SAFE requirements whose
@@ -1029,39 +894,35 @@ class DesignEvaluator:
           safety_connectivity    (25 %) -- fraction of SAFE-satisfying parts
                                            with at least one connected instance
 
-        Every sub-metric is a fraction over the requirement set or the parts
-        that satisfy it, so the denominator is fixed by the frozen input and
-        comparable across configurations; none consults a name. The two
-        lexical sub-metrics this dimension used to carry (a port literally
-        named overrideCmd, action names containing emergency/failsafe/...)
-        scored zero for models that implemented the same behaviour under their
-        own vocabulary, and the transition COUNT it used to reward saturated
-        for whichever configuration emitted the most transitions regardless of
-        which requirements they covered.
+        Each sub-metric is a fraction over the requirement set or the parts that
+        satisfy it, so the denominator is fixed by the frozen input and comparable
+        across configurations; none consults a name. The two lexical sub-metrics
+        dropped here (a port named overrideCmd, action names containing
+        emergency/failsafe/...) scored zero for models implementing the same
+        behaviour under their own vocabulary, and the transition count saturated
+        for whichever configuration emitted the most.
         """
         safe_reqs = [r for r in model.requirement_definitions if "_SAFE_" in r.name]
         if not safe_reqs:
-            return 1.0  # no safety requirements -- dimension N/A
+            return 1.0
 
         n_safe = len(safe_reqs)
         text = _sysml_text(model)
 
-        # -- State-machine coverage: state defs per SAFE requirement ------
         n_sd = self._syside_count("StateDefinition")
         state_defs = n_sd if n_sd is not None else len(re.findall(r"\bstate\s+def\s+\w+", text))
         state_cov = min(1.0, state_defs / max(n_safe, 1))
 
         # -- Fault coverage: per-requirement, shape-neutral ---------------
-        # A SAFE requirement counts as covered when a part that satisfies it
-        # carries a behavioural safety anchor in its own body: a guarded
-        # transition (a triggered fail-safe) or a state definition (an
-        # invariant pattern -- a start-up inhibit or a lock-until-release is
-        # anchored by a latch or default-locked machine and legitimately has
-        # no fault transition). Coverage is judged against the requirement
-        # set: a SAFE requirement no part satisfies is uncovered, and a
-        # hundred anchors serving one requirement cover exactly that one.
-        # Whether the anchored behaviour EXECUTES correctly is the
-        # behavioural-verification dimension's question, not this one's.
+        # A SAFE requirement is covered when a part satisfying it carries a
+        # behavioural safety anchor in its own body: a guarded transition
+        # (a triggered fail-safe) or a state definition (an invariant pattern -
+        # a start-up inhibit or lock-until-release is anchored by a latch or
+        # default-locked machine and has no fault transition). Coverage is
+        # over the requirement set: a SAFE requirement no part satisfies is
+        # uncovered, and many anchors on one requirement cover that one.
+        # Whether the anchored behaviour executes correctly belongs to the
+        # behavioural-verification dimension.
         def _part_body(name: str) -> str:
             span = named_block_span(text, "part", name)
             return text[span[0] + 1:span[1]] if span else ""
@@ -1096,7 +957,6 @@ class DesignEvaluator:
                     break
         fault_coverage = covered / n_safe
 
-        # -- Safety connectivity: SAFE-satisfying parts are wired ---------
         safe_part_names = {
             part.name
             for req in safe_reqs
@@ -1108,13 +968,11 @@ class DesignEvaluator:
             for m in part_usage_re.finditer(text):
                 usage_name, type_name = m.group(1), m.group(2)
                 instances_of.setdefault(type_name, set()).add(usage_name)
-                # A usage retyped to a catalogue implementation
-                # (``Impl :> Planned``) is still a usage of the planned type
-                # (structural_obligations.py codifies this). Credit the
-                # specialisation chain, or the DSE-selected design counts
-                # its own SAFE part as unwired (measured: propulsionSystem
-                # retyped to Catalog_*Impl read safety_connectivity 3/4 on
-                # a fully wired model).
+                # A usage retyped to a catalogue implementation (``Impl :> Planned``)
+                # is still a usage of the planned type (structural_obligations.py
+                # codifies this). Credit the specialisation chain, or the DSE-selected
+                # design counts its own SAFE part as unwired: propulsionSystem retyped
+                # to Catalog_*Impl read safety_connectivity 3/4 on a fully wired model.
                 seen: set = set()
                 base_names = list(_specialization_bases(text, type_name))
                 while base_names:
@@ -1142,41 +1000,27 @@ class DesignEvaluator:
             + 0.25 * safety_connectivity
         )
 
-    # ------------------------------------------------------------------
-    # Dimension 5: Interface Quality (5 %)
-    # ------------------------------------------------------------------
-
     def _score_interface_quality(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
         dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Three sub-metrics:
-          external_typing  (50 %) — INTF-external ports using specialised types
-                                    (internal DataPort is legitimate, not penalised)
-          fan_in_free      (30 %) — penalise fan-in violations
-          direction_cov    (20 %) — fraction of parts with all ports directed
-        """
         text = _sysml_text(model)
         parts = _scoreable_parts(model.part_definitions)
 
-        # ── External port typing ─────────────────────────────────────────
-        # Only penalise DataPort on ports belonging to components that satisfy
-        # INTF requirements.  Internal inter-component ports legitimately use
-        # DataPort and should not be counted against this score.
+        # ── External port typing ───────────────────────────────
+        # Penalise DataPort only on ports of components that satisfy INTF
+        # requirements; internal inter-component ports use DataPort and are
+        # not counted against this score.
         intf_parts: Set[str] = set()
         for part in model.part_definitions:
-            # satisfy_relationships is the correct attribute (List[SatisfyRelationship]);
-            # each relation's target.name looks like "REQ_INTF_001".
             for rel in getattr(part, "satisfy_relationships", []):
                 req_name = (rel.target.name if rel.target else "") or ""
                 if "_INTF_" in req_name:
                     intf_parts.add(part.name)
                     break
 
-        # Collect port usages only from INTF parts (via text scan of their blocks)
         if intf_parts:
             intf_port_types: List[str] = []
             for pname in intf_parts:
@@ -1195,7 +1039,6 @@ class DesignEvaluator:
             else:
                 type_consistency = 0.5
         else:
-            # No INTF parts identified — fall back to checking all ports lightly
             all_usage_types = re.findall(
                 r"(?:in|out|inout)\s+port\s+\w+\s*:\s*(\w+)", text, re.IGNORECASE
             )
@@ -1208,8 +1051,8 @@ class DesignEvaluator:
             else:
                 type_consistency = 0.0
 
-        # ── Fan-in freedom (port-level regex count) ──────────────────────
-        # Fan-in is a port-level concern: multiple sources → same target port.
+        # ── Fan-in freedom (port-level regex count) ──────────────────
+        # Fan-in is a port-level concern: multiple sources -> same target port.
         # The instance-level graph cannot detect this (multiple edges to the
         # same instance is expected and valid).
         target_count: Dict[str, int] = {}
@@ -1219,7 +1062,6 @@ class DesignEvaluator:
         fan_in_violations = sum(1 for c in target_count.values() if c > 1)
         fan_in_score = max(0.0, 1.0 - fan_in_violations * 0.40)
 
-        # ── Port direction coverage ──────────────────────────────────────
         if not parts:
             direction_cov = 0.0
         else:
@@ -1231,13 +1073,13 @@ class DesignEvaluator:
                 ):
                     return True
                 # Text fallback: count directed port keywords in part def body.
-                # Mirrors _has_directed_port — handles direction=NONE from syside
+                # Mirrors _has_directed_port - handles direction=NONE from syside
                 # when direction is declared in a port def body rather than inline.
                 span = named_block_span(text, "part", part.name)
                 if span is None or not part.ports:
                     # A part with no ports of its own may still inherit a
                     # fully-directed interface through specialisation
-                    # (Impl :> Planned — the variant emitter's contract).
+                    # (Impl :> Planned - the variant emitter's contract).
                     if not part.ports:
                         return _directed_via_specialization(
                             text, part.name, _all_directed,
@@ -1251,9 +1093,6 @@ class DesignEvaluator:
                 return directed_count >= len(part.ports)
             direction_cov = sum(1 for p in parts if _all_directed(p)) / len(parts)
 
-        # ── Connect type consistency (AST port type_ref matching) ─────────
-        # For each connect X.portA to Y.portB, resolve both port type names
-        # and flag domain mismatches (data ↔ power) or exact type mismatches.
         port_type_map = _build_port_type_map(model)
         type_mismatches = 0
         type_checked = 0
@@ -1273,10 +1112,6 @@ class DesignEvaluator:
             + 0.20 * direction_cov
         )
 
-    # ------------------------------------------------------------------
-    # Diagnostics — model-aware, MCTS-aware
-    # ------------------------------------------------------------------
-
     def _diagnose(
         self,
         model: SysMLModel,
@@ -1291,14 +1126,6 @@ class DesignEvaluator:
             syntax_result=getattr(self, "_cached_syntax_result", None),
         )
 
-    # ------------------------------------------------------------------
-    # Dim 7: behavioral_reachability
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Legacy compatibility shims
-    # ------------------------------------------------------------------
-
     def simple_score(self, config: DesignConfiguration) -> Dict[str, float]:
         """
         Parameter-only heuristic (used by legacy MCTS paths that lack a model).
@@ -1307,8 +1134,8 @@ class DesignEvaluator:
         param_count = len(config.parameters)
         return {
             "requirement_satisfaction": min(1.0, param_count / 5.0),
-            "dse_fidelity":           1.0,   # N/A without model
+            "dse_fidelity":           1.0,
             "structural_quality":      min(1.0, param_count / 5.0),
             "interface_consistency":   0.75,
-            "requirement_traceability": 0.70,  # legacy key name
+            "requirement_traceability": 0.70,
         }

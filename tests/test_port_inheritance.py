@@ -1,11 +1,10 @@
-"""Ports inherited via `:>` specialisation must be visible to the connectivity
-auditor and the behavioral extractor.
+"""Ports inherited via `:>` specialisation are visible to the connectivity auditor
+and the behavioral extractor.
 
-When a variation point is resolved, its usage is bound to a variant type that
-specialises the host type (`part def Variant :> Host`).  The ports the host's
-connects reference live on Host and are inherited.  If the simulator's port
-model ignored inheritance, every such connect would be pruned as "no port",
-isolating the component (reachability → 0).
+Resolving a variation point binds the usage to a variant type specialising the
+host (`part def Variant :> Host`), and the referenced ports live on Host. A port
+model ignoring inheritance prunes every such connect as "no port", isolating the
+component (reachability -> 0).
 """
 from __future__ import annotations
 
@@ -31,15 +30,15 @@ _RESOLVED = """package Drone {
 def test_directory_exposes_inherited_ports():
     d = build_port_directory(_RESOLVED)
     ports = d.instances.get("flightController", {})
-    assert "sensorIn" in ports and "motorCmd" in ports  # inherited from FlightController
+    assert "sensorIn" in ports and "motorCmd" in ports
 
 
-def test_auditor_keeps_connects_through_inheritance():
+def test_auditor_keeps_inherited_connects():
     res = audit_connects(_RESOLVED)
     assert res.n_removed == 0, [v.summary() for v in res.violations]
 
 
-def test_extractor_reaches_inherited_port_component():
+def test_extractor_reaches_inherited_ports():
     bg = extract_behavioral_graph(_RESOLVED)
     fc = bg.parts.get("flightController")
     assert fc is not None

@@ -1,5 +1,4 @@
-"""
-Quick smoke-test: run requirement_linker against the AutonomousDrone model
+"""Quick smoke-test: run requirement_linker against the AutonomousDrone model
 and print the generated .parm file + coverage report.
 """
 

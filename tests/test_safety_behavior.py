@@ -1,16 +1,9 @@
-"""SAFE-class behavioural verification: upgrade safety `satisfy` (allocation) to real
-three-state behavioural evidence — does the safety state machine actually REACH a fail-safe
-state? verified / violated (named but unreachable / no safe state) / absent (no state machine).
-"""
 from __future__ import annotations
 
 from src.dse.safety_behavior import (
     BEHAVIOR_ABSENT, BEHAVIORALLY_VERIFIED, BEHAVIORALLY_VIOLATED, safety_behavior_status,
 )
 
-# REQ_SAFE_001: state machine reaches failsafe → verified
-# REQ_SAFE_002: state machine present but NO safe state reachable → violated
-# REQ_SAFE_003: satisfying part has no state machine → absent
 _MODEL = """package D {
     requirement def REQ_SAFE_001 { doc /* enter failsafe on fault */ }
     requirement def REQ_SAFE_002 { doc /* must reach a safe state */ }
@@ -50,41 +43,39 @@ _REQS = [
 
 def test_three_state_safety_behaviour():
     st = safety_behavior_status(_MODEL, _REQS)
-    assert st["REQ-SAFE-001"] == BEHAVIORALLY_VERIFIED   # failsafe reachable
-    assert st["REQ-SAFE-002"] == BEHAVIORALLY_VIOLATED   # SM present, no safe state
-    assert st["REQ-SAFE-003"] == BEHAVIOR_ABSENT         # no state machine on the part
+    assert st["REQ-SAFE-001"] == BEHAVIORALLY_VERIFIED
+    assert st["REQ-SAFE-002"] == BEHAVIORALLY_VIOLATED
+    assert st["REQ-SAFE-003"] == BEHAVIOR_ABSENT
 
 
 def test_only_safety_requirements_classified():
-    # a non-safety requirement is not pulled into the safety behavioural check
     model = _MODEL.replace("REQ_SAFE_001", "REQ_FUNC_020").replace(
         "REQ-SAFE-001", "REQ-FUNC-020")
     reqs = ["REQ-FUNC-020: navigate to a waypoint."] + _REQS[1:]
     st = safety_behavior_status(model, reqs)
-    assert "REQ-FUNC-020" not in st                      # not a safety req → skipped
+    assert "REQ-FUNC-020" not in st
 
 
-def test_dynamic_failed_downgrades_reachable_safety_to_violated():
+def test_dynamic_failed_downgrades():
     from src.dse.safety_behavior import (BEHAVIORALLY_VERIFIED, BEHAVIORALLY_VIOLATED,
                                          safety_behavior_status)
-    # SAFE-001 is structurally reachable→verified; a dynamic 'failed' (guard never fires)
-    # downgrades it to violated — the fake-safety catch structural reachability can't make.
+    # SAFE-001 is structurally reachable -> verified; a dynamic 'failed' (guard never
+    # fires) downgrades it to violated, which structural reachability alone misses.
     assert safety_behavior_status(_MODEL, _REQS)["REQ-SAFE-001"] == BEHAVIORALLY_VERIFIED
     st = safety_behavior_status(_MODEL, _REQS, dynamic_fire={"MonitorA": "failed"})
     assert st["REQ-SAFE-001"] == BEHAVIORALLY_VIOLATED
 
 
-def test_dynamic_firing_does_not_oververify_without_safe_state():
+def test_no_safe_state_stays_violated():
     from src.dse.safety_behavior import BEHAVIORALLY_VIOLATED, safety_behavior_status
-    # MonitorB has no fail-safe state → a spurious non-safe 'fired' must NOT verify it
     st = safety_behavior_status(_MODEL, _REQS, dynamic_fire={"MonitorB": "fired"})
     assert st["REQ-SAFE-002"] == BEHAVIORALLY_VIOLATED
 
 
-def test_dynamic_fire_by_part_drives_guards():
+def test_dynamic_fire_by_part():
     from src.dse.dynamic_behavior import dynamic_fire_by_part
     v = dynamic_fire_by_part(_MODEL)
-    assert v.get("MonitorA") == "fired"     # fault>0.5 guard driven → transition fires
+    assert v.get("MonitorA") == "fired"
 
 
 _COLLAPSE_MODEL = """package D {
@@ -127,23 +118,21 @@ def test_response_category():
 
 def test_collapsed_response_categories():
     from src.dse.safety_behavior import collapsed_response_categories
-    # land + rtb both send CmdEmergency → collapsed; lock sends CmdLock → not
     assert collapsed_response_categories(_COLLAPSE_MODEL) == {"land", "rtb"}
 
 
-def test_response_collapse_downgrades_safety_reqs():
+def test_response_collapse_downgrades():
     from src.dse.safety_behavior import (BEHAVIORALLY_VERIFIED, RESPONSE_COLLAPSED,
                                          safety_behavior_status)
     st = safety_behavior_status(_COLLAPSE_MODEL, _COLLAPSE_REQS)
-    assert st["REQ-SAFE-010"] == RESPONSE_COLLAPSED      # land collapsed with rtb
-    assert st["REQ-SAFE-011"] == RESPONSE_COLLAPSED      # rtb collapsed with land
-    assert st["REQ-SAFE-012"] == BEHAVIORALLY_VERIFIED   # lock distinct → still verified
+    assert st["REQ-SAFE-010"] == RESPONSE_COLLAPSED
+    assert st["REQ-SAFE-011"] == RESPONSE_COLLAPSED
+    assert st["REQ-SAFE-012"] == BEHAVIORALLY_VERIFIED
 
 
-# Degraded-continue (REQ-SAFE-007 shape, run 2026-08-31): the mandated response
-# is to KEEP FLYING — the state is named for the fault and the response lives
-# in its do-action. Grading state names only called this "no reachable
-# fail-safe state", which was literally false.
+# Degraded-continue (REQ-SAFE-007 shape): the mandated response is to keep
+# flying, so the state is named for the fault and the response lives in its
+# do-action. Grading state names alone reported "no reachable fail-safe state".
 _CONTINUE_MODEL = """package D {
     requirement def REQ_SAFE_007 { doc /* maintain controlled flight */ }
     item def SinglePropulsionUnitFailure;
@@ -172,22 +161,20 @@ _CONTINUE_REQS = [
 ]
 
 
-def test_degraded_continue_response_is_verified_by_its_action():
+def test_continue_response_verified():
     st = safety_behavior_status(_CONTINUE_MODEL, _CONTINUE_REQS)
     assert st["REQ-SAFE-007"] == BEHAVIORALLY_VERIFIED
 
 
-def test_continue_is_a_response_category_and_descent_still_lands():
+def test_continue_category_descent_lands():
     from src.dse.safety_behavior import _response_category
     assert _response_category(
         "maintain controlled flight following a failure") == "continue"
-    # 'controlled descent' is a landing, not a continuation — order preserved.
+    # 'controlled descent' is a landing, not a continuation - order preserved.
     assert _response_category("perform a controlled descent") == "land"
 
 
-def test_action_word_prefixes_do_not_smuggle_substrings():
-    """`checkThresholds` must not smuggle in "hold" and `unlockPayload` must
-    not smuggle in "lock" — an action word counts only from its start."""
+def test_action_prefixes_not_substrings():
     model = _CONTINUE_MODEL.replace(
         "maintainControlledFlight", "checkThresholds"
     ).replace("operateAllMotors", "unlockPayload")

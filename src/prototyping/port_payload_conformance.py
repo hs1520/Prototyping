@@ -3,20 +3,15 @@
 Measured on 8 of 24 archived authoritative runs (5af6c666 et al.): the model
 declares a correctly typed command port (``port parachuteCmd :
 ParachuteCmdPort`` whose payload item is ``ParachuteCmdData``) yet the response
-action sends the *detected-failure event itself* through it
-(``send CriticalPropulsionFailure() to parachuteCmd``).  Syntax and the
-zero-warning qualification both accept this, and the defect then surfaces only
-at the SITL traceability gate as a blocked evidence row.  The type
-inconsistency is fully decidable from the model text, so it belongs in the
-refinement loop while the author is still in session.
-
-Deliberately conservative: a finding is emitted only when EVERY link in the
-chain resolves — the send sits inside a part definition, the target is a port
-declared on that part, the port's type is a port definition found in the model,
-that definition declares at least one typed payload item, and the sent payload
-name is itself a known item definition.  Anything unresolved is silence, never
-a guess: a false positive here would send the repair loop chasing a healthy
-model.
+action sends the detected-failure event through it (``send
+CriticalPropulsionFailure() to parachuteCmd``). Syntax and the zero-warning
+qualification both accept it, so the defect surfaces only at the SITL
+traceability gate as a blocked evidence row, though it is decidable from the
+model text. A finding is emitted only when every link resolves - the send sits
+inside a part definition, the target is a port on that part, the port's type is
+a port definition in the model, that definition declares a typed payload item,
+and the sent payload is a known item definition; anything unresolved stays
+silent.
 """
 from __future__ import annotations
 
@@ -47,7 +42,6 @@ def _short(name: str) -> str:
 
 
 def _blocks(masked: str, pattern: re.Pattern) -> list[tuple[str, int, int]]:
-    """(name, body_start, body_end) for every ``<kind> def Name { ... }``."""
     found = []
     for match in pattern.finditer(masked):
         opening = masked.find("{", match.end() - 1)
@@ -89,14 +83,14 @@ def check_port_payload_conformance(model_text: str) -> dict:
             target = send.group("target")
             port_type = ports.get(target)
             if port_type is None:
-                continue                      # not a port on this part
+                continue
             declared = port_def_payloads.get(port_type)
             if not declared:
-                continue                      # port def missing or untyped payload
+                continue
             if payload not in item_defs:
-                continue                      # sent name is not a known item def
+                continue
             if payload in declared:
-                continue                      # conformant
+                continue
             action_name = next(
                 (name for name, start, end in actions
                  if start <= send.start() < end),
@@ -116,12 +110,11 @@ def check_port_payload_conformance(model_text: str) -> dict:
 def port_payload_conformance_issues(model_text: str) -> list[str]:
     """Refinement-actionable issues for send/port payload-type mismatches.
 
-    Feeds the defect the SITL traceability gate later blocks (a response
-    action sending the trigger event instead of the port's command payload)
-    into the refinement loop while the author is still in session.  A
-    deterministic rewrite is deliberately not attempted: whether the fix is
-    to send the declared payload or to retype the port is the author's
-    intent to state.
+    Feeds the defect the SITL traceability gate later blocks - a response action
+    sending the trigger event instead of the port's command payload - into the
+    refinement loop while the author is still in session. No deterministic rewrite
+    is attempted: whether to send the declared payload or retype the port is the
+    author's intent to state.
     """
     report = check_port_payload_conformance(model_text)
     issues: list[str] = []

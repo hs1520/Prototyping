@@ -1,13 +1,10 @@
 """Bilevel coupling: outer MO-MCTS evaluation delegates to inner Bayesian opt.
 
-``BilevelEvaluator`` is the glue that makes the heterogeneous bilevel search work:
-the outer layer (discrete architecture, MCTS) asks "how good is this architecture
-at its best continuous parameterisation?", and the inner layer (Bayesian
-optimization) answers by tuning the continuous parameters for *that* architecture.
-
-It is shaped to drop straight into ``MultiObjectiveMCTS(objective_fn=...)`` and
-caches inner results per architecture so repeated rollouts of the same structure
-do not re-run BO (a basic warm-start; full cross-architecture warm-start is M3).
+``BilevelEvaluator`` scores a discrete architecture by the best continuous
+parameterisation the inner BO finds for it. It plugs into
+``MultiObjectiveMCTS(objective_fn=...)`` and caches inner results per architecture,
+so repeated rollouts of the same structure do not re-run BO (cross-architecture
+warm-start is M3).
 """
 from __future__ import annotations
 
@@ -17,9 +14,7 @@ from typing import Callable, Dict, Optional, Tuple
 from .inner_bo import BayesianOptimizer, BOResult
 from .mo_mcts import Objectives, State
 
-# inner_objective(state, x, ctx) -> float (maximised by the inner BO)
 InnerObjective = Callable[[State, float, object], float]
-# outer_map(state, best_x, best_y, ctx) -> Objectives (the outer multi-objective vector)
 OuterMap = Callable[[State, float, float, object], Objectives]
 
 

@@ -1,23 +1,12 @@
-"""Grounded safety evaluation — replaces analytic placeholders with model execution.
+"""Grounded safety evaluation - replaces analytic placeholders with model execution.
 
-Pain point B: objective values must reflect what the model actually *does*, not a
-Python formula or a regex keyword count.
-
-Pain point B / Problem-2 refinement: it is not enough that a fault transition can
-*fire* — the safety mechanism must be *causally complete*:
-
-  1. the voting guard variable must be DERIVED from the channel health (so a real
-     channel fault propagates into the decision), not a free-floating attribute,
-  2. the failsafe output (overrideCmd) must be CONNECTED to a consumer (so the
-     decision actually commands something), and
-  3. a fault→failsafe transition must exist.
-
-A model that merely *declares* `failedChannels` and lets a simulator drive that
-free variable looks safe to a naive scorer but does nothing under a real sensor
-fault. This evaluator detects that "fake safety" and penalises it — which a
-keyword/regex scorer, and even a dynamic sim that drives the guard directly,
-cannot. SITL closed-loop remains the high-fidelity oracle that calibrates this
-(docs/DSE_REDESIGN.md §三-D).
+Objective values come from what the model does, not from a Python formula or a
+keyword count. A fault transition firing is not enough: the voting guard must be
+derived from channel health, the failsafe output (overrideCmd) must be connected
+to a consumer, and a fault->failsafe transition must exist. A model that only
+declares `failedChannels` and lets a simulator drive it scores well but does
+nothing under a sensor fault, so it is penalised here. SITL closed-loop stays the
+high-fidelity oracle that calibrates this (docs/DSE_REDESIGN.md §三-D).
 """
 from __future__ import annotations
 
@@ -39,14 +28,14 @@ _FAILED_INIT_RE = re.compile(
 
 @dataclass
 class GroundedSafety:
-    channels: int            # redundancy depth read from the model's sensor ports
-    faults_masked: int       # faults tolerated before failsafe (model's guard - 1)
-    guard_grounded: bool     # voting guard is DERIVED from channel health (not free)
-    output_connected: bool   # failsafe output (overrideCmd) drives a consumer
-    has_failsafe: bool       # a fault→failsafe transition exists
-    causal_complete: bool    # all three causal links present
-    safety_verified: bool    # dynamic sim could drive the fault to failsafe (informational)
-    reliability: float       # grounded reliability objective
+    channels: int
+    faults_masked: int
+    guard_grounded: bool
+    output_connected: bool
+    has_failsafe: bool
+    causal_complete: bool
+    safety_verified: bool
+    reliability: float
 
 
 def _count_channels(sysml_text: str) -> int:
@@ -54,7 +43,6 @@ def _count_channels(sysml_text: str) -> int:
 
 
 def _guard_is_derived(sysml_text: str) -> bool:
-    """True when failedChannels is computed from channel health, not a literal."""
     m = _FAILED_INIT_RE.search(sysml_text)
     if not m:
         return False
@@ -106,9 +94,9 @@ def grounded_safety(sysml_text: str, channel_reliability: float = 0.85) -> Groun
     causal_complete = guard_grounded and output_connected and has_failsafe
 
     # k-of-N reliability using the masking the model's own voting guard encodes
-    # (e.g. 2oo3 TMR masks 1, not 2) — name and behaviour now agree.
+    # (e.g. 2oo3 TMR masks 1, not 2).
     reliability = kofn_reliability(channels, faults_masked, channel_reliability)
-    # redundancy that is not causally complete is "fake safety" — heavily penalised
+    # redundancy that is not causally complete is heavily penalised
     if channels > 1 and not causal_complete:
         reliability *= 0.5
 
@@ -125,21 +113,21 @@ def grounded_safety(sysml_text: str, channel_reliability: float = 0.85) -> Groun
 
 
 def grounded_objectives(sysml_text: str, channel_reliability: float = 0.85) -> dict:
-    """Multiple ORTHOGONAL design-quality objectives derived from the model.
+    """Orthogonal design-quality objectives derived from the model.
 
     Returns (all maximised, 0..1):
-      * reliability      — raw k-of-N redundancy benefit (no causal penalty)
-      * safety_integrity — fraction of the causal safety chain actually present
+      * reliability      - raw k-of-N redundancy benefit (no causal penalty)
+      * safety_integrity - fraction of the causal safety chain actually present
                            (guard grounded / output connected / failsafe / fires)
 
-    These are genuinely independent: a redundant model with a broken voting chain
-    has high reliability *potential* but low integrity. Designed for the N-D
-    Pareto front (the caller adds cost objectives). Replaces the toy 2-D placeholder.
+    They are independent: a redundant model with a broken voting chain has high
+    reliability but low integrity. Feeds the N-D Pareto front; the caller adds cost
+    objectives.
     """
     g = grounded_safety(sysml_text, channel_reliability)
     reliability = kofn_reliability(g.channels, g.faults_masked, channel_reliability)
     if g.channels <= 1:
-        safety_integrity = 1.0  # single channel: no failsafe expected → N/A
+        safety_integrity = 1.0  # single channel: no failsafe expected -> N/A
     else:
         links = (g.guard_grounded, g.output_connected, g.has_failsafe, g.safety_verified)
         safety_integrity = sum(1 for x in links if x) / len(links)

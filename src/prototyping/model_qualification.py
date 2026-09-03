@@ -1,8 +1,8 @@
 """Terminal qualification gate for generated SysML v2 prototypes.
 
-Qualification is deliberately separate from the continuous quality score:
-a high weighted score cannot hide a syntax error, a missing planned connection,
-or a failed applicable safety-assurance chain.
+Qualification is separate from the continuous quality score, so a high score
+cannot hide a syntax error, a missing planned connection or a failed
+safety-assurance chain.
 """
 from __future__ import annotations
 

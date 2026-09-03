@@ -245,9 +245,9 @@ class GeneratedModelAdmission:
     ):
         """Deterministic semantic cleanup for both generation and refinement.
 
-        These are requirement-operator invariants, not stylistic guesses, so
-        no LLM call is spent repairing them.  Mutates *generation_metadata*
-        in place and returns the (possibly replaced) CoT result.
+        These are requirement-operator invariants, so no LLM call is spent
+        repairing them.  Mutates *generation_metadata* in place and returns the
+        (possibly replaced) CoT result.
         """
         try:
             from ..dse.requirement_spec import RANGE, extract_requirements
@@ -265,10 +265,10 @@ class GeneratedModelAdmission:
             has_range_floor=has_range_floor,
             has_range_ceiling=has_range_ceiling,
         )
-        # A parachute action sending a flight-mode command is NOT rewritten
-        # here any more (fix_safety_action_semantics, removed 2026-08-31):
-        # that was semantic forgery — the wrong command must reach the
-        # linker's traceability check, not be silently respelled to pass it.
+        # A parachute action sending a flight-mode command is no longer rewritten
+        # here (fix_safety_action_semantics, removed 2026-08-31): the wrong command
+        # reaches the linker's traceability check instead of being respelled to
+        # pass it.
         cleaned_sysml, self_test_fixes = self._fix_self_test_behavior_semantics(
             cleaned_sysml, requirements
         )
@@ -297,11 +297,10 @@ class GeneratedModelAdmission:
     ) -> Tuple[str, int]:
         """Make a generated self-test phase produce an executable response.
 
-        A bare ``state PhaseSelfTest;`` proves only that a phase name exists.
-        When a FUNC requirement explicitly mandates an automated self-test,
-        attach an entry action to that already-generated state. Existing
-        self-test actions are reused; a minimal declaration is added only when
-        the model has none.
+        A bare ``state PhaseSelfTest;`` only shows that a phase name exists, so
+        when a FUNC requirement mandates an automated self-test an entry action is
+        attached to that already-generated state. Existing self-test actions are
+        reused; a minimal declaration is added only when the model has none.
         """
         if not any(
             "func" in req.lower()
@@ -354,8 +353,6 @@ class GeneratedModelAdmission:
             fixes = 1
 
             if action_match is None:
-                # Re-find the owner block after the state expansion and add the
-                # declaration immediately inside it.
                 owner_match = named_def_pattern(
                     "part", part_match.group(1)
                 ).search(result)
@@ -376,14 +373,13 @@ class GeneratedModelAdmission:
     ) -> Tuple[str, int]:
         """Align sequencing FUNC satisfy links with their state-machine owner.
 
-        The integration LLM occasionally places a system-level satisfy link on
-        a monitoring part even though the dedicated executable state machine is
-        owned by another part.  The verification matrix then correctly refuses
-        to credit that unrelated owner's behavior, and a later LLM closure tends
-        to add a duplicate machine that regresses simulation.  For narrowly
-        recognisable sequencing families, relocate the existing satisfy usage to
-        the part that already owns the matching state machine.  No requirement
-        definition or behavior is invented.
+        The integration LLM sometimes puts a system-level satisfy link on a
+        monitoring part while another part owns the executable state machine; the
+        verification matrix then refuses to credit that unrelated owner's behavior,
+        and a later LLM closure adds a duplicate machine that regresses simulation.
+        For narrowly recognisable sequencing families, relocate the existing satisfy
+        usage to the part that already owns the matching state machine. No
+        requirement definition or behavior is invented.
         """
         family_patterns = (
             (
@@ -483,20 +479,18 @@ class GeneratedModelAdmission:
     def _apply_requirement_traceability(
         self, model: AcceptedModel, requirements: List[str]
     ) -> List[str]:
-        """
-        Ensure each requirement is linked to the best-matching component.
+        """Ensure each requirement is linked to the best-matching component.
 
-        Returns requirement IDs that remain untraced. ``SysMLLiteModel`` keeps
-        the emitted SysML text as its source of truth, so missing links are never
-        fabricated in its extracted in-memory cache; they must be repaired by a
-        subsequent text-producing refinement. The legacy mutable ``SysMLModel``
-        path may still add a strongly matched relationship because it serializes
-        that relationship back into the model text.
+        Returns requirement IDs that remain untraced. ``SysMLLiteModel`` treats the
+        emitted SysML text as its source of truth, so missing links are not added
+        to its extracted in-memory cache and are left to a later text-producing
+        refinement. The legacy mutable ``SysMLModel`` path may add a strongly
+        matched relationship, since it serializes that relationship back into the
+        model text.
         """
         if not requirements or not model.part_definitions:
             return []
 
-        # Collect IDs already satisfied by the parsed model (from AST)
         satisfied_ids: set = {
             sr.target.name
             for part in model.part_definitions
@@ -505,14 +499,10 @@ class GeneratedModelAdmission:
         }
 
         def _tokenize(text: str) -> set:
-            """Split text into lowercase tokens, handling camelCase, PascalCase, and snake_case."""
-            # Insert space before each uppercase letter to split camelCase/PascalCase,
-            # then extract all alphanumeric words.
             spaced = re.sub(r"([A-Z])", r" \1", text)
             return set(re.findall(r"[a-z0-9]+", spaced.lower()))
 
         def _part_tokens(part: PartDefinition) -> set:
-            """Collect semantic tokens from a part: name, ports, attrs, actions, doc."""
             tokens: set = _tokenize(part.name)
             for port in part.ports:
                 tokens.update(_tokenize(port.name))
@@ -524,7 +514,6 @@ class GeneratedModelAdmission:
                 tokens.update(_tokenize(part.short_description))
             return tokens
 
-        # Pre-compute token sets once per part
         part_token_sets = {part.name: _part_tokens(part) for part in model.part_definitions}
 
         def _score(req_tokens: set, part: PartDefinition) -> int:
@@ -535,12 +524,12 @@ class GeneratedModelAdmission:
         for req_text in requirements:
             id_match = re.match(r"(REQ-\w+-\d+|REQ-\d+):\s*(.*)", req_text)
             if not id_match:
-                continue  # malformed requirement, skip
+                continue
             req_id = id_match.group(1).replace("-", "_")
             req_body = id_match.group(2)
 
             if req_id in satisfied_ids:
-                continue  # already linked by the parsed model
+                continue
 
             req_tokens = set(re.findall(r"[A-Za-z0-9_]+", req_body.lower()))
             scored = sorted(
@@ -552,11 +541,10 @@ class GeneratedModelAdmission:
             best_score = _score(req_tokens, best) if best else 0
 
             # Tightened threshold (was: best_score == 0).  A 1-token overlap is
-            # a coincidence (e.g., the word "system" matching everywhere), not a
-            # real semantic match — don't manufacture a satisfy link from it,
-            # because that inflates the requirement_satisfaction dimension.
-            # Require ≥ 2 shared domain tokens, OR a tie-breaking margin of 2
-            # over the second-best part.
+            # coincidence (the word "system" matches everywhere), and a satisfy link
+            # built from it inflates the requirement_satisfaction dimension.  Require
+            # >= 2 shared domain tokens, or a tie-breaking margin of 2 over the
+            # second-best part.
             second_best_score = (
                 _score(req_tokens, scored[1]) if len(scored) > 1 else 0
             )
@@ -564,17 +552,14 @@ class GeneratedModelAdmission:
             unambiguous = (best_score - second_best_score) >= 2
 
             if best_score == 0 or not (strong_match or unambiguous):
-                # Either no match, or only a weak coincidental overlap.
-                # Record as untraced; the refinement loop will surface this so
-                # the LLM can add an explicit satisfy link in the right part.
                 untraced.append(req_id)
                 continue
 
             if isinstance(model, SysMLLiteModel):
-                # LitePartDef intentionally has no mutating add_satisfy API.
-                # Updating only its extracted cache would make the evaluator see
-                # a relationship absent from model.to_sysml_text(), creating
-                # false traceability that disappears in post-hoc evaluation.
+                # LitePartDef has no mutating add_satisfy API: updating only its
+                # extracted cache would show the evaluator a relationship absent from
+                # model.to_sysml_text(), i.e. traceability that disappears in post-hoc
+                # evaluation.
                 untraced.append(req_id)
                 continue
 
@@ -585,4 +570,3 @@ class GeneratedModelAdmission:
             satisfied_ids.add(req_id)
 
         return untraced
-

@@ -1,9 +1,4 @@
-"""
-Design Agent for MBSE prototyping.
-
-Specializes in generating and refining SysML v2 design models
-from requirements using Chain of Thought prompting and RAG.
-"""
+"""Design Agent for MBSE prototyping."""
 
 from __future__ import annotations
 
@@ -27,25 +22,14 @@ from .generated_model_admission import (
 from .refinement_authoring import RefinementAuthoring, RefinementRequest
 
 
-#: Initial-generation modes. "multistep" is the production 5-step pipeline;
-#: "single_shot" is the pre-multistep legacy path (one prompt → whole model),
-#: retained as an ablation arm so the contribution of structured decomposition
-#: is measured rather than assumed.
+# Initial-generation modes. "multistep" is the production 5-step pipeline;
+# "single_shot" is the legacy one-prompt path, kept as an ablation arm that
+# measures what structured decomposition contributes.
 GENERATION_MODES = ("multistep", "single_shot")
 
 
 class DesignAgent(BaseAgent):
-    """
-    Agent responsible for architectural design generation.
-
-    Capabilities:
-    - Generate SysML v2 models from requirements
-    - Refine designs based on evaluation feedback
-    - Decompose system into components
-    - Define interfaces between components
-    - Ensure requirement satisfaction
-    """
-
+    """Agent responsible for architectural design generation."""
 
     def __init__(
         self,
@@ -72,17 +56,7 @@ class DesignAgent(BaseAgent):
         self.generation_mode = generation_mode
 
     def run(self, task: Dict[str, Any]) -> AgentResult:
-        """
-        Generate a SysML v2 design from requirements.
-
-        Expected task keys:
-        - system_name: str
-        - requirements: List[str]
-        - context: str (optional additional context)
-        - existing_model: SysMLModel (optional, for refinement)
-        - refinement_feedback: str (optional feedback for refinement)
-        - refinement_issues: List[str] (optional structured issues for refinement)
-        """
+        """Generate a SysML v2 design from requirements."""
         system_name = task.get("system_name", "UnnamedSystem")
         requirements = task.get("requirements", [])
         context = task.get("context", "")
@@ -112,7 +86,7 @@ class DesignAgent(BaseAgent):
             )).response
             generation_metadata = {}
         elif self.generation_mode == "single_shot":
-            # Ablation arm — one prompt produces the whole model. No typed plan
+            # Ablation arm - one prompt produces the whole model. No typed plan
             # exists, so plan-conformance / structural / semantic-fidelity gates
             # downstream are inapplicable (they record None, not PASS).
             cot_result, generation_metadata = self._single_shot_generate(
@@ -122,9 +96,6 @@ class DesignAgent(BaseAgent):
                 verbose=verbose,
             )
         else:
-            # Generation mode — multi-step pipeline. Each SysML-authoring step
-            # issues its own request; typed planning owns its separate bounded
-            # correction protocol.
             cot_result, generation_metadata = self._multistep_generate(
                 system_name=system_name,
                 requirements=requirements,
@@ -179,7 +150,6 @@ class DesignAgent(BaseAgent):
         self.record_result(result)
         return result
 
-
     def _single_shot_generate(
         self,
         system_name: str,
@@ -189,10 +159,10 @@ class DesignAgent(BaseAgent):
     ) -> Tuple[Any, Dict[str, Any]]:
         """Single-prompt whole-model generation (the pre-multistep legacy path).
 
-        Reuses ``ChainOfThoughtPrompter.generate_design`` verbatim so the
-        ablation compares against the pipeline's own historical single-shot
-        behaviour, not a prompt written for the experiment.  Admission, the
-        syntax gate, refinement, and evaluation downstream are unchanged.
+        Reuses ``ChainOfThoughtPrompter.generate_design`` verbatim, so the ablation
+        compares against the pipeline's own single-shot behaviour rather than a
+        prompt written for the experiment.  Downstream admission, syntax gate,
+        refinement and evaluation are unchanged.
         """
         if verbose:
             print("\n  [DEBUG] single-shot generation — one prompt, no typed plan")
@@ -252,7 +222,6 @@ class DesignAgent(BaseAgent):
             if ag_behavior_obligation_plan is not None else None
         )
 
-        # --- Step 1: Architecture Decomposition ---
         typed_plan = TypedPlanGeneration(
             self.cot,
             maximum_attempts=self.maximum_plan_attempts,

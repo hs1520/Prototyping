@@ -1,11 +1,3 @@
-"""Shadow comparison: new Pareto MO-MCTS vs baselines, same space & objectives.
-
-The paper's head-to-head, self-contained (does not touch the live scalar pipeline):
-  * weighted-sum (the OLD approach) returns a single design — it collapses the
-    trade-off (pain point C);
-  * Pareto MO-MCTS returns the full front, and at equal evaluation budget reaches
-    higher hypervolume than random search (sample efficiency).
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -56,20 +48,17 @@ def _obj(state, ctx):
     return {"capability": 0.6 * rel + 0.4 * interop, "cost_efficiency": 1.0 - (units - 3) / 9.0}
 
 
-def test_weighted_sum_returns_single_design_mo_mcts_returns_front():
+def test_weighted_sum_vs_front():
     ctx = Ctx()
     ws_state, ws_obj = weighted_sum_search(
         _OPS, _obj, ctx, {"capability": 0.5, "cost_efficiency": 0.5}, n_evals=300, random_seed=1
     )
     front = MultiObjectiveMCTS(_OPS, _obj, ctx, _NAMES, _REF, random_seed=7).search(iterations=300)
-    # old approach: one design; new approach: a multi-point trade-off front
     assert isinstance(ws_state, dict)
     assert len(front.members) >= 2
 
 
-def test_weighted_sum_design_is_one_corner_of_the_front():
-    """The old scalar optimum is a single corner the MO front also contains —
-    showing the old method finds *a* point but hides the rest of the trade-off."""
+def test_weighted_sum_not_dominated():
     ctx = Ctx()
     ws_state, ws_obj = weighted_sum_search(
         _OPS, _obj, ctx, {"capability": 0.5, "cost_efficiency": 0.5}, n_evals=300, random_seed=1
@@ -77,7 +66,6 @@ def test_weighted_sum_design_is_one_corner_of_the_front():
     front = MultiObjectiveMCTS(_OPS, _obj, ctx, _NAMES, _REF, random_seed=7).search(iterations=300)
     front_vecs = [(o["capability"], o["cost_efficiency"]) for _, o in front.members]
     ws_vec = (ws_obj["capability"], ws_obj["cost_efficiency"])
-    # the weighted-sum point is not dominated by the front (it is on/at it)
     assert not any(dominates(fv, ws_vec) for fv in front_vecs)
 
 
@@ -85,10 +73,12 @@ def _mean(xs):
     return sum(xs) / len(xs)
 
 
-def test_mo_mcts_more_sample_efficient_than_random_on_average():
-    """Sample efficiency is a statistical property: averaged over seeds at a small
-    budget, MO-MCTS reaches higher hypervolume than random search. (Per-seed it can
-    tie on tiny budgets — we do not overclaim per-seed dominance.)"""
+def test_mo_mcts_beats_random():
+    """Averaged over seeds at a small budget, MO-MCTS reaches higher hypervolume than
+    random search.
+
+    Per-seed it can tie on tiny budgets, so no per-seed claim is made.
+    """
     ctx = Ctx()
     seeds = range(1, 7)
     mo = [MultiObjectiveMCTS(_OPS, _obj, ctx, _NAMES, _REF, random_seed=s).search(iterations=15).hypervolume() for s in seeds]
@@ -96,8 +86,7 @@ def test_mo_mcts_more_sample_efficient_than_random_on_average():
     assert _mean(mo) > _mean(rs)
 
 
-def test_mo_front_hypervolume_dominates_single_scalar_point():
-    """A front's hypervolume is >= that of any single design the old method returns."""
+def test_front_hypervolume_beats_point():
     ctx = Ctx()
     from src.dse.mo_mcts import hypervolume_nd
 
@@ -109,9 +98,7 @@ def test_mo_front_hypervolume_dominates_single_scalar_point():
     assert front.hypervolume() >= single_hv
 
 
-# ── NSGA-II baseline ───────────────────────────────────────────────────────
-
-def test_nsga2_returns_valid_nondominated_front():
+def test_nsga2_front_nondominated():
     ctx = Ctx()
     front = nsga2(_OPS, _obj, ctx, _NAMES, _REF, pop_size=8, generations=6, random_seed=1)
     assert front.hypervolume() > 0.0
@@ -122,16 +109,14 @@ def test_nsga2_returns_valid_nondominated_front():
                 assert not dominates(b, a)
 
 
-def test_nsga2_and_mo_mcts_converge_to_same_front_at_full_budget():
-    """Both correct multi-objective optimisers reach the true Pareto front."""
+def test_nsga2_and_mo_mcts_converge():
     ctx = Ctx()
     ng = nsga2(_OPS, _obj, ctx, _NAMES, _REF, pop_size=8, generations=8, random_seed=1)
     mo = MultiObjectiveMCTS(_OPS, _obj, ctx, _NAMES, _REF, random_seed=7).search(iterations=200)
     assert abs(ng.hypervolume() - mo.hypervolume()) < 1e-6
 
 
-def test_mo_mcts_competitive_with_nsga2_on_average():
-    """Averaged over seeds at a small budget, MO-MCTS is at least as good as NSGA-II."""
+def test_mo_mcts_competitive_with_nsga2():
     ctx = Ctx()
     seeds = range(1, 7)
     mo = [MultiObjectiveMCTS(_OPS, _obj, ctx, _NAMES, _REF, random_seed=s).search(iterations=24).hypervolume() for s in seeds]

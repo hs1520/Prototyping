@@ -105,7 +105,6 @@ class GitHubAuthManager:
                 "`gh auth login` failed. Please run it manually and retry."
             )
 
-        # Mirrors selecting "Yes" for configuring Git credentials with GitHub auth.
         subprocess.run(["gh", "auth", "setup-git"], check=False)
 
         token = self._get_github_cli_token(raise_on_error=False)
@@ -122,4 +121,3 @@ class GitHubAuthManager:
 
         text = str(exc).lower()
         return "authentication" in text or "unauthorized" in text or "invalid api key" in text
-

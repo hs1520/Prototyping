@@ -1,24 +1,13 @@
-"""THRESHOLD_TRIGGERED_RESPONSE — a triggered response that states no deadline.
+"""THRESHOLD_TRIGGERED_RESPONSE - a triggered response that states no deadline.
 
-The bounded pattern set had a structural gap. A requirement that names a trigger,
-a response, and a precedence relation but no time bound could be declared under
-neither family: the timed pattern rejects a chain with no budget, and stating a
-trigger→response obligation as a continuously held invariant misdescribes it. The
-only way through was to invent a deadline the stakeholder never wrote, which is
-precisely the failure the pattern declaration exists to prevent.
-
-REQ_SAFE_002 ("controlled descent when state-of-charge falls below 15%,
-superseding any lower-priority contingency response") is that shape. It is the
-timed failsafe's arbitration topology with the timing obligations removed, so the
-pattern reuses the arbitration checks and drops only what a deadline pays for.
-
-Scope: this covers the DOMINANT direction, where the selected response supersedes
-the others — the direction the arbitration encoding already expresses (competing
-transitions guarded by ``not <trigger>``). A SUBORDINATE threshold response
-(REQ_SAFE_001, "return to base ... unless a higher-priority response is already in
-progress") is NOT covered: it needs the opposite precedence direction and a guard
-shape the extractor does not parse. That is a separate extension, and it is left
-declared rather than approximated.
+A requirement naming a trigger, a response and a precedence relation but no time
+bound fitted neither family: the timed pattern rejects a chain with no budget,
+and stating it as a held invariant misdescribes it. REQ_SAFE_002 is that shape -
+the timed failsafe's arbitration topology with the timing obligations removed.
+Scope is the dominant direction, where the selected response supersedes the
+others (competing transitions guarded by ``not <trigger>``); the subordinate
+direction (REQ_SAFE_001) needs the opposite precedence and a guard shape the
+extractor does not parse, so it stays uncovered.
 """
 from __future__ import annotations
 
@@ -91,8 +80,7 @@ def _decisions(**overrides):
     return payload
 
 
-def test_reference_chain_emits_a_strictly_clean_model():
-    """No stdlib-diagnostic allowance and no warnings — the evidence-path gate."""
+def test_reference_chain_clean_model():
     gate = check_syntax(
         _render(REQ_SAFE_002_CHAIN),
         fail_closed=True,
@@ -102,14 +90,13 @@ def test_reference_chain_emits_a_strictly_clean_model():
     assert not gate.warnings
 
 
-def test_reference_chain_round_trips_to_a_checker_pass():
+def test_reference_chain_checker_pass():
     report = check_ag_graph(extract_ag_graph(_render(REQ_SAFE_002_CHAIN)))
     assert report.verdict == "PASS"
     assert not report.errors()
 
 
-def test_decided_spec_round_trips_to_a_checker_pass():
-    """The production path: decisions in, rendered SysML out, checker PASS."""
+def test_decided_spec_checker_pass():
     spec = build_spec_from_decisions(_DECISIONS, _BOUNDARY)
     assert spec.pattern == "THRESHOLD_TRIGGERED_RESPONSE"
     assert spec.deadline is None
@@ -122,13 +109,12 @@ def test_decided_spec_round_trips_to_a_checker_pass():
     assert check_ag_graph(extract_ag_graph(text)).verdict == "PASS"
 
 
-def test_untimed_trigger_is_stated_once_on_the_priority_contract():
+def test_untimed_trigger_stated_once():
     """No timing origin to cross-check against, so the trigger is not duplicated.
 
-    The timed pattern states its trigger twice — as the priority contract's
-    trigger and as the system contract's interval origin — and the checker holds
-    them to agreement. An untimed chain declares no interval, so demanding a
-    timing origin would be demanding the deadline the pattern does without.
+    The timed pattern states its trigger twice - priority contract trigger and
+    system contract interval origin - and holds them to agreement. An untimed chain
+    declares no interval, so there is nothing to cross-check.
     """
     spec = build_spec_from_decisions(_DECISIONS, _BOUNDARY)
     assert spec.priority.trigger == "criticalBatteryThresholdReached"
@@ -139,24 +125,24 @@ def test_untimed_trigger_is_stated_once_on_the_priority_contract():
     assert not check_ag_graph(graph).errors()
 
 
-def test_a_deadline_makes_it_the_wrong_pattern():
+def test_deadline_wrong_pattern():
     with pytest.raises(DecisionError, match="must not carry deadline_seconds"):
         validate_decisions(_decisions(deadline_seconds=0.5), _BOUNDARY)
 
 
-def test_no_component_may_apportion_a_budget_there_is_nothing_to_apportion():
+def test_no_component_budget():
     payload = _decisions()
     payload["components"][0]["latency_budget_seconds"] = 0.1
     with pytest.raises(DecisionError, match="latency_budget_seconds"):
         validate_decisions(payload, _BOUNDARY)
 
 
-def test_an_untimed_pattern_does_not_have_to_state_invariants():
-    """The gap this closes: it is a triggered pattern, not an invariant one.
+def test_untimed_pattern_no_invariants():
+    """A triggered pattern, not an invariant one.
 
-    Before the split, everything that was not the timed pattern was treated as an
-    invariant pattern and had to state at least one invariant. A trigger→response
-    obligation stated as a continuously held implication is a misdescription.
+    Before the split, everything but the timed pattern was treated as invariant and
+    had to state at least one invariant, which misdescribes a trigger->response
+    obligation.
     """
     assert "THRESHOLD_TRIGGERED_RESPONSE" not in INVARIANT_PATTERNS
     assert "THRESHOLD_TRIGGERED_RESPONSE" in TRIGGERED_PATTERNS
@@ -165,14 +151,13 @@ def test_an_untimed_pattern_does_not_have_to_state_invariants():
     validate_decisions(payload, _BOUNDARY)
 
 
-def test_the_timed_pattern_still_requires_its_deadline():
-    """Regression guard on the three-way split, not a new property."""
+def test_timed_pattern_requires_deadline():
     payload = _decisions(safety_pattern="TRIGGERED_TIMED_FAILSAFE_RESPONSE")
     with pytest.raises(DecisionError, match="needs deadline_seconds"):
         validate_decisions(payload, _BOUNDARY)
 
 
-def test_conformance_does_not_re_impose_a_timing_criterion():
+def test_conformance_no_timing_criterion():
     graph = extract_ag_graph(_render(REQ_SAFE_002_CHAIN))
     report = check_ag_graph(graph)
     conformance = check_safety_pattern_conformance(graph, report)
@@ -182,22 +167,19 @@ def test_conformance_does_not_re_impose_a_timing_criterion():
     assert {case["pattern"] for case in cases} == {
         "THRESHOLD_TRIGGERED_RESPONSE"
     }
-    # It passes without any case claiming a timing criterion: were the timed
-    # pattern's extra duty still applied, these cases would fail.
+    # Passes with no case claiming a timing criterion; under the timed pattern's
+    # extra duty these cases would fail.
     assert not any(case["timing_criterion_present"] for case in cases)
 
 
-def test_the_pattern_is_published_to_authors():
-    """A checker rule the generator is never told is unsatisfiable by any author."""
+def test_pattern_published_to_authors():
     assert "THRESHOLD_TRIGGERED_RESPONSE" in KNOWN_PATTERNS
     rules = render_authoring_rules()
     assert "THRESHOLD_TRIGGERED_RESPONSE" in rules
-    # and it says how to tell it apart from the timed one
     assert "no deadline" in rules.lower() or "NO\ndeadline" in rules
 
 
-def test_arbitration_naming_defaults_keep_the_parachute_chain_identical():
-    """The new naming fields must not disturb REQ_SAFE_005 or its frozen gold."""
+def test_arbitration_naming_defaults():
     defaults = AGPrioritySpec(
         response_set_id="X", members=("A", "B"), edges=(("A", "B"),),
         trigger="t", selected_response="A", source_kind="k", source_id="i",
@@ -210,22 +192,15 @@ def test_arbitration_naming_defaults_keep_the_parachute_chain_identical():
     assert "then parachuteDeploymentSelected;" in emitted
 
 
-def test_two_arbitrating_chains_collide_on_the_single_global_arbiter():
-    """Measured boundary: the profile supports ONE arbitrating chain per model.
+def test_two_chains_collide_on_arbiter():
+    """The profile supports one arbitrating chain per model.
 
-    A paid single-arm probe (2026-07-31, seed 0) selected all four chains and
-    failed in step-1 planning, not in the A/G layer: six attempts, four of them
-    reporting `duplicate A/G behavior contract SafetyResponseArbiterContract` and
-    `duplicate stable behavior id SafetyResponseArbiter::SafetyResponseArbitration`.
-    The model could not repair it because the duplicate does not come from the
-    model — ``SafetyResponseArbitration`` is a hard-coded identifier that six
-    modules use to recognise the arbiter, so every arbitrating chain necessarily
-    claims it.
-
-    So this pattern is proven STANDALONE and is not composable with REQ_SAFE_005.
-    Pinned here so the constraint is rediscovered by a free test rather than by
-    another paid run, and so that making the arbiter identity chain-scoped is a
-    deliberate change that has to come past this assertion.
+    A probe selecting all four chains failed in step-1 planning with `duplicate A/G
+    behavior contract SafetyResponseArbiterContract`; ``SafetyResponseArbitration``
+    is a hard-coded identifier six modules use to recognise the arbiter, so every
+    arbitrating chain claims it and the model cannot repair the clash. The pattern
+    is therefore standalone, not composable with REQ_SAFE_005; making the arbiter
+    identity chain-scoped has to come past this assertion.
     """
     collisions = {}
     for chain in (REQ_SAFE_005_CHAIN, REQ_SAFE_002_CHAIN):
@@ -242,13 +217,12 @@ def test_two_arbitrating_chains_collide_on_the_single_global_arbiter():
     }
 
 
-def test_the_subordinate_direction_is_declared_out_of_scope_not_approximated():
-    """REQ_SAFE_001 is not covered, and the reason is structural.
+def test_subordinate_direction_excluded():
+    """REQ_SAFE_001 is out of scope for a structural reason.
 
-    The arbitration encoding guards competing transitions with ``not <trigger>``,
-    which says the selected response supersedes the others. REQ_SAFE_001's
-    response is superseded BY the others. Encoding it under this pattern would
-    invert what the requirement says, so it stays uncovered.
+    The arbitration encoding guards competing transitions with ``not <trigger>``, so
+    the selected response supersedes the others; REQ_SAFE_001's response is
+    superseded by them, and encoding it here would invert the requirement.
     """
     priority = REQ_SAFE_002_CHAIN.priority
     assert priority is not None

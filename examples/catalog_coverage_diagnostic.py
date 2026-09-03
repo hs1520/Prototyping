@@ -1,9 +1,7 @@
 """Diagnose real-catalog coverage against the supported DSE design domain.
 
-This deliberately reports both operational matching and an exact-cell
-counterfactual.  A
-non-empty match alone is therefore not misreported as faithful catalog
-coverage.
+Reports both operational matching and an exact-cell counterfactual, so a
+non-empty match is not read as full catalog coverage.
 """
 from __future__ import annotations
 
@@ -25,9 +23,8 @@ from src.realization.matcher import all_combinations, match
 
 CELLS = (4, 6)
 PROP_DIAMETERS_IN = (8, 10, 12, 15, 18, 22)
-# Keep the diagnostic domain coupled to the evidence-backed catalog instead of
-# freezing the old 22Ah upper bound.  Sub-3Ah racing packs are outside this
-# heavy-payload mission grid but remain visible in the inventory.
+# Domain follows the catalog rather than a frozen 22Ah upper bound. Sub-3Ah
+# racing packs are outside this heavy-payload grid but stay in the inventory.
 CAPACITIES_MAH = tuple(sorted({
     int(pack.capacity_mah) for pack in DEFAULT_CATALOG.packs
     if 3000.0 <= pack.capacity_mah <= 30000.0
@@ -95,10 +92,9 @@ def _architecture_conditioned_failures(
 ) -> tuple[str, ...]:
     """Explain interface failure without letting a wrong-arm frame mask physics.
 
-    The production report intentionally picks the globally nearest candidate.
-    For catalog planning, first hold cells/arms/prop fit fixed; otherwise an
-    octocopter candidate that only fails ``arms_match`` can hide a quad's real
-    hover-throttle shortfall.
+    The production report picks the globally nearest candidate. For catalog
+    planning, hold cells/arms/prop fit fixed first, or an octocopter failing only
+    ``arms_match`` hides a quad's hover-throttle shortfall.
     """
     candidates = all_combinations(design, list(MISSION_REQUIREMENTS), catalog)
     structural = {"cells_match", "arms_match", "prop_fits", "integration_architecture"}

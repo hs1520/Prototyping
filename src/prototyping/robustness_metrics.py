@@ -1,21 +1,21 @@
 """Robustness metrics for the bounded A/G assurance enhancement.
 
-Motivation: A/G assurance is an enhancement method that makes a generated SysML v2
-model more robust — fewer errors, more complete, better requirement fulfilment.
-This module quantifies that, honestly, as a **detection + bounded repair** measure:
+A/G assurance makes a generated SysML v2 model more robust - fewer errors, more
+complete, better requirement fulfilment. This module quantifies that as a
+detection + bounded repair measure:
 
 - DETECTION: the A/G check surfaces incompleteness (undischarged assumptions,
   unrealised guarantees, missing owners, non-conformant patterns) that a
-  no-contract pipeline (R0-CURRENT / R1-BBCTX) cannot see at all. Surfacing hidden
-  A/G gaps is itself a robustness gain.
-- BOUNDED REPAIR: the dependency-closed surgical loop auto-repairs the model-
-  semantic subset it is authorised to; integration/decomposition gaps are routed
-  as explicit BLOCKED for human/upstream repair. This is NOT a claim of full
-  auto-fixing — the delta separates auto-repaired from routed-blocked.
+  no-contract pipeline (R0-CURRENT / R1-BBCTX) cannot see at all.
+- BOUNDED REPAIR: the dependency-closed surgical loop repairs the
+  model-semantic subset it is authorised to; integration/decomposition gaps are
+  routed as explicit BLOCKED for human/upstream repair. The delta separates
+  auto-repaired from routed-blocked, and is not a full auto-fixing claim.
 
-Computed from an R2 A/G trace (the `_build_ag_trace` result). Evaluator-only in
-spirit: imports no LLM, no runtime extractor/checker, and no gold.
-Kept deliberately: thesis baseline/evidence code, exercised by its own tests and invoked on demand rather than wired into the runtime pipeline. Do not remove as dead code.
+Computed from an R2 A/G trace (the `_build_ag_trace` result); imports no LLM,
+no runtime extractor/checker and no gold. Thesis baseline/evidence code,
+exercised by its own tests and invoked on demand rather than wired into the
+runtime pipeline. Do not remove as dead code.
 """
 from __future__ import annotations
 
@@ -27,12 +27,7 @@ ROBUSTNESS_ROLE = "AG_ROBUSTNESS_METRICS"
 
 
 def compute_robustness_metrics(assurance: Mapping[str, Any]) -> Dict[str, Any]:
-    """Compute the A/G robustness delta from one R2 assurance trace.
-
-    ``assurance`` is the dict returned by the orchestrator's ``_build_ag_trace``
-    (``ag_contract_graph`` + ``pattern_conformance_report`` + ``failure_diagnostics``
-    + ``repair_decisions``). Missing sections degrade to empty, never raise.
-    """
+    """Compute the A/G robustness delta from one R2 assurance trace."""
     graph = dict(assurance.get("ag_contract_graph") or {})
     pattern = dict(assurance.get("pattern_conformance_report") or {})
     failures = dict(assurance.get("failure_diagnostics") or {})
@@ -45,7 +40,6 @@ def compute_robustness_metrics(assurance: Mapping[str, Any]) -> Dict[str, Any]:
 
     errors_before = len(round0.get("failure_ids") or [])
     errors_after = len(final.get("failure_ids") or [])
-    # errors the assurance actually removed across its bounded repair rounds
     auto_repaired = max(0, errors_before - errors_after)
 
     by_class: Dict[str, int] = {}
@@ -58,7 +52,6 @@ def compute_robustness_metrics(assurance: Mapping[str, Any]) -> Dict[str, Any]:
         1 for d in decisions if str(d.get("status")).upper() == "BLOCKED"
     )
 
-    # completeness of the final committed model
     completeness = graph.get("component_completeness") or {}
     ready = sum(1 for v in completeness.values() if str(v).upper() == "READY")
     inner = graph.get("graph") or {}

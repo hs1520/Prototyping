@@ -1,4 +1,3 @@
-"""Lock the syntax boundary chosen for the revised bounded A/G profile."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -135,7 +134,7 @@ _STUDENT_DECISION_SPIKE = """package StudentDecisionSpike {
 }"""
 
 
-def test_official_release_corpus_contains_assume_and_require_constraints():
+def test_release_corpus_has_constraints():
     source = Path(
         __file__
     ).resolve().parents[1].joinpath(
@@ -145,7 +144,7 @@ def test_official_release_corpus_contains_assume_and_require_constraints():
     assert "require constraint" in source
 
 
-def test_selected_ag_profile_constructs_pass_the_project_syside_gate():
+def test_ag_profile_passes_syside():
     result = check_syntax(
         _AG_SPIKE,
         fail_closed=True,
@@ -155,7 +154,7 @@ def test_selected_ag_profile_constructs_pass_the_project_syside_gate():
     assert result.score == 1.0
 
 
-def test_student_decision_requirement_units_logic_and_trace_constructs_parse():
+def test_student_decision_spike_parses():
     result = check_syntax(
         _STUDENT_DECISION_SPIKE,
         fail_closed=True,
@@ -165,7 +164,7 @@ def test_student_decision_requirement_units_logic_and_trace_constructs_parse():
     assert result.score == 1.0
 
 
-def test_evidence_syntax_gate_rejects_missing_tool_and_unresolved_stdlib(
+def test_gate_rejects_missing_tool(
     monkeypatch,
 ):
     monkeypatch.setattr(syntax_checker, "_SYSIDE_OK", False)

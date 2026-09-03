@@ -80,7 +80,7 @@ def _base_plan(owner="SafetyResponseArbiter"):
     }, requirements=["REQ-SAFE-005: deploy recovery system"])
 
 
-def test_model_plan_v3_carries_typed_ag_behavior_obligations():
+def test_plan_v3_carries_obligations():
     behavior_plan = compile_behavior_obligation_plan(
         (REQ_SAFE_005_CHAIN,)
     )
@@ -94,7 +94,7 @@ def test_model_plan_v3_carries_typed_ag_behavior_obligations():
     assert "RecoveryPowerSupplyBehavior" in prompt
 
 
-def test_cross_validator_rejects_an_ag_owner_outside_model_plan():
+def test_reject_owner_outside_plan():
     behavior_plan = compile_behavior_obligation_plan(
         (REQ_SAFE_005_CHAIN,)
     )
@@ -109,7 +109,7 @@ def test_cross_validator_rejects_an_ag_owner_outside_model_plan():
     )
 
 
-def test_cross_validator_rejects_ordinary_behavior_using_reserved_ag_identity():
+def test_reject_reserved_identity_reuse():
     base = _base_plan()
     colliding = PlannedBehavior(
         owner="RecoveryPowerSupply",
@@ -138,7 +138,7 @@ def test_cross_validator_rejects_ordinary_behavior_using_reserved_ag_identity():
     )
 
 
-def test_cross_validator_allows_same_kind_ag_state_identity():
+def test_allow_same_kind_identity():
     base = _base_plan()
     aligned = PlannedBehavior(
         owner="SafetyResponseArbiter",
@@ -163,7 +163,7 @@ def test_cross_validator_allows_same_kind_ag_state_identity():
     assert plan.status == "PASS", plan.issues
 
 
-def test_terminal_plan_application_restores_ag_invariant_after_constraint_pass():
+def test_invariant_restored_after_pass():
     behavior_plan = compile_behavior_obligation_plan(
         (REQ_SAFE_005_CHAIN,)
     )
@@ -198,7 +198,7 @@ def test_terminal_plan_application_restores_ag_invariant_after_constraint_pass()
     assert report["ag_reserved_identity_conformance"]["status"] == "PASS"
 
 
-def test_model_plan_v3_round_trips_behavior_obligations():
+def test_plan_v3_round_trips():
     original = attach_ag_behavior_obligations(
         _base_plan(),
         compile_behavior_obligation_plan((REQ_SAFE_005_CHAIN,)),
@@ -207,7 +207,7 @@ def test_model_plan_v3_round_trips_behavior_obligations():
     assert restored.to_dict() == original.to_dict()
 
 
-def test_local_requirement_behavior_uses_frozen_ag_stable_identity():
+def test_local_behavior_frozen_identity():
     plan = ModelGenerationPlan(
         components=(
             ComponentPlan(

@@ -2,28 +2,25 @@
 
 Aggregates the three mechanisms the robustness claim rests on, per archived run:
 
-1. safety-pattern conformance — the gold-blind checker's verdict on the committed
-   model;
-2. blackboard-controlled context access — the coordination metrics already archived
-   with the run;
-3. requirement → implementation traceability — walked from the committed model.
+1. safety-pattern conformance - the gold-blind checker's verdict on the
+   committed model;
+2. blackboard-controlled context access - the coordination metrics already
+   archived with the run;
+3. requirement -> implementation traceability - walked from the committed model.
 
-None of it compares against a reviewed answer, so this needs no frozen gold, no
-blind labels and no readiness gate: those exist to protect the pooling of
-gold-based accuracy, and there is none here. `assert_reads_no_gold` makes that
-checkable rather than merely asserted in prose.
+Nothing is compared against a reviewed answer, so no frozen gold, blind labels
+or readiness gate are needed; `assert_reads_no_gold` makes that checkable.
 
-Three states are reported distinctly, because collapsing them would misrepresent
-the baseline:
+Three states are reported distinctly, because collapsing them would
+misrepresent the baseline:
 
 ``model_archived = False``
-    The run did not archive its committed model, so nothing model-derived can be
-    measured. This is a gap in the evidence, not a result.
+    The run archived no committed model, so nothing model-derived can be
+    measured. A gap in the evidence, not a result.
 ``ag_layer_present = False``
-    The run archived a model that carries no A/G decomposition. R0/R1 are like this
-    by construction — the A/G layer *is* the R2 intervention. Reporting 0.0 here
-    would score an arm against a mechanism it does not have; the asymmetry is the
-    comparison, not a defeat.
+    The run archived a model carrying no A/G decomposition. R0/R1 are like this
+    by construction, since the A/G layer is the R2 intervention; 0.0 would
+    score an arm against a mechanism it does not have.
 otherwise
     Measured values.
 """
@@ -37,8 +34,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 ROBUSTNESS_REPORT_SCHEMA_VERSION = "1.0"
 
-#: Filenames this report is allowed to read. Gold and blind labels are absent by
-#: construction, not by convention.
+# Filenames this report is allowed to read. Gold and blind labels are absent by
+# construction, not by convention.
 _ALLOWED_ARTIFACTS = ("shared_model_final.sysml", "coordination_metrics.json")
 
 
@@ -55,10 +52,10 @@ def assert_reads_no_gold(paths: Sequence[Path]) -> None:
             raise ValueError(f"{path.name} is not a permitted input")
 
 
-#: A planned obligation the committed model asks an executor to discharge.
-#: Counted from the model text so this stays inside the report's two-artifact
-#: boundary; the executor's own pass counts live in `run_report.json`, which
-#: this report is not permitted to read.
+# A planned obligation the committed model asks an executor to discharge.
+# Counted from the model text to stay inside the report's two-artifact
+# boundary; the executor's own pass counts live in `run_report.json`, which
+# this report does not read.
 _PLAN_CONSTRAINT_MARKER = "// PLAN-CONSTRAINT"
 _STATE_EXECUTION_MARKER = "verification=STATE_EXECUTION"
 
@@ -67,14 +64,11 @@ def count_committed_obligations(model_text: str) -> Dict[str, int]:
     """How much a committed model asks to be checked against it.
 
     Reported beside conformance because a rate alone rewards conservatism: a run
-    that plans one executable constraint and discharges it scores better than one
-    that plans four and discharges two, though the second committed to more.
-    Measured on pilot_n6_20260802, where seed-3 carried four plan constraints and
-    every other seed one or two — and seed-3 was the only run in its arm to lose
-    the qualification gate. Without this column that reads as a worse run.
-
-    Counted for every arm, not only those carrying an A/G layer, so the baseline
-    is visible as the zero it actually is rather than as an absent measurement.
+    planning one executable constraint and discharging it outscores one planning
+    four and discharging two (pilot_n6_20260802: seed-3 carried four plan
+    constraints, every other seed one or two, and seed-3 lost the qualification
+    gate). Counted for every arm, not only those carrying an A/G layer, so a
+    baseline zero is visible rather than absent.
     """
     return {
         "plan_constraints": model_text.count(_PLAN_CONSTRAINT_MARKER),
@@ -90,9 +84,8 @@ def measure_model(
 ) -> Dict[str, Any]:
     """Pattern conformance + traceability for one committed model.
 
-    Public so that a comparison of generation modes goes through exactly the same
-    measurement path as the cross-arm table. Two tables computed two ways would not
-    be comparable, and the difference would be invisible in the write-up.
+    Public so a comparison of generation modes uses the same measurement path as
+    the cross-arm table; two tables computed two ways would not be comparable.
     """
     from .ag_contracts import check_ag_graph
     from .ag_extractor import extract_ag_graphs
@@ -110,17 +103,16 @@ def measure_model(
                 "than a score of zero"
             ),
         }
-    # Per chain, never pooled. A model carrying several A/G packages has several
-    # system contracts, so a single extraction leaves the decomposition root
-    # ambiguous and manufactures failures: on a three-chain model whose chains each
-    # verify PASS, the pooled graph reported FAIL with 14 errors
-    # (DECOMPOSITION_MISSING, GUARANTEE_NO_OWNER, REALIZATION_MISSING,
-    # ASSUMPTION_UNDISCHARGED) — every one of them an artefact of the pooling. The
-    # run verdict is the conjunction, as it is everywhere else.
-    # This report replays historical archives whose checker version predates the
-    # v8 response-provenance convention. Requiring a field that did not exist at
-    # their frozen code revision would rewrite rather than reproduce the recorded
-    # measurement. Current pipeline assurance uses the strict default.
+    # Per chain, not pooled. A model with several A/G packages has several system
+    # contracts, so one extraction leaves the decomposition root ambiguous and
+    # manufactures failures: on a three-chain model whose chains each verify PASS,
+    # the pooled graph reported FAIL with 14 errors (DECOMPOSITION_MISSING,
+    # GUARANTEE_NO_OWNER, REALIZATION_MISSING, ASSUMPTION_UNDISCHARGED), all
+    # artefacts of the pooling. The run verdict is the conjunction.
+    # This report replays archives whose checker version predates the v8
+    # response-provenance convention; requiring a field absent at their frozen code
+    # revision would rewrite rather than reproduce the recorded measurement. Current
+    # pipeline assurance uses the strict default.
     reports = [
         check_ag_graph(
             graph, require_priority_member_provenance=False
@@ -228,8 +220,8 @@ def build_robustness_report(
             "models_archived": sum(1 for i in arm_runs if i["model_archived"]),
             "runs_with_ag_layer": len(measured),
         }
-        # Deliberately outside the `measured` branch below: an arm that commits
-        # to nothing executable must show a zero here, not an absent field.
+        # Outside the `measured` branch below: an arm that commits to nothing
+        # executable shows a zero here rather than an absent field.
         committed = [
             item["obligations"]["state_execution_obligations"]
             for item in arm_runs if item.get("obligations")
@@ -257,11 +249,10 @@ def build_robustness_report(
             summary["mean_trace_completeness"] = (
                 round(mean(traces), 4) if traces else None
             )
-            # A run counts as fully traced only when EVERY declared requirement is
-            # traced. `traceability["fully_traced"]` is a count, so testing it for
-            # truthiness marked a run with one of two requirements traced as fully
-            # traced — the column then read 3/3 for runs that each covered half the
-            # requirement set.
+            # A run is fully traced only when every declared requirement is traced.
+            # `traceability["fully_traced"]` is a count, so a truthiness test marked a
+            # run with one of two requirements traced as fully traced and the column
+            # read 3/3 for runs covering half the requirement set.
             summary["fully_traced_runs"] = sum(
                 1 for item in measured
                 if item["traceability"]["requirements"]
@@ -299,12 +290,11 @@ def summarise_models(
     *,
     declared_requirements: Sequence[str] = (),
 ) -> Dict[str, Any]:
-    """Summarise labelled groups of committed models — e.g. generation modes.
+    """Summarise labelled groups of committed models - e.g. generation modes.
 
-    Uses `measure_model`, the same path as the cross-arm table, so the two results
-    tables in the write-up are computed identically and can be read together. A
-    group whose models carry no A/G layer is reported as such rather than as zero,
-    for the same reason it is in the cross-arm table.
+    Uses `measure_model`, the same path as the cross-arm table, so both results
+    tables are computed identically and can be read together. A group whose models
+    carry no A/G layer is reported as such rather than as zero.
     """
     groups: Dict[str, Any] = {}
     for label, models in named_models.items():
@@ -402,10 +392,9 @@ def format_robustness_table(report: Mapping[str, Any]) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     """Write the cross-arm table beside an archived pilot.
 
-    Exists because the report was previously only reachable by hand-written
-    script, and four pilots were archived before anyone generated one. It reads
-    the pilot's own frozen requirement set, so the declared denominator cannot
-    drift from the run it describes.
+    The report was previously reachable only by hand-written script, so four pilots
+    were archived without one. It reads the pilot's own frozen requirement set, so
+    the declared denominator cannot drift from the run it describes.
     """
     import argparse
 

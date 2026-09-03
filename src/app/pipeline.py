@@ -1,9 +1,4 @@
-"""
-Main orchestration module.
-
-Provides the high-level API for the AI-assisted MBSE rapid prototyping
-framework, combining all components into a unified workflow.
-"""
+"""Main orchestration module."""
 
 from __future__ import annotations
 
@@ -25,23 +20,7 @@ _SysMLModelTypes = (SysMLModel, SysMLLiteModel)
 
 
 class PrototypingPipeline:
-    """
-    High-level API for AI-assisted MBSE rapid prototyping.
-
-    This is the main entry point for using the framework. It combines:
-    - Chain of Thought prompting for design reasoning
-    - Retrieval Augmented Generation for domain knowledge
-    - Multi-agent coordination for specialized tasks
-    - Monte Carlo Tree Search for design space exploration
-
-    Example usage:
-        pipeline = PrototypingPipeline(llm=llm)
-        result = pipeline.prototype_system(
-            system_name="AutonomousDrone",
-            description="A drone that autonomously delivers packages...",
-        )
-        print(result["model_sysml"])
-    """
+    """High-level API for AI-assisted MBSE rapid prototyping."""
 
     def __init__(
         self,
@@ -68,9 +47,9 @@ class PrototypingPipeline:
     ):
         self.llm = llm
         self.parse_strict = parse_strict
-        # RAG is an enhancement, not a hard dependency: without a Pinecone key
-        # the pipeline runs RAG-free (agents accept rag_retriever=None) instead
-        # of crashing — enabling offline runs and clean RAG on/off ablations.
+        # RAG is optional: without a Pinecone key the pipeline runs RAG-free (agents
+        # accept rag_retriever=None) instead of crashing, which also gives offline runs
+        # and RAG on/off ablations.
         self.pinecone: Optional[PineconeWrapper] = None
         self.rag: Optional[RAGRetriever] = None
         try:
@@ -91,10 +70,6 @@ class PrototypingPipeline:
             quality_threshold=quality_threshold,
             max_iterations=max_iterations,
             verbose=verbose,
-            # Component ablation switches (experiments/ablation): surgical
-            # block-level refinement, the deterministic fixer chain, and the
-            # multistep-vs-single-shot generation mode. Defaults are the
-            # production pipeline; each arm flips exactly one.
             use_surgical_refinement=use_surgical_refinement,
             use_deterministic_fixers=use_deterministic_fixers,
             design_generation_mode=design_generation_mode,
@@ -109,24 +84,16 @@ class PrototypingPipeline:
             task_session_max_turns=task_session_max_turns,
             task_session_max_tokens=task_session_max_tokens,
         )
-        # DSE mode at the user entry point. Orchestrator's own flag stays default
-        # OFF (direct-construction contract); the pipeline opts the chosen path in.
+        # DSE mode at the user entry point. The orchestrator flag defaults off
+        # (direct-construction contract); the pipeline opts the chosen path in.
         self.orchestrator.use_variation_dse = self._dse_flags(dse_mode)
-        # Phase 9 is default-OFF here.  The authoritative driver freezes a single
-        # base bundle before running Gazebo then SITL and is the only path allowed
-        # to publish ``examples/output/latest``.  This switch remains an explicit,
-        # best-effort developer seam; it never creates a published authority.
+        # Phase 9 is off by default here. The authoritative driver freezes one base
+        # bundle before running Gazebo then SITL and is the only path that publishes
+        # ``examples/output/latest``; this switch is a best-effort developer seam.
         self.orchestrator.phase9_hifi = phase9_hifi
 
     @staticmethod
     def _dse_flags(mode: str) -> bool:
-        """Map a dse_mode string to use_variation_dse.
-
-        "variation" (default) — LLM-declared variation points + domain objective.
-        "bilevel"             — catalog-operator bilevel DSE (MO-MCTS + inner BO).
-
-        The legacy scalar DSE ("off") was removed; requesting it is an error.
-        """
         m = (mode or "").strip().lower()
         if m == "off":
             raise ValueError(
@@ -135,7 +102,7 @@ class PrototypingPipeline:
             )
         if m == "bilevel":
             return False
-        return True  # default: variation
+        return True
 
     def generate_system(
         self,
@@ -143,9 +110,7 @@ class PrototypingPipeline:
         description: str,
         additional_requirements: Optional[List[str]] = None,
         parse_strict: Optional[bool] = None,
-        # ── Platform Profile（影响 mode machine accept 命令命名）────────
         platform_profile: Optional[Dict[str, Any]] = None,
-        # ── Phase 5: ArduPilot SITL 验证 ──────────────────────────────
         sitl: bool = False,
         sitl_output_dir: str = "sitl_output",
         sitl_run_l2: bool = False,
@@ -155,36 +120,7 @@ class PrototypingPipeline:
         sitl_fdm_backend: str = "native",
         frozen_requirements: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """
-        Generate a validated SysML v2 model without Design Space Exploration.
-
-        Run Phases 1-4 (requirements → design → syntax gate → refinement
-        → simulation).  Optionally runs Phase 5 (ArduPilot SITL validation).
-
-        Parameters
-        ----------
-        sitl : bool
-            Enable Phase 5 — generate .parm file + L2 test scripts.
-        sitl_output_dir : str
-            Directory to write SITL artifacts (.parm, test_*.py).
-        sitl_run_l2 : bool
-            Also execute L2 tests against a running SITL instance.
-        sitl_fdm_backend : str
-            "native" (default) uses ArduPilot's built-in simplified physics.
-            "gazebo" switches to external FDM and auto-launches the
-            headless_gazebo Docker container (needed for requirements that
-            depend on real flight dynamics, e.g. gripper/parachute checks).
-        sitl_auto_launch : bool
-            Auto-launch/stop arducopter when sitl_run_l2=True.
-        sitl_host / sitl_port
-            SITL connection endpoint (used when sitl_run_l2=True).
-
-        Returns
-        -------
-        {system_name, requirements, model, model_sysml, model_summary,
-         final_score, iterations, evaluation_history, simulation_result,
-         sitl_report (if sitl=True)}
-        """
+        """Generate a validated SysML v2 model without Design Space Exploration."""
         result = self.orchestrator.generate(
             system_name=system_name,
             system_description=description,
@@ -209,10 +145,6 @@ class PrototypingPipeline:
         self.save_run_report(result)
         return result
 
-    # ------------------------------------------------------------------
-    # Phase 5 — ArduPilot SITL
-    # ------------------------------------------------------------------
-
     def _run_sitl_phase(
         self,
         result: Dict[str, Any],
@@ -224,7 +156,6 @@ class PrototypingPipeline:
         platform_profile: Optional[Dict[str, Any]] = None,
         fdm_backend: str = "native",
     ) -> Dict[str, Any]:
-        """内部方法：运行 SITL 阶段并打印进度，将报告写入 result。"""
         from ..sitl.sitl_bridge import SITLBridge
 
         W = 62
@@ -255,7 +186,6 @@ class PrototypingPipeline:
             fdm_backend=fdm_backend,
         )
 
-        # ── L1：生成 .parm + 静态验证 ────────────────────────────────
         print()
         print("  [L1] 参数文件生成")
         parm_path = bridge.generate_l1()
@@ -273,19 +203,16 @@ class PrototypingPipeline:
             for r in trace_results:
                 print(f"    ✗ {r.req_id:<20} {r.message}")
 
-        # ── L2：生成测试脚本 ─────────────────────────────────────────
         print()
         print("  [L2] 测试脚本生成")
         scripts = bridge.generate_l2_scripts()
         for s in scripts:
             print(f"    → {s.name}")
 
-        # ── L2：执行测试（可选）──────────────────────────────────────
         l2_results = []
         if run_l2:
             print()
             print("  [L2] 执行测试" + (" (自动启动 SITL)" if auto_launch else ""))
-            # per_test_sitl=True 时每个测试自己负责启停 SITL，无需外层 launch
             l2_results = bridge.run_l2(
                 per_test_sitl=auto_launch,
             )
@@ -296,7 +223,6 @@ class PrototypingPipeline:
                 dur = f"  [{r.duration_s:.1f}s]" if r.duration_s else ""
                 print(f"    {icon} {r.req_id:<20} {r.message}{dur}")
 
-        # ── 汇总 ──────────────────────────────────────────────────────
         from ..sitl.sitl_bridge import BridgeReport
         report = BridgeReport(
             model_name=model.name,
@@ -328,21 +254,7 @@ class PrototypingPipeline:
         mcts_seed: Optional[int] = None,
         mcts_patience: Optional[int] = 15,
     ) -> Dict[str, Any]:
-        """
-        Run multi-objective Design Space Exploration on a previously validated model.
-
-        Takes the dict returned by generate_system() and explores the variation /
-        catalog operator space (per ``dse_mode``) to find the recommended
-        configuration.  The mcts_* parameters are retained for API compatibility;
-        the bilevel search manages its own budget.
-
-        Returns
-        -------
-        Full result dict — superset of generate_result — with updated
-        model/score/sim fields plus DSE fields:
-        {design_space_summary, design_space_parameters,
-         best_config, pareto_alternatives}
-        """
+        """Run multi-objective Design Space Exploration on a previously validated model."""
         result = self.orchestrator.explore(
             generate_result=generate_result,
             mcts_iterations=mcts_iterations,
@@ -361,24 +273,7 @@ class PrototypingPipeline:
         parse_strict: Optional[bool] = None,
         frozen_requirements: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """
-        Run the complete AI-assisted prototyping pipeline.
-
-        Args:
-            system_name: Name of the system to design
-            description: Natural language description of the system
-            additional_requirements: Additional manually-specified requirements
-            mcts_iterations: Number of MCTS iterations for design space exploration
-
-        Returns:
-            Dictionary containing:
-            - model: SysMLModel object
-            - model_sysml: SysML v2 text representation
-            - requirements: List of extracted requirements
-            - design_space_summary: Summary of design space exploration
-            - final_score: Quality score of the final design (0-1)
-            - evaluation_history: Per-iteration scores
-        """
+        """Run the complete AI-assisted prototyping pipeline."""
         result = self.orchestrator.prototype(
             system_name=system_name,
             system_description=description,
@@ -392,12 +287,7 @@ class PrototypingPipeline:
 
     @staticmethod
     def build_run_report(result: Dict[str, Any]) -> Dict[str, Any]:
-        """JSON-serialisable snapshot of a pipeline run (no model objects).
-
-        Captures what a benchmark/paper needs from a run: scores, per-iteration
-        history, simulation outcome, DSE decision + front, verification summary,
-        and the LLM token/call ledger.
-        """
+        """JSON-serialisable snapshot of a pipeline run (no model objects)."""
         sim = result.get("simulation_result")
         report: Dict[str, Any] = {
             "system_name": result.get("system_name"),
@@ -438,8 +328,6 @@ class PrototypingPipeline:
             "ag_non_degradation": result.get("ag_non_degradation"),
             "action_semantics_audit": result.get("action_semantics_audit"),
         }
-        # Ablation-arm provenance (experiments/ablation): present only when the
-        # harness stamped the run; ordinary runs carry no ablation key.
         if result.get("ablation") is not None:
             report["ablation"] = result.get("ablation")
         revised = result.get("revised_experiment")
@@ -484,8 +372,8 @@ class PrototypingPipeline:
         ver = result.get("dse_verification")
         if ver:
             report["dse_verification_summary"] = ver.get("summary")
-        # Phase 8 outcome belongs in the canonical run report: without it the
-        # meet-in-the-middle verdict only existed in the example script's dump.
+        # Phase 8 outcome goes in the canonical run report; otherwise the
+        # meet-in-the-middle verdict lives only in the example script's dump.
         realization = result.get("realization")
         if realization:
             report["realization"] = {
@@ -495,10 +383,9 @@ class PrototypingPipeline:
                 "forward_flight_ok": realization.get("forward_flight_ok"),
                 "rank_preservation": realization.get("rank_preservation"),
                 "resize_note": realization.get("resize_note"),
-                # The datasheet/forward-flight tier INPUT. This projection
-                # used to drop it, and the matrix then reported the missing
-                # input as three "unassigned" requirements — a runner
-                # artefact blamed on the model (run3, A2).
+                # The datasheet/forward-flight tier input. Dropping it in this projection made
+                # the matrix report three "unassigned" requirements that were a runner
+                # artefact, not a model defect (run3, A2).
                 "per_requirement": realization.get("per_requirement"),
                 "failed_checks": realization.get("failed_checks"),
             }
@@ -541,11 +428,7 @@ class PrototypingPipeline:
     def save_run_report(
         self, result: Dict[str, Any], directory: str = "logs"
     ) -> Optional[str]:
-        """Write the run report to ``logs/run_<system>_<timestamp>.json``.
-
-        Best-effort: any failure is reported but never breaks the pipeline.
-        Returns the path written, or None.
-        """
+        """Write the run report to ``logs/run_<system>_<timestamp>.json``."""
         try:
             report = self.build_run_report(result)
             out_dir = Path(directory)

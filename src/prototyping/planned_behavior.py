@@ -1,11 +1,10 @@
 """Plan-first SysML v2 behavior identities and deterministic serialization.
 
-This module deliberately models only the behavior slice needed by a
-``STATE_ACTIVE`` constraint: one owning part definition, one state definition,
-its states, and the transitions that make the activation state reachable.  It
-is not a general state-machine DSL.  The committed SysML remains the semantic
-authority, while this IR prevents an LLM serialization step from silently
-renaming plan-owned members.
+Models only the behavior slice a ``STATE_ACTIVE`` constraint needs: one owning
+part definition, one state definition, its states, and the transitions that
+make the activation state reachable. The committed SysML stays the semantic
+authority; this IR keeps an LLM serialization step from renaming plan-owned
+members.
 """
 from __future__ import annotations
 
@@ -63,12 +62,12 @@ class PlannedTransition:
     target: str
     trigger_kind: str
     trigger: str
-    #: A guard that composes WITH an accept trigger, rather than replacing it.
-    #: An inhibition is exactly this shape: the event still arrives, and the
-    #: transition must not fire while the inhibiting condition holds. With only
-    #: the either/or trigger_kind, "release on arrival" and "release on arrival
-    #: unless aborted" are the same plan — which is how REQ_SAFE_006 came out
-    #: as an unguarded transition that separated the payload during an abort.
+    # A guard that composes with an accept trigger rather than replacing it.
+    # An inhibition has this shape: the event still arrives and the transition
+    # does not fire while the inhibiting condition holds. With the either/or
+    # trigger_kind, "release on arrival" and "release on arrival unless
+    # aborted" are one plan, which is how REQ_SAFE_006 became an unguarded
+    # transition that separated the payload during an abort.
     guard: str = ""
 
     @classmethod
@@ -173,22 +172,17 @@ def normalise_planned_behavior_identities(
 ) -> tuple[tuple[PlannedBehavior, ...], tuple[str, ...]]:
     """Deterministically resolve mechanical initial_state spellings.
 
-    Measured category (run3 first draw, 12 of 12 machines): the LLM writes
-    ``initial_state`` in the qualified form ``<behavior_id>::<state>`` — the
-    spelling SysML uses to REFERENCE a nested state from outside — and the
-    validator fans that one spelling into ~40 chained issues (not an
-    identifier / not a declared state / role INITIAL mismatch), burning a
-    full 15-25k output-token rewrite on something a parser can decide alone.
-
-    The rule is the behavior_kind reconciliation's (derive, don't re-ask):
-    strip the qualifier only when the prefix is this machine's own identity
-    (``behavior_id`` or ``owner::behavior_id``) and the suffix is a declared
-    state — anything else stays untouched for the validator to refuse.
-    Role INITIAL is duplicated data w.r.t. ``initial_state``, so when NO
-    state claims INITIAL, the named initial state's role is derived from the
-    field that owns the fact; a DIFFERENT state claiming INITIAL is a real
-    contradiction and keeps failing. Every acceptance is returned as an
-    audit line for ``behavior_identity_reconciliations``.
+    Run3 first draw, 12 of 12 machines: the LLM writes ``initial_state`` as
+    ``<behavior_id>::<state>``, the form SysML uses to reference a nested state
+    from outside, and the validator fans that one spelling into ~40 chained issues
+    and a 15-25k output-token rewrite of something a parser can decide. Strip the
+    qualifier only when the prefix is this machine's own identity (``behavior_id``
+    or ``owner::behavior_id``) and the suffix is a declared state; anything else
+    stays for the validator to refuse. Role INITIAL duplicates ``initial_state``,
+    so when no state claims INITIAL the named initial state's role is derived from
+    the field that owns the fact; a different state claiming INITIAL is a
+    contradiction and keeps failing. Each acceptance returns an audit line for
+    ``behavior_identity_reconciliations``.
     """
     from dataclasses import replace
 
@@ -226,13 +220,12 @@ def normalise_planned_behavior_identities(
         }
         for transition in behavior.transitions:
             updated = transition
-            # A transition named after an action SHADOWS the action def in
-            # scope: the materialised `entry action x : armSystem;` resolves
-            # to the transition (a usage), and the zero-warning terminal
-            # gate fails on usage-feature-typing (measured, s0v15 — the
-            # plan itself declared transition_id armSystem beside
-            # entry_action armSystem). The transition id is the junior,
-            # unreferenced artifact — rename it, audited.
+            # A transition named after an action shadows the action def in
+            # scope: the materialised `entry action x : armSystem;` resolves to
+            # the transition, and the zero-warning terminal gate fails on
+            # usage-feature-typing (s0v15: the plan declared transition_id
+            # armSystem beside entry_action armSystem). The transition id is
+            # unreferenced, so rename it, audited.
             if transition.transition_id in owner_actions:
                 renamed = f"{transition.transition_id}Transition"
                 if (
@@ -293,36 +286,31 @@ def _plan_inhibition_issues(
     behaviors: Sequence[PlannedBehavior],
     sources: Mapping[str, str],
 ) -> list[str]:
-    """An inhibition requirement must reach the plan as a guard — wherever
-    the departure actually lives.
+    """An inhibition requirement must reach the plan as a guard, wherever the
+    departure lives.
 
-    REQ_SAFE_006 — "maintain the payload in the mechanically locked state
-    whenever a delivery-abort condition is active, regardless of geographic
-    proximity" — was planned as an unguarded ``Locked --accept
-    DeliveryCoordinateSatisfied--> Releasing``. Every structural check passed
-    and the generated vehicle separated its payload while an abort was
-    active, reproduced independently at three tiers.
+    REQ_SAFE_006 - "maintain the payload in the mechanically locked state whenever
+    a delivery-abort condition is active, regardless of geographic proximity" - was
+    planned as an unguarded ``Locked --accept DeliveryCoordinateSatisfied-->
+    Releasing``. Every structural check passed and the generated vehicle separated
+    its payload while an abort was active, reproduced at three tiers. Scoping the
+    gate per-behaviour against that behaviour's own source requirement fired zero
+    times: the inhibition requirement's behaviour was a transitionless corner
+    machine ("DefaultToMechanicallyLockedStateBehavior") while the departure
+    (``Initial --accept DeliveryWaypointReached--> ReleasingPayload``) lived one
+    behaviour over under a different requirement. The gate is now anchored on the
+    whole plan:
 
-    An earlier version of this gate was scoped per-behaviour against that
-    behaviour's OWN source requirement. Measured against a real plan it fired
-    zero times: the inhibition requirement's behaviour was a transitionless
-    corner machine ("DefaultToMechanicallyLockedStateBehavior"), while the
-    departure itself (``Initial --accept DeliveryWaypointReached-->
-    ReleasingPayload``) lived one behaviour over, traced to a different
-    requirement. Surgical scoping was the defect, so the gate is now anchored
-    on the whole plan:
-
-    - the held state, wherever it is planned, may not be left without a guard
-      naming the condition;
-    - the departure itself (the safe state's exit vocabulary applied to the
-      held object), wherever it is planned, needs the same guard at its
-      boundary;
-    - a plan that expresses neither cannot express the inhibition at all,
-      which is a plan defect — not a silent skip;
+    - the held state, wherever planned, is not left without a guard naming the
+      condition;
+    - the departure (the safe state's exit vocabulary applied to the held object),
+      wherever planned, needs the same guard at its boundary;
+    - a plan expressing neither cannot express the inhibition at all, which is a
+      plan defect rather than a silent skip;
     - "shall not transition to X while C" guards every boundary entry into X.
 
-    Checks read the requirement's parsed intent rather than any spelling, so
-    a model that renames its states still conforms.
+    Checks read the requirement's parsed intent rather than any spelling, so a
+    model that renames its states still conforms.
     """
     from .verification_obligations import (
         RequirementIntentKind,
@@ -432,12 +420,11 @@ def _plan_inhibition_issues(
                         & intent.held_object_terms
                     ):
                         continue
-                    # Only the source STATE NAME evidences a prior departure
-                    # (ReleasingPayload -> Released is interior). Its actions
-                    # do not: run 2026-08-31 planned `Initial` with
-                    # entry_action initializeRelease — preparation, not
-                    # departure — and counting it hid the one boundary the
-                    # guard belongs on.
+                    # Only the source state name evidences a prior departure
+                    # (ReleasingPayload -> Released is interior); its actions do not.
+                    # Run 2026-08-31 planned `Initial` with entry_action
+                    # initializeRelease, and counting it hid the boundary the guard
+                    # belongs on.
                     if semantic_terms(transition.source) & exit_terms:
                         continue
                     exit_anchor = True
@@ -506,12 +493,11 @@ def validate_planned_behaviors(
                 f"planned behavior id {behavior.behavior_id} must be unique"
             )
         globally_named.add(behavior.behavior_id)
-        # A behaviour id that equals a planned action name in the SAME owner
-        # materializes as a state def and an action def sharing one name in
-        # one scope — the exact collision the terminal
-        # USER_NAMESPACE_INTEGRITY gate rejects (measured on draw 4c39e7ba:
-        # WaypointModificationBehavior declared as both). Reject it while the
-        # plan is still repairable.
+        # A behaviour id equal to a planned action name in the same owner
+        # materializes as a state def and an action def sharing one name in one
+        # scope - the collision the terminal USER_NAMESPACE_INTEGRITY gate
+        # rejects (draw 4c39e7ba: WaypointModificationBehavior as both). Reject
+        # it while the plan is still repairable.
         if behavior.behavior_id in planned_actions_by_owner.get(
             behavior.owner, set()
         ):
@@ -777,13 +763,11 @@ def emit_planned_behavior(behavior: PlannedBehavior) -> str:
             lines.extend([
                 f"    state {state.state_id} {{",
             ])
-            # Named, typed usages (`entry action onX : act;`) — the bare
-            # spelling (`entry action act;`) declares a NESTED member named
-            # `act` that shadows the part-level `action def act`, and the
-            # emitter + declaration injector then mass-produce shadow pairs
-            # by construction (measured: 59 of 61 warnings across the three
-            # failed 2026-08-30 draws). The archived QUALIFIED models use
-            # the typed spelling throughout.
+            # Named, typed usages (`entry action onX : act;`): the bare spelling
+            # (`entry action act;`) declares a nested member `act` that shadows the
+            # part-level `action def act`, and the emitter plus declaration injector
+            # then produce shadow pairs (59 of 61 warnings across the three failed
+            # 2026-08-30 draws). Archived QUALIFIED models use the typed spelling.
             if state.entry_action:
                 lines.append(
                     f"        entry action on{state.state_id} : "
@@ -1039,10 +1023,9 @@ def check_planned_behavior_conformance(
                         f"{qualified} transition "
                         f"{transition.transition_id} changed trigger"
                     )
-                # A guard that the writer dropped leaves a transition that
-                # fires unconditionally — a change that reads as harmless
-                # because everything still parses and every state is still
-                # reachable. It is the whole of REQ_SAFE_006's defect.
+                # A guard the writer dropped leaves a transition that fires
+                # unconditionally; everything still parses and every state stays
+                # reachable, which is REQ_SAFE_006's defect.
                 if transition.guard and re.search(
                     rf"\bif\s+{re.escape(transition.guard)}",
                     transition_text,
@@ -1113,11 +1096,10 @@ def materialize_owned_planned_behaviors(
         action_declarations = []
         for state in behavior.states:
             for action in (state.entry_action, state.do_action):
-                # Any DECLARATION spelling blocks re-declaration: `action def
-                # X`, a typed usage `action X : T`, or a bare owned usage
-                # `action X;` / `action X {`. (References inside state bodies
-                # — `entry action u : X;` — do not match: `X` there follows a
-                # colon, not the `action` keyword.)
+                # Any declaration spelling blocks re-declaration: `action def X`,
+                # a typed usage `action X : T`, or a bare owned usage `action X;` /
+                # `action X {`. References in state bodies (`entry action u : X;`)
+                # do not match - `X` follows a colon, not the keyword.
                 if (
                     action
                     and re.search(
@@ -1133,14 +1115,12 @@ def materialize_owned_planned_behaviors(
             owner_text, r"state\s+def", behavior.behavior_id
         )
         if not existing:
-            # A part-level BODIED usage spelling (`state Name { ... }`) is the
-            # same declaration in the extractor-invisible form; leaving it and
-            # injecting a def beside it produced the measured double
-            # declaration (a same-name sibling pair is exactly what syside
-            # flags). Replace it with the plan-blessed def instead — but only
-            # a TOP-LEVEL usage: a nested occurrence belongs to another scope
-            # and replacing it there would plant the def in the wrong place
-            # (the fingerprint guard below covers that shape by reverting).
+            # A part-level bodied usage (`state Name { ... }`) is the same
+            # declaration in the extractor-invisible form; leaving it and injecting
+            # a def beside it produced the measured double declaration, which is
+            # what syside flags. Replace it with the plan-blessed def, but only a
+            # top-level usage: a nested occurrence belongs to another scope, and
+            # the fingerprint guard below covers that shape by reverting.
             existing = [
                 (start, end)
                 for start, end in _definition_spans(
@@ -1177,9 +1157,8 @@ def materialize_owned_planned_behaviors(
             text = text[:closing] + insertion + text[closing:]
         after_fp = _shadow_fingerprint(text)
         if after_fp > before_fp:
-            # Injection must never create a duplicate/shadow the model did
-            # not already have — the surgical-pass discipline applied to our
-            # own writers. Reverting leaves the behaviour absent, which the
+            # Injection does not create a duplicate or shadow the model did not
+            # already have. Reverting leaves the behaviour absent, which the
             # conformance report below surfaces for the in-loop repair.
             text = before_text
             reverted.append({
@@ -1210,12 +1189,12 @@ def materialize_owned_planned_behaviors(
 
 
 def _shadow_fingerprint(model_text: str) -> tuple[int, int]:
-    """(duplicate members, shadowing warnings) — the injection-safety metric.
+    """(duplicate members, shadowing warnings) - the injection-safety metric.
 
-    Every pipeline writer that adds named declarations compares this before
-    and after each piece; a strictly worse fingerprint means the piece
-    manufactured a namespace defect the model did not have (measured on the
-    2026-08-30 draws: 59 of 61 shadowing warnings were injector-adjacent).
+    Every writer that adds named declarations compares this before and after each
+    piece; a worse fingerprint means the piece added a namespace defect the model
+    did not have (2026-08-30 draws: 59 of 61 shadowing warnings were
+    injector-adjacent).
     """
     from ..simulation.syntax_checker import check_syntax
     from .namespace_integrity import check_user_namespace_integrity

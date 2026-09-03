@@ -1,20 +1,4 @@
-"""
-validator.py
-
-SimulationValidator: top-level orchestrator that:
-  1. Parses SysML v2 text via syside native API (extract_behavioral_graph)
-  2. Extracts BehavioralGraph (extractor.py)
-  3. Builds networkx ExecutionGraph (exec_graph.py)
-  4. Selects / auto-detects scenarios (scenarios.py)
-  5. Runs ScenarioSimulator (simulator.py)
-  6. Returns SimulationResult
-
-SimulationResult is designed to integrate cleanly alongside the existing
-EvaluationResult from src/dse/evaluator.py — it produces:
-  - reachability_score: float 0–1 suitable as a new evaluation dimension
-  - per-scenario pass/fail
-  - aggregated issues and recommendations
-"""
+"""validator.py"""
 
 from __future__ import annotations
 
@@ -39,28 +23,27 @@ log = logging.getLogger(__name__)
 class SimulationResult:
     model_name: str
     scenario_results: List[ScenarioResult] = field(default_factory=list)
-    reachability_score: float = 0.0   # 0–1, structural connectivity score
+    reachability_score: float = 0.0
     # Primary structural evidence when a typed generation plan is active.
     # The role-derived scenario score above remains an advisory diagnostic.
     requirement_reachability_score: Optional[float] = None
     requirement_scenarios_passed: int = 0
     requirement_scenarios_total: int = 0
     structural_obligation_report: Optional[dict] = None
-    behavioral_result: Optional["BehavioralSimResult"] = None  # state machine execution
+    behavioral_result: Optional["BehavioralSimResult"] = None
     parse_errors: List[str] = field(default_factory=list)
     issues: List[str] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
 
-    # Graph-level statistics
     num_parts: int = 0
     num_ports: int = 0
     num_connections: int = 0
     num_actions: int = 0
-    isolated_parts: List[str] = field(default_factory=list)  # parts with no connect statements
-    #: Unconnected parts whose part def the model itself declares passive
-    #: (`// PLAN-PASSIVE` marker). Not defects: a structural body exchanges
-    #: nothing by plan, so these are excluded from the isolation penalty and
-    #: from refinement's wire-it-in feedback, and listed here for the audit.
+    isolated_parts: List[str] = field(default_factory=list)
+    # Unconnected parts whose part def carries the `// PLAN-PASSIVE` marker: a
+    # structural body exchanges nothing by plan, so they are excluded from the
+    # isolation penalty and from refinement's wire-it-in feedback, and listed
+    # here for the audit.
     passive_unconnected_parts: List[str] = field(default_factory=list)
     role_assignments: Dict[str, List[str]] = field(default_factory=dict)
     weakly_connected_components: List[List[str]] = field(default_factory=list)
@@ -136,9 +119,9 @@ class SimulationResult:
             if self.requirement_reachability_score is not None
             else self.reachability_score
         )
-        # Gate on "any behavioral scenario ran", not on the state-machine count:
-        # constraint-sweep scenarios are collected even for models with zero
-        # state defs, and their failures must not be discarded from the score.
+        # Gate on "any behavioral scenario ran" rather than the state-machine
+        # count: constraint-sweep scenarios are collected even for models with zero
+        # state defs, and their failures still count towards the score.
         if self.behavioral_result is None or not self.behavioral_result.scenario_results:
             return structural
         return 0.6 * structural + 0.4 * self.behavioral_score
@@ -198,15 +181,7 @@ class SimulationResult:
 
 
 class SimulationValidator:
-    """
-    Validates a SysML v2 model text by structural reachability simulation.
-
-    Usage:
-        validator = SimulationValidator()
-        result = validator.validate(sysml_text, model_name="DroneSystem")
-        print(result.summary())
-        print(f"Score: {result.reachability_score:.2f}")
-    """
+    """Validates a SysML v2 model text by structural reachability simulation."""
 
     def __init__(
         self,
@@ -224,9 +199,6 @@ class SimulationValidator:
     ) -> SimulationResult:
         result = SimulationResult(model_name=model_name)
 
-        # ── Step 1: Extract behavioral graph (syside native) ───────────────
-        # extract_behavioral_graph parses the text internally via syside;
-        # syntax errors are handled upstream by the orchestrator's syntax gate.
         try:
             bg = extract_behavioral_graph(
                 sysml_text,
@@ -249,7 +221,6 @@ class SimulationValidator:
             result.reachability_score = 0.0
             return result
 
-        # ── Step 3: Build execution graph ───────────────────────────────────
         try:
             G = build_exec_graph(bg)
         except Exception as e:
@@ -257,18 +228,16 @@ class SimulationValidator:
             log.error("Graph build error: %s", e)
             return result
 
-        # ── Step 3b: Detect isolated parts ──────────────────────────────────
         connected_in_graph: set = (
             {c.source.split(".")[0] for c in bg.connections}
             | {c.target.split(".")[0] for c in bg.connections}
         )
         unconnected = [p for p in bg.parts if p not in connected_in_graph]
-        # A declared-passive structural body exchanges nothing BY PLAN
-        # (// PLAN-PASSIVE marker; scenario selection already exempts it in
-        # scenarios.py). Charging it the isolation penalty docked a perfect
-        # run 10% per passive body, and the isolated-parts feedback told
-        # refinement to wire it in — pushing the LLM against the plan's own
-        # passivity discipline.
+        # A declared-passive structural body exchanges nothing by plan
+        # (// PLAN-PASSIVE marker; scenarios.py already exempts it in scenario
+        # selection). The isolation penalty cost a clean run 10% per passive body,
+        # and the isolated-parts feedback told refinement to wire it in, against
+        # the plan's own passivity discipline.
         result.passive_unconnected_parts = [
             p for p in unconnected
             if bg.parts[p].def_name in bg.passive_defs
@@ -285,9 +254,6 @@ class SimulationValidator:
                 f"propagate signals. Add connect statements to wire them in."
             )
 
-        # ── Step 4: Select scenarios ─────────────────────────────────────────
-        # Use model-driven auto-detection (classifies by usage name + def name).
-        # Predefined scenarios are still accepted when callers pass them in.
         candidates: Optional[List[Scenario]] = self._predefined
         scenarios = select_scenarios(bg, predefined=candidates)
         scenario_provenance = (
@@ -323,24 +289,20 @@ class SimulationValidator:
 
         if not scenarios:
             result.issues.append("No applicable scenarios found — check part names")
-            result.reachability_score = 0.5  # partial credit: model parsed OK
+            result.reachability_score = 0.5
             return result
 
-        # ── Step 5: Run simulation ──────────────────────────────────────────
         sim = ScenarioSimulator(G)
         scenario_results = sim.run_all(scenarios)
         result.scenario_results = scenario_results
 
-        # ── Step 6: Compute score ───────────────────────────────────────────
         result.reachability_score = _compute_score(
             scenario_results, result.isolated_parts, len(bg.parts)
         )
 
-        # ── Step 7: Generate recommendations ───────────────────────────────
         result.issues = _collect_issues(scenario_results)
         result.recommendations = _generate_recommendations(bg, scenario_results)
 
-        # ── Step 8: Behavioral simulation (state machine execution) ──────────
         try:
             result.behavioral_result = run_behavioral_simulation(
                 sysml_text, model_name=model_name
@@ -354,7 +316,6 @@ class SimulationValidator:
 
 
 def _part_components(bg: BehavioralGraph) -> List[List[str]]:
-    """Compute deterministic part-only weak components for audit evidence."""
     adjacency: Dict[str, set[str]] = {
         part_name: set() for part_name in bg.parts
     }
@@ -383,27 +344,16 @@ def _part_components(bg: BehavioralGraph) -> List[List[str]]:
     return sorted(components, key=lambda item: (-len(item), item))
 
 
-# ---------------------------------------------------------------------------
-# Scoring and recommendation helpers
-# ---------------------------------------------------------------------------
-
 def _compute_score(
     results: List[ScenarioResult],
     isolated_parts: List[str],
     total_parts: int,
 ) -> float:
-    """
-    Compute a 0–1 reachability score from scenario results.
+    """Compute a 0–1 reachability score from scenario results.
 
-    Weights:
-      - safety-tagged scenarios: weight 2.0
-      - emergency-tagged: weight 2.0
-      - nominal: weight 1.0
-
-    Isolation penalty: each isolated part reduces the base score
-    proportionally (up to -50%).  Isolated parts are genuine design
-    defects — a part with no connections contributes nothing to the
-    system and cannot satisfy any operational scenario.
+    Weights: safety- and emergency-tagged scenarios 2.0, nominal 1.0. Each
+    isolated part reduces the base score proportionally (up to -50%): a part
+    with no connections cannot take part in any operational scenario.
     """
     if not results:
         return 0.0
@@ -417,14 +367,12 @@ def _compute_score(
         if r.passed:
             weighted_pass += w
         elif r.reachable and not r.missing_nodes:
-            # reached target but has warnings — partial credit
             weighted_pass += w * 0.5
 
     base_score = weighted_pass / total_weight if total_weight > 0 else 0.0
 
     if isolated_parts and total_parts > 0:
         isolation_ratio = len(isolated_parts) / total_parts
-        # Each isolated part penalises up to 50% of the base score
         penalty = min(0.5, isolation_ratio)
         base_score = base_score * (1.0 - penalty)
 
@@ -448,8 +396,6 @@ def _generate_recommendations(
     if not failed:
         return ["All scenarios passed — model connectivity is structurally sound"]
 
-    # Identify parts with no connections (reported as issues upstream; skip duplicate)
-    # Parts with only in-ports (potential dead ends)
     for pname, pnode in bg.parts.items():
         dirs = [bg.ports[pid].direction for pid in pnode.port_ids if pid in bg.ports]
         if dirs and all(d == "in" for d in dirs):
@@ -458,7 +404,6 @@ def _generate_recommendations(
                 "or the model cannot propagate signals through it"
             )
 
-    # Specific failed scenario recommendations
     for r in failed:
         if "emergency" in r.tags or "safety" in r.tags:
             recs.append(

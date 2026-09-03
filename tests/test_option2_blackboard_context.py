@@ -42,7 +42,7 @@ _MODEL = """package Drone {
 }"""
 
 
-def test_legacy_and_revised_experiment_namespaces_cannot_be_confused():
+def test_namespaces_not_confused():
     assert LEGACY_EXPERIMENT_NAMESPACE != REVISED_EXPERIMENT_NAMESPACE
     assert RevisedExperimentArm.parse("R1") is RevisedExperimentArm.BLACKBOARD_CONTEXT
     assert RevisedExperimentArm.parse("R1-LONG") is RevisedExperimentArm.LONG_SESSION_DIAGNOSTIC
@@ -51,13 +51,12 @@ def test_legacy_and_revised_experiment_namespaces_cannot_be_confused():
             RevisedExperimentArm.parse(legacy_label)
 
 
-def test_unimplemented_revised_arm_fails_closed():
-    # R1-LONG is still reserved-but-not-implemented and must fail closed.
+def test_unimplemented_arm_fails_closed():
     with pytest.raises(NotImplementedError):
         Orchestrator(_NoCallLLM(), revised_experiment_arm="R1-LONG")
 
 
-def test_r2_arm_is_runnable_but_not_evaluation_ready():
+def test_r2_runnable_not_evaluation_ready():
     # R2-BBAG runs its A/G intervention (Increment 2) but is not gold-poolable
     # until the independent evaluator lands (§13/§15).
     assert RevisedExperimentArm.SEMANTIC_ASSURANCE.implemented is True
@@ -66,7 +65,7 @@ def test_r2_arm_is_runnable_but_not_evaluation_ready():
     assert orch.revised_experiment_arm is RevisedExperimentArm.SEMANTIC_ASSURANCE
 
 
-def test_blackboard_is_revision_bound_and_sysml_is_the_only_commit_authority():
+def test_sysml_only_commit_authority():
     board = Blackboard("Drone")
     source = board.publish(
         RecordType.SOURCE,
@@ -114,7 +113,7 @@ def test_blackboard_is_revision_bound_and_sysml_is_the_only_commit_authority():
         )
 
 
-def test_context_builder_is_role_checked_revision_pinned_and_has_no_gold_input():
+def test_context_role_checked_no_gold():
     board = Blackboard("Drone")
     source = board.publish(
         RecordType.SOURCE,
@@ -247,7 +246,7 @@ def test_context_builder_is_role_checked_revision_pinned_and_has_no_gold_input()
         )
 
 
-def test_task_session_has_one_task_role_revision_and_bounded_lifetime():
+def test_session_bounded_lifetime():
     registry = TaskSessionRegistry()
     session = registry.open(
         task_id="task-1",
@@ -275,7 +274,7 @@ def test_task_session_has_one_task_role_revision_and_bounded_lifetime():
         )
 
 
-def test_model_commit_stales_other_open_sessions():
+def test_commit_stales_open_sessions():
     board = Blackboard("Drone")
     registry = TaskSessionRegistry()
     task = board.create_task("VERIFY", "VerificationAgent")
@@ -314,7 +313,7 @@ def test_model_commit_stales_other_open_sessions():
     assert replacement.rebased_from_session_id == session.session_id
 
 
-def test_r1_handoff_is_recorded_and_commits_the_agent_model():
+def test_r1_handoff_commits_model():
     orchestrator = Orchestrator(
         _NoCallLLM(), revised_experiment_arm="R1-BBCTX"
     )
@@ -347,7 +346,7 @@ def test_r1_handoff_is_recorded_and_commits_the_agent_model():
     assert result_record["payload"]["accepted_status"] == "ACCEPTED"
 
 
-def test_r1_rejects_and_closes_the_task_when_design_agent_raises():
+def test_r1_closes_task_on_raise():
     orchestrator = Orchestrator(
         _NoCallLLM(), revised_experiment_arm="R1-BBCTX"
     )
@@ -364,8 +363,6 @@ def test_r1_rejects_and_closes_the_task_when_design_agent_raises():
     sessions = orchestrator.task_sessions.snapshot()["sessions"]
     assert sessions[0]["status"] == "REJECTED"
 
-
-# --- R2-BBAG A/G wiring (Increment 2, step 1: orchestrator integration) -------
 
 from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
 from src.prototyping.ag_emitter import emit_ag_package
@@ -392,7 +389,7 @@ def _r2_orchestrator_with_committed_model(
     return orch
 
 
-def test_r2_wiring_extracts_checks_and_publishes_ag_trace():
+def test_r2_publishes_ag_trace():
     orch = _r2_orchestrator_with_committed_model(_MINI_AG)
     arts = orch._build_collaboration_artifacts(_MINI_AG)
 
@@ -402,7 +399,6 @@ def test_r2_wiring_extracts_checks_and_publishes_ag_trace():
     assert graph["source_model_digest"] == orch.blackboard.current_model.model_digest
     assert arts["revised_experiment"]["evaluation_ready"] is False
 
-    # a typed ANALYSIS record was published to the blackboard at current revision
     ag = [r for r in orch.blackboard.snapshot()["records"]
           if r["topic"] == "analysis.ag_trace"]
     assert len(ag) == 1
@@ -414,9 +410,9 @@ def test_r2_wiring_extracts_checks_and_publishes_ag_trace():
         orch._build_collaboration_artifacts(_MINI_AG + "\n// uncommitted")
 
 
-def test_r2_wiring_is_honest_when_model_has_no_ag_contracts():
+def test_r2_incomplete_without_contracts():
     # The committed model is the sole authority: a model without A/G contracts
-    # yields an INCOMPLETE trace, never a fabricated PASS (§6.2).
+    # yields an INCOMPLETE trace, not a PASS (§6.2).
     orch = _r2_orchestrator_with_committed_model(_MODEL)
     graph = orch._build_collaboration_artifacts(_MODEL)["ag_contract_graph"]
     assert graph["verdict"] == "INCOMPLETE"
@@ -432,7 +428,7 @@ class _OneShotRepairLLM:
         return self.response
 
 
-def test_r2_controller_executes_one_routed_repair_and_rechecks_terminal_revision():
+def test_r2_routed_repair_rechecked():
     broken = _MINI_AG.replace(
         "state deployed { entry action setParachuteDeployed; }",
         "state deployed { }",
@@ -460,7 +456,7 @@ def test_r2_controller_executes_one_routed_repair_and_rechecks_terminal_revision
     assert sessions[-1]["messages"]
 
 
-def test_r2_controller_records_rejected_repair_without_changing_revision():
+def test_r2_rejected_repair_keeps_revision():
     broken = _MINI_AG.replace(
         "state deployed { entry action setParachuteDeployed; }",
         "state deployed { }",
@@ -470,8 +466,6 @@ def test_r2_controller_records_rejected_repair_without_changing_revision():
 
     arts = orch._build_collaboration_artifacts(broken)
 
-    # First named obligation, its bounded feedback retry, then the next named
-    # repairable obligation in the fixed run-level budget.
     assert llm.calls == 3
     assert orch.blackboard.current_revision == 1
     assert arts["ag_contract_graph"]["verdict"] != "PASS"
@@ -492,7 +486,7 @@ def test_r2_controller_records_rejected_repair_without_changing_revision():
     )
 
 
-def test_r2_controller_blocks_unsupported_upstream_decomposition_repair():
+def test_r2_blocks_upstream_repair():
     broken = _MINI_AG.replace(
         "    dependency dischargeParachuteDeploymentCommand__to__RecoverySystemContract "
         "from SafetyResponseArbiterContract to RecoverySystemContract;\n",
@@ -517,20 +511,19 @@ def test_r2_controller_blocks_unsupported_upstream_decomposition_repair():
     )
 
 
-def test_r1_arm_does_not_emit_an_ag_trace():
+def test_r1_emits_no_ag_trace():
     orch = _r2_orchestrator_with_committed_model(_MINI_AG, arm="R1-BBCTX")
     arts = orch._build_collaboration_artifacts(_MINI_AG)
     assert "ag_contract_graph" not in arts
 
 
-def test_the_derived_ag_graph_cannot_become_model_authority():
-    """§14: the derived JSON view is never generation or repair authority.
+def test_ag_graph_not_authority():
+    """§14: the derived JSON view is not generation or repair authority.
 
-    Two halves, because only the pair closes it. The positive rule (SysML is the
-    sole commit authority) was already pinned; what was not is the NEGATIVE one —
-    that serialising the graph and feeding it back cannot install a fact the
-    committed SysML does not contain. A JSON-supplied A/G fact is exactly the
-    "repair by editing the export" failure §6.2 forbids.
+    The positive rule - SysML is the sole commit authority - was already pinned;
+    this adds the negative one, that serialising the graph and feeding it back
+    cannot install a fact the committed SysML lacks (the "repair by editing the
+    export" failure §6.2 forbids).
     """
     import json
 
@@ -575,6 +568,5 @@ def test_the_derived_ag_graph_cannot_become_model_authority():
         item.get("contract") == "InventedContract"
         for item in reextracted["graph"]["allocations"]
     )
-    # and the checker's own input type is an extracted graph, never a parsed view
     with pytest.raises((AttributeError, TypeError)):
         check_ag_graph(tampered)

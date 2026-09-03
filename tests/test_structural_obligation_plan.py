@@ -80,7 +80,7 @@ def _plan_payload():
     }
 
 
-def test_compiles_stable_requirement_path_from_typed_connections():
+def test_compiles_path_from_connections():
     plan = ModelGenerationPlan.from_payload(
         _plan_payload(),
         requirements=["REQ_FUNC_001: sense and actuate"],
@@ -99,7 +99,7 @@ def test_compiles_stable_requirement_path_from_typed_connections():
     assert len(obligation.required_connections) == 2
 
 
-def test_parallel_requirement_paths_remain_separate_obligations():
+def test_parallel_paths_stay_separate():
     payload = _plan_payload()
     payload["components"].append({
         "name": "BackupController",
@@ -134,8 +134,8 @@ def test_parallel_requirement_paths_remain_separate_obligations():
             "requirements": ["REQ_FUNC_001"],
         },
     ])
-    # The shared pure input would violate the plan's single-driver rule.  Use
-    # inout here so the test isolates path compilation rather than fan-in.
+    # A shared pure input violates the plan's single-driver rule; inout keeps the
+    # test on path compilation rather than fan-in.
     payload["components"][2]["ports"][0]["direction"] = "inout"
 
     plan = ModelGenerationPlan.from_payload(payload)
@@ -149,7 +149,7 @@ def test_parallel_requirement_paths_remain_separate_obligations():
     }
 
 
-def test_rejects_structural_requirement_without_traced_connection():
+def test_rejects_untraced_requirement():
     payload = _plan_payload()
     payload["components"][0]["requirements"].append("REQ_SAFE_002")
 
@@ -290,7 +290,7 @@ def _realization(first_component, first_port, first_type):
     }
 
 
-def test_source_anchor_rejects_topologically_valid_wrong_trigger():
+def test_anchor_rejects_wrong_trigger():
     payload = _source_anchored_safety_payload()
     payload["requirement_realizations"] = [
         _realization(
@@ -314,7 +314,7 @@ def test_source_anchor_rejects_topologically_valid_wrong_trigger():
     )
 
 
-def test_source_anchor_freezes_the_requirement_declared_causal_path():
+def test_anchor_freezes_causal_path():
     payload = _source_anchored_safety_payload()
     payload["requirement_realizations"] = [
         _realization(
@@ -344,7 +344,7 @@ def test_source_anchor_freezes_the_requirement_declared_causal_path():
     )
 
 
-def test_power_on_local_behavior_uses_frozen_ag_initial_state_evidence():
+def test_power_on_uses_initial_state():
     requirement = (
         "REQ-SAFE-008: The payload-release actuator shall default to the "
         "mechanically locked state upon power-on, before any arming or flight "
@@ -383,7 +383,7 @@ def test_power_on_local_behavior_uses_frozen_ag_initial_state_evidence():
     )
 
 
-def test_power_on_local_behavior_requires_typed_initial_state_evidence():
+def test_power_on_needs_typed_state():
     requirement = (
         "REQ-SAFE-008: The payload-release actuator shall default to the "
         "mechanically locked state upon power-on."
@@ -419,7 +419,7 @@ def test_power_on_local_behavior_requires_typed_initial_state_evidence():
     )
 
 
-def test_event_local_behavior_uses_typed_transition_and_action_evidence():
+def test_event_behavior_typed_evidence():
     requirement = (
         "REQ-SAFE-009: On an emergency command, the system shall enter "
         "failsafe mode."
@@ -477,7 +477,7 @@ def test_event_local_behavior_uses_typed_transition_and_action_evidence():
     assert len(obligations) == 1
 
 
-def test_strict_plan_rejects_missing_source_anchored_realization():
+def test_strict_needs_anchored_path():
     plan = ModelGenerationPlan.from_payload(
         _plan_payload(),
         requirements=["REQ_FUNC_001: sense and actuate"],
@@ -491,7 +491,7 @@ def test_strict_plan_rejects_missing_source_anchored_realization():
     )
 
 
-def test_local_behavior_realization_avoids_inventing_a_connection():
+def test_local_behavior_no_connection():
     payload = _plan_payload()
     for component in payload["components"]:
         component["requirements"] = []
@@ -536,12 +536,11 @@ def _latency_requirement():
     ]
 
 
-def test_adjunct_effect_phrase_needs_no_endpoint_representation():
+def test_adjunct_needs_no_endpoint():
     """A tolerance clause qualifies a behaviour instead of naming one.
 
-    Measured on the failed authoritative attempt of 2026-08-01: the planner is
-    obliged to copy the effect phrase verbatim, and where the requirement
-    offers only a bound there is nothing a port name could represent.
+    The planner copies the effect phrase verbatim, and where the requirement offers
+    only a bound there is nothing a port name could represent (2026-08-01 attempt).
     """
     payload = _source_anchored_safety_payload()
     realization = _realization(
@@ -564,8 +563,7 @@ def test_adjunct_effect_phrase_needs_no_endpoint_representation():
     )
 
 
-def test_adjunct_rule_does_not_excuse_an_unrelated_endpoint():
-    """`when` heads a real trigger clause, so the gate still applies to it."""
+def test_adjunct_rejects_unrelated():
     payload = _source_anchored_safety_payload()
     realization = _realization(
         "PerceptionSystem", "sensorStatus", "SensorStatusPort"
@@ -590,8 +588,7 @@ def test_adjunct_rule_does_not_excuse_an_unrelated_endpoint():
     )
 
 
-def test_abbreviated_identifier_represents_the_spelled_out_phrase():
-    """`navState` is the port that realises `navigate`; the stemmer cannot see it."""
+def test_abbreviation_represents_phrase():
     assert _represents(
         _concept_terms("autonomously navigate to designated GPS waypoints"),
         _concept_terms("PerceptionSystem navState NavigationStatePort"),
@@ -602,8 +599,7 @@ def test_abbreviated_identifier_represents_the_spelled_out_phrase():
     )
 
 
-def test_domain_synonym_bridges_prose_and_identifier():
-    """A requirement says `collision threat`; the model says `obstacleData`."""
+def test_synonym_bridges_identifier():
     assert _represents(
         _concept_terms("approaching a stationary collision threat"),
         _concept_terms("PerceptionSystem obstacleData"),
@@ -614,8 +610,7 @@ def test_domain_synonym_bridges_prose_and_identifier():
     )
 
 
-def test_representation_still_fails_for_an_unrelated_endpoint():
-    """The two endpoint errors the planner really did make must still fail."""
+def test_unrelated_endpoint_fails():
     assert not _represents(
         _concept_terms("completing an automated landing"),
         _concept_terms("FlightController telemetry"),
@@ -626,8 +621,7 @@ def test_representation_still_fails_for_an_unrelated_endpoint():
     )
 
 
-def test_negation_does_not_abbreviate_an_unrelated_word():
-    """`not` is three characters and must not stand for `notification`."""
+def test_negation_not_abbreviation():
     assert not _represents(
         _concept_terms("shall not arm"),
         _concept_terms("NotificationService noticeOut"),

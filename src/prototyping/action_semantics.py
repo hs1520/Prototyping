@@ -1,16 +1,11 @@
-"""Read-only audit of what the committed model's actions actually do.
+"""Read-only audit of what the committed model's actions do.
 
-The behavioural simulator credits a response when the target state carries an
-action *label* (``behavioral_sim`` check 2), and the only consumer of an action
-*body* is ``state_extractor.all_sends``, whose absence produces no scenario
-rather than a failure.  A model can therefore pass behavioural verification with
-every action definition empty, which is what the archived pilot does.
-
-This module changes no verdict.  It reports, per action definition, which of the
-four realisation states it is in, and for every send it finds, whether the event
-is routed to a consumer that accepts it.  Under ``ENFORCE_V1`` a plan binds each
-requirement to one response action and the same evidence becomes a gate; under
-``LEGACY_AUDIT`` the same numbers are recorded and nothing is enforced.
+The behavioural simulator credits a response on the action label alone
+(``behavioral_sim`` check 2), so a model passes with every action definition
+empty, as the archived pilot does. This module changes no verdict: it reports
+each action definition's realisation state and, for every send, whether the
+event reaches a consumer that accepts it. ``ENFORCE_V1`` turns that evidence
+into a gate; ``LEGACY_AUDIT`` only records it.
 """
 from __future__ import annotations
 
@@ -33,15 +28,14 @@ from ..simulation.state_extractor import extract_state_machines
 
 ARTIFACT_ROLE = "TERMINAL_ACTION_SEMANTICS_AUDIT"
 
-#: How an action definition is realised, from strongest to weakest.
-REALISED_BY_BODY = "REALISED_BY_BODY"          # non-empty body
-REALISED_BY_TYPED_REF = "REALISED_BY_TYPED_REF"  # empty, but a state types it
-LABEL_ONLY = "LABEL_ONLY"                       # empty, named only by a bare usage
-ORPHAN = "ORPHAN"                               # empty and named nowhere
+REALISED_BY_BODY = "REALISED_BY_BODY"
+REALISED_BY_TYPED_REF = "REALISED_BY_TYPED_REF"
+LABEL_ONLY = "LABEL_ONLY"
+ORPHAN = "ORPHAN"
 
-#: `action def X` with real word boundaries.  A plain `action def` substring
-#: search also matches `entry action defaultToLockedState;` and inflates the
-#: denominator by three across the archived pilot.
+# `action def X` with word boundaries; a plain substring search also matches
+# `entry action defaultToLockedState;` and inflated the denominator by three
+# in the archived pilot.
 _ACTION_DEF_RE = re.compile(r"\baction\s+def\s+([A-Za-z_]\w*)")
 _TYPED_USAGE_RE = re.compile(
     r"\b(?:entry|do|exit)\s+action\s+([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)"
@@ -50,14 +44,13 @@ _BARE_USAGE_RE = re.compile(
     r"\b(?:entry|do|exit)\s+action\s+([A-Za-z_]\w*)\s*;"
 )
 _OWNER_SCOPE_RE = re.compile(r"\b(?:part\s+def|package)\s+([A-Za-z_]\w*)\s*\{")
-#: `part actuator : PayloadActuator;` — the connection graph is keyed by part
-#: *usage*, while a plan names the part *definition*.  Without this map a plan
-#: that correctly names `PayloadActuator` would be reported as unrouted.
+# `part actuator : PayloadActuator;` - the connection graph is keyed by part
+# usage, a plan names the part definition. Without this map a plan naming
+# `PayloadActuator` is reported as unrouted.
 _PART_USAGE_RE = re.compile(
     r"\bpart\s+(?!def\b)([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)\s*[;{]"
 )
 
-#: Diagnostic codes.  Named so a repair prompt can carry the exact failure.
 UNRESOLVED_ACTION = "UNRESOLVED_ACTION"
 UNSUPPORTED_BODY = "UNSUPPORTED_BODY"
 BARE_INVOCATION = "BARE_INVOCATION"
@@ -150,12 +143,7 @@ class ActionSemanticsReport:
         }
 
 
-# ---------------------------------------------------------------------------
-# Scope resolution
-# ---------------------------------------------------------------------------
-
 def _owner_scopes(text: str) -> List[Tuple[int, int, str]]:
-    """`(open_brace, close_brace, name)` for every part def / package block."""
     scopes: List[Tuple[int, int, str]] = []
     for match in _OWNER_SCOPE_RE.finditer(text):
         opening = text.find("{", match.start())
@@ -179,8 +167,8 @@ def _innermost_scope(
 def _body_is_empty(text: str, definition_start: int) -> bool:
     """Brace matching is used for this and nothing else.
 
-    Whether a definition has content is a lexical question; every type relation
-    below comes from syside, not from this.
+    Whether a definition has content is lexical; every type relation below comes
+    from syside.
     """
     opening = text.find("{", definition_start)
     if opening == -1:
@@ -191,17 +179,12 @@ def _body_is_empty(text: str, definition_start: int) -> bool:
     return text[opening + 1:closing].strip() == ""
 
 
-# ---------------------------------------------------------------------------
-# Routing
-# ---------------------------------------------------------------------------
-
 def _reachable_parts(model_text: str, part_name: str, port_name: str) -> Tuple[str, ...]:
     """Parts an out/inout port reaches over declared connections.
 
-    Connect statements carry no direction of their own — a SysML connection is
-    directed by the port directions at its ends — so the walk is over the
-    undirected connection graph and the direction test is applied at the ends:
-    the sender must be out/inout, a consumer must be in/inout.
+    A SysML connection is directed by its end ports, not by the connect
+    statement, so the walk is undirected and direction is tested at the ends:
+    sender out/inout, consumer in/inout.
     """
     graph = extract_behavioral_graph(model_text)
     if not graph.ports:
@@ -216,9 +199,8 @@ def _reachable_parts(model_text: str, part_name: str, port_name: str) -> Tuple[s
 
     starts = [pid for pid, node in graph.ports.items() if _matches_sender(node)]
     if not starts:
-        # The owner is identified by part *definition* while ports are keyed by
-        # part *usage*; fall back to the port name alone rather than reporting a
-        # routing failure that is really a naming mismatch.
+        # Owner is a part definition, ports are keyed by part usage; fall back to the
+        # port name alone so a naming mismatch is not reported as a routing failure.
         starts = [
             pid for pid, node in graph.ports.items()
             if node.port_name == port_name and node.direction in ("out", "inout")
@@ -249,10 +231,6 @@ def _reachable_parts(model_text: str, part_name: str, port_name: str) -> Tuple[s
     return tuple(consumers)
 
 
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
-
 def analyze_action_semantics(
     model_text: str,
     action_effect_plan: Optional[Sequence[PlannedActionEffect]] = None,
@@ -260,10 +238,9 @@ def analyze_action_semantics(
 ) -> ActionSemanticsReport:
     """Describe how every action definition in *model_text* is realised.
 
-    With no ``action_effect_plan`` there are no planned chains to check, and the
-    report says so rather than reconstructing chains by name — inferring which
-    requirement an action belongs to from its spelling is the defect this audit
-    exists to measure.
+    With no ``action_effect_plan`` there are no planned chains to check and the
+    report says so; chains are not reconstructed by name, since inferring an
+    action's requirement from its spelling is the defect this audit measures.
     """
     text = model_text or ""
     digest = sha256_text(text)
@@ -280,13 +257,12 @@ def analyze_action_semantics(
     for match in _BARE_USAGE_RE.finditer(text):
         bare_names[match.group(1)] = bare_names.get(match.group(1), 0) + 1
 
-    # Sends are read from syside, not from the text: reaching a send means
-    # following the usage's type edge into the definition body, which is exactly
-    # what a bare usage does not have.
+    # Sends come from syside, not the text: reaching one means following the
+    # usage's type edge into the definition body, which a bare usage lacks.
     machines = extract_state_machines(text)
-    # Where each definition is actually invoked through a type edge. The usage
-    # label is not part of the key: it is a local name, and three runs of one
-    # configuration spelled the same correct invocation three ways.
+    # Where each definition is invoked through a type edge. The usage label is a
+    # local name and is not part of the key - three runs of one configuration
+    # spelled the same invocation three ways.
     invocations: Dict[str, List[Tuple[str, str, str]]] = {}
     sends_by_action: Dict[str, List[Tuple[str, str]]] = {}
     send_records: List[SendRecord] = []
@@ -383,9 +359,8 @@ def _summarise(
         "typed_invocations": sum(len(v) for v in typed_targets.values()),
         "bare_invocations": sum(bare_names.values()),
         "supported_effects": sum(1 for a in report.actions if a.sends),
-        # Counted independently, not from `status`: a send can be both
-        # unrouted and unaccepted, and reporting only the first would understate
-        # the routing gap.
+        # Counted independently of `status`: a send can be both unrouted and
+        # unaccepted, and counting only the first understates the routing gap.
         "unmatched_sends": sum(1 for s in report.sends if not s.accepted_by),
         "unrouted_sends": sum(1 for s in report.sends if not s.routed_to),
         "complete_requirement_chains": sum(
@@ -423,14 +398,12 @@ def _check_planned_chains(
                 failures.append(UNRESOLVED_ACTION)
             if record.body_empty:
                 failures.append(UNSUPPORTED_BODY)
-            # The planned response state must invoke this definition through a
-            # type edge. The usage *label* is not checked: it is a local name,
-            # and three runs of one configuration spelled the same correct
-            # invocation `onParachute`, `...SelectedAction` and `onSet...`.
-            # Requiring the planned spelling would reject a correct model for
-            # the reason this profile exists to stop — treating a name as
-            # evidence — while requiring nothing but "some state somewhere"
-            # would let an unrelated machine discharge the obligation.
+            # The planned response state invokes this definition through a type edge.
+            # The usage label is a local name and is not checked: three runs of one
+            # configuration spelled the same invocation `onParachute`,
+            # `...SelectedAction` and `onSet...`. Requiring the planned spelling would
+            # reject correct models; accepting any state at all would let an unrelated
+            # machine discharge the obligation.
             observed = tuple(invocations.get(effect.action_def, ()))
             if not any(
                 owner == effect.owner_def
@@ -439,10 +412,9 @@ def _check_planned_chains(
                 for owner, behaviour, state in observed
             ):
                 failures.append(BARE_INVOCATION)
-                # Recorded because the first failure of this check cost a
-                # separate reading of the model to answer "which of the three
-                # did not match" — a report that states only the code cannot
-                # distinguish a missing type edge from a renamed state.
+                # Recorded because a report carrying only the code cannot distinguish a
+                # missing type edge from a renamed state; the first failure needed a
+                # separate reading of the model to tell which of the three did not match.
                 evidence = {
                     "expected": {
                         "owner_def": effect.owner_def,
@@ -509,7 +481,6 @@ def _collect_issues(
 
 
 def _status_for(profile: str, report: ActionSemanticsReport) -> str:
-    """LEGACY_AUDIT never fails: the archived evidence must stay reproducible."""
     if profile != ENFORCE_V1:
         return "ADVISORY"
     if not report.requirement_chains:

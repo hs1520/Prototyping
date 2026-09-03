@@ -1,14 +1,12 @@
 """Deep module for the planned-action terminal lifecycle.
 
-The generation pipeline owns phase ordering and model commits.  This module owns
-the knowledge needed on either side of that real seam: which effects may be
-materialised before the terminal commit, how the rewrite is guarded, and which
-planned effects are audited against the final terminal snapshot.
-
-The two effect selections are deliberately not the same.  Materialisation is
-derived from the A/G specifications chosen by this run.  Audit evidence is read
-from the model generation plan when it carries schema-10 ``action_effects`` and
-falls back to the runtime derivation only when the plan carries none.
+The generation pipeline owns phase ordering and model commits. This module owns
+what sits on either side of that seam: which effects may be materialised before
+the terminal commit, how the rewrite is guarded, and which planned effects are
+audited against the final terminal snapshot. The two selections differ:
+materialisation comes from the A/G specifications this run chose; audit evidence
+comes from the plan's schema-10 ``action_effects``, falling back to the runtime
+derivation only when the plan carries none.
 """
 from __future__ import annotations
 
@@ -29,8 +27,8 @@ from ..simulation.syntax_checker import check_syntax
 from ..utils.sysml_text_utils import find_block_end, named_block_span
 
 
-# Scoped to one chain while the profile is proven end to end.  Widening this is
-# a deliberate semantic change: every additional chain rewrites generated text.
+# Scoped to one chain while the profile is proven end to end; each added chain
+# rewrites generated text, so widening is a semantic change.
 _ACTION_EFFECT_CHAINS = ("REQ_SAFE_005",)
 _OWNER_SCOPE_RE = re.compile(r"\bpart\s+def\s+([A-Za-z_]\w*)\s*\{")
 
@@ -75,11 +73,11 @@ def prepare_planned_actions(
     model_plan: Mapping[str, Any] | None,
     ag_plan: Mapping[str, Any] | None,
 ) -> PlannedActionPreparation:
-    """Derive and safely materialise this run's bounded response actions.
+    """Derive and materialise this run's bounded response actions.
 
-    Call after every other behaviour writer and immediately before the existing
-    terminal commit.  Expected model problems are returned as diagnostics; an
-    unexpected implementation failure remains visible as an exception.
+    Call after every other behaviour writer, immediately before the terminal
+    commit. Expected model problems are returned as diagnostics; an implementation
+    failure still raises.
     """
     source = str(model_text or "")
     runtime_effects = _derive_runtime_effects(model_plan, ag_plan)
@@ -106,10 +104,9 @@ def prepare_planned_actions(
 
     before = check_syntax(source).total_errors()
     after = check_syntax(candidate).total_errors()
-    # Duplicate members are warning-level for the syntax checker but a hard
-    # USER_NAMESPACE_INTEGRITY failure at terminal qualification — and this
-    # writer runs AFTER the namespace repair pass, so a collision injected
-    # here has no repair downstream. Gate on that regression too.
+    # Duplicate members are checker warnings but fail USER_NAMESPACE_INTEGRITY at
+    # terminal qualification, and this writer runs after the namespace repair pass,
+    # so a collision here has no repair downstream. Gate on it too.
     duplicates_before = len(
         check_user_namespace_integrity(source)["duplicate_members"]
     )
@@ -162,9 +159,9 @@ def observe_terminal_actions(
 ) -> PlannedActionObservation:
     """Audit the final terminal snapshot without changing qualification.
 
-    ``terminal_model_text`` is intentionally supplied again: collaboration may
-    accept a repair after the initial terminal commit.  The observed text, not
-    the prepared candidate or the plan, is the semantic authority.
+    ``terminal_model_text`` is supplied again because collaboration may accept a
+    repair after the initial terminal commit. The observed text is the semantic
+    authority, not the prepared candidate or the plan.
     """
     text = str(terminal_model_text or "")
     report = analyze_action_semantics(
@@ -193,9 +190,9 @@ def _derive_runtime_effects(
 ) -> tuple[PlannedActionEffect, ...]:
     """Use the A/G specifications this run actually decided.
 
-    ``LLM_DECIDED_SPEC`` may rename every response.  The static chain library is
-    only a template: archived models use an arbiter response name different from
-    the library's default, so deriving from the library resolves to nothing.
+    ``LLM_DECIDED_SPEC`` may rename every response, and the static chain library is
+    only a template: archived models use arbiter response names other than the
+    library default, so deriving from the library resolves to nothing.
     """
     plan = model_plan if isinstance(model_plan, Mapping) else {}
     architecture_components = plan.get("components") or ()
@@ -216,7 +213,6 @@ def _derive_action_effects(
     components: Sequence[Mapping[str, Any]],
     connections: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[PlannedActionEffect, ...]:
-    """Join this run's selected A/G chain to its architecture plan."""
     by_name = {str(item.get("name")): item for item in components}
     produced = {
         _signal_for_guarantee(component.guarantee): component
@@ -255,8 +251,8 @@ def _derive_action_effects(
 def _signal_for_guarantee(guarantee: str) -> str:
     """Apply the A/G chain convention for an in-chain produced signal.
 
-    A trigger with no producer under this convention is an environment input and
-    is deliberately not turned into a planned action effect.
+    A trigger with no producer under this convention is an environment input and is
+    not turned into a planned action effect.
     """
     if not guarantee:
         return ""
@@ -264,7 +260,6 @@ def _signal_for_guarantee(guarantee: str) -> str:
 
 
 def _response_state(chain: Any, producer: Any) -> str:
-    """Resolve the emitted arbitration state rather than guessing its name."""
     from ..prototyping.ag_emitter import arbitration_response_state
 
     if getattr(producer, "behavior", None) == "SafetyResponseArbitration":

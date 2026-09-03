@@ -20,8 +20,8 @@ class RefinementIntelligence(Protocol):
 class RuntimeRefinementIntelligence:
     """Production adapter; resolves runtime collaborators at call time.
 
-    Late resolution preserves test injection while preventing the refinement
-    implementation from depending on three unrelated runtime interfaces.
+    Late resolution keeps test injection working and keeps the refinement
+    implementation off three unrelated runtime interfaces.
     """
 
     def __init__(self, runtime: Any) -> None:
@@ -36,8 +36,8 @@ class RuntimeRefinementIntelligence:
         try:
             return llm.chat(prompt, system_prompt=system_prompt, label=label)
         except TypeError:
-            # Test doubles predate the label keyword; attribution is
-            # observational and must never change what the caller receives.
+            # Test doubles predate the label keyword; attribution is observational and
+            # does not change what the caller receives.
             return llm.chat(prompt, system_prompt=system_prompt)
 
     def generate(self, payload: Mapping[str, Any]) -> Any:
@@ -57,10 +57,9 @@ class RuntimeRefinementIntelligence:
 class ScriptedRefinementIntelligence:
     """Deterministic in-memory adapter for Refinement Closure tests.
 
-    Tests script responses at the same intelligence boundary used in
-    production instead of replacing individual refinement helpers.  Every
-    invocation is retained in ``calls`` so interaction assertions stay at the
-    module interface.
+    Tests script responses at the production intelligence boundary instead of
+    replacing individual refinement helpers. Every invocation is kept in ``calls``
+    so interaction assertions stay at the module interface.
     """
 
     def __init__(

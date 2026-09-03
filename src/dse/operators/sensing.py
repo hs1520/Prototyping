@@ -1,19 +1,17 @@
-"""#1 AddRedundantSensor + InsertFusionNode — architecture DSE operator.
+"""#1 AddRedundantSensor + InsertFusionNode - architecture DSE operator.
 
-Chooses the sensing front-end: how many independent sensors, and (for N>1) a
-fusion node that aggregates them. Every redundant sensor is wired into a distinct
-fusion input — fixing the legacy ``apply_inject_sensor_count_to_sysml_text`` bug
-that added sensor parts but skipped wiring, leaving them dangling.
-
-Valid-by-construction; Syside 0.8.8 verified. Couples with #2 (RedundantizeComponent)
-via the number of independent channels. See docs/DSE_OPERATORS.md §#1.
+Chooses the sensing front-end: how many independent sensors, and for N>1 a fusion
+node that aggregates them. Every redundant sensor is wired into a distinct fusion
+input, fixing the legacy ``apply_inject_sensor_count_to_sysml_text`` bug that
+added sensor parts but skipped wiring. Syside 0.8.8 verified; couples with #2
+(RedundantizeComponent) via the number of independent channels. See
+docs/DSE_OPERATORS.md §#1.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, List
 
-# variant key -> sensor count
 CATALOG: Dict[str, int] = {"single": 1, "dual": 2, "triple": 3}
 
 _PRELUDE = """    port def SensorSignal;
@@ -34,21 +32,15 @@ class AddRedundantSensor:
     def sensors(self, variant: str) -> int:
         return CATALOG[variant]
 
-    # ------------------------------------------------------------------
-    # MO-MCTS contract
-    # ------------------------------------------------------------------
-
     def feasible(self, variant: str, ctx, state=None) -> bool:
         ch = self.sensors(variant)
         if not self.preconditions(variant, max_sensors=getattr(ctx, "max_sensors", 3)):
             return False
-        # severity floor: must supply >= the mandated redundancy's channels
         profile = getattr(ctx, "requirement_profile", None)
         if profile is not None:
             from ..requirements_profile import min_redundancy, redundancy_depth
             if ch < redundancy_depth(min_redundancy(profile)):
                 return False
-        # cross-operator coupling (#1↔#2): >= chosen redundancy channels
         if state and "arbitration" in state:
             from .redundantize import CATALOG as _RED
             if ch < _RED[state["arbitration"]][1]:
@@ -59,10 +51,6 @@ class AddRedundantSensor:
         if variant not in CATALOG:
             return False
         return CATALOG[variant] <= max_sensors
-
-    # ------------------------------------------------------------------
-    # Skeleton declaration
-    # ------------------------------------------------------------------
 
     def declare_skeleton(self) -> str:
         variant_lines = "\n".join(
@@ -78,10 +66,6 @@ class AddRedundantSensor:
             "    }\n"
             "}\n"
         )
-
-    # ------------------------------------------------------------------
-    # Resolution — N sensors + fusion node, every sensor wired (no dangling)
-    # ------------------------------------------------------------------
 
     def _fusion_def(self, n: int) -> str:
         ports = "\n".join(f"        in port in{i} : SensorSignal;" for i in range(1, n + 1))

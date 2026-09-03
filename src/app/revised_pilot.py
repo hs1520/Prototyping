@@ -1,7 +1,7 @@
 """Reproducible, fail-closed runner for the revised Option 2 pilot.
 
-This module owns experiment execution provenance only. It has no evaluator-gold
-input and never upgrades runtime checker verdicts into accuracy or physical
+Owns experiment execution provenance only: no evaluator-gold input, and
+runtime checker verdicts are not upgraded into accuracy or physical
 verification claims.
 """
 from __future__ import annotations
@@ -68,11 +68,10 @@ def _json_digest(value: Mapping[str, Any]) -> str:
     return sha256_text(raw)
 
 
-
 def _salvage_model_text(model: Any) -> str:
-    """Best-effort SysML text from a partially built model, never raising.
+    """Best-effort SysML text from a partially built model; does not raise.
 
-    Used only on the failure path, where anything recoverable beats nothing.
+    Used on the failure path, where anything recoverable beats nothing.
     """
     if model is None:
         return ""
@@ -101,30 +100,28 @@ class RevisedPilotConfig:
     code_revision: str
     requirements: tuple[str, ...]
     quality_threshold: float = 0.75
-    #: 300 s cancelled two runs of the 2026-08-11 pilot client-side, surfacing
-    #: as 499 CANCELLED, which the Vertex subclass deliberately does not retry.
-    #: Raised rather than made retryable: a request the deadline killed will
-    #: hit the same deadline again, and `llm_usage.max_call_seconds` now records
-    #: whether any single attempt actually approaches it.
+    # 300 s cancelled two runs of the 2026-08-11 pilot client-side as 499
+    # CANCELLED, which the Vertex subclass does not retry. Raised rather than made
+    # retryable, since a request the deadline killed hits the same deadline again;
+    # `llm_usage.max_call_seconds` records how close any single attempt comes.
     llm_timeout_seconds: float = 600.0
     task_session_max_turns: int = 12
     task_session_max_tokens: int = 600000
     context_token_budget: int = 12000
     ag_checker_version: str = AG_CHECKER_VERSION
     pattern_profile_version: str = "bounded-ag-safety-profile-2.0"
-    #: Frozen per pilot and carried in the configuration digest: a run that
-    #: enforces action effects is not the same evaluator as one that only
-    #: records them, and the two must never be aggregated.
+    # Frozen per pilot and carried in the configuration digest: enforcing action
+    # effects is a different evaluator from only recording them, so the two are not
+    # aggregated.
     action_semantics_profile: str = LEGACY_AUDIT
     action_semantics_profile_version: str = ACTION_SEMANTICS_PROFILE_VERSION
     r2_generation_mode: str = R2_DETERMINISTIC_GENERATION_MODE
     r2_intervention_version: str = R2_DETERMINISTIC_INTERVENTION_VERSION
     r2_authored_syntax_max_attempts: int = 3
     maximum_ag_repair_attempts: int = 3
-    #: Bounded typed-plan attempts, frozen per pilot. Set so every arm can
-    #: complete: the baseline needs more attempts than the blackboard arms,
-    #: and a budget it cannot finish within loses the run instead of
-    #: measuring the difference.
+    # Bounded typed-plan attempts, frozen per pilot. Sized so every arm completes:
+    # the baseline needs more attempts than the blackboard arms, and a budget it
+    # cannot finish in loses the run instead of measuring the difference.
     maximum_plan_attempts: int = DEFAULT_MAXIMUM_PLAN_ATTEMPTS
     system_name: str = "DeliveryUAV"
     system_description: str = (
@@ -145,10 +142,9 @@ class RevisedPilotConfig:
                 "unknown action semantics profile: "
                 f"{self.action_semantics_profile}"
             )
-        # Three is the floor, not the design.  The study stays DESCRIPTIVE_PILOT
-        # at any n — more repetitions tighten the descriptive estimates and let
-        # more chain behaviour be observed; they do not license confirmatory
-        # inference, and `evaluation_protocol` still forbids p-values.
+        # Three is the floor, not the design. The study stays DESCRIPTIVE_PILOT at any
+        # n: more repetitions tighten the descriptive estimates but license no
+        # confirmatory inference, and `evaluation_protocol` still forbids p-values.
         if len(self.seeds) < 3 or len(set(self.seeds)) != len(self.seeds):
             raise ValueError(
                 "descriptive pilot requires at least three distinct seeds"
@@ -174,11 +170,10 @@ class RevisedPilotConfig:
             raise ValueError("provider and model must be explicit")
         if not self.code_revision.strip():
             raise ValueError("code_revision must be frozen before execution")
-        # Each R2 generation mode is its own frozen intervention with its own
-        # version, and results from different modes must never be pooled. That is
-        # enforced by binding the mode to exactly one version — the same binding
-        # `evaluation_readiness` gates on — rather than by pinning the runner to a
-        # single mode, which prevented the other interventions from ever executing.
+        # Each R2 generation mode is a frozen intervention with its own version, and
+        # results from different modes are not pooled. Enforced by binding the mode to
+        # one version - the binding `evaluation_readiness` gates on - rather than by
+        # pinning the runner to a single mode, which blocked the other interventions.
         expected_version = R2_INTERVENTION_VERSION_BY_MODE.get(
             self.r2_generation_mode
         )
@@ -272,7 +267,6 @@ def _usage(report: Mapping[str, Any]) -> tuple[int | None, int | None]:
 
 
 def _contains_evaluator_only_material(value: Any) -> bool:
-    """Reject evaluator artifacts recursively, independent of key spelling."""
     if isinstance(value, Mapping):
         role = re.sub(
             r"[^a-z0-9]", "", str(value.get("artifact_role") or "").lower()
@@ -398,8 +392,8 @@ def _aggregate(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         arm: [row for row in rows if row.get("configuration") == arm]
         for arm in REVISED_PILOT_ARMS
     }
-    # Pairing is the invariant, not the count: every arm must carry the same
-    # number of repetitions, and the descriptive floor of three still applies.
+    # Invariant: every arm carries the same number of repetitions, and the
+    # descriptive floor of three still applies.
     arm_counts = {len(items) for items in by_arm.values()}
     if len(arm_counts) != 1 or next(iter(arm_counts)) < 3:
         return {"status": "INCOMPLETE", "reason": "paired arm coverage is incomplete"}
@@ -450,9 +444,9 @@ def run_revised_pilot(
 ) -> dict[str, Any]:
     """Run one paired R0/R1/R2 repetition per configured seed, with provenance.
 
-    A fresh provider instance is created for every arm/seed run so token ledgers,
-    call state, and seed configuration cannot leak across arms. Existing output
-    directories are rejected rather than overwritten.
+    Each arm/seed run gets a fresh provider instance so token ledgers, call state
+    and seed configuration cannot leak across arms. Existing output directories
+    are rejected, not overwritten.
     """
     if config.provider.strip().lower() != "mock" and not external_execution_authorized:
         raise PermissionError(
@@ -556,11 +550,10 @@ def run_revised_pilot(
                     r2_intervention_version=config.r2_intervention_version,
                 )
                 atomic_write_json(run_dir / "run_report.json", report)
-                # Every arm archives what it has. Gating on the collaboration
-                # block meant R0-CURRENT — which has no blackboard by
-                # construction — archived no model, so a defect seen only in the
-                # baseline could not be diagnosed afterwards. The writer already
-                # skips the board-derived views when there is no board.
+                # Every arm archives what it has. Gating on the collaboration block left
+                # R0-CURRENT, which has no blackboard, archiving no model, so a baseline-only
+                # defect could not be diagnosed afterwards. The writer already skips the
+                # board-derived views when there is no board.
                 written: Mapping[str, str] = artifact_writer(result, run_dir)
                 calls, tokens = _usage(report)
                 row = {
@@ -647,12 +640,10 @@ def run_revised_pilot(
                         },
                     )
                     failed_artifacts.append("ag_authoring_attempts")
-                # A failed run is when the model is most worth having, and it
-                # used to be the one case that archived nothing but a manifest:
-                # two measured failures could not be diagnosed afterwards
-                # because the evidence was a line number and no model. The
-                # orchestrator holds the last text it worked on even when a
-                # later stage raised, so it is written here.
+                # A failed run used to archive nothing but a manifest, so two measured
+                # failures could not be diagnosed from a line number with no model. The
+                # orchestrator still holds the last text it worked on when a later stage
+                # raised, so write it here.
                 salvage = getattr(
                     getattr(pipeline, "orchestrator", None), "state", None
                 )

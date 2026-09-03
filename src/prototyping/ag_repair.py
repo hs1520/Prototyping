@@ -61,7 +61,7 @@ def _publish_decision(
 
 
 class _CapturingChat:
-    """Archive the exact surgical-repair chat turn without provider sessions."""
+    """Archive the surgical-repair chat turn without provider sessions."""
     def __init__(self, llm: Any, session: Any, board: Blackboard):
         self._llm = llm
         self._session = session
@@ -91,7 +91,6 @@ class _CapturingChat:
 
 
 def _behavior_tokens(model_text: str, behavior: str) -> set[tuple[str, str]]:
-    """Named behavior content that an A/G repair is never allowed to shed."""
     span = named_block_span(model_text, "state", behavior)
     if span is None:
         return set()
@@ -100,14 +99,13 @@ def _behavior_tokens(model_text: str, behavior: str) -> set[tuple[str, str]]:
         (kind, item)
         for kind, pattern in (
             ("state", r"\bstate\s+(\w+)"),
-            # The name is optional; on `transition first idle ...` the old
-            # pattern captured the keyword `first` as a bogus identity token,
-            # so a renamed-to-unnamed rewrite read as an identity change.
+            # The name is optional; on `transition first idle ...` the old pattern
+            # captured the keyword `first` as an identity token, so a
+            # renamed-to-unnamed rewrite read as an identity change.
             ("transition", r"\btransition\s+(?!first\b)(\w+)"),
-            # Skip the optional usage label so the bare
-            # `entry action deployParachute;` and the typed
-            # `entry action onParachute : deployParachute;` yield the same
-            # token — otherwise a repair that only respelled it reads as a loss.
+            # Skip the optional usage label so `entry action deployParachute;`
+            # and `entry action onParachute : deployParachute;` yield the same
+            # token; otherwise a repair that only respelled it reads as a loss.
             ("entry_action", r"\bentry\s+action\s+(?:\w+\s*:\s*)?(\w+)"),
             ("trigger", r"\baccept\s+(\w+)"),
         )
@@ -124,23 +122,21 @@ _EVENT_DEF_RE = re.compile(
 
 
 def _ag_context_supplement(model_text: str, contract: str) -> str:
-    """The A/G facts a reference-closure slice structurally cannot contain.
+    """The A/G facts a reference-closure slice cannot contain.
 
     `build_dependency_closed_context` closes over symbols the sliced elements
-    REFERENCE. For an omission fault that is exactly the wrong direction: the
-    element to restore is absent, so nothing references it and the closure cannot
-    reach it. Measured on a real committed model — delete one transition and the
-    slice keeps the injured state machine but loses
-    `item def ParachuteDeploymentCommandSignal;`, the declaration the fix has
-    to name. An agent that cannot see it either invents a signal name (an
-    undeclared reference — the failure class that cost the authored mode every
-    seed) or guesses from the diagnostic text.
+    reference, which is the wrong direction for an omission fault: the element to
+    restore is absent, so nothing references it and the closure cannot reach it.
+    Measured on a committed model - delete one transition and the slice keeps the
+    injured state machine but loses `item def ParachuteDeploymentCommandSignal;`, the
+    declaration the fix has to name, leaving an agent to invent a signal name (an
+    undeclared reference) or guess from the diagnostic text.
 
     So the two A/G facts the diagnostic implies are added deterministically: the
     contract being realized, whose assumptions name the trigger concept and whose
-    guarantee fixes the `set<Concept>` action name, and the package's declared
-    event signals. Both are small and neither widens the EDIT scope — the slice is
-    prompt context, and the accept gates are unchanged.
+    guarantee fixes the `set<Concept>` action name, and the package's declared event
+    signals. Neither widens the EDIT scope - the slice is prompt context and the
+    accept gates are unchanged.
     """
     additions: list[str] = []
     match = re.search(
@@ -164,16 +160,14 @@ def _ag_context_supplement(model_text: str, contract: str) -> str:
 
 
 def _repair_feedback(diagnostic_code: str) -> str:
-    """What the repair must and must not do — including the rules the GATE enforces.
+    """What the repair may and may not do, including the rules the gate enforces.
 
-    The feedback used to state only "repair the routed realization; these elements
-    are immutable". Two rules the merge gate enforces were left unsaid, and a
-    measured run died on both at once: the model added a new action definition
-    (`addition_out_of_scope:action:DeployBallisticRecoveryParachute`) instead of
-    restoring the conventional `set<GuaranteeConcept>` entry action inside the
-    existing state. Ninth instance in this project of a gate demanding something
-    the generator was never told, so the convention is rendered from
-    `ag_convention` rather than restated here — one statement, one place.
+    The feedback once stated only "repair the routed realization; these elements are
+    immutable", leaving two merge-gate rules unsaid: a measured run added a new action
+    definition (`addition_out_of_scope:action:DeployBallisticRecoveryParachute`)
+    instead of restoring the conventional `set<GuaranteeConcept>` entry action inside
+    the existing state. The convention is therefore rendered from `ag_convention`
+    rather than restated here - one statement, one place.
     """
     from .ag_convention import DIAGNOSTIC_OBLIGATIONS
 
@@ -194,7 +188,6 @@ def _repair_feedback(diagnostic_code: str) -> str:
 
 
 def _diagnostic_obligations(diagnostic: Any) -> set[str]:
-    """Named sub-obligations carried by an aggregate checker diagnostic."""
     provenance = getattr(diagnostic, "provenance", {}) or {}
     values = provenance.get("unsatisfied_obligations", ())
     if isinstance(values, (list, tuple)):
@@ -214,7 +207,6 @@ def _matching_diagnostic_obligations(
     report: Any,
     target: tuple[Any, Any, Any],
 ) -> set[str]:
-    """Named obligations currently carried by one aggregate diagnostic."""
     code, contract, subject = target
     obligations: set[str] = set()
     for diagnostic in report.errors():
@@ -234,7 +226,6 @@ def _extract_routed_ag_graph(
     revision: int | None = None,
     model_digest: str | None = None,
 ):
-    """Select exactly the routed chain; never pool a multi-chain repair gate."""
     normalized = source_requirement.upper().replace("-", "_")
     matches = [
         graph
@@ -267,7 +258,7 @@ def attempt_dependency_closed_ag_repair(
     failure_record_id: str,
     analysis_record_id: str,
 ) -> AGRepairDecision:
-    """Attempt one authorised model-semantic repair; never rewrites the full model."""
+    """Attempt one authorised model-semantic repair, not a full-model rewrite."""
     failure_record = board.record(failure_record_id)
     failure = dict(failure_record.payload)
     route = failure.get("route")
@@ -405,11 +396,9 @@ def attempt_dependency_closed_ag_repair(
             details={
                 "context_envelope_digest": envelope.envelope_digest,
                 "transcript_digest": session.transcript_digest,
-                # WHICH gate refused, not just that one did. Without this a
-                # REJECTED decision is unactionable: an out-of-scope edit, an
-                # unparseable patch and an over-strict gate all looked identical
-                # in `repair_decisions.json`. Same defect as the lumped
-                # PRIORITY_TOPOLOGY_INCOMPLETE diagnostic, in the repair artifact.
+                # Which gate refused, not just that one did: without it an
+                # out-of-scope edit, an unparseable patch and an over-strict gate
+                # all look identical in `repair_decisions.json`.
                 "audit": {
                     "llm_invoked": audit.llm_invoked,
                     "response_count": audit.response_count,
@@ -445,32 +434,30 @@ def attempt_dependency_closed_ag_repair(
         failure.get("priority_obligation") or ""
     ).strip() or None
     if priority_obligation is not None:
-        # PRIORITY_TOPOLOGY_INCOMPLETE is deliberately one checker diagnostic for
-        # comparability, but routing is per named obligation. A correct scoped
-        # repair may remove its wiring obligation while an unrepairable response-
-        # vocabulary obligation keeps the aggregate code alive. Judge the actual
-        # routed target, not the container diagnostic.
+        # PRIORITY_TOPOLOGY_INCOMPLETE is one checker diagnostic for comparability,
+        # but routing is per named obligation: a scoped repair may remove its wiring
+        # obligation while an unrepairable response-vocabulary obligation keeps the
+        # aggregate code alive. Judge the routed target, not the container
+        # diagnostic.
         before_obligations = _matching_diagnostic_obligations(before, target)
         after_obligations = _matching_diagnostic_obligations(after, target)
         target_removed = priority_obligation not in after_obligations
-        # Regression means an obligation appeared that was not present before.
-        # Keeping the routed target is already reported by target_removed=False;
-        # counting that same unchanged target as a new regression made the audit
-        # claim two different failures for one fact.
+        # Regression means an obligation appeared that was absent before. An
+        # unchanged routed target is already reported by target_removed=False;
+        # counting it again as a regression made the audit report two failures
+        # for one fact.
         new_priority_obligations = after_obligations - before_obligations
         permitted_after = before_ids
     else:
         target_removed = target not in after_ids
         new_priority_obligations = set()
         permitted_after = before_ids - {target}
-    # Every realizing state def named by the routed failure, identified by BEING a
-    # state def rather than by ending in "Behavior". The suffix filter silently
-    # exempted the one state def the emitter names differently
-    # (`SafetyResponseArbitration`), so a repair could delete another state's entry
-    # action from it and `behavior_preserved` stayed vacuously true. A measured run
-    # did exactly that; only the pattern-conformance gate caught it, which is luck,
-    # not design. Same defect class as a checker keyed on names instead of
-    # declarations.
+    # Every realizing state def named by the routed failure, identified by being a
+    # state def rather than by a "Behavior" suffix. The suffix filter exempted
+    # `SafetyResponseArbitration`, the one state def the emitter names differently,
+    # so a repair could delete another state's entry action from it and
+    # `behavior_preserved` stayed true; a measured run did that, and only the
+    # pattern-conformance gate caught it.
     affected_behaviors = [
         str(item) for item in failure.get("affected_elements", ())
         if named_def_pattern("state", str(item)).search(
@@ -488,16 +475,14 @@ def attempt_dependency_closed_ag_repair(
         and not new_priority_obligations
         and behavior_preserved
     )
-    # A SCOPED repair is judged for regression, not for finishing the chain. The
-    # gate demanded `pattern verdict == PASS` outright, so a repair could clear the
-    # one diagnostic it was routed and still be refused for an unrelated profile
-    # failure it was never told about — measured: the routed task named only
-    # REALIZATION_ACTION_MISSING, the patch removed it, and the refusal came from
-    # PRIORITY_TOPOLOGY_INCOMPLETE, which was already there before the attempt. That
-    # is the same asymmetry as a gate enforcing an unstated rule, and it makes a
-    # bounded repair unacceptable no matter what it does. The condition is now "no
-    # worse than before": breaking conformance (PASS -> FAIL) is still refused, and
-    # the run verdict still reports the chain as failing, honestly.
+    # A SCOPED repair is judged for regression, not for finishing the chain.
+    # Demanding `pattern verdict == PASS` refused a repair that cleared its routed
+    # diagnostic but left an unrelated profile failure it was never told about:
+    # the routed task named only REALIZATION_ACTION_MISSING, the patch removed it,
+    # and the refusal came from PRIORITY_TOPOLOGY_INCOMPLETE, already present
+    # before the attempt. The condition is now "no worse than before": breaking
+    # conformance (PASS -> FAIL) is still refused, and the run verdict still
+    # reports the chain as failing.
     pattern = check_safety_pattern_conformance(after_graph, after)
     pattern_before = check_safety_pattern_conformance(before_graph, before)
     pattern_regressed = (
@@ -520,9 +505,8 @@ def attempt_dependency_closed_ag_repair(
                 "transcript_digest": session.transcript_digest,
                 # which of the three gate conditions failed, and what changed.
                 # "target_not_removed_or_regression" names three possibilities at
-                # once; a reader of repair_decisions.json could not tell whether
-                # the patch missed the target, introduced a new defect, or broke
-                # pattern conformance.
+                # once, so a reader of repair_decisions.json could not tell a missed
+                # target from a new defect or broken pattern conformance.
                 "gate": {
                     "target": [item for item in target],
                     "target_obligation": priority_obligation,

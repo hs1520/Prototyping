@@ -1,22 +1,4 @@
-"""Multi-system × multi-seed benchmark harness (addresses the n=1 criticism).
-
-Runs the full PrototypingPipeline over a suite of system specifications and
-random seeds, saves one JSON run report per run (via
-``PrototypingPipeline.build_run_report``), and aggregates mean/std of the
-headline metrics so a single lucky run can't carry a claim.
-
-Usage
------
-    # harness plumbing smoke (MockLLM can't produce a real design — the run is
-    # recorded as failed, which exercises capture/aggregate/save end to end):
-    .venv/bin/python scripts/benchmark.py --provider mock --systems drone --seeds 1
-
-    # real benchmark (uses your provider keys from .env):
-    .venv/bin/python scripts/benchmark.py --provider vertex --seeds 3 \
-        --systems drone smart_building
-
-Outputs ``logs/benchmark_<timestamp>.json`` with per-run records + aggregates.
-"""
+"""Multi-system x multi-seed benchmark harness (addresses the n=1 criticism)."""
 from __future__ import annotations
 
 import argparse
@@ -29,9 +11,9 @@ from typing import Any, Dict, List
 
 from src.utils.digest import sha256_text
 
-# ── Benchmark suite ─────────────────────────────────────────────────────────
-# Each spec is deliberately self-contained (name, description, requirements)
-# so results are reproducible from this file alone.
+# ── Benchmark suite ────────────────────────────────────────────────────────────
+# Each spec is self-contained (name, description, requirements) so results are
+# reproducible from this file alone.
 
 SYSTEMS: Dict[str, Dict[str, Any]] = {
     "drone": {
@@ -100,10 +82,9 @@ def _archive_failure(
 ) -> None:
     """Persist the rejected model and the evidence that rejected it.
 
-    A fail-closed verdict is correct, but it kills the run before any artifact
-    is written, so the exact revision that failed used to be lost and only the
-    requirement ids survived. The gates already attach their evidence to the
-    error; this writes it down.
+    A fail-closed verdict ends the run before any artifact is written, so the
+    failing revision was lost and only requirement ids survived. The gates attach
+    their evidence to the error; this writes it down.
     """
     model_text = getattr(error, "terminal_model_text", None)
     closure = getattr(error, "functional_closure", None)
@@ -155,7 +136,7 @@ def run_one(
     dse_mode: str,
     out_dir: Path,
 ) -> Dict[str, Any]:
-    """One benchmark run → flat record (never raises; failures are recorded)."""
+    """One benchmark run -> flat record (never raises; failures are recorded)."""
     from src.app.pipeline import PrototypingPipeline
     from src.prototyping.provider_factory import create_llm
 
@@ -215,14 +196,14 @@ def run_one(
         record.update({"ok": False, "error": f"{type(e).__name__}: {e}"})
         try:
             _archive_failure(e, out_dir, spec, seed, record)
-        except Exception as archive_error:   # never mask the real failure
+        except Exception as archive_error:   # do not mask the failure
             record["archive_error"] = f"{type(archive_error).__name__}: {archive_error}"
     record["elapsed_s"] = round(time.time() - started, 1)
     return record
 
 
 def aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Per-system mean/std over successful runs — the anti-lucky-run table."""
+    """Per-system mean/std over successful runs, not a single-run figure."""
     out: Dict[str, Any] = {}
     for system in sorted({r["system"] for r in records}):
         runs = [r for r in records if r["system"] == system and r.get("ok")]

@@ -1,14 +1,4 @@
-"""Layer 0+1 entry point: turn a DSE-recommended model into a verifiable artifact.
-
-Combines:
-  * layer 0 — SysML v2 verification cases (verification_builder), making the
-    verification intent explicit and traceable in the model;
-  * layer 1 — settable-family → ArduPilot .parm + static L1 validation,
-    no SITL launch.
-
-This is the minimal, deterministic, no-flight closed loop of the DSE→SITL plan.
-L2 (real flight) and the multi-fidelity calibration (layer 3) build on this.
-"""
+"""Layer 0+1 entry point: turn a DSE-recommended model into a verifiable artifact."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -24,10 +14,10 @@ from .parameter_projection import (
 
 @dataclass
 class DSEVerificationReport:
-    verification_model: str               # model text + SysML v2 verification cases
-    verification_cases: List[str]         # generated verification def names
-    parm_lines: List[str]                 # settable-family ArduPilot .parm lines
-    l1_ok: bool                           # all mapped settable params in range
+    verification_model: str
+    verification_cases: List[str]
+    parm_lines: List[str]
+    l1_ok: bool
     l1_results: List[ParameterCheck] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -40,9 +30,9 @@ class DSEVerificationReport:
 def build_dse_verification(model_text: str, requirements: List[str]) -> DSEVerificationReport:
     """Run the layer 0+1 loop on a DSE-recommended model.
 
-    The verification cases are derived from the quantified requirements; L1 reads the
-    settable-family values off the (resolved) model's variant attributes. Emergent
-    families are deferred to L2 (see memory `sitl-family-param-mapping`).
+    Cases come from the quantified requirements; L1 reads the settable-family
+    values off the resolved model's variant attributes. Emergent families are
+    deferred to L2 (see memory `sitl-family-param-mapping`).
     """
     vmodel, vnames = build_verification_cases(model_text, requirements)
     l1_ok, l1_results = validate_settable_parameters(model_text)

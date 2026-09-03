@@ -1,24 +1,24 @@
-"""Honest requirement-verification coverage classifier.
+"""Requirement-verification coverage classifier.
 
-A model can `satisfy` every requirement (allocation/intent) yet VERIFY almost none. `satisfy`
-is an allocation relation, NOT proof — proof comes from verification (an assert/calc-def that
-evaluates, a verification case, a behavioral check). This classifier reports, per requirement,
-what evidence actually exists, so a baseline states its verification maturity instead of
-implying all requirements are met.
+A model can `satisfy` every requirement (allocation/intent) yet verify almost
+none: `satisfy` is an allocation relation, and proof comes from verification (an
+assert/calc-def that evaluates, a verification case, a behavioral check). This
+classifier reports per requirement what evidence exists, so a baseline states its
+verification maturity.
 
-Levels (strongest → weakest):
-  flight-verified    : the recommended design was FLOWN in Gazebo (stable hover, real-motor
-                       calibrated) AND a real motor+prop datasheet meets the target — the
-                       highest-fidelity evidence (physical flight + real components). Opt-in
-                       (RUN_GAZEBO); applies to the endurance/flight requirement.
-  analysis-verified  : an injected, Automator-evaluable `assert constraint` checks it
-                       (endurance / MTOW / range — the physics axis we actually model).
-  quantitative       : carries a numeric target → coverable by the DSE→SITL quantitative
-                       pipeline (verification case / L1 settable-param range check).
-  allocated-only     : has a `satisfy` (design intent) but NO quantitative target and NO
-                       assert — i.e. functional/safety/interface BEHAVIOUR or protocol
-                       conformance, which is NOT verified here (needs behavioural modelling /
-                       protocol testing — generation-side / out of this tool's scope).
+Levels (strongest -> weakest):
+  flight-verified    : the recommended design was flown in Gazebo (stable hover,
+                       real-motor calibrated) AND a real motor+prop datasheet meets
+                       the target. Opt-in (RUN_GAZEBO); applies to the
+                       endurance/flight requirement.
+  analysis-verified  : an injected, Automator-evaluable `assert constraint` checks
+                       it (endurance / MTOW / range - the physics axis we model).
+  quantitative       : carries a numeric target -> coverable by the DSE->SITL
+                       quantitative pipeline (verification case / L1 settable-param
+                       range check).
+  allocated-only     : has a `satisfy` but no quantitative target and no assert -
+                       functional/safety/interface behaviour or protocol
+                       conformance, not verified here (generation-side).
   unallocated        : declared but not even allocated (no satisfy).
 """
 from __future__ import annotations
@@ -41,18 +41,14 @@ UNALLOCATED = "unallocated"
 def classify_requirement_coverage(model_text: str, requirements: List[str],
                                   endurance_req: str = "REQ-PERF-002",
                                   dynamic: bool = False, gazebo: Dict = None) -> Dict[str, str]:
-    """{req_id: evidence level} for every requirement declared in the model. ``dynamic=True``
-    runs the behavioural simulator so safety reqs are graded by whether their guarded response
-    actually FIRES. ``gazebo`` (a verify_recommended_design result dict) upgrades the endurance
-    requirement to flight-verified when the recommended design flew stably AND a real motor+prop
-    datasheet meets the endurance target."""
+    """{req_id: evidence level} for every requirement declared in the model."""
     trace = extract_requirement_trace(model_text, requirements)
     declared = trace.declared
     satisfied = trace.satisfied
 
-    # flight-verified (strongest): Gazebo FLEW the design and confirmed a physical property only
-    # flight can show — (a) endurance (stable hover + real datasheet ≥ target), and (b) single-
-    # motor-failure controllability (the redundancy requirement, unique to physical flight sim).
+    # flight-verified (strongest): Gazebo flew the design and confirmed (a) endurance
+    # (stable hover + real datasheet >= target) and (b) single-motor-failure
+    # controllability, the redundancy requirement only physical flight sim can show.
     flight = set()
     if gazebo and gazebo.get("status") == "ok":
         et = endurance_target(requirements)
@@ -61,7 +57,7 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
         if gazebo.get("motor_failure_tolerant") and gazebo.get("redundancy_req"):
             flight.add(dse_req_id(gazebo["redundancy_req"]))
 
-    analysis = set()                                   # reqs an injected assert actually checks
+    analysis = set()
     if "enduranceMeetsReq" in model_text and endurance_target(requirements) > 0:
         analysis.add(dse_req_id(endurance_req))
     if "mtowWithinReq" in model_text and mass_limit(requirements)[0]:
@@ -69,9 +65,9 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
     if "rangeMeetsReq" in model_text and range_requirement(requirements)[0]:
         analysis.add(dse_req_id(range_requirement(requirements)[0]))
     quant = {dse_req_id(s.req_id) for s in extract_requirements(requirements)}
-    # safety + functional requirements get a BEHAVIOURAL status from state-machine reachability
-    # (safety: fail-safe reachable; functional: response action reachable), upgrading them out
-    # of allocated-only. Safety takes precedence when a req qualifies for both.
+    # safety + functional requirements get a behavioural status from state-machine
+    # reachability (safety: fail-safe reachable; functional: response action
+    # reachable), lifting them out of allocated-only. Safety wins when both apply.
     dyn = {}
     if dynamic:
         from .dynamic_behavior import dynamic_fire_by_part
@@ -82,15 +78,15 @@ def classify_requirement_coverage(model_text: str, requirements: List[str],
     out: Dict[str, str] = {}
     for rid in declared:
         if rid in flight:
-            out[rid] = FLIGHT_VERIFIED          # flown in Gazebo + real datasheet (highest)
+            out[rid] = FLIGHT_VERIFIED
         elif rid in analysis:
             out[rid] = ANALYSIS_VERIFIED
         elif rid in quant:
             out[rid] = QUANTITATIVE
         elif rid in safety:
-            out[rid] = safety[rid]              # behaviorally-verified / -violated / behavior-absent
+            out[rid] = safety[rid]
         elif rid in functional:
-            out[rid] = functional[rid]          # functional response reachable? verified / absent
+            out[rid] = functional[rid]
         elif rid in satisfied:
             out[rid] = ALLOCATED_ONLY
         else:

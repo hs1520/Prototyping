@@ -1,8 +1,8 @@
 """Forward-flight realization checks for speed/range requirements.
 
-This is a distinct fidelity tier from datasheet hover closure. It uses a lumped
-momentum-theory model plus an assumed equivalent drag area, so results are
-reported separately and never decide the datasheet CLOSED/INFEASIBLE verdict.
+A separate fidelity tier from datasheet hover closure: lumped momentum theory
+plus an assumed drag area, so results are reported separately and do not
+decide the datasheet CLOSED/INFEASIBLE verdict.
 """
 from __future__ import annotations
 
@@ -55,8 +55,8 @@ def forward_flight_verdicts(
         rotor_radius_m,
         rd.pack.capacity_mah,
         rd.pack.cells,
-        # Li-ion packs are 3.6 V/cell nominal — the 3.7 default silently rated
-        # them as LiPo, inflating usable energy (and range verdicts) by ~2.8%.
+        # Li-ion packs are 3.6 V/cell nominal; the 3.7 default rated them as LiPo and
+        # inflated usable energy (and range verdicts) by ~2.8%.
         cell_v=rd.pack.operating_voltage_v() / rd.pack.cells,
     )
     realized_range_m = range_result.range_km * 1000.0
@@ -110,11 +110,10 @@ def _required_per_motor_thrust_g(
 def _forward_power_limit_w(rd: RealizedDesign) -> float:
     """Electrical power ceiling from published bench rows and pack C-rate.
 
-    The catalog does not carry thermal continuous-power ratings. We therefore use
-    the maximum official bench-table electrical power as a motor-side upper bound
-    and the pack C-rating as a battery-side upper bound. This remains a lumped
-    fidelity check, but avoids claiming speeds that exceed the real component
-    power envelope.
+    The catalog carries no thermal continuous-power ratings, so the maximum
+    bench-table electrical power is the motor-side bound and the pack C-rating
+    the battery-side bound. Still a lumped check, but it does not claim speeds
+    above the component power envelope.
     """
     motor_limit_w = max(p.power_w for p in rd.combo.curve) * rd.rotor_count
     pack_voltage_v = rd.pack.operating_voltage_v()

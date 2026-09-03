@@ -7,7 +7,7 @@ from src.prototyping.namespace_integrity import (
 from src.simulation.syntax_checker import check_syntax
 
 
-def test_same_scope_cross_kind_definition_collision_fails():
+def test_cross_kind_collision_fails():
     model = """package P {
     attribute def FaultSignal;
     action def FaultSignal {}
@@ -24,7 +24,7 @@ def test_same_scope_cross_kind_definition_collision_fails():
     }]
 
 
-def test_same_name_in_different_owning_scopes_is_legal():
+def test_same_name_other_scopes_legal():
     model = """package P {
     part def A { action def reset {} }
     part def B { action def reset {} }
@@ -33,7 +33,7 @@ def test_same_name_in_different_owning_scopes_is_legal():
     assert check_user_namespace_integrity(model)["status"] == "PASS"
 
 
-def test_state_definition_and_assert_constraint_collision_fails():
+def test_state_constraint_collision_fails():
     model = """package P {
     part def RecoveryPowerSupply {
         state def RecoveryPowerSupplyBehavior { state idle; }
@@ -52,7 +52,7 @@ def test_state_definition_and_assert_constraint_collision_fails():
     }]
 
 
-def test_duplicate_attribute_usages_in_same_item_scope_fail():
+def test_duplicate_attributes_fail():
     model = """package P {
     item def ObstacleData {
         attribute separation : Real = 0.0 [m];
@@ -71,7 +71,7 @@ def test_duplicate_attribute_usages_in_same_item_scope_fail():
     }]
 
 
-def test_duplicate_item_usages_in_same_port_scope_fail():
+def test_duplicate_port_items_fail():
     model = """package P {
     item def ObstacleData;
     port def ObstaclePort {
@@ -91,7 +91,7 @@ def test_duplicate_item_usages_in_same_port_scope_fail():
     }]
 
 
-def test_same_feature_name_in_different_definition_scopes_is_legal():
+def test_same_feature_other_defs_legal():
     model = """package P {
     item def A { attribute value : Real; }
     item def B { attribute value : Real; }
@@ -100,7 +100,7 @@ def test_same_feature_name_in_different_definition_scopes_is_legal():
     assert check_user_namespace_integrity(model)["status"] == "PASS"
 
 
-def test_same_scope_port_and_attribute_collision_fails():
+def test_port_attribute_collision_fails():
     model = """package P {
     part def Latch {
         out port startupInhibitActive : InhibitPort;
@@ -119,7 +119,7 @@ def test_same_scope_port_and_attribute_collision_fails():
     }]
 
 
-def test_same_port_name_in_different_definition_scopes_is_legal():
+def test_same_port_other_defs_legal():
     model = """package P {
     part def Producer { out port status : StatusPort; }
     part def Consumer { in port status : StatusPort; }
@@ -128,7 +128,7 @@ def test_same_port_name_in_different_definition_scopes_is_legal():
     assert check_user_namespace_integrity(model)["status"] == "PASS"
 
 
-def test_comments_and_documentation_do_not_create_false_members():
+def test_comments_not_members():
     model = """package P {
     doc /* action def FaultSignal {} */
     // attribute def FaultSignal;
@@ -148,7 +148,7 @@ class _Simulation:
         return []
 
 
-def test_namespace_collision_is_a_terminal_qualification_failure():
+def test_collision_fails_qualification():
     model = """package P {
     requirement def REQ_SAFE_001 { doc /* safe */ }
     satisfy requirement REQ_SAFE_001;
@@ -183,7 +183,7 @@ def test_namespace_collision_is_a_terminal_qualification_failure():
     assert checks["USER_NAMESPACE_INTEGRITY"]["status"] == "FAIL"
 
 
-def test_reserved_ag_identity_has_an_explicit_qualification_check():
+def test_reserved_ag_identity_checked():
     model = """package P {
     requirement def REQ_SAFE_001 { doc /* safe */ }
     satisfy requirement REQ_SAFE_001;
@@ -221,7 +221,7 @@ def test_reserved_ag_identity_has_an_explicit_qualification_check():
     assert checks["A_G_RESERVED_IDENTITY_CONFORMANCE"]["evidence"] == reserved
 
 
-def test_planned_event_identity_has_an_explicit_qualification_check():
+def test_planned_event_identity_checked():
     model = """package P {
     requirement def REQ_SAFE_001 { doc /* safe */ }
     satisfy requirement REQ_SAFE_001;

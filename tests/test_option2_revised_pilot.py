@@ -130,7 +130,7 @@ class _FakePipeline:
         }
 
 
-def test_config_freezes_exact_three_seed_three_arm_protocol():
+def test_config_freezes_protocol():
     manifest = _config().to_manifest()
     assert manifest["experiment_namespace"] == "BLACKBOARD_AG_V1"
     assert manifest["arms"] == ["R0-CURRENT", "R1-BBCTX", "R2-BBAG"]
@@ -160,10 +160,10 @@ def test_config_freezes_exact_three_seed_three_arm_protocol():
         _config(r2_authored_syntax_max_attempts=0)
     with pytest.raises(ValueError, match="repair attempts must be positive"):
         _config(maximum_ag_repair_attempts=0)
-    # Each R2 generation mode is its own frozen intervention. The runner used to be
-    # pinned to the deterministic mode, which kept the other interventions from
-    # ever executing; the red line is now the mode->version binding itself, so a
-    # mode cannot borrow another intervention's version and pool with it.
+    # Each R2 generation mode is its own frozen intervention. The runner was pinned
+    # to the deterministic mode, so the others never executed; the check is now the
+    # mode->version binding, so a mode cannot borrow another's version and pool
+    # with it.
     from src.prototyping.experiment_arms import (
         R2_LLM_AUTHORED_GENERATION_MODE,
         R2_LLM_DECIDED_GENERATION_MODE,
@@ -171,11 +171,9 @@ def test_config_freezes_exact_three_seed_three_arm_protocol():
     )
 
     with pytest.raises(ValueError, match="unknown r2_generation_mode"):
-        _config(r2_generation_mode="LLM_AUTHORED")  # not a real mode
+        _config(r2_generation_mode="LLM_AUTHORED")
     with pytest.raises(ValueError, match="would pool"):
-        # a real mode carrying the deterministic intervention's version
         _config(r2_generation_mode=R2_LLM_AUTHORED_GENERATION_MODE)
-    # correctly bound, so it may run
     bound = _config(
         r2_generation_mode=R2_LLM_DECIDED_GENERATION_MODE,
         r2_intervention_version=R2_LLM_DECIDED_INTERVENTION_VERSION,
@@ -183,7 +181,7 @@ def test_config_freezes_exact_three_seed_three_arm_protocol():
     assert bound.r2_generation_mode == R2_LLM_DECIDED_GENERATION_MODE
 
 
-def test_external_execution_requires_explicit_authorization(tmp_path):
+def test_external_run_needs_authorization(tmp_path):
     with pytest.raises(PermissionError, match="explicit current-run authorization"):
         run_revised_pilot(
             _config(),
@@ -196,7 +194,7 @@ def test_external_execution_requires_explicit_authorization(tmp_path):
     assert not (tmp_path / "unauthorised").exists()
 
 
-def test_pilot_rejects_nested_evaluator_material_and_role_variants():
+def test_rejects_evaluator_material():
     assert _contains_evaluator_only_material(
         {"payload": {"humanGold": {"chain": "REQ_SAFE_005"}}}
     )
@@ -215,7 +213,7 @@ def test_pilot_rejects_nested_evaluator_material_and_role_variants():
     )
 
 
-def test_pilot_rejects_terminal_evidence_from_a_different_model_revision():
+def test_rejects_stale_evidence():
     frozen = {
         "requirements": list(_REQS),
         "requirement_set_digest": "req-digest",
@@ -248,7 +246,7 @@ def test_pilot_rejects_terminal_evidence_from_a_different_model_revision():
         )
 
 
-def test_complete_pilot_archives_nine_isolated_runs_and_descriptive_summary(tmp_path):
+def test_complete_pilot_archives_runs(tmp_path):
     factory_calls = []
     llm_instances = []
     artifact_calls = []
@@ -307,7 +305,7 @@ def test_complete_pilot_archives_nine_isolated_runs_and_descriptive_summary(tmp_
     )
 
 
-def test_failed_run_makes_pilot_incomplete_and_existing_output_is_not_overwritten(
+def test_failed_run_keeps_output(
     tmp_path,
 ):
     def llm_factory(**kwargs):

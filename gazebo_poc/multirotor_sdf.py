@@ -1,18 +1,13 @@
-"""Parametric N-rotor SDF generator (hexa support — stage A).
+"""Parametric N-rotor SDF generator (hexa support - stage A).
 
-The quad path (sdf_generator) edits the iris template in place. For hexa the iris template has the
-wrong rotor count, so we REBUILD both model files for an arbitrary motor table:
-
-  - iris_with_standoffs: keep base_link + imu_link (head of the iris template), append N rotor
-    links + joints at hexa-X positions.
-  - iris_with_gimbal: include standoffs + N×2 LiftDrag (blade pair, spin-correct `forward`) +
-    N ApplyJointForce + the ArduPilotPlugin (reuse iris's header: fdm_addr 0.0.0.0, imu, frame
-    conventions) with N motor control channels. The gimbal camera/gripper/parachute are dropped
-    (not needed for the hover/forward test, and they'd collide with motor channels 4-5).
-
-Motor tables are ArduCopter's own (AP_MotorsMatrix.cpp), so SDF positions+spins match the flight
-controller's mixing — required for stable flight. angle = degrees clockwise from forward; SDF is
-+X forward, +Y left, so position = (L·cos θ, −L·sin θ).
+The quad path (sdf_generator) edits the iris template in place; for hexa the template has the
+wrong rotor count, so both model files are rebuilt for an arbitrary motor table.
+iris_with_standoffs keeps base_link + imu_link and appends N rotor links/joints;
+iris_with_gimbal includes the standoffs, Nx2 LiftDrag (blade pair, spin-correct `forward`),
+N ApplyJointForce and the ArduPilotPlugin with N motor channels, dropping the gimbal
+camera/gripper/parachute (unused here, and they collide with motor channels 4-5). Motor tables
+are ArduCopter's own (AP_MotorsMatrix.cpp) so positions and spins match the mixer; angle =
+degrees clockwise from forward, and SDF is +X forward, +Y left, so position = (L*cos θ, −L*sin θ).
 """
 from __future__ import annotations
 
@@ -20,8 +15,8 @@ import math
 from pathlib import Path
 from typing import List, Tuple
 
-# (angle_deg_cw_from_fwd, spin)  spin: +1 = CCW (multiplier +838), -1 = CW (multiplier -838)
-# tables are ArduCopter's own (AP_MotorsMatrix.cpp) so SDF positions+spins match the mixer.
+# (angle_deg_cw_from_fwd, spin); spin +1 = CCW (multiplier +838), -1 = CW (-838).
+# Tables are ArduCopter's own (AP_MotorsMatrix.cpp), so SDF matches the mixer.
 QUAD_X: List[Tuple[float, int]] = [
     (45, +1), (-135, +1), (-45, -1), (135, -1),
 ]
@@ -32,12 +27,11 @@ OCTA_X: List[Tuple[float, int]] = [
     (22.5, -1), (-157.5, -1), (67.5, +1), (157.5, +1),
     (-22.5, +1), (-112.5, +1), (-67.5, -1), (112.5, -1),
 ]
-FRAME_CLASS = {4: 1, 6: 2, 8: 3}        # ArduCopter FRAME_CLASS: QUAD=1, HEXA=2, OCTA=3
+FRAME_CLASS = {4: 1, 6: 2, 8: 3}
 
 # --- airframe geometry -----------------------------------------------------
-# One source of truth. The SDF visual below is drawn from these numbers and
-# ``airframe_drag`` computes the parasitic-drag area from the same ones, so the
-# airframe that is drawn and the airframe the drag model sees cannot diverge.
+# One source of truth: the SDF visual below and the parasitic-drag area in
+# ``airframe_drag`` come from these numbers, so they cannot diverge.
 ARM_LEN_PER_ROTOR_RADIUS = 2.2
 HUB_RADIUS_PER_ARM_LEN = 0.32
 HUB_RADIUS_MIN_M = 0.06
@@ -81,16 +75,15 @@ _ROTOR_LINK = """    <link name='rotor_{i}'>
     </joint>
 """
 
-# The iris template's own rotor visual is drawn for a 0.1 m propeller, which is
-# the radius its collision cylinder also uses. Scaling the mesh by
-# rotor_radius_m / this value draws the propellers at the designed size.
+# The iris rotor visual is drawn for a 0.1 m propeller, the radius its collision
+# cylinder also uses; scaling the mesh by rotor_radius_m / that value draws the
+# propellers at the designed size.
 _IRIS_PROP_RADIUS_M = 0.1
 
-# The head of the iris template carries a quadrotor body mesh. For an N-rotor
-# airframe that shape is wrong, so the body visual is replaced by geometry
-# derived from the design: a central hub plus one arm reaching each rotor. This
-# is visual only -- collision, inertia and the LiftDrag areas are declared
-# separately and are untouched, so the flight is unchanged.
+# The iris template's body mesh is a quadrotor, wrong for an N-rotor airframe, so
+# the body visual is replaced by design-derived geometry: a central hub plus one
+# arm per rotor. Visual only - collision, inertia and LiftDrag areas are declared
+# separately and untouched.
 _BODY_VISUAL = """      <visual name='hub_visual'>
         <geometry><cylinder><radius>{hub_r:.4f}</radius><length>{hub_h:.4f}</length></cylinder></geometry>
         <material><ambient>0.08 0.08 0.09</ambient><diffuse>0.10 0.10 0.12</diffuse>
@@ -108,14 +101,13 @@ _ARM_VISUAL = """      <visual name='arm_{i}_visual'>
 
 
 def _airframe_visual(table, arm_len_m: float, rotor_radius_m: float) -> str:
-    """Hub-and-arms visual for the planned rotor layout."""
     body = _BODY_VISUAL.format(hub_r=hub_radius_m(arm_len_m), hub_h=HUB_HEIGHT_M)
     for i, (ang, _spin) in enumerate(table):
         th = math.radians(ang)
         x, y = arm_len_m * math.cos(th), -arm_len_m * math.sin(th)
         body += _ARM_VISUAL.format(
             i=i,
-            mx=x / 2.0, my=y / 2.0,          # arm spans hub centre to rotor
+            mx=x / 2.0, my=y / 2.0,
             yaw=math.atan2(y, x),
             alen=arm_len_m,
             aw=arm_width_m(rotor_radius_m),
@@ -133,20 +125,19 @@ _LIFTDRAG = """    <plugin filename="gz-sim-lift-drag-system" name="gz::sim::sys
     </plugin>
 """
 
-# Airframe parasitic drag. The rotor LiftDrag plugins above produce *thrust*;
-# without this the body has no drag at all, so a forward dash never reaches a
-# terminal velocity and its "cruise speed" is just however long it accelerated.
+# Airframe parasitic drag. The rotor LiftDrag plugins above produce thrust only;
+# without this the body has no drag, so a forward dash never reaches terminal
+# velocity and its cruise speed just tracks the dash duration.
 #
 # gz-sim's LiftDrag uses cd = cda*alpha below the stall angle and
-# cd = cda*alpha_stall + cda_stall*(alpha - alpha_stall) above it. Setting
-# cda_stall=0 and biasing a0 past alpha_stall therefore yields a CONSTANT
-# cd = cda*alpha_stall, i.e. a genuine quadratic drag plate rather than an
-# angle-of-attack-dependent aerofoil. With cd pinned to 1.0 the <area> below is
-# exactly the equivalent flat-plate area f, and drag = 0.5*rho*f*V^2. LiftDrag
-# reads the world Wind component, so V is airspeed, not ground speed.
+# cd = cda*alpha_stall + cda_stall*(alpha - alpha_stall) above it, so cda_stall=0
+# with a0 biased past alpha_stall gives a constant cd = cda*alpha_stall: a
+# quadratic drag plate rather than an angle-of-attack aerofoil. With cd = 1.0 the
+# <area> below is the equivalent flat-plate area f and drag = 0.5*rho*f*V^2.
+# LiftDrag reads the world Wind component, so V is airspeed.
 _BODY_DRAG_ALPHA_STALL = 0.01
-# NOTE: the plugin *name* selects the class inside the shared library, so it must be
-# the registered LiftDrag class — a descriptive name of our own fails to load.
+# The plugin name selects the class inside the shared library, so it must be the
+# registered LiftDrag class; a name of our own fails to load.
 _BODY_DRAG = """    <plugin filename="gz-sim-lift-drag-system" name="gz::sim::systems::LiftDrag">
       <a0>1.5708</a0><alpha_stall>{stall}</alpha_stall>
       <cla>0.0</cla><cda>{cda:.4f}</cda>
@@ -265,19 +256,19 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
                             forward_lidar: bool = False,
                             forward_lidar_range_m: float = 15.0,
                             body_drag_area_m2: float = 0.0):
-    """Write parametric standoffs + gimbal SDFs for an N-rotor airframe. ``max_rotor_rad_s`` is the
-    full-throttle rotor speed (ArduPilotPlugin multiplier) — lower it (real-motor calibration) to
-    get a realistic thrust-to-weight. ``fail_rotor`` (index) sets that rotor's LiftDrag area to 0
-    (dead motor — produces no thrust though ArduCopter still commands it): simulates a single
-    propulsion-unit failure to test controllability/redundancy. ``body_drag_area_m2`` is the
-    equivalent flat-plate area of the airframe (see ``airframe_drag``); it gives the body genuine
-    quadratic parasitic drag, without which a forward dash has no terminal velocity."""
+    """Write parametric standoffs + gimbal SDFs for an N-rotor airframe.
+
+    ``max_rotor_rad_s`` is the full-throttle rotor speed (ArduPilotPlugin multiplier); lower it for
+    real-motor calibration. ``fail_rotor`` (index) zeroes that rotor's LiftDrag area - a dead motor
+    ArduCopter still commands - to test controllability under one propulsion-unit failure.
+    ``body_drag_area_m2`` is the airframe's equivalent flat-plate area (see ``airframe_drag``), which
+    gives the body quadratic parasitic drag; without it a forward dash has no terminal velocity.
+    """
     table = _motor_table(rotor_count)
     L = arm_length_m(rotor_radius_m)
     ixx, iyy, izz = inertia
     template_dir, out_dir = Path(template_dir), Path(out_dir)
 
-    # --- standoffs: iris head (base_link + imu) with our mass/inertia, + N rotors ---
     so_src = (template_dir / "all_models" / "iris_with_standoffs" / "model.sdf").read_text()
     head = so_src[: so_src.index("    <link name='rotor_0'>")]
     head = head.replace("<mass>1.5</mass>", f"<mass>{total_mass_kg:.4f}</mass>")
@@ -301,7 +292,6 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
         "          <iyy>0.015</iyy>\n          <iyz>0</iyz>\n          <izz>0.017</izz>",
         f"<ixx>{ixx:.6f}</ixx>\n          <ixy>0</ixy>\n          <ixz>0</ixz>\n"
         f"          <iyy>{iyy:.6f}</iyy>\n          <iyz>0</iyz>\n          <izz>{izz:.6f}</izz>")
-    # Draw the planned airframe instead of the template's quadrotor body mesh.
     body_start = head.index("      <visual name='base_visual'>")
     body_end = head.index("</visual>", body_start) + len("</visual>\n")
     head = (head[:body_start]
@@ -320,13 +310,11 @@ def generate_multirotor_sdf(total_mass_kg: float, rotor_count: int, rotor_radius
                    '      name="gz::sim::systems::JointStatePublisher"></plugin>\n'
                  + "  </model>\n</sdf>\n")
 
-    # --- gimbal: include standoffs + aero + control (drop camera/gripper/parachute) ---
     gm = ('<?xml version="1.0"?>\n<sdf version="1.9">\n  <model name="iris_with_gimbal">\n'
           '    <include><uri>model://iris_with_standoffs</uri></include>\n')
     for i, (ang, spin) in enumerate(table):
-        # CCW: blade1 forward +y, blade2 forward -y; CW flips both
         f1, f2 = ("1", "-1") if spin > 0 else ("-1", "1")
-        a = 0.0 if i == fail_rotor else area        # fail_rotor → zero thrust (dead motor)
+        a = 0.0 if i == fail_rotor else area
         gm += _LIFTDRAG.format(area=a, cpx="0.084", fwd=f1, i=i)
         gm += _LIFTDRAG.format(area=a, cpx="-0.084", fwd=f2, i=i)
     for i in range(rotor_count):

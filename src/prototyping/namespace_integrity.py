@@ -1,9 +1,9 @@
 """User-defined namespace integrity checks for generated SysML v2.
 
-Syside reports namespace-distinguishability warnings, but a blanket warning gate
-also catches unrelated standard-library shadowing. This module checks the
-unambiguous defect we own: same-named definitions or direct features in the same
-user-defined namespace. Definitions in different owning scopes remain legal.
+Syside's namespace-distinguishability warnings also catch unrelated
+standard-library shadowing, so this module checks only the defect we own:
+same-named definitions or direct features in one user-defined namespace.
+Definitions in different owning scopes remain legal.
 """
 from __future__ import annotations
 
@@ -33,7 +33,6 @@ _DIRECT_FEATURE_RE = re.compile(
 
 
 def _mask_comments_and_strings(text: str) -> str:
-    """Preserve offsets while hiding braces and declarations in prose."""
     result = list(text)
     index = 0
     mode: str | None = None
@@ -167,13 +166,12 @@ def check_user_namespace_integrity(model_text: str) -> dict[str, Any]:
 def namespace_integrity_issues(model_text: str) -> list[str]:
     """Refinement-actionable issues for non-distinguishable member names.
 
-    Feeds the same defect the terminal USER_NAMESPACE_INTEGRITY gate rejects
-    into the refinement loop while the author is still in session — measured
-    on run 33f87cc6, where an action def and a state def twice shared one
-    name in FlightController and the collision surfaced only at the
-    zero-warning terminal qualification.  A deterministic rename is unsafe
-    here (textual references to the shared name are ambiguous about which
-    declaration they meant), so the author repairs its own naming.
+    Feeds the defect the terminal USER_NAMESPACE_INTEGRITY gate rejects into the
+    refinement loop while the author is still in session (run 33f87cc6: an action
+    def and a state def twice shared one name in FlightController and the collision
+    surfaced only at terminal qualification). A deterministic rename is unsafe -
+    references to the shared name are ambiguous - so the author repairs its own
+    naming.
     """
     report = check_user_namespace_integrity(model_text)
     issues: list[str] = []
@@ -195,9 +193,9 @@ def collect_package_definitions(
 ) -> list[dict[str, str]]:
     """Return direct user definitions in the root package (or a fragment).
 
-    The generation-plan checker needs declaration *kinds*, not only usages.
-    Keeping this scanner beside the namespace gate ensures both checks use the
-    same comment/string masking and brace-depth rules.
+    The generation-plan checker needs declaration kinds, not only usages; keeping
+    this scanner beside the namespace gate gives both checks the same masking and
+    brace-depth rules.
     """
     source = str(model_text or "")
     masked = _mask_comments_and_strings(source)

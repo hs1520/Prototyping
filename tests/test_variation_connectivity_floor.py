@@ -1,10 +1,9 @@
 """Connectivity-regression guard for the variation-DSE refinement path.
 
-The resolved variation model arrives at Phase 4-5 fully wired (reachability 1.0).
-A full LLM rewrite tends to drop `connect` statements on the converted components,
-isolating them. ``RefinementClosure.refine`` with
-``preserve_connectivity=True`` must reject any candidate that sheds connects
-relative to the model it was refined from.
+The resolved variation model arrives at Phase 4-5 fully wired (reachability 1.0)
+and a full LLM rewrite tends to drop `connect` statements on the converted
+components. ``RefinementClosure.refine`` with ``preserve_connectivity=True``
+rejects any candidate that sheds connects relative to its input.
 """
 from __future__ import annotations
 
@@ -82,7 +81,7 @@ def _execute(candidate_text: str):
     ))
 
 
-def test_refine_rejects_candidate_that_drops_connectivity():
+def test_rejects_dropped_connectivity():
     dropped = _WIRED.replace("        connect b.o to a.i;\n", "")
     current, outcome = _execute(dropped)
 
@@ -92,7 +91,7 @@ def test_refine_rejects_candidate_that_drops_connectivity():
     )
 
 
-def test_refine_accepts_candidate_that_preserves_connectivity():
+def test_accepts_kept_connectivity():
     current, outcome = _execute(_WIRED)
 
     assert outcome.revision.digest == ModelRevision.capture(current).digest

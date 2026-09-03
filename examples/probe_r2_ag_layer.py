@@ -1,25 +1,16 @@
 """Exercise the R2 A/G layer alone, against a base model an earlier run committed.
 
-DIAGNOSTIC ONLY — this writes no manifest, freezes nothing, and binds no digests,
-so nothing it prints is experiment evidence. Claims still come from
-``run_revised_experiment.py``, which is a descriptive pilot and therefore requires
-three distinct seeds by protocol.
-
-The point is cost. A pilot spends most of its budget on design generation and
-refinement, which is not what an A/G change touches: what changes is the decision
-prompt, ``ag_decision``, ``ag_emitter`` and the checker. This runs exactly that
-path —
+Diagnostic only: no manifest, no freezing, no digest binding, so its output is
+not experiment evidence; claims come from ``run_revised_experiment.py``, which
+needs three distinct seeds by protocol. This runs just the path an A/G change
+touches -
 
     decision prompt -> LLM decisions -> ag_decision -> ag_emitter -> check_ag_graph
 
-— at one LLM call per selected chain, so a defect can be found and fixed in a
-minute instead of an hour, and the expensive multi-seed run happens once, at the
-end, when the chains are already stable.
+- at one LLM call per selected chain, instead of paying for design generation
+and refinement, so a defect surfaces before the multi-seed run.
 
-    .venv/bin/python examples/probe_r2_ag_layer.py \
-        --base examples/output/<run>/seed-0/R1-BBCTX/shared_model_final.sysml \
-        --provider vertex --model gemini-3.1-pro-preview \
-        --confirm-external-call
+    .venv/bin/python examples/probe_r2_ag_layer.py         --base examples/output/<run>/seed-0/R1-BBCTX/shared_model_final.sysml         --provider vertex --model gemini-3.1-pro-preview         --confirm-external-call
 """
 from __future__ import annotations
 

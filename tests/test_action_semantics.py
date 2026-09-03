@@ -1,9 +1,9 @@
-"""The terminal action-semantics audit: what an action actually does.
+"""Terminal action-semantics audit: what an action does.
 
 The behavioural simulator credits a response when the target state carries an
-action label, and the only reader of an action body produces no scenario when
-there is nothing to read.  These tests pin the distinctions that audit has to
-make, including the ones the archived evidence never exercises.
+action label, and the only reader of an action body produces no scenario for
+an empty one. These tests pin the distinctions the audit has to make,
+including those the archived evidence never exercises.
 """
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def _chain(model: str, effect: PlannedActionEffect) -> dict:
     return report.requirement_chains[0]
 
 
-def test_the_complete_chain_passes():
+def test_complete_chain_passes():
     from src.simulation.syntax_checker import check_syntax
 
     assert check_syntax(_COMPLETE).total_errors() == 0, (
@@ -123,17 +123,14 @@ def test_the_complete_chain_passes():
     assert chain["status"] == "PASS", chain
 
 
-def test_an_empty_response_action_fails():
-    """The archived pilot's ordinary case: a named response that does nothing."""
+def test_empty_response_action_fails():
     chain = _chain(_model(controller_body=" ", consumer_transition=_ACCEPT),
                    _effect())
     assert chain["status"] == "FAIL"
     assert UNSUPPORTED_BODY in chain["failures"]
 
 
-def test_an_empty_event_item_definition_is_allowed():
-    """`item def PayloadReleaseRequested;` has no body and needs none — the
-    strict rule must not demand an implementation of a command type."""
+def test_empty_event_item_allowed():
     report = analyze_action_semantics(_COMPLETE)
     assert report.summary["definitions_total"] == 1, (
         "only the response action is an action definition; the event is an item"
@@ -141,7 +138,7 @@ def test_an_empty_event_item_definition_is_allowed():
     assert report.summary["supported_effects"] == 1
 
 
-def test_a_bare_invocation_fails_even_though_the_name_matches():
+def test_bare_invocation_fails():
     bare = _COMPLETE.replace(
         "entry action onRelease : releasePayload;",
         "entry action releasePayload;",
@@ -151,7 +148,7 @@ def test_a_bare_invocation_fails_even_though_the_name_matches():
     assert BARE_INVOCATION in chain["failures"]
 
 
-def test_a_send_with_no_accepting_consumer_fails():
+def test_no_accepting_consumer_fails():
     chain = _chain(
         _model(controller_body=_SEND,
                consumer_transition="transition idle first Held "
@@ -162,7 +159,7 @@ def test_a_send_with_no_accepting_consumer_fails():
     assert NO_ACCEPT_TRANSITION in chain["failures"]
 
 
-def test_a_send_with_no_connect_path_fails():
+def test_no_connect_path_fails():
     chain = _chain(
         _model(controller_body=_SEND, consumer_transition=_ACCEPT, connect=""),
         _effect(),
@@ -171,14 +168,12 @@ def test_a_send_with_no_connect_path_fails():
     assert NO_CONNECT_PATH in chain["failures"]
 
 
-def test_a_response_owned_by_another_part_does_not_satisfy_the_requirement():
-    """Name matching is what this profile replaces: an identically named action
-    in a different owner must not be credited."""
+def test_foreign_owner_fails():
     chain = _chain(_COMPLETE, _effect(owner_def="SomeOtherController"))
     assert chain["status"] == "FAIL"
 
 
-def test_an_unsupported_effect_is_recorded_rather_than_faked():
+def test_unsupported_effect_recorded():
     chain = _chain(
         _COMPLETE,
         _effect(effect_kind=EXTERNAL_OR_UNSUPPORTED, event_type="",
@@ -189,7 +184,7 @@ def test_an_unsupported_effect_is_recorded_rather_than_faked():
     assert chain["failures"] == []
 
 
-def test_the_four_realisation_states_are_distinguished():
+def test_four_realisation_states():
     model = """
 package P {
     part def Monitor {
@@ -216,10 +211,11 @@ package P {
     assert kinds["nobodyNamesMe"] == ORPHAN
 
 
-def test_the_audit_profile_never_fails_and_reports_no_invented_chains():
-    """LEGACY_AUDIT must leave archived evidence reproducible: it records the
-    numbers and asserts nothing, and with no plan it claims no chains rather
-    than reconstructing them from action names."""
+def test_audit_profile_invents_no_chains():
+    """LEGACY_AUDIT keeps archived evidence reproducible: it records the numbers,
+    asserts nothing, and with no plan claims no chains instead of rebuilding
+    them from action names.
+    """
     report = analyze_action_semantics(_COMPLETE, profile=LEGACY_AUDIT)
     assert report.status == "ADVISORY"
     assert report.requirement_chains == []
@@ -227,13 +223,13 @@ def test_the_audit_profile_never_fails_and_reports_no_invented_chains():
     assert report.summary["complete_requirement_chains"] == 0
 
 
-def test_the_off_profile_does_no_work():
+def test_off_profile_no_work():
     report = analyze_action_semantics(_COMPLETE, profile=OFF)
     assert report.actions == []
     assert report.summary["definitions_total"] == 0
 
 
-def test_the_report_carries_a_digest_of_the_model_it_read():
+def test_report_carries_model_digest():
     import hashlib
 
     report = analyze_action_semantics(_COMPLETE)
@@ -243,9 +239,7 @@ def test_the_report_carries_a_digest_of_the_model_it_read():
     ).hexdigest()
 
 
-def test_the_action_def_count_is_not_inflated_by_a_default_prefixed_usage():
-    """`entry action defaultToLockedState;` contains the substring `action def`
-    and inflates a naive count by three across the archived pilot."""
+def test_default_prefix_not_counted():
     model = """
 package P {
     part def Latch {
@@ -265,11 +259,9 @@ package P {
     ("examples/output/pilot_n6_v8_full_20260808_1029", 155, 152),
     ("examples/output/runs/82c1e7ad-8e26-4f71-946c-83e7fe9b684e", 25, 19),
 ])
-def test_the_archived_evidence_reproduces_its_known_counts(
+def test_archived_counts_reproduce(
     path, expected_total, expected_empty
 ):
-    """Pinned against the frozen evidence: the audit is only useful if it
-    reproduces the numbers the report will quote."""
     import pathlib
 
     root = pathlib.Path(path)
@@ -288,14 +280,13 @@ def test_the_archived_evidence_reproduces_its_known_counts(
     assert (total, empty) == (expected_total, expected_empty)
 
 
-def test_the_audit_reaches_the_run_report_and_its_own_artifact():
+def test_audit_reaches_run_report():
     """Two carriers, because one has failed before.
 
-    `generation_metadata["semantic_fixes"]` and its four sibling counters reach
-    no archived artefact at all — not in the frozen pilot, not anywhere — and a
-    repair-refusal audit was reverted in `a8d7052` for the same reason.  The
-    run report is a hand-maintained projection of the run result, so a field
-    present in the result is not thereby present in the report.
+    `generation_metadata["semantic_fixes"]` and its four sibling counters reach no
+    archived artefact, and a repair-refusal audit was reverted in `a8d7052` for
+    the same reason. The run report is a hand-maintained projection of the run
+    result, so a field in the result need not be in the report.
     """
     from src.app.pipeline import PrototypingPipeline
     from src.prototyping.run_artifacts import write_revised_run_artifacts
@@ -317,12 +308,11 @@ def test_the_audit_reaches_the_run_report_and_its_own_artifact():
 
 
 # ---------------------------------------------------------------------------
-# The strict reading of functional evidence.  Advisory: `functional_behavior_status`
-# is unchanged so every archived run still scores exactly as it did.
+# Strict reading of functional evidence. Advisory: `functional_behavior_status`
+# is unchanged, so archived runs score as before.
 # ---------------------------------------------------------------------------
 
 def _archived_authoritative():
-    """The frozen authoritative run, or None in a checkout without archives."""
     import json
     import pathlib
 
@@ -341,15 +331,15 @@ def _archived_authoritative():
     return model.read_text(encoding="utf-8"), requirements
 
 
-def test_the_legacy_rule_credits_a_requirement_from_another_requirements_action():
+def test_legacy_rule_credits_by_name():
     """Pinned against the authoritative run rather than a fixture.
 
-    REQ-FUNC-001 asks for navigation to GPS waypoints. The model's own
-    `navigateToGpsWaypoints` is an orphan — defined, referenced nowhere — and
-    the only crediting name is `incorporateRevisedWaypointSequence`, which is
-    REQ-FUNC-006's response, matched on the shared substring `waypoint`.
-    Neither REQ-FUNC-001 nor REQ-FUNC-008 hits the requirement-text fallback in
-    `verification_matrix`, so their archived `partial` rows rest on this alone.
+    REQ-FUNC-001 asks for navigation to GPS waypoints. `navigateToGpsWaypoints` is
+    defined but referenced nowhere, so the only crediting name is REQ-FUNC-006's
+    `incorporateRevisedWaypointSequence`, matched on the shared substring
+    `waypoint`. Neither REQ-FUNC-001 nor REQ-FUNC-008 hits the requirement-text
+    fallback in `verification_matrix`, so their archived `partial` rows rest on
+    this alone.
     """
     from src.dse.functional_behavior import functional_behavior_status
 
@@ -362,7 +352,7 @@ def test_the_legacy_rule_credits_a_requirement_from_another_requirements_action(
     assert status.get("REQ-FUNC-008") == "behaviorally-verified"
 
 
-def test_the_strict_reading_withdraws_what_only_a_name_supported():
+def test_strict_withdraws_name_credit():
     from src.dse.functional_behavior import functional_behavior_diagnosis
     from src.prototyping.action_semantics import analyze_action_semantics
 
@@ -379,8 +369,7 @@ def test_the_strict_reading_withdraws_what_only_a_name_supported():
         assert diagnosis[rid]["status_difference_reason"]
 
 
-def test_the_strict_reading_leaves_the_legacy_verdict_untouched():
-    """The audit must not change a number any archived run reported."""
+def test_strict_leaves_legacy_verdict():
     from src.dse.functional_behavior import (
         functional_behavior_diagnosis,
         functional_behavior_status,
@@ -417,7 +406,7 @@ def _schema_10_payload() -> dict:
     }
 
 
-def test_a_plan_that_carries_action_effects_declares_schema_10():
+def test_action_effects_declare_schema_10():
     from src.prototyping.generation_plan import ModelGenerationPlan
 
     plan = ModelGenerationPlan.from_dict(_schema_10_payload())
@@ -426,9 +415,7 @@ def test_a_plan_that_carries_action_effects_declares_schema_10():
     assert plan.to_dict()["action_effects"][0]["requirement_id"] == "REQ_FUNC_005"
 
 
-def test_a_plan_without_action_effects_serialises_exactly_as_before():
-    """Schema 1-9 plans must round-trip unchanged, or every archived run's
-    plan artefact stops being comparable with the one the code now produces."""
+def test_no_action_effects_old_schema():
     from src.prototyping.generation_plan import ModelGenerationPlan
 
     payload = _schema_10_payload()
@@ -439,7 +426,7 @@ def test_a_plan_without_action_effects_serialises_exactly_as_before():
     assert "action_effects" not in plan.to_dict()
 
 
-def test_an_action_effect_missing_an_identity_fails_the_plan_closed():
+def test_effect_missing_identity_fails():
     from src.prototyping.generation_plan import ModelGenerationPlan
 
     payload = _schema_10_payload()
@@ -448,7 +435,7 @@ def test_an_action_effect_missing_an_identity_fails_the_plan_closed():
     assert any("does not name every element" in issue for issue in plan.issues)
 
 
-def test_the_archived_plans_round_trip_without_gaining_a_schema_10_key():
+def test_archived_plans_round_trip():
     import glob
     import json
 
@@ -473,13 +460,13 @@ def test_the_archived_plans_round_trip_without_gaining_a_schema_10_key():
     assert checked
 
 
-def test_an_invocation_from_an_unrelated_state_does_not_discharge_the_plan():
+def test_unrelated_state_invocation_fails():
     """`some state somewhere types it` is not the obligation.
 
-    Dropping the usage-label requirement was right — the label is a local name
-    and three runs of one configuration spelled it three ways — but the check
-    still has to bind the invocation to the planned response state, or an
-    unrelated machine satisfies it.
+    The usage-label requirement was dropped because the label is a local name that
+    three runs of one configuration spelled three ways, but the check still binds
+    the invocation to the planned response state, or an unrelated machine
+    satisfies it.
     """
     from src.prototyping.action_semantics import BARE_INVOCATION
 
@@ -495,7 +482,7 @@ def test_an_invocation_from_an_unrelated_state_does_not_discharge_the_plan():
     assert BARE_INVOCATION in chain["failures"]
 
 
-def test_the_planned_response_state_may_spell_its_usage_label_any_way():
+def test_any_usage_label_passes():
     for label in ("onRelease", "releasePayloadAction", "doIt"):
         model = _COMPLETE.replace(
             "entry action onRelease : releasePayload;",

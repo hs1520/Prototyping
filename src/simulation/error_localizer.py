@@ -1,25 +1,4 @@
-"""
-error_localizer.py
-
-Tier-1 外科式 LLM 修复：把整个 SysML 模型传给 LLM 之前，先把每处
-语法错误定位到最小代码块，只传错误片段 + 精简声明摘要，
-修复后用行范围替换合并回原文。
-
-典型效果
-────────
-  传统方式：~200 行完整模型 → LLM → 整个新模型
-  本模块：  ~15 行错误块 + ~8 行声明摘要 → LLM → 修复片段 → 程序合并
-
-公共 API
-────────
-  ErrorChunk              — 一个提取出来的错误块（含声明摘要）
-  MergeResult             — merge_fixed_chunk() 的返回值
-  ChunkFixSession         — 同一次修复循环中多块合并的上下文
-  extract_error_context   — 按语法块分组，提取最小上下文
-  merge_fixed_chunk       — 行范围替换合并
-  build_fix_prompt        — 为单块生成 LLM 修复 prompt
-  text_normalization.strip_code_fences — 清除 LLM 返回中的 markdown 围栏
-"""
+"""error_localizer.py"""
 
 from __future__ import annotations
 
@@ -32,32 +11,13 @@ from .syntax_checker import condense_diagnostic
 from ..sysml import text_normalization
 
 
-# ---------------------------------------------------------------------------
-# 常量
-# ---------------------------------------------------------------------------
+_DEFAULT_PADDING       = 3
+_DEFAULT_MAX_LINE_DELTA = 15
 
-_DEFAULT_PADDING       = 3   # 包级别错误上下文的上下行数
-_DEFAULT_MAX_LINE_DELTA = 15  # 合并时允许的最大行数变化量
-
-
-# ---------------------------------------------------------------------------
-# 数据类
-# ---------------------------------------------------------------------------
 
 @dataclass
 class ErrorChunk:
-    """
-    从原始 SysML 文本中提取的一个错误修复单元。
-
-    Attributes
-    ----------
-    start_line   原文中的起始行（1-indexed，含）
-    end_line     原文中的结束行（1-indexed，含）
-    chunk_text   提取出来的代码片段（多行字符串，不含行号前缀）
-    errors       落在 [start_line, end_line] 内的错误列表
-    decl_summary 精简声明摘要，供 LLM 参考（不在错误块内）
-    block_name   所在语法块名称，例如 "BatteryMonitor"；包级别为 "__pkg__"
-    """
+    """从原始 SysML 文本中提取的一个错误修复单元。"""
     start_line:   int
     end_line:     int
     chunk_text:   str
@@ -68,35 +28,14 @@ class ErrorChunk:
 
 @dataclass
 class MergeResult:
-    """
-    merge_fixed_chunk() 的返回值。
-
-    Attributes
-    ----------
-    success      是否成功合并
-    merged_text  合并后的完整 SysML 文本
-    line_delta   行数变化（正 = 增加，负 = 减少）
-    warning      非空时表示合并成功但有需要注意的情况
-    """
+    """merge_fixed_chunk() 的返回值。"""
     success:     bool
     merged_text: str
     line_delta:  int
     warning:     Optional[str] = None
 
 
-# ---------------------------------------------------------------------------
-# 工具函数
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# 声明摘要生成
-# ---------------------------------------------------------------------------
-
 def _build_decl_summary(vocab: SysMLVocab) -> str:
-    """
-    从 SysMLVocab 生成精简声明摘要，供 LLM 参考。
-    无论模型多大，输出通常只有 4-8 行。
-    """
     lines: List[str] = [
         "[Reference — do not modify, for context only]"
     ]
@@ -122,25 +61,17 @@ def _build_decl_summary(vocab: SysMLVocab) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# 核心函数 1：提取错误上下文
-# ---------------------------------------------------------------------------
-
 def extract_error_context(
     sysml_text: str,
     errors: List[Dict],
     padding: int = _DEFAULT_PADDING,
 ) -> List[ErrorChunk]:
-    """
-    把 *errors* 按所在语法块分组，为每组提取最小代码上下文。
+    """把 *errors* 按所在语法块分组，为每组提取最小代码上下文。
 
     分组规则
     ────────
-    ① 落在某个 `part def` 块体内的错误  →  以该完整块体为单元（一次 LLM 调用
-       能看到完整结构，避免缺少上下文导致的误修）
-    ② 不在任何 `part def` 内的错误      →  以 ±padding 行窗口为单元；
-       相邻 / 重叠的窗口自动合并为一块
-
+    ① 落在 `part def` 块体内的错误 -> 以整个块体为单元，避免缺上下文的误修
+    ② 其余错误 -> 以 +/-padding 行窗口为单元，相邻/重叠窗口合并为一块
     返回值按 start_line 升序排列。
 
     Parameters
@@ -157,16 +88,13 @@ def extract_error_context(
     total      = len(all_lines)
     decl_summary = _build_decl_summary(vocab)
 
-    # ── 第一步：将每个错误映射到对应的块 key ─────────────────────────────
-    # key = (start_line, end_line, block_name)
     block_to_errors: Dict[Tuple[int, int, str], List[Dict]] = {}
 
     for err in errors:
         line_no = err.get('line', 0)
         if not (1 <= line_no <= total):
-            continue   # 行号无效，跳过
+            continue
 
-        # 在 part def 范围表中查找包含该行的块
         matched: Optional[Tuple[int, int, str]] = None
         for s, e, name in vocab._ranges:
             if s <= line_no <= e:
@@ -174,14 +102,12 @@ def extract_error_context(
                 break
 
         if matched is None:
-            # 包级别：建立以错误行为中心的上下文窗口
             ws = max(1, line_no - padding)
             we = min(total, line_no + padding)
             matched = (ws, we, '__pkg__')
 
         block_to_errors.setdefault(matched, []).append(err)
 
-    # ── 第二步：合并重叠的包级别窗口 ─────────────────────────────────────
     items: List[Tuple[Tuple[int, int, str], List[Dict]]] = list(block_to_errors.items())
 
     pkg_items   = [(k, v) for k, v in items if k[2] == '__pkg__']
@@ -194,7 +120,7 @@ def extract_error_context(
         cur_errs: List[Dict] = list(pkg_items[0][1])
 
         for (s, e, _), errs in pkg_items[1:]:
-            if s <= cur_e + 1:          # 重叠或相邻 → 合并
+            if s <= cur_e + 1:
                 cur_e = max(cur_e, e)
                 cur_errs.extend(errs)
             else:
@@ -205,12 +131,11 @@ def extract_error_context(
 
         items = other_items + merged_pkg
 
-    # ── 第三步：按 start_line 排序，构建 ErrorChunk 列表 ─────────────────
     items.sort(key=lambda x: x[0][0])
 
     chunks: List[ErrorChunk] = []
     for (start, end, block_name), errs in items:
-        chunk_lines = all_lines[start - 1: end]   # 0-indexed 切片
+        chunk_lines = all_lines[start - 1: end]
         chunks.append(ErrorChunk(
             start_line   = start,
             end_line     = end,
@@ -223,23 +148,18 @@ def extract_error_context(
     return chunks
 
 
-# ---------------------------------------------------------------------------
-# 核心函数 2：合并修复片段
-# ---------------------------------------------------------------------------
-
 def merge_fixed_chunk(
     sysml_text: str,
     chunk: ErrorChunk,
     fixed_text: str,
     max_line_delta: int = _DEFAULT_MAX_LINE_DELTA,
 ) -> MergeResult:
-    """
-    用 *fixed_text* 替换 *sysml_text* 中 [chunk.start_line, chunk.end_line] 对应的行。
+    """用 *fixed_text* 替换 *sysml_text* 中 [chunk.start_line, chunk.end_line] 对应的行。
 
     行数校验
     ────────
-    若修复后行数变化超过 *max_line_delta*，合并被拒绝并返回 success=False。
-    这可以防止 LLM 对模型做大幅度结构性改动。
+    行数变化超过 *max_line_delta* 时拒绝合并（success=False），防止 LLM 做大幅
+    结构性改动。
 
     Parameters
     ----------
@@ -260,7 +180,6 @@ def merge_fixed_chunk(
     orig_chunk_len = chunk.end_line - chunk.start_line + 1
     line_delta     = len(fixed_lines) - orig_chunk_len
 
-    # ── 行数合理性校验 ────────────────────────────────────────────────────
     if abs(line_delta) > max_line_delta:
         return MergeResult(
             success     = False,
@@ -274,7 +193,6 @@ def merge_fixed_chunk(
             ),
         )
 
-    # ── 行范围替换 ────────────────────────────────────────────────────────
     merged = (
         orig_lines[: chunk.start_line - 1]
         + fixed_lines
@@ -297,14 +215,8 @@ def merge_fixed_chunk(
     )
 
 
-# ---------------------------------------------------------------------------
-# 核心函数 3：构建 LLM 修复 prompt
-# ---------------------------------------------------------------------------
-
-# "No Feature named 'X' found." — 提取缺失的特征名
 _MISSING_FEATURE_RE = re.compile(r"No Feature named '([^']+)' found")
 
-# 名字暗示布尔标志的词缀（用于推断缺失属性的类型）
 _BOOL_HINT_RE = re.compile(
     r"(?:Failed|Detected|Active|Activated|Enabled|Disabled|Triggered|Ready|"
     r"Valid|Invalid|Lost|Exceeded|Pending|Done|Complete|Ok|Set|Flag)$",
@@ -312,23 +224,16 @@ _BOOL_HINT_RE = re.compile(
 )
 _BOOL_PREFIX_RE = re.compile(r"^(?:is|has|should|can|must)[A-Z]")
 
-# 单位括号 [...] — 用于把 `[bit]` 这类单位名与 guard 状态变量区分开
+# 单位括号 [...] - 用于把 `[bit]` 这类单位名与 guard 状态变量区分开
 
 
 def _infer_attr_decl(name: str) -> str:
-    """
-    为一个缺失的 guard 变量推断合理的 attribute 声明。
-
-    名字暗示布尔标志（…Failed / …Detected / isX / hasX …）→ Boolean = false
-    否则视为被测的连续量                                    → Real = 0.0
-    """
     if _BOOL_HINT_RE.search(name) or _BOOL_PREFIX_RE.match(name):
         return f"attribute {name} : Boolean = false;"
     return f"attribute {name} : Real = 0.0;"
 
 
 def _name_in_unit_bracket(name: str, line_text: str) -> bool:
-    """Return True if *name* appears inside a unit bracket [...] on *line_text*."""
     for m in _UNIT_BRACKET_RE.finditer(line_text):
         if name in m.group(1):
             return True
@@ -336,12 +241,11 @@ def _name_in_unit_bracket(name: str, line_text: str) -> bool:
 
 
 def _missing_feature_hints(chunk: "ErrorChunk") -> List[str]:
-    """
-    从 chunk 的 "No Feature named 'X' found" 错误中提取缺失变量，
-    返回推荐声明列表（去重，保持出现顺序）。
+    """从 chunk 的 "No Feature named 'X' found" 错误中提取缺失变量，返回推荐声明
+    列表（去重，保持出现顺序）。
 
-    会跳过出现在单位括号 [...] 内的名字（如 `[bit]`）：那是单位标注，
-    不是 guard 状态变量，绝不能为它声明 attribute（否则产生垃圾属性）。
+    跳过单位括号 [...] 内的名字（如 `[bit]`）：那是单位标注而非 guard 状态变量，
+    不为它声明 attribute。
     """
     chunk_lines = chunk.chunk_text.split('\n')
     seen: Set[str] = set()
@@ -354,7 +258,6 @@ def _missing_feature_hints(chunk: "ErrorChunk") -> List[str]:
         if name in seen:
             continue
 
-        # 定位错误所在源码行，判断 name 是否是单位标注 [name]
         idx = e.get('line', 0) - chunk.start_line
         line_text = chunk_lines[idx] if 0 <= idx < len(chunk_lines) else ""
         if _name_in_unit_bracket(name, line_text):
@@ -366,24 +269,10 @@ def _missing_feature_hints(chunk: "ErrorChunk") -> List[str]:
 
 
 def build_fix_prompt(chunk: ErrorChunk) -> str:
-    """
-    为单个 ErrorChunk 生成聚焦的 LLM 修复 prompt。
-
-    Prompt 结构
-    ───────────
-    1. 指令 + 语义保持规则（禁止改运算符 / 禁止把 guard 变量绑到无关端口）
-    2. 需修复的错误列表
-    3. 缺失 guard 变量的推荐声明（针对 "No Feature named" 错误）
-    4. 声明摘要（参考用，不可修改）
-    5. 带行号显示的代码片段
-    6. 严格的输出格式约束
-
-    返回字符串通常在 30-45 行之间（vs 整个模型的 100-300 行）。
-    """
-    # ── 格式化错误列表 ────────────────────────────────────────────────────
-    # syside 的 parser 诊断会把整个期望终结符集合打出来（~2400 字符），单条就
-    # 比它所附的代码片段还长，而且不具区分度（实测出现过 "Unexpected 'part',
-    # expected one of [… "part" …]"）。喂给 LLM 前压缩；日志与 artifact 保持原样。
+    """为单个 ErrorChunk 生成聚焦的 LLM 修复 prompt。"""
+    # ── 格式化错误列表 ────────────────────────────────────────
+    # syside parser 诊断会打出整个期望终结符集合（~2400 字符），比所附代码片段
+    # 还长且无区分度。喂给 LLM 前压缩；日志与 artifact 保持原样。
     err_lines: List[str] = []
     for e in chunk.errors:
         ln  = e.get('line', '?')
@@ -392,13 +281,11 @@ def build_fix_prompt(chunk: ErrorChunk) -> str:
         err_lines.append(f"  Line {ln}, col {col}: {msg}")
     errors_block = "\n".join(err_lines)
 
-    # ── 带行号的代码片段（仅用于展示，输出时不带行号）────────────────────
     snippet_lines: List[str] = []
     for i, line in enumerate(chunk.chunk_text.split('\n'), start=chunk.start_line):
         snippet_lines.append(f"{i:4d} | {line}")
     snippet = "\n".join(snippet_lines)
 
-    # ── 缺失 guard 变量的推荐声明块（仅当存在此类错误时）──────────────────
     miss_hints = _missing_feature_hints(chunk)
     missing_block = ""
     if miss_hints:

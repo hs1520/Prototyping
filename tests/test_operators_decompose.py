@@ -1,4 +1,3 @@
-"""Tests for the #4 DecomposeController architecture operator."""
 from __future__ import annotations
 
 import pytest
@@ -32,7 +31,7 @@ def test_resolve_parses(op: DecomposeController, variant: str) -> None:
     _assert_parses(op.resolve(variant))
 
 
-def test_distributed_wiring_parses_and_connects(op: DecomposeController) -> None:
+def test_distributed_wiring_connects(op: DecomposeController) -> None:
     text = op.resolve("distributed", with_wiring=True)
     _assert_parses(text)
     assert text.count("connect coordinator.toNode") == 3
@@ -51,5 +50,5 @@ def test_resolve_unknown_variant_raises(op: DecomposeController) -> None:
 def test_preconditions(op: DecomposeController) -> None:
     assert op.preconditions("centralised", part_count=1)
     assert op.preconditions("distributed", part_count=5)
-    assert not op.preconditions("distributed", part_count=2)  # too few parts
+    assert not op.preconditions("distributed", part_count=2)
     assert not op.preconditions("distributed", part_count=5, allow_distributed=False)

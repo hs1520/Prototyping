@@ -1,9 +1,8 @@
 """Capstone: outer MO-MCTS + inner BO + grounded (executed-model) safety eval.
 
-The outer layer searches architectures; the inner BO tunes control_frequency per
-architecture; reliability is no longer an analytic formula but is derived by
-*executing* each resolved model under fault injection (grounded_eval). This is the
-full bilevel + grounded-evaluation stack the redesign targets.
+The outer layer searches architectures, the inner BO tunes control_frequency per
+architecture, and reliability comes from executing each resolved model under
+fault injection (grounded_eval).
 """
 from __future__ import annotations
 
@@ -36,7 +35,6 @@ def _inner_objective(state, f, ctx):
 
 
 def _outer_map(state, best_f, best_perf, ctx):
-    # reliability comes from EXECUTING the resolved redundancy model under faults
     g = grounded_safety(_RED.resolve(state["arbitration"], with_fanin=True),
                         channel_reliability=ctx.channel_reliability)
     nodes = 1 if state["topology"] == "centralised" else 3
@@ -65,7 +63,7 @@ def _make():
     return mcts, ev
 
 
-def test_full_stack_front_non_dominated():
+def test_front_non_dominated():
     mcts, _ = _make()
     front = mcts.search(iterations=120)
     vecs = [(o["reliability"], o["cost_efficiency"]) for _, o in front.members]
@@ -75,19 +73,16 @@ def test_full_stack_front_non_dominated():
                 assert not dominates(b, a)
 
 
-def test_full_stack_reliability_is_grounded():
-    """The reliability of front members tracks executed-model redundancy depth."""
+def test_reliability_grounded():
     mcts, _ = _make()
     front = mcts.search(iterations=120)
     by_red = {}
     for s, o in front.members:
         by_red.setdefault(s["arbitration"], o["reliability"])
-    # whenever both appear on the front, more redundancy => higher (perf-weighted) reliability
-    # at minimum, triple's grounded reliability ceiling exceeds single's
     assert grounded_safety(_RED.resolve("triple", with_fanin=True)).reliability > grounded_safety(_RED.resolve("single")).reliability
 
 
 def test_inner_bo_cached_and_bounded():
     mcts, ev = _make()
     mcts.search(iterations=120)
-    assert ev.inner_runs <= 6  # one inner BO per distinct architecture
+    assert ev.inner_runs <= 6

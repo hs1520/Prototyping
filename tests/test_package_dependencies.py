@@ -1,4 +1,3 @@
-"""Package layering stays acyclic after the P1 shared-helper moves."""
 from __future__ import annotations
 
 import ast
@@ -36,8 +35,7 @@ def test_no_bidirectional_package_pairs():
     ]
 
 
-def test_package_graph_is_acyclic():
-    """Reject cycles of every length, not only bidirectional package pairs."""
+def test_package_graph_acyclic():
     edges = _package_edges()
     graph: dict[str, set[str]] = collections.defaultdict(set)
     for source, target in edges:
@@ -70,7 +68,7 @@ def test_design_agent_annotations_resolve():
     assert hints["request"].__name__ == "AssemblyRequest"
 
 
-def test_generation_protocols_are_not_reimplemented_on_design_agent():
+def test_no_reimplemented_protocols():
     tree = ast.parse((_SRC / "agents/design_agent.py").read_text(encoding="utf-8"))
     design_agent = next(
         node
@@ -120,7 +118,7 @@ def test_generation_protocols_are_not_reimplemented_on_design_agent():
     assert ".system_prompt =" not in requirements
 
 
-def test_moved_helpers_are_not_still_defined_in_source_modules():
+def test_moved_helpers_not_redefined():
     forbidden = {
         "sysml/lite_model.py": {"_is_stdlib_sema_error"},
         "simulation/syntax_checker.py": {"_is_stdlib_sema_error"},
@@ -136,7 +134,7 @@ def test_moved_helpers_are_not_still_defined_in_source_modules():
         assert defined.isdisjoint(names), f"{relative}: {defined & names}"
 
 
-def test_sitl_does_not_import_private_dse_implementation():
+def test_sitl_no_private_dse_import():
     for path in (_SRC / "sitl").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         private = {

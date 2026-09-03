@@ -1,8 +1,8 @@
 """Fail-closed reporting policy for the revised descriptive pilot.
 
-`n` follows the runs actually performed; three is the floor.  The classification
-and the inference bans below are deliberately independent of `n`: more
-repetitions buy tighter descriptive estimates, never confirmatory licence.
+`n` follows the runs performed, with three as the floor. The classification and the
+inference bans below are independent of `n`: more repetitions tighten descriptive
+estimates but grant no confirmatory licence.
 """
 from __future__ import annotations
 

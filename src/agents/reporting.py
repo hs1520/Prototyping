@@ -12,7 +12,6 @@ class ReportingMixin:
     def _print_explore_summary(
         self, final_model: SysMLModel, final_score: float, final_sim, best_config
     ) -> None:
-        """Always-visible end-of-exploration summary (score, sim, LLM usage)."""
         print(f"{'='*60}")
         print("Exploration Complete!")
         print(f"  Final score:              {final_score:.3f}")
@@ -26,14 +25,12 @@ class ReportingMixin:
             print(line)
         print(f"{'='*60}\n")
 
-
     @staticmethod
     def _print_exploration_summary(
         design_space: DesignSpace,
         best_config: DesignConfiguration,
         pareto_front: List[DesignConfiguration],
     ) -> None:
-        """Print a transparent breakdown of MCTS exploration results."""
         summary = design_space.get_summary()
         diagnostics = design_space.objective_weights or {}
         iters = int(diagnostics.get("iterations_run", 0))
@@ -42,7 +39,7 @@ class ReportingMixin:
         # all stored on the space); scalar path falls back to the summary count.
         evaluated = int(diagnostics.get("configurations_evaluated",
                                         summary['configurations_evaluated']))
-        # size and the top-N list below must come from the SAME source, else they
+        # size and the top-N list below come from the same source, else they
         # contradict (e.g. "size 0" above "top 2").
         pareto_size = len(pareto_front)
 
@@ -50,7 +47,6 @@ class ReportingMixin:
               f"in {iters} iteration(s){' (early-stopped)' if early else ''}")
         print(f"  ✓ Pareto front size: {pareto_size}")
 
-        # Show top-3 Pareto candidates
         top = pareto_front[:3]
         if top:
             print(f"  ✓ Pareto front (top {len(top)}):")
@@ -68,7 +64,6 @@ class ReportingMixin:
         else:
             print(f"  ✓ Best config applied to model: {best_params}\n")
 
-
     def _print_iteration_summary(
         self,
         iteration: int,
@@ -80,7 +75,6 @@ class ReportingMixin:
         veto_fired: bool,
         syntax_result=None,
     ) -> None:
-        """Print a self-contained, always-visible summary block for one iteration."""
         W = 62
         bar_w = 30
 
@@ -101,7 +95,6 @@ class ReportingMixin:
               f"rule={rule_score:.3f}  llm={llm_str}{veto_tag}")
         print(f"  {'─'*W}")
 
-        # ── Syntax check block ───────────────────────────────────────────
         if syntax_result is not None:
             if not syntax_result.has_errors:
                 n_w = len(getattr(syntax_result, "warnings", ()) or ())
@@ -115,7 +108,6 @@ class ReportingMixin:
                     print(f"    L{e['line']:>3}: {e['message'][:W-10]}")
             print(f"  {'-'*W}")
 
-        # ── Dimension scores table ────────────────────────────────────────
         dim_scores = eval_result.criteria_scores or {}
         dim_labels = {
             "syntactic_validity":       "Syntactic valid ",
@@ -133,7 +125,6 @@ class ReportingMixin:
             icon = score_icon(v)
             print(f"  {icon} {label}  {bar(v)}  {v:.3f}")
 
-        # ── Structural evidence block ─────────────────────────────────────
         sim_passed = len(sim_result.passed_scenarios())
         sim_total  = len(sim_result.scenario_results)
         sim_score  = sim_result.reachability_score
@@ -161,7 +152,6 @@ class ReportingMixin:
                 f"{sim_score:.3f}  ({sim_passed}/{sim_total} scenarios)"
             )
 
-        # Show paths for safety/emergency passing scenarios
         for r in sim_result.passed_scenarios():
             if "safety" in r.tags or "emergency" in r.tags:
                 path_parts = [n for n in r.path if "." not in n]
@@ -169,7 +159,6 @@ class ReportingMixin:
                 print(f"    ✓ [{'/'.join(r.tags):<20}] {r.scenario_name}")
                 print(f"       {path_str[:W-7]}")
 
-        # Show all passing nominal scenarios (compact, one line each)
         nominal_passed = [r for r in sim_result.passed_scenarios()
                           if "safety" not in r.tags and "emergency" not in r.tags]
         if nominal_passed:
@@ -177,14 +166,12 @@ class ReportingMixin:
                   + ", ".join(r.scenario_name[:20] for r in nominal_passed[:4])
                   + ("…" if len(nominal_passed) > 4 else ""))
 
-        # Show failed scenarios with reason
         for r in sim_result.failed_scenarios():
             tgts = ", ".join(r.unreachable_targets) or "?"
             print(f"    ✗ {r.scenario_name}  →  can't reach: {tgts}")
             for w in r.warnings:
                 print(f"      ⚠ {w}")
 
-        # ── Behavioral simulation (state machine) block ───────────────────
         br = getattr(sim_result, "behavioral_result", None)
         if br is not None and br.scenario_results:
             b_passed = br.passed_count()
@@ -196,13 +183,11 @@ class ReportingMixin:
                   f"extracted: {br.extracted_sm_count}")
             for sr in br.scenario_results:
                 icon = "✓" if sr.passed else "✗"
-                # Compact trigger line
                 trig = ""
                 if sr.trigger_value is not None:
                     trig = f"  val={sr.trigger_value}"
                 elif sr.trigger_step is not None:
                     trig = f"  step={sr.trigger_step}"
-                # Show timeline entries (guard drive + entry action)
                 key_lines = [l for l in sr.timeline
                              if "Driving" in l or "Flipping" in l
                              or "entry action" in l or "at trigger" in l]
@@ -212,7 +197,6 @@ class ReportingMixin:
                 for v in sr.violations:
                     print(f"       ⚠ {v[:W-7]}")
 
-        # ── Issues (always shown) ─────────────────────────────────────────
         if eval_result.issues:
             print(f"  {'-'*W}")
             print(f"  Issues ({len(eval_result.issues)}):")
@@ -222,7 +206,6 @@ class ReportingMixin:
                 display = iss.lstrip("[VETO] ").lstrip("[SIM] ")
                 print(f"    • {display[:W-4]}{tag}")
 
-        # ── Recommendations (top 3) ───────────────────────────────────────
         if eval_result.recommendations:
             print(f"  {'-'*W}")
             print(f"  Recommendations (top {min(3, len(eval_result.recommendations))}):")
@@ -242,9 +225,7 @@ class ReportingMixin:
                     print(f"{prefix}{l}")
         print(f"  {'─'*W}", flush=True)
 
-
     def _print_final_sim(self, sim_result: SimulationResult) -> None:
-        """Full simulation report printed at the end of Phase 6."""
         total  = len(sim_result.scenario_results)
         passed = len(sim_result.passed_scenarios())
         W = 62
@@ -294,7 +275,6 @@ class ReportingMixin:
             print(f"{passive_str:<{W+4}}║")
         print(f"  ╠{'═'*W}╣")
 
-        # Per-scenario table
         for r in sim_result.scenario_results:
             icon  = "✓" if r.passed else "✗"
             tags  = "|".join(r.tags)
@@ -326,7 +306,6 @@ class ReportingMixin:
             print(f"  ║  ✓ All scenarios passed — connectivity is sound {'':>10}║")
         print(f"  ╚{'═'*W}╝", flush=True)
 
-        # ── Behavioral simulation (state machine) detail report ───────────
         br = getattr(sim_result, "behavioral_result", None)
         if br is not None and br.scenario_results:
             b_passed = br.passed_count()

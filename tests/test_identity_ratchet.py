@@ -1,15 +1,13 @@
-"""Identity ratchets: the harness may never regrow a load-bearing vocabulary.
+"""Identity ratchets: a harness spelling does not become load-bearing.
 
-Two directions, pinned on run3's committed evidence bundle:
+Pinned on run3's committed evidence bundle, two directions:
 
-- **Anti-coupling** — run3's model and plan with systematically RENAMED
-  identities must produce identical verification structure. PLAN-tier
-  consumers must survive semantically alien renames (spelling independence);
-  the SEMANTIC tier must survive renames that keep term coverage, and must
-  report an alien rename as NOT MEASURED — never as a model defect.
-- **Anti-laundering** — lenient identity resolution must not launder real
-  defects: a guard-stripped model still reads "resolved and unguarded", and
-  a response sent off its plan route still mismatches.
+- Anti-coupling: renamed identities produce identical verification structure.
+  PLAN-tier consumers survive alien renames; the SEMANTIC tier survives renames
+  that keep term coverage and reports an alien rename as NOT MEASURED.
+- Anti-laundering: lenient identity resolution still fails real defects: a
+  guard-stripped model reads "resolved and unguarded", and a response sent off
+  its plan route still mismatches.
 """
 from __future__ import annotations
 
@@ -26,8 +24,8 @@ _BUNDLE = (
     / "examples" / "output" / "run3_authoritative_20260831"
 )
 
-#: Semantically alien renames — no stem shared with the originals, and no
-#: PARACHUTE/CHUTE/CMD substring a legacy matcher could latch onto.
+# Alien renames: no stem shared with the originals, and no PARACHUTE/CHUTE/CMD
+# substring a legacy matcher could latch onto.
 _ALIEN = {
     "DeliveryCoordinateConditionSatisfied": "KryptonPulseNine",
     "PayloadReleaseCommand": "XylemBurstFour",
@@ -67,21 +65,21 @@ def _linker_shape(model_text: str, plan_payload: dict):
 
 
 def test_plan_tier_is_spelling_independent():
-    """Anti-coupling, PLAN tier: rename model AND plan consistently with
-    alien identities — the L2 suite and mismatch set must be byte-identical
-    to run3's shape. The frontier this pin once held open ({FUNC_005,
-    SAFE_006}: the AST synthesizer's keyword-family guard matching) was
-    closed by the identity tier (plan identifiers → semantic tags); any
-    reappearing gap means a harness spelling became load-bearing again."""
+    """Anti-coupling, PLAN tier: rename model and plan consistently with alien
+    identities; the L2 suite and mismatch set stay byte-identical to run3's shape.
+
+    The gap this pin once held open ({FUNC_005, SAFE_006}: the AST synthesizer's
+    keyword-family guard matching) was closed by the identity tier (plan identifiers
+    -> semantic tags); a reappearing gap means a harness spelling is load-bearing
+    again.
+    """
     base = _linker_shape(_model_text(), _plan_payload())
     renamed_plan = json.loads(_rename(json.dumps(_plan_payload()), _ALIEN))
     renamed = _linker_shape(_rename(_model_text(), _ALIEN), renamed_plan)
     assert renamed == base
 
 
-def test_semantic_tier_resolves_term_covering_renames_identically():
-    """Anti-coupling, SEMANTIC tier: a rename that keeps the canonical
-    event's terms covered resolves to the same guards as run3."""
+def test_semantic_tier_resolves_renames():
     baseline = ModelDrivenMission(model_text=_model_text()).guards_for_event(
         "DeliveryCoordinateSatisfied"
     )
@@ -95,17 +93,16 @@ def test_semantic_tier_resolves_term_covering_renames_identically():
     assert baseline and renamed == baseline
 
 
-def test_alien_event_rename_reads_not_measured_never_unguarded():
-    """Anti-coupling, SEMANTIC tier limit: an alien rename is beyond term
-    matching, and the ONLY acceptable reading is None (not measured). ()
-    here would repeat the run3 false verdict with extra steps."""
+def test_alien_rename_reads_not_measured():
+    """Anti-coupling, SEMANTIC tier limit: an alien rename is beyond term matching, so
+    the only acceptable reading is None (not measured). () would repeat the run3
+    false verdict with extra steps.
+    """
     mission = ModelDrivenMission(model_text=_rename(_model_text(), _ALIEN))
     assert mission.guards_for_event("DeliveryCoordinateSatisfied") is None
 
 
-def test_guard_strip_still_reads_resolved_and_unguarded():
-    """Anti-laundering: strip the abort guards — the event still resolves,
-    and the reading MUST be () (a real model finding), never None."""
+def test_guard_strip_reads_unguarded():
     stripped = re.sub(
         r"(?m)^[ \t]*if not deliveryAbortConditionActive[ \t]*\n", "",
         _model_text(),
@@ -115,10 +112,11 @@ def test_guard_strip_still_reads_resolved_and_unguarded():
     assert mission.guards_for_event("DeliveryCoordinateSatisfied") == ()
 
 
-def test_off_route_send_still_mismatches_with_the_plan():
-    """Anti-laundering, layer 4: the route widening accepts only a send on
-    the requirement's OWN causal-path leg. Redirect the parachute command to
-    a different existing port and the mismatch must come back."""
+def test_off_route_send_mismatches():
+    """Anti-laundering, layer 4: the route widening accepts only a send on the
+    requirement's own causal-path leg. Redirect the parachute command to another
+    existing port and the mismatch returns.
+    """
     off_route = _model_text().replace(
         "send RecoveryCmdData() to recoveryCmd;",
         "send RecoveryCmdData() to overrideCmd;",

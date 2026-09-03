@@ -1,9 +1,9 @@
 """Typed whole-model generation plan and deterministic connectivity assembly.
 
-The LLM decides the architecture and signal flows once.  Later generation
-stages consume this validated plan instead of independently guessing component,
-port, and connection names.  The committed SysML remains the semantic authority;
-this object is generation input and an auditable conformance expectation only.
+The LLM decides architecture and signal flows once; later generation stages
+consume the validated plan instead of guessing component, port and connection
+names. The committed SysML stays the semantic authority - this object is
+generation input and an auditable conformance expectation.
 """
 from __future__ import annotations
 
@@ -72,13 +72,12 @@ _STANDARD_LIBRARY_TYPES = {
         "Real",
         "String",
     },
-    # Every name below is verified against syside with ``import ISQ::*`` et al.
-    # (tests/test_stdlib_vocabulary.py).  Plausible-but-nonexistent names
-    # (AngleValue, ChargeValue, CurrentValue, VelocityValue, VoltageValue) used
-    # to sit here: the import computation blessed them, materialisation wrote
-    # them faithfully, the in-loop checker suppressed the reference error, and
-    # only the unfiltered terminal qualification failed — NOT_QUALIFIED for a
-    # type the vocabulary itself invited (ablation pilot 20260829, AngleValue).
+    # Every name below is verified against syside with ``import ISQ::*`` et al
+    # (tests/test_stdlib_vocabulary.py). Nonexistent names (AngleValue,
+    # ChargeValue, CurrentValue, VelocityValue, VoltageValue) used to sit here:
+    # the import computation blessed them, materialisation wrote them, the in-loop
+    # checker suppressed the reference error, and only terminal qualification
+    # failed (ablation pilot 20260829, AngleValue).
     "ISQ": {
         "AccelerationValue",
         "AngularMeasureValue",
@@ -104,14 +103,13 @@ _STANDARD_LIBRARY_TYPES = {
         "DimensionOneValue",
     },
 }
-# Unit emission tokens and their resolutions come from the single registry
-# (unit_registry.py).  The emitter keeps ASCII tokens (every reader of
-# ``[<token>]`` brackets depends on word characters — that is why ``m/s``
-# becomes ``m_s`` in model text) and resolution is closed by injecting an
-# alias onto the standard SI unit where one exists (deg, degC, m_s, km_h) or
-# a conversion-defined unit where none does (ms, percent).  Measured twice
-# before this was centralised: the archived extraction run failed on
-# ``deg``/``degC`` reference errors, and ablation pilot 2 failed on ``m_s``.
+# Unit emission tokens and resolutions come from unit_registry.py. The emitter
+# keeps ASCII tokens because every reader of ``[<token>]`` brackets depends on
+# word characters (hence ``m/s`` -> ``m_s``), and resolution is closed by
+# aliasing onto the standard SI unit where one exists (deg, degC, m_s, km_h) or
+# a conversion-defined unit where none does (ms, percent). Before this was
+# centralised the archived extraction run failed on ``deg``/``degC`` reference
+# errors and ablation pilot 2 on ``m_s``.
 from .unit_registry import (  # noqa: E402
     EMISSION_TOKENS as _REGISTRY_EMISSION_TOKENS,
     RESOLUTIONS as _REGISTRY_RESOLUTIONS,
@@ -132,18 +130,13 @@ def normalise_planned_port_types(
 ) -> tuple[str, list[str]]:
     """Give a planned port the planned type when generation used another one.
 
-    The plan owns a port's type exactly as it owns an attribute's. Generation
-    writing `in port overrideCmd : DataPort` where the plan says `CommandPort`
-    used to satisfy the "does this port exist?" test, which looks only at the
-    name, so nothing added it and nothing corrected it — and conformance then
-    reported the same port as BOTH a missing planned port and an unplanned one.
-    Four such pairs failed one measured run. An UNTYPED declaration
-    (`in port environmentExposure;` — legal grammar) is the same case: the
-    grammar makes the type optional, so a planned port declared without one
-    is retyped to the planned type, not reported as a missing/unplanned pair.
-
-    Direction is deliberately not rewritten. A wrong direction changes what the
-    connections mean, which is a design question rather than a notation one.
+    The plan owns a port's type as it owns an attribute's. `in port overrideCmd :
+    DataPort` where the plan says `CommandPort` satisfied the name-only "does this
+    port exist?" test, so nothing added or corrected it and conformance reported
+    the port as both missing and unplanned - four such pairs failed one measured
+    run. An untyped declaration (`in port environmentExposure;`) is the same case
+    and is retyped. Direction is not rewritten: a wrong direction changes what the
+    connections mean, a design question rather than a notation one.
     """
     text = str(model_text)
     changes: list[str] = []
@@ -188,21 +181,15 @@ def materialize_planned_port_definitions(
 ) -> tuple[str, list[str]]:
     """Emit a ``port def`` for every planned port type the text does not declare.
 
-    The plan owns a planned port's type, and enforcement acts on that
-    ownership twice: `normalise_planned_port_types` retypes a declared port to
-    the planned type, and the port-addition path adds missing planned ports
-    with it. Neither used to materialise the type's definition, so enforcing
-    the plan could itself create a dangling reference -- measured: a run whose
-    ports were deterministically retyped ``DataPort -> SensorStatusPort``
-    committed with two ``No Type named 'SensorStatusPort'`` errors, and a
-    planned addition whose type was undeclared was rejected outright. Only
-    types the plan names are materialised; a type the model invented stays
-    undeclared and is reported, not legalised.
-
-    The payload item is included when every planned connection touching ports
-    of that type agrees on one item type that the text declares; otherwise the
-    definition is emitted bare, which resolves the reference without inventing
-    a payload the plan does not support.
+    The plan owns a planned port's type and enforcement acts on it twice
+    (`normalise_planned_port_types` retypes a declared port, the port-addition path
+    adds missing ones), but neither materialised the type's definition, so
+    enforcing the plan could create a dangling reference: a run retyped
+    ``DataPort -> SensorStatusPort`` committed with two ``No Type named
+    'SensorStatusPort'`` errors, and a planned addition with an undeclared type was
+    rejected. Only types the plan names are materialised. The payload item is
+    included when every planned connection touching that type agrees on one item
+    type the text declares; otherwise the definition is emitted bare.
     """
     text = str(model_text)
     declared = {
@@ -406,10 +393,10 @@ def _reserved_word_issues(
 ) -> list[str]:
     """Reject plan identifiers the language cannot declare as names.
 
-    Every name below is rendered verbatim into SysML text by a
-    materialisation step that runs after the last syntax gate, so a
-    reserved word here becomes a parser error in the committed model.
-    Planning time is the cheapest place to refuse it."""
+    These names are rendered verbatim into SysML text by a materialisation step
+    that runs after the last syntax gate, so a reserved word becomes a parser error
+    in the committed model.
+    """
     named: list[tuple[str, str]] = []
     for component in components:
         named.append((component.name, f"component {component.name}"))
@@ -508,7 +495,6 @@ def _is_planned_assembly_container(
     definition_name: str,
     planned_components: set[str],
 ) -> bool:
-    """Allow an unplanned wrapper only when it contains planned part usages."""
     span = named_block_span(model_text, "part", definition_name)
     if span is None:
         return False
@@ -538,7 +524,6 @@ def _definition_contract_report(
     model_text: str,
     plan: "ModelGenerationPlan",
 ) -> dict[str, Any]:
-    """Validate plan-owned definition names and their SysML declaration kind."""
     definitions = collect_package_definitions(model_text)
     by_name: dict[str, list[str]] = {}
     for item in definitions:
@@ -610,13 +595,11 @@ def _req_ids(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(found)
 
 
-#: The one port a passive structural component plans: a structural attachment
-#: point. The port definition is emitted with no features, which is the
-#: standard's own way of saying nothing can be exchanged through it (a port's
-#: features specify what an interaction may exchange; zero features, zero
-#: exchange) -- so the passive convention and the port coexist. The name and
-#: type are fixed so that the planned port, the prompt guidance and the
-#: conformance check all agree on one spelling.
+# The one port a passive structural component plans: a structural attachment
+# point. The port def is emitted with no features, so nothing can be exchanged
+# through it and the passive convention still holds. Name and type are fixed so
+# the planned port, the prompt guidance and the conformance check use one
+# spelling.
 STRUCTURAL_MOUNT_PORT_NAME = "structuralMount"
 STRUCTURAL_MOUNT_PORT_TYPE = "StructuralMountPort"
 
@@ -644,13 +627,12 @@ class ComponentPlan:
     requirements: tuple[str, ...]
     ports: tuple[PortPlan, ...]
     attributes: tuple[AttributePlan, ...] = ()
-    # A passive component is a purely structural body -- an airframe, a
-    # chassis, an enclosure -- that carries other parts but exchanges no
-    # signals, commands or power in the model. The planner declares it, with a
-    # reason, so that a downstream check does not silently expect the body to
-    # be wired (the reachability simulator used to require a power path into
-    # every structural part) and the planner is not forced to invent a port for
-    # a part that has none. A passive component may plan no ports.
+    # A passive component is a structural body -- an airframe, a chassis, an
+    # enclosure -- that carries other parts but exchanges no signals, commands or
+    # power in the model. The planner declares it, with a reason, so downstream
+    # checks stop expecting the body to be wired (the reachability simulator
+    # required a power path into every structural part) and no port has to be
+    # invented for a part that has none. A passive component may plan no ports.
     passive: bool = False
     passive_rationale: str = ""
 
@@ -705,7 +687,6 @@ def _compile_architecture_section(
     requirements: Sequence[str],
     issues: list[str],
 ) -> _ArchitectureCompilation:
-    """Parse and validate components, ports, allocation and connections."""
     raw_components = payload.get("components")
     raw_connections = payload.get("connections")
     components: list[ComponentPlan] = []
@@ -797,11 +778,9 @@ def _compile_architecture_section(
                     f"{STRUCTURAL_MOUNT_PORT_NAME} : "
                     f"{STRUCTURAL_MOUNT_PORT_TYPE}, and nothing else"
                 )
-            # The attachment port is planned, not optional: a structural body
-            # legitimately exposes a mounting interface (a port is the
-            # standard's connection point for interactions, mechanical ones
-            # included), and leaving it unplanned made every generator that
-            # sensibly wrote one non-conformant.
+            # The attachment port is planned rather than optional: a structural
+            # body exposes a mounting interface, and leaving it unplanned made
+            # every generator that wrote one non-conformant.
             ports = [
                 PortPlan(
                     name=STRUCTURAL_MOUNT_PORT_NAME,
@@ -940,7 +919,6 @@ def _compile_architecture_section(
 
 
 def _reachable_planned_states(behavior: PlannedBehavior) -> set[str]:
-    """States reachable from the planned initial state along its transitions."""
     edges: dict[str, list[str]] = {}
     for transition in behavior.transitions:
         edges.setdefault(transition.source, []).append(transition.target)
@@ -963,30 +941,18 @@ def _validate_planned_functional_responses(
 ) -> None:
     """Oblige the plan to carry the response the closure gate will demand.
 
-    The terminal gate credits a functional requirement only when a reachable
-    state produces its intent's response, and only event symbols this plan
-    declares are legal ``accept`` targets. When the plan omits the behavior,
-    the gate asks for a repair whose trigger cannot exist in the frozen
-    registry, so every attempt is refused and the run fails closed with no way
-    out. Raising it here instead puts the obligation where it can still be
-    met — in the plan the LLM is about to be asked to correct.
-
-    Which response a requirement obliges is the planner's recorded decision
-    (``response_intent`` on its realization), not a keyword inference: the
-    same LLM that plans the behaviours decides what each functional
-    requirement asks for, in a vocabulary the gate can check, and may record
-    "none" or "unverifiable" with a reason. An intent outside the built-in
-    table is admitted only as a declared intent: it must carry
-    ``response_markers``, each lexically anchored in the realization's copied
-    effect phrase, and the gate then runs its reachable-action check against
-    those markers. The anchoring rule is what keeps a declared intent from
-    grading itself — the planner cannot declare a marker its own behaviours
-    happen to satisfy unless the requirement's effect phrase names it. A
-    functional realization that records "none"/"unverifiable" without a
-    rationale, or an out-of-vocabulary intent without anchored markers, is a
-    plan defect. Markers declared alongside a built-in intent are ignored:
-    the built-in table keeps its authority over what evidences release,
-    navigate and the rest.
+    The terminal gate credits a functional requirement only when a reachable state
+    produces its intent's response, and only event symbols this plan declares are
+    legal ``accept`` targets, so a plan omitting the behavior asks for a repair
+    whose trigger cannot exist and fails closed; raising it here leaves the
+    obligation where it can still be met. Which response a requirement obliges is
+    the planner's recorded ``response_intent``, not a keyword inference, and may be
+    "none" or "unverifiable" with a reason. An intent outside the built-in table
+    needs ``response_markers``, each lexically anchored in the realization's copied
+    effect phrase, and the gate runs its reachable-action check against those; the
+    anchoring rule is what keeps a declared intent from grading itself. Missing
+    rationale or unanchored markers are plan defects, and markers declared beside a
+    built-in intent are ignored.
     """
     from ..dse.functional_behavior import (
         RESPONSE_INTENTS, is_safety_req, marker_anchored_in_effect,
@@ -1032,9 +998,9 @@ def _validate_planned_functional_responses(
             declared = markers_by_requirement.get(req_id) or ()
             # A missing realization, or one with a blank intent, means the
             # planner recorded nothing: fall back to keyword inference below
-            # rather than refusing, so plans archived before the field
-            # existed remain valid and the check still fires for a FUNC
-            # requirement the plan omitted altogether.
+            # rather than refusing, so plans archived before the field existed
+            # stay valid and the check still fires for an omitted FUNC
+            # requirement.
             if recorded in ("none", "unverifiable") and not (
                 rationale_by_requirement.get(req_id)
             ):
@@ -1045,10 +1011,9 @@ def _validate_planned_functional_responses(
                 )
                 continue
             if recorded is not None and recorded not in RESPONSE_INTENTS:
-                # Out-of-vocabulary intent: admissible only as a declared
-                # intent that carries its own evidence markers, each
-                # lexically anchored in the copied effect phrase (the
-                # anti-self-grading rule; see the docstring).
+                # Out-of-vocabulary intent: admissible only when it declares
+                # evidence markers, each lexically anchored in the copied effect
+                # phrase (anti-self-grading rule; see the docstring).
                 if not declared:
                     issues.append(
                         f"{req_id} response_intent {recorded!r} is not one "
@@ -1084,11 +1049,10 @@ def _validate_planned_functional_responses(
             satisfied = False
             # The behaviour that answers a requirement is the one its
             # realization names (owner + behavior_name); provenance is the
-            # fallback for realizations that name none. Requiring the
-            # provenance tag to equal this requirement made a shared state
-            # machine -- navigate and return as two states of one behaviour --
-            # unable to satisfy the second requirement it serves, because a
-            # behaviour carries exactly one provenance requirement.
+            # fallback when none is named. A behaviour carries one provenance
+            # requirement, so matching on provenance left a shared machine --
+            # navigate and return as two states -- unable to satisfy its second
+            # requirement.
             named = behavior_by_requirement.get(req_id)
             for behavior in planned_behaviors:
                 if named is not None:
@@ -1127,7 +1091,6 @@ def _validate_timed_functional_paths(
     constraint_plans: Sequence[ConstraintPlan],
     issues: list[str],
 ) -> None:
-    """Validate source-linked response and timing evidence as one rule set."""
     components_by_name = {component.name: component for component in components}
     for source_requirement in requirements:
         source_text = " ".join(str(source_requirement or "").split())
@@ -1270,17 +1233,16 @@ class ModelGenerationPlan:
     semantic_bindings: tuple[SemanticBindingPlan, ...] = ()
     constraint_plans: tuple[ConstraintPlan, ...] = ()
     planned_behaviors: tuple[PlannedBehavior, ...] = ()
-    #: Schema 10. One response action per functional requirement, bound to
-    #: element identities rather than names, so a response can be checked
-    #: instead of matched by spelling. Absent in schema 1-9, and absent here
-    #: means the audit reports no planned chains rather than inferring them.
+    # Schema 10. One response action per functional requirement, bound to
+    # element identities rather than names, so a response is checked rather
+    # than spelling-matched. Absent in schema 1-9; absent here means no
+    # planned chains are reported rather than inferred.
     action_effects: tuple[PlannedActionEffect, ...] = ()
     behavior_obligations: tuple[BehaviorObligation, ...] = ()
     behavior_identity_reconciliations: tuple[str, ...] = ()
     constraint_identity_reconciliations: tuple[str, ...] = ()
     source: str = "LLM_TYPED_JSON"
     issues: tuple[str, ...] = ()
-    # Reported, never blocking — see state_execution_advisories.
     advisories: tuple[str, ...] = ()
     schema_version: str = "1.0"
 
@@ -1300,8 +1262,8 @@ class ModelGenerationPlan:
 
     def to_dict(self) -> dict[str, Any]:
         # `action_effects` is emitted only when the plan carries one, so a
-        # schema 1-9 plan serialises byte-identically to how it always has and
-        # every archived run stays comparable.
+        # schema 1-9 plan serialises byte-identically and every archived run
+        # stays comparable.
         effects = (
             {"action_effects": [item.to_dict() for item in self.action_effects]}
             if self.action_effects else {}
@@ -1368,8 +1330,8 @@ class ModelGenerationPlan:
         issues: list[str] = []
         # Planned-by-construction safety interconnect: both authoring prompts
         # mandate this wiring, so the accepted plan carries it deterministically
-        # instead of depending on the model having repeated it (measured drift:
-        # pilot2 / run 219eb9bb failed conformance on exactly these ports).
+        # rather than relying on the model to repeat it (pilot2 / run 219eb9bb
+        # failed conformance on these ports).
         from .mandated_wiring import augment_architecture_payload
         payload, mandated_wiring_notes = augment_architecture_payload(payload)
         architecture = _compile_architecture_section(
@@ -1450,9 +1412,8 @@ class ModelGenerationPlan:
             if isinstance(item, Mapping)
         )
         # Mechanical spellings a parser can decide are decided here, before
-        # the validator turns them into a paid correction round (run3 first
-        # draw: 12/12 machines wrote initial_state as Behavior::State and
-        # ~40 chained issues bought a full rewrite).
+        # the validator makes them a paid correction round (run3: 12/12 machines
+        # wrote initial_state as Behavior::State, ~40 chained issues).
         planned_behaviors, initial_state_reconciliations = (
             normalise_planned_behavior_identities(planned_behaviors)
         )
@@ -1522,30 +1483,26 @@ class ModelGenerationPlan:
                 else item
                 for item in requirement_realizations
             )
-        # behaviors[] is the SOLE WRITER of every behaviour it names
-        # (materialize_planned_behaviors), and a planned behaviour always
-        # materialises as `state def`. A realization's behavior_kind for such
-        # a name is therefore derived data, not a free field: run 2026-08-31
-        # declared ACTION_DEF for a name behaviors[] defined as a state
-        # machine, the emitted model (correctly) carried `state def`, and the
-        # obligation compiled from the contradictory kind failed a
+        # behaviors[] is the sole writer of every behaviour it names
+        # (materialize_planned_behaviors) and always materialises `state def`,
+        # so a realization's behavior_kind for such a name is derived data: run
+        # 2026-08-31 declared ACTION_DEF for a name behaviors[] defined as a
+        # state machine, and the obligation compiled from that kind failed a
         # structurally correct model. Reconcile toward the sole writer.
         planned_behavior_keys = {
             (behavior.owner, behavior.behavior_id)
             for behavior in planned_behaviors
         }
         # A realization naming a STATE of a planned machine as its
-        # behavior_name collides with the sole writer's namespace: the
-        # machine materialises with that state INSIDE it, so no standalone
-        # `state def <state>` will ever exist and the obligation compiled
-        # from the name is unsatisfiable. Measured (s0v6 anchor):
-        # REQ_SAFE_006 recorded 'Locked' — a state of PayloadMechanism's
-        # one planned machine — and lost terminal qualification to the
-        # frozen obligation STATE_DEF PayloadMechanism.Locked. Derive,
-        # don't re-ask: a name that is exactly one planned machine's state
-        # reconciles to that machine (audited). A name that matches NO
-        # planned machine or state stays untouched — realizations
-        # legitimately name behaviours that Step 4 authors beyond the
+        # behavior_name collides with the sole writer's namespace: the state
+        # materialises inside the machine, so no standalone `state def <state>`
+        # exists and the compiled obligation is unsatisfiable (s0v6 anchor:
+        # REQ_SAFE_006 recorded 'Locked', a state of PayloadMechanism's one
+        # planned machine, and lost terminal qualification to the obligation
+        # STATE_DEF PayloadMechanism.Locked). Derive, don't re-ask: a name that
+        # is exactly one planned machine's state reconciles to that machine,
+        # audited. A name matching no planned machine or state stays untouched -
+        # realizations legitimately name behaviours Step 4 authors beyond the
         # planned machines (run2's archived plan carries three).
         states_to_behavior: dict[tuple[str, str], list[str]] = {}
         for behavior in planned_behaviors:
@@ -1563,9 +1520,9 @@ class ModelGenerationPlan:
         for item in requirement_realizations:
             if (
                 item.realization_kind == "LOCAL_BEHAVIOR"
-                # STATE_DEF only: behaviors[] writes state machines and
-                # nothing else, so an ACTION_DEF realization legitimately
-                # names an action def that behaviors[] never declares.
+                # STATE_DEF only: behaviors[] writes state machines and nothing
+                # else, so an ACTION_DEF realization may name an action def that
+                # behaviors[] never declares.
                 and item.behavior_kind == "STATE_DEF"
                 and item.behavior_name
                 and item.owner_component in behaviors_by_owner
@@ -1629,8 +1586,8 @@ class ModelGenerationPlan:
                 )
             )
         else:
-            # Compatibility for archived plans and test doubles created before
-            # schema 6.0. New provider calls must declare source anchors.
+            # Compatibility for archived plans and test doubles predating schema
+            # 6.0. New provider calls declare source anchors.
             structural_obligations, structural_issues = (
                 compile_structural_obligations(
                     components,
@@ -1945,10 +1902,9 @@ class ModelGenerationPlan:
                         )
                     )
                 for transition in behavior.transitions:
-                    # The guard is part of the frozen identity: omitting it
-                    # here told the writer "emit exactly" an unguarded
-                    # transition while the sole-writer materialization emits
-                    # `accept E if guard` — the writer then authors
+                    # The guard is part of the frozen identity: omitting it here showed
+                    # the writer an unguarded transition while the sole-writer
+                    # materialization emits `accept E if guard`, so it authored the
                     # surrounding text against the wrong shape.
                     lines.append(
                         f"  transition {transition.transition_id}: "
@@ -2041,26 +1997,20 @@ def attach_ag_behavior_obligations(
         issues.append(
             f"A/G behavior obligation plan is {behavior_plan.status}"
         )
-    # An A/G concept used as a Boolean operand is typed by the contract, not by
-    # generation — a guard or invariant reading `not (airborne)` is meaningless
-    # over a Real. Nothing owned that type before: these concepts come from the
+    # An A/G concept used as a Boolean operand is typed by the contract:
+    # `not (airborne)` is meaningless over a Real. These concepts come from the
     # frozen A/G decisions, so the typed plan never carried them and generation
-    # was free to write `attribute airborne : Real = 0.0;`. It did, in two
-    # measured runs, and the only thing left to catch it was the terminal gate,
-    # which could then only fail the whole run.
+    # wrote `attribute airborne : Real = 0.0;` in two measured runs, leaving the
+    # terminal gate as the only thing able to catch it.
     #
     # Declaring them here puts them under the existing planned-attribute
-    # materialiser, so the type is enforced during generation and the terminal
-    # gate goes back to being a check that should never fire rather than the
-    # first line of defence. A concept the component already plans is left
-    # alone: the plan is authority for its own attributes.
+    # materialiser, so the type is enforced during generation. A concept the
+    # component already plans is left alone: the plan owns its own attributes.
     #
-    # Only what the component CONSUMES. A guarantee is an output: it flows to the
-    # component that assumes it, so generation realises it as a directed port,
-    # and the terminal binder accepts a port as a valid carrier of the truth
-    # concept. Planning it as an attribute as well produced exactly the collision
-    # the binder reports as AMBIGUOUS — one measured run had
-    # `recoveryActuationPowerAvailable` as both.
+    # Only what the component consumes. A guarantee is an output, realised as a
+    # directed port, and the terminal binder accepts a port as a carrier of the
+    # truth concept; planning it as an attribute too produced the AMBIGUOUS
+    # collision (one run had `recoveryActuationPowerAvailable` as both).
     boolean_by_owner: dict[str, set[str]] = {}
     for obligation in behavior_plan.obligations:
         consumed = set(obligation.assumptions) - set(obligation.guarantees)
@@ -2123,10 +2073,9 @@ def attach_ag_behavior_obligations(
     ))
 
     # A source-anchored LOCAL_BEHAVIOR and an A/G state-machine obligation for
-    # the same requirement and owner identify one model element, not two
-    # independently named behaviors.  The A/G plan is frozen before ordinary
-    # generation, so its stable id is the canonical identity.  Reconcile that
-    # notation deterministically and keep an explicit audit record.
+    # the same requirement and owner are one model element. The A/G plan is frozen
+    # before ordinary generation, so its stable id is the canonical identity;
+    # reconcile the notation deterministically and keep the audit record.
     reconciliations = list(plan.behavior_identity_reconciliations)
     canonical_names: dict[tuple[str, str], str] = {}
     for obligation in behavior_plan.obligations:
@@ -2216,10 +2165,9 @@ def attach_ag_behavior_obligations(
     )
 
 
-# The passive-marker reader lives in utils so that packages below
-# `prototyping` in the dependency order (dse.diagnostics) can honour
-# plan-declared passivity without importing this package. Re-exported here
-# for its existing callers.
+# The passive-marker reader lives in utils so packages below
+# `prototyping` (dse.diagnostics) can honour plan-declared passivity
+# without importing this package. Re-exported for existing callers.
 from ..utils.sysml_text_utils import (  # noqa: F401,E402
     PASSIVE_MARKER_RE,
     passive_components_in_text,
@@ -2229,11 +2177,7 @@ from ..utils.sysml_text_utils import (  # noqa: F401,E402
 def materialize_passive_components(
     sysml_text: str, components: Sequence["ComponentPlan"]
 ) -> tuple[str, list[str]]:
-    """Write a `// PLAN-PASSIVE` marker into each passive component's part def.
-
-    Idempotent: a marker already present is left alone. Returns the new text
-    and the names materialised on this call.
-    """
+    """Write a `// PLAN-PASSIVE` marker into each passive component's part def."""
     text = sysml_text or ""
     already = passive_components_in_text(text)
     written: list[str] = []
@@ -2244,7 +2188,6 @@ def materialize_passive_components(
         if m is None:
             continue
         brace = m.end() - 1
-        # indent: reuse the part def line's indent plus four spaces
         line_start = text.rfind("\n", 0, m.start()) + 1
         indent = re.match(r"[ \t]*", text[line_start:m.start()]).group(0) + "    "
         reason = " ".join(component.passive_rationale.split()) or "purely structural body"
@@ -2289,10 +2232,9 @@ def apply_generation_plan(
     type_bases = part_def_bases(semantic_text)
     instances_by_type: dict[str, list[str]] = {}
     for instance, component_type in directory.instance_type.items():
-        # Index the usage under its declared type and every definition that
-        # type transitively specialises: a usage retyped to a catalogue
-        # implementation (`Impl :> Planned`) is still a usage of the planned
-        # definition by the language's own subtyping.
+        # Index the usage under its declared type and every definition that type
+        # transitively specialises: a usage retyped to a catalogue implementation
+        # (`Impl :> Planned`) is still a usage of the planned definition.
         indexed = {component_type}
         frontier = [component_type]
         while frontier:
@@ -2355,9 +2297,9 @@ def apply_generation_plan(
         if usage is None:
             continue
         existing_ports = dict(directory.instances.get(usage, {}))
-        # A retyped usage's own definition may declare no ports and inherit
-        # them all; a port declared anywhere up the specialisation chain
-        # already exists and must be neither reported missing nor re-added.
+        # A retyped usage's definition may declare no ports and inherit them
+        # all; a port declared up the specialisation chain exists already and is
+        # neither reported missing nor re-added.
         usage_type = directory.instance_type.get(usage)
         seen_types: set[str] = set()
         frontier = [usage_type] if usage_type else []
@@ -2548,8 +2490,8 @@ def apply_generation_plan(
     final_type_bases = part_def_bases(final_text)
 
     def _planned_type_of(component_type: str) -> str | None:
-        # A usage retyped to `Impl :> Planned` is, by the language's own
-        # subtyping, still a usage of the planned definition.
+        # A usage retyped to `Impl :> Planned` is still a usage of the
+        # planned definition by subtyping.
         if component_type in planned_component_types:
             return component_type
         for planned in planned_component_types:
@@ -2625,16 +2567,13 @@ def apply_generation_plan(
     )
 
     # ── Extension contract (specialization semantics + declared deviation) ──
-    # The plan's inventory is the MANDATORY core: planned elements missing or
-    # contradicted stay FAIL. An ADDITION, however, is what SysML v2
-    # specialization permits by construction — provided it is (a) conservative
-    # (a new port on a planned component; a connect between planned parts
-    # through that port; nothing planned touched) and (b) DECLARED in the
-    # model itself via an in-body ``doc /* rationale; satisfies REQ_... */``
-    # on the added port. A silent addition remains FAIL — the anti-fabrication
-    # discipline is unchanged; only the closed-world "inventory equality"
-    # becomes the open-world "consistent specialization + justified extension"
-    # (same objectivity rule the variation-point admission already applies).
+    # The plan's inventory is the mandatory core: planned elements missing or
+    # contradicted stay FAIL. An addition is what specialization permits, provided
+    # it is (a) conservative - a new port on a planned component, a connect between
+    # planned parts through that port, nothing planned touched - and (b) declared in
+    # the model via an in-body ``doc /* rationale; satisfies REQ_... */`` on the
+    # added port. A silent addition stays FAIL: closed-world inventory equality
+    # becomes open-world consistent specialization plus justified extension.
     planned_port_names = {(c, n) for c, n, _, _ in planned_ports}
     missing_port_names = {(c, n) for c, n, _, _ in planned_ports - actual_ports}
     owner_actual_types: dict[str, list[str]] = {}
@@ -2646,7 +2585,6 @@ def apply_generation_plan(
     def _extension_justification(
         component: str, name: str, direction: str, port_type: str,
     ) -> str | None:
-        """The declared rationale of an added port, or None if undeclared."""
         pattern = re.compile(
             rf"\b{re.escape(direction)}\s+port\s+{re.escape(name)}\s*:"
             rf"\s*{re.escape(port_type)}\s*\{{"
@@ -2670,8 +2608,8 @@ def apply_generation_plan(
     justified_extension_ports: list[str] = []
     unjustified_port_tuples: list[tuple[str, str, str, str]] = []
     for component, name, direction, port_type in unplanned_port_tuples:
-        # Redefining a PLANNED port under a different direction/type is a
-        # contradiction, never a justifiable extension.
+        # Redefining a planned port under a different direction/type is a
+        # contradiction, not an extension.
         conflict = (component, name) in missing_port_names
         rationale = (
             None if conflict
@@ -2706,9 +2644,9 @@ def apply_generation_plan(
             if pair not in justified_port_pairs
             and pair not in planned_port_names
         ]
-        # A justified connection must SERVE a declared extension port and may
-        # not touch anything unaccounted for; rewiring planned ports only is
-        # an alteration of the planned information flow, not an extension.
+        # A justified connection serves a declared extension port and touches
+        # nothing unaccounted for; rewiring planned ports alone alters the
+        # planned information flow rather than extending it.
         if conservative and extension_endpoints and not unaccounted:
             key = (src, source_port, target, target_port)
             justified_connection_keys.add(key)
@@ -2729,9 +2667,9 @@ def apply_generation_plan(
         for port in component.ports:
             if not port.external:
                 continue
-            # Connections that ARE the justified extension do not violate the
-            # planned boundary: the external role is an inherited feature the
-            # extension adds a reader/writer to, not one it removes.
+            # Connections that are the justified extension keep the planned
+            # boundary: the external role is an inherited feature the extension
+            # adds a reader/writer to, not one it removes.
             unjustified_final = final_connections - justified_connection_keys
             if (
                 port.direction in {"in", "inout"}
@@ -2846,11 +2784,10 @@ def apply_generation_plan(
         "unplanned_ports": unplanned_ports,
         "internalized_external_ports": internalized_external_ports,
         "definition_contract": definition_contract,
-        # Deterministic deletion targets for the additive violation classes --
-        # exactly what strip_unplanned_additions() consumes.  Deletion is the
-        # anti-fabrication-safe direction: an ADDED element can be removed
-        # without inventing anything, whereas a missing/contradicted planned
-        # element cannot be restored deterministically and stays FAIL.
+        # Deletion targets for the additive violation classes, consumed by
+        # strip_unplanned_additions(). An added element can be removed without
+        # inventing anything; a missing or contradicted planned element cannot be
+        # restored deterministically and stays FAIL.
         "salvage_targets": {
             "part_definitions": list(
                 definition_contract["unplanned_part_definitions"]
@@ -2882,31 +2819,26 @@ def strip_unplanned_additions(
 ) -> tuple[str, list[str]]:
     '''Deterministically delete the additive plan violations from a candidate.
 
-    A refinement candidate that bundles in-plan edits (an assert constraint,
-    a doc, an attribute value) with out-of-plan additions used to be rejected
-    whole by the conformance gate -- the good fix died with the collateral
-    (s0v16: two forced refinements carrying fidelity asserts were both
-    rejected for exactly this).  Deletion never fabricates: only elements the
-    conformance report identified as unplanned ADDITIONS are removed, in
-    dependency order (connections -> ports -> usages -> part definitions).
-    The caller MUST re-run apply_generation_plan and the syntax check on the
-    result and keep the candidate only if both are clean -- this function is
-    the knife, not the judge.
+    A candidate bundling in-plan edits (an assert constraint, a doc, an attribute
+    value) with out-of-plan additions used to be rejected whole by the conformance
+    gate, taking the good fix with it (s0v16: two forced refinements carrying
+    fidelity asserts). Only elements the conformance report identified as unplanned
+    additions are removed, in dependency order (connections -> ports -> usages ->
+    part definitions). The caller re-runs apply_generation_plan and the syntax
+    check and keeps the candidate only if both are clean.
 
-    Returns (stripped_text, removal_log); an empty log means nothing this
-    function knows how to remove was found (caller keeps the rejection).
+    Returns (stripped_text, removal_log); an empty log means nothing this function
+    knows how to remove was found, and the caller keeps the rejection.
     '''
     text = str(model_text or "")
     removed: list[str] = []
 
     def _drop_span(start: int, end: int) -> None:
         nonlocal text
-        # swallow the trailing newline so no blank line is left behind
         while end < len(text) and text[end] in " \t":
             end += 1
         if end < len(text) and text[end] == "\n":
             end += 1
-        # and the line's leading indentation
         line_start = text.rfind("\n", 0, start) + 1
         if text[line_start:start].strip() == "":
             start = line_start
@@ -2917,7 +2849,6 @@ def strip_unplanned_additions(
         if match is None:
             return
         start, end = match.start(), match.end()
-        # a declaration may carry a brace body instead of ';'
         if end > 0 and text[end - 1] == "{":
             close = find_block_end(text, end - 1)
             if close == -1:
@@ -2988,8 +2919,8 @@ def strip_unplanned_additions(
             )
 
     for name in salvage_targets.get("part_definitions") or ():
-        # named_block_span returns brace-to-brace; the declaration HEADER must
-        # go too, so locate it with the same supertype-tolerant pattern.
+        # named_block_span returns brace-to-brace; the declaration header goes
+        # too, located with the same supertype-tolerant pattern.
         header = named_def_pattern("part", str(name)).search(text)
         if header is not None:
             close = find_block_end(text, header.end() - 1)

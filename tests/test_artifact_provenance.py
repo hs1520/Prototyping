@@ -23,7 +23,7 @@ def _run(model="package D {}", parm="FRAME_CLASS 1\n"):
     return run
 
 
-def test_run_provenance_binds_model_design_components_catalog_and_parm():
+def test_run_provenance_binds_inputs():
     run = _run()
 
     assert validate_run_provenance(
@@ -36,7 +36,7 @@ def test_run_provenance_binds_model_design_components_catalog_and_parm():
     assert not validate_run_provenance(run)[0]
 
 
-def test_run_provenance_detects_realized_component_or_catalog_identity_change():
+def test_detects_component_change():
     run = _run()
     run["realization"]["chosen"]["pack"] = "different-pack"
 
@@ -46,7 +46,7 @@ def test_run_provenance_detects_realized_component_or_catalog_identity_change():
     assert "component" in reason
 
 
-def test_run_provenance_detects_requirement_set_change():
+def test_detects_requirement_set_change():
     run = _run()
     run["requirements"][0]["text"] = "land"
 
@@ -56,7 +56,7 @@ def test_run_provenance_detects_requirement_set_change():
     assert "requirement-set" in reason
 
 
-def test_derived_report_must_copy_the_exact_source_provenance():
+def test_derived_copies_source_provenance():
     run = _run()
     good = {"source_provenance": dict(run["artifact_provenance"])}
     stale = {"source_provenance": {**run["artifact_provenance"], "run_id": "old"}}
@@ -65,14 +65,14 @@ def test_derived_report_must_copy_the_exact_source_provenance():
     assert not validate_derived_provenance(stale, run, "package D {}")[0]
 
 
-def test_legacy_run_without_provenance_is_rejected():
+def test_legacy_run_rejected():
     ok, reason = validate_run_provenance({"recommended_design_inputs": {}})
 
     assert not ok
     assert "regenerate" in reason
 
 
-def test_run_provenance_detects_dependency_graph_change():
+def test_detects_dependency_graph_change():
     run = _run()
     run["requirement_input"] = {
         "dependency_graph": {"nodes": [], "edges": []}
@@ -96,7 +96,7 @@ def test_run_provenance_detects_dependency_graph_change():
     assert "dependency graph" in reason
 
 
-def test_passed_evidence_reuse_ignores_unrelated_requirement_prose_only():
+def test_reuse_ignores_prose_change():
     previous = _run()
     current = _run()
     current["requirement_impact"] = {
@@ -118,7 +118,7 @@ def test_passed_evidence_reuse_ignores_unrelated_requirement_prose_only():
     )
 
 
-def test_passed_evidence_reuse_rejects_impacted_or_changed_model_semantics():
+def test_reuse_rejects_changed_semantics():
     previous = _run()
     current = _run()
     old_model = "package D { part def Drone { attribute ready : Boolean = true; } }"

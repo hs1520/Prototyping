@@ -1,13 +1,12 @@
 """DSE over LLM-declared SysML v2 variation points (the "replace" path).
 
-The explored space is the set of ``variation`` points the LLM declared in the
-model (admitted only if they carry a rationale + linked requirement). Each point
-becomes a dynamic operator; the outer MO-MCTS explores combinations; each
-candidate is *resolved* into a concrete model and scored by the REAL
-DesignEvaluator (full models, so the real evaluator is appropriate here).
-
-Returns a Pareto front over (design_quality, simplicity) + a recommended concrete
-model. Falls back to None when the model declares no admissible variation points.
+The explored space is the ``variation`` points the LLM declared in the model,
+admitted only if they carry a rationale + linked requirement. Each point becomes
+a dynamic operator, the outer MO-MCTS explores combinations, and each candidate
+is resolved into a concrete model and scored by the DesignEvaluator (full models,
+so the real evaluator applies here). Returns a Pareto front over (design_quality,
+simplicity) + a recommended concrete model, or None when the model declares no
+admissible variation points.
 """
 from __future__ import annotations
 
@@ -68,7 +67,7 @@ class VariationOperator:
     def feasible(self, variant: str, ctx, state=None) -> bool:
         return variant in self.vp.variant_names
 
-    def resolve(self, variant: str) -> str:  # not used in-search (resolution is collective)
+    def resolve(self, variant: str) -> str:
         return f"{self.vp.kind} {self.vp.point_id} : {self.vp.type_of(variant)};"
 
 
@@ -80,7 +79,7 @@ class VariationDSEResult:
     admitted_points: List[str]
     rejected_points: List[str]
     real_quality: Dict[str, float]
-    evaluated: int = 0  # number of distinct architectures scored during the search
+    evaluated: int = 0
     # The unconstrained estimator Pareto is diagnostic only. ``pareto_front`` above
     # is the official front rebuilt *after* all hard constraints are applied.
     exploratory_pareto_front: List[Tuple[State, Objectives]] = field(default_factory=list)
@@ -90,19 +89,17 @@ class VariationDSEResult:
     mapping_compliant_count: Optional[int] = None
     phase8_closable_count: Optional[int] = None
     constraint_feasible_count: int = 0
-    recommended_capacity_mah: Optional[float] = None  # inner-BO chosen battery capacity
+    recommended_capacity_mah: Optional[float] = None
     notes: List[str] = field(default_factory=list)
-    # Pareto front resolved to concrete design inputs (for the SysML trade study);
-    # recommended_design is the front member the recommendation picked.
     pareto_designs: List[Tuple["DesignInputs", Objectives]] = field(default_factory=list)
     recommended_design: Optional["DesignInputs"] = None
     recommended_realizable: Optional[bool] = None
     realizable_front_count: Optional[int] = None
     recommended_by: Optional[str] = None
     recommended_estimator_feasible: Optional[bool] = None
-    # Per-alternative variant→implementation bindings ({point_id: impl_type_name}), index-
-    # aligned with pareto_designs, so the trade study can FORMALLY bind each alternative to
-    # the variant definitions it's composed of (object-level traceability, not a comment).
+    # Per-alternative variant->implementation bindings ({point_id: impl_type_name}),
+    # index-aligned with pareto_designs, so the trade study binds each alternative to
+    # the variant definitions it is composed of (object-level traceability).
     pareto_bindings: List[Dict[str, str]] = field(default_factory=list)
     recommended_bindings: Dict[str, str] = field(default_factory=dict)
     recommendation_status: str = "RECOMMENDED"
@@ -111,8 +108,7 @@ class VariationDSEResult:
     exploratory_design: Optional["DesignInputs"] = None
     # Weight-simplex sensitivity of the weight-stage pick over the official front
     # (docs/DSE_REDESIGN.md §三-A). Diagnostic only: when recommended_by=="datasheet"
-    # the datasheet rank decides the final selection and the weights merely break
-    # ties, so reports must not credit the weights with that choice.
+    # the datasheet rank decides the final selection and the weights only break ties.
     weight_sensitivity: Optional[Dict] = None
 
 
@@ -122,15 +118,14 @@ def _design_quality(dims: Dict[str, float]) -> float:
 
 
 def _state_label(state: State) -> str:
-    """Stable identity for a front member's variant choices (sorted items)."""
     return ",".join(f"{k}={v}" for k, v in sorted(state.items()))
 
 
 def _recommendation_weights(names, requirements) -> Dict[str, float]:
-    """Objective weights for picking the recommended design: each perf family weighted
-    by how many requirement targets it carries (requirement emphasis), other objectives
-    (cost, generic dims) a baseline 1. Normalised. Objective + traceable to requirements
-    — not a lexicographic guess."""
+    """Objective weights for picking the recommended design: each perf family is
+    weighted by how many requirement targets it carries, other objectives (cost,
+    generic dims) get a baseline 1, then normalised. Traceable to the requirement set.
+    """
     counts: Dict[str, float] = {}
     for fts in requirement_targets(requirements).values():
         for fam, _ in fts:
@@ -145,9 +140,9 @@ def _pareto_members(
 ) -> List[Tuple[State, Objectives]]:
     """Rebuild a maximisation Pareto front from an arbitrary candidate set.
 
-    Objective-equal but architecturally distinct states are intentionally retained:
-    a later datasheet rank may distinguish them, and dropping one merely because it
-    was evaluated second would make the recommendation order-dependent.
+    Objective-equal but architecturally distinct states are retained: a later
+    datasheet rank may distinguish them, and dropping one for being evaluated second
+    would make the recommendation order-dependent.
     """
     unique: List[Tuple[State, Objectives]] = []
     seen = set()
@@ -173,15 +168,14 @@ def _pareto_members(
 def _write_back_capacity(
     model_text: str, capacity_mah: float, bound_types: Sequence[str] = (),
 ) -> str:
-    """Inject the inner-BO battery capacity into the resolved model so downstream
-    (SITL params, reports) reads it.
+    """Inject the inner-BO battery capacity into the resolved model so downstream (SITL
+    params, reports) reads it.
 
-    The capacity belongs to the design the recommendation BOUND, so it is written
-    into a bound variant's type def — the one declaring ``batteryCells`` (the
-    power owner) first, else the first bound def without a capacity. A flat
-    first-specialised-def heuristic previously landed it in the first RETAINED
-    Pareto alternative instead of the chosen one, so the archived model asserted
-    a capacity for a design that was never selected. Without ``bound_types``
+    The capacity is written into a bound variant's type def - the one declaring
+    ``batteryCells`` (the power owner) first, else the first bound def without a
+    capacity. A flat first-specialised-def heuristic landed it in the first retained
+    Pareto alternative instead of the chosen one, so the archived model asserted a
+    capacity for a design that was never selected. Without ``bound_types``
     (degenerate spaces with untyped variants) the text is returned unchanged.
     """
     ordered = list(dict.fromkeys(t for t in bound_types if t))
@@ -189,9 +183,9 @@ def _write_back_capacity(
     for type_name in ordered:
         span = named_block_span(model_text, "part", type_name)
         if span is None:
-            # A bodiless bound def (`part def X :> Y;`) still owns the design:
-            # materialise a body rather than silently dropping the capacity
-            # (which would fly SITL at the 5000 mAh default, not the optimum).
+            # A bodiless bound def (`part def X :> Y;`) still owns the design, so materialise
+            # a body; dropping the capacity would fly SITL at the 5000 mAh default rather than
+            # the optimum.
             decl = re.search(
                 rf"\bpart\s+def\s+{re.escape(type_name)}\b[^{{;\n]*;", model_text
             )
@@ -207,7 +201,7 @@ def _write_back_capacity(
             continue
         body = model_text[span[0] + 1:span[1]]
         if "batteryCapacityMah" in body:
-            return model_text  # already declared on a bound type — idempotent
+            return model_text
         if "batteryCells" in body:
             injected, ok = _inject_attr_into_type(
                 model_text, type_name, "batteryCapacityMah", float(capacity_mah)
@@ -247,7 +241,7 @@ def run_variation_dse(
             + ", ".join(p.point_id for p in bad)
         )
     # resolve-safety: only explore points whose variants share a port interface,
-    # so binding a variant never breaks the host's connects.
+    # so binding a variant cannot break the host's connects.
     ok, unsafe = port_safe_split(ok, base_text)
     if unsafe:
         notes.append(
@@ -256,40 +250,37 @@ def run_variation_dse(
             + ", ".join(p.point_id for p in unsafe)
         )
     if not ok:
-        return None  # no admissible, resolve-safe LLM-declared variation space
+        return None
 
-    # Deduplicate design-field ownership: if two variation points parametrise the same
-    # physical quantity (e.g. propulsion AND airframe both declaring rotorCount), the
-    # search would explore incoherent combos (hexa propulsion + octo airframe). Keep each
-    # field on its canonical owner, strip it from the others (notes record what changed).
-    # Regularize the LLM-declared variation space (ontology-driven, one entry): dedup field
-    # ownership across variation points + strip inner-loop variables for a uniform interface.
+    # Deduplicate design-field ownership: if two variation points parametrise the
+    # same physical quantity (propulsion and airframe both declaring rotorCount),
+    # the search would explore incoherent combos (hexa propulsion + octo airframe).
+    # Keep each field on its canonical owner and strip it from the others; notes
+    # record the changes. The same entry point also strips inner-loop variables,
+    # so the LLM-declared variation space gets a uniform interface.
     base_text, norm_notes = normalize_variation_space(base_text, ok)
     notes.extend(norm_notes)
 
     operators = [VariationOperator(p) for p in ok]
-    # Budget scales with the total number of variant choices (points × variants per
+    # Budget scales with the total number of variant choices (points x variants per
     # point), so wider models and denser variant sets don't get under-explored.
     if iterations is None:
         total_choices = sum(len(op.variants) for op in operators)
         iterations = max(60, 30 * total_choices)
     cache: Dict[Tuple, Objectives] = {}
-    inner_cap: Dict[Tuple, float] = {}   # per-architecture inner-BO battery capacity
+    inner_cap: Dict[Tuple, float] = {}
     sizing_mode: Dict[Tuple, str] = {}
 
-    # Domain-aware objective (requirement-target driven) when the requirements
-    # supply measurable targets matching variant attributes; else fall back to the
-    # generic design-quality / simplicity dims.
     domain_names = objective_names(requirements)
     use_domain = len(domain_names) > 1  # at least one perf family + cost_efficiency
     names = domain_names if use_domain else ["design_quality", "simplicity"]
     endurance_tgt = endurance_target(requirements) if use_domain else 0.0
-    # All-up NON-structural mass = DELIVERY payload (the rated requirement load, REQ_PERF_002
-    # "at maximum rated payload") + Σ COMPONENT masses (massKg) of the chosen variants
-    # (sensor/gimbal/airframe/…). Otherwise the chosen components' mass never enters
-    # Endurance/MTOW → optimistic. (Assumes variant massKg = equipment mass, distinct from the
-    # requirement's delivery payload — true for the current generation: payload is requirement-
-    # driven, variants carry component masses.)
+    # All-up non-structural mass = delivery payload (the rated requirement load,
+    # REQ_PERF_002 "at maximum rated payload") + Σ component masses (massKg) of the
+    # chosen variants (sensor/gimbal/airframe/...). Without the sum the chosen
+    # components never enter Endurance/MTOW and both come out optimistic. Assumes
+    # variant massKg is equipment mass, separate from the requirement's delivery
+    # payload, which holds for the current generation.
     _rated = evaluation_overrides(requirements).get("payload_mass_kg", 0.0) if use_domain else 0.0
     _delivery = _rated if _rated > 0 else DESIGN_DEFAULTS["payload_mass_kg"]
 
@@ -301,16 +292,13 @@ def run_variation_dse(
 
     def _design_with_mass(state: State, di0: DesignInputs) -> Dict[str, float]:
         arch = design_arch_inputs(di0)
-        arch["payload_mass_kg"] = _added_mass(state)   # delivery + components
+        arch["payload_mass_kg"] = _added_mass(state)
         return arch
 
     def objective_fn(state: State, ctx) -> Objectives:
         key = tuple(sorted(state.items()))
         if key not in cache:
             if use_domain:
-                # BILEVEL: outer = discrete architecture (this state); inner BO tunes the
-                # continuous battery capacity to the cheapest pack meeting the endurance
-                # target, then we score the inner-optimized design.
                 di0 = architecture_design(ok, dict(state), base_text)
                 arch = _design_with_mass(state, di0)
                 if endurance_tgt > 0:
@@ -353,12 +341,12 @@ def run_variation_dse(
     )
     raw_front = mcts.search(iterations=iterations)
 
-    # The search archive contains only nondominated rollouts, while the hard
-    # constraints must be evaluated over ALL scored designs.  Preserve every
-    # terminal state in ``cache`` and explicitly cover finite catalog spaces.
-    # Current generated spaces are small (e.g. 10 catalog architectures x 2
-    # equipment choices), so exhaustive coverage is both faster to audit and more
-    # scientifically defensible than hoping a stochastic rollout sampled each one.
+    # The search archive holds only nondominated rollouts, while the hard constraints
+    # are evaluated over all scored designs, so every terminal state is kept in
+    # ``cache`` and finite catalog spaces are covered explicitly. Current generated
+    # spaces are small (e.g. 10 catalog architectures x 2 equipment choices), so
+    # exhaustive coverage is cheap to audit and does not rely on a stochastic rollout
+    # sampling each one.
     search_space_size = math.prod(len(op.variants) for op in operators)
     coverage_mode = "mcts"
     if 0 < search_space_size <= exhaustive_limit:
@@ -378,9 +366,9 @@ def run_variation_dse(
             "legal outer configurations"
         )
     else:
-        # For a genuinely large space retain MO-MCTS, but still force at least one
-        # complete evaluation of every catalog architecture seed.  Other points use
-        # their lightest declared equipment choice as a deterministic baseline.
+        # For a large space keep MO-MCTS, but still force at least one complete evaluation
+        # of every catalog architecture seed. Other points use their lightest declared
+        # equipment choice as a deterministic baseline.
         seed_ops = [
             op for op in operators
             if "catalog architecture seed" in op.vp.rationale.lower()
@@ -439,14 +427,14 @@ def run_variation_dse(
     if not evaluated_members:
         return None
 
-    # Preserve the unconstrained estimator front strictly as an exploratory
-    # diagnostic.  It must never be used as the input to mapping/closure filters.
+    # Keep the unconstrained estimator front as an exploratory diagnostic; it is not
+    # the input to the mapping/closure filters.
     exploratory_front = _pareto_members(evaluated_members, names)
 
-    # HARD-CONSTRAINT PIPELINE (order is deliberate and auditable):
+    # Hard-constraint pipeline, in order:
     #   all evaluated -> estimator feasible -> catalog mapping -> Phase 8 closure
-    # Only then is the official Pareto front rebuilt.  This is constrained
-    # multi-objective optimisation; filtering an already-unconstrained front is not.
+    # The official Pareto front is rebuilt only after that, so this is constrained
+    # multi-objective optimisation rather than a filter over an unconstrained front.
     perf_objs = [n for n in names if n.endswith("_sat")]
     perf_feasible = [
         member for member in evaluated_members
@@ -464,11 +452,11 @@ def run_variation_dse(
             f"performance-feasible designs also satisfy MTOW <= {mtow_limit:g} kg"
         )
 
-    # A raising predicate is NOT an engineering "no": count the failures and
-    # attribute them, or a systematic code fault (renamed catalog field,
-    # division by zero in the estimator) empties the feasible set and gets
-    # published as the substantive verdict "no Pareto member closes Phase 8".
-    # record_suppressed alone was invisible — no run artifact writes it.
+    # A raising predicate is not an engineering "no": count the failures and attribute
+    # them, or a systematic code fault (renamed catalog field, division by zero in the
+    # estimator) empties the feasible set and gets published as the verdict "no Pareto
+    # member closes Phase 8". record_suppressed alone is invisible - no run artifact
+    # writes it.
     gate_errors: Dict[str, int] = {"realizability": 0, "recommendability": 0}
     mapping_compliant = list(estimator_feasible)
     if realizability is not None:
@@ -597,11 +585,11 @@ def run_variation_dse(
     )
     recommended_estimator_feasible = True if rec_state is not None else None
 
-    # Weight-simplex sensitivity over the official front, with the SAME scalarisation
-    # as the recommender above (method="chebyshev" — sensitivity() itself defaults to
+    # Weight-simplex sensitivity over the official front, using the same scalarisation
+    # as the recommender above (method="chebyshev"; sensitivity() defaults to
     # weighted_sum, which would report robustness of a pick this path never makes).
-    # A 1-member front is computed too: robustness == 100% is then the machine-readable
-    # evidence, not a skipped case.
+    # A 1-member front is computed too, so robustness == 100% is machine-readable
+    # evidence rather than a skipped case.
     weight_sensitivity: Optional[Dict] = None
     if official_front:
         sens = sensitivity(
@@ -626,7 +614,6 @@ def run_variation_dse(
         )
 
     def _bindings(state: State) -> Dict[str, str]:
-        """{point_id: chosen variant's impl type name} — the variant defs this design uses."""
         s = dict(state)
         return {p.point_id: p.type_of(s[p.point_id])
                 for p in ok if p.point_id in s and p.type_of(s[p.point_id])}
@@ -638,10 +625,10 @@ def run_variation_dse(
             concrete, rec_cap, list(_bindings(dict(rec_state)).values())
         )
         if not check_syntax(wb).has_errors:
-            concrete = wb   # inner-optimized capacity now lives in the BOUND variant
+            concrete = wb
 
-    # Resolve each Pareto member to concrete design inputs (inner-optimized capacity) so
-    # the recommendation can be presented as a SysML trade study over real alternatives.
+    # Resolve each Pareto member to concrete design inputs (inner-optimized capacity)
+    # so the recommendation is presented as a SysML trade study over alternatives.
 
     pareto_designs: List[Tuple[DesignInputs, Objectives]] = []
     pareto_bindings: List[Dict[str, str]] = []

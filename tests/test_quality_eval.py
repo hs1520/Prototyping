@@ -1,4 +1,3 @@
-"""Tests for real design-quality scoring via the DesignEvaluator (Item F, step 5)."""
 from __future__ import annotations
 
 from src.dse.quality_eval import evaluate_design_quality
@@ -16,16 +15,14 @@ _MODEL = """package Drone {
 }"""
 
 
-def test_returns_real_dimensions_without_mcts_fidelity():
+def test_real_dimensions_no_mcts():
     scores = evaluate_design_quality(_MODEL)
     assert _DIMS.issubset(set(scores))
-    assert "mcts_fidelity" not in scores          # self-verification dim dropped
+    assert "mcts_fidelity" not in scores
     assert all(0.0 <= v <= 1.0 for v in scores.values())
 
 
-def test_safety_machine_raises_safety_assurance():
-    """A model whose SAFE requirement is backed by a state machine + failsafe
-    scores higher on safety_assurance than a bare one — the real evaluator sees it."""
+def test_safety_machine_raises_score():
     bare = evaluate_design_quality(_MODEL)["safety_assurance"]
     with_safety = """package Drone {
     requirement def REQ_SAFE_001 { doc /* failsafe */ }

@@ -1,17 +1,14 @@
 """Student-approved bounded A/G chain library (Stage 2 decomposition, design §7).
 
-Each entry is an implementation candidate, not independent evaluator gold or a
-human-frozen architecture.  The student-approved decisions are recorded in
-``docs/gold/STUDENT_DESIGN_DECISIONS.md`` and remain subject to independent review.
-Four chains are encoded, each a distinct bounded safety pattern:
-REQ_SAFE_005 (critical propulsion failure → parachute deployment, a timed
-failsafe), REQ_SAFE_004 (power-on self-test → arming inhibit, a Boolean
-startup-inhibit invariant), REQ_SAFE_008 (stakeholder power-on default lock
-plus student-derived authorised-unlock/de-energise rules — a
-locked-until-authorised-release invariant), and REQ_SAFE_002 (critical battery
-threshold → controlled descent, a threshold-triggered response: the timed
-failsafe's arbitration shape with no deadline). Adding a chain is a controlled
-design activity; the emitter renders it into the model deterministically.
+Each entry is an implementation candidate, not evaluator gold or a
+human-frozen architecture; the decisions are recorded in
+``docs/gold/STUDENT_DESIGN_DECISIONS.md``. Four chains are encoded, one per
+bounded safety pattern: REQ_SAFE_005 (propulsion failure -> parachute, a timed
+failsafe), REQ_SAFE_004 (self-test -> arming inhibit, a startup-inhibit
+invariant), REQ_SAFE_008 (power-on default lock plus authorised-unlock and
+de-energise rules), and REQ_SAFE_002 (battery threshold -> controlled descent,
+a threshold-triggered response with no deadline). Adding a chain is a
+controlled design activity; the emitter renders it deterministically.
 """
 from __future__ import annotations
 
@@ -35,7 +32,6 @@ from .ag_profile import (
 from ..utils.req_id import normalise_req_id
 
 
-# Small typed-AST constructors keep the decision record and emitted SysML aligned.
 def _id(name: str) -> dict[str, str]:
     return {"node": "Identifier", "name": name}
 
@@ -48,7 +44,7 @@ def _and(*items: dict[str, object]) -> dict[str, object]:
     return {"node": "And", "operands": list(items)}
 
 
-# REQ_SAFE_005 — timing starts at the already-detected failure event. Detection
+# REQ_SAFE_005 - timing starts at the already-detected failure event. Detection
 # latency is outside the chain; 0.10 + 0.35 = 0.45 s and the remaining 0.05 s is
 # unallocated margin (STUDENT_DESIGN_DECISIONS §4).
 REQ_SAFE_005_CHAIN = AGChainSpec(
@@ -99,9 +95,8 @@ REQ_SAFE_005_CHAIN = AGChainSpec(
             owner_usage="recoveryPowerSupply",
             guarantee="recoveryActuationPowerAvailable",
             behavior="RecoveryPowerSupplyBehavior",
-            # Availability is a standing guarantee while the ``airborne``
-            # assumption holds, not a one-shot behavior triggered by an
-            # invented mode-entry signal.
+            # Availability is a standing guarantee while the ``airborne`` assumption
+            # holds, so there is no mode-entry trigger signal.
             trigger_signal=None,
             initial_state="recoveryPowerAvailable",
             response_state="recoveryPowerAvailable",
@@ -174,10 +169,10 @@ REQ_SAFE_005_CHAIN = AGChainSpec(
     ),
 )
 
-# REQ_SAFE_004 — startup self-test → arming inhibit. A Boolean *invariant*
-# (failed self-test ↛ armed), not a timed chain: no latency budgets, and the
-# StartupInhibit pattern carries no timing obligation. Second selected chain,
-# exercising a structurally different property KIND + safety pattern.
+# REQ_SAFE_004 - startup self-test -> arming inhibit. A Boolean invariant
+# (failed self-test ↛ armed): no latency budgets, and the StartupInhibit
+# pattern carries no timing obligation. Second selected chain, a different
+# property kind and safety pattern.
 REQ_SAFE_004_CHAIN = AGChainSpec(
     source_requirement="REQ_SAFE_004",
     package="REQ_SAFE_004_AG",
@@ -303,11 +298,10 @@ REQ_SAFE_004_CHAIN = AGChainSpec(
     ),
 )
 
-# REQ_SAFE_008 — the selected stakeholder source requires a locked power-on
-# default before arming/flight authorisation. The guarded-unlock and
-# de-energise-to-lock rules are separately identified student architecture
-# constraints. Together they instantiate the third bounded pattern,
-# LockedUntilAuthorisedRelease. No timing budget applies.
+# REQ_SAFE_008 - the stakeholder source requires a locked power-on default
+# before arming/flight authorisation; the guarded-unlock and
+# de-energise-to-lock rules are separate student architecture constraints.
+# Together they instantiate LockedUntilAuthorisedRelease. No timing budget.
 REQ_SAFE_008_CHAIN = AGChainSpec(
     source_requirement="REQ_SAFE_008",
     package="REQ_SAFE_008_AG",
@@ -422,15 +416,13 @@ REQ_SAFE_008_CHAIN = AGChainSpec(
     ),
 )
 
-# REQ_SAFE_002 — critical battery threshold → controlled descent. Structurally a
-# triggered response with arbitration, exactly like REQ_SAFE_005, and *without* a
-# deadline: the requirement names a trigger, a response, and a precedence relation
-# ("superseding any lower-priority contingency response") but no time bound.
-# Before THRESHOLD_TRIGGERED_RESPONSE existed this chain had nowhere to go — the
-# timed pattern rejects a chain with no budget, and stating a trigger→response
-# obligation as a continuously held invariant misdescribes it. Encoding it under
-# the timed pattern would have required inventing a deadline the stakeholder never
-# stated, which is the failure mode the pattern set exists to prevent.
+# REQ_SAFE_002 - critical battery threshold -> controlled descent. A triggered
+# response with arbitration like REQ_SAFE_005 but with no deadline: the
+# requirement names a trigger, a response and a precedence relation
+# ("superseding any lower-priority contingency response") and no time bound.
+# Before THRESHOLD_TRIGGERED_RESPONSE existed the chain fit nowhere - the
+# timed pattern rejects a chain with no budget, and an invariant misdescribes
+# a trigger->response obligation.
 REQ_SAFE_002_CHAIN = AGChainSpec(
     source_requirement="REQ_SAFE_002",
     package="REQ_SAFE_002_AG",
@@ -471,8 +463,8 @@ REQ_SAFE_002_CHAIN = AGChainSpec(
                     "criticalBatteryThresholdReached", environment=True
                 ),
             ),
-            # Reacts to something upstream, so it consumes time — but the chain
-            # apportions none, because the requirement sets no deadline.
+            # Reacts to something upstream, so it consumes time; the chain apportions
+            # none because the requirement sets no deadline.
             timing_segment_required=True,
         ),
         AGComponentSpec(
@@ -502,12 +494,12 @@ REQ_SAFE_002_CHAIN = AGChainSpec(
     verification="ControlledDescentVerification",
     pattern=THRESHOLD_PATTERN,
     # No timing_origin: the chain declares no interval, so the trigger is stated
-    # once, in the priority contract, rather than twice.
+    # once, in the priority contract.
     timing_origin=None,
     priority=AGPrioritySpec(
         response_set_id="FLIGHT_RESPONSES_V1",
-        # The selected member's name must be recoverable from its arbitration
-        # state name, which is how the extractor maps a state back to a response.
+        # The extractor maps a state back to a response, so the member name is
+        # recoverable from its arbitration state name.
         members=(
             "CONTROLLED_DESCENT",
             "COMMUNICATION_LOSS_SAFE_LANDING",

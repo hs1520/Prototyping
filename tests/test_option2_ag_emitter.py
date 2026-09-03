@@ -1,9 +1,3 @@
-"""A/G-aware generation (Stage 2-3) — emitter, chain library, R2 integration.
-
-The selected decomposition candidate renders to valid SysML and round-trips to a checker
-PASS, and under R2-BBAG the orchestrator merges it so the committed model carries
-the contracts and the A/G trace is non-empty. R0/R1 models never carry them.
-"""
 from __future__ import annotations
 
 import pytest
@@ -37,7 +31,7 @@ _BASE_MODEL = (
 _REQS = ["REQ-SAFE-005: The system shall deploy the parachute within 0.5 s."]
 
 
-def test_emitted_chain_passes_the_syside_gate():
+def test_emitted_chain_passes_gate():
     emitted = emit_ag_package(REQ_SAFE_005_CHAIN)
     result = check_syntax(
         emitted,
@@ -55,8 +49,7 @@ def test_emitted_chain_passes_the_syside_gate():
         assert f"action def {event_name}" not in emitted
 
 
-def test_r2_accepts_strict_generated_base_shape_and_keeps_raw_gate():
-    """The R2 base and deterministic package use the same strict policy."""
+def test_r2_accepts_generated_base():
     generated_shape = """
 package Drone {
     private import ScalarValues::*;
@@ -97,7 +90,7 @@ package Drone {
     assert "requirement def SystemParachuteContract" in merged
 
 
-def test_r2_raw_gate_rejects_a_broken_deterministic_package(monkeypatch):
+def test_raw_gate_rejects_broken_package(monkeypatch):
     import src.prototyping.ag_emitter as emitter
 
     monkeypatch.setattr(
@@ -116,8 +109,7 @@ def test_r2_raw_gate_rejects_a_broken_deterministic_package(monkeypatch):
     assert "parser L" in message
 
 
-def test_a_warning_on_the_base_model_fails_the_arm_closed(monkeypatch):
-    """A committed user-model warning is a release failure."""
+def test_base_model_warning_fails(monkeypatch):
     import src.agents.orchestrator as orchestrator_module
     from src.simulation.syntax_checker import SyntaxCheckResult
 
@@ -125,7 +117,7 @@ def test_a_warning_on_the_base_model_fails_the_arm_closed(monkeypatch):
 
     def _warned(text, **kwargs):
         result = real(text, **kwargs)
-        # only the BASE model earns the warning; the emitted package is left alone
+        # only _BASE_MODEL gets the warning; the emitted package is left alone,
         # so this pins the base-model gate and nothing else
         if result.has_errors or text != _BASE_MODEL:
             return result
@@ -144,7 +136,7 @@ def test_a_warning_on_the_base_model_fails_the_arm_closed(monkeypatch):
         orch._apply_ag_contract_layer(_BASE_MODEL, _REQS)
 
 
-def test_emitted_chain_round_trips_to_a_checker_pass():
+def test_emitted_chain_round_trips():
     sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
     report = check_ag_graph(extract_ag_graph(sysml, revision=1))
     assert report.verdict == "PASS", [d.code for d in report.diagnostics]
@@ -177,8 +169,7 @@ def test_emitted_chain_round_trips_to_a_checker_pass():
     ] is False
 
 
-def test_priority_topology_is_structural_not_bound_to_reviewed_element_names():
-    """Equivalent authored names must not become a checker false positive."""
+def test_priority_topology_structural():
     sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
     authored_names = (
         sysml
@@ -212,8 +203,7 @@ def test_priority_topology_is_structural_not_bound_to_reviewed_element_names():
     } >= {"CONTROLLED_BATTERY_LANDING"}
 
 
-def test_wiring_is_checked_independently_of_an_incomplete_response_vocabulary():
-    """A blocked enum-vocabulary fault must not manufacture a wiring fault."""
+def test_wiring_checked_bare_enums():
     sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
     bare_enum_literals = sysml
     for member in REQ_SAFE_005_CHAIN.priority.members:
@@ -237,7 +227,7 @@ def test_wiring_is_checked_independently_of_an_incomplete_response_vocabulary():
     assert "selection_action_connected" not in unsatisfied
 
 
-def test_priority_extractor_holds_no_reviewed_transition_or_action_names():
+def test_extractor_holds_no_names():
     import inspect
     from src.prototyping import ag_extractor
 
@@ -250,7 +240,7 @@ def test_priority_extractor_holds_no_reviewed_transition_or_action_names():
         assert reviewed_name not in source
 
 
-def test_runtime_checker_fails_closed_when_priority_semantics_are_removed():
+def test_removed_priority_fails():
     sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
     without_priority = sysml.replace(
         "requirement def SafetyResponsePriorityContract",
@@ -277,7 +267,7 @@ def test_runtime_checker_fails_closed_when_priority_semantics_are_removed():
     }
 
 
-def test_current_checker_requires_priority_provenance_but_archive_replay_can_opt_out():
+def test_provenance_required_opt_out():
     sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
     without_provenance = "\n".join(
         line for line in sysml.splitlines()
@@ -345,7 +335,7 @@ def test_current_checker_requires_priority_provenance_but_archive_replay_can_opt
         ),
     ],
 )
-def test_safe005_checker_rejects_each_missing_priority_topology_fact(
+def test_missing_topology_facts_rejected(
     before, after, expected_code
 ):
     sysml = _BASE_MODEL + "\n" + emit_ag_package(REQ_SAFE_005_CHAIN)
@@ -357,9 +347,9 @@ def test_safe005_checker_rejects_each_missing_priority_topology_fact(
     assert expected_code in {diagnostic.code for diagnostic in report.diagnostics}
 
 
-def test_merge_preserves_the_base_model_and_stays_valid():
+def test_merge_preserves_base_model():
     merged = merge_ag_contracts(_BASE_MODEL, [REQ_SAFE_005_CHAIN])
-    assert "part def SafetyMonitor" in merged  # base preserved verbatim
+    assert "part def SafetyMonitor" in merged
     assert "requirement def SystemParachuteContract" in merged
     assert check_syntax(merged).has_errors is False
     graph = extract_ag_graph(merged, revision=1)
@@ -367,13 +357,13 @@ def test_merge_preserves_the_base_model_and_stays_valid():
     assert len(graph.components) == 3
 
 
-def test_select_ag_chains_matches_only_present_source_requirements():
+def test_select_chains_only_present_reqs():
     assert select_ag_chains(_REQS) == (REQ_SAFE_005_CHAIN,)
     assert select_ag_chains(["REQ-FUNC-001: unrelated"]) == ()
     assert select_ag_chains([]) == ()
 
 
-def test_r2_orchestrator_merges_ag_layer_and_emits_non_empty_pass_trace():
+def test_r2_merges_layer_and_traces():
     orch = Orchestrator(_NoCallLLM(), revised_experiment_arm="R2-BBAG")
     merged = orch._apply_ag_contract_layer(_BASE_MODEL, _REQS)
     assert "SystemParachuteContract" in merged
@@ -393,20 +383,19 @@ def test_r2_orchestrator_merges_ag_layer_and_emits_non_empty_pass_trace():
     assert len(graph["graph"]["discharge_edges"]) == 5
 
 
-def test_r1_and_r0_never_apply_the_ag_contract_layer():
+def test_r1_r0_skip_ag_layer():
     r1 = Orchestrator(_NoCallLLM(), revised_experiment_arm="R1-BBCTX")
     assert r1._apply_ag_contract_layer(_BASE_MODEL, _REQS) == _BASE_MODEL
-    r0 = Orchestrator(_NoCallLLM())  # no revised arm
+    r0 = Orchestrator(_NoCallLLM())
     assert r0._apply_ag_contract_layer(_BASE_MODEL, _REQS) == _BASE_MODEL
 
 
 # --- End-to-end R2-BBAG orchestrator seam (the sequence generate() runs) -------
-# MockLLM cannot synthesise valid multi-step SysML, so a full mock-driven
-# generate() is not viable; this drives the real R2 integration methods that
-# generate() calls (prepare -> finalize handoff -> A/G layer -> commit ->
-# collaboration artifacts) with a realistic committed model, deterministically.
+# MockLLM cannot synthesise valid multi-step SysML, so this drives the real R2
+# integration methods generate() calls (prepare -> finalize handoff -> A/G layer
+# -> commit -> collaboration artifacts) with a committed model.
 
-def test_r2_end_to_end_orchestrator_seam_produces_full_evidence_chain():
+def test_r2_end_to_end_evidence():
     from types import SimpleNamespace
 
     from src.prototyping.requirement_inputs import build_frozen_requirement_set
@@ -426,7 +415,6 @@ def test_r2_end_to_end_orchestrator_seam_produces_full_evidence_chain():
         "requirement_set_digest": artifact.get("requirement_set_digest"),
     }
 
-    # Phase 2 seam: real blackboard/context/session handoff, then a committed model.
     orch._prepare_design_handoff("DeliveryUAV", reqs)
     design_model = build_lite_model(
         "package DeliveryUAV {\n"
@@ -445,28 +433,22 @@ def test_r2_end_to_end_orchestrator_seam_produces_full_evidence_chain():
         design_model,
     )
 
-    # generate()/explore() tail seam.
     final_sysml = get_sysml_text(design_model)
     final_sysml = orch._apply_ag_contract_layer(final_sysml, reqs)
     orch._commit_terminal_model(final_sysml, producer="smoke")
     artifacts = orch._build_collaboration_artifacts(final_sysml)
 
-    # A/G layer merged into the committed authority model.
     assert "requirement def SystemParachuteContract" in final_sysml
     assert orch.blackboard.current_model.model_text == final_sysml
 
-    # Non-empty PASS A/G trace attached to the run artifacts.
     graph = artifacts["ag_contract_graph"]
     assert graph["verdict"] == "PASS"
     assert len(graph["graph"]["allocations"]) == 4
     assert graph["source_model_revision"] == orch.blackboard.current_revision
 
-    # Honest experiment metadata: runnable R2, not gold-poolable.
     assert artifacts["revised_experiment"]["configuration"] == "R2-BBAG"
     assert artifacts["revised_experiment"]["evaluation_ready"] is False
 
-    # The full typed record chain is on the board: source -> design result ->
-    # model revisions -> A/G analysis, all under the SysML authority.
     records = artifacts["collaboration"]["blackboard"]["records"]
     topics = {r["topic"] for r in records}
     assert "requirements.authoritative" in topics

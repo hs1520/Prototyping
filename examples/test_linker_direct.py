@@ -1,6 +1,4 @@
-"""
-直接用上次生成的 SysML 文本测试 requirement_linker，不重跑 LLM。
-"""
+"""直接用上次生成的 SysML 文本测试 requirement_linker，不重跑 LLM。"""
 
 from src.sysml.lite_model import build_lite_model
 from src.sitl.requirement_linker import RequirementLinker

@@ -1,13 +1,12 @@
 """Planning-only A/G artifacts and their bounded consistency gate.
 
-Pre-generation planning happens before a concrete system model exists.  It may
-therefore commit contract decomposition decisions, but it must not claim that a
-component owner or realizing behavior already exists.  This module derives a
-planning-only SysML package from the deterministic emitter and validates only
-the obligations that are meaningful at that lifecycle stage.
+Planning runs before a concrete system model exists, so it commits contract
+decomposition decisions but claims no component owner or realizing behavior. This
+module derives a planning-only SysML package from the deterministic emitter and
+validates only the obligations meaningful at that lifecycle stage.
 
-The terminal model remains the semantic authority.  Planning packages are
-generation inputs and must never be merged into the committed model verbatim.
+The terminal model stays the semantic authority; planning packages are generation
+inputs and are not merged into the committed model verbatim.
 """
 from __future__ import annotations
 
@@ -34,12 +33,11 @@ PLANNING_CONSISTENCY = "PLANNING_CONSISTENCY"
 
 
 def emit_ag_planning_package(spec: AGChainSpec) -> str:
-    """Render contract decisions without fictional owners or realizations."""
-    # A planning artifact may describe the behavior obligation by name in the
-    # typed AGChainSpec, but no concrete state definition exists until the main
-    # model has been generated. Realization edges would assert that the omitted
-    # behavior exists. The terminal binder recreates those edges against
-    # qualified main-model paths.
+    """Render contract decisions without owner or realization claims."""
+    # A planning artifact names the behavior obligation in the typed AGChainSpec,
+    # but no concrete state definition exists until the main model is generated,
+    # so realization edges would assert an absent behavior. The terminal binder
+    # recreates those edges against qualified main-model paths.
     return emit_ag_package(spec, mode=EmissionMode.CONTRACTS_ONLY)
 
 @dataclass(frozen=True)
@@ -72,9 +70,9 @@ def check_ag_planning_graph(
 ) -> AGPlanningReport:
     """Check obligations decidable before owner/behavior generation.
 
-    This deliberately excludes ownership, behavior realization, and executable
-    pattern topology.  Those are terminal obligations and treating them as
-    pre-generation facts is the root cause of the former shadow model.
+    Excludes ownership, behavior realization and executable pattern topology: those are
+    terminal obligations, and treating them as pre-generation facts produced the former
+    shadow model.
     """
     alias_map = {
         str(key).strip().lower(): str(value).strip().lower()

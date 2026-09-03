@@ -90,11 +90,11 @@ def realized_metrics(rd: RealizedDesign, cruise_speed_mps: float = 0.0,
     if pack_voltage_v <= 0 or rd.combo.voltage_v <= 0:
         raise ValueError("pack and motor-curve voltages must be positive")
 
-    # Same S-count does not imply the same operating voltage.  We never scale a
-    # curve upward beyond its published test point.  At lower pack voltage,
-    # maximum static thrust is conservatively derated with V^2; the same hover
-    # operating point needs proportionally more throttle and its published
-    # electrical power is converted to pack current at the actual voltage.
+    # Same S-count does not imply the same operating voltage. A curve is not
+    # scaled above its published test point. At lower pack voltage, maximum static
+    # thrust is derated with V^2; the same hover point needs proportionally more
+    # throttle, and its published electrical power converts to pack current at the
+    # actual voltage.
     voltage_ratio = pack_voltage_v / rd.combo.voltage_v
     conservative_ratio = min(1.0, voltage_ratio)
     derated_max_thrust_g = rd.combo.max_thrust_g() * conservative_ratio ** 2

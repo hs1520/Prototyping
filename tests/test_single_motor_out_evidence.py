@@ -14,11 +14,13 @@ _REQ_TEXT = (
 )
 
 
-def test_motor_out_surface_criterion_gates_and_attitude_stays_informational():
-    """REQ-SAFE-007 names no measurement method, so its own observable surface
-    — controlled flight maintained (stable hover held) in every run — is the
-    verdict. The 5 deg RMS engineering interpretation stays on the record but
-    cannot fail a requirement that never stated it."""
+def test_surface_criterion_gates():
+    """REQ-SAFE-007 names no measurement method, so its observable surface - stable
+    hover held in every run - is the verdict.
+
+    The 5 deg RMS interpretation stays on the record but cannot fail a requirement
+    that never stated it.
+    """
     runs = [
         {"return_code": 0, "stable": True, "attitude_rms_deg": 1.59},
         {"return_code": 0, "stable": True, "attitude_rms_deg": 13.46},
@@ -37,7 +39,6 @@ def test_motor_out_surface_criterion_gates_and_attitude_stays_informational():
     assert claim.criterion.metric == "hover_stable"
     assert claim.criterion.source is CriterionSource.REQUIREMENT
     assert claim.criterion.accepted_for_requirement is True
-    # surface first, then the informational interpretation, then completion
     assert [(item.passed_runs, item.total_runs) for item in claim.sensitivity] == [
         (5, 5),
         (2, 5),
@@ -46,10 +47,10 @@ def test_motor_out_surface_criterion_gates_and_attitude_stays_informational():
     assert "informational" in claim.sensitivity[1].interpretation
 
 
-def test_motor_out_surface_criterion_still_fails_an_unstable_flight():
-    """Worst case, not average: one departed flight fails the redundancy
-    claim, and the accepted surface criterion makes that a real failure,
-    not a demoted partial."""
+def test_unstable_flight_fails():
+    """Worst case, not average: one departed flight fails the redundancy claim, and
+    the surface criterion reports it as a failure rather than a partial.
+    """
     runs = [
         {"return_code": 0, "stable": True, "attitude_rms_deg": 1.59},
         {"return_code": 1, "stable": False, "attitude_rms_deg": None},
@@ -68,9 +69,7 @@ def test_motor_out_surface_criterion_still_fails_an_unstable_flight():
     ]
 
 
-def test_motor_out_runs_without_a_stability_observation_do_not_pass():
-    """A run that never recorded the surface observable cannot meet it —
-    absence of measurement is not evidence of controlled flight."""
+def test_no_stability_observation_fails():
     claim = evaluate_single_motor_out(
         [{"return_code": 0, "attitude_rms_deg": 1.59}]
     )
@@ -78,6 +77,6 @@ def test_motor_out_runs_without_a_stability_observation_do_not_pass():
     assert claim.sensitivity[0].passed_runs == 0
 
 
-def test_motor_out_evidence_rejects_an_empty_campaign():
+def test_empty_campaign_rejected():
     with pytest.raises(ValueError, match="at least one flight run"):
         evaluate_single_motor_out([])

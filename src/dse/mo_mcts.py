@@ -1,19 +1,15 @@
-"""Multi-objective (Pareto-aware) MCTS — bilevel outer-layer prototype.
+"""Multi-objective (Pareto-aware) MCTS - bilevel outer-layer prototype.
 
 Replaces the scalar weighted-sum reward of ``mcts.py`` for architecture search:
-
-  * state   = the set of resolved variation-point choices {point_id: variant}
-  * action  = resolve one operator's variation point to a feasible variant
-  * reward  = the hypervolume *gain* a rollout contributes to the global Pareto
-              archive (MO-MCTS, hypervolume-driven; Wang & Sebag 2012 lineage)
-  * output  = the global Pareto front, not a single "best" configuration
-
-Objectives are supplied as a callable returning a dict of values, all to be
-MAXIMISED. Operators are duck-typed: each exposes ``point_id``, ``variants``,
-``feasible(variant, ctx)`` and ``resolve(variant)``.
-
-This module is deliberately decoupled from the live scalar pipeline in
-``mcts.py`` so the existing flow is unaffected during the M1/M2 refactor.
+state = the resolved variation-point choices {point_id: variant}; action =
+resolve one operator's variation point to a feasible variant; reward = the
+hypervolume gain a rollout contributes to the global Pareto archive (MO-MCTS,
+hypervolume-driven; Wang & Sebag 2012 lineage); output = the global Pareto front
+rather than one best configuration. Objectives come from a callable returning a
+dict of values, all maximised. Operators are duck-typed: ``point_id``,
+``variants``, ``feasible(variant, ctx)`` and ``resolve(variant)``. Decoupled from
+the live scalar pipeline in ``mcts.py`` so the existing flow is unaffected during
+the M1/M2 refactor.
 """
 from __future__ import annotations
 
@@ -23,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 Objectives = Dict[str, float]
-State = Dict[str, str]  # point_id -> variant
+State = Dict[str, str]
 
 
 class Operator(Protocol):
@@ -37,18 +33,12 @@ class Operator(Protocol):
     def resolve(self, variant: str) -> str: ...
 
 
-# ---------------------------------------------------------------------------
-# Pareto archive + 2D hypervolume
-# ---------------------------------------------------------------------------
-
-
 def dominates(a: Sequence[float], b: Sequence[float]) -> bool:
-    """True if a Pareto-dominates b (>= on all, > on at least one). Maximisation."""
+    """True if a Pareto-dominates b (>= on all, > on at least one)."""
     return all(x >= y for x, y in zip(a, b)) and any(x > y for x, y in zip(a, b))
 
 
 def _nondominated(points: List[Tuple[float, ...]]) -> List[Tuple[float, ...]]:
-    """Keep only the non-dominated points (maximisation)."""
     keep: List[Tuple[float, ...]] = []
     for p in points:
         if any(dominates(q, p) for q in points if q is not p):
@@ -59,12 +49,7 @@ def _nondominated(points: List[Tuple[float, ...]]) -> List[Tuple[float, ...]]:
 
 
 def hypervolume_nd(points: Sequence[Tuple[float, ...]], reference: Sequence[float]) -> float:
-    """N-dimensional hypervolume above ``reference`` (maximisation), via HSO.
-
-    Hypervolume by Slicing Objectives: slice along the last axis; each slab's
-    volume is its height times the (d-1)-D hypervolume of the points covering it.
-    Exact for any number of objectives; fine for the small fronts here.
-    """
+    """N-dimensional hypervolume above ``reference`` (maximisation), via HSO."""
     ref = tuple(reference)
     pts = [tuple(p) for p in points if all(p[i] > ref[i] for i in range(len(ref)))]
 
@@ -102,7 +87,7 @@ class ParetoArchive:
         return tuple(obj[n] for n in self.names)
 
     def add(self, state: State, obj: Objectives) -> bool:
-        """Add a point; drop any it dominates. Returns True if it is non-dominated."""
+        """Add a point; drop any it dominates."""
         v = self._vec(obj)
         for _, existing in self.members:
             if dominates(self._vec(existing), v) or self._vec(existing) == v:
@@ -118,17 +103,12 @@ class ParetoArchive:
         return hypervolume_nd([self._vec(o) for _, o in self.members], self.reference)
 
 
-# ---------------------------------------------------------------------------
-# MCTS tree
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class MONode:
     state: State
     parent: Optional["MONode"] = None
     children: List["MONode"] = field(default_factory=list)
-    untried: List[Tuple[str, str]] = field(default_factory=list)  # (point_id, variant)
+    untried: List[Tuple[str, str]] = field(default_factory=list)
     visits: int = 0
     total_reward: float = 0.0
 
@@ -165,22 +145,18 @@ class MultiObjectiveMCTS:
         self.archive = ParetoArchive(objective_names, reference)
         self.root = MONode(state={}, untried=self._actions({}))
 
-    # -- action enumeration --------------------------------------------------
-
     def _actions(self, state: State) -> List[Tuple[str, str]]:
         acts: List[Tuple[str, str]] = []
         for op in self.operators:
             if op.point_id in state:
                 continue
             for v in op.variants:
-                if op.feasible(v, self.ctx, state):  # state-aware (cross-operator)
+                if op.feasible(v, self.ctx, state):
                     acts.append((op.point_id, v))
         return acts
 
     def _is_terminal(self, state: State) -> bool:
         return all(op.point_id in state for op in self.operators)
-
-    # -- four phases ---------------------------------------------------------
 
     def search(self, iterations: int = 100) -> ParetoArchive:
         for _ in range(iterations):
@@ -211,7 +187,6 @@ class MultiObjectiveMCTS:
         return child
 
     def _simulate(self, node: MONode) -> float:
-        """Random-resolve remaining points, score the terminal, return HV gain."""
         state = dict(node.state)
         remaining = self._actions(state)
         while not self._is_terminal(state) and remaining:
@@ -219,8 +194,8 @@ class MultiObjectiveMCTS:
             state[point_id] = variant
             remaining = self._actions(state)
 
-        # cross-operator feasibility can leave a branch with no completion; never
-        # evaluate an incomplete architecture (objective_fn expects all points set).
+        # cross-operator feasibility can leave a branch with no completion; an incomplete
+        # architecture is not scored (objective_fn expects all points set).
         if not self._is_terminal(state):
             return 0.0
 
@@ -247,14 +222,13 @@ def forest_search(
     iterations: int = 30,
     seeds: Optional[Sequence[int]] = None,
 ) -> ParetoArchive:
-    """Multi-seed forest search (Item E): run ``n_trees`` independent MO-MCTS trees
-    from different seeds and merge their fronts into one Pareto archive.
+    """Multi-seed forest search (Item E): run ``n_trees`` independent MO-MCTS trees and
+    merge their fronts into one Pareto archive.
 
-    Forest (vs a single tree of the same total budget) reduces premature
-    convergence: each tree explores a different trajectory and the union covers
-    more of the front. Total budget = n_trees x iterations. Also an ablation axis
-    (forest vs single-tree). When LLM-generated variation skeletons exist (optional
-    step 3), the per-tree seeds would instead be distinct seed architectures.
+    Each tree explores a different trajectory, so the union covers more of the front
+    than a single tree of the same budget. Total budget = n_trees x iterations; also
+    an ablation axis (forest vs single-tree). With LLM-generated variation skeletons
+    (optional step 3) the per-tree seeds would be distinct seed architectures.
     """
     seeds = list(seeds) if seeds is not None else list(range(n_trees))
     merged = ParetoArchive(objective_names, reference)

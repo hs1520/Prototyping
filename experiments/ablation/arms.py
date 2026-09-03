@@ -1,10 +1,9 @@
-"""Ablation arm registry — each arm differs from FULL by exactly one component.
+"""Ablation arm registry - each arm differs from FULL by one component.
 
-The registry is the single source of truth for what an arm means: its pipeline
-configuration, whether it runs the DSE stage, and whether it is a post-hoc
-replay (no LLM runs at all).  ``run_ablation.py`` consumes it; ``analyze.py``
-and the campaign manifest record its digest so a result can always be traced
-to the exact arm definition that produced it.
+An arm entry holds its pipeline configuration, whether it runs the DSE stage,
+and whether it is a post-hoc replay (no LLM runs). ``run_ablation.py``
+consumes it; ``analyze.py`` and the campaign manifest record its digest, so a
+result traces back to the arm definition that produced it.
 """
 from __future__ import annotations
 
@@ -17,18 +16,10 @@ from typing import Any, Dict, Mapping
 @dataclass(frozen=True)
 class AblationArm:
     name: str
-    #: Which component this arm removes/replaces, relative to FULL.
     ablated_component: str
-    #: The question the arm answers for the evaluation chapter.
     question: str
-    #: PrototypingPipeline constructor overrides (on top of the harness base
-    #: kwargs).  Empty for FULL by definition.
     pipeline_kwargs: Mapping[str, Any] = field(default_factory=dict)
-    #: False → generate-only (the NO-DSE arm): explore() is skipped and the
-    #: reported model/score are the pre-DSE ones.
     run_dse: bool = True
-    #: True → no pipeline runs; the arm is computed offline from FULL's saved
-    #: artifacts (see posthoc_weights.py).
     posthoc: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
@@ -132,7 +123,6 @@ ARMS: Dict[str, AblationArm] = {
     )
 }
 
-#: Arms that consume LLM budget, in the order a campaign runs them.
 PAID_ARMS = [arm.name for arm in ARMS.values() if not arm.posthoc]
 
 

@@ -1,14 +1,10 @@
 """Per-requirement traceability, measured without human gold.
 
-The project's claim is that the generated models are more robust. Allocation and
-discharge agreement against frozen gold turned out to be largely determined by the
-architecture boundary, so more human freezing buys little (see
-`docs/R2_GENERATION_FINDINGS.md` §2). Traceability is the load-bearing part that is
-free: whether each requirement actually reaches an implementation, checked entirely
-against the committed model.
-
-A measure that cannot separate the arms would be worthless, so the tests below pin
-that separation against real artifacts rather than only asserting the shape.
+Allocation and discharge agreement against frozen gold is largely determined by
+the architecture boundary, so more freezing buys little (see
+`docs/R2_GENERATION_FINDINGS.md` §2). Traceability - whether each requirement
+reaches an implementation - is checked against the committed model alone, and
+the tests below pin arm separation against real artifacts, not just the shape.
 """
 from __future__ import annotations
 
@@ -36,32 +32,27 @@ def _trace(text: str) -> dict:
     )
 
 
-def test_a_model_with_no_ag_contracts_traces_nothing():
-    """R0/R1 carry no A/G layer, so no requirement reaches an implementation."""
+def test_no_contracts_traces_nothing():
     out = _trace(_BASE)
     assert out["mean_trace_completeness"] == 0.0
     assert out["fully_traced"] == 0
     assert out["untraced_requirements"] == ["REQ_SAFE_005"]
 
 
-def test_a_complete_decomposition_traces_every_link():
+def test_complete_decomposition_traces_all():
     out = _trace(_FULL)
     assert out["fully_traced_rate"] == 1.0
     assert out["untraced_requirements"] == []
     assert out["per_requirement"][0]["missing_links"] == []
 
 
-def test_the_measure_separates_the_arms():
-    """The point of the metric: an empty model and a complete one must not score
-    the same, or it evidences nothing."""
+def test_measure_separates_arms():
     assert _trace(_BASE)["mean_trace_completeness"] < (
         _trace(_FULL)["mean_trace_completeness"]
     )
 
 
-def test_a_missing_link_is_named_not_just_counted():
-    """A score without the missing link is unactionable — the same defect the
-    lumped priority diagnostic had."""
+def test_missing_link_named():
     without_observation = "\n".join(
         line for line in _FULL.splitlines()
         if "dependency observe" not in line
@@ -72,8 +63,7 @@ def test_a_missing_link_is_named_not_just_counted():
     assert requirement["trace_completeness"] < 1.0
 
 
-def test_matching_guarantee_does_not_fake_an_explicit_discharge_edge():
-    """A concept produced somewhere is not a discharge relationship."""
+def test_no_fake_discharge_edge():
     without_discharge = "\n".join(
         line for line in _FULL.splitlines()
         if "dependency discharge" not in line
@@ -84,7 +74,7 @@ def test_matching_guarantee_does_not_fake_an_explicit_discharge_edge():
     assert requirement["fully_traced"] is False
 
 
-def test_a_failed_realization_link_does_not_count_as_implemented_behavior():
+def test_failed_link_not_realized():
     links = [dict(item) for item in _links(_FULL)]
     links[0]["status"] = "FAIL"
     out = compute_traceability(
@@ -95,10 +85,10 @@ def test_a_failed_realization_link_does_not_count_as_implemented_behavior():
     assert "behaviours_realized" in out["per_requirement"][0]["missing_links"]
 
 
-def test_a_chain_without_provenance_is_unattributed_and_kept_in_full():
-    """Provenance is load-bearing: a chain that never cites a requirement cannot
-    be traced to it however complete it is. The detail must survive, or a score of
-    0.0 looks like nothing was built when what failed was provenance."""
+def test_chain_without_provenance_kept():
+    """A chain that cites no requirement cannot be traced to it, however complete it
+    is. The detail is kept, so a score of 0.0 is not read as nothing built.
+    """
     without_provenance = _FULL.replace(
         "bounded A/G system contract for REQ_SAFE_005", "no requirement cited"
     )
@@ -110,8 +100,7 @@ def test_a_chain_without_provenance_is_unattributed_and_kept_in_full():
     assert orphan["links_complete"] > 0
 
 
-def test_an_empty_denominator_does_not_count_as_a_satisfied_link():
-    """A contract owning no guarantee has not been implemented, it is empty."""
+def test_empty_denominator_not_satisfied():
     from src.prototyping.ag_traceability import _link_ok
 
     assert _link_ok(1.0) is True
@@ -119,18 +108,18 @@ def test_an_empty_denominator_does_not_count_as_a_satisfied_link():
     assert _link_ok(0.5) is False
 
 
-def test_the_measure_declares_it_is_not_an_accuracy_claim():
+def test_not_accuracy_claim():
     out = _trace(_FULL)
     assert "no human gold" in out["measurement_boundary"]
     assert "NOT correctness" in out["metric_interpretation"]
     assert len(TRACE_LINKS) == out["per_requirement"][0]["links_total"]
 
 
-def test_an_out_of_scope_requirement_must_be_declared_not_inferred():
+def test_out_of_scope_declared_not_inferred():
     """Scope is a design decision. An undeclared requirement counts as in scope, so
-    excluding one always takes an explicit recorded decision and the denominator
-    cannot be quietly shrunk — which is exactly how an earlier version of the table
-    reached 1.00."""
+    excluding one takes a recorded decision and the denominator cannot shrink
+    silently - which is how an earlier table reached 1.00.
+    """
     graphs = extract_ag_graphs(_FULL)
     both = ["REQ_SAFE_005", "REQ_FUNC_002"]
 
@@ -150,9 +139,7 @@ def test_an_out_of_scope_requirement_must_be_declared_not_inferred():
     assert declared["mean_trace_completeness"] == 1.0
 
 
-def test_an_excluded_requirement_is_reported_with_its_reason():
-    """Silently dropping it would make the denominator unauditable — the reader
-    could not tell a scoped exclusion from a missing requirement."""
+def test_excluded_requirement_has_reason():
     out = compute_traceability(
         extract_ag_graphs(_FULL),
         realization_links=_links(_FULL),
@@ -164,8 +151,7 @@ def test_an_excluded_requirement_is_reported_with_its_reason():
     assert "invariant state" in excluded[0]["reason"]
 
 
-def test_scope_does_not_excuse_an_in_scope_requirement_that_is_missing():
-    """Exclusion applies only to what is declared; everything else still counts."""
+def test_scope_no_excuse_for_missing():
     out = compute_traceability(
         extract_ag_graphs(_FULL),
         realization_links=_links(_FULL),

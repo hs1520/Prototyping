@@ -1,4 +1,3 @@
-"""Tests for surgical variation introduction (connectivity-preserving)."""
 from __future__ import annotations
 
 from src.dse.variation_introducer import (
@@ -26,24 +25,24 @@ _VARIANTS = [
 ]
 
 
-def test_connected_components_finds_wired_parts():
+def test_connected_components_found():
     comps = dict(connected_components(_MODEL))
     assert comps["sensorSuite"] == "SensorSuite"
     assert comps["flightController"] == "FlightController"
 
 
-def test_introduce_preserves_connect_and_is_port_safe():
+def test_introduce_keeps_connect_safe():
     text, ok = introduce_variation(
         _MODEL, "sensorSuite", "SensorSuite", _VARIANTS, "range vs mass", ["REQ-PERF-001"]
     )
     assert ok and not check_syntax(text).has_errors
-    assert "connect sensorSuite.data to flightController.sensorIn;" in text  # preserved
+    assert "connect sensorSuite.data to flightController.sensorIn;" in text
     vp = admitted(parse_variation_points(text))[0][0]
     assert vp.point_id == "sensorSuite"
-    assert port_safe(vp, text)  # variants specialise the host type → shared ports
+    assert port_safe(vp, text)
 
 
-def test_resolution_keeps_the_connect_valid():
+def test_resolution_keeps_connect():
     text, _ = introduce_variation(
         _MODEL, "sensorSuite", "SensorSuite", _VARIANTS, "range vs mass", ["REQ-PERF-001"]
     )
@@ -54,14 +53,14 @@ def test_resolution_keeps_the_connect_valid():
         assert "connect sensorSuite.data to flightController.sensorIn;" in concrete
 
 
-def test_fewer_than_two_variants_is_noop():
+def test_one_variant_noop():
     text, ok = introduce_variation(
         _MODEL, "sensorSuite", "SensorSuite", _VARIANTS[:1], "x", ["REQ-PERF-001"]
     )
     assert not ok and text == _MODEL
 
 
-def test_missing_usage_is_noop():
+def test_missing_usage_noop():
     text, ok = introduce_variation(
         _MODEL, "nonexistent", "SensorSuite", _VARIANTS, "x", ["REQ-PERF-001"]
     )

@@ -1,17 +1,4 @@
-"""Optional Gazebo high-fidelity feasibility check for the recommended realization.
-
-This is the H-tier complement to native SITL. It verifies Gazebo dynamics such
-as hover stability, forward dash measurements, and the one-motor-out check when
-the model has that requirement. It does not change Phase 8 datasheet CLOSED
-semantics and it does not validate endurance; endurance remains a datasheet
-closure result.
-
-Run:
-  PYTHONPATH=. .venv/bin/python examples/run_gazebo_feasibility.py
-
-For CI/static reporting without Docker:
-  PYTHONPATH=. .venv/bin/python examples/run_gazebo_feasibility.py --dry-run
-"""
+"""Optional Gazebo high-fidelity feasibility check for the recommended realization."""
 from __future__ import annotations
 
 import argparse
@@ -86,16 +73,12 @@ def _planned_gazebo_reqs(requirements: list[str]) -> list[dict[str, Any]]:
         reason = None
         if (("navigate" in low or "navigation" in low)
                 and ("cep" in low or "circular error" in low)):
-            # Autonomous waypoint navigation, not a stick-flown dash. Whether
-            # the rig can fly it at all is the first thing this check reports.
             check = "navigation_accuracy"
             reason = ("waypoint navigation accuracy requires autonomous "
                       "position-controlled flight")
         elif ("payload" in low and "lock" in low and "abort" in low):
-            # An inhibition claim cannot be shown by a run in which the
-            # inhibiting condition never held. It is only testable by driving
-            # the generated logic WITH the condition active and observing that
-            # the action does not occur.
+            # An inhibition claim needs the inhibiting condition active: drive the
+            # generated logic with it set and observe that the action does not occur.
             check = "delivery_abort_inhibition"
             reason = ("payload-lock inhibition under an active abort must be "
                       "driven and physically observed, not inferred")
@@ -179,8 +162,8 @@ def _planned_gazebo_reqs(requirements: list[str]) -> list[dict[str, Any]]:
                     r"less\s+than\s+(\d+(?:\.\d+)?)\s*(?:metres?|meters?)", low
                 )
             elif check == "obstacle_avoidance":
-                # Every number comes from the requirement's own text; the
-                # scenario envelope is never invented here.
+                # Every number comes from the requirement text; the scenario
+                # envelope is not invented here.
                 item["detection_range_m"] = _number_after(
                     r"detection\s+no\s+later\s+than\s+(\d+(?:\.\d+)?)\s*(?:metres?|meters?)",
                     low,
@@ -260,38 +243,34 @@ def _single_motor_req(planned: list[dict[str, Any]]) -> str | None:
     return None
 
 
-#: A cruise claim phrased "at all authorised speeds" needs an envelope, not a
-#: point. Three certified steady points spanning the authority range is the
-#: minimum this harness will call a sweep; the reported RMS is the worst of them.
+# "At all authorised speeds" needs an envelope, not a point: a sweep here means
+# at least three certified steady points spanning the authority range, and the
+# reported RMS is the worst of them.
 _MIN_SWEEP_POINTS = 3
-#: How far the headroom under a bound must exceed the variation a sweep itself
-#: showed, before the sweep may stand in for speeds nobody flew. 10x is a
-#: deliberately generous extrapolation: the swept points must look flat next to
-#: the margin, not merely happen to pass.
+# How far headroom under a bound must exceed the variation the sweep showed
+# before the sweep stands in for unflown speeds. At 10x the swept points must
+# look flat next to the margin, not merely pass.
 _ENVELOPE_MARGIN_FACTOR = 10.0
-#: ...and the worst swept point must clear the bound by this fraction outright.
-#: A result sitting just under the limit closes nothing, however flat the sweep.
+# ...and the worst swept point must clear the bound by this fraction; sitting
+# just under the limit closes nothing, however flat the sweep.
 _ENVELOPE_MARGIN_HEADROOM = 0.5
 _CEP_REQUIRED_POINTS = 8
 
 
-#: How many times the one-motor-out scenario is flown before a verdict is
-#: recorded. The outcome has been observed bistable — repeated flights of the
-#: same configuration have both held a clean hover and sunk — so a larger
-#: sample (historically 5) supports the claim better; 1 trades that
-#: confidence for turnaround time by the user's direction, and the per-run
-#: record keeps the sample size visible in the evidence either way.
+# How many times the one-motor-out scenario is flown before a verdict. The
+# outcome is bistable - the same configuration has both held a clean hover and
+# sunk - so a larger sample (was 5) is stronger; 1 trades that for turnaround
+# time, and the per-run record keeps the sample size visible.
 _MOTOR_OUT_REPEATS = 1
 
 
 def _expected_action_names(gazebo: dict[str, Any], what: str) -> set[str]:
     """The adapter's constant plus every model spelling performed() accepted.
 
-    The mission adapter records each causal-role acceptance as
-    ``(adapter_constant, model_action)`` in ``action_resolutions``; a report
-    that only recognises the adapter's spelling would re-demote a model whose
-    own action name was already accepted and physically actuated (run3 fires
-    ``releasePayload`` where the constant says ``actuateRelease``).
+    ``action_resolutions`` records each causal-role acceptance as
+    ``(adapter_constant, model_action)``; recognising only the adapter's spelling
+    would re-demote a model whose own action name was accepted and actuated (run3
+    fires ``releasePayload`` where the constant says ``actuateRelease``).
     """
     expected = {
         "payload_release": ModelAction.RELEASE_PAYLOAD.value,
@@ -306,7 +285,6 @@ def _expected_action_names(gazebo: dict[str, Any], what: str) -> set[str]:
 
 
 def _decided_by_model(gazebo: dict[str, Any] | None, what: str) -> bool:
-    """True when the generated model fired the physical action itself."""
     if not gazebo or gazebo.get(f"{what}_decided_by") != "generated model":
         return False
     expected = _expected_action_names(gazebo, what)
@@ -317,7 +295,6 @@ def _decided_by_model(gazebo: dict[str, Any] | None, what: str) -> bool:
 
 
 def _model_owned_clause(gazebo: dict[str, Any], what: str) -> str:
-    """Name the machine and action the generated model fired."""
     expected = _expected_action_names(gazebo, what)
     decisions = [
         decision
@@ -407,8 +384,8 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         measure_attitude=(cruise_att_req is not None
                           or payload_att_req is not None),
         mission_model_text=mission_model_text,
-        # extend the pre-wind (nil-wind) dash so top speed and cruise attitude
-        # are sampled from a built-up plateau rather than the 7 s direction probe
+        # extend the nil-wind dash so top speed and cruise attitude are sampled
+        # from a plateau rather than the 7 s direction probe
         nilwind_dash_s=(
             15.0 if (speed_req is not None or cruise_att_req is not None) else 0.0
         ),
@@ -435,10 +412,9 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
             "implied_ct": rpm.ct_implied,
         })
 
-    # Navigation accuracy is a separate route-following campaign. Its flight
-    # intentionally returns after the eight global waypoints, whereas the
-    # primary flight must continue into cruise and wind sweeps; combining them
-    # would silently suppress every later primary-flight measurement.
+    # Navigation accuracy is a separate route-following flight: it returns after
+    # the eight global waypoints, while the primary flight continues into cruise
+    # and wind sweeps. Combining them suppresses every later primary measurement.
     if navigation_req is not None and result.get("hover_stable"):
         rc_navigation = run_flight.main(
             mass_kg=mass,
@@ -458,11 +434,10 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
                     or key == "guided_mode_held_after_arming"):
                 result[key] = value
 
-    # Obstacle avoidance is its own scenario: the vehicle must approach a
-    # stationary threat and be seen to break off. It cannot ride along with the
-    # cruise survey, so it is flown separately — like one-motor-out — and only
-    # when the requirement itself states the whole envelope (detection range,
-    # separation, closing speed). Nothing here invents a scenario.
+    # Obstacle avoidance needs its own flight: the vehicle approaches a stationary
+    # threat and must be seen to break off, which cannot ride along with the cruise
+    # survey. Flown only when the requirement states the whole envelope (detection
+    # range, separation, closing speed).
     obstacle_req = _planned_check(planned, "obstacle_avoidance")
     if obstacle_req and obstacle_req.get("contract_ready") and result.get("hover_stable"):
         rc_obstacle = run_flight.main(
@@ -508,9 +483,8 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         result["abort_inhibition_req"] = str(inhibition_req["req_id"])
         result["abort_inhibition_return_code"] = rc_inhibit
         result["abort_inhibition_abort_active"] = inhibit_result.get("payload_abort_active")
-        # None = the release identity never resolved on this model (harness
-        # question unput); [] = resolved and genuinely unguarded. Coercing the
-        # first into the second is how a guarded model gets blamed.
+        # None = the release identity never resolved on this model (question unput);
+        # [] = resolved and unguarded. Coercing None into [] blames a guarded model.
         result["abort_inhibition_release_guards"] = inhibit_result.get(
             "payload_release_guards")
         result["abort_inhibition_flags_unbound"] = inhibit_result.get(
@@ -526,11 +500,10 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         result["abort_inhibition_z_before_m"] = inhibit_result.get("payload_z_before_m")
         result["abort_inhibition_z_after_m"] = inhibit_result.get("payload_z_after_m")
 
-    # Transport is its own flight. In the delivery flight the release block runs
-    # before the cruise survey, so every cruise point there is flown empty —
-    # measured: the payload sat at the takeoff point while the vehicle reached
-    # 1253 m away. A scenario that carries the payload throughout is the only
-    # way a cruise window is transport evidence.
+    # Transport needs its own flight: in the delivery flight the release block runs
+    # before the cruise survey, so every cruise point there is flown empty (measured:
+    # payload at the takeoff point, vehicle 1253 m away). Only a flight carrying the
+    # payload throughout makes a cruise window transport evidence.
     if payload_att_req is not None and payload_mass_kg > 0 and result.get("hover_stable"):
         rc_transport = run_flight.main(
             mass_kg=mass,
@@ -546,7 +519,7 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
         )
         transport_result = dict(run_flight.LAST_RESULT)
         result["transport_return_code"] = rc_transport
-        # the transport flight's windows REPLACE the delivery flight's, which
+        # the transport flight's windows replace the delivery flight's, which
         # are empty by construction
         result["transport_windows"] = transport_result.get("transport_windows")
         result["transport_cruise_points"] = transport_result.get(
@@ -554,11 +527,9 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
 
     rid = _single_motor_req(planned) if include_single_motor_out else None
     if rid and result.get("hover_stable"):
-        # One flight cannot settle this. The same configuration has held 1.17,
-        # 6.27, 9.93 and 10.00 m with attitude RMS from 1.59 to 19.56 deg — one
-        # of those a genuinely clean flight. A single sample of a bistable
-        # outcome is a coin flip, and a coin flip is not evidence about a safety
-        # requirement whichever way it lands.
+        # One flight cannot settle this: the same configuration has held 1.17, 6.27,
+        # 9.93 and 10.00 m with attitude RMS from 1.59 to 19.56 deg. A single sample
+        # of a bistable outcome is not evidence about a safety requirement.
         runs = []
         for attempt in range(_MOTOR_OUT_REPEATS):
             rc_fail = run_flight.main(
@@ -570,9 +541,9 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
                 fail_rotor=0,
                 max_thrust_g=max_thrust_g,
                 hover_throttle=hover_throttle,
-                # "maintain controlled flight" is an attitude claim before it is
-                # an altitude one: a run held 9.93 m to +/-0.06 m while wobbling
-                # 13.5 deg. This scenario is never flown without measuring both.
+                # "maintain controlled flight" is an attitude claim before an altitude
+                # one - a run held 9.93 m to +/-0.06 m while wobbling 13.5 deg - so this
+                # scenario measures both.
                 measure_attitude=True,
             )
             attempt_result = dict(run_flight.LAST_RESULT)
@@ -589,8 +560,8 @@ def _run_live_gazebo(gazebo_design: dict[str, Any], planned: list[dict[str, Any]
                   f"attitude_rms={runs[-1]['attitude_rms_deg']}", flush=True)
 
         measured = [r for r in runs if r["attitude_rms_deg"] is not None]
-        # Worst case, not average: a redundancy claim that only holds sometimes
-        # does not hold. The worst run is the one with the largest attitude RMS.
+        # Worst case, not average: a redundancy claim that holds only sometimes does
+        # not hold. Worst = largest attitude RMS.
         worst = max(measured, key=lambda r: float(r["attitude_rms_deg"])) if measured else None
         passes = [r for r in runs if r["stable"]]
         result["motor_failure_req"] = rid
@@ -634,9 +605,8 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         results.append({
             "req_id": rid,
             "check": "single_motor_out",
-            # REQ-SAFE-007 names no measurement method, so its own surface
-            # judges: controlled flight maintained (stable hover held) in
-            # every run = PASS. The 5 deg RMS engineering interpretation is
+            # REQ-SAFE-007 names no measurement method, so its own wording judges:
+            # stable hover held in every run = PASS. The 5 deg RMS interpretation is
             # reported in sensitivity but does not gate.
             "status": (
                 "PASS" if claim.status == "verified" else "FAIL"
@@ -678,10 +648,10 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         held = bool(steady.get("steady"))
         meets = aligned and held and speed >= minimum
         f_drag = gazebo.get("wind_drag_area_m2")
-        # How wrong could the drag estimate be before the verdict flips? The
-        # vehicle holds a fixed AIRSPEED at fixed tilt, so ground speed is
-        # airspeed - wind, and airspeed scales as 1/sqrt(f). Stating this makes
-        # the result checkable rather than dependent on trusting the Cd values.
+        # How wrong the drag estimate can be before the verdict flips. The vehicle
+        # holds a fixed airspeed at fixed tilt, so ground speed is airspeed - wind
+        # and airspeed scales as 1/sqrt(f); stating it makes the result checkable
+        # without trusting the Cd values.
         tolerated_f = None
         if f_drag and speed + wind > 0 and minimum + wind > 0:
             tolerated_f = float(f_drag) * ((speed + wind) / (minimum + wind)) ** 2
@@ -689,9 +659,6 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         results.append({
             "req_id": rid,
             "check": "wind_condition",
-            # The headwind now acts through the airframe's geometry-derived
-            # quadratic drag plate, evaluated by gz-sim's LiftDrag against
-            # airspeed, and the ground speed held is certified steady state.
             "status": "PASS" if meets else "INCONCLUSIVE",
             "message": (
                 f"Gazebo closed-loop flight HELD {speed:.2f} m/s ground speed against a "
@@ -717,11 +684,10 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         detected = bool(gazebo.get("payload_release_detected"))
         observer_available = bool(gazebo.get("payload_observer_available"))
         if chain is not None:
-            # Full requirement interval: coordinate condition satisfied →
-            # physical separation. Who owned the decision decides the ceiling:
-            # the generated logic consuming the event and firing its own action
-            # is what makes this evidence about the model rather than about
-            # Gazebo's ability to separate a joint.
+            # Full requirement interval: coordinate condition satisfied -> physical
+            # separation. The decision owner sets the ceiling: only generated logic
+            # consuming the event and firing its own action makes this evidence about
+            # the model rather than about Gazebo's joint separation.
             meets = detected and float(chain) <= limit
             message = (
                 f"delivery-coordinate condition satisfied → physical detachable-joint "
@@ -765,15 +731,14 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             and error is not None
         )
         met = physical_position_observed and float(error) <= limit
-        # "no delivery-abort condition is active" must be shown, not assumed:
-        # absence of an abort flag is not evidence that none was active.
+        # "no delivery-abort condition is active" is shown, not assumed: a missing
+        # abort flag is not evidence that none was active.
         abort_inactive = gazebo.get("delivery_abort_inactive") is True
-        # The requirement bounds WHEN the release is commanded — "release the
-        # payload when the current geographic position is within 1.0 metre" —
-        # so the clause closes on where the vehicle TRULY was at the trigger.
-        # Not the estimator's own figure for that moment (a system scoring
-        # itself against its own estimate proves nothing), and not the payload's
-        # position at separation, which the requirement does not bound.
+        # The requirement bounds when the release is commanded - "release the payload
+        # when the current geographic position is within 1.0 metre" - so the clause
+        # closes on where the vehicle truly was at the trigger: not the estimator's own
+        # figure for that moment, and not the payload's position at separation, which
+        # the requirement does not bound.
         trigger_truth = gazebo.get("trigger_truth_error_m")
         separation_truth = gazebo.get("separation_truth_error_m")
         trigger_truth_observed = trigger_truth is not None
@@ -781,9 +746,9 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         results.append({
             "req_id": rid,
             "check": "positional_release",
-            # The requirement is a conjunction: within 1.0 m of the waypoint AND
-            # no abort active. Only the first half was ever checked, so a
-            # release that happened during an abort would have closed it.
+            # The requirement is a conjunction: within 1.0 m of the waypoint and no
+            # abort active. Checking only the first half closes on a release that
+            # happened during an abort.
             "status": (
                 ("PASS" if _decided_by_model(gazebo, "payload_release")
                  and abort_inactive else "PARTIAL")
@@ -879,11 +844,10 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         results.append({
             "req_id": rid,
             "check": "cruise_speed",
-            # Nil wind → ground speed equals airspeed; ALT_HOLD keeps level
-            # flight. A speed may only be reported once its window plateaus:
-            # a still-accelerating dash reports the dash duration, not the
-            # vehicle. INCONCLUSIVE (not FAIL) when nothing reached steady
-            # state, because no speed was actually measured.
+            # Nil wind -> ground speed equals airspeed; ALT_HOLD keeps level flight.
+            # A speed is reported only once its window plateaus; an accelerating dash
+            # measures the dash duration. INCONCLUSIVE, not FAIL, when nothing reached
+            # steady state: no speed was measured.
             "status": ("PASS" if met else "FAIL" if held else "INCONCLUSIVE"),
             "message": (
                 f"Gazebo nil-wind pitch sweep: the fastest speed the vehicle HELD was "
@@ -918,30 +882,24 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             and float(span[0]) <= float(authorised[0])
             and float(span[1]) >= float(authorised[1])
         )
-        # When nobody declares the authorised envelope, "all authorised speeds"
-        # is a universal quantifier over a set we cannot enumerate — and a
-        # verdict that no finite sweep can ever satisfy has stopped measuring
-        # the vehicle and started restating that we did not fly infinitely many
-        # points. The sweep may still speak for the set when two things hold:
-        #   * the top of the sweep IS the fastest speed the vehicle held, and it
-        #     clears the cruise-speed requirement, so no authorised speed sits
-        #     above everything measured — a faster one is not flyable;
-        #   * an unsampled point breaching the bound would have to depart from
-        #     the measured envelope by many times the variation the sweep itself
-        #     showed across its whole speed range.
-        # The second is a margin argument, not a shape argument. Requiring RMS
-        # to rise monotonically instead was tried and rejected: the measured
-        # sweep dips 0.0032 deg between two points — 0.6% of a 0.5 deg limit —
-        # so monotonicity fits the noise, not the physics, and would refuse a
-        # result with 15x margin over a wobble that means nothing.
+        # With no declared authorised envelope, "all authorised speeds" quantifies over
+        # a set we cannot enumerate, and no finite sweep satisfies it. The sweep stands
+        # in for the set when both hold:
+        #   * the top of the sweep is the fastest speed the vehicle held and it clears
+        #     the cruise-speed requirement, so no authorised speed sits above it;
+        #   * an unsampled point breaching the bound would have to depart from the
+        #     measured envelope by many times the variation the sweep showed.
+        # That is a margin argument, not a shape argument. Requiring RMS to rise
+        # monotonically was rejected: the sweep dips 0.0032 deg between two points,
+        # 0.6% of a 0.5 deg limit, so monotonicity fits the noise and would refuse a
+        # result with 15x margin.
         swept_speeds = gazebo.get("cruise_attitude_swept_speeds_mps") or []
         swept_rms = gazebo.get("cruise_attitude_swept_rms_deg") or []
         if not swept_rms:
-            # cruise_sweep is where the per-point RMS is actually measured; the
-            # lists above are a convenience the run may predate. Falling back
-            # here is what lets a stored report be re-scored under a corrected
-            # criterion without re-flying — which would also re-roll the
-            # physics and stop the comparison from isolating the change.
+            # cruise_sweep holds the per-point RMS; the lists above are a convenience
+            # the run may predate. The fallback lets a stored report be re-scored under
+            # a corrected criterion without re-flying, which would re-roll the physics
+            # and stop the comparison isolating the change.
             sweep = sorted(
                 (pt for pt in (gazebo.get("cruise_sweep") or [])
                  if pt.get("steady") and pt.get("attitude_rms_deg") is not None),
@@ -959,8 +917,8 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         margin_dominates_variation = (
             spread is not None
             and headroom >= _ENVELOPE_MARGIN_FACTOR * spread
-            # and the worst point is not merely close to the bound: a result
-            # sitting just under the limit closes nothing, however flat.
+            # and the worst point is not merely close to the bound; sitting just
+            # under the limit closes nothing, however flat.
             and rms <= _ENVELOPE_MARGIN_HEADROOM * limit
         )
         reaches_ceiling = (
@@ -980,16 +938,14 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         results.append({
             "req_id": rid,
             "check": "cruise_attitude",
-            # "At all authorised speeds" is a sweep. The reported RMS is the
-            # WORST case over the swept envelope, so a pass covers every point
-            # measured — but only a sweep may claim it; one point stays PARTIAL.
+            # "At all authorised speeds" is a sweep. The reported RMS is the worst case
+            # over the swept envelope, so a pass covers every measured point; a single
+            # point stays PARTIAL.
             "status": (
-                # A breach measured on a certified steady cruise point is a
-                # violation of the stated bound whether or not the envelope was
-                # closed: the vehicle held that speed in level nil-wind flight,
-                # which is the "steady cruise" the requirement talks about.
-                # Reporting it as PARTIAL would hide a real violation behind a
-                # scope technicality.
+                # A breach on a certified steady cruise point violates the stated bound
+                # whether or not the envelope closed: the vehicle held that speed in level
+                # nil-wind flight, the "steady cruise" the requirement names. PARTIAL would
+                # hide it behind a scope technicality.
                 "FAIL" if not met and (closed or swept)
                 else "PASS" if met and closed
                 else "PARTIAL"
@@ -1054,16 +1010,14 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
             or (margin is not None and margin >= float(margin_req))
         )
         met = rms_ok and margin_ok
-        # "Transport" covers cruise, not just carrying in a hover. The cruise
-        # sweep is flown before the payload is released, so when it is a
-        # certified sweep with the payload aboard it closes the cruise half;
+        # "Transport" covers cruise, not only hover. The cruise sweep is flown before
+        # release, so a certified sweep with the payload aboard closes the cruise half;
         # its worst-case RMS must clear the same limit.
         cruise_points = int(gazebo.get("cruise_attitude_points") or 0)
         cruise_span = gazebo.get("cruise_attitude_speed_span_mps") or []
-        # Judged on the windows OBSERVED to be carrying, by the same module the
-        # flight used — a window measured after separation is excluded however
-        # the run was configured, and a run that never looked cannot claim to
-        # have been transporting anything.
+        # Judged on the windows observed to be carrying, by the module the flight
+        # used: a window measured after separation is excluded whatever the run's
+        # configuration, and a run that never looked claims nothing.
         transport = evaluate_payload_transport(
             [TransportWindow.from_dict(w) for w in
              (gazebo.get("transport_windows") or [])],
@@ -1113,11 +1067,10 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         guards = list(guards_value or [])
         unbound = list(gazebo.get("abort_inhibition_flags_unbound") or [])
         raised = dict(gazebo.get("abort_inhibition_flags_raised") or {})
-        # A release that fires past a guard the harness never fed says nothing
-        # about the model: an unset boolean reads FALSE, so a correctly guarded
-        # model behaves exactly like an unguarded one. Only an unguarded
-        # transition, or a guard that WAS fed and fired anyway, is a finding
-        # against the model.
+        # A release that fires past a guard the harness never fed says nothing about
+        # the model: an unset boolean reads false, so a guarded model behaves like an
+        # unguarded one. Only an unguarded transition, or a guard that was fed and
+        # fired anyway, is a finding against the model.
         told = bool(raised) or not unbound
         blind = bool(guards) and not told
         fired = "; ".join(
@@ -1194,13 +1147,10 @@ def _req_results(gazebo: dict[str, Any] | None, planned: list[dict[str, Any]],
         results.append({
             "req_id": rid,
             "check": "navigation_accuracy",
-            # No CEP is reported unless the vehicle actually navigated to a
-            # commanded position. Saying WHY it could not is worth more than a
-            # blank row, and it is checkable.
-            # CEP is a GNSS-dominated quantity. A rig whose simulated GNSS
-            # carries no error cannot support a navigation-accuracy verdict
-            # however small the measured error is — that would be a floor
-            # reported as a result.
+            # No CEP unless the vehicle navigated to a commanded position; record why
+            # it could not rather than leave a blank row. CEP is GNSS-dominated, so a
+            # rig whose simulated GNSS carries no error cannot support a
+            # navigation-accuracy verdict: the measured error is a floor, not a result.
             "status": (
                 "PASS" if measurable and float(cep) < limit
                 else "FAIL" if measurable
@@ -1493,11 +1443,7 @@ def build_report(dry_run: bool = False, include_single_motor_out: bool = False) 
 
 
 def reprocess_existing_report() -> dict[str, Any]:
-    """Re-evaluate requirement statuses from an existing raw Gazebo result.
-
-    This is useful when report classification or an observer parser is fixed:
-    it never starts Docker and never invents measurements that were not captured.
-    """
+    """Re-evaluate requirement statuses from an existing raw Gazebo result."""
     if not REPORT_JSON.exists():
         raise FileNotFoundError(f"{REPORT_JSON} not found")
     report = json.loads(REPORT_JSON.read_text(encoding="utf-8"))
@@ -1530,9 +1476,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
                         help="Build the Gazebo plan/report without launching Docker/Gazebo.")
-    # One-motor-out is collected by DEFAULT since 2026-07-16 (user decision:
-    # unsuspended — a hexa surviving one motor out is a core safety claim).
-    # --skip-single-motor-out restores the previous suspended behaviour.
+    # One-motor-out is collected by default since 2026-07-16; a hexa surviving
+    # one motor out is a core safety claim. --skip-single-motor-out restores the
+    # previous suspended behaviour.
     parser.add_argument(
         "--include-single-motor-out",
         dest="include_single_motor_out",

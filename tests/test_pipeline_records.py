@@ -23,7 +23,7 @@ class _NoCallLLM:
         raise AssertionError("LLM must not be called")
 
 
-def test_runtime_state_is_a_typed_board_record_not_orchestrator_attributes():
+def test_runtime_state_typed_record():
     orchestrator = Orchestrator(_NoCallLLM())
     before = orchestrator._runtime_board.records(topic="pipeline.runtime.state")
     orchestrator.last_functional_closure = {"status": "OPEN"}
@@ -49,7 +49,7 @@ def test_runtime_state_is_a_typed_board_record_not_orchestrator_attributes():
     ]
 
 
-def test_runtime_state_history_is_bounded_to_one_generation_run():
+def test_runtime_state_history_bounded():
     orchestrator = Orchestrator(_NoCallLLM())
     orchestrator.last_functional_closure = {"status": "CLOSED"}
     previous_board = orchestrator._runtime_board
@@ -63,7 +63,7 @@ def test_runtime_state_history_is_bounded_to_one_generation_run():
     assert orchestrator.last_functional_closure is None
 
 
-def test_planned_action_values_are_published_for_provenance_not_control_flow():
+def test_planned_actions_published():
     orchestrator = Orchestrator(_NoCallLLM())
     before = orchestrator._runtime_board.records(topic="pipeline.runtime.state")
     preparation = PlannedActionPreparation(
@@ -97,7 +97,7 @@ def test_planned_action_values_are_published_for_provenance_not_control_flow():
     assert not hasattr(orchestrator, "last_action_semantics_audit")
 
 
-def test_design_handoff_is_resolved_from_its_typed_board_record():
+def test_design_handoff_from_record():
     orchestrator = Orchestrator(
         _NoCallLLM(), revised_experiment_arm="R1-BBCTX"
     )
@@ -119,7 +119,7 @@ def test_design_handoff_is_resolved_from_its_typed_board_record():
     assert snapshot_record["payload"]["record_schema"] == "DesignHandoffRecord"
 
 
-def test_generation_dependency_stops_when_upstream_output_is_removed():
+def test_dependency_stops_without_upstream():
     orchestrator = Orchestrator(_NoCallLLM())
     context = GenerationContext(
         system_name="Test", system_description="", additional_requirements=[],
@@ -140,16 +140,15 @@ def test_generation_dependency_stops_when_upstream_output_is_removed():
                 )
 
         if source.name == "pre_ag_simulation":
-            # Remove the source's output publication.  Its dependent must remain
-            # ineligible even though sources were registered in reverse order.
+            # Remove the source's output publication; its dependent stays ineligible even
+            # though sources were registered in reverse order.
             source = replace(source, output_topics=(), activate=lambda: None)
         else:
             source = replace(source, activate=publish)
         controller.register(source)
 
-    # A partial run is the point of this test: one source's output publication
-    # was removed, so its dependents must stay ineligible. Completeness is not
-    # being asserted here, so it is opted out of explicitly.
+    # A partial run is the point: one source's output publication was removed, so
+    # its dependents stay ineligible. Completeness is opted out of explicitly.
     controller.run(allow_partial=True)
     activated = [item["knowledge_source"] for item in controller.activation_log]
     assert "pre_ag_simulation" in activated
@@ -157,21 +156,19 @@ def test_generation_dependency_stops_when_upstream_output_is_removed():
     assert "generation_reporting" not in activated
 
 
-def test_generation_sources_declare_their_agent_role_explicitly():
-    """The role must not be re-derived from a substring of the source name.
+def test_sources_declare_agent_role():
+    """The role is declared, not re-derived from a substring of the source name.
 
-    `pre_ag_simulation` is the case that made the old rule fragile: it contains
-    "ag_" and is correctly an AssuranceAgent source, so the substring test
-    happened to agree. Any future name that merely contains those characters
-    would not, and the role travels into every activation record in the run
-    artefacts.
+    `pre_ag_simulation` contains "ag_" and is an AssuranceAgent source, so the
+    substring test agreed by luck; another name containing those characters would
+    not, and the role travels into every activation record in the run artefacts.
     """
     import re
     from pathlib import Path
 
     source = Path("src/agents/generation_pipeline.py").read_text()
-    # Strip comments: the rule being guarded against is quoted in one, and the
-    # point is that it must not be live code.
+    # Strip comments: the guarded rule is quoted in one, and only live code
+    # counts here.
     code = "\n".join(
         re.sub(r"#.*$", "", line) for line in source.splitlines()
     )
@@ -191,19 +188,14 @@ def test_generation_sources_declare_their_agent_role_explicitly():
     }
 
 
-def test_no_module_commits_a_model_onto_the_runtime_board_by_name():
-    """A cheap early warning, and deliberately not the protection.
+def test_no_commit_model_on_runtime_board():
+    """An early warning, not the protection.
 
-    Committing a model onto the runtime board advances its revision and hides
-    every phase topic published before it, stalling the generation chain. This
-    check only matches the literal attribute access, so it misses an alias, a
-    board passed into a helper, or a getattr. The actual guard is semantic and
-    lives in the controller: `_hidden_topics` detects the condition from the
-    board's contents, and `run()` raises naming the topics a
-    revision change took away -- see
-    `test_a_model_commit_hides_earlier_topics_and_the_stall_says_so`. This test
-    is kept because it fails at edit time rather than at run time, which is
-    cheaper when it does fire.
+    Committing a model onto the runtime board advances its revision and hides every
+    phase topic published before it, stalling the generation chain. This check
+    matches only the literal attribute access, so it misses an alias or a getattr;
+    the semantic guard is `_hidden_topics` in the controller, with `run()` raising
+    and naming the lost topics. Kept because it fails at edit time, not run time.
     """
     from pathlib import Path
 

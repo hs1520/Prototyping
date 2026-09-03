@@ -1,45 +1,14 @@
-"""Let the generated model own the decision, and the harness only actuate it.
+"""Let the generated model own the mission decision; the harness only actuates it.
 
-Why this exists
----------------
-Every payload and parachute result in the 2026-08-30 authoritative run carried
-the same caveat, written by the harness about itself:
-
-    "the coordinate condition was evaluated by the harness, not by generated
-     mission logic"
-    "this exercises trajectory/position/actuator coupling but not generated
-     mission-logic ownership of the trigger"
-
-That caveat is the difference between "Gazebo can separate a joint" and "the
-model we generated releases the payload". A reviewer's first question about any
-of those numbers is which of the two was demonstrated, and the honest answer was
-the first.
-
-What this changes
------------------
-The generated model is an event-driven machine: every behaviour is
-``accept <Event> -> <State> { entry action ... }``. It does not compute the
-delivery condition itself — it consumes an event that something else produces.
-So the faithful split is:
-
-  * the harness derives events from telemetry (it is the event source the model
-    declares) and executes whatever action the model fires;
-  * the generated state machine owns the transition, the arbitration between
-    competing behaviours, and the action.
-
-:class:`ModelDrivenMission` is that boundary. ``offer()`` hands an event to the
-generated machines and returns the actions THEY fired. When the model fires
-nothing, the harness does nothing — which is what makes a suppressed release
-(an abort condition holding the payload locked) a real observation rather than
-a harness policy.
-
-Honesty boundary
-----------------
-This does not make the model's *timing* physical: the machines step in Python,
-so an event-to-action interval measured here is plumbing, not a system latency.
-What it establishes is ownership — which artefact decided — plus the arbitration
-between behaviours. Physical timing still comes from the Gazebo observation of
-the actuation that follows.
+The generated model is an event-driven machine (``accept <Event> -> <State> { entry action }``)
+and does not compute the delivery condition itself, so the split is: the harness derives events
+from telemetry and executes whatever action the model fires, while the generated state machine
+owns the transition, the arbitration between competing behaviours, and the action.
+:class:`ModelDrivenMission` is that boundary - ``offer()`` hands an event to the machines and
+returns the actions they fired, so a suppressed release (an abort holding the payload locked) is
+an observation rather than a harness policy. The machines step in Python, so an event-to-action
+interval measured here is plumbing, not system latency; what it establishes is which artefact
+decided. Physical timing still comes from the Gazebo observation of the actuation.
 """
 from __future__ import annotations
 
@@ -91,27 +60,23 @@ class ModelDrivenMission:
     machines: Dict[str, Any] = field(default_factory=dict)
     decisions: List[ModelDecision] = field(default_factory=list)
     offered: List[Tuple[float, str]] = field(default_factory=list)
-    #: Boolean guard flags raised by the events offered so far, and the record
-    #: of which event raised each — evidence has to be able to say the model
-    #: was actually told the condition held.
+    # Boolean guard flags raised by the events offered so far, plus which event
+    # raised each, so the evidence can say the model was told the condition held.
     conditions: Dict[str, Any] = field(default_factory=dict)
     latched: List[Tuple[float, str, str]] = field(default_factory=list)
-    #: (time, requested, resolved, how) — a harness that quietly renames the
-    #: events it offers is its own hazard, so every rename is recorded and the
-    #: evidence can name it.
+    # (time, requested, resolved, how) - every event rename is recorded so the
+    # evidence can name it.
     resolutions: List[Tuple[float, str, str, str]] = field(default_factory=list)
-    #: (time, requested, why) — the offer established NOTHING: no declared
-    #: event covered it and no boolean guard flag matched it. The model was
-    #: never asked, so a scenario resting on it proves nothing.
+    # (time, requested, why) - the offer established nothing: no declared event
+    # covered it and no guard flag matched it, so the model was never asked.
     unresolved: List[Tuple[float, str, str]] = field(default_factory=list)
-    #: (time, requested, flags) — no event matched, but the offer raised guard
-    #: flags, so the condition WAS established. The model expresses this one as
-    #: a standing boolean rather than an event; that is a modelling choice, not
-    #: a gap.
+    # (time, requested, flags) - no event matched but the offer raised guard flags,
+    # so the condition was established: the model expresses it as a standing
+    # boolean rather than an event.
     condition_only: List[Tuple[float, str, Tuple[str, ...]]] = field(
         default_factory=list)
-    #: (adapter_constant, model_action) — actuation identities accepted by
-    #: causal role rather than by spelling; the rename is on the record.
+    # (adapter_constant, model_action) - actuation identities accepted by causal
+    # role rather than spelling; the rename is recorded.
     action_resolutions: List[Tuple[str, str]] = field(default_factory=list)
     _digest: str = ""
 
@@ -123,18 +88,12 @@ class ModelDrivenMission:
             (self.model_text or "").encode("utf-8")
         ).hexdigest()
         for sm in extract_state_machines(self.model_text or ""):
-            # Every machine is loaded, including purely guard-driven ones.
-            # offer() steps them all, and a guard transition fires on the
-            # variables it is given whether or not the event names it — so a
-            # guard-only machine IS drivable. Skipping them hid the one that
-            # matters most: SafetyArbiter expresses REQ-SAFE-005's precedence
-            # entirely in guards ("... and not propulsionCriticalFailure"), and
-            # while it was filtered out the precedence check saw no competing
-            # response to take precedence over, and returned inconclusive
-            # forever.
+            # Load every machine, including guard-only ones: offer() steps them all and a
+            # guard transition fires on the variables it is given whether or not the event
+            # names it. Filtering them out dropped SafetyArbiter, which expresses
+            # REQ-SAFE-005's precedence entirely in guards, so the precedence check saw no
+            # competing response and returned inconclusive.
             self.machines[f"{sm.owner_part}.{sm.name}"] = StateMachineInstance(sm)
-
-    # -- introspection ----------------------------------------------------
 
     def accepted_events(self) -> Tuple[str, ...]:
         """Every event name the loaded machines can consume."""
@@ -150,22 +109,15 @@ class ModelDrivenMission:
         return event in self.accepted_events()
 
     def resolve_event(self, event: str) -> Tuple[Optional[str], str]:
-        """Map a scenario's canonical event onto the name THIS model declares.
+        """Map a scenario's canonical event onto the name this model declares.
 
-        The harness held three hard-coded event spellings. A generated model is
-        free to name its own events, and run3's did: it accepts
-        ``DeliveryCoordinateConditionSatisfied`` where the harness offered
-        ``DeliveryCoordinateSatisfied``. Nothing fired, and the resulting
-        evidence would have read as "the generated logic declined to release" —
-        a model defect that was really a harness spelling.
-
-        Matching is on meaning, not on string equality: the scenario's words
-        must all appear in the declared event's words. That admits a model that
-        says more than the scenario (``...ConditionSatisfied``,
-        ``...SubsystemFailure``) and rejects one that says something else. The
-        most specific match wins, and a tie is refused rather than guessed —
-        picking arbitrarily between two candidate events would silently decide
-        which requirement the run exercised.
+        A generated model names its own events: run3 accepts
+        ``DeliveryCoordinateConditionSatisfied`` where the harness offers
+        ``DeliveryCoordinateSatisfied``, and against hard-coded spellings nothing
+        fired. Matching is therefore on meaning - all of the scenario's words must
+        appear in the declared event's words, which admits a model that says more
+        (``...ConditionSatisfied``) and rejects one that says something else. The
+        most specific match wins; a tie is refused rather than guessed.
         """
         from src.prototyping.verification_obligations import semantic_terms
 
@@ -228,31 +180,23 @@ class ModelDrivenMission:
     def _latched_by(self, event: str) -> Tuple[str, ...]:
         """Boolean guard flags this event's own name says it raises.
 
-        A guard is only a guard if something sets the flag it reads. An unset
-        flag evaluates FALSE, so a correctly guarded model behaves exactly like
-        an unguarded one — measured: with no variables bound, a
-        ``not deliveryAbortActive`` guard still fired the release. That failure
-        looks like a model defect and is a harness defect, so the flag has to be
-        bound from something.
-
-        It is bound by matching the offered event's words against the words in
-        the flags the MODEL declared, never against a name this harness holds:
-        REQ-SAFE-006 must be checkable on a model that calls the flag whatever
-        it likes. Only boolean flags are latched — writing True into a numeric
-        attribute would corrupt an unrelated comparison guard.
+        An unset flag evaluates false, so a guarded model behaves like an unguarded
+        one: with no variables bound, a ``not deliveryAbortActive`` guard still fired
+        the release. Flags are bound by matching the offered event's words against the
+        words in the flags the model declared, not against a name this harness holds,
+        so REQ-SAFE-006 stays checkable whatever the model calls the flag. Only
+        boolean flags are latched - writing True into a numeric attribute would
+        corrupt a comparison guard.
         """
         from src.prototyping.verification_obligations import semantic_terms
 
         offered = semantic_terms(event)
         if not offered:
             return ()
-        # Every word the EVENT uses must appear in the flag's name. A shared
-        # word is not enough: "DeliveryCoordinateSatisfied" and
-        # "deliveryAbortActive" share "delivery", and latching on that raised
-        # the abort flag from the delivery event itself — the guard then
-        # inhibited the ordinary release too, turning a fix into a new false
-        # negative. Subset says the event names the condition rather than
-        # merely touching the same subject.
+        # Every word of the event must appear in the flag's name; a shared word is not
+        # enough. "DeliveryCoordinateSatisfied" and "deliveryAbortActive" share
+        # "delivery", and latching on that raised the abort flag from the delivery
+        # event itself, inhibiting the ordinary release.
         return tuple(
             name for name in self.boolean_guard_attributes()
             if offered <= semantic_terms(name)
@@ -261,17 +205,12 @@ class ModelDrivenMission:
     def guards_reaching_action(self, action_definition: str) -> Tuple[str, ...]:
         """Guard descriptions on every transition that reaches an action.
 
-        Empty means the action fires unconditionally. "The model has no guard"
-        and "the harness never raised the flag the guard reads" produce the
-        same behaviour and are different findings, so a verdict on inhibition
-        has to be able to tell them apart.
-
-        The action name is a MODEL identity. A harness that queries this with
-        its own canonical spelling gets () for a model that names the action
-        differently — indistinguishable from "unconditional" — which is how a
-        guarded run3 was reported as carrying no inhibition logic. Verdicts
-        should prefer :meth:`guards_for_event`, whose identity comes from the
-        model via event resolution.
+        Empty means the action fires unconditionally. The action name is a model
+        identity, so querying with the harness's own spelling returns () for a model
+        that names the action differently - indistinguishable from unconditional,
+        which is how a guarded run3 was reported as carrying no inhibition logic.
+        Prefer :meth:`guards_for_event`, whose identity comes from the model via
+        event resolution.
         """
         return tuple(
             guard.description()
@@ -284,20 +223,19 @@ class ModelDrivenMission:
         )
 
     def guards_for_event(self, event: str) -> Optional[Tuple[str, ...]]:
-        """Guards on every transition that fires in response to *event* —
-        identity by causal role, no action names involved.
+        """Guards on every transition that fires in response to *event*; identity by
+        causal role, no action names involved.
 
-        The scenario's canonical event is resolved onto the model's own
-        declaration first (layer 1); the transitions accepting the resolved
-        event ARE the response the requirement is about, whatever the model
-        called the actions they run. Returns:
+        The canonical event is resolved onto the model's own declaration first, and
+        the transitions accepting the resolved event are the response the requirement
+        is about, whatever the model called their actions. Returns:
 
-        - ``None``  — the event did not resolve: the question could not be
-          put to this model, so the caller must report "not measured",
-          never "unguarded";
-        - ``()``    — resolved, and the responding transitions carry no
-          guard: a real finding about the model;
-        - guards    — resolved and guarded.
+        - ``None``  - the event did not resolve: the question could not be
+          put to this model, so the caller reports "not measured",
+          not "unguarded";
+        - ``()``    - resolved, and the responding transitions carry no
+          guard: a finding about the model;
+        - guards    - resolved and guarded.
         """
         resolved, _how = self.resolve_event(event)
         if resolved is None:
@@ -314,26 +252,22 @@ class ModelDrivenMission:
     def unlatched_boolean_attributes(self) -> Tuple[str, ...]:
         """Boolean guard flags no offered event ever raised.
 
-        These read FALSE, so the model behaves as if unguarded on them. That is
-        indistinguishable from a model with no guard at all, which is why a
-        verdict that rests on inhibition has to check this and report
-        INCONCLUSIVE rather than blame the model for a condition it was never
-        told about.
+        These read false, so the model behaves as if unguarded on them and is
+        indistinguishable from a model with no guard. A verdict resting on inhibition
+        checks this and reports inconclusive rather than blaming the model.
         """
         return tuple(
             name for name in self.boolean_guard_attributes()
             if name not in self.conditions
         )
 
-    # -- driving ----------------------------------------------------------
-
     def offer(self, event: str, *, time: float,
               variables: Optional[Mapping[str, Any]] = None
               ) -> Tuple[ModelDecision, ...]:
         """Offer one event to every loaded machine; return what the model fired.
 
-        An empty result means the generated logic declined to act. The caller
-        must then do nothing — that is the whole point of asking it.
+        An empty result means the generated logic declined to act, and the caller then
+        does nothing.
         """
         requested = str(event)
         resolved, how = self.resolve_event(requested)
@@ -341,20 +275,17 @@ class ModelDrivenMission:
             self.resolutions.append((float(time), requested, resolved, how))
         event = resolved or requested
         self.offered.append((float(time), str(event)))
-        # Conditions latch: "whenever an abort is active" is a standing state,
-        # not an instant, so a flag raised by an earlier event is still true
-        # when the next one is offered. An explicit caller value always wins.
+        # Conditions latch: "whenever an abort is active" is a standing state, so a
+        # flag raised by an earlier event is still true at the next offer. An explicit
+        # caller value wins.
         raised = self._latched_by(requested) or self._latched_by(event)
         for name in raised:
             self.conditions[name] = True
             self.latched.append((float(time), str(event), name))
-        # A model may express a condition as a standing boolean read by guards
-        # rather than as an event — run3's delivery abort has no event at all.
-        # So "no event matched" does NOT mean the model was never told: the
-        # latched flag told it. Only an offer that resolved to nothing AND
-        # raised nothing established nothing, and that is the one a verdict
-        # must never rest on. Recording those together would make an exercised
-        # scenario read like an unasked one.
+        # A model may express a condition as a standing boolean read by guards rather
+        # than as an event, so "no event matched" does not mean the model was never
+        # told - the latched flag told it. Only an offer that resolved to nothing and
+        # raised nothing established nothing; the two are recorded separately.
         if resolved is None:
             if raised:
                 self.condition_only.append(
@@ -395,25 +326,17 @@ class ModelDrivenMission:
     ) -> bool:
         """Whether this transition set invoked the executable action.
 
-        Verbatim match first. Otherwise identity by CAUSAL ROLE: the
-        decisions handed in are the model's response to one offered event,
-        and when they invoke exactly one distinct action, that action IS
-        the response — whatever the model named it. run3 fires
-        ``releasePayload`` where this adapter's constant says
-        ``actuateRelease``; the literal comparison made the harness refuse
-        to actuate, the payload never separated, and both the positional
-        and the timed checks starved of evidence — a harness spelling
-        reported as "the model declined". Causal role alone would launder:
-        a model answering the delivery event with ``lockPayload`` also fired
-        exactly one action, and actuating the gripper on it would fabricate
-        a release the model refused. So the fallback carries the same
-        semantic gate as resolve_event — the fired action must share at
-        least one term with the adapter's action name (release↔release,
-        deploy/parachute↔parachute); an unrelated or opposing action stays
-        not-performed. Two distinct fired actions are refused rather than
-        guessed, and the physical observation downstream remains the judge
-        either way. Every causal-role acceptance is recorded in
-        ``action_resolutions`` so the evidence can name the rename.
+        Verbatim match first, then identity by causal role: the decisions are the
+        model's response to one offered event, so when they invoke exactly one
+        distinct action, that action is the response whatever the model named it
+        (run3 fires ``releasePayload`` where the adapter constant says
+        ``actuateRelease``, and the literal comparison stopped the harness actuating
+        at all). Causal role alone would accept ``lockPayload`` as a release, so the
+        fallback carries the same semantic gate as resolve_event: the fired action
+        must share a term with the adapter's action name (release↔release,
+        deploy/parachute↔parachute). Two distinct fired actions are refused rather
+        than guessed, and every causal-role acceptance is recorded in
+        ``action_resolutions``.
         """
         from src.utils.sysml_text_utils import semantic_terms
 
@@ -433,8 +356,6 @@ class ModelDrivenMission:
                 self.action_resolutions.append((action.value, resolved))
                 return True
         return False
-
-    # -- evidence ---------------------------------------------------------
 
     def provenance(self) -> dict:
         """What was executed, so the evidence can name it."""

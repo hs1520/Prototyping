@@ -1,12 +1,12 @@
 """Run one isolated, authoritative end-to-end realization experiment.
 
-The run is scientifically ordered and single-writer:
+Single-writer, in order:
 
   Phase 1-8 -> immutable base fingerprints -> Gazebo -> SITL/executed matrix
   -> provenance finalizer -> atomic ``examples/output/latest`` publication.
 
-Every run lives under ``examples/output/runs/<run_id>``.  A failed/interrupted
-run is retained for diagnosis but can never replace ``latest``.
+Runs live under ``examples/output/runs/<run_id>``; a failed or interrupted run
+is kept for diagnosis and does not replace ``latest``.
 """
 from __future__ import annotations
 
@@ -52,10 +52,9 @@ SYSTEM = "AutonomousDrone"
 def require_authoritative_runtime() -> None:
     """Fail before any LLM call when the Syside-backed runtime is unavailable.
 
-    ``conda run -n AI-Prototyping python`` can resolve a pyenv shim ahead of
-    the environment interpreter on some shells. Both syntax checking and the
-    structured LiteModel then degrade to permissive/empty fallbacks, which is
-    unacceptable for an authoritative run.
+    ``conda run -n AI-Prototyping python`` can resolve a pyenv shim ahead of the
+    environment interpreter, after which syntax checking and the structured
+    LiteModel degrade to permissive/empty fallbacks.
     """
     from src.simulation import syntax_checker
     from src.sysml import lite_model
@@ -75,7 +74,7 @@ def require_authoritative_runtime() -> None:
 
 
 def retire_stale_parm(parm_path: str) -> bool:
-    """Legacy scratch-output helper; isolated run bundles never need this path."""
+    """Legacy scratch-output helper; isolated run bundles do not use this path."""
     path = Path(parm_path)
     if not path.exists():
         return False
@@ -92,12 +91,10 @@ def require_authoritative_functional_closure(
 ) -> list[str]:
     """Reject publication while model-fixable FUNC gaps remain.
 
-    Reads the same two signals the pipeline's own terminal closure gate reads
-    -- the plan's recorded response intents and the extractor's
-    no-measurable-criterion flags -- so that a requirement the pipeline
-    correctly classified as offering nothing to anchor to is not re-raised
-    here as a model gap. Both are None on the frozen path (no frozen
-    requirement is unmeasurable), so that path is unchanged.
+    Reads the two signals the pipeline's terminal closure gate reads -- the plan's
+    recorded response intents and the extractor's no-measurable-criterion flags --
+    so a requirement with nothing to anchor to is not re-raised here as a model
+    gap. Both are None on the frozen path, which is therefore unchanged.
     """
     from src.agents.verification_audit import functional_verification_gap_issues
     from src.simulation.syntax_checker import check_syntax
@@ -158,7 +155,6 @@ def _run_evidence(script: str, run_dir: Path, timeout_s: int = 1800) -> int:
 
 
 def _require_clean_worktree() -> None:
-    """Fail before the expensive LLM run unless the executable code is committed."""
     dirty = subprocess.run(
         ["git", "status", "--short", "--untracked-files=all"],
         cwd=ROOT,
@@ -201,8 +197,8 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
             orch, "last_recommended_estimator_feasible", None
         )
     final_sysml = res.get("model_sysml") or ""
-    # Independent final publication gate (do not trust only run metadata) --
-    # but read the same plan/extractor context the pipeline's gate read.
+    # Independent final publication gate: not run metadata alone, but the
+    # same plan/extractor context the pipeline's gate read.
     _ri = getattr(orch, "last_requirement_input", None) or {}
     _plan = getattr(orch, "_active_model_generation_plan", None) or {}
     _intents = {}
@@ -231,7 +227,6 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
     out = {
         "elapsed_s": round(elapsed_s, 1),
         "system_name": SYSTEM,
-        # Persist the exact extracted requirement set, not merely its count.
         "requirements": requirements,
         "requirement_input": dict(res.get("requirement_input") or {}),
         "final_score": res.get("final_score"),
@@ -286,18 +281,17 @@ def main() -> int:
     run_dir: Path | None = None
     with AuthoritativeRunLock(output_root()):
         try:
-            # Fail-fast marker for in-process gates (e.g. the variation-DSE
-            # catalog seed): an authoritative run must stop at the first
-            # unpublishable condition instead of spending the remaining
-            # budget before the finalizer refuses publication.
+            # Fail-fast marker for in-process gates (e.g. the variation-DSE catalog
+            # seed): an authoritative run stops at the first unpublishable condition
+            # instead of spending the rest of the budget before the finalizer refuses.
             os.environ["PROTOTYPING_AUTHORITATIVE"] = "1"
             require_authoritative_runtime()
             _require_clean_worktree()
             staging = create_staging_bundle(output_root())
             llm = create_llm(provider="vertex")
             print("LLM:", llm.__class__.__name__, flush=True)
-            # Phase 9 is deliberately disabled inside the orchestrator.  External
-            # evidence may start only after the base bundle is fingerprinted.
+            # Phase 9 is disabled inside the orchestrator: external evidence starts
+            # only after the base bundle is fingerprinted.
             pipe = PrototypingPipeline(
                 llm=llm,
                 max_iterations=4,
@@ -305,11 +299,10 @@ def main() -> int:
                 dse_mode="variation",
                 phase9_hifi=None,
             )
-            # REQUIREMENT_INPUT=extract runs Phase 1 (LLM extraction from the
-            # system description) instead of loading the frozen set. Default is
-            # the frozen set, so every existing invocation is unchanged. Which
-            # path ran is recorded on the artefact as requirement_input.mode
-            # ("frozen" | "llm_extracted"), so the two are never confusable.
+            # REQUIREMENT_INPUT=extract runs Phase 1 (LLM extraction from the system
+            # description) instead of loading the frozen set; the frozen set stays the
+            # default. The artefact records requirement_input.mode ("frozen" |
+            # "llm_extracted"), so the two paths stay distinguishable.
             requirement_input_mode = os.environ.get("REQUIREMENT_INPUT", "frozen")
             if requirement_input_mode not in ("frozen", "extract"):
                 raise SystemExit(
@@ -325,13 +318,11 @@ def main() -> int:
                     else DRONE_FROZEN_REQUIREMENTS
                 ),
             )
-            # Persist the generation-stage inputs and output before explore
-            # runs. Explore can fail (no admissible design space, no realisable
-            # design) after generation succeeded, and until this point nothing
-            # had been written to the staging bundle: a failed run left only a
-            # one-line error and no way to see which requirement set or which
-            # committed model produced it. On the extraction path that is the
-            # only record of the extracted set, which is not otherwise frozen.
+            # Persist the generation-stage inputs and output before explore runs.
+            # Explore can fail (no admissible design space, no realisable design) after
+            # generation succeeded, and nothing is written to the staging bundle until
+            # then, so a failed run left only a one-line error. On the extraction path
+            # this is the only record of the extracted set.
             try:
                 atomic_write_json(
                     staging / "generation_stage.json",
@@ -347,7 +338,7 @@ def main() -> int:
                 )
                 if isinstance(gen, dict) and isinstance(gen.get("model_sysml"), str):
                     atomic_write_text(staging / "committed_model.sysml", gen["model_sysml"])
-            except Exception as snap_exc:  # diagnostics must never fail the run
+            except Exception as snap_exc:  # diagnostics do not fail the run
                 print(f"  (generation-stage snapshot not written: {snap_exc})", flush=True)
             res = pipe.orchestrator.explore(gen, mcts_iterations=20)
             base, final_sysml, parm_text = _build_base_artifacts(
@@ -368,8 +359,6 @@ def main() -> int:
             )
             atomic_write_text(run_dir / "final_model.sysml", final_sysml)
             atomic_write_text(run_dir / "recommended.parm", parm_text)
-            # Canonical snapshot contains the report plus exact model/requirement
-            # references.  It is sufficient to recover the run without another LLM call.
             atomic_write_json(run_dir / "canonical_run.json", {
                 "run_id": run_id,
                 "pipeline_report": pipe.build_run_report(res),
@@ -388,9 +377,9 @@ def main() -> int:
             write_state(run_dir, "EVIDENCE", run_id=run_id)
             print(f"\n=== base bundle fixed: {run_dir} ===", flush=True)
 
-            # Gazebo first; SITL writes the final execution-aware matrix using
-            # the already-fresh Gazebo report.  Non-zero can be a scientific
-            # FAIL, so the finalizer—not the return code—decides completeness.
+            # Gazebo first; SITL then writes the execution-aware matrix from the fresh
+            # Gazebo report. A non-zero exit can be a scientific FAIL, so the finalizer
+            # decides completeness.
             for layer, script in (
                 ("gazebo", "run_gazebo_feasibility.py"),
                 ("sitl", "run_sitl_feasibility.py"),
@@ -425,9 +414,8 @@ def main() -> int:
                     )
                 except Exception:
                     pass
-                # Without this the bounded Step 1 attempts — response digests,
-                # excerpts, and per-attempt parse status — die with the
-                # process, leaving only a one-line error to diagnose from.
+                # Without this the bounded Step 1 attempts - response digests, excerpts,
+                # per-attempt parse status - die with the process, leaving a one-line error.
                 step1_attempts = list(getattr(exc, "plan_attempts", ()) or ())
                 if step1_attempts:
                     try:

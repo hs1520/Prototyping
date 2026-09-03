@@ -5,7 +5,7 @@ import pytest
 from src.prototyping.evaluation_protocol import build_descriptive_pilot_manifest
 
 
-def test_three_repetitions_are_descriptive_not_confirmatory():
+def test_three_reps_descriptive():
     manifest = build_descriptive_pilot_manifest(["run-1", "run-2", "run-3"])
     assert manifest["n"] == 3
     assert manifest["study_classification"] == "DESCRIPTIVE_PILOT"
@@ -13,7 +13,7 @@ def test_three_repetitions_are_descriptive_not_confirmatory():
     assert manifest["confirmatory_p_values_permitted"] is False
 
 
-def test_pilot_manifest_rejects_mixed_namespace_and_wrong_n():
+def test_rejects_legacy_namespace_low_n():
     with pytest.raises(ValueError, match="legacy"):
         build_descriptive_pilot_manifest(
             ["a", "b", "c"],
@@ -25,8 +25,7 @@ def test_pilot_manifest_rejects_mixed_namespace_and_wrong_n():
         build_descriptive_pilot_manifest(["a", "b", "b"])
 
 
-def test_more_repetitions_raise_n_without_licensing_inference():
-    """Above the floor, `n` follows the runs; the inference bans do not move."""
+def test_six_reps_stay_descriptive():
     manifest = build_descriptive_pilot_manifest(["a", "b", "c", "d", "e", "f"])
 
     assert manifest["n"] == 6

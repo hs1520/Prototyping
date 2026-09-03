@@ -1,12 +1,4 @@
-"""
-Autonomous Drone System Prototyping Example.
-
-Demonstrates the use of the AI-assisted MBSE prototyping framework
-to rapidly design an autonomous package delivery drone system.
-
-Usage:
-    python examples/drone_system.py
-"""
+"""Autonomous Drone System Prototyping Example."""
 
 from src.app.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
@@ -50,7 +42,6 @@ def main():
     print(f"Using LLM: {llm.__class__.__name__}")
     print()
 
-    # Initialize the prototyping pipeline
     pipeline = PrototypingPipeline(
         llm=llm,
         quality_threshold=0.75,
@@ -58,14 +49,12 @@ def main():
         verbose=True,
     )
 
-    # Stage 1: Generate a validated SysML v2 model (no DSE)
     result = pipeline.generate_system(
         system_name="AutonomousDrone",
         description=DRONE_DESCRIPTION,
         additional_requirements=DRONE_REQUIREMENTS,
     )
 
-    # Display results
     print("\n" + "=" * 70)
     print("GENERATION RESULTS")
     print("=" * 70)

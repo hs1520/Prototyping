@@ -14,12 +14,12 @@ from src.realization.catalog import (
 )
 
 
-def test_catalog_dataclasses_are_frozen():
+def test_dataclasses_frozen():
     with pytest.raises(FrozenInstanceError):
         MN5008_KV340_18x61.motor_mass_g = 1.0
 
 
-def test_gazebo_poc_reexport_keeps_old_import_path():
+def test_reexport_keeps_import_path():
     assert OLD_MN5008 is MN5008_KV340_18x61
     assert OldMotorProp is MotorPropCombo
     assert OLD_MN5008.interp_at_thrust(1390.0)[0] == pytest.approx(
@@ -27,7 +27,7 @@ def test_gazebo_poc_reexport_keeps_old_import_path():
     )
 
 
-def test_mn5008_has_traceable_realization_fields():
+def test_mn5008_fields_traceable():
     m = MN5008_KV340_18x61
     assert m.source_url.startswith("https://store.tmotor.com/")
     assert m.retrieved == "2026-07-03"
@@ -40,7 +40,7 @@ def _has_source_url(url: str) -> bool:
     return url.startswith(("http://", "https://"))
 
 
-def test_default_catalog_entries_keep_source_and_retrieval_traceability():
+def test_catalog_entries_traceable():
     for combo in DEFAULT_CATALOG.combos:
         assert _has_source_url(combo.source_url)
         assert combo.retrieved.startswith("2026-07-")
@@ -72,7 +72,7 @@ def test_default_catalog_entries_keep_source_and_retrieval_traceability():
         assert bundle.components
 
 
-def test_u7_4s_gap_fill_uses_official_voltage_specific_bench_data():
+def test_u7_4s_bench_data():
     for combo, diameter, max_thrust in (
         (U7_V2_KV490_17x58_4S, 17.0, 3000.0),
         (U7_V2_KV490_18x61_4S, 18.0, 3240.0),
@@ -87,7 +87,7 @@ def test_u7_4s_gap_fill_uses_official_voltage_specific_bench_data():
         assert combo.retrieved == "2026-07-14"
 
 
-def test_4s_uav_capacity_gap_now_contains_10000mah_pack():
+def test_4s_10000mah_pack_present():
     packs = [
         pack for pack in DEFAULT_CATALOG.packs
         if pack.cells == 4 and pack.capacity_mah == 10000.0
@@ -98,7 +98,7 @@ def test_4s_uav_capacity_gap_now_contains_10000mah_pack():
     assert packs[0].retrieved == "2026-07-14"
 
 
-def test_heavy_payload_4s_gap_has_light_frame_and_voltage_traced_uav_packs():
+def test_t960_frame_and_4s_packs():
     t960 = next(f for f in DEFAULT_CATALOG.frames if "T960 TL960A" in f.name)
     assert t960.mass_g == 1050.0
     assert t960.arms == 6
@@ -117,7 +117,7 @@ def test_heavy_payload_4s_gap_has_light_frame_and_voltage_traced_uav_packs():
     assert all(p.capacity_mah / 1000.0 * p.c_rating >= 240.0 for p in packs.values())
 
 
-def test_coverage_diagnostic_uses_current_capacity_and_integration_domains():
+def test_coverage_capacities_current():
     assert 24000 in CAPACITIES_MAH
     assert 30000 in CAPACITIES_MAH
     exact_4s = _cell_catalog(4)

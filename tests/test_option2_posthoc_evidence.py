@@ -1,4 +1,3 @@
-"""Operator evidence preparation remains fail-closed and human-gated."""
 from __future__ import annotations
 
 import hashlib
@@ -114,7 +113,7 @@ def _pilot(tmp_path: Path) -> Path:
     return root
 
 
-def test_completed_pilot_loader_checks_exact_model_digest(tmp_path):
+def test_loader_checks_model_digest(tmp_path):
     root = _pilot(tmp_path)
     config, manifest, archived = load_completed_pilot(root)
     assert manifest["status"] == "COMPLETE"
@@ -126,7 +125,7 @@ def test_completed_pilot_loader_checks_exact_model_digest(tmp_path):
         load_completed_pilot(root)
 
 
-def test_prepare_review_binds_config_but_keeps_human_decisions_open(
+def test_review_leaves_decisions_open(
     tmp_path,
 ):
     root = _pilot(tmp_path)
@@ -158,7 +157,7 @@ def test_prepare_review_binds_config_but_keeps_human_decisions_open(
     assert taxonomy["review_protocol"]["independent_human_review"] is False
 
 
-def test_digest_stamping_refuses_to_make_the_human_attestation(tmp_path):
+def test_stamping_refuses_attestation(tmp_path):
     artifact = tmp_path / "boundary.json"
     _write(artifact, {
         "status": "DRAFT_FOR_SUPERVISOR_REVIEW",
@@ -170,7 +169,7 @@ def test_digest_stamping_refuses_to_make_the_human_attestation(tmp_path):
     assert artifact.read_text() == before
 
 
-def test_blind_materials_are_built_only_after_synthetic_human_freeze(tmp_path):
+def test_blind_materials_after_freeze(tmp_path):
     pilot = _pilot(tmp_path)
     config = json.loads((pilot / "pilot_config.json").read_text())
     evidence = tmp_path / "evidence"

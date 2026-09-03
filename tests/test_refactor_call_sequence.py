@@ -1,34 +1,17 @@
 """Golden: what each arm asks the provider during ``generate()``, and in what order.
 
-Written to characterize the sequence before the controller refactor, which has
-since landed. What it does now is different and more demanding: it is a standing
-prompt-drift golden. Every prompt digest here moves when any prompt those calls
-assemble is edited, so **an intentional prompt change must regenerate this
-golden in the same commit, and the commit must say which digests moved and why**.
-A digest that moves without such a statement is the regression this test exists
-to catch. Running this module as a script rewrites the golden; diff it before
-committing, because the point is knowing exactly which digests moved.
-
-The replay responses are archived seed-0 responses from ``pilot_v17_20260801``,
-which let the real ``Orchestrator.generate()`` pipeline run offline. Two
-qualifications on reading the recorded sequence:
-
-- **R0-CURRENT is a hybrid, not a recording of R0.** The baseline arm archives
-  no ``session_transcripts.jsonl`` — board-derived views are skipped for an arm
-  that has no blackboard sessions — and ``step1_plan_attempts.json`` keeps only
-  an 800-character excerpt of each response, which cannot be replayed. So R0's
-  code path is driven by the R1-BBCTX arm's answers. Prompts from the second
-  call onward embed the model text built from earlier answers, and this was
-  measured rather than assumed: perturbing the first replayed response changes
-  R0's call #2 digest. R0's entry is therefore "what R0 would ask had it been
-  given R1's answers". It is stable and drift-sensitive, which is what a golden
-  needs; it is not evidence about what R0 asked in a real run.
-- The pilot is pinned at v17 while the pipeline is at v20. Replaying archived
-  answers against current code is the point, but the responses are two pipeline
-  versions old, and pruning that pilot directory would take this test with it.
-
-``VerificationAgent`` responses are deliberately outside the replay: that agent
-is not called within ``generate()``.
+Every prompt digest here moves when any prompt those calls assemble is edited,
+so an intentional prompt change regenerates this golden in the same commit and
+the commit states which digests moved and why. Running the module as a script
+rewrites the golden; diff it before committing. The replay responses are
+archived seed-0 responses from ``pilot_v17_20260801``, which let the real
+``Orchestrator.generate()`` run offline. Two qualifications: R0-CURRENT archives
+no replayable transcript, so its code path is driven by R1-BBCTX's answers and
+its entry is "what R0 would ask had it been given R1's answers" - stable and
+drift-sensitive, but not evidence about a real R0 run; and the pilot is pinned
+at v17 while the pipeline is at v20, so pruning that directory would take this
+test with it. ``VerificationAgent`` is outside the replay - it is not called
+within ``generate()``.
 """
 from __future__ import annotations
 
@@ -83,9 +66,8 @@ class _RecordingReplayLLM(LLMInterface):
     def _next_response(self) -> str:
         """Fail as a call-count change rather than as `StopIteration`.
 
-        An arm that starts asking for one more call than the archive holds is
-        exactly what this golden is for, and a bare `StopIteration` raised deep
-        inside the orchestrator reports it as anything but that.
+        An arm asking for one more call than the archive holds is what this golden is
+        for, and a bare `StopIteration` raised deep inside the orchestrator hides that.
         """
         if self._issued >= len(self._responses):
             raise AssertionError(
@@ -173,11 +155,11 @@ def _record_all() -> dict[str, list[dict]]:
     return {arm: _record_arm(arm) for arm in _ARMS}
 
 
-def test_refactor_provider_call_sequence_matches_golden():
+def test_call_sequence_matches_golden():
     assert _record_all() == json.loads(_GOLDEN.read_text())
 
 
-def test_fresh_run_agenda_activates_every_phase_from_reversed_registration():
+def test_agenda_activates_every_phase():
     result = _run_with_agenda("R2-BBAG")
     agenda = result["control_agenda"]
     registered = [item["name"] for item in agenda["registered_knowledge_sources"]]
@@ -189,8 +171,7 @@ def test_fresh_run_agenda_activates_every_phase_from_reversed_registration():
     )
 
 
-def test_exhausted_replay_reports_a_grown_call_sequence():
-    """The one failure this golden exists to catch must say what it is."""
+def test_exhausted_replay_reports_growth():
     llm = _RecordingReplayLLM(["only one archived answer"])
     messages = [Message(role="user", content="plan")]
     llm._complete_impl(messages, temperature=0.2, max_tokens=16)

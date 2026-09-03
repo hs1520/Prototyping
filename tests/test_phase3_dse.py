@@ -1,8 +1,3 @@
-"""Tests for the DSE best-config injectors (dse_injectors module).
-
-The scalar-DSE helpers this file also used to cover (_define_design_space /
-_score_config_against_requirements) were removed with the legacy scalar MCTS.
-"""
 from __future__ import annotations
 
 from tests._dep_stubs import install_missing_dep_stubs
@@ -18,10 +13,6 @@ from src.sysml.model import (
     FeatureDirection, SysMLModel,
 )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _make_orchestrator() -> Orchestrator:
     return Orchestrator(llm=MockLLM())
@@ -44,12 +35,7 @@ _REQUIREMENTS = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 方案 A: Requirements-driven design space
-# ─────────────────────────────────────────────────────────────────────────────
-
 class TestApplyBestConfigToModel:
-
     def _model_with_freq_attr(self) -> SysMLModel:
         model = SysMLModel(name="DroneSystem", description="")
         part = PartDefinition(name="FlightController")
@@ -73,7 +59,7 @@ class TestApplyBestConfigToModel:
         attr = model.part_definitions[0].attributes[0]
         assert float(attr.default_value) == 400.0
 
-    def test_redundancy_written_to_model_description(self):
+    def test_redundancy_in_description(self):
         model = self._model_with_freq_attr()
         config = DesignConfiguration(
             name="best",
@@ -82,7 +68,7 @@ class TestApplyBestConfigToModel:
         apply_best_config_to_model(config, model)
         assert "redundancy=dual" in model.description
 
-    def test_redundancy_none_does_not_modify_description(self):
+    def test_redundancy_none_noop(self):
         model = self._model_with_freq_attr()
         original_desc = model.description
         config = DesignConfiguration(
@@ -92,9 +78,8 @@ class TestApplyBestConfigToModel:
         apply_best_config_to_model(config, model)
         assert model.description == original_desc
 
-    def test_protocol_assigned_to_undeclared_port_type(self):
+    def test_protocol_fills_untyped_port(self):
         model = self._model_with_freq_attr()
-        # Port has no type_ref
         assert model.part_definitions[0].ports[0].type_ref is None
         config = DesignConfiguration(
             name="best",
@@ -105,7 +90,7 @@ class TestApplyBestConfigToModel:
         assert port.type_ref is not None
         assert "MAVLink" in port.type_ref.name
 
-    def test_protocol_not_overwritten_when_already_set(self):
+    def test_protocol_not_overwritten(self):
         model = self._model_with_freq_attr()
         model.part_definitions[0].ports[0].type_ref = ElementRef(name="ExistingProtocol")
         config = DesignConfiguration(
@@ -113,10 +98,9 @@ class TestApplyBestConfigToModel:
             parameters={"communication_protocol": "CAN"},
         )
         apply_best_config_to_model(config, model)
-        # Should NOT overwrite existing type_ref
         assert model.part_definitions[0].ports[0].type_ref.name == "ExistingProtocol"
 
-    def test_sensor_count_stored_in_model_metadata(self):
+    def test_sensor_count_in_metadata(self):
         model = self._model_with_freq_attr()
         config = DesignConfiguration(
             name="best",
@@ -126,7 +110,7 @@ class TestApplyBestConfigToModel:
         assert model.metadata.get("recommended_sensor_count") == 4
         assert model.metadata.get("dse_best_config") == "best"
 
-    def test_empty_params_does_not_raise(self):
+    def test_empty_params_no_raise(self):
         model = self._model_with_freq_attr()
         config = DesignConfiguration(name="empty", parameters={})
-        apply_best_config_to_model(config, model)  # must not raise
+        apply_best_config_to_model(config, model)

@@ -1,7 +1,7 @@
 """Deterministic normalization seam for provider-authored SysML text.
 
-These rules repair text whose upstream authority is an LLM or a repair round.
-They are deliberately not part of the structured SysML writer.
+These rules repair text authored by an LLM or a repair round; they are not
+part of the structured SysML writer.
 """
 from __future__ import annotations
 
@@ -11,9 +11,8 @@ from typing import Iterable, Sequence, Tuple
 from ..utils.sysml_text_utils import find_block_end
 
 
-# These tuples record the historical order at each call-site boundary.  Callers
-# retain their gates and validation between steps; this seam owns the rules,
-# not their scheduling.
+# These tuples record the rule order at each call-site boundary. Callers keep
+# their gates between steps and do the scheduling; this seam owns the rules.
 NORMALIZATION_RULE_ORDER = {
     "syntax_gate": (
         "fix_doc_syntax",
@@ -21,9 +20,9 @@ NORMALIZATION_RULE_ORDER = {
         "fix_keyword_item_names",
         "fix_c_style_negation",
     ),
-    # 2026-08-31: `fix_safety_action_semantics` removed from this tier — it
-    # rewrote wrong safety commands toward the harness vocabulary (semantic
-    # forgery); the defect now surfaces at the linker's traceability check.
+    # 2026-08-31: `fix_safety_action_semantics` removed from this tier - it
+    # rewrote wrong safety commands toward the harness vocabulary. The defect
+    # now surfaces at the linker's traceability check.
     "design_semantics": (
         "fix_capability_semantics",
     ),
@@ -40,15 +39,13 @@ NORMALIZATION_RULE_ORDER = {
 
 
 def fix_keyword_item_names(sysml_text: str) -> str:
-    """
-    Quote SysML reserved words used as item-usage names inside port/part defs.
+    """Quote SysML reserved words used as item-usage names inside port/part defs.
 
     Pattern:  (in|out|inout) item <keyword> :
     Fix:      (in|out|inout) item '<keyword>' :
 
-    syside rejects bare reserved words like `message`, `flow`, `connect`,
-    `accept`, `send`, `loop`, `state` as item-usage names (parser error
-    "Unexpected 'item'").  Quoting them makes the syntax valid.
+    syside rejects bare reserved words such as `message`, `flow`, `connect`,
+    `accept`, `send`, `loop`, `state` here (parser error "Unexpected 'item'").
     """
     _SYSML_KW = re.compile(
         r'\b(in|out|inout)\s+item\s+'
@@ -62,64 +59,39 @@ _READONLY_ATTR_RE = re.compile(r'\breadonly\s+(attribute\b)')
 
 
 def strip_readonly_keyword(sysml_text: str) -> str:
-    """
-    Drop the `readonly` modifier before `attribute`.
+    """Drop the `readonly` modifier before `attribute`.
 
-    syside's parser rejects `readonly attribute X : ...` ("Unexpected
-    identifier"), and the official SysML v2 corpus never uses `readonly`
-    — constants are plain `attribute name : T = value [unit];`.  The
-    design-limit vs runtime-state distinction is carried by naming
-    convention (max/min/limit vs current*) and assert constraints, not by
-    this keyword.  The generation prompt no longer teaches `readonly`;
-    this is a deterministic safety net for residual LLM emissions so they
-    cost no syntax-gate LLM round.
+    syside rejects `readonly attribute X : ...` ("Unexpected identifier") and the
+    SysML v2 corpus writes constants as `attribute name : T = value [unit];`. The
+    design-limit vs runtime-state distinction is carried by naming (max/min/limit
+    vs current*) and assert constraints. The generation prompt no longer teaches
+    `readonly`; this catches residual LLM emissions without a syntax-gate round.
     """
     return _READONLY_ATTR_RE.sub(r'\1', sysml_text)
 
 
 def strip_code_fences(text: str) -> str:
-    """
-    去除 LLM 返回内容中常见的 markdown 代码围栏。
-
-    处理以下格式：
-      ```sysml ... ```
-      ```         ... ```
-      ~~~sysml    ... ~~~
-    """
-    # 去掉开头的围栏行（```sysml、```、~~~sysml 等）
+    """去除 LLM 返回内容中常见的 markdown 代码围栏。"""
     text = re.sub(r'^[ \t]*(?:```|~~~)\w*[ \t]*\n', '', text, flags=re.MULTILINE)
-    # 去掉结尾的围栏行
     text = re.sub(r'^[ \t]*(?:```|~~~)[ \t]*$', '', text, flags=re.MULTILINE)
     return text.strip('\n')
 
 
-# ──────────────────────────────────────────────────────────────────────
-# doc = "string" → doc /* string */ syntax normaliser
-# ──────────────────────────────────────────────────────────────────────
-
 def normalise_connect_syntax(sysml_text: str) -> Tuple[str, int]:
-    """Convert `connect a::b to c::d;` → `connect a.b to c.d;`.
+    """Convert `connect a::b to c::d;` -> `connect a.b to c.d;`.
 
-    SysML v2 uses dot notation for connect endpoints (verified against the
-    official SysML-v2-release-src/examples corpus).  The `::` operator is
-    for namespace-qualified names (`Package::Element`), not feature access
-    in connect statements.  LLMs sometimes emit the `::` form anyway;
-    normalising here ensures every downstream consumer sees the canonical
-    SysML v2 syntax.
-
-    Only `::` occurrences inside `connect ... to ...;` are touched — any
-    other use (e.g. `Package::Element` qualified names) is preserved.
+    SysML v2 uses dot notation for connect endpoints (checked against the
+    official SysML-v2-release-src/examples corpus); `::` is for
+    namespace-qualified names, which LLMs sometimes emit here anyway. Only `::`
+    inside `connect ... to ...;` is touched, so `Package::Element` is preserved.
 
     Returns (normalised_text, count_of_substitutions).
     """
-    # Match a complete connect statement that uses `::` on either side.
-    # The capture groups isolate part / port pieces so we can rewrite with `.`.
     connect_pat = re.compile(
         r"\bconnect\s+(\w+)::(\w+)\s+to\s+(\w+)::(\w+)\s*;",
         re.IGNORECASE,
     )
 
-    # Also handle the asymmetric forms (one side `::`, the other `.`).
     connect_mixed_left = re.compile(
         r"\bconnect\s+(\w+)::(\w+)\s+to\s+(\w+)\.(\w+)\s*;",
         re.IGNORECASE,
@@ -146,21 +118,13 @@ def normalise_connect_syntax(sysml_text: str) -> Tuple[str, int]:
 def fix_doc_syntax(sysml_text: str) -> Tuple[str, int]:
     """Convert quoted ``doc`` bodies to the legal ``doc /* text */`` form.
 
-    The correct SysML v2 doc-comment syntax is ``doc /* text */`` —
-    documentation bodies are comments, never strings.  LLMs emit two
-    invalid spellings of the same idea:
-
-    * ``doc = "text";`` — parsed by Syside as a feature-usage named
-      ``doc`` of type String, leaking into ``top_level_usages`` as a
-      spurious ``requirement req : String = "..."`` line;
-    * ``doc 'text';`` / ``doc "text";`` (no ``=``) — a hard parser error.
-      Measured on the 2026-08-30 authoritative attempt: one such line
-      inside a port body produced an error the three-attempt LLM syntax
-      gate could not clear (the block-scoped rewrite tripped the
-      merge-size gate), and the run limped on with a degraded model.
-
-    Both are mechanical rewrites, so they cost no syntax-gate LLM round.
-    Single-line bodies only; ``*/`` inside a body is defused.
+    SysML v2 doc bodies are comments, not strings. LLMs emit two invalid
+    spellings: ``doc = "text";``, which Syside parses as a String feature-usage
+    named ``doc`` and leaks into ``top_level_usages``; and ``doc 'text';``
+    without ``=``, a parser error the three-attempt syntax gate could not clear
+    on the 2026-08-30 attempt. Both rewrites are mechanical, so they cost no
+    syntax-gate LLM round. Single-line bodies only; ``*/`` inside a body is
+    defused.
 
     Returns:
         (fixed_text, count_of_substitutions)
@@ -180,27 +144,17 @@ def fix_doc_syntax(sysml_text: str) -> Tuple[str, int]:
     return fixed, count
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Invalid requirement-attribute cleanup (post-assembly sanitiser)
-# ──────────────────────────────────────────────────────────────────────
-
 def strip_invalid_requirement_attrs(sysml_text: str) -> Tuple[str, int]:
     """Remove invalid ``requirement <name> : <Type> = "...";`` lines.
 
-    These are not valid SysML v2.  The refinement LLM sometimes produces
-    them when it tries to "document" a requirement inline — but the correct
-    construct is ``satisfy requirement REQ_ID;`` inside a part def, or
-    ``requirement def REQ_ID { doc /* ... */ }`` at package level.
-
-    Only lines that match the specific bogus pattern are removed; all valid
-    ``requirement def`` and ``satisfy requirement`` constructs are preserved.
+    The refinement LLM emits these when documenting a requirement inline; the
+    valid constructs are ``satisfy requirement REQ_ID;`` inside a part def and
+    ``requirement def REQ_ID { doc /* ... */ }`` at package level. Only the
+    bogus pattern is removed.
 
     Returns:
         (cleaned_text, count_of_removed_lines)
     """
-    # Matches: optional leading whitespace, `requirement`, identifier,
-    # colon, type name, equals, a double-quoted string, semicolon.
-    # Does NOT match `requirement def` (the `def` keyword breaks the pattern).
     invalid_re = re.compile(
         r"^[ \t]*requirement[ \t]+(?!def\b)\w+[ \t]*:[ \t]*\w+[ \t]*"
         r"=[ \t]*\"[^\"]*\"[ \t]*;[ \t]*$",
@@ -219,11 +173,10 @@ def fix_capability_semantics(
 ) -> Tuple[str, int]:
     """Repair range-floor naming and remove invalid always-on invariants.
 
-    Operational range is a mission-end capability.  When the structured
-    requirement is a lower bound, ``currentRange <= maxRange`` verifies the
-    opposite property, while ``currentRange >= minRange`` is false at
-    startup.  Keep the design target as ``min*Range`` and leave evaluation
-    to the forward-flight fidelity tier.
+    Operational range is a mission-end capability. For a lower-bound requirement,
+    ``currentRange <= maxRange`` checks the opposite property and
+    ``currentRange >= minRange`` is false at startup, so keep the design target as
+    ``min*Range`` and leave evaluation to the forward-flight fidelity tier.
     """
     if not has_range_floor or has_range_ceiling:
         return sysml_text, 0
@@ -262,9 +215,9 @@ def fix_capability_semantics(
         if not is_mission_range:
             return match.group(0)
         fixes += 1
-        # The structured marker makes the delegation auditable: semantic
-        # fidelity records the obligation as DELEGATED to the named tier
-        # instead of failing it for the assert this normaliser removed.
+        # The marker keeps the delegation auditable: semantic fidelity records
+        # the obligation as DELEGATED to the named tier rather than failing it
+        # for the assert removed here.
         return (
             f"{match.group('indent')}// DELEGATED-CONSTRAINT "
             f"{match.group('name')} tier=FORWARD_FLIGHT_FIDELITY "
@@ -278,15 +231,12 @@ def fix_capability_semantics(
 
 # `fix_safety_action_semantics` was removed 2026-08-31. It rewrote
 # `send CMD_LAND()` inside parachute-named actions into `send CMD_PARACHUTE()`
-# and injected the harness's command definition — semantic forgery, not
-# normalisation: a model that commands the wrong response was silently
-# "repaired" toward the harness vocabulary, laundering a real arbitration
-# defect into a pass and hiding it from every verification tier. The defect
-# now surfaces where it belongs: the requirement linker's traceability check
-# blocks a parachute guard that sends a LAND command
-# (test_parachute_guard_with_land_command_is_traceability_blocked), and a
+# and injected the harness's command definition, turning an arbitration defect
+# into a pass. The defect now surfaces at the requirement linker's traceability
+# check, which blocks a parachute guard that sends a LAND command
+# (test_parachute_land_command_blocked); a
 # correctly-commanded model with its own spelling is accepted via the plan's
-# causal-path route instead of a CHUTE-substring.
+# causal-path route rather than a CHUTE substring.
 
 
 def _remove_named_block(text: str, keyword: str, name: str) -> str:
@@ -313,9 +263,8 @@ def strip_ag_implementation(
     """Remove implementation claims from an authored A/G package."""
     text = str(package_text)
 
-    # A planning artifact may describe the behavior obligation by name in the
-    # typed AGChainSpec, but no concrete state definition exists until the main
-    # model has been generated.
+    # The typed AGChainSpec may name the behavior obligation, but no state
+    # definition exists until the main model is generated.
     for behavior in dict.fromkeys(behavior_names):
         text = _remove_named_block(text, "state def", behavior)
 
@@ -356,8 +305,8 @@ def strip_named_item_definitions(
 ) -> str:
     """Remove standalone event types before terminal canonical imports.
 
-    A terminal A/G package imports the exact system event classifiers and must
-    not retain package-local classifiers with merely equal simple names.
+    A terminal A/G package imports the system event classifiers, so package-local
+    classifiers sharing a simple name are dropped.
     """
     text = str(package_text)
     for event_name in event_names:
@@ -370,23 +319,20 @@ def strip_named_item_definitions(
     return text
 
 
-#: Boolean negation written the C way.  `!=` is a legal SysML v2 inequality and
-#: our own A/G emitter produces it, so the lookahead excluding `=` is what makes
-#: this rule safe rather than a nicety.  Negation is only rewritten where an
-#: identifier follows, which is the only position `not` is valid in.
+# Boolean negation written the C way. `!=` is a legal SysML v2 inequality the
+# A/G emitter produces, so the lookahead excluding `=` is required. Negation is
+# rewritten only where an identifier follows - the only position `not` is valid.
 _C_NEGATION_RE = re.compile(r"(?<![!=<>])!(?!=)\s*(?=[A-Za-z_])")
 
 
 def fix_c_style_negation(sysml_text: str) -> str:
     """Rewrite `!flag` as `not flag`.
 
-    SysML v2 spells boolean negation `not`; syside rejects `!` with
-    "Unexpected token '!'".  Measured in pilot_n6_20260802/seed-3/R0-CURRENT,
-    where a single `if !sensorFailure` at line 125 was the only parser error in
-    the committed model and failed the whole run's qualification gate.  One
-    occurrence across eight archived pilots, and the deterministic A/G emitter
-    already writes `not`, so the convention was known to the system but never
-    enforced on provider output.
+    SysML v2 spells boolean negation `not`; syside rejects `!` with "Unexpected
+    token '!'". In pilot_n6_20260802/seed-3/R0-CURRENT a single
+    `if !sensorFailure` at line 125 was the model's only parser error and failed
+    the run's qualification gate - one occurrence across eight archived pilots,
+    on provider output the deterministic A/G emitter already spells correctly.
     """
     return _C_NEGATION_RE.sub("not ", sysml_text)
 
@@ -404,15 +350,11 @@ _PORT_DECLARATION_RE = re.compile(
 def strip_redundant_inherited_ports(sysml_text: str) -> Tuple[str, int]:
     """Remove port redeclarations identical to an inherited declaration.
 
-    A part def specialising a host (``X :> Host``) inherits the host's ports;
-    redeclaring one with the same name, direction, and type is semantically
-    redundant and trips syside's namespace-distinguishability warning for
-    every copy.  Measured: run 00e4d333 carried ten such warnings — an LLM
-    refinement pass had decorated each catalog variant with the inherited
-    ``propulsionStatus`` port — and the terminal qualification's zero-warning
-    policy failed the run on them.  Only exact matches are removed; a
-    declaration that differs in direction or type is left for the checker to
-    judge.
+    A part def specialising a host (``X :> Host``) inherits its ports;
+    redeclaring one with the same name, direction and type is redundant and trips
+    syside's namespace-distinguishability warning per copy. Run 00e4d333 carried
+    ten of them and lost the terminal zero-warning gate. Only exact matches are
+    removed; a declaration differing in direction or type is left to the checker.
     """
     text = str(sysml_text or "")
 

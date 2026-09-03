@@ -1,11 +1,10 @@
 """Functional closure without surgical refinement falls back to full rewrite.
 
-NO-SURGICAL@seed0 measured the old behavior: the closure pass printed one
-line ("surgical refinement disabled; functional gaps remain") and gave up —
-2 budgeted passes, 0 attempts, run failed at terminal closure. The arm was
-therefore measuring "closure repair exists vs not", not the intended
-"surgical vs full-rewrite repair". The fallback keeps the same pass budget
-and the same acceptance gates; only the candidate generator differs.
+NO-SURGICAL@seed0 measured the old behavior: the closure pass printed
+"surgical refinement disabled; functional gaps remain" and gave up with 2
+budgeted passes and 0 attempts, so the arm measured whether closure repair
+exists rather than surgical vs full-rewrite repair. The fallback keeps the
+pass budget and the acceptance gates; only the candidate generator differs.
 """
 from __future__ import annotations
 
@@ -60,7 +59,7 @@ def _harness(generate_responses, gap_audit):
     return runtime, closure._RefinementClosure__implementation
 
 
-def test_disabled_surgical_repairs_closure_via_full_rewrite():
+def test_no_surgical_full_rewrite_closes():
     def gap_audit(text, _name):
         if "reportHealth" in text:
             return []
@@ -90,7 +89,7 @@ def test_disabled_surgical_repairs_closure_via_full_rewrite():
         == ["ACCEPTED"]
 
 
-def test_unusable_full_rewrite_leaves_closure_open_not_crashed():
+def test_unusable_rewrite_leaves_open():
     runtime, engine = _harness(
         generate_responses=[
             SimpleNamespace(success=False, output=None),
@@ -109,7 +108,7 @@ def test_unusable_full_rewrite_leaves_closure_open_not_crashed():
 
     closure_record = engine.last_functional_closure
     assert closure_record["status"] == "OPEN"
-    assert closure_record["attempts"] == 2      # budget spent, not skipped
+    assert closure_record["attempts"] == 2
     assert all(
         c.get("reason") == "full_rewrite_unusable"
         for c in closure_record["repair_contexts"]

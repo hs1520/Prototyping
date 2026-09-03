@@ -8,7 +8,7 @@ from .realization_fixtures import catalog, pack
 REQS = ["REQ-PERF-002: endurance at least 32 minutes."]
 
 
-def test_resize_returns_lightest_closing_pack_and_keeps_combo_frame():
+def test_resize_picks_lightest_pack():
     d = DesignInputs(1.0, 8000, 6, 4, 18 * 0.0254 / 2)
     cat = catalog(packs=[
         pack("small", capacity=8000, mass=900),
@@ -28,14 +28,14 @@ def test_resize_returns_lightest_closing_pack_and_keeps_combo_frame():
     assert drift["battery_capacity_mah"].within_limit is True
 
 
-def test_resize_returns_none_when_no_pack_closes():
+def test_no_closing_pack_returns_none():
     d = DesignInputs(1.0, 8000, 6, 4, 18 * 0.0254 / 2)
     cat = catalog(packs=[pack("small", capacity=8000, mass=900)])
     cand = match(d, [], cat)[0]
     assert resize_on_real_packs(cand, ["REQ-PERF-002: endurance at least 60 minutes."], cat) is None
 
 
-def test_resize_cannot_reset_drift_and_jump_to_a_different_design():
+def test_resize_cannot_jump_designs():
     d = DesignInputs(1.0, 8000, 6, 4, 18 * 0.0254 / 2)
     cat = catalog(packs=[
         pack("small", capacity=8000, mass=900),

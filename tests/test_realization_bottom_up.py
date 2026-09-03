@@ -47,7 +47,7 @@ def _rd(pack):
     return RealizedDesign(_combo(), pack, _frame(), 4, 1.5, 0.4)
 
 
-def test_payload_split_uses_rated_delivery_and_equipment_delta():
+def test_payload_split_rated_delivery():
     d = DesignInputs(2.1, 12000, 6, 4, 0.23)
     reqs = [
         "REQ-PERF-002: endurance at least 25 minutes at maximum rated payload.",
@@ -56,18 +56,18 @@ def test_payload_split_uses_rated_delivery_and_equipment_delta():
     assert payload_split(d, reqs) == pytest.approx((1.5, 0.6))
 
 
-def test_payload_split_clamps_negative_equipment_to_zero():
+def test_payload_split_clamps_negative():
     d = DesignInputs(0.5, 12000, 6, 4, 0.23)
     reqs = ["REQ-FUNC-003: transport payloads of up to 1.5 kg."]
     assert payload_split(d, reqs) == pytest.approx((1.5, 0.0))
 
 
-def test_realized_total_mass_is_sum_of_real_components():
+def test_total_mass_sums_components():
     rd = _rd(_pack(12000, 1400.0))
     assert realized_total_mass_kg(rd) == pytest.approx(0.8 + 4 * 0.12 + 1.4 + 1.5 + 0.4)
 
 
-def test_realized_total_mass_includes_explicit_integration_bundle():
+def test_total_mass_includes_bundle():
     bundle = IntegrationBundle(
         "integration budget", "engineering assumption", "2026-07-14", 500.0,
         ("ESCs", "flight controller", "wiring"),
@@ -82,7 +82,7 @@ def test_realized_total_mass_includes_explicit_integration_bundle():
     )
 
 
-def test_lower_nominal_voltage_is_derated_instead_of_treated_as_equal_s_count():
+def test_lower_voltage_derated():
     lipo = _pack(12000, 1400.0)
     li_ion = BatteryPack(
         "synthetic 6S Li-ion", "synthetic", "synthetic",
@@ -99,7 +99,7 @@ def test_lower_nominal_voltage_is_derated_instead_of_treated_as_equal_s_count():
     assert "derated" in derated.notes[0]
 
 
-def test_endurance_increases_with_larger_pack_but_with_diminishing_return():
+def test_endurance_diminishing_returns():
     small = realized_metrics(_rd(_pack(8000, 900.0))).endurance_min
     medium = realized_metrics(_rd(_pack(12000, 1400.0))).endurance_min
     large = realized_metrics(_rd(_pack(16000, 2100.0))).endurance_min
@@ -107,7 +107,7 @@ def test_endurance_increases_with_larger_pack_but_with_diminishing_return():
     assert (large - medium) < (medium - small)
 
 
-def test_cost_axis_price_and_missing_price_fallback():
+def test_cost_axis_price_fallback():
     rd = _rd(_pack(12000, 1400.0, price=200.0))
     assert realized_metrics(rd, cost_axis="price").cost == pytest.approx(350.0)
     no_price = RealizedDesign(_combo(price=None), rd.pack, rd.frame, 4, 1.5, 0.4)

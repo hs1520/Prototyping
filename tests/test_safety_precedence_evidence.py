@@ -1,10 +1,10 @@
 from gazebo_poc.safety_precedence_evidence import evaluate_safety_precedence
 
 
-def test_a_verified_precedence_needs_a_control_that_actually_competed():
-    """Silence is not precedence. Without a control run showing those responses
-    WOULD have fired, an inert arbiter and a correctly arbitrating one are
-    indistinguishable."""
+def test_verified_needs_control_run():
+    """Without a control run showing the responses would have fired, an inert
+    arbiter and an arbitrating one look the same.
+    """
     no_control = evaluate_safety_precedence(
         fired_action_definitions=["deployParachute"],
         winner_action_definition="deployParachute",
@@ -17,13 +17,13 @@ def test_a_verified_precedence_needs_a_control_that_actually_competed():
         fired_action_definitions=["deployParachute"],
         winner_action_definition="deployParachute",
         competing_action_definitions=["initiateEmergencyLand"],
-        control_fired_action_definitions=[],      # nothing competed either way
+        control_fired_action_definitions=[],
     )
     assert inert_control.status == "inconclusive"
     assert "does not put the winner in competition" in inert_control.description
 
 
-def test_parachute_wins_over_every_declared_competing_response():
+def test_parachute_wins_over_competitors():
     evidence = evaluate_safety_precedence(
         fired_action_definitions=["deployParachute"],
         winner_action_definition="deployParachute",
@@ -32,8 +32,8 @@ def test_parachute_wins_over_every_declared_competing_response():
             "initiateEmergencyLand",
             "initiateBatteryRtb",
         ],
-        # the same hazard state with only the winning condition withheld does
-        # fire the competitors — so their silence above is suppression
+        # the same hazard state with the winning condition withheld fires the
+        # competitors, so their silence above is suppression
         control_fired_action_definitions=[
             "initiateArmingInhibit",
             "initiateEmergencyLand",
@@ -49,7 +49,7 @@ def test_parachute_wins_over_every_declared_competing_response():
     assert evidence.competing_actions_fired == ()
 
 
-def test_any_competing_response_firing_is_a_precedence_failure():
+def test_competitor_firing_fails():
     evidence = evaluate_safety_precedence(
         fired_action_definitions=["deployParachute", "initiateEmergencyLand"],
         winner_action_definition="deployParachute",
@@ -60,16 +60,18 @@ def test_any_competing_response_firing_is_a_precedence_failure():
     assert evidence.competing_actions_fired == ("initiateEmergencyLand",)
 
 
-def test_the_winner_is_not_its_own_competitor():
-    """The competing set is discovered from the generated arbiter's full
-    action table, so it contains the winning action too. run3's first real
-    parachute firing was judged 'a competing response fired alongside the
-    winner' — the failure was manufactured out of the win itself."""
+def test_winner_not_own_competitor():
+    """The competing set comes from the arbiter's full action table, so it contains
+    the winning action too.
+
+    In run3 the parachute firing was then judged 'a competing response fired
+    alongside the winner'.
+    """
     evidence = evaluate_safety_precedence(
         fired_action_definitions=["deployBallisticRecoveryParachute"],
         winner_action_definition="deployBallisticRecoveryParachute",
         competing_action_definitions=[
-            "deployBallisticRecoveryParachute",   # the winner, as discovered
+            "deployBallisticRecoveryParachute",
             "initiateBatteryRtb",
             "initiateEmergencyLand",
         ],
@@ -83,7 +85,7 @@ def test_the_winner_is_not_its_own_competitor():
     )
 
 
-def test_no_declared_competitors_cannot_establish_precedence_over_all_others():
+def test_no_competitors_inconclusive():
     evidence = evaluate_safety_precedence(
         fired_action_definitions=["deployParachute"],
         winner_action_definition="deployParachute",

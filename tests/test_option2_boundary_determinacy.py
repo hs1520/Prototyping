@@ -1,14 +1,10 @@
 """How much of the reviewed decomposition the frozen boundary already determines.
 
-Both LLM modes score guarantee-allocation F1 = 1.0, and the decided mode also scores
-assumption-discharge F1 = 1.0. Neither is evidence of generation capability: the
-boundary hands over each component's owner and its consumes/produces interfaces, and
-a trivial rule over those reproduces almost all of the reviewed wiring.
-
-This is a standing guard, not a one-off measurement. If someone later reports those
-categories as generation accuracy, or changes the boundary so that it supplies more
-or less than it does today, the numbers asserted here move and the test says so.
-See `docs/R2_GENERATION_FINDINGS.md`.
+Both LLM modes score guarantee-allocation F1 = 1.0 and the decided mode also
+scores assumption-discharge F1 = 1.0, but the boundary hands over each
+component's owner and interfaces, and a trivial rule over those reproduces most
+of the reviewed wiring. A standing guard: change what the boundary supplies and
+the numbers asserted here move. See `docs/R2_GENERATION_FINDINGS.md`.
 """
 from __future__ import annotations
 
@@ -25,7 +21,6 @@ _CHAINS = {
 
 
 def _determined_slots(chain) -> tuple[int, int]:
-    """(slots the trivial boundary rule gets right, total reviewed slots)."""
     boundary = build_architecture_boundary_draft(chain)
     produced = {
         str(concept): str(item["component_id"])
@@ -47,7 +42,7 @@ def _determined_slots(chain) -> tuple[int, int]:
     "chain_id,expected_right,expected_total",
     [("REQ_SAFE_004", 4, 4), ("REQ_SAFE_005", 5, 5), ("REQ_SAFE_008", 2, 2)],
 )
-def test_boundary_determines_the_discharge_wiring(
+def test_boundary_determines_wiring(
     chain_id, expected_right, expected_total
 ):
     right, total = _determined_slots(_CHAINS[chain_id])
@@ -58,12 +53,12 @@ def test_boundary_determines_the_discharge_wiring(
     )
 
 
-def test_every_reviewed_slot_is_boundary_determined():
-    """The headline: every reviewed assumption slot, on every chain, is determined.
+def test_reviewed_slots_determined():
+    """Every reviewed assumption slot, on every chain, is determined.
 
-    Counting only reviewed assumptions is the correct denominator — an
-    `interface_input` is not a discharge obligation and including it both inflates
-    the total and invents disagreements that no gold edge corresponds to.
+    Reviewed assumptions are the denominator: an `interface_input` is not a
+    discharge obligation, and counting it inflates the total and invents
+    disagreements with no gold edge behind them.
     """
     right = sum(_determined_slots(chain)[0] for chain in _CHAINS.values())
     total = sum(_determined_slots(chain)[1] for chain in _CHAINS.values())
@@ -72,9 +67,7 @@ def test_every_reviewed_slot_is_boundary_determined():
     )
 
 
-def test_ownership_is_handed_over_outright():
-    """Allocation F1 cannot be a capability claim at all: the owner of every
-    component is stated in the boundary the generator is given."""
+def test_ownership_handed_over():
     for chain_id, chain in _CHAINS.items():
         boundary = build_architecture_boundary_draft(chain)
         for item in boundary["components"]:

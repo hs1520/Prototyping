@@ -1,11 +1,10 @@
-"""Expected candidate-probe misses must not flood the suppressed channel.
+"""Expected candidate-probe misses stay out of the suppressed channel.
 
 The extractor probes several syside attribute names per node and merges the
-results; a name absent in the current syside build is the expected outcome of
-that probing, not an anomaly.  Recording each miss buried real errors under
-thousands of entries (ablation pilot: 5,265 + 324 in one run — 81 extractions
-x the per-pass miss count).  This pins both halves of the fix: extraction
-still works on the committed pilot model, and one full pass records nothing.
+results, so an absent name is the expected outcome of probing. Recording each
+miss buried real errors under thousands of entries (5,265 + 324 in one pilot
+run). Pinned here: extraction still works on the committed pilot model, and
+one full pass records nothing.
 """
 from __future__ import annotations
 
@@ -21,11 +20,10 @@ _PILOT_MODEL = (
 )
 
 
-def test_extraction_works_without_flooding_the_suppressed_channel():
+def test_extraction_without_noise_flood():
     reset_suppressed()
     machines = extract_state_machines(_PILOT_MODEL.read_text())
 
-    # Function preserved: the pilot model's known machine and send counts.
     assert len(machines) == 13
     total_sends = sum(
         len(getattr(state, "sends", []) or [])

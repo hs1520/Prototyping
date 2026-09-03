@@ -35,7 +35,7 @@ def _check(text: str):
     return graph, check_ag_graph(graph)
 
 
-def test_pattern_pass_requires_real_topology_not_selection_alone():
+def test_pattern_needs_real_topology():
     graph, report = _check(GOOD)
     pattern = check_safety_pattern_conformance(graph, report)
     assert report.verdict == "PASS"
@@ -52,7 +52,7 @@ def test_pattern_pass_requires_real_topology_not_selection_alone():
     assert check_safety_pattern_conformance(graph, report)["verdict"] == "FAIL"
 
 
-def test_typed_failure_routing_distinguishes_model_integration_and_verifier():
+def test_typed_failure_routing_kinds():
     broken_behavior = GOOD.replace(
         "state deployed { entry action setParachuteDeployed; }",
         "state deployed { }",
@@ -103,7 +103,7 @@ def test_typed_failure_routing_distinguishes_model_integration_and_verifier():
     assert verifier["repair_authorized"] is False
 
 
-def test_nonatomic_component_guarantee_is_blocked_contract_work():
+def test_nonatomic_guarantee_blocked():
     routed = route_failure_diagnostics(
         (
             AGDiagnostic(
@@ -123,7 +123,7 @@ def test_nonatomic_component_guarantee_is_blocked_contract_work():
     assert failure["repair_authorized"] is False
 
 
-def test_itemized_pattern_topology_routes_to_its_existing_behavior():
+def test_pattern_topology_routes_behavior():
     diagnostic = AGDiagnostic(
         "PATTERN_TOPOLOGY_INCOMPLETE",
         "startup topology incomplete; unsatisfied: reset_state_present",
@@ -149,7 +149,7 @@ def test_itemized_pattern_topology_routes_to_its_existing_behavior():
     assert "LatchBehavior" in failure["affected_elements"]
 
 
-def test_model_fault_without_existing_behavior_target_fails_closed():
+def test_missing_realization_fails_closed():
     """The merge policy replaces existing definitions; it cannot satisfy a
     REALIZATION_MISSING fault by inventing the absent state definition.
     """
@@ -170,13 +170,13 @@ def test_model_fault_without_existing_behavior_target_fails_closed():
     assert failure["routing_basis"] == "MODEL_FAULT_WITHOUT_BEHAVIOR_TARGET"
 
 
-def test_every_priority_obligation_has_the_reviewed_routing_scope():
-    """Moving an obligation across the repair boundary must fail loudly.
+def test_priority_obligation_scopes():
+    """Moving an obligation across the repair boundary fails loudly.
 
-    The aggregate checker code is not a routing unit. These are the individual
-    facts it reports. Only topology that can be restored inside an existing state
-    definition is authorised; changing the response vocabulary, contract facts,
-    or verification boundary remains blocked.
+    The aggregate checker code is not a routing unit; these are the individual facts
+    it reports. Only topology restorable inside an existing state definition is
+    authorised, and the response vocabulary, contract facts and verification
+    boundary stay blocked.
     """
     expected_wiring = {
         "selection_guarded_by_trigger",
@@ -216,7 +216,7 @@ def test_every_priority_obligation_has_the_reviewed_routing_scope():
     }
 
 
-def test_priority_routing_splits_wiring_from_input_semantics():
+def test_priority_splits_wiring_semantics():
     diagnostic = AGDiagnostic(
         "PRIORITY_TOPOLOGY_INCOMPLETE",
         "priority topology is incomplete; unsatisfied: response_set_members, "
@@ -259,7 +259,7 @@ def test_priority_routing_splits_wiring_from_input_semantics():
     assert repairable["routing_basis"] == "NAMED_PRIORITY_OBLIGATION"
 
 
-def test_unknown_priority_obligation_fails_closed():
+def test_unknown_obligation_fails_closed():
     routed = route_failure_diagnostics(
         [AGDiagnostic(
             "PRIORITY_TOPOLOGY_INCOMPLETE",
@@ -275,7 +275,7 @@ def test_unknown_priority_obligation_fails_closed():
     assert failure["route"] == FailureRoute.CLARIFICATION_OR_BLOCKED.value
 
 
-def test_wiring_obligation_without_an_existing_behavior_target_fails_closed():
+def test_wiring_without_target_fails_closed():
     routed = route_failure_diagnostics(
         [AGDiagnostic(
             "PRIORITY_TOPOLOGY_INCOMPLETE",
@@ -302,7 +302,7 @@ def test_wiring_obligation_without_an_existing_behavior_target_fails_closed():
     )
 
 
-def test_checker_binds_repairable_priority_obligation_to_its_state_def():
+def test_obligation_bound_to_state_def():
     injured = GOOD.replace(
         "entry action "
         "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand;",
@@ -337,7 +337,7 @@ def _definition(text: str, kind: str, name: str) -> str:
     return text[span[0]:span[1]]
 
 
-def test_board_mediated_dependency_closed_repair_accepts_only_targeted_fix():
+def test_repair_accepts_only_targeted_fix():
     broken = GOOD.replace(
         "state deployed { entry action setParachuteDeployed; }",
         "state deployed { }",
@@ -386,8 +386,7 @@ def test_board_mediated_dependency_closed_repair_accepts_only_targeted_fix():
     assert check_ag_graph(extract_ag_graph(board.current_model.model_text)).verdict == "PASS"
 
 
-def test_priority_wiring_repair_can_succeed_while_input_obligation_stays_blocked():
-    """The routed sub-obligation, not its aggregate diagnostic, is the target."""
+def test_wiring_repair_with_blocked_input():
     precedence = (
         "        require constraint "
         "precedence_PARACHUTE_DEPLOYMENT_over_LOW_BATTERY_RETURN_TO_BASE "
@@ -463,8 +462,7 @@ def test_priority_wiring_repair_can_succeed_while_input_obligation_stays_blocked
     ]
 
 
-def test_priority_repair_rejects_a_new_obligation_hidden_under_the_same_code():
-    """Replacing one named defect with another is a regression, not a repair."""
+def test_repair_rejects_hidden_obligation():
     action = (
         "entry action "
         "setParachuteResponseSelectedAndIssueParachuteDeploymentCommand;"
@@ -550,7 +548,7 @@ def test_priority_repair_rejects_a_new_obligation_hidden_under_the_same_code():
         ),
     ],
 )
-def test_ag_repair_rejects_source_threshold_unit_and_unrelated_edits(
+def test_repair_rejects_unrelated_edits(
     malicious_block
 ):
     broken = GOOD.replace(
@@ -600,19 +598,15 @@ def test_ag_repair_rejects_source_threshold_unit_and_unrelated_edits(
     assert board.current_model.model_text == broken
 
 
-def test_a_rejected_repair_records_which_gate_refused_and_why():
-    """A REJECTED repair decision must be actionable.
+def test_rejection_records_gate_reason():
+    """A REJECTED repair decision records which gate refused and why.
 
-    `repair_decisions.json` recorded only that a repair was rejected, with the
-    reason `surgical_merge_rejected` or `target_not_removed_or_regression` — the
-    latter naming three possibilities at once. An out-of-scope edit, a patch that
-    missed its target, a new defect and a broken pattern all looked identical. The
-    same defect as the lumped PRIORITY_TOPOLOGY_INCOMPLETE diagnostic, in the
-    repair artifact instead of the checker.
-
-    Measured on a real provider run: `addition_out_of_scope:action:...` — the
-    model added a new action definition instead of restoring the existing entry
-    action. That is a fact about the prompt, and it was invisible before.
+    `repair_decisions.json` gave only `surgical_merge_rejected` or
+    `target_not_removed_or_regression`, so an out-of-scope edit, a patch that missed
+    its target, a new defect and a broken pattern all looked identical. The specific
+    reason from a provider run, `addition_out_of_scope:action:...` (the model added
+    a new action definition instead of restoring the existing entry action), is a
+    fact about the prompt.
     """
     broken = GOOD.replace(
         "state deployed { entry action setParachuteDeployed; }",
@@ -641,7 +635,6 @@ def test_a_rejected_repair_records_which_gate_refused_and_why():
         RecordType.ANALYSIS, "diagnostic.failure", "AGFailureRouter", failure,
     )
 
-    # a patch that merges but leaves the target diagnostic in place
     unchanged = _definition(broken, "state", "RecoverySystemBehavior")
     decision = attempt_dependency_closed_ag_repair(
         llm=_RepairLLM(f"```sysml\n{unchanged}\n```"),
@@ -667,36 +660,34 @@ def test_a_rejected_repair_records_which_gate_refused_and_why():
         assert published["audit"]["rejection_reasons"]
 
 
-def test_the_repair_prompt_states_the_rules_its_gate_enforces():
-    """Ninth instance of the recurring defect: the merge gate refuses an added
-    definition and requires the conventional action name, and the repair feedback
-    said neither. A measured run was rejected with
-    `addition_out_of_scope:action:DeployBallisticRecoveryParachute` — the model
-    invented an action rather than restoring the existing one."""
+def test_repair_prompt_states_rules():
+    """The merge gate refuses an added definition and requires the conventional action
+    name, so the repair feedback states both.
+
+    A measured run was rejected with
+    `addition_out_of_scope:action:DeployBallisticRecoveryParachute`: the model
+    invented an action rather than restoring the existing one.
+    """
     from src.prototyping.ag_repair import _repair_feedback
 
     feedback = _repair_feedback("REALIZATION_ACTION_MISSING")
     assert "adding a new definition" in feedback
     assert "out of scope" in feedback
-    # single-sourced from ag_convention, not restated here
     assert "prefixed with `set`" in feedback
-    # and an unknown code still gets the scope rules, just no convention line
     assert "adding a new definition" in _repair_feedback("SOMETHING_ELSE")
     from src.simulation.surgical_refiner import SURGICAL_SYSTEM_PROMPT
     assert "never translate it" in SURGICAL_SYSTEM_PROMPT
     assert "entry; then <state>;" in SURGICAL_SYSTEM_PROMPT
 
 
-def test_preservation_guards_every_realizing_state_def_not_just_named_behaviors():
+def test_preservation_guards_state_defs():
     """The preservation gate selected affected elements by the suffix "Behavior".
 
-    The emitter names one state def differently — `SafetyResponseArbitration` — so
-    that one was silently exempt from token preservation: a repair could shed a
-    transition or an entry action from it and `behavior_preserved` stayed vacuously
-    true. Selection is now by BEING a state def in the committed model.
-
-    Staged so the loss is real: the patch restores the routed target and deletes a
-    transition, which is a preserved token.
+    The emitter names one state def `SafetyResponseArbitration`, so it was exempt
+    from token preservation and `behavior_preserved` stayed vacuously true.
+    Selection is now by being a state def in the committed model. Staged so the loss
+    is real: the patch restores the routed target and deletes a transition, which is
+    a preserved token.
     """
     from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
     from src.prototyping.ag_emitter import emit_ag_package
@@ -743,7 +734,6 @@ def test_preservation_guards_every_realizing_state_def_not_just_named_behaviors(
     failure_record = board.publish(
         RecordType.ANALYSIS, "diagnostic.failure", "AGFailureRouter", failure,
     )
-    # restores the target action, but sheds a transition from the same state def
     import re as _re
 
     transition = _re.search(
@@ -766,14 +756,13 @@ def test_preservation_guards_every_realizing_state_def_not_just_named_behaviors(
     )
 
 
-def test_a_scoped_repair_is_judged_for_regression_not_for_finishing_the_chain():
+def test_scoped_repair_judged_no_regression():
     """The accept gate demanded `pattern verdict == PASS` outright.
 
-    Measured: the routed task named only REALIZATION_ACTION_MISSING, the patch
-    removed it, and the refusal came from PRIORITY_TOPOLOGY_INCOMPLETE — which was
-    already present before the attempt. A bounded repair was therefore
-    unacceptable no matter what it did. The condition is now "no worse than
-    before"; breaking conformance is still refused, and the run verdict still
+    The routed task named only REALIZATION_ACTION_MISSING, the patch removed it, and
+    the refusal came from PRIORITY_TOPOLOGY_INCOMPLETE, already present before the
+    attempt, so no bounded repair could be accepted. The condition is now "no worse
+    than before": breaking conformance is still refused, and the run verdict still
     reports the chain as failing.
     """
     from src.prototyping.ag_assurance import check_safety_pattern_conformance
@@ -794,6 +783,4 @@ def test_a_scoped_repair_is_judged_for_regression_not_for_finishing_the_chain():
     report = check_ag_graph(graph)
     codes = {item.code for item in report.errors()}
     assert {"REALIZATION_ACTION_MISSING", "PRIORITY_TOPOLOGY_INCOMPLETE"} <= codes
-    # pattern conformance already fails BEFORE any repair, on a profile diagnostic
-    # the routed task does not name
     assert check_safety_pattern_conformance(graph, report)["verdict"] == "FAIL"

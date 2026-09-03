@@ -40,7 +40,7 @@ class _Simulation:
         return [item for item in self.scenario_results if item.passed]
 
 
-def test_ag_non_degradation_detects_a_lost_behavior_scenario():
+def test_lost_scenario_detected():
     before = _Simulation([("structure", True)], [("behavior", True)])
     after = _Simulation([("structure", True)], [("behavior", False)])
     report = build_ag_non_degradation_report(before, after)
@@ -48,7 +48,7 @@ def test_ag_non_degradation_detects_a_lost_behavior_scenario():
     assert report["lost_behavioral_scenarios"] == ["behavior"]
 
 
-def test_ag_non_degradation_requires_topology_to_remain_unchanged():
+def test_topology_must_be_unchanged():
     before = _Simulation([("structure", True)], [("behavior", True)])
     after = _Simulation(
         [("structure", True)], [("behavior", True)], connections=2
@@ -58,7 +58,7 @@ def test_ag_non_degradation_requires_topology_to_remain_unchanged():
     assert report["topology_unchanged"] is False
 
 
-def test_role_scenario_loss_is_advisory_when_frozen_paths_are_stable():
+def test_role_loss_advisory():
     before = _Simulation([("role_guess", True)], [("behavior", True)])
     after = _Simulation([("role_guess", False)], [("behavior", True)])
     fixed = {
@@ -79,7 +79,7 @@ def test_role_scenario_loss_is_advisory_when_frozen_paths_are_stable():
     assert report["lost_requirement_structural_obligations"] == []
 
 
-def test_qualification_fails_closed_when_expected_ag_binding_is_missing():
+def test_missing_binding_fails_closed():
     simulation = _Simulation(
         [("structure", True)], [("behavior", True)]
     )

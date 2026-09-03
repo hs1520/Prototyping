@@ -1,8 +1,8 @@
 """Discover every SysML emitter and enforce its writer/reader contract.
 
-Emitter discovery is deliberately source-driven.  The case functions below are
-not a registry: their names are derived from the discovered qualified name, and
-the coverage test fails when a new public emitter has no conformance obligation.
+Emitter discovery is source-driven: the case functions below are named from the
+discovered qualified name, and the coverage test fails when a new public emitter
+has no conformance obligation.
 """
 from __future__ import annotations
 
@@ -69,7 +69,6 @@ def _returns_text(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 
 def _discovered_emitters() -> tuple[str, ...]:
-    """Find public SysML serializers; no author-maintained emitter list exists."""
     found: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -104,7 +103,6 @@ def _identity(text: str) -> str:
 
 
 def _wrap_ag(fragment: str) -> str:
-    """Supply the stakeholder requirement whose A/G layer consumes the text."""
     return (
         "package ConformanceInput { requirement def REQ_SAFE_005; "
         "part def EvidenceOwner { satisfy requirement REQ_SAFE_005; } }\n"
@@ -200,7 +198,6 @@ def _expected_planning_facts(spec) -> object:
 
 
 def _ag_attribute_facts(text: str) -> object:
-    """Declaration identities consumed by the A/G extractor's two patterns."""
     from src.prototyping import ag_extractor
 
     names = Counter(
@@ -373,8 +370,8 @@ def case__src__prototyping__ag_planning__emit_ag_planning_package() -> EmitterCa
             "ag_attribute_reader": _expected_ag_attribute_facts(
                 REQ_SAFE_005_CHAIN, include_implementation=False
             ),
-            # Planning deliberately contains no state realization, so the SAFE
-            # implementation sub-score is absent while satisfy coverage remains.
+            # Planning contains no state realization, so the SAFE implementation sub-score
+            # is absent while satisfy coverage remains.
             "dse_evaluator": 0.6,
             "dse_diagnostics": (),
         },
@@ -558,11 +555,11 @@ DISCOVERED = _discovered_emitters()
 
 
 def _unit_suffix_on_type(text: str) -> str | None:
-    """Add the same unit already carried by the value to its declared type.
+    """Add the unit already carried by the value to its declared type.
 
-    This is meaning-preserving because both spellings declare seconds, and the
-    numeric initializer and its unit are unchanged.  The precondition rejects
-    mixed or absent units instead of guessing dimensional meaning.
+    Both spellings declare seconds and the numeric initializer is unchanged, so
+    meaning is preserved. The precondition rejects mixed or absent units rather
+    than guessing dimensional meaning.
     """
     pattern = re.compile(
         r"(attribute\s+\w+\s*:\s*DurationValue)(\s*=\s*-?[\d.]+\s*\[s\])"
@@ -578,7 +575,7 @@ def _qualified_type(text: str) -> str | None:
     """Qualify a type through an import already present in the emitted package.
 
     `ScalarValues::Boolean` and imported `Boolean` resolve to the same library
-    classifier.  Requiring the import before rewriting is the semantic proof.
+    classifier; the required import is what makes the rewrite safe.
     """
     if "private import ScalarValues::*;" not in text:
         return None
@@ -592,12 +589,12 @@ def _qualified_type(text: str) -> str | None:
 def _optional_true_guard(text: str) -> str | None:
     """Add a tautological optional guard to an event-triggered transition.
 
-    `accept E then` and `accept E if true then` enable on exactly the same event;
-    unlike removing an arbitrary accept clause, this cannot discard a trigger.
+    `accept E then` and `accept E if true then` enable on the same event, so no
+    trigger is discarded.
     """
-    # Probe model-level emitters whose consumer is the Syside state reader.  The
-    # repair-line parser is a legacy lexical gate and is covered at baseline,
-    # but §3.3 forbids changing it here; its disagreement is reported separately.
+    # Probe model-level emitters whose consumer is the Syside state reader. The
+    # repair-line parser is a legacy lexical gate covered at baseline; §3.3 forbids
+    # changing it here, so its disagreement is reported separately.
     if "// OWNER:" not in text and "private import ScalarValues::*;" not in text:
         return None
     match = re.search(r"(accept\s+\w+)(\s+then\s+\w+;)", text)
@@ -610,9 +607,9 @@ def _optional_true_guard(text: str) -> str | None:
 def _redundant_initializer(text: str) -> str | None:
     """Initialize a Boolean already constrained to true by the same contract.
 
-    The initializer is redundant only when the exact feature has a positive
-    assume constraint in the same emitted text.  This precondition deliberately
-    excludes `timingSegmentRequired`, where removing `= true` changes a fact.
+    The initializer is redundant only when the same feature has a positive assume
+    constraint in the emitted text; that precondition excludes
+    `timingSegmentRequired`, where removing `= true` changes a fact.
     """
     for match in re.finditer(r"attribute\s+(\w+)\s*:\s*Boolean\s*;", text):
         name = match.group(1)
@@ -635,13 +632,13 @@ PERTURBATIONS = (
 )
 
 
-def test_every_discovered_emitter_has_a_conformance_obligation():
+def test_every_emitter_has_case():
     missing = [item for item in DISCOVERED if _case_name(item) not in globals()]
     assert not missing, f"discovered SysML emitters without obligations: {missing}"
 
 
 @pytest.mark.parametrize("emitter", DISCOVERED)
-def test_discovered_emitter_parses_and_round_trips_to_every_reader(emitter):
+def test_emitter_round_trips_readers(emitter):
     factory = globals().get(_case_name(emitter))
     assert callable(factory), f"{emitter} has no conformance case"
     case = factory()
@@ -671,7 +668,7 @@ def _perturbation_cases():
     _perturbation_cases(),
     ids=lambda value: value.name if isinstance(value, SpellingPerturbation) else value,
 )
-def test_reader_facts_are_invariant_under_meaning_preserving_spelling(
+def test_readers_invariant_to_spelling(
     emitter, perturbation
 ):
     case = globals()[_case_name(emitter)]()
@@ -690,7 +687,7 @@ def test_reader_facts_are_invariant_under_meaning_preserving_spelling(
         )
 
 
-def test_every_required_spelling_class_is_exercised_on_emitter_output():
+def test_all_spelling_classes_used():
     exercised = {perturbation.name for _, perturbation in _perturbation_cases()}
     assert exercised == {item.name for item in PERTURBATIONS}
 
@@ -707,14 +704,13 @@ def _assert_ag_mutation_is_asymmetric_and_caught(
     baseline = case.parse_source(case.emit())
     assert _ag_attribute_facts(baseline) == case.expected["ag_attribute_reader"]
     with pytest.raises(AssertionError):
-        test_reader_facts_are_invariant_under_meaning_preserving_spelling(
+        test_readers_invariant_to_spelling(
             emitter,
             _perturbation_named(perturbation_name),
         )
 
 
-def test_unit_suffix_perturbation_kills_asymmetric_reader_mutation(monkeypatch):
-    """Baseline has no type unit; only the perturbed spelling is made blind."""
+def test_unit_suffix_kills_mutation(monkeypatch):
     from src.prototyping import ag_extractor
 
     monkeypatch.setattr(ag_extractor, "_ATTR_RE", re.compile(
@@ -725,8 +721,7 @@ def test_unit_suffix_perturbation_kills_asymmetric_reader_mutation(monkeypatch):
     _assert_ag_mutation_is_asymmetric_and_caught("unit suffix added/removed")
 
 
-def test_qualified_type_perturbation_kills_asymmetric_reader_mutation(monkeypatch):
-    """Unqualified baseline types survive; qualified perturbed types disappear."""
+def test_qualified_type_kills_mutation(monkeypatch):
     from src.prototyping import ag_extractor
 
     monkeypatch.setattr(ag_extractor, "_ATTR_RE", re.compile(
@@ -744,8 +739,7 @@ def test_qualified_type_perturbation_kills_asymmetric_reader_mutation(monkeypatc
     _assert_ag_mutation_is_asymmetric_and_caught("qualified/unqualified type")
 
 
-def test_initializer_perturbation_kills_asymmetric_reader_mutation(monkeypatch):
-    """The uninitialized baseline is visible; only initialized airborne is blind."""
+def test_initializer_kills_mutation(monkeypatch):
     from src.prototyping import ag_extractor
 
     monkeypatch.setattr(ag_extractor, "_BOOL_ATTR_RE", re.compile(
@@ -757,8 +751,7 @@ def test_initializer_perturbation_kills_asymmetric_reader_mutation(monkeypatch):
     _assert_ag_mutation_is_asymmetric_and_caught("initializer present/absent")
 
 
-def test_optional_clause_perturbation_kills_asymmetric_reader_mutation(monkeypatch):
-    """Simulate a reader blind only to `accept E if true`, not its baseline."""
+def test_optional_clause_kills_mutation(monkeypatch):
     original = extract_state_machines
 
     def optional_clause_blind(text: str):
@@ -774,18 +767,18 @@ def test_optional_clause_perturbation_kills_asymmetric_reader_mutation(monkeypat
     baseline = case.parse_source(case.emit())
     assert _behavior_facts(baseline) == case.expected["state_extractor"]
     with pytest.raises(AssertionError):
-        test_reader_facts_are_invariant_under_meaning_preserving_spelling(
+        test_readers_invariant_to_spelling(
             emitter,
             _perturbation_named("optional clause present/absent"),
         )
 
 
-def test_legacy_transition_repair_reader_disagrees_with_syside_on_optional_guard():
+def test_repair_reader_disagrees():
     """Record, but do not repair, the reader disagreement found by this probe.
 
-    P0-3 §3.3 says a reader change is a finding rather than a step in this task.
-    The model-level Syside reader retains the transition; the repair-line reader
-    silently drops the same legal construct when `accept` and `if` coexist.
+    P0-3 §3.3 treats a reader change as a finding, not a step here. The model-level
+    Syside reader retains the transition; the repair-line reader drops the same
+    legal construct when `accept` and `if` coexist.
     """
     stmt = TransitionStmt("respond", "Idle", "", "Responding", "FaultSignal")
     perturbed = stmt.to_sysml().replace(
@@ -799,7 +792,7 @@ def test_legacy_transition_repair_reader_disagrees_with_syside_on_optional_guard
     assert summary.transitions == []
 
 
-def test_discovered_emitter_outputs_match_byte_golden():
+def test_emitter_output_matches_golden():
     expected = json.loads(GOLDEN.read_text(encoding="utf-8"))
     actual = {}
     for emitter in DISCOVERED:

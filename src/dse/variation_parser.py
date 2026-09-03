@@ -1,10 +1,10 @@
 """Parse LLM-declared SysML v2 variation points into a searchable design space.
 
-This is the "replace" path (user-chosen): the explored space comes entirely from
-the ``variation``/``variant`` points the LLM declares in the generated model, not
-from the fixed operator catalog. Each point must carry an objectivity rationale —
-a ``doc`` comment with a rationale and at least one linked requirement — or it is
-rejected (so the variant space stays traceable, not LLM-whim).
+The "replace" path (user-chosen): the explored space comes from the
+``variation``/``variant`` points the LLM declares in the generated model, not from
+the fixed operator catalog. A point is rejected unless it carries an objectivity
+rationale - a ``doc`` comment with a rationale and at least one linked
+requirement - so the variant space stays traceable.
 
   parse_variation_points(text)   -> [VariationPoint]
   admitted(points)               -> (admitted, rejected) by the objectivity rule
@@ -27,11 +27,11 @@ _REQ_RE = re.compile(r"REQ[-_][A-Z]+[-_]\d+")
 @dataclass
 class VariationPoint:
     point_id: str
-    kind: str                                   # "part" | "item" | "attribute"
-    variants: List[Tuple[str, str]]             # (variant_name, type_name or "")
+    kind: str
+    variants: List[Tuple[str, str]]
     rationale: str = ""
     requirements: List[str] = field(default_factory=list)
-    span: Tuple[int, int] = (0, 0)              # [start, end) of the whole block in source
+    span: Tuple[int, int] = (0, 0)
 
     @property
     def variant_names(self) -> List[str]:
@@ -84,16 +84,15 @@ def admitted(points: List[VariationPoint]) -> Tuple[List[VariationPoint], List[V
 
 
 def _variant_base(model_text: str, type_name: str) -> str:
-    """The base a variant part def specialises: `part def T :> Base` → 'Base'."""
     m = re.search(rf"\bpart\s+def\s+{re.escape(type_name)}\s*:>\s*(\w+)", model_text)
     return m.group(1) if m else ""
 
 
 def port_safe(vp: VariationPoint, model_text: str) -> bool:
-    """True iff every variant type specialises the SAME interface part def.
+    """True iff every variant type specialises the same interface part def.
 
-    Then all variants share that interface's ports, so binding any variant keeps
-    the host's connects valid (they target interface ports present in every variant).
+    All variants then share that interface's ports, so binding any variant keeps the
+    host's connects valid (they target ports present in every variant).
     """
     bases = {_variant_base(model_text, t) for _, t in vp.variants if t}
     return len(bases) == 1 and "" not in bases
@@ -121,7 +120,7 @@ def resolve_model(sysml_text: str, points: List[VariationPoint], choices: Dict[s
         variant = choices[p.point_id]
         vtype = p.type_of(variant)
         if not vtype:
-            continue  # untyped variant — cannot bind a concrete type, leave as-is
+            continue
         replacement = f"{p.kind} {p.point_id} : {vtype};"
         s, e = p.span
         result = result[:s] + replacement + result[e:]

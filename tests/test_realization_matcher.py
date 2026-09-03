@@ -25,7 +25,7 @@ def test_cells_mismatch_filtered_out():
     assert match(_design(), [], catalog(packs=[pack(cells=4)])) == []
 
 
-def test_catalog_voltage_must_also_match_recommended_design_voltage():
+def test_voltage_must_match():
     # Pack and motor curve agree with each other at 4S, but the recommended
     # architecture is 6S.  This is a different design, not a valid mapping.
     assert match(
@@ -68,7 +68,7 @@ def test_distance_sorting_is_stable():
     assert [c.rd.pack.name for c in got] == ["near", "far"]
 
 
-def test_design_drift_is_reported_and_bounded():
+def test_drift_reported_and_bounded():
     d = _design(battery_capacity_mah=11000, rotor_radius_m=0.22)
     got = match(d, [], catalog(packs=[pack(capacity=12000)]))
     assert got
@@ -81,15 +81,15 @@ def test_design_drift_is_reported_and_bounded():
     assert all(item.within_limit for item in drift.values())
 
 
-def test_rotor_radius_drift_over_ten_percent_is_not_the_same_design():
+def test_rotor_drift_over_ten_percent():
     assert match(_design(rotor_radius_m=0.20), [], catalog()) == []
 
 
-def test_battery_capacity_drift_over_ten_percent_is_not_the_same_design():
+def test_capacity_drift_over_ten_percent():
     assert match(_design(battery_capacity_mah=10000), [], catalog()) == []
 
 
-def test_ten_percent_capacity_boundary_is_admissible():
+def test_capacity_boundary_admissible():
     got = match(
         _design(battery_capacity_mah=10000), [],
         catalog(packs=[pack(capacity=11000)]),
@@ -100,7 +100,7 @@ def test_ten_percent_capacity_boundary_is_admissible():
     assert drift["battery_capacity_mah"].limit == 0.10
 
 
-def test_default_catalog_domain_exposes_only_evidence_backed_voltage_families():
+def test_domain_only_backed_cells():
     domain = catalog_design_domain()
     assert domain["battery_cells"] == [4, 6]
     assert 8 not in domain["battery_cells"] and 12 not in domain["battery_cells"]
@@ -108,7 +108,7 @@ def test_default_catalog_domain_exposes_only_evidence_backed_voltage_families():
     assert 30000.0 in domain["battery_capacity_mah_by_cells"]["4"]
 
 
-def test_partial_variant_is_checked_against_a_complete_catalog_architecture():
+def test_partial_variant_checked():
     assert variant_design_is_catalog_admissible({
         "rotor_count": 6, "battery_cells": 6, "rotor_radius_m": 0.2286,
     })
@@ -118,7 +118,7 @@ def test_partial_variant_is_checked_against_a_complete_catalog_architecture():
     })
 
 
-def test_catalog_capacity_options_are_real_packs_that_map_exactly():
+def test_capacity_options_are_real_packs():
     domain = catalog_design_domain()
     arch = next(x for x in domain["architectures"] if x["battery_cells"] == 6)
     d = DesignInputs(

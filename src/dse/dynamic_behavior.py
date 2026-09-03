@@ -1,17 +1,15 @@
-"""Dynamic (scenario-level) behavioural verdicts per part — roadmap ① remaining.
+"""Dynamic (scenario-level) behavioural verdicts per part - roadmap ① remaining.
 
-Structural reachability (safety_behavior) credits a guarded transition that *exists* and is
-graph-reachable. This goes further: it runs the behavioural simulator, which DRIVES each
-guard variable across its threshold and checks the guarded transition actually FIRES — so a
-guard that is present but unsatisfiable / not grounded (dynamic "fake safety") is caught.
+Structural reachability (safety_behavior) credits a guarded transition that exists and
+is graph-reachable; this runs the behavioural simulator, driving each guard variable
+across its threshold to check the transition fires, so a guard that is present but
+unsatisfiable is caught. It verifies the response fires under its trigger, not metric
+timing ("within 1 s / 1 m"): the model carries no temporal semantics.
 
 Returns {owner_part: 'fired' | 'failed'}:
-  fired  — a guarded transition on that part's state machine fired when its guard was driven.
-  failed — a scenario for that part's state machine did NOT pass (response never fires).
-Parts without a guarded scenario are absent from the dict (caller falls back to structural).
-
-Note: this verifies the response FIRES under its trigger; it does NOT verify metric timing
-("within 1 s / 1 m") — the model carries no temporal semantics, so timing stays out of scope.
+  fired  - a guarded transition on that part's machine fired when its guard was driven.
+  failed - a scenario for that part's state machine did not pass.
+Parts without a guarded scenario are absent (caller falls back to structural).
 """
 from __future__ import annotations
 
@@ -22,8 +20,9 @@ from ..simulation.state_extractor import extract_state_machines
 
 
 def dynamic_fire_by_part(model_text: str) -> Dict[str, str]:
-    """{owner_part: 'fired'|'failed'} from executing the state machines (drive guards, check
-    the guarded transition fires). 'failed' wins over 'fired' for the same part."""
+    """{owner_part: 'fired'|'failed'} from executing the state machines (drive guards, check the
+    guarded transition fires).
+    """
     sm_owner = {sm.name: sm.owner_part for sm in extract_state_machines(model_text)}
     verdict: Dict[str, str] = {}
     try:

@@ -1,13 +1,10 @@
-"""Gazebo hi-fi PoC stage 3 — fly OUR airframe and read the trimmed hover (dynamics check).
+"""Gazebo hi-fi PoC stage 3 - fly our airframe and read the trimmed hover (dynamics check).
 
 Generates the parametric SDF, starts headless_gazebo with our models mounted over the iris
-originals, launches ArduCopter SITL on the JSON FDM, arms + takes off + hovers, and reports the
-trimmed hover throttle and altitude-hold stability. This is the DYNAMICS result (can our
-mass/inertia airframe fly stably) — endurance comes from the datasheet model, not here.
-
-Honest risk: on Docker Desktop (macOS) the FDM return path (plugin fdm_addr=127.0.0.1) may not
-reach the host SITL; if so EKF never gets a position and we report that as an environment blocker
-rather than a flight result.
+originals, launches ArduCopter SITL on the JSON FDM, arms/takes off/hovers, and reports trimmed
+hover throttle and altitude-hold stability. Endurance comes from the datasheet model, not here.
+On Docker Desktop (macOS) the FDM return path (plugin fdm_addr=127.0.0.1) may not reach the host
+SITL; then EKF never gets a position and the run is reported as an environment blocker.
 
 Run: PYTHONPATH=. python gazebo_poc/run_flight.py
 """
@@ -35,10 +32,10 @@ _CONTAINER = "ai_prototyping_gazebo"
 _HOME = "-35.363262,149.165237,584,0"
 _HOME_LAT, _HOME_LON = (float(_HOME.split(",")[0]),
                         float(_HOME.split(",")[1]))
-_FWD_PITCH = int(os.environ.get("FWD_PITCH", "1330"))   # RC2 for the forward dash (lower = faster)
+_FWD_PITCH = int(os.environ.get("FWD_PITCH", "1330"))
 _ARDUCOPTER = os.path.expanduser("~/PycharmProjects/ardupilot/build/sitl/bin/arducopter")
-# gz resolves model:// via GZ_SIM_RESOURCE_PATH=/ardupilot_gazebo/models — NOT the
-# /usr/local/share copy (mounting there is a no-op; this was a real bug found in audit).
+# gz resolves model:// via GZ_SIM_RESOURCE_PATH=/ardupilot_gazebo/models, not the
+# /usr/local/share copy - mounting there is a no-op.
 _MODEL_BASE = "/ardupilot_gazebo/models"
 _WORLD_PATH = "/ardupilot_gazebo/worlds/iris_runway.sdf"
 _AIR_DENSITY = 1.2041
@@ -73,15 +70,12 @@ def _sh(*args, **kw):
 
 
 def _parse_rotor_velocity(path) -> float:
-    """Mean |velocity| (rad/s) over all rotor_*_joint entries in a captured gz joint_state dump."""
     per = _parse_rotor_velocities(path)
     allv = [w for ws in per.values() for w in ws]
     return sum(allv) / len(allv) if allv else 0.0
 
 
 def _parse_rotor_velocities(path):
-    """{rotor_joint_name: [|velocity| rad/s, ...]} from a gz joint_state dump (per-rotor, so power
-    ∝ n³ can be summed correctly — the mean underestimates it in forward flight)."""
     import re
     try:
         lines = Path(path).read_text().splitlines()
@@ -103,7 +97,6 @@ def _parse_rotor_velocities(path):
 
 
 def _per_rotor_power_w(path, diameter_m):
-    """Total shaft power Σ Cp·ρ·n_i³·D⁵ from per-rotor mean speeds (last samples)."""
     from gazebo_poc.prop_theory import mechanical_power_w
     per = _parse_rotor_velocities(path)
     total = 0.0
@@ -119,9 +112,8 @@ def _thrust_diagnostics(mass_kg: float, rotor_count: int, area: float,
                         max_rotor_rad_s: float, max_thrust_g: float | None):
     """Analytical thrust-margin check for the generated LiftDrag model.
 
-    This is the "thrust sweep" without needing a second Gazebo run: the generated
-    model uses T = kappa * area * omega^2 per rotor, so we can tell whether the
-    SDF has enough static thrust before blaming the controller.
+    The model uses T = kappa * area * omega^2 per rotor, so static thrust margin
+    can be checked without a second Gazebo run.
     """
     import math
     from gazebo_poc.prop_theory import G, IRIS_LIFTDRAG_KAPPA
@@ -167,63 +159,49 @@ def _parm_text(frame_class: int, hover_throttle: float | None,
             f"SERVO{parachute_servo}_FUNCTION 27\n"
         )
     if extra_parms:
-        # Per-scenario overlay. Position-controlled flight needs a yaw source,
-        # which the base set deliberately does not have; that overlay must not
-        # leak into the scenarios measured without it.
+        # Per-scenario overlay. Position-controlled flight needs a yaw source the base
+        # set does not have, and that overlay does not leak into scenarios measured
+        # without it.
         text += extra_parms if extra_parms.endswith("\n") else extra_parms + "\n"
     return text
 
 
-#: A dash is measured over the trailing window once the initial acceleration
-#: transient has passed, and it runs until that window is steady or the cap is
-#: reached. Reporting a speed from a still-accelerating dash is what made the
-#: 2026-08-30 run's "cruise speed" a function of the dash duration.
-#: A hover is "controlled" only if the attitude controller is still tracking.
-#: Altitude alone cannot say so: a one-motor-out hexa was recorded holding
-#: 9.93 m to +/-0.06 m while its attitude RMS was 13.5 deg — a wobble 1500x the
-#: nominal 0.009 deg, which no reading of "maintain controlled flight" covers,
-#: and which an altitude-only check passed.
-#:
-#: The bound is an engineering judgement, not a requirement value: an order of
-#: magnitude above the 0.5 deg RMS the requirements ask of steady cruise, and
-#: far below the tilt authority, so it separates "tracking with reduced margin"
-#: from "not tracking". It is reported with every verdict so a reader can
-#: disagree with it.
-#:
-#: This does NOT make one run sufficient. Four runs of the same one-motor-out
-#: configuration produced attitude RMS of 1.59, 13.46 and 19.56 deg (one run
-#: unmeasured) and steady altitudes of 1.17, 6.27, 9.93 and 10.00 m: the
-#: scenario is bistable, and BOTH signals vary. Adding attitude catches a
-#: flight altitude alone would pass; settling the requirement needs the
-#: scenario repeated and the distribution reported.
+# A dash is measured over the trailing window once the acceleration transient
+# has passed, and runs until that window is steady or the cap is reached; a
+# speed read from a still-accelerating dash is a function of the dash duration.
+#
+# A hover counts as controlled only if the attitude controller is still
+# tracking. Altitude alone cannot say so: a one-motor-out hexa held 9.93 m to
+# +/-0.06 m with attitude RMS at 13.5 deg, 1500x the nominal 0.009 deg, and
+# passed an altitude-only check. The bound is an engineering judgement - an
+# order of magnitude above the 0.5 deg RMS required of steady cruise, far below
+# the tilt authority - and is reported with every verdict.
+#
+# One run is not enough either: four runs of the same one-motor-out
+# configuration gave attitude RMS 1.59, 13.46 and 19.56 deg (one unmeasured) and
+# steady altitudes 1.17, 6.27, 9.93 and 10.00 m, so both signals vary and the
+# requirement needs the scenario repeated with the distribution reported.
 _HOVER_ATTITUDE_RMS_LIMIT_DEG = 5.0
 
 
 _DASH_SETTLE_S = 6.0
 _DASH_WINDOW_S = 10.0
-#: Raised from 45 s because the low-pitch points need it: at ~10 m/s the drag
-#: force is small, the approach to terminal velocity is correspondingly slow,
-#: and rc1420 was still at 1.06% drift when a 45 s cap cut it off — losing an
-#: envelope point to the clock rather than to the vehicle. The criterion stays
-#: where it is; the measurement gets the time it needs to meet it.
+# Raised from 45 s for the low-pitch points: at ~10 m/s the drag force is small
+# and the approach to terminal velocity slow, and rc1420 was still at 1.06% drift
+# when the 45 s cap cut it off. The steadiness criterion is unchanged.
 _DASH_MAX_S = 75.0
 
-#: RC2 commands swept by the cruise survey, gentle to full forward authority
-#: (1500 = neutral, 1100 = full). One stick position answers "how fast is the
-#: vehicle at this stick position"; the requirements ask what the vehicle can
-#: hold "at all authorised speeds", which is a sweep.
+# RC2 commands swept by the cruise survey, gentle to full forward authority
+# (1500 = neutral, 1100 = full). One stick position gives one speed; "at all
+# authorised speeds" needs a sweep.
 _DASH_SWEEP_PITCH = (1420, 1330, 1220, 1100)
 
 
 def _trailing(samples, now: float, window_s: float = _DASH_WINDOW_S):
-    """The trailing ``window_s`` of ``[(time, value)]``."""
     return [item for item in samples if item[0] >= now - window_s]
 
 
-
-
 def _collect_ned(m, sink) -> None:
-    """Append the current NED horizontal velocity, for headwind alignment."""
     pos = m.messages.get("LOCAL_POSITION_NED") if hasattr(m, "messages") else None
     if pos is not None:
         sink.append((float(pos.vx), float(pos.vy)))
@@ -234,10 +212,9 @@ def _hold_until_steady(m, rc, alt_hold_stick, alt0, pitch, *, label,
     """Hold a fixed forward pitch until the trailing speed window plateaus.
 
     Returns ``(window, verdict, t_window)`` where ``window`` is the trailing
-    ``[(time, groundspeed)]`` the verdict was computed over and ``t_window`` is
-    its ``(start, end)``. A hold that hits the cap without plateauing returns a
-    verdict with ``steady=False``; the caller must then report INCONCLUSIVE
-    rather than a speed.
+    ``[(time, groundspeed)]`` the verdict was computed over and ``t_window`` is its
+    ``(start, end)``. A hold that hits the cap without plateauing returns
+    ``steady=False``, and the caller reports inconclusive rather than a speed.
     """
     samples = []
     t_start = time.time()
@@ -250,7 +227,7 @@ def _hold_until_steady(m, rc, alt_hold_stick, alt0, pitch, *, label,
         rc(alt_hold_stick(v.alt - alt0), pitch=pitch)
         now = time.time()
         if now - t_start <= _DASH_SETTLE_S:
-            continue                      # discard the acceleration transient
+            continue
         samples.append((now, float(v.groundspeed)))
         if attitude is not None:
             attitude.sample(m)
@@ -270,19 +247,14 @@ def _hold_until_steady(m, rc, alt_hold_stick, alt0, pitch, *, label,
 
 def _wind_force_scale(mass_kg: float, wind_mps: float,
                       drag_area_m2: float = _DEFAULT_DRAG_AREA_M2) -> float:
-    """The superseded linearization of quadratic drag at the wind working point.
+    """Superseded linearization of quadratic drag at the wind working point.
 
-    Gazebo 8 WindEffects applies ``m*k*(wind-v)``. Choosing k this way makes its
-    force at zero groundspeed equal ``0.5*rho*A*wind^2``.
-
-    NOT used in flight any more. Because the force stays linear in ``wind - v``
-    while true drag is quadratic in it, this under-predicts drag by a factor of
-    ``(wind+v)/wind`` as the vehicle speeds up: the 2026-08-30 run reached
-    28.9 m/s against a 15 m/s headwind — faster than it flew with no wind at
-    all. The headwind now acts through the airframe's geometry-derived drag
-    plate instead (``airframe_drag``), which gz-sim's LiftDrag evaluates against
-    airspeed. This is retained so ``wind_force_scale_override`` can reproduce
-    the old behaviour for comparison.
+    Gazebo 8 WindEffects applies ``m*k*(wind-v)``, and this k makes its force at
+    zero groundspeed equal ``0.5*rho*A*wind^2``. Being linear in ``wind - v`` it
+    under-predicts drag by ``(wind+v)/wind`` as the vehicle speeds up, which is how
+    a run reached 28.9 m/s against a 15 m/s headwind. The headwind now acts through
+    the geometry-derived drag plate (``airframe_drag``); this is retained only so
+    ``wind_force_scale_override`` can reproduce the old behaviour.
     """
     if mass_kg <= 0 or wind_mps <= 0 or drag_area_m2 <= 0:
         return 0.0
@@ -317,7 +289,6 @@ def _prepare_wind_world(out: Path, force_scale: float) -> Path:
 
 
 def _vehicle_spawn_heading_deg(stock_world: str) -> float:
-    """Read the airframe's world yaw so the obstacle follows its body +X axis."""
     match = re.search(
         r"<include>\s*<uri>model://iris_with_gimbal</uri>\s*"
         r"<pose\s+degrees=[\"']true[\"']>\s*"
@@ -411,9 +382,8 @@ def _model_xyz(model: str) -> tuple[float, float, float] | None:
     return _parse_model_xyz(result.stdout) if result.returncode == 0 else None
 
 
-#: Single source for the attachment bound — the evidence module owns it,
-#: so the distance the harness reports and the distance the verdict uses
-#: cannot drift apart.
+# Single source for the attachment bound: the evidence module owns it, so the
+# harness and the verdict use the same distance.
 from gazebo_poc.payload_transport_evidence import ATTACHED_MAX_DISTANCE_M as _PAYLOAD_ATTACHED_MAX_DISTANCE_M
 
 
@@ -430,9 +400,7 @@ def _payload_z() -> float | None:
     return _parse_model_z(result.stdout) if result.returncode == 0 else None
 
 
-
 def _parse_model_xy(output: str) -> tuple | None:
-    """Ground-truth horizontal position from ``gz model -p``."""
     number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
     match = re.search(rf"XYZ\s*\(m\)[^\n]*\]\s*\n\s*\[\s*({number})\s+({number})\s+{number}\s*\]",
                       output, re.I)
@@ -454,9 +422,9 @@ def _payload_xy() -> tuple | None:
     return _parse_model_xy(result.stdout) if result.returncode == 0 else None
 
 
-#: Waypoints for the navigation-accuracy survey, as (north, east) metres from
-#: the hover point. Eight points on a 15 m ring: CEP is a median, so it needs
-#: several samples, and a ring exercises every heading rather than one axis.
+# Waypoints for the navigation-accuracy survey, as (north, east) metres from the
+# hover point. Eight points on a 15 m ring: CEP is a median so it needs several
+# samples, and a ring exercises every heading.
 _CEP_RING_RADIUS_M = 15.0
 _CEP_POINTS = 8
 
@@ -491,7 +459,6 @@ def _publish_wind(world_x: float, world_y: float) -> bool:
 
 
 def _start_model_observer(model_name: str):
-    """Observe the world pose stream and timestamp first appearance of a model."""
     seen = {"at": None}
     event = threading.Event()
     proc = subprocess.Popen(
@@ -534,9 +501,8 @@ def _obstacle_requirement_met(
 ) -> bool:
     """Evaluate only criteria present in the requirement contract.
 
-    In particular, an "initiate before X" requirement is not silently upgraded
-    into "never cross X".  Minimum separation is checked only when the contract
-    explicitly contains that invariant.
+    An "initiate before X" requirement is not upgraded into "never cross X":
+    minimum separation is checked only when the contract contains that invariant.
     """
     response_timely = (
         response_onset_distance_m is not None
@@ -559,7 +525,6 @@ def _obstacle_requirement_met(
 
 
 def _start_lidar_observer(max_range_m: float = 15.0):
-    """Stream the generated Gazebo lidar and expose its latest minimum range."""
     latest = {"distance_m": None, "updated_at": None, "sample_count": 0}
     proc = subprocess.Popen(
         ["docker", "exec", _CONTAINER, "gz", "topic", "-e", "-t", "/forward_lidar"],
@@ -577,7 +542,7 @@ def _start_lidar_observer(max_range_m: float = 15.0):
             if stripped.startswith("ranges:"):
                 try:
                     value = float(stripped.split(":", 1)[1])
-                    if value == value and value > 0:  # finite/non-NaN checked below
+                    if value == value and value > 0:
                         ranges.append(value)
                 except ValueError:
                     continue
@@ -603,23 +568,19 @@ def _cleanup(proc):
     _sh("docker", "stop", _CONTAINER)
 
 
-# last flight's measurements, for programmatic callers (gazebo_verify / pipeline integration)
 LAST_RESULT: dict = {}
 
 
 def _attitude_rms_deg(samples) -> dict:
     """Roll/pitch RMS deviation about the window mean, in degrees.
 
-    "Attitude deviations ... RMS" in the requirements means variation around the
-    trim/commanded attitude, not the absolute pitch of a forward dash — so each
-    axis is centred on its own window mean before the RMS is taken.
+    The requirements' "attitude deviations ... RMS" means variation around the
+    trim/commanded attitude, so each axis is centred on its own window mean first.
     """
     import math
     n = len(samples)
     if n < 2:
         return {"n": n, "roll_rms_deg": None, "pitch_rms_deg": None, "rms_deg": None}
-    # Samples are (time, roll, pitch[, target_roll, target_pitch]); a bare
-    # (roll, pitch) is still accepted.
     def _actual(sample):
         return (sample[1], sample[2]) if len(sample) >= 3 else (sample[0], sample[1])
 
@@ -634,16 +595,15 @@ def _attitude_rms_deg(samples) -> dict:
         var = sum((v - mean) ** 2 for v in vals) / n
         out[f"{name}_rms_deg"] = math.degrees(math.sqrt(var))
     out["n"] = n
-    # The historical number: deviation about the window's own mean. That is
-    # JITTER around whatever attitude the vehicle settled at, and it is not what
-    # "attitude deviations within 0.5 degree RMS" asks — a vehicle holding a
-    # steady 12 deg error scores zero on it.
+    # Historical number: deviation about the window's own mean, i.e. jitter around
+    # whatever attitude the vehicle settled at. A steady 12 deg error scores zero on
+    # it, so it does not answer "attitude deviations within 0.5 degree RMS".
     out["jitter_rms_about_window_mean_deg"] = max(
         out["roll_rms_deg"], out["pitch_rms_deg"])
 
-    # Deviation from the attitude the controller was COMMANDED to hold, which is
-    # what the requirement bounds. Only available when ATTITUDE_TARGET was
-    # sampled; never silently substituted by the jitter figure.
+    # Deviation from the commanded attitude, which is what the requirement bounds.
+    # Available only when ATTITUDE_TARGET was sampled, and not substituted by the
+    # jitter figure.
     paired = [s for s in samples if _target(s)[0] is not None]
     if len(paired) >= 2:
         for axis, index in (("roll", 0), ("pitch", 1)):
@@ -659,15 +619,14 @@ def _attitude_rms_deg(samples) -> dict:
         out["rms_about_command_deg"] = None
         out["command_samples"] = len(paired)
 
-    # rms_deg stays the requirement-facing number, and it is the about-command
-    # one when it exists. It is None rather than the jitter when it does not:
-    # an unmeasured reference is not a small error.
+    # rms_deg is the requirement-facing number: the about-command value when it
+    # exists, otherwise None rather than the jitter, since an unmeasured reference
+    # is not a small error.
     out["rms_deg"] = out["rms_about_command_deg"]
     return out
 
 
 def _quaternion_roll_pitch(q) -> tuple:
-    """Roll and pitch in radians from a MAVLink (w, x, y, z) quaternion."""
     if q is None or len(q) < 4:
         return None, None
     w, x, y, z = (float(value) for value in q[:4])
@@ -677,9 +636,10 @@ def _quaternion_roll_pitch(q) -> tuple:
 
 
 class _AttitudeSampler:
-    """Collect ATTITUDE messages off pymavlink's parse cache without stealing
-    messages from the blocking recv_match loops (every parsed message lands in
-    ``m.messages`` regardless of which filtered read consumed it)."""
+    """Collect ATTITUDE messages from pymavlink's parse cache without stealing them
+    from the blocking recv_match loops - every parsed message lands in
+    ``m.messages`` whichever filtered read consumed it.
+    """
 
     def __init__(self):
         self.samples = []
@@ -693,9 +653,8 @@ class _AttitudeSampler:
         if boot_ms is not None and boot_ms == self._last_boot_ms:
             return
         self._last_boot_ms = boot_ms
-        # The attitude the controller was COMMANDED to hold. Without it only
-        # jitter can be computed, and jitter scores a steadily mis-trimmed
-        # vehicle as perfect.
+        # The commanded attitude. Without it only jitter can be computed, and jitter
+        # scores a steadily mis-trimmed vehicle as perfect.
         target = m.messages.get("ATTITUDE_TARGET") if hasattr(m, "messages") else None
         target_roll = target_pitch = None
         if target is not None and getattr(target, "q", None):
@@ -706,8 +665,9 @@ class _AttitudeSampler:
         ))
 
     def between(self, t0: float, t1: float):
-        """Samples inside a time window — used to restrict attitude RMS to the
-        segment whose speed was certified steady."""
+        """Samples inside a time window, to restrict attitude RMS to the segment certified
+        steady.
+        """
         return [s for s in self.samples if t0 <= s[0] <= t1]
 
 
@@ -732,17 +692,15 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
          gps_horizontal_error_m=None,
          extra_parms="") -> int:
     LAST_RESULT.clear()
-    # Carrying a payload and releasing it are different scenarios, and the flight
-    # order made that matter: the release block runs BEFORE the cruise survey, so
-    # a run configured for release flies every cruise point already empty. The
-    # SDF, the payload spawn and the gripper wiring key off "aboard"; only the
-    # release action keys off "release".
+    # Carrying a payload and releasing it are different scenarios: the release block
+    # runs before the cruise survey, so a run configured for release flies every
+    # cruise point empty. The SDF, payload spawn and gripper wiring key off "aboard";
+    # only the release action keys off "release".
     payload_aboard = (payload_release or payload_transport) and payload_mass_kg > 0
-    # When the generated model is supplied it OWNS the mission decisions: the
-    # harness offers events derived from telemetry and actuates only what the
-    # model fires. Without it the harness decides, which is honest evidence of
-    # physics but says nothing about the generated logic — the two cases are
-    # labelled differently so the mapper can tell them apart.
+    # With a generated model supplied, the model owns the mission decisions: the
+    # harness offers telemetry-derived events and actuates only what the model fires.
+    # Without one the harness decides, which is evidence of physics but not of the
+    # generated logic, so the two cases are labelled differently for the mapper.
     mission = None
     if mission_model_text:
         from gazebo_poc.model_mission import ModelAction, ModelDrivenMission
@@ -755,8 +713,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
     tdir = Path("gazebo_poc/templates")
     frame_class = 1
     if rotor_count == 4 and not calibrate and fail_rotor is None:
-        # legacy quad path (in-place iris edit, iris-default aero/T-W) — kept for back-compat.
-        # NOTE: it has no fail_rotor support, so any motor-failure test must take the path below.
+        # Legacy quad path (in-place iris edit, iris-default aero/T-W), kept for
+        # back-compat. No fail_rotor support, so motor-failure tests take the path below.
         g = generate_sdf(mass_kg, 4, rotor_radius, tdir, out, area_override=area_override)
         print(f"[gen] quad mass={g.mass_kg}kg inertia={tuple(round(x,4) for x in g.inertia)} "
               f"area={0.002*g.area_scale:.6f}", flush=True)
@@ -768,9 +726,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         inertia = multirotor_inertia(mass_kg, rotor_count, rotor_radius)
         mult = 838.0
         if calibrate:
-            # real-motor calibration: area matches the prop's Ct (→ physical hover RPM) and the
-            # max rotor speed is set so full throttle = the real motor's max thrust (→ real T/W,
-            # so the controller can park a high-rotor-count airframe cleanly).
+            # Motor calibration: area matches the prop's Ct (-> physical hover RPM) and max
+            # rotor speed is set so full throttle equals the motor's max thrust, giving a
+            # T/W the controller can trim a high-rotor-count airframe at.
             from gazebo_poc.component_data import MN5008_KV340_18x61 as motor
             from gazebo_poc.prop_theory import calibrated_area, calibrated_max_rad_s
             area = calibrated_area(2 * rotor_radius)
@@ -779,18 +737,15 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         else:
             area = (area_override if area_override is not None
                     else (mass_kg / IRIS_MASS_KG) * IRIS_AREA)
-        # The Phase-8 total already includes delivery payload. When the payload
-        # is represented as a detachable Gazebo model, remove it from the body
-        # link so it is not counted twice.
+        # The Phase-8 total already includes the delivery payload, so when the payload is
+        # a detachable Gazebo model remove it from the body link to avoid double count.
         body_mass_kg = mass_kg
         if payload_aboard:
             body_mass_kg = max(0.1, mass_kg - payload_mass_kg)
-        # Parasitic drag of the airframe that is actually drawn. Without it the
-        # body has no drag at all: a forward dash never reaches terminal
-        # velocity, so its "cruise speed" measures the dash duration rather
-        # than the vehicle. Enable wind on the link unconditionally — with no
-        # WindEffects plugin in the world it costs nothing, and it lets the
-        # drag plate see airspeed rather than ground speed when there is wind.
+        # Parasitic drag of the drawn airframe. Without it the body has no drag, so a
+        # forward dash never reaches terminal velocity and its cruise speed measures the
+        # dash duration. Wind is enabled on the link unconditionally: it costs nothing
+        # without a WindEffects plugin and lets the drag plate see airspeed.
         from gazebo_poc.airframe_drag import drag_breakdown
         drag = drag_breakdown(
             rotor_count, rotor_radius,
@@ -819,8 +774,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
           f"sdf_can_hover={thrust_diag['sdf_can_hover']}", flush=True)
 
     _sh("docker", "rm", "-f", _CONTAINER)
-    # Mount the individual model.sdf FILES (not the dirs) so the original meshes/config in the
-    # image are preserved — mounting the whole dir hides iris_collision.stl → gz fails to load.
+    # Mount the individual model.sdf files, not the dirs: mounting a whole dir hides
+    # iris_collision.stl and gz fails to load.
     so = str((out / "iris_with_standoffs" / "model.sdf").resolve())
     gm = str((out / "iris_with_gimbal" / "model.sdf").resolve())
     docker_args = [
@@ -830,13 +785,12 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
     ]
     wind_scale = None
     if wind_mps > 0:
-        # The airframe now carries genuine quadratic drag (the BodyDrag plate),
-        # which gz-sim's LiftDrag evaluates against airspeed. WindEffects' own
-        # m*k*(wind-v) term is a LINEAR approximation of that same drag, so
-        # leaving it on would double-count — and it under-predicts badly once
-        # groundspeed exceeds the wind it was linearized at. It is kept only as
-        # the channel that carries the wind field; the force it adds is zero
-        # unless a caller explicitly asks for the legacy behaviour.
+        # The airframe carries quadratic drag (the BodyDrag plate), which LiftDrag
+        # evaluates against airspeed. WindEffects' m*k*(wind-v) term is a linear
+        # approximation of the same drag, so leaving it on double-counts and
+        # under-predicts once groundspeed exceeds the wind it was linearized at. It is
+        # kept only as the channel carrying the wind field; its force is zero unless a
+        # caller asks for the legacy behaviour.
         wind_scale = (
             0.0 if wind_force_scale_override is None
             else float(wind_force_scale_override)
@@ -974,11 +928,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         def mode_holds(mode_id, secs=6.0, consecutive=4):
             """True only when the mode is reported on N heartbeats in a row.
 
-            A single matching heartbeat is not evidence the vehicle is IN a
-            mode. ArduCopter accepts GUIDED while disarmed, reports it once,
-            and reverts to STABILIZE — which read as success here for months
-            and left every flight in a stick-flown fallback, because
-            ModeStabilize has no user takeoff.
+            One matching heartbeat is not evidence: ArduCopter accepts GUIDED while
+            disarmed, reports it once and reverts to STABILIZE, which read as success and
+            left flights in a stick-flown fallback since ModeStabilize has no user takeoff.
             """
             end = time.time() + secs
             run = 0
@@ -998,13 +950,13 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     break
                 print(f"[sitl] STATUSTEXT: {s.text}", flush=True)
 
-        def rc(throttle, pitch=1500):           # roll=neutral, ch2=pitch, ch3=throttle, yaw=neutral
+        def rc(throttle, pitch=1500):
             m.mav.rc_channels_override_send(m.target_system, m.target_component,
                                             1500, pitch, throttle, 1500, 0, 0, 0, 0)
 
         ALT_HOLD = 2
         GUIDED = 4
-        rc(1000)                                # throttle low before arming
+        rc(1000)
         m.set_mode("GUIDED")
         if not wait(lambda h: h.custom_mode == GUIDED, 8, "GUIDED mode"):
             _cleanup(proc); return 5
@@ -1016,7 +968,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         ARMED = mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
 
         def is_armed():
-            for _ in range(6):                  # poll several heartbeats
+            for _ in range(6):
                 h = hb()
                 if h and (h.base_mode & ARMED):
                     return True
@@ -1033,10 +985,10 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 armed = True; break
         if not armed:
             print("[RESULT] failed to arm", flush=True); _cleanup(proc); return 5
-        # GUIDED must be (re-)entered AFTER arming and must HOLD. Set while
-        # disarmed it does not stick, and the vehicle arms in STABILIZE, whose
-        # has_user_takeoff() is false — so MAV_CMD_NAV_TAKEOFF is refused with
-        # a bare MAV_RESULT_FAILED and every flight falls back to stick control.
+        # GUIDED is re-entered after arming and checked to hold. Set while disarmed it
+        # does not stick: the vehicle arms in STABILIZE, whose has_user_takeoff() is
+        # false, so MAV_CMD_NAV_TAKEOFF is refused with a bare MAV_RESULT_FAILED and the
+        # flight falls back to stick control.
         m.set_mode("GUIDED")
         guided_held = mode_holds(GUIDED)
         LAST_RESULT["guided_mode_held_after_arming"] = guided_held
@@ -1047,9 +999,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             v = m.recv_match(type="VFR_HUD", blocking=True, timeout=2)
             return v.alt if v else None
 
-        # ArduCopter refuses a GUIDED takeoff unless position_ok() holds, which
-        # when armed needs EKF_POS_HORIZ_ABS set and EKF_CONST_POS_MODE clear.
-        # A bare MAV_RESULT_FAILED does not say which; these flags do.
+        # ArduCopter refuses a GUIDED takeoff unless position_ok() holds: armed, that
+        # needs EKF_POS_HORIZ_ABS set and EKF_CONST_POS_MODE clear. MAV_RESULT_FAILED
+        # alone does not say which.
         ekf = m.recv_match(type="EKF_STATUS_REPORT", blocking=True, timeout=5)
         if ekf is not None:
             bits = {
@@ -1082,10 +1034,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             TGT,
         )
         LAST_RESULT["takeoff_method"] = "guided_nav_takeoff"
-        # Whether the autopilot ACCEPTED the takeoff decides how to read a
-        # failure to climb: a rejected command is a configuration problem, a
-        # denied climb after acceptance is a control/thrust one. Without this
-        # the fallback hides which.
+        # Whether the autopilot accepted the takeoff decides how to read a failure to
+        # climb: a rejected command is a configuration problem, a denied climb after
+        # acceptance is a control/thrust one.
         takeoff_ack = m.recv_match(type="COMMAND_ACK", blocking=True, timeout=3)
         if takeoff_ack is not None and takeoff_ack.command == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
             LAST_RESULT["takeoff_command_result"] = int(takeoff_ack.result)
@@ -1100,18 +1051,17 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
 
         def alt_hold_stick(rel):
             hover_rc = 1500 if hover_throttle is None else int(1100 + max(0.2, min(0.8, float(hover_throttle))) * 800)
-            # proportional climb-rate command around the datasheet hover-throttle seed. The
-            # old 1500±90 cap was too weak for borderline real-motor T/W cases.
+            # Proportional climb-rate command around the datasheet hover-throttle seed; the
+            # old 1500+/-90 cap was too weak for borderline T/W cases.
             err = TGT - rel
             return hover_rc + int(max(-180, min(160, err * 35)))
 
         peak = 0.0
         thr, rels = [], []
         if measure_attitude:
-            # Requested BEFORE the first measurement window, not before the
-            # cruise survey: hover is a measurement window too, and a stream
-            # asked for too late leaves those samples with no reference at all —
-            # which correctly yields None, but under-measures the envelope.
+            # Requested before the first measurement window, not before the cruise survey:
+            # hover is a measurement window too, and a stream asked for too late leaves those
+            # samples with no reference, which under-measures the envelope.
             m.mav.command_long_send(
                 m.target_system, m.target_component,
                 mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
@@ -1121,7 +1071,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         hover_att = _AttitudeSampler() if measure_attitude else None
         cap_proc, cap_path = None, Path("gazebo_poc/generated/jointstate.txt")
         topic = ("/world/iris_runway/model/iris_with_gimbal/model/"
-                 "iris_with_standoffs/joint_state")    # nested model — has rotor_*_joint
+                 "iris_with_standoffs/joint_state")
         t_end = time.time() + 45
         while time.time() < t_end:
             v = m.recv_match(type="VFR_HUD", blocking=True, timeout=2)
@@ -1129,11 +1079,11 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 continue
             rel = v.alt - alt0
             peak = max(peak, rel)
-            if time.time() > t_end - 18:          # sample steady-state in the final 18 s
+            if time.time() > t_end - 18:
                 thr.append(v.throttle); rels.append(rel)
                 if hover_att is not None:
                     hover_att.sample(m)
-                if cap_proc is None:              # capture rotor RPM while hovering
+                if cap_proc is None:
                     cap_proc = subprocess.Popen(
                         ["docker", "exec", _CONTAINER, "gz", "topic", "-e", "-t", topic],
                         stdout=open(cap_path, "w"), stderr=subprocess.DEVNULL)
@@ -1179,9 +1129,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 "hover_attitude_roll_rms_deg": hover_rms["roll_rms_deg"],
                 "hover_attitude_pitch_rms_deg": hover_rms["pitch_rms_deg"],
                 "hover_attitude_rms_deg": hover_rms["rms_deg"],
-                # Observed, not assumed: the release happens later in the same
-                # flight, so a configuration flag cannot say what was aboard
-                # when this window was sampled.
+                # Observed, not assumed: the release happens later in the same flight, so a
+                # configuration flag cannot say what was aboard when this window was sampled.
                 "hover_attitude_with_payload": (
                     hover_payload_distance is not None
                     and hover_payload_distance <= _PAYLOAD_ATTACHED_MAX_DISTANCE_M
@@ -1189,10 +1138,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 "hover_payload_attachment_distance_m": hover_payload_distance,
                 "hover_payload_vertical_separation_m": (
                     hover_attachment.vertical_separation_m),
-                # Named for what it means: the payload was ATTACHED, not merely
-                # that a pose was readable. The two were conflated, and a field
-                # that says "observed" while meaning "attached" is how an
-                # unloaded window gets counted as transport evidence.
+                # The payload was attached, not merely that a pose was readable. Conflating the
+                # two lets an unloaded window count as transport evidence.
                 "hover_payload_attached": (
                     hover_attachment.attached
                     or False
@@ -1205,12 +1152,12 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
               f"rotor |omega|~{rotor_rad_s:.1f} rad/s ({hover_rpm:.0f} RPM)", flush=True)
 
         # --- physical payload release timing ---
-        # This checks command -> Gazebo detachable joint -> falling payload. It
-        # does not claim that the aircraft's mission logic generated the command.
+        # Checks command -> Gazebo detachable joint -> falling payload. It does not claim
+        # the mission logic generated the command.
         if payload_release and payload_mass_kg > 0:
-            # NOT payload_aboard: a transport scenario carries the payload
-            # through the whole flight and never releases it, which is what
-            # makes its cruise windows transport evidence.
+            # Not payload_aboard: a transport scenario carries the payload for the whole
+            # flight and does not release it, which is what makes its cruise windows
+            # transport evidence.
             release_target_ned = None
             release_target_world = None
             condition_position_ned = None
@@ -1264,18 +1211,14 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                             pitch = 1470 if condition_position_error < 2.0 else 1420
                             rc(alt_hold_stick(hud.alt - alt0), pitch=pitch)
                         if condition_position_error <= positional_tolerance_m:
-                            # the delivery coordinate condition is first satisfied
-                            # HERE — the PERF-005 clock starts at this moment.
                             condition_met_mono = time.monotonic()
                             condition_position_world = _vehicle_xy()
                             break
                 rc(alt_hold_stick(rels[-1] if rels else TGT))
 
-            # An abort condition, when the scenario asks for one, is offered to
-            # the model BEFORE the coordinate event. REQ-SAFE-006 says the
-            # payload stays locked whenever an abort is active regardless of
-            # proximity, so a release that still happens here is a physical
-            # observation of the requirement being violated.
+            # An abort condition, when the scenario asks for one, is offered before the
+            # coordinate event. REQ-SAFE-006 keeps the payload locked whenever an abort is
+            # active regardless of proximity, so a release here is an observed violation.
             abort_active = False
             if mission is not None and delivery_abort_before_release:
                 abort_fired = mission.offer(
@@ -1284,7 +1227,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 print(f"[model] abort offered; model fired "
                       f"{[d.action for d in abort_fired]}", flush=True)
 
-            # Ask the model whether to release. The harness does NOT decide.
+            # Ask the model whether to release; the harness does not decide.
             release_decisions = ()
             if mission is not None:
                 release_decisions = mission.offer(
@@ -1302,9 +1245,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 m.mav.command_long_send(
                     m.target_system,
                     m.target_component,
-                    211,  # MAV_CMD_DO_GRIPPER
+                    211,
                     0,
-                    0, 0, 0, 0, 0, 0, 0,  # gripper 0, RELEASE
+                    0, 0, 0, 0, 0, 0, 0,
                 )
             else:
                 print("[model] the generated logic declined to release; "
@@ -1329,10 +1272,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     break
             coordinate_chain_delay = None
             if condition_met_mono is not None and release_delay is not None:
-                # coordinate-condition satisfied → physical separation, the
-                # full PERF-005 interval. With a mission model the condition is
-                # consumed by the generated logic, which owns the decision to
-                # actuate; the harness only observes the separation.
+                # Coordinate condition satisfied -> physical separation, the full PERF-005
+                # interval. With a mission model the generated logic consumes the condition and
+                # owns the decision; the harness observes the separation.
                 coordinate_chain_delay = (
                     release_started + release_delay - condition_met_mono
                 )
@@ -1343,24 +1285,18 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 "payload_release_decisions": (
                     [d.as_dict() for d in release_decisions]
                     if mission is not None else None),
-                # (adapter_constant, model_action) pairs performed() accepted
-                # by causal role — the report must be able to recognise the
-                # model's own spelling of the actuation, not just the
-                # adapter's.
+                # (adapter_constant, model_action) pairs performed() accepted by causal role, so
+                # the report can recognise the model's own spelling of the actuation.
                 "action_resolutions": (
                     [list(pair) for pair in mission.action_resolutions]
                     if mission is not None else None),
                 "payload_abort_active": abort_active,
-                # "no guard in the model" and "a guard the harness never fed"
-                # look identical in the flight: both release. Recording which
-                # one happened is what keeps the verdict from blaming the model
-                # for a condition it was never told about.
-                # Identity by causal role: the guards on whatever transitions
-                # answer the delivery event THIS model declares. None means
-                # the event did not resolve — the question was never put, and
-                # no verdict may read that as "unguarded". (The old lookup
-                # asked for the harness spelling 'actuateRelease' and reported
-                # a guarded run3 as carrying no inhibition logic.)
+                # "No guard in the model" and "a guard the harness never fed" both release, so
+                # which one happened is recorded rather than blamed on the model.
+                # Identity by causal role: the guards on whatever transitions answer the delivery
+                # event this model declares. None means the event did not resolve, which is not
+                # "unguarded" - the old lookup asked for the harness spelling 'actuateRelease'
+                # and reported a guarded run3 as carrying no inhibition logic.
                 "payload_release_guards": (
                     (lambda g: None if g is None else list(g))(
                         mission.guards_for_event("DeliveryCoordinateSatisfied")
@@ -1395,16 +1331,14 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     separation_position_error is not None
                     and separation_position_error <= positional_tolerance_m
                 ),
-                # The three quantities the requirement's two conjuncts turn on,
-                # kept apart on purpose: what the ESTIMATOR thought at the
-                # trigger, where the payload TRULY was when it separated, and
-                # how long lay between. Only the truth error may close the
-                # position clause; the other two are what make it readable.
+                # The three quantities the requirement's two conjuncts turn on, kept apart: what
+                # the estimator thought at the trigger, where the payload actually was at
+                # separation, and the interval between. Only the truth error closes the position
+                # clause.
                 "trigger_estimated_error_m": condition_position_error,
-                # The missing cell: where the vehicle TRULY was when the model
-                # decided. Without it the estimator's error and the actuation
-                # lag cannot be told apart, and a 4 m miss looks like one
-                # cause when it may be the other.
+                # Where the vehicle actually was when the model decided. Without it the
+                # estimator's error and the actuation lag cannot be told apart, so a 4 m miss
+                # has no attributable cause.
                 "trigger_truth_error_m": (
                     math.hypot(
                         condition_position_world[0] - release_target_world[0],
@@ -1415,8 +1349,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 ),
                 "separation_truth_error_m": separation_position_error,
                 "trigger_to_separation_s": coordinate_chain_delay,
-                # "no delivery-abort condition is active" is the requirement's
-                # second conjunct, and it was never checked.
+                # "No delivery-abort condition is active" is the requirement's second conjunct.
                 "delivery_abort_inactive": not abort_active,
                 "payload_release_position_basis": (
                     "payload_ground_truth_at_separation"
@@ -1438,13 +1371,11 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             )
 
         if navigation_accuracy:
-            # CEP is a NAVIGATION claim: where the vehicle actually ends up
-            # versus where it was told to go. Comparing the EKF's own estimate
-            # against the commanded target only measures the position
-            # controller — the EKF believes it arrived even when it did not.
-            # So the error is taken from Gazebo ground truth, and the EKF's
-            # view is recorded beside it; the gap between them IS the
-            # GPS/estimator contribution the requirement is about.
+            # CEP is a navigation claim: where the vehicle ends up versus where it was told
+            # to go. The EKF estimate against the commanded target measures only the position
+            # controller, since the EKF believes it arrived either way, so the error comes
+            # from Gazebo ground truth with the EKF view recorded beside it - the gap between
+            # them is the GPS/estimator contribution.
             if not guided_held:
                 LAST_RESULT["cep_unavailable_reason"] = (
                     "GUIDED did not hold, so no commanded waypoint was flown"
@@ -1462,19 +1393,14 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     )
                 else:
                     n0, e0, d0 = float(origin.x), float(origin.y), float(origin.z)
-                    # The requirement says "designated GPS waypoints", which are
-                    # ABSOLUTE. Commanding local-NED offsets instead makes a GNSS
-                    # bias unobservable: the local origin is derived from the same
-                    # biased fix, so the error cancels and the measurement reports
-                    # the control loop no matter how wrong the GNSS is. Measured
-                    # directly: a 1.5 m injected bias showed up at the sensor
-                    # (raw-versus-fused 1.508 m) and moved the local-frame result
-                    # by 0.000 m.
+                    # "Designated GPS waypoints" are absolute. Local-NED offsets make a GNSS bias
+                    # unobservable: the local origin comes from the same biased fix, so the error
+                    # cancels and the measurement reports the control loop. Measured: a 1.5 m
+                    # injected bias showed up at the sensor (raw-versus-fused 1.508 m) and moved the
+                    # local-frame result by 0.000 m.
                     #
-                    # So the waypoints are designated in GLOBAL coordinates, and
-                    # derived from Gazebo GROUND TRUTH rather than from the fix —
-                    # a point designated on a map does not move because the
-                    # receiver is biased.
+                    # Waypoints are therefore designated in global coordinates and derived from
+                    # Gazebo ground truth rather than from the fix.
                     true_n0, true_e0 = world0[0], -world0[1]
                     lat_scale = 1.0 / 111320.0
                     lon_scale = lat_scale / math.cos(math.radians(_HOME_LAT))
@@ -1497,7 +1423,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                             injected_offset = [
                                 round(error_north, 4), round(error_east, 4),
                             ]
-                        tn, te = n0 + dn, e0 + de      # local target, for arrival only
+                        tn, te = n0 + dn, e0 + de
                         des_lat = _HOME_LAT + (true_n0 + dn) * lat_scale
                         des_lon = _HOME_LON + (true_e0 + de) * lon_scale
                         arrived = False
@@ -1506,7 +1432,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                             m.mav.set_position_target_global_int_send(
                                 0, m.target_system, m.target_component,
                                 mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-                                0b0000111111111000,          # position only
+                                0b0000111111111000,
                                 int(des_lat * 1e7), int(des_lon * 1e7), alt_rel,
                                 0, 0, 0, 0, 0, 0, 0, 0,
                             )
@@ -1532,10 +1458,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                                 0, 0, 0, 0, 0, 0, 0, 0)
                             m.recv_match(type="LOCAL_POSITION_NED",
                                          blocking=True, timeout=1)
-                        # How much GNSS noise actually reaches the link, and how
-                        # much of it survives the estimator. Without this a CEP
-                        # that ignores injected noise looks like a robust result
-                        # instead of an unverified filtering claim.
+                        # How much GNSS noise reaches the link and how much survives the estimator.
+                        # Without it a CEP that ignores injected noise is an unverified filtering
+                        # claim.
                         truth = _vehicle_xy()
                         raw_spread = []
                         raw_truth_errors = []
@@ -1715,7 +1640,7 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                         max(20, min(max_distance_cm, int(distance * 100))),
                         0,
                         0,
-                        0,  # MAV_SENSOR_ROTATION_NONE: body-forward
+                        0,
                         0,
                     )
                     if last_hud is not None:
@@ -1752,16 +1677,15 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     )
                     if clearance_breached or response_late or stopped_samples >= 10:
                         break
-                # The lidar boresight, MAVLink sensor orientation, velocity command,
-                # and wall normal are all body-forward (+X). BODY_NED prevents a
-                # future world-frame edit from silently recreating the old side-flight
-                # scenario in which the wall entered the ±30° lidar only at ~3 m.
+                # Lidar boresight, MAVLink sensor orientation, velocity command and wall normal
+                # are all body-forward (+X). BODY_NED keeps a world-frame edit from recreating
+                # the side-flight case where the wall entered the +/-30° lidar only at ~3 m.
                 m.mav.set_position_target_local_ned_send(
                     int(time.monotonic() * 1000) & 0xFFFFFFFF,
                     m.target_system,
                     m.target_component,
-                    8,      # MAV_FRAME_BODY_NED
-                    4039,   # velocity only; ignore pos/accel/yaw
+                    8,
+                    4039,
                     0, 0, 0,
                     approach_speed, 0, 0,
                     0, 0, 0,
@@ -1792,8 +1716,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 obstacle_min_separation_m,
             )
             LAST_RESULT.update({
-                # gate read by the feasibility mapper: an obstacle scenario was
-                # actually flown, so its verdict may be judged from live evidence
+                # Gate read by the feasibility mapper: an obstacle scenario was flown, so its
+                # verdict can be judged from live evidence.
                 "obstacle_req": True,
                 "obstacle_lidar_available": lidar_available,
                 "obstacle_lidar_samples": int(lidar.get("sample_count") or 0),
@@ -1848,15 +1772,13 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             return 0 if stable else 8
 
         # --- forward-flight survey: sweep pitch, hold each point to steady state ---
-        # One stick position only answers "how fast is this stick position". The
-        # requirements ask what the vehicle holds "at all authorised speeds", and
-        # whether it can make headway against a headwind using the authority it
-        # has. Both are sweeps, and every point must reach a certified plateau
-        # before its speed may be reported.
+        # One stick position gives one speed; "at all authorised speeds" and headway
+        # against a headwind are both sweeps. Each point reaches a certified plateau
+        # before its speed is reported.
         if payload_aboard:
-            # SERVO_OUTPUT_RAW is not streamed by default, and a non-blocking
-            # read of a message nobody sends returns None — which reads as "no
-            # signal" rather than "not asked for".
+            # SERVO_OUTPUT_RAW is not streamed by default, and a non-blocking read of a
+            # message nobody sends returns None, which reads as "no signal" rather than
+            # "not asked for".
             m.mav.command_long_send(
                 m.target_system, m.target_component,
                 mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
@@ -1875,30 +1797,25 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         for index, pitch in enumerate(_DASH_SWEEP_PITCH):
             final_point = index == len(_DASH_SWEEP_PITCH) - 1
             if final_point and wind_mps <= 0 and fcap is None:
-                # capture rotor speed over the segment fwd_speed will describe
                 fcap = subprocess.Popen(
                     ["docker", "exec", _CONTAINER, "gz", "topic", "-e", "-t", topic],
                     stdout=open(fwd_cap, "w"), stderr=subprocess.DEVNULL)
-            # What the vehicle is CARRYING is observed per window, not inferred
-            # once from configuration: the same flight releases the payload, so
-            # a window flown after separation is not transport evidence however
-            # the run was configured.
+            # What the vehicle is carrying is observed per window, not inferred from
+            # configuration: the same flight releases the payload, so a window flown after
+            # separation is not transport evidence.
             attachment = observe_attachment(
                 _model_xyz("iris_with_gimbal"), _model_xyz("payload_box"))
-            # The gripper servo drives the detach topic through a
-            # TriggeredPublisher, so its PWM separates "the joint let go" from
-            # "something commanded the release" when a payload goes missing.
+            # The gripper servo drives the detach topic through a TriggeredPublisher, so its
+            # PWM separates "the joint let go" from "something commanded the release".
             _srv = m.recv_match(type="SERVO_OUTPUT_RAW", blocking=True, timeout=2)
             gripper_pwm = (
                 getattr(_srv, f"servo{(gripper_channel or 6) + 1}_raw", None)
                 if _srv is not None else None
             )
             if payload_aboard:
-                # Absolute poses, not just their separation: a RELEASED payload
-                # is left hundreds of metres behind, while one that merely lags
-                # under acceleration stays within a few. Only the vehicle's own
-                # displacement tells those apart, and the separation alone was
-                # about to be read as a release.
+                # Absolute poses, not just their separation: a released payload is left hundreds
+                # of metres behind while one lagging under acceleration stays within a few, and
+                # only the vehicle's own displacement tells those apart.
                 _veh = _model_xyz("iris_with_gimbal")
                 _pay = _model_xyz("payload_box")
                 print(f"[payload] {pitch}: vehicle={_veh} payload={_pay} "
@@ -1946,17 +1863,14 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             if window:
                 last_window = window
         LAST_RESULT["cruise_sweep"] = sweep
-        # Transport windows: the hover sample plus every cruise point, each
-        # carrying the attachment that was OBSERVED while it was measured.
         transport_windows = []
         if LAST_RESULT.get("hover_attitude_rms_deg") is not None:
             transport_windows.append(TransportWindow(
                 label="hover",
                 attachment=PayloadAttachment(
-                    # "observed" is whether the poses could be read; whether
-                    # that means attached is the module's call, on vertical
-                    # separation — which must be carried through EVERY
-                    # reconstruction or it silently decides "not attached".
+                    # "observed" is whether the poses could be read; whether that means attached is
+                    # the module's call on vertical separation, and it is carried through every
+                    # reconstruction or the result defaults to "not attached".
                     observed=LAST_RESULT.get(
                         "hover_payload_attachment_distance_m") is not None,
                     distance_m=LAST_RESULT.get("hover_payload_attachment_distance_m"),
@@ -1991,8 +1905,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         if steady_points:
             best = max(steady_points, key=lambda pt: pt["speed_mps"])
             LAST_RESULT.update({
-                # The fastest speed the vehicle *held*, across the swept
-                # authority — not the speed it happened to have reached.
+                # The fastest speed the vehicle held across the swept authority, not the
+                # fastest it reached.
                 "nilwind_dash_speed_mps": best["speed_mps"],
                 "nilwind_dash_peak_mps": max(pt["speed_mps"] for pt in steady_points),
                 "nilwind_dash_samples": best["steady_state"]["samples"],
@@ -2010,8 +1924,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
 
         rms_points = [pt for pt in steady_points if pt.get("attitude_rms_deg") is not None]
         if rms_points:
-            # "at all authorised speeds" is a worst case over the sweep, not one
-            # point: report the largest RMS and the span it was swept across.
+            # "at all authorised speeds" is a worst case over the sweep: report the largest
+            # RMS and the span it was swept across.
             worst = max(rms_points, key=lambda pt: pt["attitude_rms_deg"])
             LAST_RESULT.update({
                 "cruise_attitude_rms_deg": worst["attitude_rms_deg"],
@@ -2020,11 +1934,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 "cruise_attitude_samples": worst["attitude_samples"],
                 "cruise_attitude_mean_speed_mps": worst["speed_mps"],
                 "cruise_attitude_swept_speeds_mps": [pt["speed_mps"] for pt in rms_points],
-                # Paired with the speeds above, ascending. "All authorised
-                # speeds" is a claim about points nobody flew; the per-point
-                # RMS is what says whether the worst case sits at the envelope
-                # boundary or somewhere in the interior, and only the first of
-                # those lets a bounded sweep speak for the unbounded set.
+                # Paired with the speeds above, ascending. The per-point RMS says whether the
+                # worst case sits at the envelope boundary or in the interior; only a boundary
+                # worst case lets a bounded sweep speak for "all authorised speeds".
                 "cruise_attitude_swept_rms_deg": [
                     pt["attitude_rms_deg"] for pt in rms_points
                 ],
@@ -2045,9 +1957,8 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         LAST_RESULT["fwd_speed_steady_state"] = steady_state(last_window).as_dict()
 
         if wind_mps > 0:
-            # Aim the wind against the direction the vehicle actually flies, then
-            # ask the question the requirement asks: with the forward authority it
-            # has, what ground speed can it HOLD against the headwind?
+            # Aim the wind against the direction the vehicle actually flies, then measure
+            # the ground speed it holds against that headwind with its forward authority.
             # ArduPilot reports NED while Gazebo uses ENU-like world axes; the
             # ArduPilotPlugin transform maps (world x, world y) -> (NED x, -NED y).
             baseline_vectors = []
@@ -2129,17 +2040,14 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
             observer, chute_event, chute_seen = _start_model_observer("parachute_small")
             time.sleep(0.2)
             observer_available = observer.poll() is None
-            # Offer the critical-propulsion-failure detection to the model and
-            # deploy only if its SafetyMonitor fires. Precedence over other
-            # safety responses (REQ-SAFE-005) is a separate arbitration claim
-            # and is NOT established by this subcheck.
+            # Offer the critical-propulsion-failure detection to the model and deploy only if
+            # its SafetyMonitor fires. Precedence over other safety responses (REQ-SAFE-005)
+            # is a separate claim, not established here.
             chute_decisions = ()
             precedence_evidence = None
-            # The clock starts BEFORE the hazard is offered, so the model's own
-            # decision time is inside the interval. The requirement says
-            # "within 0.5 seconds of DETECTING", and detection is where the
-            # interval begins — starting it after the model has already decided
-            # measures the actuator alone.
+            # The clock starts before the hazard is offered, so the model's decision time is
+            # inside the interval. The requirement says "within 0.5 seconds of detecting",
+            # and starting after the model decided would measure the actuator alone.
             chute_started = time.monotonic()
             if mission is not None:
                 competing_actions = mission.action_definitions_for_machine(
@@ -2151,13 +2059,11 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     "batterySoc": 0.0,
                     "commLossTime": 20.0,
                 }
-                # Control: the identical hazard state with nothing withheld but
-                # the winning condition, on a FRESH machine so no state carries
-                # over. Offered under a name the model does not accept, so only
-                # the guard-driven competitors are evaluated and the winner's
-                # accept transition stays out of it. Without this, an arbiter
-                # that suppresses nothing and one that suppresses correctly both
-                # produce silence.
+                # Control: the same hazard state with only the winning condition withheld, on a
+                # fresh machine so no state carries over, offered under a name the model does not
+                # accept so only the guard-driven competitors are evaluated. Without it an
+                # arbiter that suppresses nothing and one that suppresses correctly both produce
+                # silence.
                 control_mission = ModelDrivenMission(mission_model_text)
                 control_decisions = control_mission.offer(
                     "__precedence_control__", time=time.monotonic(),
@@ -2177,11 +2083,10 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                     for decision in chute_decisions
                     if decision.action_definition is not None
                 ]
-                # The expected winner is the model's OWN parachute action:
-                # when the failure event fired exactly one distinct action,
-                # that action is the response by causal role (run3 names it
-                # deployBallisticRecoveryParachute); the adapter constant is
-                # only the no-decision fallback.
+                # The expected winner is the model's own parachute action: when the failure event
+                # fired exactly one distinct action, that action is the response by causal role
+                # (run3 names it deployBallisticRecoveryParachute). The adapter constant is the
+                # no-decision fallback.
                 winner_action = (
                     chute_fired_defs[0]
                     if len(set(chute_fired_defs)) == 1 and chute_fired_defs
@@ -2203,9 +2108,9 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                 m.mav.command_long_send(
                     m.target_system,
                     m.target_component,
-                    208,  # MAV_CMD_DO_PARACHUTE
+                    208,
                     0,
-                    2, 0, 0, 0, 0, 0, 0,  # PARACHUTE_ACTION_RELEASE
+                    2, 0, 0, 0, 0, 0, 0,
                 )
             else:
                 print("[model] the generated logic declined to deploy the "
@@ -2268,7 +2173,6 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
         m.mav.rc_channels_override_send(m.target_system, m.target_component, *([0] * 8))
         _cleanup(proc)
 
-        # per-rotor mechanical power (Σ Cp·ρ·n³·D⁵), analytical curve, and backed-out drag area
         from gazebo_poc.forward_flight import power_at_speed, effective_drag_area_from_power
         D = 2 * rotor_radius
         p_hover = _per_rotor_power_w(cap_path, D)
@@ -2296,19 +2200,18 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
                   "drag-area backout suppressed because airspeed != groundspeed", flush=True)
         if not thr:
             print("[RESULT] armed but no telemetry", flush=True); return 6
-        n = max(1, len(thr) // 3)               # steady-state = last third
+        n = max(1, len(thr) // 3)
         hov_thr = sum(thr[-n:]) / n
         hov_alt = sum(rels[-n:]) / n
         band = max(rels[-n:]) - min(rels[-n:])
-        # stable = SUSTAINED altitude near target + small band. A crashed/grounded vehicle has
-        # band≈0 (sitting on the ground) and a brief peak, so check the steady altitude is held
-        # well above ground — this correctly fails a non-redundant frame after a motor loss.
+        # stable = sustained altitude near target plus a small band. A grounded vehicle
+        # also has band~0, so the steady altitude must be held well above ground; this
+        # fails a non-redundant frame after a motor loss.
         #
-        # Altitude is necessary but not sufficient. Repeated one-motor-out runs
-        # of the same configuration held 1.17, 6.27, 9.93 and 10.00 m with
-        # attitude RMS from 1.59 to 19.56 deg — one of them holding altitude
-        # beautifully while wobbling 13.5 deg. Requiring both closes that gap;
-        # neither signal alone, and no single run, settles the requirement.
+        # Altitude alone is not enough: repeated one-motor-out runs of the same
+        # configuration held 1.17, 6.27, 9.93 and 10.00 m with attitude RMS from 1.59 to
+        # 19.56 deg, one holding altitude while wobbling 13.5 deg. Both signals are
+        # required, and no single run settles the requirement.
         att_rms = LAST_RESULT.get("hover_attitude_rms_deg")
         attitude_ok = (att_rms is None
                        or float(att_rms) <= _HOVER_ATTITUDE_RMS_LIMIT_DEG)
@@ -2346,6 +2249,5 @@ def main(mass_kg=5.5, rotor_radius=0.19, capacity_mah=16000, area_override=None,
 
 
 if __name__ == "__main__":
-    # optional: python run_flight.py <area_override>  (stage-4 calibrated-thrust flight)
     ao = float(sys.argv[1]) if len(sys.argv) > 1 else None
     sys.exit(main(area_override=ao))
