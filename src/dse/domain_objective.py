@@ -106,6 +106,12 @@ DESIGN_DEFAULTS = {d.field: d.default for d in DESIGN_ONTOLOGY}
 _FIELD_CONCERN = {d.field: d.concern for d in DESIGN_ONTOLOGY if d.concern}
 DESIGN_FIELD_FAMILY = {d.field: d.family for d in DESIGN_ONTOLOGY if d.family}
 _INNER_LOOP_FIELDS = tuple(d.field for d in DESIGN_ONTOLOGY if d.layer == "inner")
+# Fields a component variant may declare: outer-loop and not pinned by a
+# requirement condition. Payload is evaluated at the rated payload whatever the
+# variant says, so a payload variant would only multiply the space with ties.
+VARIANT_DECLARABLE_FIELDS = tuple(
+    d.field for d in DESIGN_ONTOLOGY if d.layer == "outer" and not d.req_cond
+)
 
 # `attribute <name> [: <Type>[::<Type>][ [unit] ]] = <number> [ [unit] ];`
 # The type may be qualified (`ISQ::LengthValue`, written by the A/G emitter)

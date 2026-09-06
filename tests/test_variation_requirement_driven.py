@@ -50,9 +50,10 @@ def test_relevant_component_emits_attrs():
     rationale, reqs, variants = spec
     assert reqs == ["REQ-PERF-001", "REQ-PERF-002"]
     assert len(variants) == 2
-    # battery capacity is inner-BO optimized, not variant-declared; cells/payload are
+    # capacity is inner-BO sized and payload is pinned to the rated payload;
+    # neither is variant-declared, cells are
     assert "batteryCapacityMah" not in variants[0].attrs
-    assert "batteryCells" in variants[0].attrs and "massKg" in variants[0].attrs
+    assert "batteryCells" in variants[0].attrs and "massKg" not in variants[0].attrs
     assert "enduranceMinutes" not in variants[0].attrs
 
 
@@ -157,14 +158,57 @@ def test_budget_scales_with_density():
 
 def test_out_of_bound_variants_filtered():
     import json
-    reqs = ["REQ-FUNC-003: payload gross mass up to 2.5 kg.",
+    reqs = ["REQ-CONS-004: no more than 6 rotors.",
             "REQ-PERF-002: endurance at least 25 minutes."]
     def chat(_):
-        return json.dumps({"relevant": True, "rationale": "payload sizing",
-            "satisfies": ["REQ-FUNC-003", "REQ-PERF-002"],
-            "variants": [{"name": "a", "design": {"payload_mass_kg": 2.0}},
-                         {"name": "b", "design": {"payload_mass_kg": 2.5}},
-                         {"name": "c", "design": {"payload_mass_kg": 10.0}},
-                         {"name": "d", "design": {"payload_mass_kg": 25.0}}]})
-    spec = Orchestrator._propose_variants(_orch(chat), "payloadSystem", "Payload", reqs)
+        return json.dumps({"relevant": True, "rationale": "rotor sizing",
+            "satisfies": ["REQ-CONS-004", "REQ-PERF-002"],
+            "variants": [{"name": "a", "design": {"rotor_count": 4}},
+                         {"name": "b", "design": {"rotor_count": 6}},
+                         {"name": "c", "design": {"rotor_count": 8}},
+                         {"name": "d", "design": {"rotor_count": 12}}]})
+    spec = Orchestrator._propose_variants(_orch(chat), "propulsionSystem", "Propulsion", reqs)
     assert [v.name for v in spec[2]] == ["a", "b"]
+
+
+def test_prompt_renders_ceiling_and_floor():
+    # Mass is a ceiling the bound filter enforces; the prompt used to show it as
+    # ">=", and its example named a design key (mass_kg) that does not exist.
+    seen = []
+
+    def chat(prompt):
+        seen.append(prompt)
+        return json.dumps({"relevant": False})
+
+    reqs = _REQS + ["REQ-CONS-003: take-off mass shall not exceed 8.0 kg."]
+    Orchestrator._propose_variants(_orch(chat), "airframe", "Airframe", reqs)
+    prompt = seen[0]
+    assert "mass<=8.0" in prompt
+    assert "speed>=18.0" in prompt
+    assert "mass>=" not in prompt
+    assert "do NOT declare battery_capacity_mah or payload_mass_kg" in prompt
+    assert "payload_mass_kg, " not in prompt  # not offered as a design input
+    assert "airframe sets mass_kg" not in prompt
+
+
+def test_payload_not_variant_declarable():
+    # Payload is evaluated at the rated payload, so a payload-only proposal has
+    # nothing to vary and a stray payload figure is dropped from a real variant.
+    reqs = _REQS + ["REQ-FUNC-004: carry a payload of up to 1.5 kg."]
+
+    def payload_only(_):
+        return json.dumps({"relevant": True, "rationale": "payload",
+            "satisfies": ["REQ-FUNC-004"],
+            "variants": [{"name": "light", "design": {"payload_mass_kg": 0.5}},
+                         {"name": "heavy", "design": {"payload_mass_kg": 1.5}}]})
+    assert Orchestrator._propose_variants(
+        _orch(payload_only), "payloadMechanism", "Payload", reqs) is None
+
+    def mixed(_):
+        return json.dumps({"relevant": True, "rationale": "cells",
+            "satisfies": ["REQ-PERF-002"],
+            "variants": [{"name": "s4", "design": {"battery_cells": 4, "payload_mass_kg": 9.0}},
+                         {"name": "s6", "design": {"battery_cells": 6, "payload_mass_kg": 9.0}}]})
+    spec = Orchestrator._propose_variants(_orch(mixed), "powerSystem", "Power", reqs)
+    assert [v.name for v in spec[2]] == ["s4", "s6"]
+    assert all("massKg" not in v.attrs for v in spec[2])

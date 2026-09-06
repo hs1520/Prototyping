@@ -741,7 +741,9 @@ class ExplorationMixin:
         Returns (rationale, [req_ids], [VariantSpec]) or None.
         """
         from ..dse.domain_objective import (
+            _COST_FAMILIES,
             DESIGN_FIELD_ATTR,
+            VARIANT_DECLARABLE_FIELDS,
             objective_families,
             requirement_targets,
             within_requirement_bounds,
@@ -756,14 +758,20 @@ class ExplorationMixin:
         if not targets or not perf_fams:
             return self._propose_variants_generic(usage, type_name, requirements)
 
+        # Cost families are ceilings (the bound filter below rejects anything above
+        # them); rendering every target as ">=" invited payload variants that were
+        # then filtered out to nothing.
         quant = "\n".join(
-            f"{rid}: " + ", ".join(f"{f}>={t}" for f, t in fts)
+            f"{rid}: " + ", ".join(
+                f"{f}<={t}" if f in _COST_FAMILIES else f"{f}>={t}" for f, t in fts
+            )
             for rid, fts in targets.items()
         )
-        design_keys = ", ".join(k for k in DESIGN_FIELD_ATTR if k != "battery_capacity_mah")
+        design_keys = ", ".join(VARIANT_DECLARABLE_FIELDS)
         catalog_domain = catalog_design_domain()
         prompt = (
-            f"Component '{usage}' (type {type_name}). Quantified requirements:\n"
+            f"Component '{usage}' (type {type_name}). Quantified requirements "
+            "(<= is a ceiling that variants must respect, >= a performance floor):\n"
             f"{quant}\n\n"
             "Design inputs (SITL-settable) that determine performance:\n"
             f"{design_keys}\n\n"
@@ -775,8 +783,11 @@ class ExplorationMixin:
             '"design": {"<design_input>": <number>}}]}\n'
             "design keys MUST be from the list above, and ONLY the inputs THIS component "
             "controls (e.g. a propulsion unit sets rotor_count/rotor_radius_m, a battery "
-            "sets battery_cells, an airframe sets mass_kg). Battery CAPACITY is optimized "
-            "internally by the inner layer — do NOT declare battery_capacity_mah. Give 4-6 "
+            "sets battery_cells; a component that controls none of them, such as an "
+            "airframe, a payload mechanism or a recovery system, is NOT relevant). "
+            "Battery CAPACITY is sized by the inner layer and payload mass is fixed by "
+            "the requirements' rated payload — do NOT declare battery_capacity_mah or "
+            "payload_mass_kg. Give 4-6 "
             "variants spanning a real trade-off (more rotors / bigger rotor radius → more "
             "lift but heavier; more battery_cells → more power but heavier). satisfies must "
             "be a subset of the ids above. Catalog-controlled values MUST lie in this "
@@ -797,7 +808,14 @@ class ExplorationMixin:
                 name = re.sub(r"\W", "", str(v.get("name", "")))
                 if not name:
                     continue
-                design = v.get("design", {}) or {}
+                # inner-BO and requirement-pinned fields are not variant choices;
+                # dropped before the bound check so a stray payload figure does not
+                # sink an otherwise valid rotor/battery variant.
+                design = {
+                    str(k).strip().lower(): val
+                    for k, val in (v.get("design", {}) or {}).items()
+                    if str(k).strip().lower() in VARIANT_DECLARABLE_FIELDS
+                }
                 # objective bound filter: a variant must respect the quantified bounds of
                 # the requirements it satisfies (e.g. payload <= the payload-mass limit), so
                 # out-of-spec implementations stay out of the variant library.
@@ -807,10 +825,7 @@ class ExplorationMixin:
                     continue
                 attr_lines = []
                 for field, val in design.items():
-                    field = str(field).strip().lower()
-                    if field == "battery_capacity_mah":
-                        continue  # inner-BO optimized, not variant-declared
-                    if field in DESIGN_FIELD_ATTR and isinstance(val, (int, float)):
+                    if isinstance(val, (int, float)):
                         attr_lines.append(
                             f"attribute {DESIGN_FIELD_ATTR[field]} : Real = {float(val)};"
                         )
