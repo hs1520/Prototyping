@@ -921,7 +921,7 @@ part def SafetyMonitor {
             send CMD_LAND() to overrideCmd; 
         }
         action def deployBallisticRecoveryParachute {
-            send RecoveryCmdData() to recoveryCmd;
+            send new RecoveryCmdData() to recoveryCmd;
         }
         action def monitorPropulsionHealth {}
         action def performSelfTest {}

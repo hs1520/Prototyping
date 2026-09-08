@@ -227,7 +227,40 @@ _BOOL_PREFIX_RE = re.compile(r"^(?:is|has|should|can|must)[A-Z]")
 # 单位括号 [...] - 用于把 `[bit]` 这类单位名与 guard 状态变量区分开
 
 
-def _infer_attr_decl(name: str) -> str:
+_COMPARE_OPS_RE = re.compile(r"(<=|>=|==|!=|<|>|\+|-|\*|/)")
+
+
+def _used_as_boolean_operand(name: str, line_text: str) -> bool | None:
+    """Type the missing feature from how the line uses it, not from its name.
+
+    `not (x) or (y)` needs Booleans; `x <= 25.0` needs a Real. A name next to a
+    comparison or arithmetic operator is numeric; a name that stands alone in a
+    guard or constraint, or under `not`/`and`/`or`, is Boolean. Returns None
+    when the line gives no signal.
+    """
+    if not line_text:
+        return None
+    for m in re.finditer(rf"\b{re.escape(name)}\b", line_text):
+        before = line_text[:m.start()].rstrip()
+        after = line_text[m.end():].lstrip()
+        left = before[-2:] if before else ""
+        right = after[:2] if after else ""
+        if _COMPARE_OPS_RE.search(left) or _COMPARE_OPS_RE.search(right):
+            return False
+        before_word = re.sub(r"[()\s]+$", "", before).split()[-1:] if before.strip("() ") else []
+        after_word = re.sub(r"^[()\s]+", "", after).split()[:1] if after.strip("() ") else []
+        bool_ctx = {"not", "and", "or", "if", "then", "{", "}", "implies"}
+        if (not before_word or before_word[0] in bool_ctx) and (not after_word or after_word[0] in bool_ctx):
+            return True
+    return None
+
+
+def _infer_attr_decl(name: str, line_text: str = "") -> str:
+    as_bool = _used_as_boolean_operand(name, line_text)
+    if as_bool is True:
+        return f"attribute {name} : Boolean = false;"
+    if as_bool is False:
+        return f"attribute {name} : Real = 0.0;"
     if _BOOL_HINT_RE.search(name) or _BOOL_PREFIX_RE.match(name):
         return f"attribute {name} : Boolean = false;"
     return f"attribute {name} : Real = 0.0;"
@@ -264,7 +297,7 @@ def _missing_feature_hints(chunk: "ErrorChunk") -> List[str]:
             continue   # 单位名，交给 prompt 的单位规则处理，不声明 attribute
 
         seen.add(name)
-        hints.append(f"  • '{name}'  →  declare  `{_infer_attr_decl(name)}`")
+        hints.append(f"  • '{name}'  →  declare  `{_infer_attr_decl(name, line_text)}`")
     return hints
 
 

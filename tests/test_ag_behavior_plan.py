@@ -15,7 +15,7 @@ from src.prototyping.ag_chains import (
     REQ_SAFE_008_CHAIN,
 )
 from src.prototyping.ag_decision import build_spec_from_decisions
-from tests.test_option2_ag_decision import _BOUNDARY, _CORRECT
+from tests.test_ag_decision import _BOUNDARY, _CORRECT
 
 
 def test_one_obligation_per_component():

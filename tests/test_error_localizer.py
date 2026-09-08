@@ -260,6 +260,16 @@ def test_infer_attr_decl():
     ok("Detected→bool",  infer("collisionDetected") == "attribute collisionDetected : Boolean = false;")
     ok("Active→bool",    infer("linkActive")        == "attribute linkActive : Boolean = false;")
     ok("isReady→bool",   infer("isReady")           == "attribute isReady : Boolean = false;")
+    # usage beats the name: a bare Boolean operand is Boolean whatever it is called
+    ok("bare_or_operand→bool",
+       infer("recoveryActuationPowerAvailable", "        not (airborne) or (recoveryActuationPowerAvailable)")
+       == "attribute recoveryActuationPowerAvailable : Boolean = false;")
+    ok("bare_guard→bool",
+       infer("airborne", "transition t first A if airborne then B;")
+       == "attribute airborne : Boolean = false;")
+    ok("compared→real",
+       infer("linkActive", "transition t first A if linkActive >= 1 then B;")
+       == "attribute linkActive : Real = 0.0;")
     ok("hasFault→bool",  infer("hasFault")          == "attribute hasFault : Boolean = false;")
     ok("charge→real",    infer("batteryCharge")     == "attribute batteryCharge : Real = 0.0;")
     ok("timeToHub→real", infer("timeToHub")         == "attribute timeToHub : Real = 0.0;")

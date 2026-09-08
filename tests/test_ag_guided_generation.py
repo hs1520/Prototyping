@@ -10,7 +10,7 @@ from src.prototyping.ag_chains import REQ_SAFE_005_CHAIN
 from src.prototyping.ag_emitter import ag_event_signals, emit_ag_package
 from src.sysml.lite_model import build_lite_model
 from src.utils.sysml_text_utils import get_sysml_text
-from tests.test_option2_ag_decision import _CORRECT, _DecisionLLM
+from tests.test_ag_decision import _CORRECT, _DecisionLLM
 
 
 class _NoCallLLM:

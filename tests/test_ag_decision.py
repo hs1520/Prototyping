@@ -32,7 +32,7 @@ from src.prototyping.ag_emitter import emit_ag_package
 from src.prototyping.ag_evaluation import evaluate_ag_against_gold
 from src.prototyping.ag_extractor import extract_ag_graph
 from src.prototyping.architecture_boundary import build_architecture_boundary_draft
-from tests.test_option2_ag_evaluation import REQ_SAFE_005_GOLD
+from tests.ag_fixtures import REQ_SAFE_005_GOLD
 
 _BASE = (
     "package Src { requirement def REQ_SAFE_005 { doc /* deploy the ballistic "

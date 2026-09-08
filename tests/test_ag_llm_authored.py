@@ -19,7 +19,7 @@ from src.prototyping.ag_emitter import emit_ag_package
 from src.prototyping.ag_evaluation import evaluate_ag_against_gold
 from src.prototyping.ag_extractor import extract_ag_graph
 from src.prototyping.experiment_arms import R2_DETERMINISTIC_GENERATION_MODE
-from tests.test_option2_ag_evaluation import REQ_SAFE_005_GOLD
+from tests.ag_fixtures import REQ_SAFE_005_GOLD
 
 _BASE = (
     "package Src { requirement def REQ_SAFE_005 { doc /* deploy the ballistic "
@@ -232,7 +232,7 @@ def test_authored_path_gold_blind_feedback():
         line for line in correct.splitlines()
         if "dependency discharge" not in line.lower()
     )
-    from tests.test_option2_ag_decision import (
+    from tests.test_ag_decision import (
         _BASE_WITH_RESPONSE_CATALOG,
         _CATALOG_CORRECT,
     )
@@ -309,7 +309,7 @@ def test_missing_input_stops_early():
         line for line in correct.splitlines()
         if "dependency discharge" not in line.lower()
     )
-    from tests.test_option2_ag_decision import _CORRECT
+    from tests.test_ag_decision import _CORRECT
 
     thin = json.loads(json.dumps(_CORRECT))
     thin["priority"]["members"] = ["PARACHUTE_DEPLOYMENT"]

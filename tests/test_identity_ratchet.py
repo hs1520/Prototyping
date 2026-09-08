@@ -118,8 +118,8 @@ def test_off_route_send_mismatches():
     existing port and the mismatch returns.
     """
     off_route = _model_text().replace(
-        "send RecoveryCmdData() to recoveryCmd;",
-        "send RecoveryCmdData() to overrideCmd;",
+        "send new RecoveryCmdData() to recoveryCmd;",
+        "send new RecoveryCmdData() to overrideCmd;",
     )
     assert "to overrideCmd;" in off_route
     _l2, mismatches = _linker_shape(off_route, _plan_payload())
