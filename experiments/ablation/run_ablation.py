@@ -277,8 +277,8 @@ def _archive_failure(
 ) -> None:
     """Persist the rejected model and the evidence that rejected it.
 
-    Mirrors scripts/benchmark.py: fail-closed gates attach their evidence to
-    the raised error; without this the exact revision that failed is lost.
+    Fail-closed gates attach their evidence to the raised error; without this
+    the exact revision that failed is lost.
     """
     model_text = getattr(error, "terminal_model_text", None)
     if model_text is None:
