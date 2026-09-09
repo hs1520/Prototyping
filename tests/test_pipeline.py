@@ -89,10 +89,10 @@ def test_vertex_default_model(monkeypatch):
 def test_vertex_model_passthrough(monkeypatch):
     monkeypatch.setitem(provider_module.LLM_PROVIDER_FACTORIES, "vertex", DummyLLM)
 
-    llm = provider_module.create_llm(provider="vertex", model="claude-3-7-sonnet")
+    llm = provider_module.create_llm(provider="vertex", model="gemini-2.5-pro")
 
     assert isinstance(llm, DummyLLM)
-    assert llm.model == "claude-3-7-sonnet"
+    assert llm.model == "gemini-2.5-pro"
 
 
 class DummyPineconeWrapper:
