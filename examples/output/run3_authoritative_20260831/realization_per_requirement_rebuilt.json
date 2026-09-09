@@ -1,72 +1,72 @@
 {
- "verdict": "CLOSED",
- "per_requirement": [
-  {
-   "req_id": "REQ-FUNC-003",
-   "family": "payload",
-   "target": 0.3,
-   "estimator_value": 0.0,
-   "realized_value": 0.45945945945945954,
-   "met": true,
-   "scope": "closure",
-   "fidelity": null,
-   "note": "hover-throttle margin at the rated delivery payload (1.5 kg aboard, bench-curve interpolation); attitude/behaviour clauses are not covered at the datasheet tier"
-  },
-  {
-   "req_id": "REQ-PERF-002",
-   "family": "time",
-   "target": 25.0,
-   "estimator_value": 22.109,
-   "realized_value": 31.226373626373636,
-   "met": true,
-   "scope": "closure",
-   "fidelity": null,
-   "note": ""
-  },
-  {
-   "req_id": "REQ-PERF-003",
-   "family": "speed",
-   "target": 18.0,
-   "estimator_value": 0.0,
-   "realized_value": 41.5,
-   "met": true,
-   "scope": "forward_flight",
-   "fidelity": "lumped_forward_flight",
-   "note": "lumped forward-flight momentum model; equivalent drag area assumed 0.05 m^2; max speed is capped by tilted thrust and datasheet electrical power (published bench power plus pack C-rate); continuous thermal limits remain unavailable; Gazebo/SITL can calibrate this fidelity tier"
-  },
-  {
-   "req_id": "REQ-PERF-006",
-   "family": "range",
-   "target": 5000.0,
-   "estimator_value": 0.0,
-   "realized_value": 41378.263928686414,
-   "met": true,
-   "scope": "forward_flight",
-   "fidelity": "lumped_forward_flight",
-   "note": "lumped forward-flight momentum model; equivalent drag area assumed 0.05 m^2; max speed is capped by tilted thrust and datasheet electrical power (published bench power plus pack C-rate); continuous thermal limits remain unavailable; Gazebo/SITL can calibrate this fidelity tier"
-  },
-  {
-   "req_id": "REQ-CONS-001",
-   "family": "altitude",
-   "target": 120.0,
-   "estimator_value": 0.0,
-   "realized_value": null,
-   "met": null,
-   "scope": "deferred",
-   "fidelity": null,
-   "note": "altitude <= is not a datasheet/forward-flight capability check"
-  },
-  {
-   "req_id": "REQ-CONS-003",
-   "family": "mass",
-   "target": 8.0,
-   "estimator_value": 6.314,
-   "realized_value": 5.54,
-   "met": true,
-   "scope": "closure",
-   "fidelity": null,
-   "note": ""
-  }
- ],
- "forward_flight_ok": true
+  "verdict": "CLOSED",
+  "per_requirement": [
+    {
+      "req_id": "REQ-FUNC-003",
+      "family": "payload",
+      "target": 0.3,
+      "estimator_value": 0.0,
+      "realized_value": 0.45945945945945954,
+      "met": true,
+      "scope": "closure",
+      "fidelity": null,
+      "note": "hover-throttle margin at the rated delivery payload (1.5 kg aboard, bench-curve interpolation); attitude/behaviour clauses are not covered at the datasheet tier"
+    },
+    {
+      "req_id": "REQ-PERF-002",
+      "family": "time",
+      "target": 25.0,
+      "estimator_value": 22.109,
+      "realized_value": 31.226373626373636,
+      "met": true,
+      "scope": "closure",
+      "fidelity": null,
+      "note": ""
+    },
+    {
+      "req_id": "REQ-PERF-003",
+      "family": "speed",
+      "target": 18.0,
+      "estimator_value": 0.0,
+      "realized_value": 41.5,
+      "met": true,
+      "scope": "forward_flight",
+      "fidelity": "lumped_forward_flight",
+      "note": "lumped forward-flight momentum model; equivalent drag area assumed 0.05 m^2; max speed is capped by tilted thrust and datasheet electrical power (published bench power plus pack C-rate); continuous thermal limits remain unavailable; Gazebo/SITL can calibrate this fidelity tier"
+    },
+    {
+      "req_id": "REQ-PERF-006",
+      "family": "range",
+      "target": 5000.0,
+      "estimator_value": 0.0,
+      "realized_value": 41378.263928686414,
+      "met": true,
+      "scope": "forward_flight",
+      "fidelity": "lumped_forward_flight",
+      "note": "lumped forward-flight momentum model; equivalent drag area assumed 0.05 m^2; max speed is capped by tilted thrust and datasheet electrical power (published bench power plus pack C-rate); continuous thermal limits remain unavailable; Gazebo/SITL can calibrate this fidelity tier"
+    },
+    {
+      "req_id": "REQ-CONS-001",
+      "family": "altitude",
+      "target": 120.0,
+      "estimator_value": 0.0,
+      "realized_value": null,
+      "met": null,
+      "scope": "deferred",
+      "fidelity": null,
+      "note": "altitude <= is not a datasheet/forward-flight capability check"
+    },
+    {
+      "req_id": "REQ-CONS-003",
+      "family": "mass",
+      "target": 8.0,
+      "estimator_value": 6.314,
+      "realized_value": 5.54,
+      "met": true,
+      "scope": "closure",
+      "fidelity": null,
+      "note": ""
+    }
+  ],
+  "forward_flight_ok": true
 }

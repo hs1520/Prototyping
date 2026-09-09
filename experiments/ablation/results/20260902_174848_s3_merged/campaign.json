@@ -1,7 +1,6 @@
 {
   "system": "AutonomousDrone",
   "requirement_source": "examples/drone_system_v2.py (DRONE_FROZEN_REQUIREMENTS)",
-  "requirements_digest": "a2f04214fa1e129bd231b54c83fb728badc7b9eada1224822263a9828fbb893a",
   "provider": "vertex",
   "base_pipeline_kwargs": {
     "max_iterations": 4,
@@ -12,7 +11,7 @@
   "arm_registry": {
     "FULL": {
       "name": "FULL",
-      "ablated_component": "none (baseline \u2014 production default pipeline)",
+      "ablated_component": "none (baseline — production default pipeline)",
       "question": "Baseline for every paired comparison; its own failure rate quantifies current full-chain robustness.",
       "pipeline_kwargs": {},
       "run_dse": true,
@@ -30,7 +29,7 @@
     },
     "DSE-BILEVEL": {
       "name": "DSE-BILEVEL",
-      "ablated_component": "LLM-declared variation points \u2192 catalog-operator bilevel DSE",
+      "ablated_component": "LLM-declared variation points → catalog-operator bilevel DSE",
       "question": "How do the two DSE modes compare on the same spec?",
       "pipeline_kwargs": {
         "dse_mode": "bilevel"
@@ -41,7 +40,7 @@
     },
     "NO-REFINE": {
       "name": "NO-REFINE",
-      "ablated_component": "iterative refinement loop (max_iterations 4 \u2192 1)",
+      "ablated_component": "iterative refinement loop (max_iterations 4 → 1)",
       "question": "What does iterative refinement contribute beyond the first evaluated candidate?",
       "pipeline_kwargs": {
         "max_iterations": 1
@@ -86,7 +85,7 @@
     },
     "SINGLE-SHOT": {
       "name": "SINGLE-SHOT",
-      "ablated_component": "multistep typed-plan generation \u2192 legacy single-prompt whole-model generation (plan-conformance gates inapplicable by construction)",
+      "ablated_component": "multistep typed-plan generation → legacy single-prompt whole-model generation (plan-conformance gates inapplicable by construction)",
       "question": "Is structured multistep decomposition necessary, or can one prompt produce an admissible model?",
       "pipeline_kwargs": {
         "design_generation_mode": "single_shot"
@@ -97,7 +96,7 @@
     },
     "W-UNIFORM": {
       "name": "W-UNIFORM",
-      "ablated_component": "requirement-derived recommendation weights \u2192 uniform weights (offline replay on FULL's saved Pareto fronts)",
+      "ablated_component": "requirement-derived recommendation weights → uniform weights (offline replay on FULL's saved Pareto fronts)",
       "question": "Does requirement-traceable weighting actually change which design is recommended?",
       "pipeline_kwargs": {},
       "run_dse": true,

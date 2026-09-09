@@ -12,18 +12,6 @@
     "rotor_count": 6,
     "rotor_radius_m": 0.2032
   },
-  "source_provenance": {
-    "schema_version": 2,
-    "run_id": "68c38629-cac4-4432-aa15-1b102279eb0a",
-    "model_sha256": "b9c9e678c0cba8ba8ee2f80a9ab0b01a90475b727f6657390c69055020f0f702",
-    "verification_model_sha256": "f1d6b150fdea8a62a917a1bc9f6d8fc962f213b082d66ea0a2c98b5f860c57f0",
-    "requirements_sha256": "041b7a93b719ab3138062e6045540cab0acd8691759429de6f4bd09f571b4ffa",
-    "requirement_graph_sha256": "15e28e63f1bbee1e2430db6bafb34ea2bb8bc7693def2567d0efb55a2d434b9f",
-    "catalog_sha256": "8dbe547d1f08318ac4709d7365dfe8c726e0b40bbdf49dc17196b0cc27662021",
-    "recommended_design_sha256": "e2ea13680170f2b4d494662aa778a45431637e71233dfce64d1035000b1a1806",
-    "realized_components_sha256": "cc5543dbf3d306c8792333d82f0720c66120ab070744539be8c9900489180e7b",
-    "parm_sha256": null
-  },
   "gazebo_design": {
     "rotor_count": 6,
     "rotor_radius_m": 0.2032,
@@ -37,7 +25,6 @@
   },
   "gazebo_result": {
     "mission_provenance": {
-      "model_sha256": "b9c9e678c0cba8ba8ee2f80a9ab0b01a90475b727f6657390c69055020f0f702",
       "machines": [
         "FlightController.ContingencyResponseBehavior",
         "FlightController.HeadwindFlightBehavior",
@@ -1038,5 +1025,6 @@
       "max_delay_s": 0.5,
       "status": "PLANNED"
     }
-  ]
+  ],
+  "source_run_id": "68c38629-cac4-4432-aa15-1b102279eb0a"
 }
