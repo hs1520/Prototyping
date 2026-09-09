@@ -296,8 +296,6 @@ class CollaborationMixin:
                 "input_model_revision": task.base_model_revision,
                 "input_model_digest": task.base_model_digest,
                 "context_envelope_id": envelope.envelope_id,
-                "context_envelope_digest": envelope.envelope_digest,
-                "transcript_digest": session.transcript_digest,
                 "included_record_ids": list(
                     envelope.included_record_ids
                 ),
@@ -450,8 +448,6 @@ class CollaborationMixin:
             {
                 "success": True,
                 "context_envelope_id": envelope.envelope_id,
-                "context_envelope_digest": envelope.envelope_digest,
-                "transcript_digest": session.transcript_digest,
                 "included_record_ids": list(envelope.included_record_ids),
                 "verification_plan": plan,
                 "accepted_status": "ACCEPTED",
@@ -767,7 +763,6 @@ class CollaborationMixin:
                 # membership of a conversation, not position in it: the opening
                 # turn has offset 0 and is still part of one
                 "multi_turn": event.get("conversation_id") is not None,
-                "fragment_digest": text_digest(fragment),
                 "fragment_chars": len(fragment),
                 "fragment": fragment,
                 "completion_tokens": int(

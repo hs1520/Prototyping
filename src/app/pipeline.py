@@ -318,11 +318,6 @@ class PrototypingPipeline:
             report["revised_experiment"] = revised
             collaboration = result.get("collaboration")
             report["collaboration"] = collaboration
-            if collaboration:
-                from ..prototyping.run_metrics import compute_coordination_metrics
-                report["coordination_metrics"] = compute_coordination_metrics(
-                    collaboration, llm_usage=result.get("llm_usage")
-                )
             if result.get("ag_contract_graph") is not None:
                 report["ag_contract_graph"] = result.get("ag_contract_graph")
             for artifact in (

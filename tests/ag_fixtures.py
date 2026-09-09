@@ -1,5 +1,4 @@
 """Shared fixture for the assume-guarantee tests: the reviewed gold record for REQ-SAFE-005."""
-import hashlib
 
 from src.prototyping.ag_evaluation import GOLD_ROLE
 
@@ -21,14 +20,7 @@ REQ_SAFE_005_GOLD = {
         "REQ-SAFE-005: independently authored evaluator fixture for the "
         "parachute-deployment chain."
     ),
-    "source_digest": hashlib.sha256(
-        (
-            "REQ-SAFE-005: independently authored evaluator fixture for the "
-            "parachute-deployment chain."
-        ).encode("utf-8")
-    ).hexdigest(),
     "requirement_set_digest": "a" * 64,
-    "architecture_boundary_digest": "b" * 64,
     "allocations": [
         {
             "owner": "safetyResponseArbiter",

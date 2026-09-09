@@ -84,9 +84,6 @@ class ModelRevision:
         )
 
     def materialize(self) -> SysMLModel:
-        expected = sha256_text(self.sysml)
-        if expected != self.digest:
-            raise ValueError("model revision digest does not match its SysML text")
         model = build_lite_model(self.sysml, model_name=self.name)
         model.metadata.update(deepcopy(self._metadata))
         model.metadata["last_sysml_text"] = self.sysml
@@ -1720,9 +1717,7 @@ class _RefinementEngine:
                         current_model, requirements
                     )
                     fatal_state = (
-                        hashlib.sha256(
-                            get_sysml_text(current_model).encode("utf-8")
-                        ).hexdigest(),
+                        get_sysml_text(current_model),
                         tuple(sorted(str(a) for a in fatal_advisories)),
                     )
                     if fatal_state == fatal_state_before:

@@ -6,7 +6,6 @@ from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 
 from .blackboard import Blackboard, RecordType
-from ..utils.digest import sha256_text
 from ..utils.tokens import estimate_tokens
 
 
@@ -65,7 +64,6 @@ class ContextEnvelope:
     estimated_tokens: int = 0
     context_item_provenance: tuple[Mapping[str, Any], ...] = ()
     record_context: tuple[Mapping[str, Any], ...] = ()
-    envelope_digest: str = ""
 
     def to_dict(self, *, include_content: bool = False) -> dict[str, Any]:
         result = asdict(self)
@@ -79,13 +77,13 @@ class ContextEnvelope:
     def render_for_prompt(self) -> str:
         """The prompt text for this envelope.
 
-        Omits the monotonic bookkeeping identifiers - ``task_id``, per-record
-        ``record_id``/``session_id``, and the envelope digest. Including them made every
+        Omits the monotonic bookkeeping identifiers - ``task_id`` and per-record
+        ``record_id``/``session_id``. Including them made every
         generation prompt sensitive to unrelated board activity: one upstream publication
         shifted every downstream counter, changing the prompt bytes and so the sampled
         output with no semantic change, which made "we added a board record" and "we
         changed generation" indistinguishable interventions. They remain in the archived
-        envelope and in ``envelope_digest``.
+        envelope.
 
         ``model_revision`` and ``model_digest`` stay: content-derived, stable for identical
         content, and what pins the envelope to a revision.
@@ -256,14 +254,6 @@ class ContextBuilder:
         self._sequence = 0
         self._envelopes: list[ContextEnvelope] = []
 
-    @staticmethod
-    def _digest(fields: Mapping[str, Any]) -> str:
-        raw = json.dumps(
-            dict(fields), ensure_ascii=False, sort_keys=True,
-            separators=(",", ":"), default=str,
-        )
-        return sha256_text(raw)
-
     def build(
         self,
         *,
@@ -357,7 +347,6 @@ class ContextBuilder:
             "kind": "committed_sysml_slice",
             "model_revision": current.revision,
             "model_digest": current.model_digest,
-            "content_digest": sha256_text(content),
         },)
         record_context = tuple({
             "record_id": record.record_id,
@@ -389,7 +378,7 @@ class ContextBuilder:
             "context_item_provenance": provenance,
             "record_context": record_context,
         }
-        envelope = ContextEnvelope(**base, envelope_digest=self._digest(base))
+        envelope = ContextEnvelope(**base)
         estimated_tokens = estimate_tokens(envelope.render_for_prompt())
         if estimated_tokens > envelope.token_budget:
             if allow_deterministic_truncation and content:
@@ -406,9 +395,7 @@ class ContextBuilder:
                         "omitted": "model_context:tail",
                     },),
                 })
-                envelope = ContextEnvelope(
-                    **base, envelope_digest=self._digest(base)
-                )
+                envelope = ContextEnvelope(**base)
                 estimated_tokens = estimate_tokens(envelope.render_for_prompt())
             if estimated_tokens > envelope.token_budget:
                 raise ValueError(
@@ -417,7 +404,7 @@ class ContextBuilder:
                     "deterministically truncated envelope with omitted_items"
                 )
         base["estimated_tokens"] = estimated_tokens
-        envelope = ContextEnvelope(**base, envelope_digest=self._digest(base))
+        envelope = ContextEnvelope(**base)
         self._envelopes.append(envelope)
         self.board.publish(
             RecordType.HISTORY,

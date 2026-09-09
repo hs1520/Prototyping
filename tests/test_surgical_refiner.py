@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import List
 
 from src.agents.orchestrator import Orchestrator, PrototypingState
@@ -108,12 +106,6 @@ def _repair_packet(*, affected=("FlightController",)):
         "platform_bindings": [],
         "pattern_constraints": [],
     }
-    canonical = json.dumps(
-        packet, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
-    packet["packet_digest"] = hashlib.sha256(
-        canonical.encode("utf-8")
-    ).hexdigest()
     return packet
 
 
@@ -264,7 +256,7 @@ class TestAttemptSurgicalRefinement:
     def test_invalid_packet_skips_llm(self):
         llm = _ScriptedLLM(["anything"])
         packet = _repair_packet()
-        packet["scope"]["affected_elements"] = ["Imu"]
+        del packet["artifact_type"]
         audit = SurgicalAudit()
 
         assert attempt_surgical_refinement(

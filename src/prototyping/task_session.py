@@ -1,8 +1,6 @@
 """Application-owned short-lived task sessions for revised Option 2."""
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Iterable, Optional
@@ -120,14 +118,6 @@ class TaskSession:
         self.status = target
         self.output_record_ids.extend(str(item) for item in output_record_ids)
 
-    @property
-    def transcript_digest(self) -> str:
-        payload = [asdict(item) for item in self.messages]
-        raw = json.dumps(
-            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        )
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
     def to_dict(self, *, include_messages: bool = False) -> dict[str, Any]:
         result = {
             "session_id": self.session_id,
@@ -143,7 +133,6 @@ class TaskSession:
             "status": self.status.value,
             "output_record_ids": list(self.output_record_ids),
             "rebased_from_session_id": self.rebased_from_session_id,
-            "transcript_digest": self.transcript_digest,
         }
         if include_messages:
             result["messages"] = [asdict(item) for item in self.messages]

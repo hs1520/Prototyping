@@ -23,19 +23,13 @@ from .ag_emitter import AGComponentSpec
 from .experiment_arms import REVISED_EXPERIMENT_NAMESPACE
 from .frozen_artifact_protocol import (
     has_review_markers,
-    is_sha256,
     validate_frozen_envelope,
 )
-from ..utils.digest import sha256_text
 
 GOLD_ROLE = "EVALUATOR_GOLD"
 GOLD_STATUS_DRAFT = "DRAFT_FOR_SUPERVISOR_REVIEW"
 GOLD_STATUS_FROZEN = "FROZEN"
 GOLD_SCHEMA_VERSION = "3.0"
-
-
-def _digest(text: str) -> str:
-    return sha256_text(text or "")
 
 
 def _gold_realization_paths(
@@ -114,11 +108,8 @@ def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
     source_text = gold.get("source_text")
     if not isinstance(source_text, str) or not source_text:
         problems.append("source_text must be the immutable stakeholder text")
-    elif gold.get("source_digest") != _digest(source_text):
-        problems.append("source_digest does not match source_text")
-    for field in ("requirement_set_digest", "architecture_boundary_digest"):
-        if not is_sha256(gold.get(field)):
-            problems.append(f"{field} must be a lowercase SHA-256 digest")
+    if not gold.get("requirement_set_digest"):
+        problems.append("requirement_set_digest must name the frozen requirement set")
     allocations = gold.get("allocations")
     if not isinstance(allocations, list) or not allocations:
         problems.append("allocations must be a non-empty list")

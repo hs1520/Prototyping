@@ -167,8 +167,7 @@ class AGAssuranceMixin:
             plan = self._compile_ag_generation_plan(selected, requirements)
         except BaseException:
             # Fail closed on the board too: a planning task whose compilation raised is not
-            # archived as an ACCEPTED handoff (run_metrics counts COMPLETED sessions as
-            # successful handoffs).
+            # archived as an ACCEPTED handoff.
             self._close_ag_planning_session(planning_session, success=False)
             raise
         self._close_ag_planning_session(planning_session, success=True)
@@ -275,8 +274,6 @@ class AGAssuranceMixin:
             {
                 "success": success,
                 "context_envelope_id": envelope.envelope_id,
-                "context_envelope_digest": envelope.envelope_digest,
-                "transcript_digest": session.transcript_digest,
                 "included_record_ids": list(envelope.included_record_ids),
                 "decision_attempts": len(self.last_ag_authoring_attempts),
                 "accepted_status": "ACCEPTED" if success else "REJECTED",
