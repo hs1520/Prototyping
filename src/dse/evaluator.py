@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .design_space import DesignConfiguration
 from .diagnostics import _STAKEHOLDER_REQ, diagnose as _diagnose_impl
