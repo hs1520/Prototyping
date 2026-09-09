@@ -16,6 +16,8 @@ from src.prototyping.artifact_provenance import (
     validate_run_provenance,
 )
 from src.prototyping.artifact_store import (
+    LATEST_NAME,
+    output_root,
     atomic_write_json,
     atomic_write_text,
     ensure_open_bundle,
@@ -32,7 +34,16 @@ from gazebo_poc.model_mission import ModelAction
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = output_dir()
-INPUT = input_dir()
+
+def _input_dir_or_placeholder() -> Path:
+    # Importing this module must not require a published bundle; main() re-validates.
+    try:
+        return input_dir()
+    except FileNotFoundError:
+        return output_root() / LATEST_NAME
+
+
+INPUT = _input_dir_or_placeholder()
 SYSML_PATH = INPUT / "final_model.sysml"
 RUN_JSON = INPUT / "realization_run.json"
 REPORT_JSON = OUT / "gazebo_feasibility_report.json"
@@ -1474,6 +1485,7 @@ def reprocess_existing_report() -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    input_dir()  # fail closed before any work when no bundle is published
     parser.add_argument("--dry-run", action="store_true",
                         help="Build the Gazebo plan/report without launching Docker/Gazebo.")
     # One-motor-out is collected by default since 2026-07-16; a hexa surviving

@@ -4,8 +4,7 @@ Chooses the sensing front-end: how many independent sensors, and for N>1 a fusio
 node that aggregates them. Every redundant sensor is wired into a distinct fusion
 input, fixing the legacy ``apply_inject_sensor_count_to_sysml_text`` bug that
 added sensor parts but skipped wiring. Syside 0.8.8 verified; couples with #2
-(RedundantizeComponent) via the number of independent channels. See
-docs/DSE_OPERATORS.md §#1.
+(RedundantizeComponent) via the number of independent channels.
 """
 from __future__ import annotations
 

@@ -9,6 +9,8 @@ from src.prototyping.artifact_provenance import (
     validate_derived_provenance, validate_run_provenance,
 )
 from src.prototyping.artifact_store import (
+    LATEST_NAME,
+    output_root,
     atomic_write_json, atomic_write_text, ensure_open_bundle, input_dir, output_dir,
 )
 from src.sitl.requirement_linker import RequirementLinker
@@ -16,7 +18,16 @@ from src.sysml.lite_model import build_lite_model
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = output_dir()
-INPUT = input_dir()
+
+def _input_dir_or_placeholder() -> Path:
+    # Importing this module must not require a published bundle; main() re-validates.
+    try:
+        return input_dir()
+    except FileNotFoundError:
+        return output_root() / LATEST_NAME
+
+
+INPUT = _input_dir_or_placeholder()
 SYSML_PATH = INPUT / "final_model.sysml"
 RUN_JSON = INPUT / "realization_run.json"
 GAZEBO_JSON = INPUT / "gazebo_feasibility_report.json"
@@ -35,6 +46,7 @@ def _fresh_gazebo_report(run_json: dict | None, model_sysml: str) -> dict | None
 
 
 def main() -> int:
+    input_dir()  # fail closed before any work when no bundle is published
     ensure_open_bundle(OUT)
     model_sysml = SYSML_PATH.read_text(encoding="utf-8")
     model = build_lite_model(model_sysml,

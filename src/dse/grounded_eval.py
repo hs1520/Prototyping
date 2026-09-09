@@ -6,7 +6,7 @@ derived from channel health, the failsafe output (overrideCmd) must be connected
 to a consumer, and a fault->failsafe transition must exist. A model that only
 declares `failedChannels` and lets a simulator drive it scores well but does
 nothing under a sensor fault, so it is penalised here. SITL closed-loop stays the
-high-fidelity oracle that calibrates this (docs/DSE_REDESIGN.md §三-D).
+high-fidelity oracle that calibrates this.
 """
 from __future__ import annotations
 

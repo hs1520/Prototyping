@@ -21,7 +21,7 @@ from src.prototyping.mandated_wiring import (
 )
 
 _REPO = Path(__file__).resolve().parents[1]
-_RUN = _REPO / "examples/output/runs/219eb9bb-4acd-4d20-b858-d1b1ae46d890"
+_RUN = _REPO / "tests/fixtures/run_219eb9bb"
 
 
 def _payload(**overrides):

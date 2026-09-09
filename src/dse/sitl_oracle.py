@@ -95,7 +95,7 @@ class SITLFaultOracle:
     produced no observable failover in this build. A discriminating oracle needs
     version-specific multi-GPS EKF-source configuration plus a fault that fails only
     the primary while the backup keeps producing data. Until then the demonstrated
-    calibration result is the ReferenceFaultOracle one (docs/DSE_REDESIGN.md §三-D).
+    calibration result is the ReferenceFaultOracle one.
     """
     arducopter_bin: str = ""
     settle_s: float = 20.0
