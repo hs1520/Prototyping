@@ -237,7 +237,7 @@ def test_conformance_residue_in_loop():
     import json as _json
     from pathlib import Path
 
-    fixtures = Path(__file__).parent / "fixtures" / "plan_deadlock_20260831"
+    fixtures = Path(__file__).parent / "fixtures" / "admitted_model_20260831"
     text = (fixtures / "final_model.sysml").read_text()
     payload = _json.loads(
         (fixtures / "whole_model_generation_plan.json").read_text()
@@ -297,7 +297,7 @@ def _s0_style_setup(tampered_connect: str):
     from pathlib import Path
     from src.simulation.validator import SimulationResult
 
-    fixtures = Path(__file__).parent / "fixtures" / "plan_deadlock_20260831"
+    fixtures = Path(__file__).parent / "fixtures" / "admitted_model_20260831"
     text = (fixtures / "final_model.sysml").read_text()
     payload = _json.loads(
         (fixtures / "whole_model_generation_plan.json").read_text()
