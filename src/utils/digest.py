@@ -1,9 +1,4 @@
-"""Shared SHA-256 text fingerprint.
-
-Canonical-JSON digests stay with their owning protocol modules
-(``frozen_artifact_protocol``, ``blackboard``): their ``default=`` fallbacks
-and failure modes belong to each protocol's contract.
-"""
+"""SHA-256 of a text, used as a content identity for board revisions and replay keys."""
 from __future__ import annotations
 
 import hashlib

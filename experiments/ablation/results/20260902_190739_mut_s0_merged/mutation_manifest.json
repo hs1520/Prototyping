@@ -1,6 +1,5 @@
 {
   "source": "experiments/ablation/results/20260902_133704_s3_prefix_matched/runs/NO-DSE_seed0",
-  "source_digest": "3fb8080ee7c62f10246524fadb2a95b77fecddfaeccf5c6502654fad376e180e",
   "sets": {
     "CONTROL": [],
     "SYNTAX": [
