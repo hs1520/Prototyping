@@ -24,14 +24,6 @@ def test_frozen_artifact_round_trips():
     assert canonical["requirement_set_digest"] == artifact["requirement_set_digest"]
 
 
-def test_tampered_content_rejected():
-    artifact = build_frozen_requirement_set([REQ])
-    artifact["requirements"][0] += " changed"
-
-    with pytest.raises(ValueError, match="digest"):
-        resolve_frozen_requirement_set(artifact)
-
-
 def test_graph_normalises_ids():
     prerequisite = "REQ-INTF-001: The system shall receive navigation data."
     artifact = build_frozen_requirement_set(

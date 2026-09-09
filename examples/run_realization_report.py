@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 import src.config  # noqa: F401  (loads .env)
-from src.prototyping.artifact_provenance import build_run_provenance
+import uuid
 from src.prototyping.artifact_store import (
     OUTPUT_DIR_ENV,
     AuthoritativeRunLock,
@@ -251,14 +251,7 @@ def _build_base_artifacts(pipe, res, elapsed_s: float) -> tuple[dict, str, str]:
         "functional_closure": dict(res.get("functional_closure") or {}),
         "realization": realization,
     }
-    out["artifact_provenance"] = build_run_provenance(
-        model_sysml=final_sysml,
-        recommended_design=out["recommended_design_inputs"],
-        realization=realization,
-        requirements=out["requirements"],
-        parm_text=parm_text,
-        requirement_input=out["requirement_input"],
-    )
+    out["run_id"] = str(uuid.uuid4())
     previous_input = None
     try:
         previous_run = json.loads(
@@ -344,7 +337,7 @@ def main() -> int:
             base, final_sysml, parm_text = _build_base_artifacts(
                 pipe, res, time.time() - t0
             )
-            run_id = base["artifact_provenance"]["run_id"]
+            run_id = base["run_id"]
             run_dir = assign_run_id(staging, run_id, output_root())
             staging = None
 
@@ -365,7 +358,6 @@ def main() -> int:
                 "requirements": base["requirements"],
                 "model_artifact": "final_model.sysml",
                 "parm_artifact": "recommended.parm",
-                "artifact_provenance": base["artifact_provenance"],
                 "execution": {
                     "llm_provider": "vertex",
                     "llm_model": getattr(llm, "model", None),
@@ -395,9 +387,7 @@ def main() -> int:
             authority = json.loads(
                 (run_dir / "authoritative_run.json").read_text(encoding="utf-8")
             )
-            if not authority.get("provenance_validated"):
-                raise RuntimeError("finalizer did not validate provenance")
-            if authority.get("artifact_provenance", {}).get("run_id") != run_id:
+            if authority.get("run_id") != run_id:
                 raise RuntimeError("finalizer returned a different run_id")
             latest = publish_latest(run_dir, output_root())
             print(f"\n=== authoritative run published: {run_id} ===", flush=True)

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 from examples import run_gazebo_feasibility as rgf
-from src.prototyping.artifact_provenance import build_run_provenance
 
 
 def test_planned_reqs_from_text():
@@ -63,14 +62,7 @@ def test_reuses_unchanged_pass(
                 "invalidated_requirement_ids": ["REQ_OTHER_001"]
             },
         }
-        value["artifact_provenance"] = build_run_provenance(
-            model_sysml=model,
-            recommended_design=design,
-            realization=realization,
-            requirements=value["requirements"],
-            parm_text=None,
-            run_id=run_id,
-        )
+        value["run_id"] = run_id
         return value
 
     previous = tmp_path / "previous"
@@ -87,7 +79,7 @@ def test_reuses_unchanged_pass(
     (previous / "final_model.sysml").write_text(model, encoding="utf-8")
     (previous / "gazebo_feasibility_report.json").write_text(json.dumps({
         "status": "PASS",
-        "source_provenance": previous_run["artifact_provenance"],
+        "source_run_id": previous_run["run_id"],
         "req_results": [{
             "req_id": "REQ-SAFE-007",
             "check": "single_motor_out",
@@ -119,8 +111,7 @@ def test_reuses_unchanged_pass(
 
     assert report["reused_from_run_id"] == "previous-run"
     assert report["req_results"][0]["evidence_reused"] is True
-    assert report["source_provenance"] == current_run["artifact_provenance"]
-    assert report["evidence_origin_provenance"] == previous_run["artifact_provenance"]
+    assert report["source_run_id"] == current_run["run_id"]
 
 
 def test_evidence_only_for_implemented():

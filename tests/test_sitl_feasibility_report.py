@@ -5,7 +5,6 @@ from examples.run_realization_report import (
     require_authoritative_runtime,
     retire_stale_parm,
 )
-from src.prototyping.artifact_provenance import build_run_provenance
 from types import SimpleNamespace
 
 from examples.run_sitl_feasibility import (
@@ -184,11 +183,7 @@ def test_parm_freshness_mismatch():
         "recommended_design_inputs": {"battery_capacity_mah": 22000.0, "rotor_count": 4},
         "realization": None,
     }
-    run["artifact_provenance"] = build_run_provenance(
-        model_sysml="model", recommended_design=run["recommended_design_inputs"],
-        realization=None, requirements=run["requirements"],
-        parm_text="\n".join(lines) + "\n", run_id="test-run",
-    )
+    run["run_id"] = "test-run"
     fresh, reason = parm_freshness(lines, run, model_sysml="model")
     assert fresh is True
     assert "consistent" in reason

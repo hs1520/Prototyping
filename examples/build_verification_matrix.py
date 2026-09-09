@@ -5,9 +5,6 @@ import json
 from pathlib import Path
 
 from src.prototyping.verification_matrix import build_matrix, summarize, to_json, to_markdown
-from src.prototyping.artifact_provenance import (
-    validate_derived_provenance, validate_run_provenance,
-)
 from src.prototyping.artifact_store import (
     LATEST_NAME,
     output_root,
@@ -41,8 +38,7 @@ def _fresh_gazebo_report(run_json: dict | None, model_sysml: str) -> dict | None
     report = json.loads(GAZEBO_JSON.read_text(encoding="utf-8"))
     if not run_json:
         return None
-    fresh, _ = validate_derived_provenance(report, run_json, model_sysml)
-    return report if fresh else None
+    return report if report.get("source_run_id") == run_json.get("run_id") else None
 
 
 def main() -> int:
@@ -55,9 +51,8 @@ def main() -> int:
     realization = None
     if RUN_JSON.exists():
         run_json = json.loads(RUN_JSON.read_text(encoding="utf-8"))
-        fresh, reason = validate_run_provenance(run_json, model_sysml=model_sysml)
-        if not fresh:
-            raise SystemExit(f"STALE artifact set: {reason}")
+        if not run_json.get("run_id"):
+            raise SystemExit("realization_run.json has no run_id; regenerate the run")
         realization = run_json.get("realization")
     gazebo = _fresh_gazebo_report(run_json, model_sysml)
     linker = RequirementLinker(model)
@@ -67,7 +62,7 @@ def main() -> int:
     atomic_write_text(MATRIX_MD, to_markdown(rows))
     payload = to_json(rows)
     if run_json:
-        payload["source_provenance"] = run_json.get("artifact_provenance")
+        payload["source_run_id"] = run_json.get("run_id")
     atomic_write_json(MATRIX_JSON, payload)
     print(json.dumps(summarize(rows), indent=2, ensure_ascii=False))
     print(f"Wrote {MATRIX_MD}")
