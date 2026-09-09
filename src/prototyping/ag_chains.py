@@ -1,8 +1,7 @@
 """Student-approved bounded A/G chain library (Stage 2 decomposition, design §7).
 
 Each entry is an implementation candidate, not evaluator gold or a
-human-frozen architecture; the decisions are recorded in
-``docs/gold/STUDENT_DESIGN_DECISIONS.md``. Four chains are encoded, one per
+human-frozen architecture. Four chains are encoded, one per
 bounded safety pattern: REQ_SAFE_005 (propulsion failure -> parachute, a timed
 failsafe), REQ_SAFE_004 (self-test -> arming inhibit, a startup-inhibit
 invariant), REQ_SAFE_008 (power-on default lock plus authorised-unlock and
