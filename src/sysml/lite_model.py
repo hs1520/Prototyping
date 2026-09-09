@@ -409,20 +409,6 @@ class SysMLLiteModel:
             ),
         }
 
-    def invalidate_cache(self) -> None:
-        """Re-parse syside model on next property access."""
-        self._part_defs = None
-        self._req_defs = None
-        self._diag_list = None
-        raw_text = self.metadata.get("last_sysml_text", "")
-        if _SYSIDE_OK and raw_text:
-            try:
-                self._syside_model, self._raw_diagnostics = \
-                    _syside.try_load_model(sysml_source=raw_text)
-            except Exception as exc:
-                record_suppressed("sysml.lite_model.invalidate_reparse", exc)
-
-
 def build_lite_model(
     raw_text: str,
     model_name: str = "GeneratedModel",

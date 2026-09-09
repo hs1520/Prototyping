@@ -264,27 +264,6 @@ class PrototypingPipeline:
         self.save_run_report(result)
         return result
 
-    def prototype_system(
-        self,
-        system_name: str,
-        description: str,
-        additional_requirements: Optional[List[str]] = None,
-        mcts_iterations: int = 50,
-        parse_strict: Optional[bool] = None,
-        frozen_requirements: Optional[Any] = None,
-    ) -> Dict[str, Any]:
-        """Run the complete AI-assisted prototyping pipeline."""
-        result = self.orchestrator.prototype(
-            system_name=system_name,
-            system_description=description,
-            additional_requirements=additional_requirements,
-            mcts_iterations=mcts_iterations,
-            parse_strict=(parse_strict if parse_strict is not None else self.parse_strict),
-            frozen_requirements=frozen_requirements,
-        )
-        self.save_run_report(result)
-        return result
-
     @staticmethod
     def build_run_report(result: Dict[str, Any]) -> Dict[str, Any]:
         """JSON-serialisable snapshot of a pipeline run (no model objects)."""

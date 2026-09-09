@@ -34,7 +34,6 @@ authoritative run holds that port during its SITL stage.
 """
 from __future__ import annotations
 
-import base64
 import datetime
 import json
 import pathlib
@@ -192,18 +191,6 @@ def crop_still(frames_dir: pathlib.Path, cam: str, index: int,
     for y in range(y0, y0 + ch):
         out += src[(y*w + x0)*3:(y*w + x0 + cw)*3]
     return encode_png(bytes(out), cw, ch)
-
-
-def clip_frames(frames_dir: pathlib.Path, cam: str, lo: int, hi: int,
-                keep: int = 72) -> tuple[list[str], int, int]:
-    d = frames_dir / cam
-    w, h, _ = (d / "meta.txt").read_text().split()
-    w, h = int(w), int(h)
-    files = sorted(d.glob("f*.raw"))[lo:hi]
-    step = max(1, len(files) // keep)
-    picked = files[::step][:keep]
-    return ([base64.b64encode(encode_png(halve(f.read_bytes(), w, h), w//2, h//2)).decode()
-             for f in picked], w // 2, h // 2)
 
 
 def main() -> int:

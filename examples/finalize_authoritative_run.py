@@ -46,59 +46,6 @@ def _infrastructure_failure_message(value: str) -> bool:
     ))
 
 
-def _terminal_evidence(gazebo: dict, sitl: dict, matrix: dict) -> dict[str, dict]:
-    evidence: dict[str, dict] = {}
-
-    def item(req_id: str) -> dict:
-        return evidence.setdefault(_req_id(req_id), {
-            "verifier_available": True,
-            "infrastructure_ok": True,
-            "oracle_executed": False,
-            "oracle_passed": None,
-        })
-
-    for row in matrix.get("rows", ()):
-        current = item(row.get("req_id", ""))
-        status = str(row.get("status", "")).lower()
-        if status in {"unassigned", "out-of-sim-scope"}:
-            current["verifier_available"] = False
-        elif status == "failed":
-            current.update(oracle_executed=True, oracle_passed=False)
-        elif status == "verified" and current["oracle_passed"] is not False:
-            current.update(oracle_executed=True, oracle_passed=True)
-
-    for result in sitl.get("safety_l2", ()):
-        current = item(result.get("req_id", ""))
-        message = f"{result.get('message', '')} {result.get('note', '')}"
-        if _infrastructure_failure_message(message):
-            current.update(infrastructure_ok=False, oracle_executed=False)
-            continue
-        passed = bool(result.get("passed"))
-        current.update(oracle_executed=True, oracle_passed=passed)
-
-    gazebo_failed_to_run = str(gazebo.get("status", "")).upper() == "FAILED"
-    for result in gazebo.get("req_results", ()):
-        current = item(result.get("req_id", ""))
-        status = str(result.get("status", "")).upper()
-        message = str(result.get("message", ""))
-        if gazebo_failed_to_run and status == "PLANNED":
-            current.update(infrastructure_ok=False, oracle_executed=False)
-            continue
-        if status == "FAIL":
-            current.update(oracle_executed=True, oracle_passed=False)
-        elif status == "PASS" and current["oracle_passed"] is not False:
-            current.update(oracle_executed=True, oracle_passed=True)
-        elif status == "INCONCLUSIVE" and any(token in message.lower() for token in (
-            "observer", "not available", "unavailable", "no implemented",
-        )):
-            current["verifier_available"] = False
-        elif status in {"PARTIAL", "PLANNED"}:
-            current["verifier_available"] = True
-        elif status == "SUSPENDED":
-            current["verifier_available"] = False
-    return evidence
-
-
 def main() -> int:
     ensure_open_bundle(OUT)
     run = _read("realization_run.json")

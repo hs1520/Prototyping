@@ -212,31 +212,3 @@ class MultiObjectiveMCTS:
             node = node.parent
 
 
-def forest_search(
-    operators: Sequence[Operator],
-    objective_fn: Callable[[State, object], Objectives],
-    ctx: object,
-    objective_names: Sequence[str],
-    reference: Sequence[float],
-    n_trees: int = 4,
-    iterations: int = 30,
-    seeds: Optional[Sequence[int]] = None,
-) -> ParetoArchive:
-    """Multi-seed forest search (Item E): run ``n_trees`` independent MO-MCTS trees and
-    merge their fronts into one Pareto archive.
-
-    Each tree explores a different trajectory, so the union covers more of the front
-    than a single tree of the same budget. Total budget = n_trees x iterations; also
-    an ablation axis (forest vs single-tree). With LLM-generated variation skeletons
-    (optional step 3) the per-tree seeds would be distinct seed architectures.
-    """
-    seeds = list(seeds) if seeds is not None else list(range(n_trees))
-    merged = ParetoArchive(objective_names, reference)
-    for s in seeds:
-        tree = MultiObjectiveMCTS(
-            operators, objective_fn, ctx, objective_names, reference, random_seed=s
-        )
-        front = tree.search(iterations=iterations)
-        for state, obj in front.members:
-            merged.add(state, obj)
-    return merged

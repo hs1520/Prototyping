@@ -140,7 +140,6 @@ class RequirementLinker:
             candidate = metadata.get("whole_model_generation_plan")
             plan_payload = candidate if isinstance(candidate, dict) else None
         self._requirement_bindings = plan_bindings(plan_payload)
-        self._contract_bundle = None
         self._contracts: Dict[str, Any] = {}
         self._contract_trace_findings: Dict[str, List[Any]] = {}
         self._satisfy_map: Dict[str, List[str]] = self._build_satisfy_map()

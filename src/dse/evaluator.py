@@ -458,23 +458,6 @@ class DesignEvaluator:
         except Exception:
             return None
 
-    def _syside_guarded_transitions(self) -> Optional[int]:
-        sm = getattr(self, "_syside_model", None)
-        if sm is None or not _SYSIDE_EVAL_OK:
-            return None
-        membership = getattr(_syside_eval, "TransitionFeatureMembership", None)
-        kinds = getattr(_syside_eval, "TransitionFeatureKind", None)
-        if membership is None or kinds is None:
-            return None
-        try:
-            guard = kinds.Guard
-            return sum(
-                1 for node in sm.nodes(membership)
-                if getattr(node, "kind", None) == guard
-            )
-        except Exception:
-            return None
-
     def _syside_any(self, cls_name: str, predicate=None) -> Optional[bool]:
         sm = getattr(self, "_syside_model", None)
         if sm is None or not _SYSIDE_EVAL_OK:

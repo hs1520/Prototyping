@@ -403,28 +403,6 @@ class Blackboard:
         )
         return task
 
-    def rebase_task(
-        self,
-        task_id: str,
-        *,
-        producer: str = "controller",
-    ) -> BlackboardTask:
-        task = self._tasks[task_id]
-        if task.status is not TaskStatus.ACTIVE:
-            raise InvalidTaskTransition(
-                f"only ACTIVE tasks can rebase; status={task.status.value}"
-            )
-        task.base_model_revision = self.current_revision
-        task.base_model_digest = self.current_model.model_digest
-        self.publish(
-            RecordType.CONTROL,
-            "task.rebased",
-            producer,
-            task.to_dict(),
-            task_id=task.task_id,
-        )
-        return task
-
     def commit_model(
         self,
         model_text: str,

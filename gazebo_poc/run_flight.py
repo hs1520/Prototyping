@@ -387,14 +387,6 @@ def _model_xyz(model: str) -> tuple[float, float, float] | None:
 from gazebo_poc.payload_transport_evidence import ATTACHED_MAX_DISTANCE_M as _PAYLOAD_ATTACHED_MAX_DISTANCE_M
 
 
-def _payload_attachment_distance() -> float | None:
-    vehicle = _model_xyz("iris_with_gimbal")
-    payload = _model_xyz("payload_box")
-    if vehicle is None or payload is None:
-        return None
-    return math.dist(vehicle, payload)
-
-
 def _payload_z() -> float | None:
     result = _sh("docker", "exec", _CONTAINER, "gz", "model", "-m", "payload_box", "-p")
     return _parse_model_z(result.stdout) if result.returncode == 0 else None

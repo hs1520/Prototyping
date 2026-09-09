@@ -17,11 +17,9 @@ field carries a review note.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any, Dict, Mapping
 
-from .ag_emitter import AGChainSpec, AGComponentSpec
+from .ag_emitter import AGComponentSpec
 from .experiment_arms import REVISED_EXPERIMENT_NAMESPACE
 from .frozen_artifact_protocol import (
     has_review_markers,
@@ -29,7 +27,6 @@ from .frozen_artifact_protocol import (
     validate_frozen_envelope,
 )
 from ..utils.digest import sha256_text
-from ..utils.req_id import normalise_req_id
 
 GOLD_ROLE = "EVALUATOR_GOLD"
 GOLD_STATUS_DRAFT = "DRAFT_FOR_SUPERVISOR_REVIEW"
@@ -65,171 +62,6 @@ def _gold_realization_paths(
     ]
 
 
-def build_gold_draft(
-    spec: AGChainSpec,
-    *,
-    source_text: str,
-    requirement_set_digest: str | None = None,
-    architecture_boundary_digest: str | None = None,
-) -> Dict[str, Any]:
-    """Build a review-ready DRAFT from a student-approved A/G decomposition.
-
-    Allocations and discharge edges are pre-filled from the decomposition intent so the
-    reviewer confirms rather than transcribes; an assumption that is neither an
-    environment/system assumption nor produced by an upstream guarantee is left
-    ``by = None`` and flagged UNRESOLVED for the reviewer.
-    """
-    producers = {
-        guarantee: comp.name
-        for comp in spec.components
-        for guarantee in comp.guarantees
-    }
-    system_env = set(spec.system_assumptions)
-
-    allocations = [
-        {
-            "owner": comp.owner_usage,
-            "contract": comp.name,
-            "guarantee": guarantee,
-            "_review": "confirm the responsible owner",
-        }
-        for comp in spec.components
-        for guarantee in comp.guarantees
-    ]
-
-    discharge_edges = []
-    for comp in spec.components:
-        for assumption in comp.assumptions:
-            if assumption.environment or assumption.concept in system_env:
-                by = "environment"
-            else:
-                by = producers.get(assumption.concept)
-            edge = {"component": comp.name, "assumption": assumption.concept, "by": by}
-            edge["_review"] = (
-                "UNRESOLVED — reviewer must set the discharging source"
-                if by is None else "confirm the discharging source"
-            )
-            discharge_edges.append(edge)
-
-    semantic_fields: Dict[str, Any] = {}
-    semantic_fields["realization_links"] = [
-        {
-            "contract": comp.name,
-            "owner": comp.owner_usage,
-            "behavior": comp.behavior,
-            "initial_state": comp.initial_state,
-            "response_paths": _gold_realization_paths(comp),
-            "continuous_guarantee": comp.trigger_signal is None,
-            "_review": (
-                "confirm every exact guarantee-producing behavior path from the "
-                "approved design, not from runtime checker output"
-            ),
-        }
-        for comp in spec.components
-    ]
-    semantic_fields["observation_links"] = [
-        {
-            "contract": spec.system_contract,
-            "verification": spec.verification,
-            "observation": spec.observation,
-            "_review": (
-                "confirm the verification case and observed guarantee concept"
-            ),
-        }
-    ]
-    if spec.deadline is not None and spec.timing_origin:
-        semantic_fields["timing"] = {
-            "origin": spec.timing_origin,
-            "deadline": {
-                "value": format(spec.deadline, ".15g"),
-                "unit": "s",
-            },
-            "segments": [
-                {
-                    "component": comp.name.removesuffix("Contract"),
-                    "budget": {
-                        "value": format(comp.latency_budget, ".15g"),
-                        "unit": "s",
-                    },
-                }
-                for comp in spec.components
-                if comp.latency_budget is not None
-                and comp.timing_segment_required is not False
-            ],
-        }
-    if spec.priority is not None:
-        semantic_fields["priority"] = {
-            "response_set_id": spec.priority.response_set_id,
-            "source_kind": spec.priority.source_kind,
-            "source_id": spec.priority.source_id,
-            "members": list(spec.priority.members),
-            "edges": [
-                {"higher": higher, "lower": lower}
-                for higher, lower in spec.priority.edges
-            ],
-            "trigger": spec.priority.trigger,
-        }
-    if spec.invariants:
-        semantic_fields["selected_model_elements"] = list(
-            spec.selected_model_elements
-        )
-        semantic_fields["invariants"] = [
-            {
-                "invariant_id": item.invariant_id,
-                "scope": item.scope,
-                "trigger_or_antecedent_ast": dict(
-                    item.trigger_or_antecedent_ast
-                ),
-                "required_consequent_ast": dict(
-                    item.required_consequent_ast
-                ),
-                "source_kind": item.source_kind,
-                "source_id": item.source_id,
-            }
-            for item in spec.invariants
-        ]
-
-    return {
-        "schema_version": GOLD_SCHEMA_VERSION,
-        "artifact_role": GOLD_ROLE,
-        "experiment_namespace": "BLACKBOARD_AG_V1",
-        "status": GOLD_STATUS_DRAFT,
-        "chain_id": normalise_req_id(spec.source_requirement),
-        "source_requirement": spec.source_requirement,
-        "source_text": source_text,
-        "source_digest": _digest(source_text),
-        "requirement_set_digest": requirement_set_digest,
-        "architecture_boundary_digest": architecture_boundary_digest,
-        "_provenance_review": (
-            "bind the frozen requirement-set and independently frozen architecture "
-            "boundary SHA-256 digests before freeze"
-        ),
-        "reviewer": None,
-        "reviewed_date": None,
-        "review_protocol": {
-            "blind_to_runtime_verdict": False,
-            "independent_human_review": False,
-        },
-        "review_instructions": (
-            "Label blind to any pipeline verdict (design §13). Confirm or edit each "
-            "field from the source requirement and the student-approved decomposition "
-            "candidate, drop "
-            "the _review notes, set reviewer/reviewed_date, and change status to "
-            f"{GOLD_STATUS_FROZEN!r}. This artifact is evaluator-only: never feed it "
-            "into generation, context, checking, routing, or repair."
-        ),
-        "system": {
-            "contract": spec.system_contract,
-            "assumptions": list(spec.system_assumptions),
-            "guarantee_observation": spec.observation,
-            "_review": "confirm system assumptions and observation",
-        },
-        "allocations": allocations,
-        "discharge_edges": discharge_edges,
-        **semantic_fields,
-    }
-
-
 _REQUIRED_NAMESPACE = REVISED_EXPERIMENT_NAMESPACE
 
 
@@ -256,32 +88,6 @@ GOLD_METRIC_SUPPORT: Dict[str, str] = {
     "priority": "safety topology (priority) conformance",
     "invariants": "safety invariant conformance",
 }
-
-
-def gold_metric_coverage(gold: Dict[str, Any]) -> Dict[str, Any]:
-    """Which §13 Group B metrics this gold can and cannot support.
-
-    Reported, not enforced: requiring every family would invalidate an existing freeze,
-    and re-freezing is the supervisor's decision. The report makes an omission visible
-    at freeze time rather than later as a metric nobody can compute.
-    """
-    supported, unsupported = {}, {}
-    for family, metric in GOLD_METRIC_SUPPORT.items():
-        value = gold.get(family)
-        present = bool(value) and (
-            not isinstance(value, (list, tuple, dict)) or len(value) > 0
-        )
-        (supported if present else unsupported)[family] = metric
-    return {
-        "artifact_role": "GOLD_METRIC_COVERAGE",
-        "chain_id": gold.get("chain_id"),
-        "supported_metrics": supported,
-        "unsupported_metrics": unsupported,
-        "note": (
-            "a family absent from the freeze makes its metric uncomputable; this "
-            "is a completeness report, not a validation failure"
-        ),
-    }
 
 
 def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
@@ -607,35 +413,3 @@ def validate_frozen_gold(gold: Dict[str, Any]) -> list[str]:
     return problems
 
 
-def frozen_gold_gate(
-    requirements, *, gold_dir: str = "docs/gold"
-) -> list[str]:
-    """Legacy convenience check for frozen gold coverage.
-
-    This still selects chains from live code, so an empty result is not authority to
-    pool; it is kept for draft/freeze diagnostics and compatibility. The pooling
-    decision is :func:`evaluation_readiness.build_evaluation_readiness_manifest`, which
-    binds a frozen experiment configuration, requirement and architecture digests, the
-    complete selected chain/run sets, and blind labels.
-    """
-    from .ag_chains import select_ag_chains
-
-    chains = select_ag_chains(requirements)
-    if not chains:
-        return ["no bounded A/G chain is selected for these requirements"]
-    problems: list[str] = []
-    for chain in chains:
-        req = normalise_req_id(chain.source_requirement)
-        path = Path(gold_dir) / f"{req}_ag_gold.json"
-        if not path.exists():
-            problems.append(
-                f"{req}: no FROZEN gold at {path} (a .draft is not sufficient)"
-            )
-            continue
-        try:
-            gold = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            problems.append(f"{req}: gold file unreadable ({exc})")
-            continue
-        problems.extend(f"{req}: {issue}" for issue in validate_frozen_gold(gold))
-    return problems

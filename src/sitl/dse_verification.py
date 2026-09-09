@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import List
 
 from ..dse.verification_builder import build_verification_cases
 from .parameter_projection import (
@@ -46,8 +46,3 @@ def build_dse_verification(model_text: str, requirements: List[str]) -> DSEVerif
     )
 
 
-def build_from_explore_result(result: Dict[str, Any]) -> DSEVerificationReport:
-    """Convenience: run the loop on an Orchestrator.explore()/prototype() result dict."""
-    return build_dse_verification(
-        result.get("model_sysml", ""), result.get("requirements", []) or []
-    )

@@ -81,29 +81,6 @@ class PineconeWrapper:
 		)
 		return results
 
-	@staticmethod
-	def build_filter(
-		conditions: Optional[Dict[str, Any]] = None,
-		operator: str = "$and",
-	) -> Optional[Dict[str, Any]]:
-		"""Helper to build complex metadata filter expressions."""
-		if conditions is None:
-			return None
-
-		if isinstance(conditions, dict) and not any(
-			k in conditions for k in ["$and", "$or", "$in", "$nin", "$gt", "$gte", "$lt", "$lte", "$ne", "$eq", "$exists"]
-		):
-			return conditions if conditions else None
-
-		if isinstance(conditions, list):
-			if not conditions:
-				return None
-			if len(conditions) == 1:
-				return conditions[0]
-			return {operator: conditions}
-
-		return conditions
-
 	@property
 	def client(self) -> Pinecone:
 		"""Expose underlying Pinecone client when low-level access is needed."""

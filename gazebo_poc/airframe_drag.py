@@ -111,14 +111,3 @@ def flat_plate_area_m2(rotor_count: int, rotor_radius_m: float,
     return drag_breakdown(rotor_count, rotor_radius_m, payload_attached).flat_plate_area_m2
 
 
-def terminal_speed_mps(flat_plate_m2: float, mass_kg: float,
-                       tilt_rad: float) -> float:
-    """Steady forward airspeed where parasitic drag balances the tilted thrust.
-
-    ``m g tan(theta) = 0.5 rho f V^2``. The measured dash is checked against
-    this prediction.
-    """
-    if flat_plate_m2 <= 0 or mass_kg <= 0 or tilt_rad <= 0:
-        return 0.0
-    horizontal_n = mass_kg * 9.81 * math.tan(tilt_rad)
-    return math.sqrt(horizontal_n / (0.5 * AIR_DENSITY * flat_plate_m2))

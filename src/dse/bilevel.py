@@ -53,7 +53,3 @@ class BilevelEvaluator:
         hit = self._cache.get(self._key(state))
         return hit[0] if hit else None
 
-    def cached_states(self):
-        """Yield every resolved architecture the inner layer has evaluated."""
-        for key in self._cache:
-            yield dict(key)

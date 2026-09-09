@@ -318,9 +318,6 @@ class ModelDrivenMission:
             self.decisions.append(decision)
         return tuple(fired)
 
-    def actions_for(self, decisions: Sequence[ModelDecision]) -> Tuple[str, ...]:
-        return tuple(d.action for d in decisions if d.action)
-
     def performed(
         self, decisions: Sequence[ModelDecision], action: ModelAction,
     ) -> bool:

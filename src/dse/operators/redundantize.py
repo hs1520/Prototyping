@@ -73,16 +73,6 @@ CATALOG: Dict[str, Tuple[str, int, str]] = {
 }
 
 
-def parallel_reliability(channels: int, channel_reliability: float) -> float:
-    """1-out-of-N parallel reliability: R = 1 - (1 - R_ch)^N.
-
-    Holds for "any one channel suffices" (e.g. dual hot/cold standby), not for k-of-N
-    voting. Used by the analytic machinery demos (mo_mcts / bilevel); safety scoring
-    uses ``kofn_reliability`` with the model's own guard.
-    """
-    return 1.0 - (1.0 - channel_reliability) ** max(1, channels)
-
-
 def kofn_reliability(channels: int, faults_masked: int, channel_reliability: float) -> float:
     """k-out-of-N survival: P(at most ``faults_masked`` of N channels fail).
 

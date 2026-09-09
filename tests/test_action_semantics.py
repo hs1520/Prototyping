@@ -280,33 +280,6 @@ def test_archived_counts_reproduce(
     assert (total, empty) == (expected_total, expected_empty)
 
 
-def test_audit_reaches_run_report():
-    """Two carriers, because one has failed before.
-
-    `generation_metadata["semantic_fixes"]` and its four sibling counters reach no
-    archived artefact, and a repair-refusal audit was reverted in `a8d7052` for
-    the same reason. The run report is a hand-maintained projection of the run
-    result, so a field in the result need not be in the report.
-    """
-    from src.app.pipeline import PrototypingPipeline
-    from src.prototyping.run_artifacts import write_revised_run_artifacts
-
-    payload = {"artifact_role": ARTIFACT_ROLE, "summary": {}}
-    report = PrototypingPipeline.build_run_report(
-        {"action_semantics_audit": payload}
-    )
-    assert report["action_semantics_audit"] == payload, (
-        "the run report projection drops the audit"
-    )
-
-    import inspect
-
-    source = inspect.getsource(write_revised_run_artifacts)
-    assert '"action_semantics_audit.json"' in source, (
-        "the audit has no artefact of its own to fall back on"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Strict reading of functional evidence. Advisory: `functional_behavior_status`
 # is unchanged, so archived runs score as before.

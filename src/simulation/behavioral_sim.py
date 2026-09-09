@@ -367,11 +367,6 @@ def _build_accept_command_plan(sm: StateMachineDef) -> Optional[DriverPlan]:
     )
 
 
-def _build_test_sequence(sm: StateMachineDef) -> List[Dict[str, Any]]:
-    plans = _build_driver_plans(sm)
-    return plans[0].sequence if plans else []
-
-
 def _drive_power_event_to_default(
     sm: StateMachineDef,
     initial: str,

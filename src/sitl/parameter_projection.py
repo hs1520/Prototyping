@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import List, Mapping, Tuple
 
 from ..dse.domain_objective import resolve_design_attributes
-from ..dse.physics_estimator import DesignInputs, estimate
+from ..dse.physics_estimator import DesignInputs
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,24 +139,6 @@ def merge_base_parameters(
     if not additions:
         return parm_content
     return parm_content + "\n" + "\n".join(additions) + "\n"
-
-
-def project_model_parameters(
-    model_text: str,
-    *,
-    base_params: Mapping[str, object] | None = None,
-) -> ParameterProjection:
-    design = design_inputs_from_model(model_text)
-    predicted = estimate(design)
-    return ParameterProjection(
-        design_inputs=design,
-        parm_lines=tuple(design_parm_lines(design, base_params=base_params)),
-        predicted=MappingProxyType(dict(predicted)),
-        caveat=(
-            "all-up mass is emergent ({:.2f} kg) and NOT set in SITL "
-            "(fixed frame model) — calibration will surface the gap"
-        ).format(predicted.get("total_mass_kg", 0.0)),
-    )
 
 
 def _parameter_names(lines: List[str]) -> set[str]:
