@@ -543,12 +543,11 @@ class _RefinementEngine:
         return {str(req_id) for req_id in ids}
 
     def _active_requirement_ids(self) -> Optional[set[str]]:
-        source_digests = (self.last_requirement_input or {}).get(
-            "source_digests"
-        )
-        if not isinstance(source_digests, Mapping):
+        requirements = (self.last_requirement_input or {}).get("requirements")
+        if not isinstance(requirements, (list, tuple)):
             return None
-        return {str(req_id) for req_id in source_digests}
+        from ..prototyping.requirement_inputs import normalise_requirement_id
+        return {normalise_requirement_id(str(item)) for item in requirements}
 
     def _functional_verification_gap_issues(
         self, sysml_text: str, model_name: str

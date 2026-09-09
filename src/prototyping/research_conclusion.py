@@ -226,7 +226,7 @@ def derive_research_conclusion(run: Mapping[str, Any], gazebo: Mapping[str, Any]
     incomplete = [c["claim_id"] for c in claims if c["status"] in {INCOMPLETE, PARTIAL}]
     return {
         "schema_version": SCHEMA_VERSION,
-        "run_id": (run.get("artifact_provenance") or {}).get("run_id"),
+        "run_id": run.get("run_id"),
         "overall": overall,
         "claims": claims,
         "supported_claim_ids": supported,

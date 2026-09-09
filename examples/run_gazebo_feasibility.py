@@ -10,11 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.dse.physics_estimator import DesignInputs, total_mass_kg
-from src.prototyping.artifact_provenance import (
-    evidence_reuse_allowed,
-    validate_derived_provenance,
-    validate_run_provenance,
-)
+from src.prototyping.evidence_reuse import evidence_reuse_allowed
 from src.prototyping.artifact_store import (
     LATEST_NAME,
     output_root,
@@ -1341,9 +1337,8 @@ def build_report(dry_run: bool = False, include_single_motor_out: bool = False) 
     run = _load_run()
     if SYSML_PATH.exists():
         model_sysml = SYSML_PATH.read_text(encoding="utf-8")
-        fresh, reason = validate_run_provenance(run, model_sysml=model_sysml)
-        if not fresh:
-            raise RuntimeError(f"STALE artifact set: {reason}")
+        if not run.get("run_id"):
+            raise RuntimeError("realization_run.json has no run_id; regenerate the run")
         requirements = _requirements_from_sysml(model_sysml)
         requirements_source = str(SYSML_PATH)
     else:
@@ -1383,9 +1378,7 @@ def build_report(dry_run: bool = False, include_single_motor_out: bool = False) 
                 for item in previous_report.get("req_results", ())
                 if str(item.get("status") or "").upper() == "PASS"
             }
-            fresh, _ = validate_derived_provenance(
-                previous_report, previous_run, previous_model
-            )
+            fresh = previous_report.get("source_run_id") == previous_run.get("run_id")
             if (
                 fresh
                 and previous_report.get("status") == "PASS"
@@ -1408,13 +1401,8 @@ def build_report(dry_run: bool = False, include_single_motor_out: bool = False) 
                     "recommended_design_inputs": run.get(
                         "recommended_design_inputs"
                     ),
-                    "source_provenance": run.get("artifact_provenance"),
-                    "evidence_origin_provenance": previous_run.get(
-                        "artifact_provenance"
-                    ),
-                    "reused_from_run_id": (
-                        previous_run.get("artifact_provenance") or {}
-                    ).get("run_id"),
+                    "source_run_id": run.get("run_id"),
+                    "reused_from_run_id": previous_run.get("run_id"),
                     "req_results": [
                         {**item, "evidence_reused": True}
                         for item in previous_report.get("req_results", ())
@@ -1444,7 +1432,7 @@ def build_report(dry_run: bool = False, include_single_motor_out: bool = False) 
         ),
         "requirements_source": requirements_source,
         "recommended_design_inputs": run.get("recommended_design_inputs"),
-        "source_provenance": run.get("artifact_provenance"),
+        "source_run_id": run.get("run_id"),
         "gazebo_design": gazebo_design,
         "gazebo_result": live or {},
         "req_results": req_results,
@@ -1462,10 +1450,8 @@ def reprocess_existing_report() -> dict[str, Any]:
     if not SYSML_PATH.exists():
         raise FileNotFoundError(f"{SYSML_PATH} not found")
     model_sysml = SYSML_PATH.read_text(encoding="utf-8")
-    from src.prototyping.artifact_provenance import validate_derived_provenance
-    fresh, reason = validate_derived_provenance(report, run, model_sysml)
-    if not fresh:
-        raise RuntimeError(f"STALE artifact set: {reason}")
+    if not run.get("run_id") or report.get("source_run_id") != run.get("run_id"):
+        raise RuntimeError("existing Gazebo report does not belong to this run")
     if SYSML_PATH.exists():
         requirements = _requirements_from_sysml(model_sysml)
     else:

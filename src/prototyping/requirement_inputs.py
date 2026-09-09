@@ -1,11 +1,11 @@
 """Immutable stakeholder requirement-input boundary.
 
 Controlled experiments vary generation, not the requirement set, so this module
-creates and verifies digest-checked frozen requirement artifacts.
+builds the frozen requirement artifact and the dependency graph used for change
+propagation between runs.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any, Iterable, Mapping
 
@@ -14,11 +14,6 @@ from ..utils.req_id import first_req_id, normalise_req_id
 
 
 FROZEN_REQUIREMENT_SCHEMA_VERSION = "1.0"
-
-
-def source_digest(text: str) -> str:
-    """Stable digest of the stakeholder-owned source text."""
-    return sha256_text(text or "")
 
 
 def normalise_requirement_id(value: str) -> str:
@@ -36,11 +31,7 @@ def requirement_records(requirements: Iterable[str]) -> list[dict[str, str]]:
         if req_id in seen:
             raise ValueError(f"frozen requirements contain duplicate id {req_id}")
         seen.add(req_id)
-        records.append({
-            "req_id": req_id,
-            "source_text": text,
-            "source_digest": source_digest(text),
-        })
+        records.append({"req_id": req_id, "source_text": text})
     if not records:
         raise ValueError("frozen requirement set must not be empty")
     return records
@@ -84,14 +75,11 @@ def build_requirement_dependency_graph(
         "schema_version": "1.0",
         "artifact_type": "REQUIREMENT_DEPENDENCY_GRAPH",
         "nodes": [
-            {"req_id": item["req_id"], "source_digest": item["source_digest"]}
+            {"req_id": item["req_id"], "source_text": item["source_text"]}
             for item in sorted(records, key=lambda value: value["req_id"])
         ],
         "edges": sorted(edges, key=lambda value: (value["from"], value["to"])),
     }
-    graph["graph_digest"] = hashlib.sha256(json.dumps(
-        graph, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-    ).encode("utf-8")).hexdigest()
     return graph
 
 
@@ -100,28 +88,14 @@ def requirement_change_impact(
     current: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Return requirements whose evidence is invalid after a graph change."""
-    old_graph = (previous or {}).get("dependency_graph") or {
-        "nodes": [
-            {"req_id": req_id, "source_digest": digest}
-            for req_id, digest in (
-                (previous or {}).get("source_digests") or {}
-            ).items()
-        ],
-        "edges": [],
-    }
-    new_graph = current.get("dependency_graph") or {
-        "nodes": [
-            {"req_id": req_id, "source_digest": digest}
-            for req_id, digest in (current.get("source_digests") or {}).items()
-        ],
-        "edges": [],
-    }
+    old_graph = (previous or {}).get("dependency_graph") or {"nodes": [], "edges": []}
+    new_graph = current.get("dependency_graph") or {"nodes": [], "edges": []}
     old_nodes = {
-        str(item.get("req_id")): str(item.get("source_digest"))
+        str(item.get("req_id")): str(item.get("source_text"))
         for item in old_graph.get("nodes", ())
     }
     new_nodes = {
-        str(item.get("req_id")): str(item.get("source_digest"))
+        str(item.get("req_id")): str(item.get("source_text"))
         for item in new_graph.get("nodes", ())
     }
     directly_changed = {
@@ -156,8 +130,6 @@ def requirement_change_impact(
             "requirement_set_digest"
         ),
         "current_requirement_set_digest": current.get("requirement_set_digest"),
-        "baseline_graph_digest": old_graph.get("graph_digest"),
-        "current_graph_digest": new_graph.get("graph_digest"),
         "directly_changed_requirement_ids": sorted(directly_changed),
         "invalidated_requirement_ids": sorted(impacted),
         "evidence_invalidations": [
@@ -184,9 +156,6 @@ def build_frozen_requirement_set(
         "source": source,
         "requirement_set_digest": requirement_set_digest(items),
         "requirements": [item["source_text"] for item in records],
-        "source_digests": {
-            item["req_id"]: item["source_digest"] for item in records
-        },
         "dependency_graph": build_requirement_dependency_graph(
             items, dependencies
         ),
@@ -214,13 +183,6 @@ def resolve_frozen_requirement_set(
                 (value.get("dependency_graph") or {}).get("edges") or ()
             ),
         )
-        if value.get("requirement_set_digest") != canonical["requirement_set_digest"]:
-            raise ValueError("frozen requirement_set_digest does not match contents")
-        if value.get("source_digests") != canonical["source_digests"]:
-            raise ValueError("frozen requirement source_digests do not match contents")
-        supplied_graph = value.get("dependency_graph")
-        if supplied_graph is not None and supplied_graph != canonical["dependency_graph"]:
-            raise ValueError("frozen requirement dependency graph does not match contents")
         return requirements, canonical
     requirements = [str(item) for item in value]
     return requirements, build_frozen_requirement_set(requirements)

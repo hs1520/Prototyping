@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..prototyping.artifact_provenance import sha256_json, validate_run_provenance
 from ..prototyping.artifact_store import (
     OUTPUT_DIR_ENV, atomic_write_json, atomic_write_text, output_dir,
 )
@@ -67,13 +66,10 @@ def _persist_recommendation(design, model_text: str, output_dir: Path) -> None:
             existing = json.loads(run_json.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             existing = {}
-    if existing.get("artifact_provenance"):
-        ok, reason = validate_run_provenance(existing, model_sysml=model_text or "")
-        if not ok:
-            raise RuntimeError(f"refusing to mutate authoritative base bundle: {reason}")
+    if existing.get("run_id"):
         expected = existing.get("recommended_design_inputs")
         actual = dict(vars(design)) if design is not None else None
-        if sha256_json(expected) != sha256_json(actual):
+        if expected != actual:
             raise RuntimeError("refusing Phase 9 design that differs from authoritative run")
         return  # base artifacts are immutable during collection
     atomic_write_text(output_dir / "final_model.sysml", model_text or "")

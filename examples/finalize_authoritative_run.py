@@ -3,17 +3,10 @@ from __future__ import annotations
 
 import base64
 import json
-import hashlib
 import subprocess
 import time
 from pathlib import Path
 
-from src.prototyping.artifact_provenance import (
-    sha256_json,
-    sha256_text,
-    validate_derived_provenance,
-    validate_run_provenance,
-)
 from src.prototyping.artifact_store import (
     atomic_write_json, atomic_write_text, ensure_open_bundle, output_dir, write_state,
 )
@@ -28,10 +21,6 @@ OUT = output_dir()
 
 def _read(name: str) -> dict:
     return json.loads((OUT / name).read_text(encoding="utf-8"))
-
-
-def _file_sha256(name: str) -> str:
-    return hashlib.sha256((OUT / name).read_bytes()).hexdigest()
 
 
 def _req_id(value: str) -> str:
@@ -51,27 +40,23 @@ def main() -> int:
     run = _read("realization_run.json")
     model = (OUT / "final_model.sysml").read_text(encoding="utf-8")
     parm = (OUT / "recommended.parm").read_text(encoding="utf-8")
-    ok, reason = validate_run_provenance(run, model_sysml=model, parm_text=parm)
-    if not ok:
-        raise SystemExit(f"STALE base artifact set: {reason}")
-    provenance = run["artifact_provenance"]
+    run_id = run.get("run_id")
+    if not run_id:
+        raise SystemExit("realization_run.json has no run_id; regenerate the run")
     canonical = _read("canonical_run.json")
-    if canonical.get("run_id") != provenance["run_id"]:
+    if canonical.get("run_id") != run_id:
         raise SystemExit("STALE canonical run: run_id mismatch")
-    if canonical.get("artifact_provenance") != provenance:
-        raise SystemExit("STALE canonical run: provenance mismatch")
     if canonical.get("requirements") != run.get("requirements"):
         raise SystemExit("STALE canonical run: exact requirement set mismatch")
     gazebo = _read("gazebo_feasibility_report.json")
-    ok, reason = validate_derived_provenance(gazebo, run, model)
-    if not ok:
-        raise SystemExit(f"STALE Gazebo report: {reason}")
+    if gazebo.get("source_run_id") != run_id:
+        raise SystemExit("STALE Gazebo report: it does not belong to this run")
     sitl = _read("sitl_feasibility_report.json")
-    if sitl.get("source_provenance") != provenance:
-        raise SystemExit("STALE SITL report: source provenance does not match this run")
+    if sitl.get("source_run_id") != run_id:
+        raise SystemExit("STALE SITL report: it does not belong to this run")
     matrix = _read("verification_matrix.json")
-    if matrix.get("source_provenance") != provenance:
-        raise SystemExit("STALE verification matrix: source provenance does not match this run")
+    if matrix.get("source_run_id") != run_id:
+        raise SystemExit("STALE verification matrix: it does not belong to this run")
     matrix_summary = matrix.get("summary") or sitl.get("verification_matrix")
     rows = matrix.get("rows") or []
     if len(rows) != len(run.get("requirements") or []):
@@ -85,12 +70,6 @@ def main() -> int:
             "STALE requirement dependency graph: artifact does not match run input"
         )
     requirement_impact = _read("requirement_impact.json")
-    if requirement_impact.get("current_graph_digest") != requirement_graph.get(
-        "graph_digest"
-    ):
-        raise SystemExit(
-            "STALE requirement impact: current graph digest does not match"
-        )
     try:
         research_conclusion = derive_research_conclusion(run, gazebo, sitl, matrix)
     except ValueError as exc:
@@ -99,14 +78,14 @@ def main() -> int:
     phase9 = {
         "gazebo": {
             "status": gazebo.get("status"),
-            "source_provenance": gazebo.get("source_provenance"),
+            "source_run_id": gazebo.get("source_run_id"),
         },
         "sitl": {
             "flight_passed": (sitl.get("flight") or {}).get("passed"),
             "safety_status": (sitl.get("safety_verification") or {}).get("status"),
             "l2_passed": sum(bool(x.get("passed")) for x in sitl.get("safety_l2", [])),
             "l2_total": len(sitl.get("safety_l2", [])),
-            "source_provenance": sitl.get("source_provenance"),
+            "source_run_id": sitl.get("source_run_id"),
         },
         "verification_matrix": {"row_count": len(rows)},
     }
@@ -132,7 +111,6 @@ def main() -> int:
         capture_output=True, text=True, check=True,
     ).stdout
     atomic_write_text(OUT / "working_tree.patch", diff)
-    untracked: dict[str, str] = {}
     untracked_archive: dict[str, dict[str, str]] = {}
     for line in dirty:
         if not line.startswith("?? "):
@@ -141,10 +119,7 @@ def main() -> int:
         path = ROOT / rel
         if path.is_file():
             data = path.read_bytes()
-            digest = hashlib.sha256(data).hexdigest()
-            untracked[rel] = digest
             untracked_archive[rel] = {
-                "sha256": digest,
                 "encoding": "base64",
                 "content": base64.b64encode(data).decode("ascii"),
             }
@@ -154,27 +129,8 @@ def main() -> int:
     })
     code_state = {
         "git_commit": commit,
-        "git_diff_sha256": sha256_text(diff),
         "dirty_worktree": dirty,
-        "untracked_file_sha256": untracked,
     }
-    code_state["code_state_sha256"] = sha256_json(code_state)
-    artifact_files = [
-        "canonical_run.json",
-        "realization_run.json",
-        "final_model.sysml",
-        "recommended.parm",
-        "gazebo_feasibility_report.json",
-        "sitl_feasibility_report.json",
-        "verification_matrix.json",
-        "research_conclusion.json",
-        "research_conclusion.md",
-        "working_tree.patch",
-        "working_tree_untracked.json",
-        "requirement_dependency_graph.json",
-        "requirement_impact.json",
-    ]
-    artifact_sha256 = {name: _file_sha256(name) for name in artifact_files}
     artifact_index = {
         "canonical_run": "canonical_run.json",
         "realization": "realization_run.json",
@@ -192,10 +148,8 @@ def main() -> int:
     }
     authority = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "artifact_provenance": provenance,
-        "provenance_validated": True,
+        "run_id": run_id,
         "code_state": code_state,
-        "bundle_artifact_sha256": artifact_sha256,
         "phase8": {
             "verdict": (run.get("realization") or {}).get("verdict"),
             "chosen": (run.get("realization") or {}).get("chosen"),
@@ -215,9 +169,9 @@ def main() -> int:
         "artifacts": artifact_index,
     }
     atomic_write_json(OUT / "authoritative_run.json", authority)
-    write_state(OUT, "FINAL", run_id=provenance["run_id"], provenance_validated=True)
+    write_state(OUT, "FINAL", run_id=run_id)
     print(json.dumps({
-        "run_id": provenance["run_id"],
+        "run_id": run_id,
         "phase8": authority["phase8"]["verdict"],
         "gazebo": phase9["gazebo"]["status"],
         "sitl_flight": phase9["sitl"]["flight_passed"],

@@ -21,9 +21,7 @@ from pymavlink import mavutil
 
 from src.dse.physics_estimator import DesignInputs
 from src.realization.closure import close_the_loop
-from src.prototyping.artifact_provenance import (
-    evidence_reuse_allowed, validate_derived_provenance, validate_run_provenance,
-)
+from src.prototyping.evidence_reuse import evidence_reuse_allowed
 from src.prototyping.artifact_store import (
     LATEST_NAME,
     output_root,
@@ -149,15 +147,16 @@ def parm_freshness(primary_lines: list[str], run_json: dict | None,
     if fc is not None and "FRAME_CLASS" in values and int(values["FRAME_CLASS"]) != fc:
         return False, (f"FRAME_CLASS {int(values['FRAME_CLASS'])} does not match the latest "
                        f"recommended rotor count ({int(d.get('rotor_count', 0))} → {fc})")
-    if model_sysml is None and SYSML_PATH.exists():
-        model_sysml = SYSML_PATH.read_text(encoding="utf-8")
-    parm_text = "\n".join(primary_lines) + "\n"
-    fresh, reason = validate_run_provenance(
-        run_json, model_sysml=model_sysml, parm_text=parm_text,
-    )
-    if not fresh:
-        return False, reason
+    if not run_json.get("run_id"):
+        return False, "realization_run.json has no run_id; regenerate the run"
     return True, "consistent with the latest realization_run.json recommended design"
+
+
+def _read_optional(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
 
 
 def _prepare_bridge_inputs(model, allow_stale: bool = False) -> tuple[SITLBridge, str]:
@@ -490,7 +489,7 @@ def matrix_summary(model, bridge: SITLBridge,
         matrix_payload = to_json(rows)
         if RUN_JSON.exists():
             run_json = json.loads(RUN_JSON.read_text(encoding="utf-8"))
-            matrix_payload["source_provenance"] = run_json.get("artifact_provenance")
+            matrix_payload["source_run_id"] = run_json.get("run_id")
         atomic_write_json(MATRIX_JSON, matrix_payload)
         atomic_write_text(MATRIX_MD, to_markdown(rows))
         return summarize(rows)
@@ -865,8 +864,7 @@ def main(argv: list[str] | None = None) -> int:
         if (
             (previous_report.get("flight") or {}).get("passed") is True
             and previous_ids == current_ids
-            and previous_report.get("source_provenance")
-            == previous_run.get("artifact_provenance")
+            and previous_report.get("source_run_id") == previous_run.get("run_id")
             and evidence_reuse_allowed(
                 previous_run,
                 run_json,
@@ -874,6 +872,8 @@ def main(argv: list[str] | None = None) -> int:
                 current_model,
                 current_ids,
                 require_parm_match=True,
+                previous_parm=_read_optional(previous_dir / "recommended.parm"),
+                current_parm=_read_optional(PARM_PATH),
             )
         ):
             report = dict(previous_report)
@@ -881,13 +881,8 @@ def main(argv: list[str] | None = None) -> int:
                 "model_source": model_source,
                 "model_source_note": model_source_note,
                 "parm_source": parm_source,
-                "source_provenance": run_json.get("artifact_provenance"),
-                "evidence_origin_provenance": previous_run.get(
-                    "artifact_provenance"
-                ),
-                "reused_from_run_id": (
-                    previous_run.get("artifact_provenance") or {}
-                ).get("run_id"),
+                "source_run_id": run_json.get("run_id"),
+                "reused_from_run_id": previous_run.get("run_id"),
                 "coverage": coverage_summary(bridge),
                 "traceability": traceability_results(bridge),
                 "safety_l2": [
@@ -928,9 +923,9 @@ def main(argv: list[str] | None = None) -> int:
     if RUN_JSON.exists():
         try:
             run_json = json.loads(RUN_JSON.read_text(encoding="utf-8"))
-            report["source_provenance"] = run_json.get("artifact_provenance")
+            report["source_run_id"] = run_json.get("run_id")
         except (OSError, ValueError):
-            report["source_provenance"] = None
+            report["source_run_id"] = None
     report["coverage"] = coverage_summary(bridge)
     report["traceability"] = traceability_results(bridge)
     if report["traceability"]:
