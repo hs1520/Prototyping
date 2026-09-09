@@ -11,7 +11,6 @@ test intents stay recorded as planned or deferred.
 
 Usage: python experiments/source_removal.py <output.json>
 """
-import hashlib
 import json
 import subprocess
 import sys
@@ -52,10 +51,6 @@ APPENDIX_G = {
     "REQ-SAFE-005": "verified", "REQ-SAFE-006": "partial",
     "REQ-SAFE-007": "failed", "REQ-SAFE-008": "verified",
 }
-
-
-def sha(name):
-    return hashlib.sha256((RUN / name).read_bytes()).hexdigest()
 
 
 def load_inputs():
@@ -113,7 +108,7 @@ def main(out_path):
                             capture_output=True, text=True, cwd=REPO).stdout.strip()
     out = {
         "code_commit": commit,
-        "inputs": {name: sha(name) for name in INPUTS},
+        "inputs": [str(RUN.relative_to(REPO) / name) for name in INPUTS],
         "baseline": {"status": base, "obligations": base_ob, "summary": base_summary},
         "variants": {},
     }

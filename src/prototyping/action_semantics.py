@@ -21,7 +21,6 @@ from .action_effects import (
     PROFILE_VERSION,
     PlannedActionEffect,
 )
-from ..utils.digest import sha256_text
 from ..utils.sysml_text_utils import find_block_end
 from ..simulation.extractor import extract_behavioral_graph
 from ..simulation.state_extractor import extract_state_machines
@@ -120,7 +119,6 @@ class SendRecord:
 @dataclass
 class ActionSemanticsReport:
     profile: str
-    source_model_sha256: str
     status: str = "ADVISORY"
     summary: Dict[str, int] = field(default_factory=dict)
     actions: List[ActionRecord] = field(default_factory=list)
@@ -134,7 +132,6 @@ class ActionSemanticsReport:
             "profile": self.profile,
             "profile_version": PROFILE_VERSION,
             "status": self.status,
-            "source_model_sha256": self.source_model_sha256,
             "summary": dict(self.summary),
             "actions": [item.to_dict() for item in self.actions],
             "sends": [item.to_dict() for item in self.sends],
@@ -243,8 +240,7 @@ def analyze_action_semantics(
     action's requirement from its spelling is the defect this audit measures.
     """
     text = model_text or ""
-    digest = sha256_text(text)
-    report = ActionSemanticsReport(profile=profile, source_model_sha256=digest)
+    report = ActionSemanticsReport(profile=profile)
     if profile == OFF or not text.strip():
         report.summary = _empty_summary()
         return report

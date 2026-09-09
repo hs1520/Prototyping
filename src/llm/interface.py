@@ -433,7 +433,7 @@ class Conversation:
     The provider APIs used here (Vertex/Gemini ``generateContent``, the GitHub
     Models chat endpoint) keep no server-side session; continuity comes from
     resending earlier turns. This object owns them, so the exact bytes the model
-    saw stay application-owned, reproducible and digest-recordable (§5.3). One
+    saw stay application-owned and reproducible (§5.3). One
     instance belongs to one Agent role and one bounded task, as TaskSession
     requires; it is not shared across roles or tasks.
     """

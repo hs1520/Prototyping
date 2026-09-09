@@ -535,8 +535,8 @@ def build_dependency_closed_context(
         normalized_allowed = {
             str(item).upper().replace("-", "_") for item in allowed_req_ids
         }
-        # A signed/scoped packet is one atomic authorization unit: trimming a
-        # contaminated packet would leave its digest and edit policy authorizing
+        # A scoped packet is one atomic authorization unit: trimming a
+        # contaminated packet would leave its edit policy authorizing
         # more than the prompt slice shows, so fail closed.
         if packet_req_ids - normalized_allowed:
             return None

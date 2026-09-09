@@ -8,7 +8,6 @@ the same paths for every candidate.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -114,7 +113,6 @@ class RequirementRealizationPlan:
     owner_component: str = ""
     behavior_kind: str = ""
     behavior_name: str = ""
-    source_digest: str = ""
     # The discrete response a functional requirement obliges. The planner decides
     # it from the requirement text and records it here so the plan validator and
     # the terminal closure gate read one decision instead of each inferring it
@@ -139,7 +137,6 @@ class RequirementRealizationPlan:
             "owner_component": self.owner_component,
             "behavior_kind": self.behavior_kind,
             "behavior_name": self.behavior_name,
-            "source_digest": self.source_digest,
             "response_intent": self.response_intent,
             "response_intent_rationale": self.response_intent_rationale,
             "response_markers": list(self.response_markers),
@@ -176,7 +173,6 @@ class RequirementRealizationPlan:
             behavior_name=str(
                 value.get("behavior_name") or ""
             ).strip(),
-            source_digest=str(value.get("source_digest") or "").strip(),
             response_intent=str(
                 value.get("response_intent") or ""
             ).strip().lower(),
@@ -214,7 +210,6 @@ class StructuralObligation:
     entry_kind: str
     trigger_concept: str = ""
     effect_concept: str = ""
-    source_digest: str = ""
     provenance: str = "PLAN_TOPOLOGY"
     realization_kind: str = "CAUSAL_PATH"
     behavior_kind: str = ""
@@ -233,7 +228,6 @@ class StructuralObligation:
             "entry_kind": self.entry_kind,
             "trigger_concept": self.trigger_concept,
             "effect_concept": self.effect_concept,
-            "source_digest": self.source_digest,
             "provenance": self.provenance,
             "realization_kind": self.realization_kind,
             "behavior_kind": self.behavior_kind,
@@ -517,10 +511,6 @@ def compile_source_anchored_structural_obligations(
             )
 
         source_text = requirement_sources.get(req_id, "")
-        source_digest = (
-            hashlib.sha256(source_text.encode("utf-8")).hexdigest()
-            if source_text else realization.source_digest
-        )
         source_phrase = _normalise_phrase(source_text)
         for field_name, concept in (
             ("trigger_concept", realization.trigger_concept),
@@ -670,7 +660,6 @@ def compile_source_anchored_structural_obligations(
                     entry_kind="SOURCE_ANCHORED_LOCAL_BEHAVIOR",
                     trigger_concept=realization.trigger_concept,
                     effect_concept=realization.effect_concept,
-                    source_digest=source_digest,
                     provenance="FROZEN_REQUIREMENT_REALIZATION",
                     realization_kind="LOCAL_BEHAVIOR",
                     behavior_kind=realization.behavior_kind,
@@ -773,7 +762,6 @@ def compile_source_anchored_structural_obligations(
             entry_kind="SOURCE_ANCHORED_CAUSAL_TRIGGER",
             trigger_concept=realization.trigger_concept,
             effect_concept=realization.effect_concept,
-            source_digest=source_digest,
             provenance="FROZEN_REQUIREMENT_REALIZATION",
             realization_kind="CAUSAL_PATH",
         ))
@@ -1099,9 +1087,6 @@ def validate_structural_obligations(
         "status": status,
         "scenario_set_fixed": True,
         "model_name": model_name,
-        "source_model_digest": hashlib.sha256(
-            (model_text or "").encode("utf-8")
-        ).hexdigest(),
         "passed": passed,
         "total": len(results),
         "results": results,

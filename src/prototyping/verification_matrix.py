@@ -13,7 +13,6 @@ convention (Inspection / Analysis / Demonstration / Test).
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -353,8 +352,7 @@ def build_matrix(model, realization: Optional[dict], requirement_evidence,
     if not isinstance(requirement_evidence, RequirementEvidenceBundle):
         raise TypeError("build_matrix requires a RequirementEvidenceBundle")
     model_text = model.to_sysml_text() or ""
-    model_digest = hashlib.sha256(model_text.encode("utf-8")).hexdigest()
-    if requirement_evidence.model_digest != model_digest:
+    if requirement_evidence.model_text != model_text:
         raise ValueError(
             "requirement evidence does not match the model revision"
         )

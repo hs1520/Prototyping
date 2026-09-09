@@ -74,9 +74,9 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # (release|return|land|navigate|report|self_test|none), rationale required for
 # `none`; the plan validator and terminal closure gate read it and fall back to
 # the keyword table only when blank, so archived runs keep their verdicts. The
-# planning prompt gained the field and its rule, moving the user-prompt digest of
+# planning prompt gained the field and its rule, changing the user prompt of
 # every planning call on every arm (golden_refactor_call_sequence.json ordinals
-# 1/2/4/5; system-prompt digests unchanged). Riding along: the unit vocabulary
+# 1/2/4/5; system prompts unchanged). Riding along: the unit vocabulary
 # accepts the degree symbol and Celsius, numeric bounds accept U+2212, "deliver"
 # alone no longer marks a release intent, and return-intent markers gained the
 # launch/RTL spellings. The validator looks for a requirement's response in the
@@ -156,7 +156,7 @@ REVISED_EXPERIMENT_NAMESPACE = "BLACKBOARD_AG_V1"
 # rationale when a response is obliged but no reachable-action name can evidence
 # it; the gate holds the model to nothing and the matrix reports the row under a
 # `planned_unverifiable_response` tier instead of `none`. The prompt gained the
-# field and both rules, moving the same planning-call digests v21 moved. Nothing
+# field and both rules, changing the same planning calls v21 changed. Nothing
 # fires on the frozen path - every frozen FUNC requirement's response is named by
 # the built-in table - so v22 plans of frozen inputs differ from v21 only in
 # prompt text, and are still not poolable.

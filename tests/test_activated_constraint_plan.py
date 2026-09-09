@@ -578,9 +578,6 @@ def test_provenance_denominators():
         simulation_result=simulation,
         terminal_consistency={
             "status": "PASS",
-            "model_digest": digest,
-            "simulation_source_model_digest": digest,
-            "evaluation_source_model_digest": digest,
         },
         generation_plan_conformance={
             "status": "PASS",

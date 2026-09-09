@@ -229,15 +229,6 @@ def test_off_profile_no_work():
     assert report.summary["definitions_total"] == 0
 
 
-def test_report_carries_model_digest():
-    import hashlib
-
-    report = analyze_action_semantics(_COMPLETE)
-    assert report.to_dict()["artifact_role"] == ARTIFACT_ROLE
-    assert report.source_model_sha256 == hashlib.sha256(
-        _COMPLETE.encode("utf-8")
-    ).hexdigest()
-
 
 def test_default_prefix_not_counted():
     model = """

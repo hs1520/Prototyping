@@ -269,7 +269,6 @@ class AGGraph:
     components: Tuple[Contract, ...] = ()
     edges: Tuple[AGEdge, ...] = ()
     revision: Optional[int] = None
-    model_digest: Optional[str] = None
     parse_diagnostics: Tuple[AGDiagnostic, ...] = ()
     behaviors: Tuple[BehaviorRealization, ...] = ()
     invariant_realizations: Tuple[InvariantRealization, ...] = ()
@@ -293,7 +292,6 @@ class AGReport:
     timing: Dict[str, Any]
     discharge: Dict[str, str]
     revision: Optional[int]
-    model_digest: Optional[str]
     allocations: Tuple[Dict[str, str], ...] = ()
     discharge_edges: Tuple[Dict[str, Any], ...] = ()
     realization_links: Tuple[Dict[str, Any], ...] = ()
@@ -310,7 +308,7 @@ class AGReport:
 
     def to_dict(self) -> Dict[str, Any]:
         # Shape of the read-only ``ag_contract_graph.json`` audit view (§14): the
-        # report cites the source model revision, digest and checker version, and is
+        # report cites the source model revision and checker version, and is
         # deterministically regenerable. The ``graph`` block carries the predicted
         # structure so the independent post-hoc evaluator can score it without
         # re-running the checker (§13 separation).
@@ -323,7 +321,6 @@ class AGReport:
             "configuration": "R2-BBAG",
             "checker_version": self.checker_version,
             "source_model_revision": self.revision,
-            "source_model_digest": self.model_digest,
             "verdict": self.verdict,
             "system_completeness": self.system_completeness,
             "component_completeness": dict(self.component_completeness),
@@ -2058,7 +2055,6 @@ def check_ag_graph(
         timing=timing,
         discharge=discharge,
         revision=graph.revision,
-        model_digest=graph.model_digest,
         allocations=tuple(allocations),
         discharge_edges=tuple(discharge_edges),
         realization_links=tuple(realization_links),

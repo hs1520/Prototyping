@@ -3,13 +3,12 @@
 Extracts only explicit numeric bounds stated by the stakeholder (for example,
 "maintain at least 5 metres of separation while avoiding it"); the anchor
 preserves comparator, threshold, unit, subject terms and a bounded activation
-qualifier across generation, and stays digest-bound to its source. Not a
+qualifier across generation, and stays bound to its source clause. Not a
 temporal proof system.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 import re
 from typing import Any, Mapping, Sequence
 
@@ -162,10 +161,6 @@ _TRANSITION_GUARD_RE = re.compile(
     r"(?P<target>[A-Za-z_]\w*)\s*;)",
     re.DOTALL,
 )
-
-
-def _source_digest(source: str) -> str:
-    return hashlib.sha256(source.strip().encode("utf-8")).hexdigest()
 
 
 def _subject_terms(value: str) -> tuple[str, ...]:
@@ -433,7 +428,6 @@ class RequirementSemanticObligation:
     threshold: float
     unit: str
     source_clause: str
-    source_digest: str
     activation_kind: str = "UNCONDITIONAL"
     activation_clause: str | None = None
 
@@ -447,7 +441,6 @@ class RequirementSemanticObligation:
             "threshold": self.threshold,
             "unit": self.unit,
             "source_clause": self.source_clause,
-            "source_digest": self.source_digest,
             "activation": {
                 "kind": self.activation_kind,
                 "source_clause": self.activation_clause,
@@ -480,7 +473,6 @@ class RequirementSemanticObligation:
             threshold=float(value.get("threshold") or 0.0),
             unit=str(value.get("unit") or ""),
             source_clause=str(value.get("source_clause") or ""),
-            source_digest=str(value.get("source_digest") or ""),
             activation_kind=str(
                 activation.get("kind")
                 or value.get("activation_kind")
@@ -728,7 +720,6 @@ def compile_requirement_semantic_obligations(
                         )
                     ).split()
                 ),
-                source_digest=_source_digest(source),
                 activation_kind=(
                     "CONTEXTUAL" if activation_clause else "UNCONDITIONAL"
                 ),
@@ -1415,12 +1406,6 @@ def materialize_semantic_bindings(
             else "FAIL"
         ),
         "transaction_committed": committed,
-        "input_model_digest": hashlib.sha256(
-            original.encode("utf-8")
-        ).hexdigest(),
-        "output_model_digest": hashlib.sha256(
-            output.encode("utf-8")
-        ).hexdigest(),
         "planned_binding_count": len(bindings),
         "materialized_binding_count": sum(
             item["status"] == "PASS" for item in results
@@ -1715,9 +1700,6 @@ def validate_requirement_semantic_obligations(
         "claim_boundary": "MODEL_SEMANTIC_FIDELITY_NOT_PHYSICAL_PROOF",
         "scenario_set_fixed": True,
         "model_name": model_name,
-        "source_model_digest": hashlib.sha256(
-            text.encode("utf-8")
-        ).hexdigest(),
         "passed": passed,
         "delegated": delegated,
         "total": len(results),

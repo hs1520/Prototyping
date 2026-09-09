@@ -174,16 +174,14 @@ def test_incompatible_timing_units():
     assert report.verdict == "FAIL"
 
 
-def test_report_cites_revision_digest():
-    graph = extract_ag_graph(REQ_SAFE_005_SYSML, revision=42, model_digest="deadbeef")
+def test_report_cites_revision():
+    graph = extract_ag_graph(REQ_SAFE_005_SYSML, revision=42)
     report = check_ag_graph(graph)
     d = report.to_dict()
     assert d["source_model_revision"] == 42
-    assert d["source_model_digest"] == "deadbeef"
     assert d["checker_version"] == report.checker_version
     assert d["artifact_role"] == "RUNTIME_A_G_PREDICTION"
-    assert check_ag_graph(extract_ag_graph(REQ_SAFE_005_SYSML, revision=42,
-                                           model_digest="deadbeef")).to_dict() == d
+    assert check_ag_graph(extract_ag_graph(REQ_SAFE_005_SYSML, revision=42)).to_dict() == d
 
 
 def test_unproduced_observation_insufficient():

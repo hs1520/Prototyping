@@ -2,8 +2,8 @@
 
 Single-writer, in order:
 
-  Phase 1-8 -> immutable base fingerprints -> Gazebo -> SITL/executed matrix
-  -> provenance finalizer -> atomic ``examples/output/latest`` publication.
+  Phase 1-8 -> base bundle -> Gazebo -> SITL/executed matrix
+  -> finalizer -> atomic ``examples/output/latest`` publication.
 
 Runs live under ``examples/output/runs/<run_id>``; a failed or interrupted run
 is kept for diagnosis and does not replace ``latest``.
@@ -284,7 +284,7 @@ def main() -> int:
             llm = create_llm(provider="vertex")
             print("LLM:", llm.__class__.__name__, flush=True)
             # Phase 9 is disabled inside the orchestrator: external evidence starts
-            # only after the base bundle is fingerprinted.
+            # only after the base bundle is written.
             pipe = PrototypingPipeline(
                 llm=llm,
                 max_iterations=4,
@@ -404,7 +404,7 @@ def main() -> int:
                     )
                 except Exception:
                     pass
-                # Without this the bounded Step 1 attempts - response digests, excerpts,
+                # Without this the bounded Step 1 attempts - response excerpts,
                 # per-attempt parse status - die with the process, leaving a one-line error.
                 step1_attempts = list(getattr(exc, "plan_attempts", ()) or ())
                 if step1_attempts:

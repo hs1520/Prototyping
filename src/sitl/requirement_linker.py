@@ -28,7 +28,6 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Dict, List, Optional, Any, Mapping, Tuple
 
-from src.utils.digest import sha256_text
 from src.sysml.lite_model import SysMLLiteModel
 from src.sitl.sitl_specs import InjectSpec, VerifySpec
 
@@ -97,7 +96,7 @@ class AcceptEventGuard:
 class RequirementEvidenceBundle:
     """Immutable, revision-bound input for SITL and verification consumers."""
 
-    model_digest: str
+    model_text: str
     requirement_texts: Mapping[str, str]
     satisfying_parts: Mapping[str, tuple[str, ...]]
     guard_assignments: Mapping[str, GuardEvidence]
@@ -1391,7 +1390,7 @@ class RequirementLinker:
             for key, value in self.coverage_stats().items()
         })
         self._evidence_bundle = RequirementEvidenceBundle(
-            model_digest=sha256_text(model_text),
+            model_text=model_text,
             requirement_texts=MappingProxyType(dict(self._req_texts)),
             satisfying_parts=MappingProxyType({
                 req_id: tuple(parts)

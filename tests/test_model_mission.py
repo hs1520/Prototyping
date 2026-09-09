@@ -156,7 +156,6 @@ def test_actions_found_per_machine():
 def test_provenance_names_machines():
     mission = ModelDrivenMission(_MODEL)
     prov = mission.provenance()
-    assert len(prov["model_sha256"]) == 64
     assert "PayloadMechanism.PayloadReleaseBehavior" in prov["machines"]
     assert prov["decision_owner"] == "generated model state machines"
 

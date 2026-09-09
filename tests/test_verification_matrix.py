@@ -206,9 +206,7 @@ def test_l1_needs_validation_result():
         params=[SimpleNamespace(param_name="SCHED_LOOP_RATE")],
     )
     evidence = RequirementEvidenceBundle(
-        model_digest=__import__("hashlib").sha256(
-            (model.to_sysml_text() or "").encode("utf-8")
-        ).hexdigest(),
+        model_text=model.to_sysml_text() or "",
         requirement_texts={
             "REQ_PERF_006": "Control loop rate shall be at least 10 Hz."
         },

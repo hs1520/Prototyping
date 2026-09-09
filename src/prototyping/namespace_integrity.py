@@ -7,7 +7,6 @@ Definitions in different owning scopes remain legal.
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from typing import Any
 
@@ -156,9 +155,6 @@ def check_user_namespace_integrity(model_text: str) -> dict[str, Any]:
         "schema_version": "1.0",
         "artifact_role": "USER_NAMESPACE_INTEGRITY",
         "status": "PASS" if not findings else "FAIL",
-        "source_model_digest": hashlib.sha256(
-            text.encode("utf-8")
-        ).hexdigest(),
         "duplicate_members": findings,
     }
 

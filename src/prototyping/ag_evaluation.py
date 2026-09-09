@@ -41,7 +41,6 @@ PREDICTION_ROLE = "RUNTIME_A_G_PREDICTION"
 GOLD_ROLE = "EVALUATOR_GOLD"
 REVISED_NAMESPACE = "BLACKBOARD_AG_V1"
 R2_CONFIGURATION = "R2-BBAG"
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -289,10 +288,6 @@ def evaluate_ag_against_gold(
     chain_id = str(gold.get("chain_id") or "")
     if normalise_req_id(str(prediction.get("source_requirement") or "")) != chain_id:
         raise ValueError("prediction source_requirement does not match gold chain_id")
-    if not _SHA256_RE.fullmatch(
-        str(prediction.get("source_model_digest") or "")
-    ):
-        raise ValueError("prediction source_model_digest must be a SHA-256 digest")
     if not str(prediction.get("checker_version") or ""):
         raise ValueError("prediction checker_version must be set")
     if not isinstance(prediction.get("graph"), Mapping):
@@ -334,7 +329,6 @@ def evaluate_ag_against_gold(
         "chain_id": gold.get("chain_id"),
         "checker_version": prediction.get("checker_version"),
         "source_model_revision": prediction.get("source_model_revision"),
-        "source_model_digest": prediction.get("source_model_digest"),
         "evaluated_against": "independent_human_gold",
         "self_scored": False,
         "experiment_namespace": REVISED_NAMESPACE,

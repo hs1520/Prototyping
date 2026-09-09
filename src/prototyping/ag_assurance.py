@@ -303,7 +303,6 @@ def check_safety_pattern_conformance(
         "producing_stage": "R2_PATTERN_CONFORMANCE",
         "measurement_boundary": "INTERVENTION",
         "source_model_revision": report.revision,
-        "source_model_digest": report.model_digest,
         "selected_scope": report.source_requirement,
         "formal_proof": False,
         "verdict": verdict,

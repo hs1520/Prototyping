@@ -60,7 +60,7 @@ def main() -> int:
             shutil.copy2(f, out / "runs" / f.name)
     base = manifests[0]
     manifest = {
-        **{k: base.get(k) for k in ("source", "source_digest", "sets", "provider", "base_pipeline_kwargs")},
+        **{k: base.get(k) for k in ("source", "sets", "provider", "base_pipeline_kwargs")},
         "campaign": out.name,
         "merged_from": provenance,
         "arms": sorted({r["arm"] for r in records}, key=lambda a: arm_order.index(a) if a in arm_order else 99),

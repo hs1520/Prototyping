@@ -13,7 +13,6 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
 from ..utils.req_id import normalise_req_id, source_requirements_by_id
-from ..utils.digest import sha256_text
 from ..utils.sysml_text_utils import IDENTIFIER_RE, find_block_end, named_block_span
 from .event_symbols import (
     PlannedEventSymbol,
@@ -98,7 +97,6 @@ class PlannedBehavior:
     transitions: tuple[PlannedTransition, ...]
     provenance: str = "FROZEN_REQUIREMENT"
     source_requirement_id: str | None = None
-    source_digest: str | None = None
 
     @classmethod
     def from_dict(
@@ -116,11 +114,6 @@ class PlannedBehavior:
             or ""
         ).strip()
         req_id = normalise_req_id(req_id) if req_id else None
-        source = source_requirements_by_id(requirements).get(req_id or "")
-        archived_digest = (
-            provenance.get("source_digest")
-            or value.get("source_digest")
-        )
         return cls(
             owner=str(value.get("owner") or "").strip(),
             behavior_id=str(
@@ -143,13 +136,6 @@ class PlannedBehavior:
                 or "FROZEN_REQUIREMENT"
             ).strip().upper(),
             source_requirement_id=req_id,
-            source_digest=(
-                sha256_text(source)
-                if source else (
-                    str(archived_digest).strip()
-                    if archived_digest not in (None, "") else None
-                )
-            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -162,7 +148,6 @@ class PlannedBehavior:
             "provenance": {
                 "kind": self.provenance,
                 "requirement_id": self.source_requirement_id,
-                "source_digest": self.source_digest,
             },
         }
 
@@ -1120,7 +1105,7 @@ def materialize_owned_planned_behaviors(
             # a def beside it produced the measured double declaration, which is
             # what syside flags. Replace it with the plan-blessed def, but only a
             # top-level usage: a nested occurrence belongs to another scope, and
-            # the fingerprint guard below covers that shape by reverting.
+            # the defect-count guard below covers that shape by reverting.
             existing = [
                 (start, end)
                 for start, end in _definition_spans(
@@ -1142,7 +1127,7 @@ def materialize_owned_planned_behaviors(
             + "\n    "
         )
         before_text = text
-        before_fp = _shadow_fingerprint(text)
+        before_fp = _shadow_defect_counts(text)
         if existing:
             start, end = existing[0]
             absolute_start = owner_span[0] + start
@@ -1155,7 +1140,7 @@ def materialize_owned_planned_behaviors(
         else:
             closing = owner_span[1]
             text = text[:closing] + insertion + text[closing:]
-        after_fp = _shadow_fingerprint(text)
+        after_fp = _shadow_defect_counts(text)
         if after_fp > before_fp:
             # Injection does not create a duplicate or shadow the model did not
             # already have. Reverting leaves the behaviour absent, which the
@@ -1188,11 +1173,11 @@ def materialize_owned_planned_behaviors(
     return text, report
 
 
-def _shadow_fingerprint(model_text: str) -> tuple[int, int]:
+def _shadow_defect_counts(model_text: str) -> tuple[int, int]:
     """(duplicate members, shadowing warnings) - the injection-safety metric.
 
     Every writer that adds named declarations compares this before and after each
-    piece; a worse fingerprint means the piece added a namespace defect the model
+    piece; a worse count means the piece added a namespace defect the model
     did not have (2026-08-30 draws: 59 of 61 shadowing warnings were
     injector-adjacent).
     """

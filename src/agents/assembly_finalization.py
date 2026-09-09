@@ -563,8 +563,8 @@ class AssemblyFinalizer:
             )
             # Injection does not add a duplicate or shadow the model did not already
             # have (surgical-pass discipline applied to our own writers).
-            from ..prototyping.planned_behavior import _shadow_fingerprint
-            if _shadow_fingerprint(candidate) > _shadow_fingerprint(result):
+            from ..prototyping.planned_behavior import _shadow_defect_counts
+            if _shadow_defect_counts(candidate) > _shadow_defect_counts(result):
                 print(
                     f"  ⚠ state-def injection of '{name}' reverted — it "
                     "would add a duplicate/shadowed member", flush=True,

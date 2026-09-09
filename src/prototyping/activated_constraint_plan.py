@@ -19,7 +19,6 @@ from .requirement_semantics import (
     quantity_type_for_unit,
     semantic_binding_matches_subject,
 )
-from ..utils.digest import sha256_text
 from ..utils.req_id import (
     normalise_req_id,
     source_requirements_by_id,
@@ -281,7 +280,6 @@ class AttributePlan:
     input_binding: str | None = None
     provenance: str = "DESIGN_DECISION"
     source_requirement_id: str | None = None
-    source_digest: str | None = None
 
     @classmethod
     def from_dict(
@@ -297,7 +295,6 @@ class AttributePlan:
             or ""
         ).strip()
         req_id = normalise_req_id(req_id) if req_id else None
-        source = sources.get(req_id or "")
         initial = value.get("initial_value")
         binding = value.get("input_binding")
         return cls(
@@ -315,12 +312,6 @@ class AttributePlan:
                 value.get("provenance") or "DESIGN_DECISION"
             ).strip().upper(),
             source_requirement_id=req_id,
-            source_digest=(
-                sha256_text(source)
-                if source else (
-                    str(value.get("source_digest") or "").strip() or None
-                )
-            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -333,7 +324,6 @@ class AttributePlan:
             "input_binding": self.input_binding,
             "provenance": self.provenance,
             "source_requirement_id": self.source_requirement_id,
-            "source_digest": self.source_digest,
         }
 
 
@@ -349,7 +339,6 @@ class ConstraintPlan:
     provenance: str = "DESIGN_DECISION"
     verification_tier: str = "INSPECTION"
     source_requirement_id: str | None = None
-    source_digest: str | None = None
 
     @property
     def expression(self) -> str:
@@ -404,12 +393,6 @@ class ConstraintPlan:
                 provenance or "DESIGN_DECISION"
             ).strip().upper()
         req_id = normalise_req_id(req_id) if req_id else None
-        source = source_requirements_by_id(requirements).get(req_id or "")
-        archived_digest = None
-        if isinstance(provenance, Mapping):
-            archived_digest = provenance.get("source_digest")
-        if archived_digest in (None, ""):
-            archived_digest = value.get("source_digest")
         return cls(
             constraint_id=str(
                 value.get("constraint_id") or value.get("name") or ""
@@ -441,13 +424,6 @@ class ConstraintPlan:
                 value.get("verification_tier") or "INSPECTION"
             ).strip().upper(),
             source_requirement_id=req_id,
-            source_digest=(
-                sha256_text(source)
-                if source else (
-                    str(archived_digest).strip()
-                    if archived_digest not in (None, "") else None
-                )
-            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -466,7 +442,6 @@ class ConstraintPlan:
             "provenance": {
                 "kind": self.provenance,
                 "requirement_id": self.source_requirement_id,
-                "source_digest": self.source_digest,
             },
             "verification_tier": self.verification_tier,
             "qualification_effect": self.qualification_effect,
@@ -739,7 +714,6 @@ def compile_constraint_plan(
                 input_binding=binding.source_path,
                 provenance="FROZEN_REQUIREMENT",
                 source_requirement_id=binding.requirement_id,
-                source_digest=obligation.source_digest,
             ),
             AttributePlan(
                 name=binding.threshold_attribute,
@@ -749,7 +723,6 @@ def compile_constraint_plan(
                 initial_value=f"{obligation.threshold:g} [{sysml_unit_name(obligation.unit)}]",
                 provenance="FROZEN_REQUIREMENT",
                 source_requirement_id=binding.requirement_id,
-                source_digest=obligation.source_digest,
             ),
         ])
         semantic_key = (
@@ -800,7 +773,6 @@ def compile_constraint_plan(
                     provenance="FROZEN_REQUIREMENT",
                     verification_tier="PARAMETRIC_SWEEP",
                     source_requirement_id=binding.requirement_id,
-                    source_digest=obligation.source_digest,
                 ))
         reconciled_bindings.append(binding)
 

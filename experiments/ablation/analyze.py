@@ -160,8 +160,8 @@ def render_markdown(
     lines: List[str] = []
     lines.append(f"# Ablation campaign `{manifest.get('campaign')}`\n")
     lines.append(f"- system: {manifest.get('system')} "
-                 f"(frozen requirements, digest "
-                 f"`{str(manifest.get('requirements_digest'))[:12]}…`)")
+                 f"(frozen requirement set "
+                 f"`{str(manifest.get('frozen_set_digest'))[:12]}…`)")
     lines.append(f"- provider: {manifest.get('provider')}  ·  seeds: "
                  f"{manifest.get('seeds')}  ·  commit: "
                  f"`{str(manifest.get('git_commit'))[:12]}`"

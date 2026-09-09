@@ -1403,17 +1403,15 @@ class AGAssuranceMixin:
             extract_ag_graphs,
         )
         from ..prototyping.ag_repair import attempt_dependency_closed_ag_repair
-        from ..prototyping.blackboard import text_digest
 
-        if text_digest(model_text) != self.blackboard.current_model.model_digest:
+        if model_text != self.blackboard.current_model.model_text:
             raise ValueError(
                 "A/G extraction input does not match the committed Blackboard "
-                "model revision/digest"
+                "model revision"
             )
         graphs = extract_ag_graphs(
             self.blackboard.current_model.model_text,
             revision=self.blackboard.current_revision,
-            model_digest=self.blackboard.current_model.model_digest,
         )
         if len(graphs) > 1:
             # Several selected chains co-exist (e.g. the drone co-selects
@@ -1428,11 +1426,8 @@ class AGAssuranceMixin:
 
         while True:
             revision = self.blackboard.current_revision
-            digest = self.blackboard.current_model.model_digest
             current_text = self.blackboard.current_model.model_text
-            graph = extract_ag_graph(
-                current_text, revision=revision, model_digest=digest
-            )
+            graph = extract_ag_graph(current_text, revision=revision)
             report, pattern, failures, analysis_record, repair_candidates = (
                 self._run_ag_analysis_round(
                     graph,
@@ -1445,7 +1440,6 @@ class AGAssuranceMixin:
             analysis_history.append({
                 "analysis_round": analysis_round,
                 "source_model_revision": revision,
-                "source_model_digest": digest,
                 "verdict": report.verdict,
                 "pattern_verdict": pattern["verdict"],
                 "failure_ids": [
@@ -1548,7 +1542,6 @@ class AGAssuranceMixin:
         from ..prototyping.blackboard import RecordType, TaskStatus
 
         revision = graph.revision
-        digest = graph.model_digest
         report = check_ag_graph(graph)
         analysis_record = self.blackboard.publish(
             RecordType.ANALYSIS,
@@ -1590,7 +1583,6 @@ class AGAssuranceMixin:
         )
         failures.update({
             "source_model_revision": revision,
-            "source_model_digest": digest,
             "analysis_record_id": analysis_record.record_id,
             "analysis_round": analysis_round,
         })
@@ -1633,7 +1625,6 @@ class AGAssuranceMixin:
                                 else "automatic_repair_disabled_for_this_run"
                             ),
                             "base_model_revision": revision,
-                            "base_model_digest": digest,
                             "committed_model_revision": None,
                             "target_diagnostic_removed": False,
                             "regression_free": False,
@@ -1696,7 +1687,6 @@ class AGAssuranceMixin:
                             "decomposition_repair"
                         ),
                         "base_model_revision": revision,
-                        "base_model_digest": digest,
                         "committed_model_revision": None,
                         "target_diagnostic_removed": False,
                         "regression_free": False,
@@ -1928,7 +1918,6 @@ class AGAssuranceMixin:
                     "analysis_round": analysis_round,
                     "source_requirement": report.source_requirement,
                     "source_model_revision": graph.revision,
-                    "source_model_digest": graph.model_digest,
                     "verdict": report.verdict,
                     "pattern_verdict": pattern["verdict"],
                     "failure_ids": [
@@ -2002,11 +1991,9 @@ class AGAssuranceMixin:
             graphs = extract_ag_graphs(
                 self.blackboard.current_model.model_text,
                 revision=self.blackboard.current_revision,
-                model_digest=self.blackboard.current_model.model_digest,
             )
 
         revision = self.blackboard.current_revision
-        digest = self.blackboard.current_model.model_digest
         repair_decisions = [
             dict(item.payload)
             for item in self.blackboard.records(topic="repair.decision")
@@ -2020,7 +2007,6 @@ class AGAssuranceMixin:
                 "configuration": "R2-BBAG",
                 "checker_version": checker_version,
                 "source_model_revision": revision,
-                "source_model_digest": digest,
                 "verdict": aggregate_verdict,
                 "multi_chain": True,
                 "chain_count": len(chains),
@@ -2048,7 +2034,6 @@ class AGAssuranceMixin:
                 "failures": all_failures,
                 "analysis_history": analysis_history,
                 "source_model_revision": revision,
-                "source_model_digest": digest,
             },
             "repair_decisions": {
                 "schema_version": "1.0",

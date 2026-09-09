@@ -1,8 +1,6 @@
 """Refinement, repair, simulation closure, and syntax-gate orchestration."""
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 import time
 from copy import deepcopy
@@ -58,7 +56,6 @@ from ..sysml.text_normalization import (
     strip_code_fences,
     strip_readonly_keyword,
 )
-from ..utils.digest import sha256_text
 from ..utils.sysml_text_utils import get_sysml_text
 
 
@@ -68,7 +65,6 @@ class ModelRevision:
 
     name: str
     sysml: str
-    digest: str
     _metadata: Dict[str, Any] = field(
         default_factory=dict, repr=False, compare=False
     )
@@ -79,7 +75,6 @@ class ModelRevision:
         return cls(
             name=str(getattr(model, "name", None) or "System"),
             sysml=text,
-            digest=sha256_text(text),
             _metadata=deepcopy(dict(getattr(model, "metadata", None) or {})),
         )
 
@@ -192,10 +187,7 @@ class RefinementClosure:
     ) -> ProjectedRevision:
         model, score, simulation = refined.materialize()
         disposition = "NOT_REQUESTED"
-        parameter_evidence: Dict[str, Any] = {
-            "status": disposition,
-            "model_digest": refined.revision.digest,
-        }
+        parameter_evidence: Dict[str, Any] = {"status": disposition}
         if platform_profile is not None:
             model, score, simulation = self.__implementation._sitl_refinement_loop(
                 model,
@@ -213,17 +205,8 @@ class RefinementClosure:
                 llm=None,
                 verbose=self.__implementation.verbose,
             ).compile_evidence()
-            profile_digest = hashlib.sha256(json.dumps(
-                dict(platform_profile),
-                sort_keys=True,
-                default=lambda value: (
-                    sorted(value) if isinstance(value, set) else str(value)
-                ),
-            ).encode("utf-8")).hexdigest()
             parameter_evidence = {
                 "status": disposition,
-                "model_digest": bundle.model_digest,
-                "platform_profile_digest": profile_digest,
                 "parm_file": merge_base_parameters(
                     bundle.parm_file,
                     platform_profile.get("base_sitl_params", {}) or {},
@@ -363,8 +346,6 @@ class _RefinementEngine:
             else None
         )
         return _freeze_evidence({
-            "base_model_digest": base.digest,
-            "result_model_digest": sha256_text(text),
             "syntax_error_count": syntax.total_errors(),
             "failed_scenario_count": failed,
             "events": self._refinement_observations,
@@ -612,7 +593,6 @@ class _RefinementEngine:
                 "OPEN" if remaining_ids else "CLOSED"
             ),
             "remaining_gap_req_ids": remaining_ids,
-            "terminal_model_digest": sha256_text(model_text),
             "terminal_audit_issues": list(gaps),
         })
         self.last_functional_closure = closure
@@ -674,7 +654,6 @@ class _RefinementEngine:
                 "attempts": 0,
                 "accepted_repairs": 0,
                 "repair_contexts": [],
-                "closure_model_digest": sha256_text(text),
             }
             return current, current_score, current_sim
 
@@ -905,7 +884,6 @@ class _RefinementEngine:
             "attempts": attempts,
             "accepted_repairs": accepted,
             "repair_contexts": repair_contexts,
-            "closure_model_digest": sha256_text(get_sysml_text(current)),
         }
         if remaining_ids:
             print(

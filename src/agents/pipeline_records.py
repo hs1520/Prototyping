@@ -123,7 +123,7 @@ def publish_handoff_transition(
     the transition on the same topic.
 
     The opening ``publish_typed`` snapshots its payload while the handoff is
-    ACTIVE and payloads are immutable (digest-bound), so mutating only the
+    ACTIVE and payloads are immutable, so mutating only the
     typed object left every archived event log showing both handoffs as
     ACTIVE, with rejected and completed indistinguishable post-hoc. History is
     appended, not edited.

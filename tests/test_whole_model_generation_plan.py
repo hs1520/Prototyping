@@ -724,9 +724,6 @@ def test_qualification_ignores_score():
         simulation_result=SimulationResult(model_name="P"),
         terminal_consistency={
             "status": "PASS",
-            "model_digest": digest,
-            "simulation_source_model_digest": digest,
-            "evaluation_source_model_digest": digest,
         },
         generation_plan_conformance={"status": "PASS"},
         ag_contract_graph={"verdict": "FAIL", "checker_version": "test"},
@@ -749,9 +746,6 @@ def test_lost_metadata_fails_closed():
         simulation_result=SimulationResult(model_name="P"),
         terminal_consistency={
             "status": "PASS",
-            "model_digest": "same",
-            "simulation_source_model_digest": "same",
-            "evaluation_source_model_digest": "same",
         },
         generation_plan_expected=True,
     )
