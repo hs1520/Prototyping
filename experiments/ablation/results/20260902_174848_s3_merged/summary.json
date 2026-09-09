@@ -1,0 +1,1368 @@
+{
+  "aggregate": {
+    "DSE-BILEVEL": {
+      "runs_ok": 3,
+      "runs_failed": 0,
+      "runs_infra_failed": 0,
+      "failed_seeds": [],
+      "infra_failed_seeds": [],
+      "runs_counted": 3,
+      "gates": {
+        "qualified": 0,
+        "closure_closed": 3,
+        "paths_7of7": 3
+      },
+      "final_score": {
+        "mean": 0.9343,
+        "std": 0.0017,
+        "n": 3
+      },
+      "generate_phase_score": {
+        "mean": 0.9557,
+        "std": 0.0044,
+        "n": 3
+      },
+      "reachability": {
+        "mean": 0.6331,
+        "std": 0.0452,
+        "n": 3
+      },
+      "controlled_pass_rate": {
+        "mean": 1.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "iterations": {
+        "mean": 2.6667,
+        "std": 1.1547,
+        "n": 3
+      },
+      "llm_calls": {
+        "mean": 10.0,
+        "std": 4.3589,
+        "n": 3
+      },
+      "llm_total_tokens": {
+        "mean": 171093.6667,
+        "std": 47418.6233,
+        "n": 3
+      },
+      "llm_live_calls": {
+        "mean": 3.3333,
+        "std": 4.0415,
+        "n": 3
+      },
+      "llm_live_tokens": {
+        "mean": 34361.0,
+        "std": 43153.9661,
+        "n": 3
+      },
+      "replayed_calls": {
+        "mean": 6.6667,
+        "std": 0.5774,
+        "n": 3
+      },
+      "replayed_tokens": {
+        "mean": 136732.6667,
+        "std": 13708.3706,
+        "n": 3
+      },
+      "elapsed_s": {
+        "mean": 351.6333,
+        "std": 401.0574,
+        "n": 3
+      },
+      "mech_refine_iterations": {
+        "mean": 2.6667,
+        "std": 1.1547,
+        "n": 3
+      },
+      "mech_plan_retries": {
+        "mean": 0.6667,
+        "std": 1.1547,
+        "n": 3
+      },
+      "mech_tier0_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_syntax_gate_llm_attempts": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_det_connectivity_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_surgical_refinement_accepted": {
+        "mean": 2.3333,
+        "std": 2.3094,
+        "n": 3
+      },
+      "mech_surgical_exit_passes": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_closure_initial_gaps": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_attempts": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_accepted": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_full_rewrite_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_surgical_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_det_additions": {
+        "mean": 0.6667,
+        "std": 1.1547,
+        "n": 3
+      },
+      "mech_plan_conformance_rejections": {
+        "mean": 1.6667,
+        "std": 1.1547,
+        "n": 3
+      }
+    },
+    "FULL": {
+      "runs_ok": 3,
+      "runs_failed": 0,
+      "runs_infra_failed": 0,
+      "failed_seeds": [],
+      "infra_failed_seeds": [],
+      "runs_counted": 3,
+      "gates": {
+        "qualified": 3,
+        "closure_closed": 3,
+        "paths_7of7": 3
+      },
+      "final_score": {
+        "mean": 0.9601,
+        "std": 0.004,
+        "n": 3
+      },
+      "generate_phase_score": {
+        "mean": 0.9557,
+        "std": 0.0044,
+        "n": 3
+      },
+      "reachability": {
+        "mean": 0.9352,
+        "std": 0.0578,
+        "n": 3
+      },
+      "controlled_pass_rate": {
+        "mean": 1.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "iterations": {
+        "mean": 2.0,
+        "std": 1.7321,
+        "n": 3
+      },
+      "llm_calls": {
+        "mean": 16.3333,
+        "std": 4.1633,
+        "n": 3
+      },
+      "llm_total_tokens": {
+        "mean": 170094.6667,
+        "std": 48104.7484,
+        "n": 3
+      },
+      "llm_live_calls": {
+        "mean": 14.0,
+        "std": 0.0,
+        "n": 1
+      },
+      "llm_live_tokens": {
+        "mean": 84615.0,
+        "std": 0.0,
+        "n": 1
+      },
+      "replayed_calls": {
+        "mean": 7.0,
+        "std": 0.0,
+        "n": 1
+      },
+      "replayed_tokens": {
+        "mean": 139292.0,
+        "std": 0.0,
+        "n": 1
+      },
+      "elapsed_s": {
+        "mean": 1497.2333,
+        "std": 1344.4573,
+        "n": 3
+      },
+      "mech_refine_iterations": {
+        "mean": 2.0,
+        "std": 1.7321,
+        "n": 3
+      },
+      "mech_plan_retries": {
+        "mean": 0.6667,
+        "std": 1.1547,
+        "n": 3
+      },
+      "mech_tier0_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_syntax_gate_llm_attempts": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_det_connectivity_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_surgical_refinement_accepted": {
+        "mean": 2.0,
+        "std": 3.4641,
+        "n": 3
+      },
+      "mech_surgical_exit_passes": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_closure_initial_gaps": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_attempts": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_accepted": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_full_rewrite_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_surgical_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_det_additions": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_conformance_rejections": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      }
+    },
+    "NO-DETFIX": {
+      "runs_ok": 3,
+      "runs_failed": 0,
+      "runs_infra_failed": 0,
+      "failed_seeds": [],
+      "infra_failed_seeds": [],
+      "runs_counted": 3,
+      "gates": {
+        "qualified": 3,
+        "closure_closed": 3,
+        "paths_7of7": 3
+      },
+      "final_score": {
+        "mean": 0.9624,
+        "std": 0.004,
+        "n": 3
+      },
+      "generate_phase_score": {
+        "mean": 0.9557,
+        "std": 0.0044,
+        "n": 3
+      },
+      "reachability": {
+        "mean": 0.9352,
+        "std": 0.0578,
+        "n": 3
+      },
+      "controlled_pass_rate": {
+        "mean": 1.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "iterations": {
+        "mean": 2.0,
+        "std": 1.7321,
+        "n": 3
+      },
+      "llm_calls": {
+        "mean": 17.3333,
+        "std": 3.2146,
+        "n": 3
+      },
+      "llm_total_tokens": {
+        "mean": 167850.0,
+        "std": 42327.5408,
+        "n": 3
+      },
+      "llm_live_calls": {
+        "mean": 10.6667,
+        "std": 2.8868,
+        "n": 3
+      },
+      "llm_live_tokens": {
+        "mean": 31117.3333,
+        "std": 37883.9984,
+        "n": 3
+      },
+      "replayed_calls": {
+        "mean": 6.6667,
+        "std": 0.5774,
+        "n": 3
+      },
+      "replayed_tokens": {
+        "mean": 136732.6667,
+        "std": 13708.3706,
+        "n": 3
+      },
+      "elapsed_s": {
+        "mean": 283.6667,
+        "std": 325.8541,
+        "n": 3
+      },
+      "mech_refine_iterations": {
+        "mean": 2.0,
+        "std": 1.7321,
+        "n": 3
+      },
+      "mech_plan_retries": {
+        "mean": 0.6667,
+        "std": 1.1547,
+        "n": 3
+      },
+      "mech_tier0_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_syntax_gate_llm_attempts": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_det_connectivity_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_surgical_refinement_accepted": {
+        "mean": 2.0,
+        "std": 3.4641,
+        "n": 3
+      },
+      "mech_surgical_exit_passes": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_closure_initial_gaps": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_attempts": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_accepted": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_full_rewrite_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_surgical_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_det_additions": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_conformance_rejections": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      }
+    },
+    "NO-DSE": {
+      "runs_ok": 3,
+      "runs_failed": 0,
+      "runs_infra_failed": 0,
+      "failed_seeds": [],
+      "infra_failed_seeds": [],
+      "runs_counted": 3,
+      "gates": {
+        "qualified": 3,
+        "closure_closed": 3,
+        "paths_7of7": 3
+      },
+      "final_score": {
+        "mean": 0.9557,
+        "std": 0.0044,
+        "n": 3
+      },
+      "generate_phase_score": {
+        "mean": 0.9557,
+        "std": 0.0044,
+        "n": 3
+      },
+      "reachability": {
+        "mean": 0.9352,
+        "std": 0.0578,
+        "n": 3
+      },
+      "controlled_pass_rate": {
+        "mean": 1.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "iterations": {
+        "mean": 2.0,
+        "std": 1.7321,
+        "n": 3
+      },
+      "llm_calls": {
+        "mean": 8.0,
+        "std": 2.6458,
+        "n": 3
+      },
+      "llm_total_tokens": {
+        "mean": 146946.3333,
+        "std": 24068.5878,
+        "n": 3
+      },
+      "llm_live_calls": {
+        "mean": 1.3333,
+        "std": 2.3094,
+        "n": 3
+      },
+      "llm_live_tokens": {
+        "mean": 10213.6667,
+        "std": 17690.5896,
+        "n": 3
+      },
+      "replayed_calls": {
+        "mean": 6.6667,
+        "std": 0.5774,
+        "n": 3
+      },
+      "replayed_tokens": {
+        "mean": 136732.6667,
+        "std": 13708.3706,
+        "n": 3
+      },
+      "elapsed_s": {
+        "mean": 123.8333,
+        "std": 176.1454,
+        "n": 3
+      },
+      "mech_refine_iterations": {
+        "mean": 2.0,
+        "std": 1.7321,
+        "n": 3
+      },
+      "mech_plan_retries": {
+        "mean": 0.6667,
+        "std": 1.1547,
+        "n": 3
+      },
+      "mech_tier0_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_syntax_gate_llm_attempts": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_det_connectivity_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_surgical_refinement_accepted": {
+        "mean": 1.0,
+        "std": 1.7321,
+        "n": 3
+      },
+      "mech_surgical_exit_passes": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_closure_initial_gaps": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_attempts": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_accepted": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_full_rewrite_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_surgical_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_det_additions": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_conformance_rejections": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      }
+    },
+    "NO-REFINE": {
+      "runs_ok": 3,
+      "runs_failed": 0,
+      "runs_infra_failed": 0,
+      "failed_seeds": [],
+      "infra_failed_seeds": [],
+      "runs_counted": 3,
+      "gates": {
+        "qualified": 3,
+        "closure_closed": 3,
+        "paths_7of7": 3
+      },
+      "final_score": {
+        "mean": 0.9601,
+        "std": 0.004,
+        "n": 3
+      },
+      "generate_phase_score": {
+        "mean": 0.9557,
+        "std": 0.0044,
+        "n": 3
+      },
+      "reachability": {
+        "mean": 0.9352,
+        "std": 0.0578,
+        "n": 3
+      },
+      "controlled_pass_rate": {
+        "mean": 1.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "iterations": {
+        "mean": 1.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "llm_calls": {
+        "mean": 15.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "llm_total_tokens": {
+        "mean": 146664.3333,
+        "std": 13978.7229,
+        "n": 3
+      },
+      "llm_live_calls": {
+        "mean": 8.6667,
+        "std": 0.5774,
+        "n": 3
+      },
+      "llm_live_tokens": {
+        "mean": 9931.6667,
+        "std": 1145.8902,
+        "n": 3
+      },
+      "replayed_calls": {
+        "mean": 6.6667,
+        "std": 0.5774,
+        "n": 3
+      },
+      "replayed_tokens": {
+        "mean": 136732.6667,
+        "std": 13708.3706,
+        "n": 3
+      },
+      "elapsed_s": {
+        "mean": 96.7,
+        "std": 4.7843,
+        "n": 3
+      },
+      "mech_refine_iterations": {
+        "mean": 1.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_retries": {
+        "mean": 1.3333,
+        "std": 1.1547,
+        "n": 3
+      },
+      "mech_tier0_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_syntax_gate_llm_attempts": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_det_connectivity_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_surgical_refinement_accepted": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_surgical_exit_passes": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_closure_initial_gaps": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_attempts": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_accepted": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_full_rewrite_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_surgical_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_det_additions": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_conformance_rejections": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      }
+    },
+    "NO-REPAIR": {
+      "runs_ok": 3,
+      "runs_failed": 0,
+      "runs_infra_failed": 0,
+      "failed_seeds": [],
+      "infra_failed_seeds": [],
+      "runs_counted": 3,
+      "gates": {
+        "qualified": 3,
+        "closure_closed": 3,
+        "paths_7of7": 3
+      },
+      "final_score": {
+        "mean": 0.9601,
+        "std": 0.004,
+        "n": 3
+      },
+      "generate_phase_score": {
+        "mean": 0.9557,
+        "std": 0.0044,
+        "n": 3
+      },
+      "reachability": {
+        "mean": 0.9352,
+        "std": 0.0578,
+        "n": 3
+      },
+      "controlled_pass_rate": {
+        "mean": 1.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "iterations": {
+        "mean": 1.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "llm_calls": {
+        "mean": 15.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "llm_total_tokens": {
+        "mean": 146715.6667,
+        "std": 13657.2401,
+        "n": 3
+      },
+      "llm_live_calls": {
+        "mean": 8.6667,
+        "std": 0.5774,
+        "n": 3
+      },
+      "llm_live_tokens": {
+        "mean": 9983.0,
+        "std": 915.6506,
+        "n": 3
+      },
+      "replayed_calls": {
+        "mean": 6.6667,
+        "std": 0.5774,
+        "n": 3
+      },
+      "replayed_tokens": {
+        "mean": 136732.6667,
+        "std": 13708.3706,
+        "n": 3
+      },
+      "elapsed_s": {
+        "mean": 110.2,
+        "std": 26.0904,
+        "n": 3
+      },
+      "mech_refine_iterations": {
+        "mean": 1.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_retries": {
+        "mean": 1.3333,
+        "std": 1.1547,
+        "n": 3
+      },
+      "mech_tier0_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_syntax_gate_llm_attempts": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_det_connectivity_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_surgical_refinement_accepted": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_surgical_exit_passes": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_closure_initial_gaps": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_attempts": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_accepted": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_full_rewrite_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_surgical_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_det_additions": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_conformance_rejections": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      }
+    },
+    "NO-SURGICAL": {
+      "runs_ok": 3,
+      "runs_failed": 0,
+      "runs_infra_failed": 0,
+      "failed_seeds": [],
+      "infra_failed_seeds": [],
+      "runs_counted": 3,
+      "gates": {
+        "qualified": 3,
+        "closure_closed": 3,
+        "paths_7of7": 3
+      },
+      "final_score": {
+        "mean": 0.9624,
+        "std": 0.004,
+        "n": 3
+      },
+      "generate_phase_score": {
+        "mean": 0.9557,
+        "std": 0.0044,
+        "n": 3
+      },
+      "reachability": {
+        "mean": 0.9352,
+        "std": 0.0578,
+        "n": 3
+      },
+      "controlled_pass_rate": {
+        "mean": 1.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "iterations": {
+        "mean": 1.6667,
+        "std": 1.1547,
+        "n": 3
+      },
+      "llm_calls": {
+        "mean": 17.0,
+        "std": 2.6458,
+        "n": 3
+      },
+      "llm_total_tokens": {
+        "mean": 180847.6667,
+        "std": 64033.4751,
+        "n": 3
+      },
+      "llm_live_calls": {
+        "mean": 10.3333,
+        "std": 2.3094,
+        "n": 3
+      },
+      "llm_live_tokens": {
+        "mean": 44115.0,
+        "std": 60375.83,
+        "n": 3
+      },
+      "replayed_calls": {
+        "mean": 6.6667,
+        "std": 0.5774,
+        "n": 3
+      },
+      "replayed_tokens": {
+        "mean": 136732.6667,
+        "std": 13708.3706,
+        "n": 3
+      },
+      "elapsed_s": {
+        "mean": 322.0,
+        "std": 396.5589,
+        "n": 3
+      },
+      "mech_refine_iterations": {
+        "mean": 1.6667,
+        "std": 1.1547,
+        "n": 3
+      },
+      "mech_plan_retries": {
+        "mean": 0.6667,
+        "std": 1.1547,
+        "n": 3
+      },
+      "mech_tier0_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_syntax_gate_llm_attempts": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_det_connectivity_fixes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_surgical_refinement_accepted": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_surgical_exit_passes": {
+        "mean": 0.3333,
+        "std": 0.5774,
+        "n": 3
+      },
+      "mech_closure_initial_gaps": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_attempts": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_accepted": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_full_rewrite_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_closure_surgical_passes": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_det_additions": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      },
+      "mech_plan_conformance_rejections": {
+        "mean": 0.0,
+        "std": 0.0,
+        "n": 3
+      }
+    },
+    "SINGLE-SHOT": {
+      "runs_ok": 0,
+      "runs_failed": 3,
+      "runs_infra_failed": 0,
+      "failed_seeds": [
+        0,
+        1,
+        2
+      ],
+      "infra_failed_seeds": [],
+      "runs_counted": 3,
+      "gates": {
+        "qualified": 0,
+        "closure_closed": 0,
+        "paths_7of7": 0
+      }
+    }
+  },
+  "paired_vs_baseline": {
+    "DSE-BILEVEL": {
+      "paired_seeds": [
+        0,
+        1,
+        2
+      ],
+      "unpaired_seeds": [],
+      "delta_final_score": {
+        "per_seed": [
+          -0.0244,
+          -0.0246,
+          -0.0284
+        ],
+        "mean": -0.0258
+      },
+      "delta_generate_phase_score": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_controlled_pass_rate": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_llm_calls": {
+        "per_seed": [
+          -5.0,
+          -6.0,
+          -8.0
+        ],
+        "mean": -6.3333
+      },
+      "delta_llm_total_tokens": {
+        "per_seed": [
+          3573.0,
+          -425.0,
+          -151.0
+        ],
+        "mean": 999.0
+      },
+      "delta_elapsed_s": {
+        "per_seed": [
+          -2924.6,
+          80.1,
+          -592.3
+        ],
+        "mean": -1145.6
+      }
+    },
+    "NO-DETFIX": {
+      "paired_seeds": [
+        0,
+        1,
+        2
+      ],
+      "unpaired_seeds": [],
+      "delta_final_score": {
+        "per_seed": [
+          0.0,
+          0.0069,
+          0.0
+        ],
+        "mean": 0.0023
+      },
+      "delta_generate_phase_score": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_controlled_pass_rate": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_llm_calls": {
+        "per_seed": [
+          3.0,
+          0.0,
+          0.0
+        ],
+        "mean": 1.0
+      },
+      "delta_llm_total_tokens": {
+        "per_seed": [
+          3132.0,
+          -9753.0,
+          -113.0
+        ],
+        "mean": -2244.6667
+      },
+      "delta_elapsed_s": {
+        "per_seed": [
+          -2958.2,
+          -74.7,
+          -607.8
+        ],
+        "mean": -1213.5667
+      }
+    },
+    "NO-DSE": {
+      "paired_seeds": [
+        0,
+        1,
+        2
+      ],
+      "unpaired_seeds": [],
+      "delta_final_score": {
+        "per_seed": [
+          -0.0047,
+          -0.0047,
+          -0.0039
+        ],
+        "mean": -0.0044
+      },
+      "delta_generate_phase_score": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_controlled_pass_rate": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_llm_calls": {
+        "per_seed": [
+          -6.0,
+          -10.0,
+          -9.0
+        ],
+        "mean": -8.3333
+      },
+      "delta_llm_total_tokens": {
+        "per_seed": [
+          -6134.0,
+          -53974.0,
+          -9337.0
+        ],
+        "mean": -23148.3333
+      },
+      "delta_elapsed_s": {
+        "per_seed": [
+          -3030.4,
+          -407.4,
+          -682.4
+        ],
+        "mean": -1373.4
+      }
+    },
+    "NO-REFINE": {
+      "paired_seeds": [
+        0,
+        1,
+        2
+      ],
+      "unpaired_seeds": [],
+      "delta_final_score": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_generate_phase_score": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_controlled_pass_rate": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_llm_calls": {
+        "per_seed": [
+          3.0,
+          -6.0,
+          0.0
+        ],
+        "mean": -1.0
+      },
+      "delta_llm_total_tokens": {
+        "per_seed": [
+          3177.0,
+          -73361.0,
+          -107.0
+        ],
+        "mean": -23430.3333
+      },
+      "delta_elapsed_s": {
+        "per_seed": [
+          -2954.2,
+          -632.6,
+          -614.8
+        ],
+        "mean": -1400.5333
+      }
+    },
+    "NO-REPAIR": {
+      "paired_seeds": [
+        0,
+        1,
+        2
+      ],
+      "unpaired_seeds": [],
+      "delta_final_score": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_generate_phase_score": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_controlled_pass_rate": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_llm_calls": {
+        "per_seed": [
+          3.0,
+          -6.0,
+          0.0
+        ],
+        "mean": -1.0
+      },
+      "delta_llm_total_tokens": {
+        "per_seed": [
+          3109.0,
+          -73608.0,
+          362.0
+        ],
+        "mean": -23379.0
+      },
+      "delta_elapsed_s": {
+        "per_seed": [
+          -2945.5,
+          -646.9,
+          -568.7
+        ],
+        "mean": -1387.0333
+      }
+    },
+    "NO-SURGICAL": {
+      "paired_seeds": [
+        0,
+        1,
+        2
+      ],
+      "unpaired_seeds": [],
+      "delta_final_score": {
+        "per_seed": [
+          0.0,
+          0.0069,
+          0.0
+        ],
+        "mean": 0.0023
+      },
+      "delta_generate_phase_score": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_controlled_pass_rate": {
+        "per_seed": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean": 0.0
+      },
+      "delta_llm_calls": {
+        "per_seed": [
+          3.0,
+          -1.0,
+          0.0
+        ],
+        "mean": 0.6667
+      },
+      "delta_llm_total_tokens": {
+        "per_seed": [
+          3104.0,
+          29216.0,
+          -61.0
+        ],
+        "mean": 10753.0
+      },
+      "delta_elapsed_s": {
+        "per_seed": [
+          -2958.7,
+          45.3,
+          -612.3
+        ],
+        "mean": -1175.2333
+      }
+    },
+    "SINGLE-SHOT": {
+      "paired_seeds": [],
+      "unpaired_seeds": [
+        0,
+        1,
+        2
+      ]
+    }
+  }
+}

@@ -1,45 +1,14 @@
 {
-  "campaign": "20260901_152036_s0v17_full_anchor_readerfix",
   "system": "AutonomousDrone",
   "requirement_source": "examples/drone_system_v2.py (DRONE_FROZEN_REQUIREMENTS)",
   "requirements_digest": "a2f04214fa1e129bd231b54c83fb728badc7b9eada1224822263a9828fbb893a",
-  "frozen_set_digest": null,
   "provider": "vertex",
-  "seeds": [
-    0
-  ],
-  "arms_requested": [
-    "FULL"
-  ],
   "base_pipeline_kwargs": {
     "max_iterations": 4,
     "dse_mode": "variation",
     "verbose": false
   },
   "mcts_iterations": 20,
-  "git_commit": "008c3825359e94dc4a6d464a34fc477361ca381c",
-  "git_dirty": false,
-  "git_untracked": [
-    "experiments/ablation/results/20260830_164357_s0_nodetfix_ABORTED_429/",
-    "experiments/ablation/results/20260830_172231_s0_nodetfix_rerun/",
-    "experiments/ablation/results/20260830_175116_s0_nosurgical/",
-    "experiments/ablation/results/20260831_232433_s0v2_full_anchor_ABORTED_HARNESS_GATE/",
-    "experiments/ablation/results/20260831_235007_s0v3_full_anchor_ABORTED_QUOTA/",
-    "experiments/ablation/results/20260901_001730_s0v4_full_anchor_ABORTED_HARNESS_PATCH_CHANNEL/",
-    "experiments/ablation/results/20260901_003310_s0v5_full_anchor/",
-    "experiments/ablation/results/20260901_010939_s0v6_full_anchor/",
-    "experiments/ablation/results/20260901_082720_s0v7_full_anchor/",
-    "experiments/ablation/results/20260901_090647_s0v8_full_anchor/",
-    "experiments/ablation/results/20260901_093634_s0v9_full_anchor/",
-    "experiments/ablation/results/20260901_101509_s0v10_full_anchor/",
-    "experiments/ablation/results/20260901_103817_s0v11_full_anchor/",
-    "experiments/ablation/results/20260901_114520_s0v12_full_anchor_ABORTED_PROVIDER_TIMEOUT/",
-    "experiments/ablation/results/20260901_122014_s0v13_ABORTED_DOUBLE_LAUNCH/",
-    "experiments/ablation/results/20260901_122045_s0v14_ABORTED_PROVIDER_HANG_NO_CAPTURE/",
-    "experiments/ablation/results/20260901_122941_s0v15_full_anchor/",
-    "experiments/ablation/results/20260901_141656_s0v16_full_anchor_postcure/",
-    "experiments/speedup_gate_results/"
-  ],
   "arm_registry": {
     "FULL": {
       "name": "FULL",
@@ -103,6 +72,18 @@
       "posthoc": false,
       "digest": "5acac5d81b9be0ae990417a5b0100631550ccea16b3832c0c34e8fbd4f5406ae"
     },
+    "NO-REPAIR": {
+      "name": "NO-REPAIR",
+      "ablated_component": "combined repair stack: iterative refinement (max_iterations 4 -> 1) AND surgical block-level refinement (whole-model rewrite only; surgical-hosted exit passes inactive, closure retains its full-rewrite fallback)",
+      "question": "Is the repair stack redundant, or does stripping both the iteration budget and the surgical mechanism break the run where single ablations were absorbed?",
+      "pipeline_kwargs": {
+        "max_iterations": 1,
+        "use_surgical_refinement": false
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "728a45c8f1a3478b7c8d1bec027a8d4c4414e6a5ae80dd741537a05964cfc6da"
+    },
     "SINGLE-SHOT": {
       "name": "SINGLE-SHOT",
       "ablated_component": "multistep typed-plan generation \u2192 legacy single-prompt whole-model generation (plan-conformance gates inapplicable by construction)",
@@ -124,6 +105,39 @@
       "digest": "592b106b92c24e2f67da2f639464a2638ba8df9ebc6794bc06dbfbf88f01ae58"
     }
   },
-  "python": "3.12.13 | packaged by conda-forge | (main, Mar  5 2026, 17:06:14) [Clang 19.1.7 ]",
-  "started": "20260901_152036"
+  "campaign": "20260902_174848_s3_merged",
+  "merged_from": [
+    {
+      "campaign": "20260902_133704_s3_prefix_matched",
+      "commit": "04a9f7f3ce10d5278df996230f4a312707d745a0",
+      "seeds": [
+        0,
+        2
+      ],
+      "records": 16
+    },
+    {
+      "campaign": "20260902_164714_s1_fix_full",
+      "commit": "a384e551329918d8df62ea03c90662593d94ab73",
+      "seeds": [
+        1
+      ],
+      "records": 1
+    },
+    {
+      "campaign": "20260902_165930_s1_fix_arms",
+      "commit": "a384e551329918d8df62ea03c90662593d94ab73",
+      "seeds": [
+        1
+      ],
+      "records": 7
+    }
+  ],
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "git_commit": "merged: 20260902_133704_s3_prefix_matched@04a9f7f3ce10, 20260902_164714_s1_fix_full@a384e5513299, 20260902_165930_s1_fix_arms@a384e5513299",
+  "started": "20260902_174848"
 }

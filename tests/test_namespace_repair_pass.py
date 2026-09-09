@@ -90,10 +90,7 @@ def test_pins_33f87cc6_collisions():
 
 
 def test_silent_on_clean_model():
-    text = (
-        _REPO / "experiments/ablation/results"
-        / "20260829_193628_pilot5/runs/FULL_seed0.final.sysml"
-    ).read_text()
+    text = (_REPO / "tests/fixtures/clean_model_20260829.sysml").read_text()
     assert namespace_integrity_issues(text) == []
 
 
